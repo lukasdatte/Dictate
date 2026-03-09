@@ -62,7 +62,6 @@ import androidx.recyclerview.widget.RecyclerView;
 import androidx.recyclerview.widget.StaggeredGridLayoutManager;
 
 import com.google.android.material.button.MaterialButton;
-import com.google.firebase.crashlytics.FirebaseCrashlytics;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.models.audio.AudioResponseFormat;
 import com.openai.models.audio.transcriptions.Transcription;
@@ -1353,7 +1352,7 @@ public class DictateInputMethodService extends InputMethodService {
             recorder.prepare();
             recorder.start();
         } catch (IOException e) {
-            sendLogToCrashlytics(e);
+            logException(e);
             // reset UI/state on failure
             isRecording = false;
             isPreparingRecording = false;
@@ -1570,7 +1569,7 @@ public class DictateInputMethodService extends InputMethodService {
 
             } catch (RuntimeException e) {
                 if (!(e.getCause() instanceof InterruptedIOException)) {
-                    sendLogToCrashlytics(e);
+                    logException(e);
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
                     mainHandler.post(() -> {
                         resendButton.setVisibility(View.VISIBLE);
@@ -1588,7 +1587,7 @@ public class DictateInputMethodService extends InputMethodService {
                         }
                     });
                 } else if (e.getCause().getMessage() != null && (e.getCause().getMessage().contains("timeout") || e.getCause().getMessage().contains("failed to connect"))) {
-                    sendLogToCrashlytics(e);
+                    logException(e);
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
                     mainHandler.post(() -> {
                         resendButton.setVisibility(View.VISIBLE);
@@ -1664,7 +1663,7 @@ public class DictateInputMethodService extends InputMethodService {
                 }
             } catch (RuntimeException e) {
                 if (!(e.getCause() instanceof InterruptedIOException)) {
-                    sendLogToCrashlytics(e);
+                    logException(e);
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
                     mainHandler.post(() -> {
                         resendButton.setVisibility(View.VISIBLE);
@@ -1678,7 +1677,7 @@ public class DictateInputMethodService extends InputMethodService {
                         }
                     });
                 } else if (e.getCause().getMessage() != null && e.getCause().getMessage().contains("timeout")) {
-                    sendLogToCrashlytics(e);
+                    logException(e);
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
                     mainHandler.post(() -> {
                         resendButton.setVisibility(View.VISIBLE);
@@ -1965,30 +1964,10 @@ public class DictateInputMethodService extends InputMethodService {
         }
     }
 
-    private void sendLogToCrashlytics(Exception e) {
-        // get all values from SharedPreferences and add them as custom keys to crashlytics
-        FirebaseCrashlytics crashlytics = FirebaseCrashlytics.getInstance();
-        for (String key : sp.getAll().keySet()) {
-            if (key.contains("api_key") || key.contains("proxy_host")) continue;
-            Object value = sp.getAll().get(key);
-            if (value instanceof Boolean) {
-                crashlytics.setCustomKey(key, (Boolean) value);
-            } else if (value instanceof Float) {
-                crashlytics.setCustomKey(key, (Float) value);
-            } else if (value instanceof Integer) {
-                crashlytics.setCustomKey(key, (Integer) value);
-            } else if (value instanceof Long) {
-                crashlytics.setCustomKey(key, (Long) value);
-            } else if (value instanceof String) {
-                crashlytics.setCustomKey(key, (String) value);
-            }
-        }
-        crashlytics.setUserId(sp.getString("net.devemperor.dictate.user_id", "null"));
-        crashlytics.recordException(e);
+    private void logException(Exception e) {
         StringWriter sw = new StringWriter();
         e.printStackTrace(new PrintWriter(sw));
         Log.e("DictateInputMethodService", sw.toString());
-        Log.e("DictateInputMethodService", "Recorded crashlytics report");
     }
 
     private void showInfo(String type) {

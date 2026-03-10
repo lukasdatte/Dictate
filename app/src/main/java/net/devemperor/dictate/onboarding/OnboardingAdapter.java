@@ -117,7 +117,7 @@ public class OnboardingAdapter extends RecyclerView.Adapter<OnboardingAdapter.Vi
 
                 @Override
                 public void onTextChanged(CharSequence s, int start, int before, int count) {
-                    finishBtn.setEnabled(s.toString().startsWith("sk-") || s.toString().startsWith("gsk_"));
+                    finishBtn.setEnabled(s.toString().trim().length() >= 10);
                 }
 
                 @Override
@@ -129,7 +129,7 @@ public class OnboardingAdapter extends RecyclerView.Adapter<OnboardingAdapter.Vi
                     .setMessage(R.string.dictate_onboarding_complete_dialog_message)
                     .setPositiveButton(R.string.dictate_okay, (dialog, which) -> {
                         SharedPreferences sp = activity.getSharedPreferences("net.devemperor.dictate", Context.MODE_PRIVATE);
-                        String apiKey = apiKeyEt.getText().toString();
+                        String apiKey = apiKeyEt.getText().toString().trim();
                         // if user decided to use Groq, switch to all Groq settings
                         if (apiKey.startsWith("gsk_")) {
                             sp.edit().putString(Pref.TranscriptionProvider.INSTANCE.getKey(), AIProvider.GROQ.name()).apply();

@@ -18,6 +18,7 @@ import android.icu.text.BreakIterator;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Build;
@@ -62,11 +63,17 @@ import com.google.android.material.button.MaterialButton;
 
 import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateUtils;
+import net.devemperor.dictate.ai.AIFunction;
 import net.devemperor.dictate.ai.AIOrchestrator;
 import net.devemperor.dictate.ai.AIProviderException;
 import net.devemperor.dictate.ai.runner.CompletionResult;
 import net.devemperor.dictate.ai.runner.TranscriptionResult;
 import net.devemperor.dictate.database.DictateDatabase;
+import net.devemperor.dictate.database.entity.InsertionMethod;
+import net.devemperor.dictate.database.entity.InsertionSource;
+import net.devemperor.dictate.database.entity.SessionType;
+import net.devemperor.dictate.database.entity.StepStatus;
+import net.devemperor.dictate.database.entity.StepType;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.preferences.PrefsMigration;
 import net.devemperor.dictate.R;
@@ -77,12 +84,15 @@ import net.devemperor.dictate.ai.prompt.PromptService;
 import net.devemperor.dictate.rewording.PromptEditActivity;
 import net.devemperor.dictate.rewording.PromptsKeyboardAdapter;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
+import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
 
 import java.io.File;
 import java.io.InterruptedIOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -131,6 +141,7 @@ public class DictateInputMethodService extends InputMethodService
 
     private ExecutorService speechApiThread;
     private ExecutorService rewordingApiThread;
+    private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private File audioFile;
     private Vibrator vibrator;
     private SharedPreferences sp;
@@ -186,6 +197,21 @@ public class DictateInputMethodService extends InputMethodService
     private final List<MaterialButton> numberPanelButtons = new ArrayList<>();
     private LinearLayout overlayCharactersLl;
 
+    // Pipeline progress views (inside prompts_keyboard_cl)
+    private LinearLayout pipelineProgressLl;
+    private LinearLayout pipelineRowDone;
+    private TextView pipelineDoneIconTv;
+    private TextView pipelineDoneNameTv;
+    private TextView pipelineDoneDurationTv;
+    private LinearLayout pipelineRowRunning;
+    private ProgressBar pipelineRunningPb;
+    private TextView pipelineRunningNameTv;
+    private MaterialButton pipelineCancelBtn;
+    private volatile boolean pipelineCancelled = false;
+
+    // History button
+    private MaterialButton editHistoryButton;
+
     // Recording visuals (pulsing)
     private ObjectAnimator recordPulseX;
     private ObjectAnimator recordPulseY;
@@ -201,6 +227,8 @@ public class DictateInputMethodService extends InputMethodService
     private AIOrchestrator aiOrchestrator;
     private PromptService promptService;
     private AutoFormattingService autoFormattingService;
+    private SessionManager sessionManager;
+    private SessionTracker sessionTracker;
 
     private interface PromptResultCallback {
         void onSuccess(String text);
@@ -318,6 +346,11 @@ public class DictateInputMethodService extends InputMethodService
         aiOrchestrator = new AIOrchestrator(sp, dictateDb.usageDao());
         promptService = PromptService.create(sp);
         autoFormattingService = AutoFormattingService.create(sp, aiOrchestrator);
+        sessionManager = new SessionManager(DictateDatabase.getInstance(this));
+        sessionTracker = new SessionTracker(sessionManager);
+        // Restore lastSessionId synchronously (SharedPrefs only, no DB), then load lastOutput async
+        sessionTracker.restoreLastSessionIdFromPrefs(sp);
+        dbExecutor.execute(() -> sessionTracker.restoreLastOutputFromDb());
 
         // Initialize managers
         recordingManager = new RecordingManager(this);
@@ -381,6 +414,20 @@ public class DictateInputMethodService extends InputMethodService
 
         overlayCharactersLl = dictateKeyboardView.findViewById(R.id.overlay_characters_ll);
 
+        // Pipeline progress views (inside prompts_keyboard_cl via <include>)
+        pipelineProgressLl = dictateKeyboardView.findViewById(R.id.pipeline_progress_ll);
+        pipelineRowDone = dictateKeyboardView.findViewById(R.id.pipeline_row_done);
+        pipelineDoneIconTv = dictateKeyboardView.findViewById(R.id.pipeline_done_icon_tv);
+        pipelineDoneNameTv = dictateKeyboardView.findViewById(R.id.pipeline_done_name_tv);
+        pipelineDoneDurationTv = dictateKeyboardView.findViewById(R.id.pipeline_done_duration_tv);
+        pipelineRowRunning = dictateKeyboardView.findViewById(R.id.pipeline_row_running);
+        pipelineRunningPb = dictateKeyboardView.findViewById(R.id.pipeline_running_pb);
+        pipelineRunningNameTv = dictateKeyboardView.findViewById(R.id.pipeline_running_name_tv);
+        pipelineCancelBtn = dictateKeyboardView.findViewById(R.id.pipeline_cancel_btn);
+
+        // History button
+        editHistoryButton = dictateKeyboardView.findViewById(R.id.edit_history_btn);
+
         StaggeredGridLayoutManager promptsLayoutManager =
                 new StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.HORIZONTAL);
         promptsLayoutManager.setGapStrategy(StaggeredGridLayoutManager.GAP_HANDLING_MOVE_ITEMS_BETWEEN_SPANS);
@@ -421,6 +468,51 @@ public class DictateInputMethodService extends InputMethodService
             openSettingsActivity();
         });
 
+        editHistoryButton.setOnClickListener(v -> {
+            Intent intent = new Intent(this, HistoryActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        });
+
+        pipelineCancelBtn.setOnClickListener(v -> {
+            // 1. Flag setzen (for queued-prompt chains)
+            pipelineCancelled = true;
+
+            // 2. Cancel current API calls
+            if (speechApiThread != null) speechApiThread.shutdownNow();
+            if (rewordingApiThread != null) rewordingApiThread.shutdownNow();
+
+            // 3. Commit last successful output + reset session (off main thread — DB access)
+            dbExecutor.execute(() -> {
+                String lastSuccessfulOutput = sessionTracker.getCurrentStepId() != null
+                    ? sessionManager.getStepOutput(sessionTracker.getCurrentStepId())
+                    : (sessionTracker.getCurrentTranscriptionId() != null
+                        ? sessionManager.getTranscriptionText(sessionTracker.getCurrentTranscriptionId())
+                        : null);
+
+                // resetSession() does DB access (getFinalOutput) — must be off main thread
+                sessionTracker.resetSession();
+                sessionTracker.persistToPrefs(sp);
+
+                mainHandler.post(() -> {
+                    if (lastSuccessfulOutput != null) {
+                        commitTextToInputConnection(lastSuccessfulOutput, InsertionSource.TRANSCRIPTION);
+                    }
+                });
+            });
+
+            // 4. Reset UI state immediately (no DB access)
+            // Note: pipelineCancelled stays true — reset happens in showPipelineProgress() / restorePromptUi()
+            hidePipelineProgress();
+            if (promptsRv != null) promptsRv.setVisibility(View.VISIBLE);
+            if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
+            if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
+            recordButton.setText(getDictateButtonText());
+            applyRecordingIconState(false);
+            recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
+            recordButton.setEnabled(true);
+        });
+
         // initial state: mic left, folder-open right
         recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
         recordButton.setOnClickListener(v -> {
@@ -453,9 +545,20 @@ public class DictateInputMethodService extends InputMethodService
 
         resendButton.setOnClickListener(v -> {
             vibrate();
-            // if user clicked on resendButton without error before, audioFile is default audio
+            // Tap: insert cached last output (no API call, no DB access on main thread)
+            String lastOutput = sessionTracker.getLastOutput();
+            if (lastOutput != null) {
+                commitTextToInputConnection(lastOutput, InsertionSource.TRANSCRIPTION);
+            }
+        });
+
+        resendButton.setOnLongClickListener(v -> {
+            vibrate();
+            // Long-press: regenerate (new API call with cached audio)
             if (audioFile == null) audioFile = new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a"));
+            sessionTracker.reuseLastSession();
             startWhisperApiRequest();
+            return true;
         });
 
         backspaceButton.setOnClickListener(v -> {
@@ -897,6 +1000,8 @@ public class DictateInputMethodService extends InputMethodService
         infoCl.setVisibility(View.GONE);
         emojiPickerCl.setVisibility(View.GONE);
         numbersPanelCl.setVisibility(View.GONE);
+        hidePipelineProgress();
+        pipelineCancelled = false;
         livePrompt = false;
         promptQueueManager.clear();
         recordingUsesBluetooth = false;
@@ -1083,6 +1188,7 @@ public class DictateInputMethodService extends InputMethodService
         applyButtonColor(editPasteButton, accentColorMedium);
         applyButtonColor(editEmojiButton, accentColorMedium);
         applyButtonColor(editNumbersButton, accentColorMedium);
+        applyButtonColor(editHistoryButton, accentColorMedium);
         applyButtonColor(emojiPickerCloseButton, accentColor);
         applyButtonColor(numbersPanelCloseButton, accentColor);
         for (MaterialButton button : numberPanelButtons) {
@@ -1094,6 +1200,9 @@ public class DictateInputMethodService extends InputMethodService
             applyButtonColor(button, background);
         }
         runningPromptPb.getIndeterminateDrawable().setColorFilter(accentColor, android.graphics.PorterDuff.Mode.SRC_IN);
+        if (pipelineRunningPb != null) {
+            pipelineRunningPb.getIndeterminateDrawable().setColorFilter(accentColor, android.graphics.PorterDuff.Mode.SRC_IN);
+        }
 
         // show infos for updates, ratings or donations
         Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
@@ -1256,7 +1365,7 @@ public class DictateInputMethodService extends InputMethodService
                 smallModeButton, editSettingsButton, recordButton, resendButton, switchButton, trashButton,
                 pauseButton, emojiPickerCloseButton, numbersPanelCloseButton,
                 editUndoButton, editRedoButton, editCutButton, editCopyButton,
-                editPasteButton, editEmojiButton, editNumbersButton,
+                editPasteButton, editEmojiButton, editNumbersButton, editHistoryButton,
                 infoYesButton, infoNoButton
         };
         for (View view : animatedViews) {
@@ -1498,18 +1607,106 @@ public class DictateInputMethodService extends InputMethodService
         recordingUsesBluetooth = false;
         updatePromptButtonsEnabledState();
 
+        // Show pipeline progress
+        promptsCl.setVisibility(View.VISIBLE);
+        showPipelineProgress();
+
         if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
 
         String stylePrompt = promptService.resolveWhisperStylePrompt(currentInputLanguageValue);
+
+        // Start RECORDING session before API call
+        EditorInfo info = getCurrentInputEditorInfo();
+        sessionTracker.startSession(SessionType.RECORDING,
+            info != null ? info.packageName : null,
+            currentInputLanguageValue, audioFile != null ? audioFile.getAbsolutePath() : null, null);
 
         speechApiThread = Executors.newSingleThreadExecutor();
         speechApiThread.execute(() -> {
             try {
                 String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
                         ? currentInputLanguageValue : null;
+
+                // Step 1: Transcription
+                mainHandler.post(() -> updatePipelineStepRunning(getString(R.string.dictate_pipeline_transcription)));
+                long transcriptionStart = System.nanoTime();
                 TranscriptionResult result = aiOrchestrator.transcribe(audioFile, language, stylePrompt);
                 String resultText = result.getText().strip();
-                resultText = autoFormattingService.formatIfEnabled(resultText, currentInputLanguageValue);
+                long transcriptionDurationMs = (System.nanoTime() - transcriptionStart) / 1_000_000;
+                mainHandler.post(() -> updatePipelineStepDone(getString(R.string.dictate_pipeline_transcription), transcriptionDurationMs));
+                String transcriptionProvider = aiOrchestrator.getProvider(AIFunction.TRANSCRIPTION).name();
+
+                if (pipelineCancelled) return;
+
+                // Persist transcription version
+                String sid = sessionTracker.getCurrentSessionId();
+                if (sid != null) {
+                    String tId = sessionManager.addTranscriptionVersion(
+                        sid, resultText, result.getModelName(),
+                        transcriptionProvider, 0, 0, transcriptionDurationMs);
+                    sessionTracker.setTranscription(tId);
+
+                    // Completion log for transcription
+                    sessionManager.logCompletion("TRANSCRIPTION", sid,
+                        null, tId, null, null, true, null);
+
+                    // Persist audio file from cache to permanent storage
+                    if (audioFile != null && audioFile.exists()) {
+                        persistAudioFile(audioFile, sid);
+                    }
+                }
+
+                // Step 2: Auto-formatting (optional — only show progress if enabled)
+                if (autoFormattingService.isEnabled()) {
+                    mainHandler.post(() -> updatePipelineStepRunning(getString(R.string.dictate_pipeline_formatting)));
+                }
+                long formatStart = System.nanoTime();
+                FormatResult fr = autoFormattingService.formatIfEnabled(resultText, currentInputLanguageValue);
+                long formatDurationMs = (System.nanoTime() - formatStart) / 1_000_000;
+
+                if (fr.getCompletionResult() != null) {
+                    mainHandler.post(() -> updatePipelineStepDone(getString(R.string.dictate_pipeline_formatting), formatDurationMs));
+                } else if (fr.getError() != null) {
+                    mainHandler.post(() -> updatePipelineStepError(getString(R.string.dictate_pipeline_formatting)));
+                }
+
+                if (pipelineCancelled) return;
+
+                if (sid != null) {
+                    if (fr.getCompletionResult() != null) {
+                        // SUCCESS: Auto-format worked
+                        String provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name();
+                        String stepId = sessionManager.appendProcessingStep(
+                            sid, StepType.AUTO_FORMAT, resultText, fr.getText(),
+                            fr.getCompletionResult().getModelName(), provider,
+                            null, null,
+                            null, sessionTracker.getCurrentTranscriptionId(),
+                            null, fr.getCompletionResult().getPromptTokens(),
+                            fr.getCompletionResult().getCompletionTokens(),
+                            formatDurationMs, StepStatus.SUCCESS, null);
+                        sessionTracker.setStep(stepId);
+
+                        sessionManager.logCompletion("AUTO_FORMAT", sid,
+                            stepId, null, null, null, true, null);
+
+                    } else if (fr.getError() != null) {
+                        // ERROR: Auto-format failed — persist error step for audit trail
+                        String provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name();
+                        String model = aiOrchestrator.getModelName(AIFunction.COMPLETION);
+                        String stepId = sessionManager.appendProcessingStep(
+                            sid, StepType.AUTO_FORMAT, resultText, null,
+                            model, provider, null, null,
+                            null, sessionTracker.getCurrentTranscriptionId(),
+                            null, 0, 0, formatDurationMs,
+                            StepStatus.ERROR, fr.getError().getMessage());
+                        // No setStep() — output stays at the transcription
+
+                        sessionManager.logCompletion("AUTO_FORMAT", sid,
+                            stepId, null, null, null, false, fr.getError().getMessage());
+                    }
+                    // else: disabled — no step, no log
+                }
+                resultText = fr.getText();
 
                 boolean processedByQueuedPrompts = false;
                 List<Integer> promptsToApply = promptQueueManager.getQueuedIds();
@@ -1522,7 +1719,7 @@ public class DictateInputMethodService extends InputMethodService
                 }
 
                 if (!processedByQueuedPrompts && !livePrompt) {
-                    commitTextToInputConnection(resultText);
+                    commitTextToInputConnection(resultText, InsertionSource.TRANSCRIPTION);
                 } else if (livePrompt) {
                     livePrompt = false;
                     startGPTApiRequest(new PromptEntity(-1, Integer.MIN_VALUE, "", resultText, true, false));
@@ -1559,6 +1756,7 @@ public class DictateInputMethodService extends InputMethodService
             }
 
             mainHandler.post(() -> {
+                hidePipelineProgress();
                 recordButton.setText(getDictateButtonText());
                 applyRecordingIconState(false);
                 recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
@@ -1581,7 +1779,7 @@ public class DictateInputMethodService extends InputMethodService
             if (callback != null) {
                 callback.onSuccess(text);
             } else {
-                commitTextToInputConnection(text);
+                commitTextToInputConnection(text, InsertionSource.STATIC_PROMPT);
             }
             if (restorePromptsOnFinish || callback == null) restorePromptUi();
             return;
@@ -1607,16 +1805,29 @@ public class DictateInputMethodService extends InputMethodService
             pp = promptService.buildRewording(prompt, selStr);
         }
 
-        startGPTApiRequestInternal(pp, model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName(), callback, restorePromptsOnFinish);
+        // Start REWORDING session for non-live, non-static prompts
+        if (model.getId() != -1) {
+            EditorInfo editorInfo = getCurrentInputEditorInfo();
+            sessionTracker.startSession(SessionType.REWORDING,
+                editorInfo != null ? editorInfo.packageName : null,
+                null, null, null);
+        }
+
+        ProcessingContext ctx = new ProcessingContext(
+            StepType.REWORDING,
+            model.getPrompt(),
+            model.getId() >= 0 ? model.getId() : null);
+        startGPTApiRequestInternal(pp, model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName(), ctx, callback, restorePromptsOnFinish);
     }
 
     /** Overload for Queued prompts: accepts a pre-built PromptPair. */
-    private void startGPTApiRequest(PromptService.PromptPair pp, String displayName, PromptResultCallback callback, boolean restorePromptsOnFinish) {
-        startGPTApiRequestInternal(pp, displayName, callback, restorePromptsOnFinish);
+    private void startGPTApiRequest(PromptService.PromptPair pp, String displayName, ProcessingContext ctx, PromptResultCallback callback, boolean restorePromptsOnFinish) {
+        startGPTApiRequestInternal(pp, displayName, ctx, callback, restorePromptsOnFinish);
     }
 
     /** Internal: shared UI/threading/error-handling for all GPT API requests (DRY). */
-    private void startGPTApiRequestInternal(PromptService.PromptPair pp, String displayName, PromptResultCallback callback, boolean restorePromptsOnFinish) {
+    private void startGPTApiRequestInternal(PromptService.PromptPair pp, String displayName,
+            ProcessingContext ctx, PromptResultCallback callback, boolean restorePromptsOnFinish) {
         mainHandler.post(() -> {
             promptsRv.setVisibility(View.GONE);
             runningPromptTv.setVisibility(View.VISIBLE);
@@ -1627,16 +1838,45 @@ public class DictateInputMethodService extends InputMethodService
 
         rewordingApiThread = Executors.newSingleThreadExecutor();
         rewordingApiThread.execute(() -> {
+            String sid = sessionTracker.getCurrentSessionId();
+            long startTime = System.nanoTime();
             try {
-                String rewordedText = requestRewordingFromApi(pp.getUserPrompt(), pp.getSystemPrompt());
+                CompletionResult result = requestRewordingFromApi(pp.getUserPrompt(), pp.getSystemPrompt());
+                long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+                String rewordedText = result.getText();
+
+                // SUCCESS: Step + Completion-Log persistieren
+                if (sid != null) {
+                    String provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name();
+                    String stepId = sessionManager.appendProcessingStep(
+                        sid, ctx.getStepType(),
+                        pp.getUserPrompt(), rewordedText,
+                        result.getModelName(), provider,
+                        ctx.getPromptUsed(), ctx.getPromptEntityId(),
+                        sessionTracker.getCurrentStepId(),
+                        sessionTracker.getCurrentTranscriptionId(),
+                        null, result.getPromptTokens(), result.getCompletionTokens(),
+                        durationMs, StepStatus.SUCCESS, null);
+
+                    sessionManager.logCompletion(ctx.getStepType().name(), sid,
+                        stepId, null,
+                        pp.getSystemPrompt(), pp.getUserPrompt(),
+                        true, null);
+
+                    sessionTracker.setStep(stepId);
+                }
 
                 if (callback != null) {
                     callback.onSuccess(rewordedText);
                 } else {
-                    commitTextToInputConnection(rewordedText);
+                    commitTextToInputConnection(rewordedText, InsertionSource.REWORDING);
                 }
             } catch (AIProviderException e) {
+                long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+
+                // Skip persistence for user-cancelled requests (no audit trail needed)
                 if (e.getErrorType() != AIProviderException.ErrorType.CANCELLED) {
+                    persistErrorStep(sid, ctx, pp, durationMs, e.getMessage());
                     logException(e);
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
                     mainHandler.post(() -> {
@@ -1647,10 +1887,11 @@ public class DictateInputMethodService extends InputMethodService
                 if (callback != null) {
                     callback.onFailure();
                 }
-                if (!restorePromptsOnFinish) {
-                    restorePromptUi();
-                }
             } catch (RuntimeException e) {
+                long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+
+                persistErrorStep(sid, ctx, pp, durationMs, e.getMessage());
+
                 if (!(e.getCause() instanceof InterruptedIOException)) {
                     logException(e);
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
@@ -1661,9 +1902,6 @@ public class DictateInputMethodService extends InputMethodService
                 }
                 if (callback != null) {
                     callback.onFailure();
-                }
-                if (!restorePromptsOnFinish) {
-                    restorePromptUi();
                 }
             }
 
@@ -1677,17 +1915,48 @@ public class DictateInputMethodService extends InputMethodService
      * Sends a completion request via AIOrchestrator.
      * @param prompt The user message (may include selected text and prompt instructions)
      * @param systemPrompt Optional system prompt (null = no system prompt)
-     * @return The completion text
+     * @return The full CompletionResult (text, model, tokens)
      * @throws AIProviderException on API errors
      */
-    private String requestRewordingFromApi(String prompt, String systemPrompt) {
-        CompletionResult result = aiOrchestrator.complete(prompt, systemPrompt);
-        return result.getText();
+    private CompletionResult requestRewordingFromApi(String prompt, String systemPrompt) {
+        return aiOrchestrator.complete(prompt, systemPrompt);
     }
 
-    private void commitTextToInputConnection(String text) {
+    /**
+     * Persists an error step + completion log for failed API calls.
+     * Shared between AIProviderException and RuntimeException catch blocks.
+     */
+    private void persistErrorStep(String sid, ProcessingContext ctx,
+            PromptService.PromptPair pp, long durationMs, String errorMessage) {
+        if (sid == null) return;
+        String provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name();
+        String model = aiOrchestrator.getModelName(AIFunction.COMPLETION);
+        sessionManager.appendProcessingStep(
+            sid, ctx.getStepType(),
+            pp.getUserPrompt(), null,
+            model, provider,
+            ctx.getPromptUsed(), ctx.getPromptEntityId(),
+            sessionTracker.getCurrentStepId(),
+            sessionTracker.getCurrentTranscriptionId(),
+            null, 0, 0, durationMs,
+            StepStatus.ERROR, errorMessage);
+
+        sessionManager.logCompletion(ctx.getStepType().name(), sid,
+            null, null,
+            pp.getSystemPrompt(), pp.getUserPrompt(),
+            false, errorMessage);
+    }
+
+    private void commitTextToInputConnection(String text, InsertionSource source) {
         InputConnection inputConnection = getCurrentInputConnection();
         if (inputConnection == null) return;
+
+        // Capture replaced (selected) text before commit for undo-buffer / audit
+        String replacedText = null;
+        if (source != null) {
+            CharSequence sel = inputConnection.getSelectedText(0);
+            if (sel != null && sel.length() > 0) replacedText = sel.toString();
+        }
 
         String output = text == null ? "" : text;
         if (sp.getBoolean("net.devemperor.dictate.instant_output", true)) {
@@ -1718,19 +1987,74 @@ public class DictateInputMethodService extends InputMethodService
                 performEnterAction();
             }
         }
+
+        // Persist text insertion and update session's final output
+        if (source != null && output.length() > 0) {
+            final String fReplacedText = replacedText;
+            final String fSessionId = sessionTracker.getCurrentSessionId();
+            final String fStepId = sessionTracker.getCurrentStepId();
+            final String fTranscriptionId = sessionTracker.getCurrentTranscriptionId();
+            final String pkg = getCurrentInputEditorInfo() != null
+                ? getCurrentInputEditorInfo().packageName : null;
+
+            dbExecutor.execute(() -> {
+                sessionManager.logTextInsertion(fSessionId, output, fReplacedText, pkg,
+                    null, fStepId, fTranscriptionId, InsertionMethod.COMMIT);
+                if (fSessionId != null) {
+                    sessionManager.updateFinalOutputText(fSessionId, output);
+                }
+            });
+        }
+    }
+
+    /**
+     * Copies audio from cache to persistent storage and updates the session with audio duration.
+     * @param cacheFile the cached audio file (e.g. audio.m4a in getCacheDir())
+     * @param sessionId the session to associate the audio with
+     */
+    private void persistAudioFile(File cacheFile, String sessionId) {
+        try {
+            File destDir = new File(getFilesDir(), "recordings");
+            destDir.mkdirs();
+            File dest = new File(destDir, sessionId + ".m4a");
+            Files.copy(cacheFile.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
+
+            // Retrieve audio duration and update session
+            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+            try {
+                retriever.setDataSource(dest.getAbsolutePath());
+                String durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                if (durationStr != null) {
+                    long durationSeconds = Long.parseLong(durationStr) / 1000;
+                    sessionManager.updateAudioDuration(sessionId, durationSeconds);
+                }
+            } finally {
+                retriever.release();
+            }
+        } catch (Exception e) {
+            Log.w("DictateIME", "Failed to persist audio file for session " + sessionId, e);
+        }
     }
 
     private void processQueuedPrompts(String initialText, List<Integer> promptIds) {
         if (promptIds == null || promptIds.isEmpty()) {
-            commitTextToInputConnection(initialText);
+            commitTextToInputConnection(initialText, InsertionSource.TRANSCRIPTION);
             return;
         }
         applyQueuedPromptAtIndex(initialText, promptIds, 0);
     }
 
     private void applyQueuedPromptAtIndex(String currentText, List<Integer> promptIds, int index) {
+        // Check cancellation flag — commit last output and abort chain
+        if (pipelineCancelled) {
+            if (currentText != null) {
+                commitTextToInputConnection(currentText, InsertionSource.QUEUED_PROMPT);
+            }
+            return;
+        }
+
         if (index >= promptIds.size()) {
-            commitTextToInputConnection(currentText);
+            commitTextToInputConnection(currentText, InsertionSource.QUEUED_PROMPT);
             return;
         }
 
@@ -1749,7 +2073,11 @@ public class DictateInputMethodService extends InputMethodService
         PromptService.PromptPair pp = promptService.buildQueuedPrompt(prompt.getPrompt(), textForPrompt);
         boolean restoreUiAfter = index == promptIds.size() - 1;
 
-        startGPTApiRequest(pp, prompt.getName(), new PromptResultCallback() {
+        ProcessingContext ctx = new ProcessingContext(
+            StepType.QUEUED_PROMPT,
+            prompt.getPrompt(),
+            prompt.getId());
+        startGPTApiRequest(pp, prompt.getName(), ctx, new PromptResultCallback() {
             @Override
             public void onSuccess(String text) {
                 applyQueuedPromptAtIndex(text, promptIds, index + 1);
@@ -1757,7 +2085,7 @@ public class DictateInputMethodService extends InputMethodService
 
             @Override
             public void onFailure() {
-                commitTextToInputConnection(currentText == null ? "" : currentText);
+                commitTextToInputConnection(currentText == null ? "" : currentText, InsertionSource.QUEUED_PROMPT);
             }
         }, restoreUiAfter);
     }
@@ -1789,12 +2117,86 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
+    // ===== Pipeline Progress =====
+
+    /**
+     * Shows the pipeline progress view and hides the prompts RecyclerView + running spinner.
+     * Must be called on the main thread.
+     */
+    private void showPipelineProgress() {
+        pipelineCancelled = false;
+        if (promptsRv != null) promptsRv.setVisibility(View.GONE);
+        if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
+        if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
+        if (pipelineProgressLl != null) {
+            pipelineProgressLl.setVisibility(View.VISIBLE);
+            pipelineRowDone.setVisibility(View.GONE);
+            pipelineRowRunning.setVisibility(View.GONE);
+        }
+    }
+
+    /**
+     * Updates the pipeline progress to show a step as running.
+     * Must be called on the main thread.
+     * @param stepName display name of the step (e.g. "Transcription")
+     */
+    private void updatePipelineStepRunning(String stepName) {
+        if (pipelineProgressLl == null) return;
+        pipelineRowRunning.setVisibility(View.VISIBLE);
+        pipelineRunningPb.setVisibility(View.VISIBLE); // reset in case updatePipelineStepError hid it
+        pipelineRunningNameTv.setText(stepName);
+    }
+
+    /**
+     * Updates the pipeline progress to mark a step as done with duration.
+     * Moves the "running" step into the "done" row and clears the running row.
+     * Must be called on the main thread.
+     * @param stepName display name of the completed step
+     * @param durationMs how long it took in milliseconds
+     */
+    private void updatePipelineStepDone(String stepName, long durationMs) {
+        if (pipelineProgressLl == null) return;
+        pipelineRowDone.setVisibility(View.VISIBLE);
+        pipelineDoneIconTv.setText("\u2705"); // checkmark emoji
+        pipelineDoneNameTv.setText(stepName);
+        pipelineDoneDurationTv.setText(String.format(Locale.US, getString(R.string.dictate_pipeline_duration), durationMs / 1000.0));
+        pipelineRowRunning.setVisibility(View.GONE);
+    }
+
+    /**
+     * Marks the current running step as error.
+     * Must be called on the main thread.
+     */
+    private void updatePipelineStepError(String stepName) {
+        if (pipelineProgressLl == null) return;
+        // Show the error in the running row position
+        pipelineRowRunning.setVisibility(View.VISIBLE);
+        pipelineRunningPb.setVisibility(View.GONE);
+        pipelineRunningNameTv.setText("\u274C " + stepName); // X emoji + name
+    }
+
+    /**
+     * Hides the pipeline progress view. Must be called on the main thread.
+     */
+    private void hidePipelineProgress() {
+        if (pipelineProgressLl != null) pipelineProgressLl.setVisibility(View.GONE);
+        if (pipelineRunningPb != null) pipelineRunningPb.setVisibility(View.VISIBLE); // reset for next time
+    }
+
     private void restorePromptUi() {
-        if (mainHandler == null) return;
-        mainHandler.post(() -> {
-            if (promptsRv != null) promptsRv.setVisibility(View.VISIBLE);
-            if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
-            if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
+        // resetSession() does DB access (getFinalOutput) — always run on dbExecutor
+        dbExecutor.execute(() -> {
+            sessionTracker.resetSession();
+            sessionTracker.persistToPrefs(sp);
+            pipelineCancelled = false;
+
+            if (mainHandler == null) return;
+            mainHandler.post(() -> {
+                if (promptsRv != null) promptsRv.setVisibility(View.VISIBLE);
+                if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
+                if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
+                hidePipelineProgress();
+            });
         });
     }
 

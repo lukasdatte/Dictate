@@ -284,8 +284,20 @@
             android:foreground="@drawable/ic_baseline_numbers_24"
             android:foregroundGravity="center"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_settings_btn"
+            app:layout_constraintEnd_toStartOf="@+id/edit_history_btn"
             app:layout_constraintStart_toEndOf="@+id/edit_emoji_btn"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/edit_history_btn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginHorizontal="4dp"
+            android:foreground="@drawable/ic_baseline_history_24"
+            android:foregroundGravity="center"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/edit_settings_btn"
+            app:layout_constraintStart_toEndOf="@+id/edit_numbers_btn"
             app:layout_constraintTop_toTopOf="parent" />
 
         <com.google.android.material.button.MaterialButton
@@ -298,7 +310,7 @@
             android:foregroundGravity="center"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toEndOf="@+id/edit_numbers_btn"
+            app:layout_constraintStart_toEndOf="@+id/edit_history_btn"
             app:layout_constraintTop_toTopOf="parent" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
@@ -360,6 +372,16 @@
                 tools:visibility="visible" />
 
         </LinearLayout>
+
+        <include
+            layout="@layout/pipeline_progress_view"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent" />
+
     </androidx.constraintlayout.widget.ConstraintLayout>
 
     <androidx.constraintlayout.widget.ConstraintLayout

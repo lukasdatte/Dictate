@@ -97,6 +97,20 @@
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value=".settings.DictateSettingsActivity" />
         </activity>
+        <activity
+            android:name=".history.HistoryActivity"
+            android:exported="false">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".settings.DictateSettingsActivity" />
+        </activity>
+        <activity
+            android:name=".history.HistoryDetailActivity"
+            android:exported="false">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".history.HistoryActivity" />
+        </activity>
     </application>
 
 </manifest>

@@ -22,6 +22,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.dao.UsageDao;
@@ -125,6 +126,16 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
 
             usagePreference.setOnPreferenceClickListener(preference -> {
                 Intent intent = new Intent(requireContext(), UsageActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+                return true;
+            });
+        }
+
+        Preference historyPreference = findPreference("net.devemperor.dictate.history");
+        if (historyPreference != null) {
+            historyPreference.setOnPreferenceClickListener(preference -> {
+                Intent intent = new Intent(requireContext(), HistoryActivity.class);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(intent);
                 return true;

@@ -8,14 +8,34 @@ import androidx.room.TypeConverters
 import androidx.sqlite.db.SupportSQLiteDatabase
 import net.devemperor.dictate.R
 import net.devemperor.dictate.database.converter.Converters
+import net.devemperor.dictate.database.dao.CompletionLogDao
+import net.devemperor.dictate.database.dao.ProcessingStepDao
 import net.devemperor.dictate.database.dao.PromptDao
+import net.devemperor.dictate.database.dao.SessionDao
+import net.devemperor.dictate.database.dao.TextInsertionDao
+import net.devemperor.dictate.database.dao.TranscriptionDao
 import net.devemperor.dictate.database.dao.UsageDao
+import net.devemperor.dictate.database.entity.CompletionLogEntity
+import net.devemperor.dictate.database.entity.ProcessingStepEntity
 import net.devemperor.dictate.database.entity.PromptEntity
+import net.devemperor.dictate.database.entity.SessionEntity
+import net.devemperor.dictate.database.entity.TextInsertionEntity
+import net.devemperor.dictate.database.entity.TranscriptionEntity
 import net.devemperor.dictate.database.entity.UsageEntity
+import net.devemperor.dictate.database.migration.MIGRATION_1_2
+import net.devemperor.dictate.database.migration.createPartialUniqueIndices
 
 @Database(
-    entities = [UsageEntity::class, PromptEntity::class],
-    version = 1,
+    entities = [
+        UsageEntity::class,
+        PromptEntity::class,
+        SessionEntity::class,
+        TranscriptionEntity::class,
+        ProcessingStepEntity::class,
+        CompletionLogEntity::class,
+        TextInsertionEntity::class
+    ],
+    version = 2,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -23,6 +43,11 @@ abstract class DictateDatabase : RoomDatabase() {
 
     abstract fun usageDao(): UsageDao
     abstract fun promptDao(): PromptDao
+    abstract fun sessionDao(): SessionDao
+    abstract fun transcriptionDao(): TranscriptionDao
+    abstract fun processingStepDao(): ProcessingStepDao
+    abstract fun completionLogDao(): CompletionLogDao
+    abstract fun textInsertionDao(): TextInsertionDao
 
     companion object {
         private const val DATABASE_NAME = "dictate.db"
@@ -45,6 +70,7 @@ abstract class DictateDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .allowMainThreadQueries()
+                .addMigrations(MIGRATION_1_2)
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)
@@ -71,6 +97,13 @@ abstract class DictateDatabase : RoomDatabase() {
                                 )
                             )
                         }
+                    }
+
+                    override fun onOpen(db: SupportSQLiteDatabase) {
+                        super.onOpen(db)
+                        // Create partial unique indices that Room annotations cannot express.
+                        // Using IF NOT EXISTS so this is safe to run on every open.
+                        createPartialUniqueIndices(db)
                     }
                 })
                 .build()

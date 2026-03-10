@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal">
+
+    <!-- Connector line -->
+    <View
+        android:id="@+id/item_pipeline_connector"
+        android:layout_width="2dp"
+        android:layout_height="match_parent"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="12dp"
+        android:background="?android:attr/textColorSecondary" />
+
+    <com.google.android.material.card.MaterialCardView
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginVertical="4dp"
+        android:layout_marginEnd="4dp"
+        app:cardElevation="1dp"
+        app:cardCornerRadius="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <!-- Title row: icon + title + action buttons -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/item_pipeline_icon_tv"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:gravity="center"
+                    android:textSize="16sp"
+                    tools:text="📝" />
+
+                <TextView
+                    android:id="@+id/item_pipeline_title_tv"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:textStyle="bold"
+                    android:textSize="14sp"
+                    tools:text="Transcription v2" />
+
+                <!-- Play button (audio step only) -->
+                <ImageButton
+                    android:id="@+id/item_pipeline_play_btn"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@android:drawable/ic_media_play"
+                    android:contentDescription="@string/dictate_history_play"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
+                <!-- Regenerate button -->
+                <ImageButton
+                    android:id="@+id/item_pipeline_regenerate_btn"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_baseline_autorenew_24"
+                    android:contentDescription="@string/dictate_history_regenerate"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
+                <!-- Other prompt button -->
+                <ImageButton
+                    android:id="@+id/item_pipeline_other_prompt_btn"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_baseline_edit_24"
+                    android:contentDescription="@string/dictate_history_other_prompt"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
+                <!-- Post-process button -->
+                <ImageButton
+                    android:id="@+id/item_pipeline_post_process_btn"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_baseline_redo_24"
+                    android:contentDescription="@string/dictate_history_post_process"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+            </LinearLayout>
+
+            <!-- Output text -->
+            <TextView
+                android:id="@+id/item_pipeline_output_tv"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:maxLines="5"
+                android:ellipsize="end"
+                android:textSize="13sp"
+                tools:text="This is the output text of this processing step..." />
+
+            <!-- Error text -->
+            <TextView
+                android:id="@+id/item_pipeline_error_tv"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@android:color/holo_red_dark"
+                android:textSize="12sp"
+                android:visibility="gone"
+                tools:text="Error: API request failed"
+                tools:visibility="visible" />
+
+            <!-- Meta info (model, duration) -->
+            <TextView
+                android:id="@+id/item_pipeline_meta_tv"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textSize="11sp"
+                android:textColor="?android:attr/textColorSecondary"
+                tools:text="gpt-4o-mini • 1.2s" />
+
+            <!-- Version chips -->
+            <com.google.android.material.chip.ChipGroup
+                android:id="@+id/item_pipeline_version_chip_group"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                app:singleSelection="true"
+                app:selectionRequired="true"
+                android:visibility="gone"
+                tools:visibility="visible" />
+
+            <!-- Downstream warning -->
+            <TextView
+                android:id="@+id/item_pipeline_version_warning_tv"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/dictate_history_version_warning"
+                android:textSize="11sp"
+                android:textColor="@android:color/holo_orange_dark"
+                android:visibility="gone"
+                tools:visibility="visible" />
+
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+</LinearLayout>

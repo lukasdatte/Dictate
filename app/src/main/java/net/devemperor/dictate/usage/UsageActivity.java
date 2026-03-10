@@ -21,12 +21,16 @@ import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.database.DictateDatabase;
+import net.devemperor.dictate.database.dao.UsageDao;
+import net.devemperor.dictate.database.entity.UsageEntity;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class UsageActivity extends AppCompatActivity {
 
-    UsageDatabaseHelper db;
+    private UsageDao usageDao;
 
     @SuppressLint("NotifyDataSetChanged")
     @Override
@@ -46,42 +50,38 @@ public class UsageActivity extends AppCompatActivity {
             actionBar.setTitle(R.string.dictate_usage);
         }
 
-        db = new UsageDatabaseHelper(this);
-        List<UsageModel> data = db.getAll();
+        usageDao = DictateDatabase.getInstance(this).usageDao();
+        List<UsageEntity> data = new ArrayList<>(usageDao.getAll());
 
         RecyclerView recyclerView = findViewById(R.id.usage_rv);
         recyclerView.setHasFixedSize(true);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
 
-        UsageAdapter adapter = new UsageAdapter(this, data, db);
+        UsageAdapter adapter = new UsageAdapter(this, data);
         recyclerView.setAdapter(adapter);
 
-        TextView totalCostTv = findViewById(R.id.usage_total_cost_tv);
-        totalCostTv.setText(getString(R.string.dictate_usage_total_cost, db.getTotalCost()));
+        TextView totalAudioTimeTv = findViewById(R.id.usage_total_audio_time_tv);
+        Long totalTimeOrNull = usageDao.getTotalAudioTime();
+        long totalTime = totalTimeOrNull != null ? totalTimeOrNull : 0;
+        totalAudioTimeTv.setText(getString(R.string.dictate_usage_total_audio_time, totalTime / 60, totalTime % 60));
 
         MaterialButton resetUsageBtn = findViewById(R.id.usage_reset_btn);
         resetUsageBtn.setOnClickListener(v -> new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.dictate_usage_reset_usage_title)
                 .setMessage(R.string.dictate_usage_reset_usage_message)
                 .setPositiveButton(R.string.dictate_yes, (dialog, which) -> {
-                    db.reset();
+                    usageDao.deleteAll();
                     data.clear();
                     adapter.notifyDataSetChanged();
                     findViewById(R.id.usage_no_usage_tv).setVisibility(View.VISIBLE);
                     resetUsageBtn.setEnabled(false);
-                    totalCostTv.setText(getString(R.string.dictate_usage_total_cost, db.getTotalCost()));
+                    totalAudioTimeTv.setText(getString(R.string.dictate_usage_total_audio_time, 0L, 0L));
                 })
                 .setNegativeButton(R.string.dictate_no, null)
                 .show());
 
         findViewById(R.id.usage_no_usage_tv).setVisibility(data.isEmpty() ? View.VISIBLE : View.GONE);
         resetUsageBtn.setEnabled(!data.isEmpty());
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        db.close();
     }
 
     @Override

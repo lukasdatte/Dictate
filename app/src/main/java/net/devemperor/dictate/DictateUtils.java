@@ -8,6 +8,7 @@ import android.media.MediaMetadataRetriever;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.os.LocaleListCompat;
 
+import com.anthropic.client.okhttp.AnthropicOkHttpClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
 
 import java.io.File;
@@ -147,122 +148,6 @@ public class DictateUtils {
         AppCompatDelegate.setApplicationLocales(locales);
     }
 
-    public static double calcModelCost(String modelName, long audioTime, long inputTokens, long outputTokens) {
-        switch (modelName) {
-            // OpenAI transcription models
-            case "whisper-1":  // whisper-1 and gpt-4o-transcribe cost the same
-            case "gpt-4o-transcribe":
-                return audioTime * 0.0001f;  // 0.0001 USD per second
-            case "gpt-4o-mini-transcribe":
-                return audioTime * 0.00005f;
-
-            // OpenAI rewording models
-            case "o4-mini":
-            case "o3-mini":  // o4-mini, o3-mini and o1-mini cost the same
-            case "o1-mini":
-                return inputTokens * 0.0000011f + outputTokens * 0.0000044f;
-            case "o1":
-                return inputTokens * 0.000015f + outputTokens * 0.00006f;
-            case "gpt-5.2":
-                return inputTokens * 0.00000175f + outputTokens * 0.000014f;
-            case "gpt-5":
-                return inputTokens * 0.00000125f + outputTokens * 0.00001f;
-            case "gpt-5-mini":
-                return inputTokens * 0.00000025f + outputTokens * 0.000002f;
-            case "gpt-4o-mini":
-                return inputTokens * 0.00000015f + outputTokens * 0.0000006f;
-            case "gpt-4o":
-                return inputTokens * 0.0000025f + outputTokens * 0.00001f;
-            case "gpt-4-turbo":
-                return inputTokens * 0.00001f + outputTokens * 0.00003f;
-            case "gpt-4":
-                return inputTokens * 0.00003f + outputTokens * 0.00006f;
-            case "gpt-3.5-turbo":
-                return inputTokens * 0.0000005f + outputTokens * 0.0000015f;
-
-            // Groq transcription models
-            case "whisper-large-v3-turbo":
-                return audioTime * 0.000011;  // rounded up
-            case "whisper-large-v3":
-                return audioTime * 0.000031;  // rounded up
-
-            // Groq rewording models
-            case "llama-3.1-8b-instant":
-                return inputTokens * 0.00000005 + outputTokens * 0.00000008;
-            case "llama-3.3-70b-versatile":
-                return inputTokens * 0.00000059 + outputTokens * 0.00000079;
-            case "meta-llama/llama-guard-4-12b":
-                return inputTokens * 0.00000020 + outputTokens * 0.00000020;
-            case "openai/gpt-oss-120b":
-                return inputTokens * 0.00000015 + outputTokens * 0.00000075;
-            case "openai/gpt-oss-20b":
-                return inputTokens * 0.00000010 + outputTokens * 0.00000050;
-
-            default:
-                return 0;
-        }
-    }
-
-    public static String translateModelName(String modelName) {
-        switch (modelName) {
-            // OpenAI transcription models
-            case "whisper-1":
-                return "Whisper V2";
-            case "gpt-4o-transcribe":
-                return "GPT-4o transcribe";
-            case "gpt-4o-mini-transcribe":
-                return "GPT-4o mini transcribe";
-
-            // OpenAI rewording models
-            case "o4-mini":
-                return "OpenAI o4 mini";
-            case "o3-mini":
-                return "OpenAI o3 mini";
-            case "o1-mini":
-                return "OpenAI o1 mini";
-            case "o1":
-                return "OpenAI o1";
-            case "gpt-5.2":
-                return "GPT-5.2";
-            case "gpt-5":
-                return "GPT-5";
-            case "gpt-5-mini":
-                return "GPT-5 mini";
-            case "gpt-4o-mini":
-                return "GPT-4o mini";
-            case "gpt-4o":
-                return "GPT-4o";
-            case "gpt-4-turbo":
-                return "GPT-4 Turbo";
-            case "gpt-4":
-                return "GPT-4";
-            case "gpt-3.5-turbo":
-                return "GPT-3.5 Turbo";
-
-            // Groq transcription models
-            case "whisper-large-v3-turbo":
-                return "Whisper Large V3 Turbo";
-            case "whisper-large-v3":
-                return "Whisper Large V3";
-
-            // Groq rewording models
-            case "llama-3.1-8b-instant":
-                return "LLaMA 3.1 8B Instant";
-            case "llama-3.3-70b-versatile":
-                return "LLaMA 3.3 70B Versatile";
-            case "meta-llama/llama-guard-4-12b":
-                return "LLaMA Guard 4 12B";
-            case "openai/gpt-oss-120b":
-                return "GPT-OSS 120B";
-            case "openai/gpt-oss-20b":
-                return "GPT-OSS 20B";
-
-            // For custom models, return the model name as is
-            default:
-                return modelName;
-        }
-    }
-
     public static long getAudioDuration(File file) {
         try (MediaMetadataRetriever retriever = new MediaMetadataRetriever()) {
             retriever.setDataSource(file.getAbsolutePath());
@@ -307,7 +192,37 @@ public class DictateUtils {
         return true;
     }
 
-    public static void applyProxy(OpenAIOkHttpClient.Builder clientBuilder, SharedPreferences sp) {
+    /**
+     * Creates a Proxy from the user's proxy settings.
+     * @return Proxy instance, or null if proxy is not enabled/configured
+     */
+    public static Proxy createProxy(SharedPreferences sp) {
+        String proxyInput = sp.getString("net.devemperor.dictate.proxy_host", "");
+        boolean proxyEnabled = sp.getBoolean("net.devemperor.dictate.proxy_enabled", false);
+
+        if (!proxyEnabled || proxyInput.isEmpty()) return null;
+
+        Pattern pattern = Pattern.compile("^(?:(socks5|http)://)?(?:(\\w+):(\\w+)@)?([\\w.-]+):(\\d+)$");
+        Matcher matcher = pattern.matcher(proxyInput);
+
+        if (matcher.matches()) {
+            String type = matcher.group(1);
+            String host = matcher.group(4);
+            int port = Integer.parseInt(matcher.group(5));
+
+            Proxy.Type proxyType = Proxy.Type.HTTP;
+            if ("socks5".equalsIgnoreCase(type)) proxyType = Proxy.Type.SOCKS;
+
+            return new Proxy(proxyType, new InetSocketAddress(host, port));
+        }
+        return null;
+    }
+
+    /**
+     * Creates a proxy Authenticator if credentials are configured.
+     * Sets it as the default Authenticator.
+     */
+    public static void applyProxyAuthenticator(SharedPreferences sp) {
         String proxyInput = sp.getString("net.devemperor.dictate.proxy_host", "");
         boolean proxyEnabled = sp.getBoolean("net.devemperor.dictate.proxy_enabled", false);
 
@@ -317,17 +232,8 @@ public class DictateUtils {
         Matcher matcher = pattern.matcher(proxyInput);
 
         if (matcher.matches()) {
-            String type = matcher.group(1); // "socks5" or "http" or null
-            String user = matcher.group(2); // optional
-            String pass = matcher.group(3); // optional
-            String host = matcher.group(4);
-            int port = Integer.parseInt(matcher.group(5));
-
-            Proxy.Type proxyType = Proxy.Type.HTTP; // Default
-            if ("socks5".equalsIgnoreCase(type)) proxyType = Proxy.Type.SOCKS;
-
-            Proxy proxy = new Proxy(proxyType, new InetSocketAddress(host, port));
-            clientBuilder.proxy(proxy);
+            String user = matcher.group(2);
+            String pass = matcher.group(3);
 
             if (user != null && pass != null) {
                 Authenticator.setDefault(new Authenticator() {
@@ -337,6 +243,30 @@ public class DictateUtils {
                     }
                 });
             }
+        }
+    }
+
+    /**
+     * Applies proxy settings to an OpenAI SDK client builder.
+     * Uses createProxy() and applyProxyAuthenticator() internally.
+     */
+    public static void applyProxy(OpenAIOkHttpClient.Builder clientBuilder, SharedPreferences sp) {
+        Proxy proxy = createProxy(sp);
+        if (proxy != null) {
+            clientBuilder.proxy(proxy);
+            applyProxyAuthenticator(sp);
+        }
+    }
+
+    /**
+     * Applies proxy settings to an Anthropic SDK client builder.
+     * Uses createProxy() and applyProxyAuthenticator() internally.
+     */
+    public static void applyProxyToAnthropic(AnthropicOkHttpClient.Builder clientBuilder, SharedPreferences sp) {
+        Proxy proxy = createProxy(sp);
+        if (proxy != null) {
+            clientBuilder.proxy(proxy);
+            applyProxyAuthenticator(sp);
         }
     }
 

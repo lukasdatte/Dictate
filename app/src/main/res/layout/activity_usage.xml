@@ -41,17 +41,17 @@
         android:layout_marginHorizontal="32dp"
         android:layout_marginBottom="16dp"
         android:text="@string/dictate_usage_reset"
-        app:layout_constraintBottom_toTopOf="@+id/usage_total_cost_tv"
+        app:layout_constraintBottom_toTopOf="@+id/usage_total_audio_time_tv"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHorizontal_bias="0.5"
         app:layout_constraintStart_toStartOf="parent" />
 
     <TextView
-        android:id="@+id/usage_total_cost_tv"
+        android:id="@+id/usage_total_audio_time_tv"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginBottom="16dp"
-        android:text="@string/dictate_usage_total_cost"
+        tools:text="Total audio time: 0 min, 0 s"
         android:textSize="18sp"
         android:textStyle="bold"
         app:layout_constraintBottom_toBottomOf="parent"

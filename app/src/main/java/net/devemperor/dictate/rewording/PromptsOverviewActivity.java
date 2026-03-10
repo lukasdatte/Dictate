@@ -23,6 +23,9 @@ import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.database.DictateDatabase;
+import net.devemperor.dictate.database.dao.PromptDao;
+import net.devemperor.dictate.database.entity.PromptEntity;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -40,8 +43,8 @@ import java.util.List;
 
 public class PromptsOverviewActivity extends AppCompatActivity {
 
-    PromptsDatabaseHelper db;
-    List<PromptModel> data;
+    PromptDao promptDao;
+    List<PromptEntity> data;
     RecyclerView recyclerView;
     PromptsOverviewAdapter adapter;
 
@@ -66,17 +69,17 @@ public class PromptsOverviewActivity extends AppCompatActivity {
             actionBar.setTitle(R.string.dictate_prompts);
         }
 
-        db = new PromptsDatabaseHelper(this);
-        data = db.getAll();
+        promptDao = DictateDatabase.getInstance(this).promptDao();
+        data = new ArrayList<>(promptDao.getAll());
 
         recyclerView = findViewById(R.id.prompts_overview_rv);
         recyclerView.setHasFixedSize(true);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
-        adapter = new PromptsOverviewAdapter(this, data, db, position -> {
-            PromptModel model = data.get(position);
+        adapter = new PromptsOverviewAdapter(this, data, promptDao, position -> {
+            PromptEntity entity = data.get(position);
 
             Intent intent = new Intent(this, PromptEditActivity.class);
-            intent.putExtra("net.devemperor.dictate.prompt_edit_activity_id", model.getId());
+            intent.putExtra("net.devemperor.dictate.prompt_edit_activity_id", entity.getId());
             addEditPromptLauncher.launch(intent);
         });
         recyclerView.setAdapter(adapter);
@@ -124,7 +127,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
                             addedId = result.getData().getIntExtra("added_id", -1);
                         }
                         if (updatedId != -1) {
-                            PromptModel updatedPrompt = db.get(updatedId);
+                            PromptEntity updatedPrompt = promptDao.getById(updatedId);
                             for (int i = 0; i < data.size(); i++) {
                                 if (data.get(i).getId() == updatedId) {
                                     data.set(i, updatedPrompt);
@@ -133,7 +136,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
                                 }
                             }
                         } else if (addedId != -1) {
-                            data.add(db.get(addedId));
+                            data.add(promptDao.getById(addedId));
                             adapter.notifyItemInserted(data.size() - 1);
                             updateEmptyState();
                         }
@@ -143,16 +146,16 @@ public class PromptsOverviewActivity extends AppCompatActivity {
     }
 
     private void exportPrompts(Uri uri) {
-        List<PromptModel> prompts = db.getAll();
+        List<PromptEntity> prompts = promptDao.getAll();
         JSONObject root = new JSONObject();
         JSONArray promptsArray = new JSONArray();
         try {
-            for (PromptModel model : prompts) {
+            for (PromptEntity entity : prompts) {
                 JSONObject promptObject = new JSONObject();
-                promptObject.put("name", model.getName());
-                promptObject.put("prompt", model.getPrompt());
-                promptObject.put("requiresSelection", model.requiresSelection());
-                promptObject.put("autoApply", model.isAutoApply());
+                promptObject.put("name", entity.getName());
+                promptObject.put("prompt", entity.getPrompt());
+                promptObject.put("requiresSelection", entity.getRequiresSelection());
+                promptObject.put("autoApply", entity.getAutoApply());
                 promptsArray.put(promptObject);
             }
             root.put("version", 1);
@@ -186,7 +189,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
                 return;
             }
             String json = readStream(inputStream);
-            List<PromptModel> importedPrompts = parsePrompts(json);
+            List<PromptEntity> importedPrompts = parsePrompts(json);
             if (importedPrompts.isEmpty()) {
                 showToast(R.string.dictate_prompts_import_no_prompts);
                 return;
@@ -209,7 +212,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
         return builder.toString();
     }
 
-    private List<PromptModel> parsePrompts(String json) throws JSONException {
+    private List<PromptEntity> parsePrompts(String json) throws JSONException {
         JSONArray promptsArray = null;
         try {
             JSONObject root = new JSONObject(json);
@@ -221,7 +224,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
             promptsArray = new JSONArray(json);
         }
 
-        List<PromptModel> prompts = new ArrayList<>();
+        List<PromptEntity> prompts = new ArrayList<>();
         for (int i = 0; i < promptsArray.length(); i++) {
             JSONObject promptObject = promptsArray.optJSONObject(i);
             if (promptObject == null) continue;
@@ -232,12 +235,12 @@ public class PromptsOverviewActivity extends AppCompatActivity {
 
             boolean requiresSelection = promptObject.optBoolean("requiresSelection", false);
             boolean autoApply = promptObject.optBoolean("autoApply", false);
-            prompts.add(new PromptModel(0, prompts.size(), name, prompt, requiresSelection, autoApply));
+            prompts.add(new PromptEntity(0, prompts.size(), name, prompt, requiresSelection, autoApply));
         }
         return prompts;
     }
 
-    private void showImportModeDialog(List<PromptModel> importedPrompts) {
+    private void showImportModeDialog(List<PromptEntity> importedPrompts) {
         new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.dictate_prompts_import_mode_title)
                 .setMessage(R.string.dictate_prompts_import_mode_message)
@@ -247,25 +250,26 @@ public class PromptsOverviewActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void replacePrompts(List<PromptModel> importedPrompts) {
-        List<PromptModel> sanitized = new ArrayList<>(importedPrompts.size());
+    private void replacePrompts(List<PromptEntity> importedPrompts) {
+        List<PromptEntity> sanitized = new ArrayList<>(importedPrompts.size());
         for (int i = 0; i < importedPrompts.size(); i++) {
-            PromptModel model = importedPrompts.get(i);
-            sanitized.add(new PromptModel(0, i, model.getName(), model.getPrompt(), model.requiresSelection(), model.isAutoApply()));
+            PromptEntity entity = importedPrompts.get(i);
+            sanitized.add(new PromptEntity(0, i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply()));
         }
-        db.replaceAll(sanitized);
+        promptDao.deleteAll();
+        promptDao.insertAll(sanitized);
         reloadPrompts();
         showToast(R.string.dictate_prompts_import_success);
     }
 
-    private void appendPrompts(List<PromptModel> importedPrompts) {
-        int startPos = db.count();
-        List<PromptModel> sanitized = new ArrayList<>(importedPrompts.size());
+    private void appendPrompts(List<PromptEntity> importedPrompts) {
+        int startPos = promptDao.count();
+        List<PromptEntity> sanitized = new ArrayList<>(importedPrompts.size());
         for (int i = 0; i < importedPrompts.size(); i++) {
-            PromptModel model = importedPrompts.get(i);
-            sanitized.add(new PromptModel(0, startPos + i, model.getName(), model.getPrompt(), model.requiresSelection(), model.isAutoApply()));
+            PromptEntity entity = importedPrompts.get(i);
+            sanitized.add(new PromptEntity(0, startPos + i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply()));
         }
-        db.addAll(sanitized);
+        promptDao.insertAll(sanitized);
         reloadPrompts();
         showToast(R.string.dictate_prompts_import_success);
     }
@@ -273,7 +277,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
     @SuppressLint("NotifyDataSetChanged")
     private void reloadPrompts() {
         data.clear();
-        data.addAll(db.getAll());
+        data.addAll(promptDao.getAll());
         adapter.notifyDataSetChanged();
         updateEmptyState();
     }
@@ -287,12 +291,6 @@ public class PromptsOverviewActivity extends AppCompatActivity {
 
     private void showToast(int resId) {
         Toast.makeText(this, resId, Toast.LENGTH_SHORT).show();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        db.close();
     }
 
     @Override

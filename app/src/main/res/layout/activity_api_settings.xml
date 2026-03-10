@@ -51,6 +51,14 @@
                 android:id="@+id/api_settings_transcription_model_spn"
                 android:layout_width="match_parent"
                 android:layout_height="48dp" />
+
+            <ProgressBar
+                android:id="@+id/api_settings_transcription_model_progress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:indeterminate="true"
+                android:visibility="gone" />
         </LinearLayout>
 
         <!-- Transcription API Key Group -->
@@ -181,6 +189,14 @@
                 android:id="@+id/api_settings_rewording_model_spn"
                 android:layout_width="match_parent"
                 android:layout_height="48dp" />
+
+            <ProgressBar
+                android:id="@+id/api_settings_rewording_model_progress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:indeterminate="true"
+                android:visibility="gone" />
         </LinearLayout>
 
         <!-- Rewording API Key Group -->
@@ -263,5 +279,14 @@
                     android:hint="@string/dictate_custom_rewording_model_hint" />
             </LinearLayout>
         </LinearLayout>
+
+        <!-- Rewording Parameter Container (dynamically populated) -->
+        <LinearLayout
+            android:id="@+id/api_settings_rewording_parameter_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="32dp" />
+
     </LinearLayout>
 </ScrollView>

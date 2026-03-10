@@ -18,10 +18,13 @@ import com.google.android.material.materialswitch.MaterialSwitch;
 
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.SimpleTextWatcher;
+import net.devemperor.dictate.database.DictateDatabase;
+import net.devemperor.dictate.database.dao.PromptDao;
+import net.devemperor.dictate.database.entity.PromptEntity;
 
 public class PromptEditActivity extends AppCompatActivity {
 
-    private PromptsDatabaseHelper db;
+    private PromptDao promptDao;
     private EditText promptNameEt;
     private EditText promptPromptEt;
     private MaterialSwitch promptRequiresSelectionSwitch;
@@ -57,20 +60,20 @@ public class PromptEditActivity extends AppCompatActivity {
         promptAutoApplySwitch = findViewById(R.id.prompt_edit_auto_apply_switch);
         savePromptBtn = findViewById(R.id.prompt_edit_save_btn);
 
-        db = new PromptsDatabaseHelper(this);
+        promptDao = DictateDatabase.getInstance(this).promptDao();
 
         promptId = getIntent().getIntExtra("net.devemperor.dictate.prompt_edit_activity_id", -1);
         if (promptId != -1) {
-            PromptModel model = db.get(promptId);
-            if (model != null) {
-                promptNameEt.setText(model.getName());
-                promptPromptEt.setText(model.getPrompt());
-                promptRequiresSelectionSwitch.setChecked(model.requiresSelection());
-                promptAutoApplySwitch.setChecked(model.isAutoApply());
-                initialName = model.getName();
-                initialPrompt = model.getPrompt();
-                initialRequiresSelection = model.requiresSelection();
-                initialAutoApply = model.isAutoApply();
+            PromptEntity entity = promptDao.getById(promptId);
+            if (entity != null) {
+                promptNameEt.setText(entity.getName());
+                promptPromptEt.setText(entity.getPrompt());
+                promptRequiresSelectionSwitch.setChecked(entity.getRequiresSelection());
+                promptAutoApplySwitch.setChecked(entity.getAutoApply());
+                initialName = entity.getName();
+                initialPrompt = entity.getPrompt();
+                initialRequiresSelection = entity.getRequiresSelection();
+                initialAutoApply = entity.getAutoApply();
             } else {
                 promptId = -1;
             }
@@ -98,12 +101,6 @@ public class PromptEditActivity extends AppCompatActivity {
         updateSaveButtonState();
 
         savePromptBtn.setOnClickListener(v -> savePrompt());
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        db.close();
     }
 
     @Override
@@ -176,16 +173,14 @@ public class PromptEditActivity extends AppCompatActivity {
 
         Intent result = new Intent();
         if (promptId == -1) {
-            int addId = db.add(new PromptModel(0, db.count(), name, prompt, requiresSelection, autoApply));
-            result.putExtra("added_id", addId);
+            PromptEntity newEntity = new PromptEntity(0, promptDao.count(), name, prompt, requiresSelection, autoApply);
+            long addId = promptDao.insert(newEntity);
+            result.putExtra("added_id", (int) addId);
         } else {
-            PromptModel model = db.get(promptId);
-            if (model != null) {
-                model.setName(name);
-                model.setPrompt(prompt);
-                model.setRequiresSelection(requiresSelection);
-                model.setAutoApply(autoApply);
-                db.update(model);
+            PromptEntity existing = promptDao.getById(promptId);
+            if (existing != null) {
+                PromptEntity updated = new PromptEntity(existing.getId(), existing.getPos(), name, prompt, requiresSelection, autoApply);
+                promptDao.update(updated);
             }
             result.putExtra("updated_id", promptId);
         }

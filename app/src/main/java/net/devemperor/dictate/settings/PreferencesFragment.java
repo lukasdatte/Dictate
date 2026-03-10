@@ -23,8 +23,9 @@ import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
+import net.devemperor.dictate.database.DictateDatabase;
+import net.devemperor.dictate.database.dao.UsageDao;
 import net.devemperor.dictate.usage.UsageActivity;
-import net.devemperor.dictate.usage.UsageDatabaseHelper;
 
 import java.io.File;
 import java.util.Arrays;
@@ -34,14 +35,14 @@ import java.util.stream.Collectors;
 public class PreferencesFragment extends PreferenceFragmentCompat {
 
     SharedPreferences sp;
-    UsageDatabaseHelper usageDatabaseHelper;
+    UsageDao usageDao;
 
     @Override
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
         getPreferenceManager().setSharedPreferencesName("net.devemperor.dictate");
         setPreferencesFromResource(R.xml.fragment_preferences, null);
         sp = getPreferenceManager().getSharedPreferences();
-        usageDatabaseHelper = new UsageDatabaseHelper(requireContext());
+        usageDao = DictateDatabase.getInstance(requireContext()).usageDao();
 
         Preference editPromptsPreference = findPreference("net.devemperor.dictate.edit_custom_rewording_prompts");
         if (editPromptsPreference != null) {
@@ -118,7 +119,9 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
 
         Preference usagePreference = findPreference("net.devemperor.dictate.usage");
         if (usagePreference != null) {
-            usagePreference.setSummary(getString(R.string.dictate_usage_total_cost, usageDatabaseHelper.getTotalCost()));
+            Long totalTimeOrNull = usageDao.getTotalAudioTime();
+            long totalTime = totalTimeOrNull != null ? totalTimeOrNull : 0;
+            usagePreference.setSummary(getString(R.string.dictate_usage_total_audio_time, totalTime / 60, totalTime % 60));
 
             usagePreference.setOnPreferenceClickListener(preference -> {
                 Intent intent = new Intent(requireContext(), UsageActivity.class);

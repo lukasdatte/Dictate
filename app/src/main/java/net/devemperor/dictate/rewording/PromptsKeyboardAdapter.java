@@ -17,6 +17,7 @@ import com.google.android.material.button.MaterialButton;
 
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.database.entity.PromptEntity;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,7 +30,7 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
     private static final TimeInterpolator PRESS_INTERPOLATOR = new DecelerateInterpolator();
 
     private final SharedPreferences sp;
-    private final List<PromptModel> data;
+    private final List<PromptEntity> data;
     private final AdapterCallback callback;
     private final List<Integer> queuedPromptOrder = new ArrayList<>();
     private boolean disableNonSelectionPrompts = false;
@@ -41,7 +42,7 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
         void onItemLongClicked(Integer position);
     }
 
-    public PromptsKeyboardAdapter(SharedPreferences sp, List<PromptModel> data, AdapterCallback callback) {
+    public PromptsKeyboardAdapter(SharedPreferences sp, List<PromptEntity> data, AdapterCallback callback) {
         this.sp = sp;
         this.data = data;
         this.callback = callback;
@@ -89,7 +90,7 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
         holder.promptBtn.animate().cancel();
         holder.promptBtn.setScaleX(1f);
         holder.promptBtn.setScaleY(1f);
-        PromptModel model = data.get(position);
+        PromptEntity model = data.get(position);
         if (holder.promptBtn == selectAllButton && model.getId() != -3) {
             selectAllButton = null;
         }
@@ -118,7 +119,7 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
             }
             holder.promptBtn.setForeground(null);
         }
-        boolean shouldDisable = disableNonSelectionPrompts && model.getId() >= 0 && !model.requiresSelection();
+        boolean shouldDisable = disableNonSelectionPrompts && model.getId() >= 0 && !model.getRequiresSelection();
         holder.promptBtn.setEnabled(!shouldDisable);
         holder.promptBtn.setAlpha(shouldDisable ? 0.5f : 1f);
         if (model.getId() >= 0) {

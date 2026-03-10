@@ -1,5 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -26,6 +28,9 @@ android {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
 
     buildFeatures {
         buildConfig = true
@@ -34,6 +39,10 @@ android {
     packagingOptions {
         exclude 'META-INF/DEPENDENCIES'
     }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -49,7 +58,12 @@ dependencies {
     androidTestImplementation libs.espresso.core
 
     implementation libs.openai.java
+    implementation libs.anthropic.java
     implementation libs.converter.jackson
     implementation libs.commons.validator
     implementation libs.colorpicker
+
+    implementation libs.room.runtime
+    implementation libs.room.ktx
+    ksp libs.room.compiler
 }

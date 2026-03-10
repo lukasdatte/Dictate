@@ -6,10 +6,8 @@ import android.animation.TimeInterpolator;
 import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.app.Dialog;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -18,7 +16,6 @@ import android.graphics.drawable.GradientDrawable;
 import android.inputmethodservice.InputMethodService;
 import android.icu.text.BreakIterator;
 import android.media.AudioAttributes;
-import android.media.AudioDeviceInfo;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaRecorder;
@@ -62,43 +59,43 @@ import androidx.recyclerview.widget.RecyclerView;
 import androidx.recyclerview.widget.StaggeredGridLayoutManager;
 
 import com.google.android.material.button.MaterialButton;
-import com.openai.client.okhttp.OpenAIOkHttpClient;
-import com.openai.models.audio.AudioResponseFormat;
-import com.openai.models.audio.transcriptions.Transcription;
-import com.openai.models.audio.transcriptions.TranscriptionCreateParams;
-import com.openai.models.chat.completions.ChatCompletion;
-import com.openai.models.chat.completions.ChatCompletionCreateParams;
 
 import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateUtils;
+import net.devemperor.dictate.ai.AIOrchestrator;
+import net.devemperor.dictate.ai.AIProviderException;
+import net.devemperor.dictate.ai.runner.CompletionResult;
+import net.devemperor.dictate.ai.runner.TranscriptionResult;
+import net.devemperor.dictate.database.DictateDatabase;
+import net.devemperor.dictate.preferences.PrefsMigration;
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.database.dao.PromptDao;
+import net.devemperor.dictate.database.dao.UsageDao;
+import net.devemperor.dictate.database.entity.PromptEntity;
 import net.devemperor.dictate.rewording.PromptEditActivity;
-import net.devemperor.dictate.rewording.PromptModel;
-import net.devemperor.dictate.rewording.PromptsDatabaseHelper;
 import net.devemperor.dictate.rewording.PromptsKeyboardAdapter;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
-import net.devemperor.dictate.usage.UsageDatabaseHelper;
 
 import java.io.File;
-import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 // MAIN CLASS
-public class DictateInputMethodService extends InputMethodService {
+public class DictateInputMethodService extends InputMethodService
+        implements RecordingManager.RecordingCallback,
+                   BluetoothScoManager.BluetoothScoCallback,
+                   PromptQueueManager.PromptQueueCallback {
 
     // define handlers and runnables for background tasks
     private static final int DELETE_LOOKBACK_CHARACTERS = 64;
@@ -128,17 +125,12 @@ public class DictateInputMethodService extends InputMethodService {
 
     private Handler mainHandler;
     private Handler deleteHandler;
-    private Handler recordTimeHandler;
     private Runnable deleteRunnable;
-    private Runnable recordTimeRunnable;
 
     // define variables and objects
-    private long elapsedTime;
     private boolean isDeleting = false;
     private long startDeleteTime = 0;
     private int currentDeleteDelay = 50;
-    private boolean isRecording = false;
-    private boolean isPaused = false;
     private boolean livePrompt = false;
     private boolean vibrationEnabled = true;
     private boolean audioFocusEnabled = true;
@@ -155,7 +147,6 @@ public class DictateInputMethodService extends InputMethodService {
     private List<Integer> swipeWordBoundaries = null;
     private int swipeSelectedSteps = 0;
 
-    private MediaRecorder recorder;
     private ExecutorService speechApiThread;
     private ExecutorService rewordingApiThread;
     private File audioFile;
@@ -163,16 +154,16 @@ public class DictateInputMethodService extends InputMethodService {
     private SharedPreferences sp;
     private AudioManager am;
     private AudioFocusRequest audioFocusRequest;
-    private BroadcastReceiver bluetoothScoReceiver;
 
-    // Bluetooth/SCO state
-    private boolean isBluetoothScoStarted = false; // true only when SCO is CONNECTED
+    // Managers (extracted from God-Class)
+    private RecordingManager recordingManager;
+    private BluetoothScoManager bluetoothScoManager;
+    private PromptQueueManager promptQueueManager;
+
+    // Bluetooth/SCO state kept in service (for startRecording coordination)
     private boolean isPreparingRecording = false; // true while we wait for SCO before starting recorder
     private boolean recordingPending = false;     // flag to start recording after SCO connected
-    private boolean waitingForSco = false;        // we're actively waiting for SCO
     private boolean recordingUsesBluetooth = false; // current recording actually uses BT mic
-    private Handler bluetoothHandler;             // handler for timeouts
-    private Runnable scoTimeoutRunnable;
 
     // define views
     private ConstraintLayout dictateKeyboardView;
@@ -217,16 +208,106 @@ public class DictateInputMethodService extends InputMethodService {
     // Keep screen awake while recording
     private boolean keepScreenAwakeApplied = false;
 
-    PromptsDatabaseHelper promptsDb;
+    PromptDao promptDao;
     PromptsKeyboardAdapter promptsAdapter;
-    private final List<Integer> queuedPromptIds = new ArrayList<>();
     private boolean disableNonSelectionPrompts = false;
 
-    UsageDatabaseHelper usageDb;
+    UsageDao usageDao;
+    private AIOrchestrator aiOrchestrator;
 
     private interface PromptResultCallback {
         void onSuccess(String text);
         void onFailure();
+    }
+
+    // ===== RecordingManager.RecordingCallback =====
+
+    @Override
+    public void onRecordingStarted() {
+        recordingUsesBluetooth = bluetoothScoManager.isScoStarted();
+        isPreparingRecording = false;
+        recordingPending = false;
+        updatePromptButtonsEnabledState();
+
+        mainHandler.post(() -> {
+            recordButton.setEnabled(true);
+            recordButton.setText(R.string.dictate_send);
+            applyRecordingIconState(true);
+            updateRecordButtonIconWhileRecording();
+            updateKeepScreenAwake(true);
+            pauseButton.setVisibility(View.VISIBLE);
+            trashButton.setVisibility(View.VISIBLE);
+            resendButton.setVisibility(View.GONE);
+        });
+    }
+
+    @Override
+    public void onRecordingStopped(File audioFile) {
+        // No-op: stop is always followed by explicit action (startWhisperApiRequest or UI reset)
+    }
+
+    @Override
+    public void onRecordingPaused() {
+        mainHandler.post(() -> {
+            pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_mic_24));
+            if (recordPulseX != null && recordPulseX.isRunning()) recordPulseX.pause();
+            if (recordPulseY != null && recordPulseY.isRunning()) recordPulseY.pause();
+        });
+    }
+
+    @Override
+    public void onRecordingResumed() {
+        mainHandler.post(() -> {
+            pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
+            if (recordPulseX != null && recordPulseX.isPaused()) recordPulseX.resume();
+            if (recordPulseY != null && recordPulseY.isPaused()) recordPulseY.resume();
+        });
+    }
+
+    @Override
+    public void onTimerTick(long elapsedMs) {
+        mainHandler.post(() -> recordButton.setText(getString(R.string.dictate_send,
+                String.format(Locale.getDefault(), "%02d:%02d", (int) (elapsedMs / 60000), (int) (elapsedMs / 1000) % 60))));
+    }
+
+    // ===== BluetoothScoManager.BluetoothScoCallback =====
+
+    @Override
+    public void onScoConnected() {
+        // If we were waiting to start the recording until SCO connects, start now
+        if (recordingPending) {
+            proceedStartRecording(MediaRecorder.AudioSource.VOICE_COMMUNICATION, true);
+        }
+
+        // Update icon if we are recording and currently using BT
+        if (recordingManager.isRecording()) {
+            updateRecordButtonIconWhileRecording();
+        }
+    }
+
+    @Override
+    public void onScoDisconnected() {
+        // If we were recording using BT and it got disconnected, keep recording and switch icon
+        if (recordingManager.isRecording() && recordingUsesBluetooth) {
+            recordingUsesBluetooth = false;
+            updateRecordButtonIconWhileRecording();
+        }
+    }
+
+    @Override
+    public void onScoFailed() {
+        // SCO timeout: fall back to MIC
+        if (recordingPending) {
+            proceedStartRecording(MediaRecorder.AudioSource.MIC, false);
+        }
+    }
+
+    // ===== PromptQueueManager.PromptQueueCallback =====
+
+    @Override
+    public void onQueueChanged(List<Integer> queuedIds) {
+        if (promptsAdapter == null || mainHandler == null) return;
+        mainHandler.post(() -> promptsAdapter.setQueuedPromptOrder(queuedIds));
     }
 
     // start method that is called when user opens the keyboard
@@ -238,13 +319,25 @@ public class DictateInputMethodService extends InputMethodService {
         // initialize some stuff
         mainHandler = new Handler(Looper.getMainLooper());
         deleteHandler = new Handler();
-        recordTimeHandler = new Handler(Looper.getMainLooper());
-        bluetoothHandler = new Handler(Looper.getMainLooper());
 
         vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE);
-        promptsDb = new PromptsDatabaseHelper(this);
-        usageDb = new UsageDatabaseHelper(this);
+        DictateDatabase dictateDb = DictateDatabase.getInstance(this);
+        promptDao = dictateDb.promptDao();
+        usageDao = dictateDb.usageDao();
+
+        // Migrate old int-based provider prefs (0/1/2) to String-based ("OPENAI"/"GROQ"/"CUSTOM")
+        PrefsMigration.migrateProviderPrefs(sp);
+        aiOrchestrator = new AIOrchestrator(sp, dictateDb.usageDao());
+
+        // Initialize managers
+        recordingManager = new RecordingManager(this);
+        am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        bluetoothScoManager = new BluetoothScoManager(this, am, this);
+        promptQueueManager = new PromptQueueManager(
+                promptDao::getAutoApplyIds,
+                sp, this);
+
         vibrationEnabled = sp.getBoolean("net.devemperor.dictate.vibration", true);
         currentInputLanguagePos = sp.getInt("net.devemperor.dictate.input_language_pos", 0);
 
@@ -307,18 +400,7 @@ public class DictateInputMethodService extends InputMethodService {
             sp.edit().putString("net.devemperor.dictate.user_id", String.valueOf((int) (Math.random() * 1000000))).apply();
         }
 
-        recordTimeRunnable = new Runnable() {  // runnable to update the record button time text
-            @Override
-            public void run() {
-                elapsedTime += 100;
-                recordButton.setText(getString(R.string.dictate_send,
-                        String.format(Locale.getDefault(), "%02d:%02d", (int) (elapsedTime / 60000), (int) (elapsedTime / 1000) % 60)));
-                recordTimeHandler.postDelayed(this, 100);
-            }
-        };
-
         // initialize audio manager to stop and start background audio
-        am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                 .setAudioAttributes(new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -327,14 +409,14 @@ public class DictateInputMethodService extends InputMethodService {
                 .setAcceptsDelayedFocusGain(true)
                 .setOnAudioFocusChangeListener(focusChange -> {
                     if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
-                        if (isRecording) pauseButton.performClick();
+                        if (recordingManager.isRecording()) pauseButton.performClick();
                     }
                 })
                 .build();
-        initAndRegisterBluetoothReceiver();
+        bluetoothScoManager.registerReceiver();
 
         settingsButton.setOnClickListener(v -> {
-            if (isRecording) trashButton.performClick();
+            if (recordingManager.isRecording()) trashButton.performClick();
             infoCl.setVisibility(View.GONE);
             openSettingsActivity();
         });
@@ -347,9 +429,9 @@ public class DictateInputMethodService extends InputMethodService {
             infoCl.setVisibility(View.GONE);
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 openSettingsActivity();
-            } else if (!isRecording && !isPreparingRecording) {
+            } else if (!recordingManager.isRecording() && !isPreparingRecording) {
                 startRecording();
-            } else if (isRecording) {
+            } else if (recordingManager.isRecording()) {
                 stopRecording();
             }
         });
@@ -357,7 +439,7 @@ public class DictateInputMethodService extends InputMethodService {
         recordButton.setOnLongClickListener(v -> {
             vibrate();
 
-            if (!isRecording && !isPreparingRecording) {  // open real settings activity to start file picker
+            if (!recordingManager.isRecording() && !isPreparingRecording) {  // open real settings activity to start file picker
                 Intent intent = new Intent(this, DictateSettingsActivity.class);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 intent.putExtra("net.devemperor.dictate.open_file_picker", true);
@@ -539,19 +621,12 @@ public class DictateInputMethodService extends InputMethodService {
         trashButton.setOnClickListener(v -> {
             vibrate();
 
-            cancelScoWaitIfAny();  // cancel any pending SCO wait
+            cancelScoWaitIfAny();
+            recordingManager.release();
+            recordingUsesBluetooth = false;
+            bluetoothScoManager.release();
 
-            if (recorder != null) {
-                try { recorder.stop(); } catch (RuntimeException ignored) {}
-                recorder.release();
-                recorder = null;
-
-                if (recordTimeRunnable != null) {
-                    recordTimeHandler.removeCallbacks(recordTimeRunnable);
-                }
-            }
             if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-            if (isBluetoothScoStarted) am.stopBluetoothSco();
 
             // enable resend button if previous audio file still exists in cache
             if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
@@ -559,11 +634,8 @@ public class DictateInputMethodService extends InputMethodService {
                 resendButton.setVisibility(View.VISIBLE);
             }
 
-            isRecording = false;
-            isPaused = false;
             livePrompt = false;
-            clearQueuedPrompts();
-            recordingUsesBluetooth = false;
+            promptQueueManager.clear();
             updatePromptButtonsEnabledState();
             recordButton.setText(getDictateButtonText());
             applyRecordingIconState(false);
@@ -623,24 +695,13 @@ public class DictateInputMethodService extends InputMethodService {
 
         pauseButton.setOnClickListener(v -> {
             vibrate();
-            if (recorder != null) {
-                if (isPaused) {
-                    if (audioFocusEnabled) am.requestAudioFocus(audioFocusRequest);
-                    recorder.resume();
-                    recordTimeHandler.post(recordTimeRunnable);
-                    pauseButton.setForeground(AppCompatResources.getDrawable(context, R.drawable.ic_baseline_pause_24));
-                    isPaused = false;
-                    if (recordPulseX != null && recordPulseX.isPaused()) recordPulseX.resume();
-                    if (recordPulseY != null && recordPulseY.isPaused()) recordPulseY.resume();
-                } else {
-                    if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-                    recorder.pause();
-                    recordTimeHandler.removeCallbacks(recordTimeRunnable);
-                    pauseButton.setForeground(AppCompatResources.getDrawable(context, R.drawable.ic_baseline_mic_24));
-                    isPaused = true;
-                    if (recordPulseX != null && recordPulseX.isRunning()) recordPulseX.pause();
-                    if (recordPulseY != null && recordPulseY.isRunning()) recordPulseY.pause();
-                }
+            if (recordingManager.isPaused()) {
+                if (audioFocusEnabled) am.requestAudioFocus(audioFocusRequest);
+                recordingManager.resume();
+                // BT SCO reconnect not done here - user accepted fallback to built-in mic on pause
+            } else {
+                if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
+                recordingManager.pause();
             }
         });
 
@@ -752,72 +813,82 @@ public class DictateInputMethodService extends InputMethodService {
         return dictateKeyboardView;
     }
 
-    private void initAndRegisterBluetoothReceiver() {
-        if (bluetoothScoReceiver != null) return;
-
-        bluetoothScoReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                if (!AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED.equals(intent.getAction())) return;
-
-                int state = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, AudioManager.SCO_AUDIO_STATE_ERROR);
-                if (state == AudioManager.SCO_AUDIO_STATE_CONNECTED) {
-                    isBluetoothScoStarted = true;
-
-                    // If we were waiting to start the recording until SCO connects, start now
-                    if (recordingPending && waitingForSco) {
-                        waitingForSco = false;
-                        if (bluetoothHandler != null && scoTimeoutRunnable != null) {
-                            bluetoothHandler.removeCallbacks(scoTimeoutRunnable);
-                        }
-                        proceedStartRecording(MediaRecorder.AudioSource.VOICE_COMMUNICATION, true);
-                    }
-
-                    // Update icon if we are recording and currently using BT
-                    if (isRecording) {
-                        updateRecordButtonIconWhileRecording();
-                    }
-                } else if (state == AudioManager.SCO_AUDIO_STATE_DISCONNECTED) {
-                    isBluetoothScoStarted = false;
-
-                    // If we were recording using BT and it got disconnected, keep recording and switch icon
-                    if (isRecording && recordingUsesBluetooth) {
-                        recordingUsesBluetooth = false;
-                        updateRecordButtonIconWhileRecording();
-                    }
-                }
-            }
-        };
-        registerReceiver(bluetoothScoReceiver, new IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED));
-    }
+    // Auto-stop timeout when recording is paused due to keyboard minimization
+    private final Runnable pauseTimeoutRunnable = () -> {
+        if (recordingManager.isRecording() && recordingManager.isPaused()) {
+            // Auto-stop after timeout: discard recording and reset UI
+            recordingManager.release();
+            if (recordPulseX != null) recordPulseX.cancel();
+            if (recordPulseY != null) recordPulseY.cancel();
+            livePrompt = false;
+            promptQueueManager.clear();
+            recordingUsesBluetooth = false;
+            updatePromptButtonsEnabledState();
+            mainHandler.post(() -> {
+                recordButton.setText(getDictateButtonText());
+                applyRecordingIconState(false);
+                recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
+                recordButton.setEnabled(true);
+                pauseButton.setVisibility(View.GONE);
+                trashButton.setVisibility(View.GONE);
+                updateKeepScreenAwake(false);
+            });
+        }
+    };
 
     // method is called if the user closed the keyboard
     @Override
     public void onFinishInputView(boolean finishingInput) {
         super.onFinishInputView(finishingInput);
 
-        cancelScoWaitIfAny();  // cancel any pending SCO wait
+        // State (A): Recording is active (running or paused) -> pause and set timeout
+        if (recordingManager.isRecording()) {
+            cancelScoWaitIfAny();
 
-        if (recorder != null) {
-            try {
-                recorder.stop();
-            } catch (RuntimeException ignored) { }
-            recorder.release();
-            recorder = null;
+            if (!recordingManager.isPaused()) {
+                // Pause the recorder (delegates to RecordingManager which fires onRecordingPaused callback)
+                recordingManager.pause();
 
-            if (recordTimeRunnable != null) {
-                recordTimeHandler.removeCallbacks(recordTimeRunnable);
+                // Release BT SCO (will be rebuilt on resume)
+                boolean useBluetoothMic = sp.getBoolean("net.devemperor.dictate.use_bluetooth_mic", false);
+                if (useBluetoothMic && bluetoothScoManager.isScoStarted()) {
+                    bluetoothScoManager.release();
+                }
+
+                // Release audio focus while paused
+                if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
             }
+
+            // Auto-stop after 60s inactivity (reset if already pending)
+            mainHandler.removeCallbacks(pauseTimeoutRunnable);
+            mainHandler.postDelayed(pauseTimeoutRunnable, 60_000);
+
+            // Hide panels but keep recording state
+            emojiPickerCl.setVisibility(View.GONE);
+            numbersPanelCl.setVisibility(View.GONE);
+            return;
         }
+
+        // State (B): API request is running -> let it continue, just hide UI panels
+        if (speechApiThread != null && !speechApiThread.isShutdown()) {
+            emojiPickerCl.setVisibility(View.GONE);
+            numbersPanelCl.setVisibility(View.GONE);
+            return;
+        }
+        if (rewordingApiThread != null && !rewordingApiThread.isShutdown()) {
+            emojiPickerCl.setVisibility(View.GONE);
+            numbersPanelCl.setVisibility(View.GONE);
+            return;
+        }
+
+        // State (C): Idle -> full cleanup (original behavior)
+        cancelScoWaitIfAny();
+        recordingManager.release();
 
         if (speechApiThread != null) speechApiThread.shutdownNow();
         if (rewordingApiThread != null) rewordingApiThread.shutdownNow();
 
-        if (bluetoothScoReceiver != null) {
-            unregisterReceiver(bluetoothScoReceiver);
-            bluetoothScoReceiver = null;
-        }
-        if (isBluetoothScoStarted) am.stopBluetoothSco();
+        bluetoothScoManager.unregisterReceiver();
 
         pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
         pauseButton.setVisibility(View.GONE);
@@ -826,10 +897,8 @@ public class DictateInputMethodService extends InputMethodService {
         infoCl.setVisibility(View.GONE);
         emojiPickerCl.setVisibility(View.GONE);
         numbersPanelCl.setVisibility(View.GONE);
-        isRecording = false;
-        isPaused = false;
         livePrompt = false;
-        clearQueuedPrompts();
+        promptQueueManager.clear();
         recordingUsesBluetooth = false;
         updatePromptButtonsEnabledState();
         if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
@@ -840,18 +909,40 @@ public class DictateInputMethodService extends InputMethodService {
         updateKeepScreenAwake(false);
     }
 
+    @Override
+    public void onDestroy() {
+        mainHandler.removeCallbacks(pauseTimeoutRunnable);
+        bluetoothScoManager.unregisterReceiver();
+        recordingManager.release();
+        super.onDestroy();
+    }
+
     // method is called if the keyboard appears again
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
         updateEnterButtonIcon(info);
-        initAndRegisterBluetoothReceiver();
+        bluetoothScoManager.registerReceiver();
+
+        // If recording was paused (by onFinishInputView), show paused UI
+        if (recordingManager.isRecording() && recordingManager.isPaused()) {
+            mainHandler.removeCallbacks(pauseTimeoutRunnable);
+            // Show paused UI state - user must manually resume
+            pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_mic_24));
+            pauseButton.setVisibility(View.VISIBLE);
+            trashButton.setVisibility(View.VISIBLE);
+            long elapsedMs = recordingManager.getElapsedTimeMs();
+            recordButton.setText(getString(R.string.dictate_send,
+                    String.format(Locale.getDefault(), "%02d:%02d", (int) (elapsedMs / 60000), (int) (elapsedMs / 1000) % 60)));
+            recordButton.setEnabled(true);
+            // BT SCO will be rebuilt when user manually clicks resume (not here)
+        }
 
         if (sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) {
             promptsCl.setVisibility(View.VISIBLE);
 
             // collect all prompts from database
-            final List<PromptModel> data = promptsDb.getAllForKeyboard();
+            final List<PromptEntity> data = getPromptsForKeyboard();
             InputConnection inputConnection = getCurrentInputConnection();
             boolean hasSelection = inputConnection != null && inputConnection.getSelectedText(0) != null;
 
@@ -859,15 +950,15 @@ public class DictateInputMethodService extends InputMethodService {
                 @Override
                 public void onItemClicked(Integer position) {
                     vibrate();
-                    PromptModel model = data.get(position);
+                    PromptEntity model = data.get(position);
 
                     if (model.getId() == -1) {  // instant prompt clicked
                         livePrompt = true;
                         if (ContextCompat.checkSelfPermission(DictateInputMethodService.this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                             openSettingsActivity();
-                        } else if (!isRecording && !isPreparingRecording) {
+                        } else if (!recordingManager.isRecording() && !isPreparingRecording) {
                             startRecording();
-                        } else if (isRecording) {
+                        } else if (recordingManager.isRecording()) {
                             stopRecording();
                         }
                     } else if (model.getId() == -3) {  // select all clicked
@@ -877,12 +968,12 @@ public class DictateInputMethodService extends InputMethodService {
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                         startActivity(intent);
                     } else {
-                        if ((isRecording || isPreparingRecording) && !livePrompt) {
-                            toggleQueuedPrompt(model);
+                        if ((recordingManager.isRecording() || isPreparingRecording) && !livePrompt) {
+                            promptQueueManager.togglePrompt(model.getId());
                             return;
                         }
                         InputConnection currentConnection = getCurrentInputConnection();
-                        if (model.requiresSelection()) {
+                        if (model.getRequiresSelection()) {
                             if (currentConnection == null) {
                                 return;
                             }
@@ -905,12 +996,12 @@ public class DictateInputMethodService extends InputMethodService {
 
                 @Override
                 public void onItemLongClicked(Integer position) {
-                    PromptModel model = data.get(position);
-                    if (model.getId() >= 0) {
+                    PromptEntity longClickModel = data.get(position);
+                    if (longClickModel.getId() >= 0) {
                         vibrate();
                         Intent intent = new Intent(DictateInputMethodService.this, PromptEditActivity.class);
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        intent.putExtra("net.devemperor.dictate.prompt_edit_activity_id", model.getId());
+                        intent.putExtra("net.devemperor.dictate.prompt_edit_activity_id", longClickModel.getId());
                         startActivity(intent);
                     }
                 }
@@ -918,7 +1009,7 @@ public class DictateInputMethodService extends InputMethodService {
             promptsRv.setAdapter(promptsAdapter);
             promptsAdapter.setDisableNonSelectionPrompts(disableNonSelectionPrompts);
             promptsAdapter.setSelectAllActive(hasSelection);
-            updateQueuedPromptsUi();
+            onQueueChanged(promptQueueManager.getQueuedIds());
             updateSelectAllPromptState();
         } else {
             promptsCl.setVisibility(View.GONE);
@@ -1004,7 +1095,8 @@ public class DictateInputMethodService extends InputMethodService {
         runningPromptPb.getIndeterminateDrawable().setColorFilter(accentColor, android.graphics.PorterDuff.Mode.SRC_IN);
 
         // show infos for updates, ratings or donations
-        long totalAudioTime = usageDb.getTotalAudioTime();
+        Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
+        long totalAudioTime = totalAudioTimeOrNull != null ? totalAudioTimeOrNull : 0;
         if (sp.getInt("net.devemperor.dictate.last_version_code", 0) < BuildConfig.VERSION_CODE) {
             showInfo("update");
         } else if (totalAudioTime > 180 && totalAudioTime <= 600 && !sp.getBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", false)) {
@@ -1299,65 +1391,41 @@ public class DictateInputMethodService extends InputMethodService {
     }
 
     private void startRecording() {
-        if (isRecording || isPreparingRecording) return;  // prevent re-entrance
+        if (recordingManager.isRecording() || isPreparingRecording) return;  // prevent re-entrance
 
-        prepareAutoApplyQueue();
+        promptQueueManager.prepareAutoApplyQueue();
 
         audioFile = new File(getCacheDir(), "audio.m4a");
         sp.edit().putString("net.devemperor.dictate.last_file_name", audioFile.getName()).apply();
 
-        boolean useBluetoothMic = sp.getBoolean("net.devemperor.dictate.use_bluetooth_mic", false);  // read preference: only use BT mic if enabled
-        boolean btAvailable = useBluetoothMic && am.isBluetoothScoAvailableOffCall() && hasBluetoothInputDevice();  // Check if BT SCO is available and (likely) an input device is present
+        boolean useBluetoothMic = sp.getBoolean("net.devemperor.dictate.use_bluetooth_mic", false);
+        boolean btAvailable = bluetoothScoManager.isBluetoothAvailable(useBluetoothMic);
 
         if (btAvailable) {
-            if (am.isBluetoothScoOn()) {
-                proceedStartRecording(MediaRecorder.AudioSource.VOICE_COMMUNICATION, true);
-            } else {
-                // Prepare to wait for SCO connection before starting the recorder
-                isPreparingRecording = true;
-                recordingPending = true;
-                waitingForSco = true;
-                updatePromptButtonsEnabledState();
-                mainHandler.post(() -> recordButton.setEnabled(false));
+            // Prepare to wait for SCO connection before starting the recorder
+            isPreparingRecording = true;
+            recordingPending = true;
+            updatePromptButtonsEnabledState();
+            mainHandler.post(() -> recordButton.setEnabled(false));
 
-                am.startBluetoothSco();  // initiate SCO connection
-
-                scoTimeoutRunnable = () -> {  // Timeout: if SCO not connected in time, fall back to MIC to avoid gaps
-                    if (recordingPending && waitingForSco) {
-                        waitingForSco = false;
-                        try { am.stopBluetoothSco(); } catch (Exception ignored) {}
-                        proceedStartRecording(MediaRecorder.AudioSource.MIC, false);
-                    }
-                };
-                bluetoothHandler.postDelayed(scoTimeoutRunnable, 2500); // 2.5s timeout
-            }
+            // startSco will call onScoConnected (immediate) or onScoFailed (timeout)
+            // onScoConnected/onScoFailed then call proceedStartRecording
+            bluetoothScoManager.startSco(2500);
         } else {
             proceedStartRecording(MediaRecorder.AudioSource.MIC, false);  // Start immediately with local MIC
         }
     }
 
     private void proceedStartRecording(int audioSource, boolean useBtForThisRecording) {
-        // Build and start MediaRecorder with the decided audio source
-        recorder = new MediaRecorder();
-        recorder.setAudioSource(audioSource);
-        recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-        recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-        recorder.setAudioEncodingBitRate(64000);
-        recorder.setAudioSamplingRate(44100);
-        recorder.setOutputFile(audioFile);
+        recordingUsesBluetooth = useBtForThisRecording;
 
         if (audioFocusEnabled) am.requestAudioFocus(audioFocusRequest);
 
-        try {
-            recorder.prepare();
-            recorder.start();
-        } catch (IOException e) {
-            logException(e);
+        boolean started = recordingManager.start(audioFile, audioSource);
+        if (!started) {
             // reset UI/state on failure
-            isRecording = false;
             isPreparingRecording = false;
             recordingPending = false;
-            waitingForSco = false;
             recordingUsesBluetooth = false;
             updatePromptButtonsEnabledState();
             if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
@@ -1367,50 +1435,15 @@ public class DictateInputMethodService extends InputMethodService {
                 recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
                 recordButton.setEnabled(true);
             });
-            return;
         }
-
-        // success -> update state and UI
-        isRecording = true;
-        isPreparingRecording = false;
-        recordingPending = false;
-        waitingForSco = false;
-        recordingUsesBluetooth = useBtForThisRecording;
-        updatePromptButtonsEnabledState();
-
-        mainHandler.post(() -> {
-            recordButton.setEnabled(true);
-            recordButton.setText(R.string.dictate_send);
-            applyRecordingIconState(true);
-            updateRecordButtonIconWhileRecording();
-            updateKeepScreenAwake(true);
-            pauseButton.setVisibility(View.VISIBLE);
-            trashButton.setVisibility(View.VISIBLE);
-            resendButton.setVisibility(View.GONE);
-            elapsedTime = 0;
-            recordTimeHandler.post(recordTimeRunnable);
-        });
+        // On success, RecordingManager fires onRecordingStarted callback which updates UI
     }
 
     private void stopRecording() {
-        cancelScoWaitIfAny();  // cancel any pending SCO wait
-
-        if (recorder != null) {
-            try {
-                recorder.stop();
-            } catch (RuntimeException ignored) { }
-            recorder.release();
-            recorder = null;
-
-            if (recordTimeRunnable != null) {
-                recordTimeHandler.removeCallbacks(recordTimeRunnable);
-            }
-        }
-
+        cancelScoWaitIfAny();
+        recordingManager.stop();
         updateKeepScreenAwake(false);
-
-        if (isBluetoothScoStarted) am.stopBluetoothSco();
-
+        bluetoothScoManager.release();
         startWhisperApiRequest();
     }
 
@@ -1459,8 +1492,6 @@ public class DictateInputMethodService extends InputMethodService {
         trashButton.setVisibility(View.GONE);
         resendButton.setVisibility(View.GONE);
         infoCl.setVisibility(View.GONE);
-        isRecording = false;
-        isPaused = false;
         recordingUsesBluetooth = false;
         updatePromptButtonsEnabledState();
 
@@ -1481,68 +1512,16 @@ public class DictateInputMethodService extends InputMethodService {
         speechApiThread = Executors.newSingleThreadExecutor();
         speechApiThread.execute(() -> {
             try {
-                int transcriptionProvider = sp.getInt("net.devemperor.dictate.transcription_provider", 0);
-                String apiHost = getResources().getStringArray(R.array.dictate_api_providers_values)[transcriptionProvider];
-                if (apiHost.equals("custom_server")) apiHost = sp.getString("net.devemperor.dictate.transcription_custom_host", getString(R.string.dictate_custom_server_host_hint));
-
-                String apiKey = sp.getString("net.devemperor.dictate.transcription_api_key", sp.getString("net.devemperor.dictate.api_key", "NO_API_KEY")).replaceAll("[^ -~]", "");
-                String proxyHost = sp.getString("net.devemperor.dictate.proxy_host", getString(R.string.dictate_settings_proxy_hint));
-
-                String transcriptionModel = "";
-                switch (transcriptionProvider) {  // for upgrading: use old transcription_model preference
-                    case 0: transcriptionModel = sp.getString("net.devemperor.dictate.transcription_openai_model", sp.getString("net.devemperor.dictate.transcription_model", "gpt-4o-mini-transcribe")); break;
-                    case 1: transcriptionModel = sp.getString("net.devemperor.dictate.transcription_groq_model", "whisper-large-v3-turbo"); break;
-                    case 2: transcriptionModel = sp.getString("net.devemperor.dictate.transcription_custom_model", getString(R.string.dictate_custom_transcription_model_hint));
-                }
-
-                OpenAIOkHttpClient.Builder clientBuilder = OpenAIOkHttpClient.builder()
-                        .apiKey(apiKey)
-                        .baseUrl(apiHost)
-                        .timeout(Duration.ofSeconds(120));
-
-                TranscriptionCreateParams.Builder transcriptionBuilder = TranscriptionCreateParams.builder()
-                        .file(audioFile.toPath())
-                        .model(transcriptionModel)
-                        .responseFormat(AudioResponseFormat.JSON);  // gpt-4o-transcribe only supports json
-
-                if (!currentInputLanguageValue.equals("detect")) transcriptionBuilder.language(currentInputLanguageValue);
-                if (!stylePrompt.isEmpty()) transcriptionBuilder.prompt(stylePrompt);
-                if (sp.getBoolean("net.devemperor.dictate.proxy_enabled", false)) {
-                    if (DictateUtils.isValidProxy(proxyHost)) DictateUtils.applyProxy(clientBuilder, sp);
-                }
-                Log.d("DictateKeyboardSerice", "Style-Prompt: " + stylePrompt);
-
-                Transcription transcription;
-                int retryCount = 0;
-                while (true) {
-                    try {
-                        transcription = clientBuilder.build().audio().transcriptions().create(transcriptionBuilder.build()).asTranscription();
-                        break;
-                    } catch (RuntimeException e) {
-                        String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
-                        boolean isRetryable = !msg.contains("api key") && !msg.contains("quota") && !msg.contains("audio duration")
-                                && !msg.contains("content size limit") && !msg.contains("format");
-
-                        if (isRetryable && retryCount < 3) {
-                            retryCount++;
-                            try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
-                        } else {
-                            throw e;
-                        }
-                    }
-                }
-                String resultText = transcription.text().strip();  // Groq sometimes adds leading whitespace
+                String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
+                        ? currentInputLanguageValue : null;
+                TranscriptionResult result = aiOrchestrator.transcribe(audioFile, language, stylePrompt.isEmpty() ? null : stylePrompt);
+                String resultText = result.getText().strip();
                 resultText = applyAutoFormattingIfEnabled(resultText);
 
-                usageDb.edit(transcriptionModel, DictateUtils.getAudioDuration(audioFile), 0, 0, transcriptionProvider);
-
                 boolean processedByQueuedPrompts = false;
-                List<Integer> promptsToApply;
-                synchronized (queuedPromptIds) {
-                    promptsToApply = new ArrayList<>(queuedPromptIds);
-                }
+                List<Integer> promptsToApply = promptQueueManager.getQueuedIds();
                 if (!promptsToApply.isEmpty()) {
-                    clearQueuedPrompts();
+                    promptQueueManager.clear();
                     if (!livePrompt) {
                         processQueuedPrompts(resultText, promptsToApply);
                         processedByQueuedPrompts = true;
@@ -1552,9 +1531,8 @@ public class DictateInputMethodService extends InputMethodService {
                 if (!processedByQueuedPrompts && !livePrompt) {
                     commitTextToInputConnection(resultText);
                 } else if (livePrompt) {
-                    // continue with ChatGPT API request
                     livePrompt = false;
-                    startGPTApiRequest(new PromptModel(-1, Integer.MIN_VALUE, "", resultText, true, false));
+                    startGPTApiRequest(new PromptEntity(-1, Integer.MIN_VALUE, "", resultText, true, false));
                 }
 
                 if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
@@ -1567,50 +1545,40 @@ public class DictateInputMethodService extends InputMethodService {
                     mainHandler.post(this::switchToPreviousKeyboard);
                 }
 
+            } catch (AIProviderException e) {
+                if (e.getErrorType() != AIProviderException.ErrorType.CANCELLED) {
+                    logException(e);
+                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
+                    mainHandler.post(() -> {
+                        resendButton.setVisibility(View.VISIBLE);
+                        showInfo(e.toInfoKey());
+                    });
+                }
             } catch (RuntimeException e) {
                 if (!(e.getCause() instanceof InterruptedIOException)) {
                     logException(e);
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
                     mainHandler.post(() -> {
                         resendButton.setVisibility(View.VISIBLE);
-                        String message = Objects.requireNonNull(e.getMessage()).toLowerCase();
-                        if (message.contains("api key")) {
-                            showInfo("invalid_api_key");
-                        } else if (message.contains("quota")) {
-                            showInfo("quota_exceeded");
-                        } else if (message.contains("audio duration") || message.contains("content size limit")) {  // gpt-o-transcribe and whisper have different limits
-                            showInfo("content_size_limit");
-                        } else if (message.contains("format")) {
-                            showInfo("format_not_supported");
-                        } else {
-                            showInfo("internet_error");
-                        }
-                    });
-                } else if (e.getCause().getMessage() != null && (e.getCause().getMessage().contains("timeout") || e.getCause().getMessage().contains("failed to connect"))) {
-                    logException(e);
-                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-                    mainHandler.post(() -> {
-                        resendButton.setVisibility(View.VISIBLE);
-                        showInfo("timeout");
+                        showInfo("internet_error");
                     });
                 }
             }
 
-
             mainHandler.post(() -> {
                 recordButton.setText(getDictateButtonText());
                 applyRecordingIconState(false);
-                recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0); // back to original icons
+                recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
                 recordButton.setEnabled(true);
             });
         });
     }
 
-    private void startGPTApiRequest(PromptModel model) {
+    private void startGPTApiRequest(PromptEntity model) {
         startGPTApiRequest(model, null, null, true);
     }
 
-    private void startGPTApiRequest(PromptModel model, String overrideSelection, PromptResultCallback callback, boolean restorePromptsOnFinish) {
+    private void startGPTApiRequest(PromptEntity model, String overrideSelection, PromptResultCallback callback, boolean restorePromptsOnFinish) {
         mainHandler.post(() -> {
             promptsRv.setVisibility(View.GONE);
             runningPromptTv.setVisibility(View.VISIBLE);
@@ -1619,17 +1587,7 @@ public class DictateInputMethodService extends InputMethodService {
             infoCl.setVisibility(View.GONE);
         });
 
-        String systemPrompt;
-        switch (sp.getInt("net.devemperor.dictate.system_prompt_selection", 1)) {
-            case 1:
-                systemPrompt = DictateUtils.PROMPT_REWORDING_BE_PRECISE;
-                break;
-            case 2:
-                systemPrompt = sp.getString("net.devemperor.dictate.system_prompt_custom_text", "");
-                break;
-            default:
-                systemPrompt = "";
-        }
+        String systemPrompt = resolveSystemPrompt();
 
         rewordingApiThread = Executors.newSingleThreadExecutor();
         rewordingApiThread.execute(() -> {
@@ -1642,18 +1600,17 @@ public class DictateInputMethodService extends InputMethodService {
                     CharSequence selectedText = null;
                     if (overrideSelection != null) {
                         selectedText = overrideSelection;
-                    } else if (model.requiresSelection()) {
+                    } else if (model.getRequiresSelection()) {
                         InputConnection selectedTextConnection = getCurrentInputConnection();
                         if (selectedTextConnection != null) {
                             selectedText = selectedTextConnection.getSelectedText(0);
                         }
                     }
-                    prompt += "\n\n" + systemPrompt;
                     if (selectedText != null && selectedText.length() > 0) {
                         prompt += "\n\n" + selectedText;
                     }
 
-                    rewordedText = requestRewordingFromApi(prompt);
+                    rewordedText = requestRewordingFromApi(prompt, systemPrompt.isEmpty() ? null : systemPrompt);
                 }
 
                 if (callback != null) {
@@ -1661,30 +1618,30 @@ public class DictateInputMethodService extends InputMethodService {
                 } else {
                     commitTextToInputConnection(rewordedText);
                 }
+            } catch (AIProviderException e) {
+                if (e.getErrorType() != AIProviderException.ErrorType.CANCELLED) {
+                    logException(e);
+                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
+                    mainHandler.post(() -> {
+                        resendButton.setVisibility(View.VISIBLE);
+                        showInfo(e.toInfoKey());
+                    });
+                }
+                if (callback != null) {
+                    callback.onFailure();
+                }
+                if (!restorePromptsOnFinish) {
+                    restorePromptUi();
+                }
             } catch (RuntimeException e) {
                 if (!(e.getCause() instanceof InterruptedIOException)) {
                     logException(e);
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
                     mainHandler.post(() -> {
                         resendButton.setVisibility(View.VISIBLE);
-                        String message = Objects.requireNonNull(e.getMessage()).toLowerCase();
-                        if (message.contains("api key")) {
-                            showInfo("invalid_api_key");
-                        } else if (message.contains("quota")) {
-                            showInfo("quota_exceeded");
-                        } else {
-                            showInfo("internet_error");
-                        }
-                    });
-                } else if (e.getCause().getMessage() != null && e.getCause().getMessage().contains("timeout")) {
-                    logException(e);
-                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-                    mainHandler.post(() -> {
-                        resendButton.setVisibility(View.VISIBLE);
-                        showInfo("timeout");
+                        showInfo("internet_error");
                     });
                 }
-
                 if (callback != null) {
                     callback.onFailure();
                 }
@@ -1699,83 +1656,27 @@ public class DictateInputMethodService extends InputMethodService {
         });
     }
 
-    private String requestRewordingFromApi(String prompt) {
-        if (sp == null) throw new IllegalStateException("Preferences unavailable");
+    /**
+     * Sends a completion request via AIOrchestrator.
+     * @param prompt The user message (may include selected text and prompt instructions)
+     * @param systemPrompt Optional system prompt (null = no system prompt)
+     * @return The completion text
+     * @throws AIProviderException on API errors
+     */
+    private String requestRewordingFromApi(String prompt, String systemPrompt) {
+        CompletionResult result = aiOrchestrator.complete(prompt, systemPrompt);
+        return result.getText();
+    }
 
-        int rewordingProvider = sp.getInt("net.devemperor.dictate.rewording_provider", 0);
-        String[] providerValues = getResources().getStringArray(R.array.dictate_api_providers_values);
-        if (rewordingProvider < 0 || rewordingProvider >= providerValues.length) {
-            throw new IllegalStateException("Invalid rewording provider");
-        }
-
-        String apiHost = providerValues[rewordingProvider];
-        if ("custom_server".equals(apiHost)) {
-            apiHost = sp.getString("net.devemperor.dictate.rewording_custom_host", getString(R.string.dictate_custom_server_host_hint));
-        }
-
-        String apiKey = sp.getString("net.devemperor.dictate.rewording_api_key",
-                sp.getString("net.devemperor.dictate.api_key", "NO_API_KEY"));
-        if (TextUtils.isEmpty(apiKey)) throw new IllegalStateException("API key missing");
-        apiKey = apiKey.replaceAll("[^ -~]", "");
-        if ("NO_API_KEY".equals(apiKey) || apiKey.isEmpty()) throw new IllegalStateException("API key missing");
-
-        String rewordingModel;
-        switch (rewordingProvider) {
-            case 0:
-                rewordingModel = sp.getString("net.devemperor.dictate.rewording_openai_model",
-                        sp.getString("net.devemperor.dictate.rewording_model", "gpt-4o-mini"));
-                break;
+    private String resolveSystemPrompt() {
+        switch (sp.getInt("net.devemperor.dictate.system_prompt_selection", 1)) {
             case 1:
-                rewordingModel = sp.getString("net.devemperor.dictate.rewording_groq_model", "llama-3.3-70b-versatile");
-                break;
+                return DictateUtils.PROMPT_REWORDING_BE_PRECISE;
             case 2:
-                rewordingModel = sp.getString("net.devemperor.dictate.rewording_custom_model",
-                        getString(R.string.dictate_custom_rewording_model_hint));
-                break;
+                return sp.getString("net.devemperor.dictate.system_prompt_custom_text", "");
             default:
-                rewordingModel = "";
+                return "";
         }
-        if (TextUtils.isEmpty(rewordingModel)) throw new IllegalStateException("Rewording model missing");
-
-        OpenAIOkHttpClient.Builder clientBuilder = OpenAIOkHttpClient.builder()
-                .apiKey(apiKey)
-                .baseUrl(apiHost)
-                .timeout(Duration.ofSeconds(120));
-
-        if (sp.getBoolean("net.devemperor.dictate.proxy_enabled", false)) {
-            String proxyHost = sp.getString("net.devemperor.dictate.proxy_host", getString(R.string.dictate_settings_proxy_hint));
-            if (DictateUtils.isValidProxy(proxyHost)) {
-                DictateUtils.applyProxy(clientBuilder, sp);
-            }
-        }
-
-        ChatCompletionCreateParams chatCompletionCreateParams = ChatCompletionCreateParams.builder()
-                .addUserMessage(prompt)
-                .model(rewordingModel)
-                .build();
-        ChatCompletion chatCompletion;
-        int retryCount = 0;
-        while (true) {
-            try {
-                chatCompletion = clientBuilder.build().chat().completions().create(chatCompletionCreateParams);
-                break;
-            } catch (RuntimeException e) {
-                String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
-                boolean isRetryable = !msg.contains("api key") && !msg.contains("quota");
-
-                if (isRetryable && retryCount < 3) {
-                    retryCount++;
-                    try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
-                } else {
-                    throw e;
-                }
-            }
-        }
-        if (chatCompletion.usage().isPresent() && usageDb != null) {
-            usageDb.edit(rewordingModel, 0, chatCompletion.usage().get().promptTokens(),
-                    chatCompletion.usage().get().completionTokens(), rewordingProvider);
-        }
-        return chatCompletion.choices().get(0).message().content().orElse("");
     }
 
     private String applyAutoFormattingIfEnabled(String transcript) {
@@ -1791,7 +1692,7 @@ public class DictateInputMethodService extends InputMethodService {
                     "\n\nTranscript:\n" +
                     transcript;
 
-            String formattedText = requestRewordingFromApi(promptBuilder);
+            String formattedText = requestRewordingFromApi(promptBuilder, null);
             if (!TextUtils.isEmpty(formattedText)) {
                 return formattedText.trim();
             }
@@ -1850,18 +1751,18 @@ public class DictateInputMethodService extends InputMethodService {
             return;
         }
 
-        PromptModel prompt = promptsDb.get(promptIds.get(index));
+        PromptEntity prompt = promptDao.getById(promptIds.get(index));
         if (prompt == null) {
             applyQueuedPromptAtIndex(currentText, promptIds, index + 1);
             return;
         }
 
-        if (prompt.requiresSelection() && (currentText == null || currentText.isEmpty())) {
+        if (prompt.getRequiresSelection() && (currentText == null || currentText.isEmpty())) {
             applyQueuedPromptAtIndex(currentText, promptIds, index + 1);
             return;
         }
 
-        String inputForPrompt = prompt.requiresSelection() ? currentText : null;
+        String inputForPrompt = prompt.getRequiresSelection() ? currentText : null;
         boolean restoreUiAfter = index == promptIds.size() - 1;
 
         startGPTApiRequest(prompt, inputForPrompt, new PromptResultCallback() {
@@ -1877,55 +1778,21 @@ public class DictateInputMethodService extends InputMethodService {
         }, restoreUiAfter);
     }
 
-    private void toggleQueuedPrompt(PromptModel model) {
-        if (model.getId() < 0) return;
-
-        synchronized (queuedPromptIds) {
-            Integer promptId = model.getId();
-            if (queuedPromptIds.contains(promptId)) {
-                queuedPromptIds.remove(promptId);
-            } else {
-                queuedPromptIds.add(promptId);
-            }
-        }
-        updateQueuedPromptsUi();
-    }
-
-    private void updateQueuedPromptsUi() {
-        if (promptsAdapter == null || mainHandler == null) return;
-        List<Integer> snapshot;
-        synchronized (queuedPromptIds) {
-            snapshot = new ArrayList<>(queuedPromptIds);
-        }
-        mainHandler.post(() -> promptsAdapter.setQueuedPromptOrder(snapshot));
-    }
-
-    private void clearQueuedPrompts() {
-        synchronized (queuedPromptIds) {
-            queuedPromptIds.clear();
-        }
-        updateQueuedPromptsUi();
-    }
-
-    private void prepareAutoApplyQueue() {
-        if (promptsDb == null || sp == null || !sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) return;
-        List<Integer> autoApplyIds = promptsDb.getAutoApplyIds();
-        synchronized (queuedPromptIds) {
-            List<Integer> manualQueue = new ArrayList<>();
-            for (Integer id : queuedPromptIds) {
-                if (!autoApplyIds.contains(id)) {
-                    manualQueue.add(id);
-                }
-            }
-            queuedPromptIds.clear();
-            queuedPromptIds.addAll(autoApplyIds);
-            queuedPromptIds.addAll(manualQueue);
-        }
-        updateQueuedPromptsUi();
+    /**
+     * Builds the keyboard prompt list with sentinel entries for instant prompt, select-all, and add button.
+     */
+    private List<PromptEntity> getPromptsForKeyboard() {
+        List<PromptEntity> dbPrompts = promptDao.getAll();
+        List<PromptEntity> result = new ArrayList<>(dbPrompts.size() + 3);
+        result.add(new PromptEntity(-1, Integer.MIN_VALUE, null, null, false, false));      // instant prompt
+        result.add(new PromptEntity(-3, Integer.MIN_VALUE + 1, null, null, false, false));  // select all
+        result.addAll(dbPrompts);
+        result.add(new PromptEntity(-2, Integer.MAX_VALUE, null, null, false, false));       // add button
+        return result;
     }
 
     private void updatePromptButtonsEnabledState() {
-        disableNonSelectionPrompts = isRecording || isPreparingRecording;
+        disableNonSelectionPrompts = recordingManager.isRecording() || isPreparingRecording;
         if (promptsAdapter == null) return;
         if (mainHandler != null) {
             mainHandler.post(() -> {
@@ -2047,14 +1914,22 @@ public class DictateInputMethodService extends InputMethodService {
                 });
                 infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
                 break;
-            case "content_size_limit":
-                infoTv.setText(R.string.dictate_content_size_limit_msg);
-                infoYesButton.setVisibility(View.GONE);
+            case "model_not_found":
+                infoTv.setText(R.string.dictate_model_not_found_msg);
+                infoYesButton.setVisibility(View.VISIBLE);
+                infoYesButton.setOnClickListener(v -> {
+                    openSettingsActivity();
+                    infoCl.setVisibility(View.GONE);
+                });
                 infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
                 break;
-            case "format_not_supported":
-                infoTv.setText(R.string.dictate_format_not_supported_msg);
-                infoYesButton.setVisibility(View.GONE);
+            case "bad_request":
+                infoTv.setText(R.string.dictate_bad_request_msg);
+                infoYesButton.setVisibility(View.VISIBLE);
+                infoYesButton.setOnClickListener(v -> {
+                    openSettingsActivity();
+                    infoCl.setVisibility(View.GONE);
+                });
                 infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
                 break;
             case "internet_error":
@@ -2217,22 +2092,8 @@ public class DictateInputMethodService extends InputMethodService {
         }
     }
 
-    // Helpers for Bluetooth/SCO availability
-    private boolean hasBluetoothInputDevice() {
-        try {
-            AudioDeviceInfo[] inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS);
-            for (AudioDeviceInfo info : inputs) {
-                if (info.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
-                    return true;
-                }
-            }
-            return false;
-        } catch (Exception ignored) {}
-        return am.isBluetoothScoOn();  // fallback heuristic
-    }
-
     private void updateRecordButtonIconWhileRecording() {
-        if (!isRecording) return;
+        if (!recordingManager.isRecording()) return;
         if (recordingUsesBluetooth) {
             recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, R.drawable.ic_baseline_bluetooth_20, 0);
         } else {
@@ -2242,11 +2103,8 @@ public class DictateInputMethodService extends InputMethodService {
 
     private void cancelScoWaitIfAny() {
         recordingPending = false;
-        waitingForSco = false;
         isPreparingRecording = false;
-        if (bluetoothHandler != null && scoTimeoutRunnable != null) {
-            bluetoothHandler.removeCallbacks(scoTimeoutRunnable);
-        }
+        // BluetoothScoManager handles its own waiting state via release()
         updatePromptButtonsEnabledState();
     }
 }

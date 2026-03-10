@@ -55,16 +55,21 @@ class SessionTracker(private val sessionManager: SessionManager) {
     }
 
     /**
-     * Resets the session state. Caches lastSessionId and lastOutput for resend functionality.
+     * Resets the session state. Caches lastSessionId for resend functionality.
+     * Sets currentSessionId to null immediately (so startSession() guard works),
+     * then loads lastOutput from DB (must be called on background thread).
      */
     fun resetSession() {
-        if (currentSessionId != null) {
-            lastSessionId = currentSessionId
-            lastOutput = sessionManager.getFinalOutput(currentSessionId!!)
-        }
+        val previousSessionId = currentSessionId
+        // Clear current state FIRST — so startSession() guard doesn't block new sessions
         currentSessionId = null
         currentStepId = null
         currentTranscriptionId = null
+
+        if (previousSessionId != null) {
+            lastSessionId = previousSessionId
+            lastOutput = sessionManager.getFinalOutput(previousSessionId)
+        }
     }
 
     /**

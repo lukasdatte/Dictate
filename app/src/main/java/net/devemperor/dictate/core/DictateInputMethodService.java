@@ -47,6 +47,7 @@ import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
@@ -198,16 +199,12 @@ public class DictateInputMethodService extends InputMethodService
     private LinearLayout overlayCharactersLl;
 
     // Pipeline progress views (inside prompts_keyboard_cl)
-    private LinearLayout pipelineProgressLl;
-    private LinearLayout pipelineRowDone;
-    private TextView pipelineDoneIconTv;
-    private TextView pipelineDoneNameTv;
-    private TextView pipelineDoneDurationTv;
-    private LinearLayout pipelineRowRunning;
-    private ProgressBar pipelineRunningPb;
-    private TextView pipelineRunningNameTv;
+    private View pipelineProgressLl;
+    private LinearLayout pipelineStepsContainer;
+    private ScrollView pipelineScrollView;
     private MaterialButton pipelineCancelBtn;
     private volatile boolean pipelineCancelled = false;
+    private final List<View> pipelineStepRows = new ArrayList<>();
 
     // History button
     private MaterialButton editHistoryButton;
@@ -416,13 +413,8 @@ public class DictateInputMethodService extends InputMethodService
 
         // Pipeline progress views (inside prompts_keyboard_cl via <include>)
         pipelineProgressLl = dictateKeyboardView.findViewById(R.id.pipeline_progress_ll);
-        pipelineRowDone = dictateKeyboardView.findViewById(R.id.pipeline_row_done);
-        pipelineDoneIconTv = dictateKeyboardView.findViewById(R.id.pipeline_done_icon_tv);
-        pipelineDoneNameTv = dictateKeyboardView.findViewById(R.id.pipeline_done_name_tv);
-        pipelineDoneDurationTv = dictateKeyboardView.findViewById(R.id.pipeline_done_duration_tv);
-        pipelineRowRunning = dictateKeyboardView.findViewById(R.id.pipeline_row_running);
-        pipelineRunningPb = dictateKeyboardView.findViewById(R.id.pipeline_running_pb);
-        pipelineRunningNameTv = dictateKeyboardView.findViewById(R.id.pipeline_running_name_tv);
+        pipelineStepsContainer = dictateKeyboardView.findViewById(R.id.pipeline_steps_container);
+        pipelineScrollView = dictateKeyboardView.findViewById(R.id.pipeline_scroll_view);
         pipelineCancelBtn = dictateKeyboardView.findViewById(R.id.pipeline_cancel_btn);
 
         // History button
@@ -1200,9 +1192,6 @@ public class DictateInputMethodService extends InputMethodService
             applyButtonColor(button, background);
         }
         runningPromptPb.getIndeterminateDrawable().setColorFilter(accentColor, android.graphics.PorterDuff.Mode.SRC_IN);
-        if (pipelineRunningPb != null) {
-            pipelineRunningPb.getIndeterminateDrawable().setColorFilter(accentColor, android.graphics.PorterDuff.Mode.SRC_IN);
-        }
 
         // show infos for updates, ratings or donations
         Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
@@ -1755,13 +1744,7 @@ public class DictateInputMethodService extends InputMethodService
                 }
             }
 
-            mainHandler.post(() -> {
-                hidePipelineProgress();
-                recordButton.setText(getDictateButtonText());
-                applyRecordingIconState(false);
-                recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-                recordButton.setEnabled(true);
-            });
+            restorePromptUi();
         });
     }
 
@@ -2125,62 +2108,85 @@ public class DictateInputMethodService extends InputMethodService
      */
     private void showPipelineProgress() {
         pipelineCancelled = false;
+        pipelineStepRows.clear();
         if (promptsRv != null) promptsRv.setVisibility(View.GONE);
         if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
         if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
         if (pipelineProgressLl != null) {
             pipelineProgressLl.setVisibility(View.VISIBLE);
-            pipelineRowDone.setVisibility(View.GONE);
-            pipelineRowRunning.setVisibility(View.GONE);
+            pipelineStepsContainer.removeAllViews();
         }
     }
 
     /**
-     * Updates the pipeline progress to show a step as running.
+     * Adds a new step row in "running" state (spinner + name).
      * Must be called on the main thread.
-     * @param stepName display name of the step (e.g. "Transcription")
      */
     private void updatePipelineStepRunning(String stepName) {
-        if (pipelineProgressLl == null) return;
-        pipelineRowRunning.setVisibility(View.VISIBLE);
-        pipelineRunningPb.setVisibility(View.VISIBLE); // reset in case updatePipelineStepError hid it
-        pipelineRunningNameTv.setText(stepName);
+        if (pipelineStepsContainer == null) return;
+        View row = getLayoutInflater().inflate(R.layout.item_pipeline_step_row, pipelineStepsContainer, false);
+        TextView iconTv = row.findViewById(R.id.pipeline_step_icon_tv);
+        ProgressBar pb = row.findViewById(R.id.pipeline_step_pb);
+        TextView nameTv = row.findViewById(R.id.pipeline_step_name_tv);
+
+        iconTv.setVisibility(View.GONE);
+        pb.setVisibility(View.VISIBLE);
+        nameTv.setText(stepName);
+
+        pipelineStepsContainer.addView(row);
+        pipelineStepRows.add(row);
+
+        // Auto-scroll to bottom
+        pipelineScrollView.post(() -> pipelineScrollView.fullScroll(View.FOCUS_DOWN));
     }
 
     /**
-     * Updates the pipeline progress to mark a step as done with duration.
-     * Moves the "running" step into the "done" row and clears the running row.
+     * Updates the last step row to "done" state (checkmark + duration).
      * Must be called on the main thread.
-     * @param stepName display name of the completed step
-     * @param durationMs how long it took in milliseconds
      */
     private void updatePipelineStepDone(String stepName, long durationMs) {
-        if (pipelineProgressLl == null) return;
-        pipelineRowDone.setVisibility(View.VISIBLE);
-        pipelineDoneIconTv.setText("\u2705"); // checkmark emoji
-        pipelineDoneNameTv.setText(stepName);
-        pipelineDoneDurationTv.setText(String.format(Locale.US, getString(R.string.dictate_pipeline_duration), durationMs / 1000.0));
-        pipelineRowRunning.setVisibility(View.GONE);
+        if (pipelineStepRows.isEmpty()) return;
+        View row = pipelineStepRows.get(pipelineStepRows.size() - 1);
+        TextView iconTv = row.findViewById(R.id.pipeline_step_icon_tv);
+        ProgressBar pb = row.findViewById(R.id.pipeline_step_pb);
+        TextView nameTv = row.findViewById(R.id.pipeline_step_name_tv);
+        TextView durationTv = row.findViewById(R.id.pipeline_step_duration_tv);
+
+        pb.setVisibility(View.GONE);
+        iconTv.setVisibility(View.VISIBLE);
+        iconTv.setText("✓");
+        iconTv.setTextColor(0xFF4CAF50); // Material Green 500
+        nameTv.setText(stepName);
+        durationTv.setVisibility(View.VISIBLE);
+        durationTv.setText(String.format(Locale.US, getString(R.string.dictate_pipeline_duration), durationMs / 1000.0));
     }
 
     /**
-     * Marks the current running step as error.
+     * Updates the last step row to "error" state (X mark).
      * Must be called on the main thread.
      */
     private void updatePipelineStepError(String stepName) {
-        if (pipelineProgressLl == null) return;
-        // Show the error in the running row position
-        pipelineRowRunning.setVisibility(View.VISIBLE);
-        pipelineRunningPb.setVisibility(View.GONE);
-        pipelineRunningNameTv.setText("\u274C " + stepName); // X emoji + name
+        if (pipelineStepRows.isEmpty()) return;
+        View row = pipelineStepRows.get(pipelineStepRows.size() - 1);
+        TextView iconTv = row.findViewById(R.id.pipeline_step_icon_tv);
+        ProgressBar pb = row.findViewById(R.id.pipeline_step_pb);
+        TextView nameTv = row.findViewById(R.id.pipeline_step_name_tv);
+
+        pb.setVisibility(View.GONE);
+        iconTv.setVisibility(View.VISIBLE);
+        iconTv.setText("✕");
+        iconTv.setTextColor(0xFFF44336); // Material Red 500
+        nameTv.setText(stepName);
     }
 
     /**
-     * Hides the pipeline progress view. Must be called on the main thread.
+     * Hides the pipeline progress view and clears step rows.
+     * Must be called on the main thread.
      */
     private void hidePipelineProgress() {
         if (pipelineProgressLl != null) pipelineProgressLl.setVisibility(View.GONE);
-        if (pipelineRunningPb != null) pipelineRunningPb.setVisibility(View.VISIBLE); // reset for next time
+        if (pipelineStepsContainer != null) pipelineStepsContainer.removeAllViews();
+        pipelineStepRows.clear();
     }
 
     private void restorePromptUi() {
@@ -2196,6 +2202,10 @@ public class DictateInputMethodService extends InputMethodService
                 if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
                 if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
                 hidePipelineProgress();
+                recordButton.setText(getDictateButtonText());
+                applyRecordingIconState(false);
+                recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
+                recordButton.setEnabled(true);
             });
         });
     }

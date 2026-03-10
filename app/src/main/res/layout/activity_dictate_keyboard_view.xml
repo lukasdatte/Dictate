@@ -8,11 +8,11 @@
     android:background="@color/dictate_keyboard_background_light">
 
     <com.google.android.material.button.MaterialButton
-        android:id="@+id/settings_btn"
+        android:id="@+id/small_mode_btn"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
-        android:foreground="@drawable/ic_baseline_settings_24"
+        android:foreground="@drawable/ic_baseline_keyboard_arrow_down_24"
         android:foregroundGravity="center"
         android:minWidth="56dp"
         app:layout_constraintBottom_toTopOf="@+id/switch_btn"
@@ -30,7 +30,7 @@
         android:maxLines="1"
         app:layout_constraintBottom_toTopOf="@+id/space_btn"
         app:layout_constraintEnd_toStartOf="@+id/resend_btn"
-        app:layout_constraintStart_toEndOf="@+id/settings_btn"
+        app:layout_constraintStart_toEndOf="@+id/small_mode_btn"
         app:layout_constraintTop_toBottomOf="@+id/edit_buttons_keyboard_ll" />
 
     <com.google.android.material.button.MaterialButton
@@ -280,12 +280,25 @@
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_marginStart="4dp"
-            android:layout_marginEnd="16dp"
+            android:layout_marginEnd="4dp"
             android:foreground="@drawable/ic_baseline_numbers_24"
             android:foregroundGravity="center"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/edit_settings_btn"
             app:layout_constraintStart_toEndOf="@+id/edit_emoji_btn"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/edit_settings_btn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="16dp"
+            android:foreground="@drawable/ic_baseline_settings_24"
+            android:foregroundGravity="center"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toEndOf="@+id/edit_numbers_btn"
             app:layout_constraintTop_toTopOf="parent" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>

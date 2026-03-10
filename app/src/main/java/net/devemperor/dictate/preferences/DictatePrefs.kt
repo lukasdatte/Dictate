@@ -29,6 +29,7 @@ sealed class Pref<T>(val key: String, val default: T) {
     object AudioFocus : Pref<Boolean>("net.devemperor.dictate.audio_focus", true)
     object UseBluetoothMic : Pref<Boolean>("net.devemperor.dictate.use_bluetooth_mic", false)
     object Animations : Pref<Boolean>("net.devemperor.dictate.animations", true)
+    object SmallMode : Pref<Boolean>("net.devemperor.dictate.small_mode", false)
 
     // ── UI/Theme ──
     object Theme : Pref<String>("net.devemperor.dictate.theme", "system")

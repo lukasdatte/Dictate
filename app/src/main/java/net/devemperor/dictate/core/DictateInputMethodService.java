@@ -67,11 +67,13 @@ import net.devemperor.dictate.ai.AIProviderException;
 import net.devemperor.dictate.ai.runner.CompletionResult;
 import net.devemperor.dictate.ai.runner.TranscriptionResult;
 import net.devemperor.dictate.database.DictateDatabase;
+import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.preferences.PrefsMigration;
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.database.dao.PromptDao;
 import net.devemperor.dictate.database.dao.UsageDao;
 import net.devemperor.dictate.database.entity.PromptEntity;
+import net.devemperor.dictate.ai.prompt.PromptService;
 import net.devemperor.dictate.rewording.PromptEditActivity;
 import net.devemperor.dictate.rewording.PromptsKeyboardAdapter;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
@@ -102,26 +104,6 @@ public class DictateInputMethodService extends InputMethodService
     private static final float KEY_PRESS_SCALE = 0.92f;
     private static final long KEY_PRESS_ANIM_DURATION = 80L;
     private static final TimeInterpolator KEY_PRESS_INTERPOLATOR = new DecelerateInterpolator();
-    private static final String AUTO_FORMATTING_PROMPT =
-            "You are an attentive, adaptive formatting assistant. Clean up speech transcripts that may contain spoken formatting instructions. Apply changes only when the speaker explicitly asks for them; "
-                    + "otherwise return the transcript exactly as provided. Keep the output strictly in the transcript's language. Follow these rules:\n"
-                    + "- Follow explicit commands such as \"new paragraph\", \"paragraph break\", or \"line break\" by inserting a blank line.\n"
-                    + "- Convert spoken punctuation cues like \"period\", \"comma\", \"question mark\", \"exclamation mark\", \"open quote\", or \"close quote\" into their symbols and remove the cue words.\n"
-                    + "- Handle spelling and replacement instructions such as \"Henry with i becomes Henri\" or \"replace beta with β\" by adjusting only the targeted words.\n"
-                    + "- Treat list cues like \"bullet\", \"list item\", \"number one\", or \"next bullet\" as requests to format list items with dashes or numbers.\n"
-                    + "- Apply text styling commands such as \"bold\", \"make this bold\", \"italic\", or \"italicize\" by wrapping only the requested span with Markdown (**bold** / _italic_).\n"
-                    + "- Interpret the user's intent intelligently, accommodating paraphrased or partial cues, and always favour the most reasonable formatting that matches the latest request.\n"
-                    + "- Leave all other wording untouched except for spacing needed to apply the commands.\n"
-                    + "- If commands conflict, apply the most recent one.\n"
-                    + "- Never translate, summarise, or add commentary. Output only the final formatted text.\n"
-                    + "Examples:\n"
-                    + "1) Input: Hello new paragraph how are you question mark -> Output: Hello\\n\\nHow are you?\n"
-                    + "2) Input: Please write Henry with i Henri period that's it -> Output: Please write Henri. That's it.\n"
-                    + "3) Input: Agenda colon bullet first item bullet second item -> Output: Agenda:\\n- first item\\n- second item\n"
-                    + "4) Input: Outline colon number one introduction number two results number three conclusion -> Output: Outline:\\n1. Introduction\\n2. Results\\n3. Conclusion\n"
-                    + "5) Input: Please make the words mission critical bold period that's it -> Output: Please make the words **mission critical**. That's it.\n"
-                    + "6) Input: Mention italicize needs review before sending -> Output: Mention _needs review_ before sending.\n"
-                    + "7) Input: Just checking in with you today -> Output: Just checking in with you today.";
 
     private Handler mainHandler;
     private Handler deleteHandler;
@@ -167,7 +149,10 @@ public class DictateInputMethodService extends InputMethodService
 
     // define views
     private ConstraintLayout dictateKeyboardView;
-    private MaterialButton settingsButton;
+    private MaterialButton smallModeButton;
+    private MaterialButton editSettingsButton;
+    private ConstraintLayout editButtonsKeyboardLl;
+    private boolean isSmallMode = false;
     private MaterialButton recordButton;
     private MaterialButton resendButton;
     private MaterialButton backspaceButton;
@@ -214,6 +199,8 @@ public class DictateInputMethodService extends InputMethodService
 
     UsageDao usageDao;
     private AIOrchestrator aiOrchestrator;
+    private PromptService promptService;
+    private AutoFormattingService autoFormattingService;
 
     private interface PromptResultCallback {
         void onSuccess(String text);
@@ -329,6 +316,8 @@ public class DictateInputMethodService extends InputMethodService
         // Migrate old int-based provider prefs (0/1/2) to String-based ("OPENAI"/"GROQ"/"CUSTOM")
         PrefsMigration.migrateProviderPrefs(sp);
         aiOrchestrator = new AIOrchestrator(sp, dictateDb.usageDao());
+        promptService = PromptService.create(sp);
+        autoFormattingService = AutoFormattingService.create(sp, aiOrchestrator);
 
         // Initialize managers
         recordingManager = new RecordingManager(this);
@@ -349,7 +338,9 @@ public class DictateInputMethodService extends InputMethodService
             return insets;  // fix for overlapping with navigation bar on Android 15+
         });
 
-        settingsButton = dictateKeyboardView.findViewById(R.id.settings_btn);
+        smallModeButton = dictateKeyboardView.findViewById(R.id.small_mode_btn);
+        editSettingsButton = dictateKeyboardView.findViewById(R.id.edit_settings_btn);
+        editButtonsKeyboardLl = dictateKeyboardView.findViewById(R.id.edit_buttons_keyboard_ll);
         recordButton = dictateKeyboardView.findViewById(R.id.record_btn);
         resendButton = dictateKeyboardView.findViewById(R.id.resend_btn);
         backspaceButton = dictateKeyboardView.findViewById(R.id.backspace_btn);
@@ -415,7 +406,16 @@ public class DictateInputMethodService extends InputMethodService
                 .build();
         bluetoothScoManager.registerReceiver();
 
-        settingsButton.setOnClickListener(v -> {
+        isSmallMode = sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false);
+
+        smallModeButton.setOnClickListener(v -> {
+            vibrate();
+            isSmallMode = !isSmallMode;
+            sp.edit().putBoolean(Pref.SmallMode.INSTANCE.getKey(), isSmallMode).apply();
+            applySmallMode(true);
+        });
+
+        editSettingsButton.setOnClickListener(v -> {
             if (recordingManager.isRecording()) trashButton.performClick();
             infoCl.setVisibility(View.GONE);
             openSettingsActivity();
@@ -1066,7 +1066,8 @@ public class DictateInputMethodService extends InputMethodService
         int accentColorDark = DictateUtils.darkenColor(accentColor, 0.35f);
         TextView[] textColorViews = { infoTv, runningPromptTv, emojiPickerTitleTv, numbersPanelTitleTv };
         for (TextView tv : textColorViews) tv.setTextColor(accentColor);
-        applyButtonColor(settingsButton, accentColorDark);
+        applyButtonColor(smallModeButton, accentColorDark);
+        applyButtonColor(editSettingsButton, accentColorMedium);
         applyButtonColor(recordButton, accentColor);
         applyButtonColor(resendButton, accentColorMedium);
         applyButtonColor(backspaceButton, accentColorDark);
@@ -1104,6 +1105,8 @@ public class DictateInputMethodService extends InputMethodService
         } else if (totalAudioTime > 600 && !sp.getBoolean("net.devemperor.dictate.flag_has_donated", false)) {
             showInfo("donate");
         }
+
+        applySmallMode(false);
 
         // start audio file transcription if user selected an audio file
         if (!sp.getString("net.devemperor.dictate.transcription_audio_file", "").isEmpty()) {
@@ -1250,7 +1253,7 @@ public class DictateInputMethodService extends InputMethodService
 
     private void initializeKeyPressAnimations() {
         View[] animatedViews = {
-                settingsButton, recordButton, resendButton, switchButton, trashButton,
+                smallModeButton, editSettingsButton, recordButton, resendButton, switchButton, trashButton,
                 pauseButton, emojiPickerCloseButton, numbersPanelCloseButton,
                 editUndoButton, editRedoButton, editCutButton, editCopyButton,
                 editPasteButton, editEmojiButton, editNumbersButton,
@@ -1497,26 +1500,16 @@ public class DictateInputMethodService extends InputMethodService
 
         if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
 
-        String stylePrompt;
-        switch (sp.getInt("net.devemperor.dictate.style_prompt_selection", 1)) {
-            case 1:
-                stylePrompt = DictateUtils.getPunctuationPromptForLanguage(currentInputLanguageValue);
-                break;
-            case 2:
-                stylePrompt = sp.getString("net.devemperor.dictate.style_prompt_custom_text", "");
-                break;
-            default:
-                stylePrompt = "";
-        }
+        String stylePrompt = promptService.resolveWhisperStylePrompt(currentInputLanguageValue);
 
         speechApiThread = Executors.newSingleThreadExecutor();
         speechApiThread.execute(() -> {
             try {
                 String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
                         ? currentInputLanguageValue : null;
-                TranscriptionResult result = aiOrchestrator.transcribe(audioFile, language, stylePrompt.isEmpty() ? null : stylePrompt);
+                TranscriptionResult result = aiOrchestrator.transcribe(audioFile, language, stylePrompt);
                 String resultText = result.getText().strip();
-                resultText = applyAutoFormattingIfEnabled(resultText);
+                resultText = autoFormattingService.formatIfEnabled(resultText, currentInputLanguageValue);
 
                 boolean processedByQueuedPrompts = false;
                 List<Integer> promptsToApply = promptQueueManager.getQueuedIds();
@@ -1578,40 +1571,64 @@ public class DictateInputMethodService extends InputMethodService
         startGPTApiRequest(model, null, null, true);
     }
 
+    /** Overload for Rewording/Live prompts: builds PromptPair from PromptEntity. */
     private void startGPTApiRequest(PromptEntity model, String overrideSelection, PromptResultCallback callback, boolean restorePromptsOnFinish) {
+        String prompt = model.getPrompt();
+
+        // Static response [text] — no API call needed
+        if (promptService.isStaticResponse(prompt)) {
+            String text = promptService.extractStaticResponse(prompt);
+            if (callback != null) {
+                callback.onSuccess(text);
+            } else {
+                commitTextToInputConnection(text);
+            }
+            if (restorePromptsOnFinish || callback == null) restorePromptUi();
+            return;
+        }
+
+        // Determine selected text
+        CharSequence selectedText = null;
+        if (overrideSelection != null) {
+            selectedText = overrideSelection;
+        } else if (model.getRequiresSelection()) {
+            InputConnection selectedTextConnection = getCurrentInputConnection();
+            if (selectedTextConnection != null) {
+                selectedText = selectedTextConnection.getSelectedText(0);
+            }
+        }
+        String selStr = selectedText != null ? selectedText.toString() : null;
+
+        // Build PromptPair based on context
+        PromptService.PromptPair pp;
+        if (model.getId() == -1) {
+            pp = promptService.buildLivePrompt(prompt);
+        } else {
+            pp = promptService.buildRewording(prompt, selStr);
+        }
+
+        startGPTApiRequestInternal(pp, model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName(), callback, restorePromptsOnFinish);
+    }
+
+    /** Overload for Queued prompts: accepts a pre-built PromptPair. */
+    private void startGPTApiRequest(PromptService.PromptPair pp, String displayName, PromptResultCallback callback, boolean restorePromptsOnFinish) {
+        startGPTApiRequestInternal(pp, displayName, callback, restorePromptsOnFinish);
+    }
+
+    /** Internal: shared UI/threading/error-handling for all GPT API requests (DRY). */
+    private void startGPTApiRequestInternal(PromptService.PromptPair pp, String displayName, PromptResultCallback callback, boolean restorePromptsOnFinish) {
         mainHandler.post(() -> {
             promptsRv.setVisibility(View.GONE);
             runningPromptTv.setVisibility(View.VISIBLE);
-            runningPromptTv.setText(model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName());
+            runningPromptTv.setText(displayName);
             runningPromptPb.setVisibility(View.VISIBLE);
             infoCl.setVisibility(View.GONE);
         });
 
-        String systemPrompt = resolveSystemPrompt();
-
         rewordingApiThread = Executors.newSingleThreadExecutor();
         rewordingApiThread.execute(() -> {
             try {
-                String prompt = model.getPrompt();
-                String rewordedText;
-                if (prompt.startsWith("[") && prompt.endsWith("]")) {
-                    rewordedText = prompt.substring(1, prompt.length() - 1);
-                } else {
-                    CharSequence selectedText = null;
-                    if (overrideSelection != null) {
-                        selectedText = overrideSelection;
-                    } else if (model.getRequiresSelection()) {
-                        InputConnection selectedTextConnection = getCurrentInputConnection();
-                        if (selectedTextConnection != null) {
-                            selectedText = selectedTextConnection.getSelectedText(0);
-                        }
-                    }
-                    if (selectedText != null && selectedText.length() > 0) {
-                        prompt += "\n\n" + selectedText;
-                    }
-
-                    rewordedText = requestRewordingFromApi(prompt, systemPrompt.isEmpty() ? null : systemPrompt);
-                }
+                String rewordedText = requestRewordingFromApi(pp.getUserPrompt(), pp.getSystemPrompt());
 
                 if (callback != null) {
                     callback.onSuccess(rewordedText);
@@ -1666,40 +1683,6 @@ public class DictateInputMethodService extends InputMethodService
     private String requestRewordingFromApi(String prompt, String systemPrompt) {
         CompletionResult result = aiOrchestrator.complete(prompt, systemPrompt);
         return result.getText();
-    }
-
-    private String resolveSystemPrompt() {
-        switch (sp.getInt("net.devemperor.dictate.system_prompt_selection", 1)) {
-            case 1:
-                return DictateUtils.PROMPT_REWORDING_BE_PRECISE;
-            case 2:
-                return sp.getString("net.devemperor.dictate.system_prompt_custom_text", "");
-            default:
-                return "";
-        }
-    }
-
-    private String applyAutoFormattingIfEnabled(String transcript) {
-        if (TextUtils.isEmpty(transcript) || sp == null
-                || !sp.getBoolean("net.devemperor.dictate.auto_formatting_enabled", false)
-                || !sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) {
-            return transcript;
-        }
-
-        try {
-            String promptBuilder = AUTO_FORMATTING_PROMPT + "\n\nLanguage hint: " +
-                    (currentInputLanguageValue == null ? "unknown" : currentInputLanguageValue) +
-                    "\n\nTranscript:\n" +
-                    transcript;
-
-            String formattedText = requestRewordingFromApi(promptBuilder, null);
-            if (!TextUtils.isEmpty(formattedText)) {
-                return formattedText.trim();
-            }
-        } catch (Exception e) {
-            Log.w("DictateInputMethodService", "Auto-formatting failed", e);
-        }
-        return transcript;
     }
 
     private void commitTextToInputConnection(String text) {
@@ -1762,10 +1745,11 @@ public class DictateInputMethodService extends InputMethodService
             return;
         }
 
-        String inputForPrompt = prompt.getRequiresSelection() ? currentText : null;
+        String textForPrompt = prompt.getRequiresSelection() ? currentText : null;
+        PromptService.PromptPair pp = promptService.buildQueuedPrompt(prompt.getPrompt(), textForPrompt);
         boolean restoreUiAfter = index == promptIds.size() - 1;
 
-        startGPTApiRequest(prompt, inputForPrompt, new PromptResultCallback() {
+        startGPTApiRequest(pp, prompt.getName(), new PromptResultCallback() {
             @Override
             public void onSuccess(String text) {
                 applyQueuedPromptAtIndex(text, promptIds, index + 1);
@@ -1831,6 +1815,32 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
+    private void applySmallMode(boolean animate) {
+        boolean animationsEnabled = sp.getBoolean(Pref.Animations.INSTANCE.getKey(), true);
+
+        if (isSmallMode) {
+            infoCl.setVisibility(View.GONE);
+            promptsCl.setVisibility(View.GONE);
+            editButtonsKeyboardLl.setVisibility(View.GONE);
+        } else {
+            if (sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
+                promptsCl.setVisibility(View.VISIBLE);
+            }
+            editButtonsKeyboardLl.setVisibility(View.VISIBLE);
+        }
+
+        if (animate && animationsEnabled) {
+            float target = isSmallMode ? 180f : 0f;
+            smallModeButton.animate()
+                    .rotation(target)
+                    .setDuration(200)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .start();
+        } else {
+            smallModeButton.setRotation(isSmallMode ? 180f : 0f);
+        }
+    }
+
     private void logException(Exception e) {
         StringWriter sw = new StringWriter();
         e.printStackTrace(new PrintWriter(sw));
@@ -1838,6 +1848,7 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void showInfo(String type) {
+        if (isSmallMode) return;
         infoCl.setVisibility(View.VISIBLE);
         infoNoButton.setVisibility(View.VISIBLE);
         infoTv.setTextColor(getResources().getColor(R.color.dictate_red, getTheme()));

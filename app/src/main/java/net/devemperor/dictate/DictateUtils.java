@@ -23,71 +23,75 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import net.devemperor.dictate.ai.prompt.PromptTemplates;
+
 public class DictateUtils {
 
-    public static final String PROMPT_PUNCTUATION_CAPITALIZATION = "This sentence has capitalization and punctuation.";
-    public static final String PROMPT_REWORDING_BE_PRECISE = "Be accurate with your output. Only output exactly what the user has asked for above. Do not add any text before or after the actual output. Output the text in the language of the instruction, unless a different language was explicitly requested.";
+    public static final String PROMPT_PUNCTUATION_CAPITALIZATION = "Hello, how are you? I'm doing well! Yes, it starts at 3:00 p.m.";
+    /** @deprecated Use {@link PromptTemplates#SYSTEM_PROMPT_BE_PRECISE} instead. */
+    @Deprecated
+    public static final String PROMPT_REWORDING_BE_PRECISE = PromptTemplates.SYSTEM_PROMPT_BE_PRECISE;
     private static final Map<String, String> PROMPT_PUNCTUATION_CAPITALIZATION_BY_LANGUAGE;
 
     static {
         Map<String, String> prompts = new HashMap<>();
-        prompts.put("af", "Hierdie sin het hoofletters en punktuasie.");
-        prompts.put("sq", "Kjo fjali ka shkronja të mëdha dhe pikësim.");
-        prompts.put("ar", "هذه الجملة تحتوي على أحرف كبيرة وعلامات ترقيم.");
-        prompts.put("hy", "Այս նախադասությունը ունի մեծատառեր և կետադրություն։");
-        prompts.put("az", "Bu cümlədə böyük hərflər və durğu işarələri var.");
-        prompts.put("eu", "Esaldi honek letra larriak eta puntuazioa ditu.");
-        prompts.put("be", "Гэты сказ мае вялікія літары і знакі прыпынку.");
-        prompts.put("bn", "এই বাক্যে বড় হাতের অক্ষর এবং যতিচিহ্ন রয়েছে।");
-        prompts.put("bg", "Това изречение има главни букви и пунктуация.");
-        prompts.put("yue-cn", "呢句句子有大寫字母同標點符號。");
-        prompts.put("yue-hk", "呢句句子有大寫字母同標點符號。");
-        prompts.put("ca", "Aquesta frase té majúscules i puntuació.");
-        prompts.put("cs", "Tato věta má velká písmena a interpunkci.");
-        prompts.put("da", "Denne sætning har store bogstaver og tegnsætning.");
-        prompts.put("nl", "Deze zin heeft hoofdletters en interpunctie.");
+        prompts.put("af", "Hallo, hoe gaan dit? Dit gaan goed! Ja, dit begin om 15:00.");
+        prompts.put("sq", "Përshëndetje, si jeni? Jam mirë! Po, fillon në orën 15:00.");
+        prompts.put("ar", "\u0645\u0631\u062d\u0628\u064b\u0627\u060c \u0643\u064a\u0641 \u062d\u0627\u0644\u0643\u061f \u0623\u0646\u0627 \u0628\u062e\u064a\u0631! \u0646\u0639\u0645\u060c \u064a\u0628\u062f\u0623 \u0627\u0644\u0633\u0627\u0639\u0629 3:00 \u0645\u0633\u0627\u0621\u064b.");
+        prompts.put("hy", "\u0532\u0561\u0580\u0587, \u056b\u0576\u0579\u057a\u0565\u055e\u057d \u0565\u057d? \u0535\u057d \u056c\u0561\u057e \u0565\u0574! \u0531\u0575\u0578, \u057d\u056f\u057d\u057e\u0578\u0582\u0574 \u0567 \u056a\u0561\u0574\u0568 3:00-\u056b\u0576:");
+        prompts.put("az", "Salam, necəsiniz? Yaxşıyam! Bəli, saat 15:00-da başlayır.");
+        prompts.put("eu", "Kaixo, zer moduz? Ondo nago! Bai, 15:00etan hasten da.");
+        prompts.put("be", "\u0412\u0456\u0442\u0430\u044e, \u044f\u043a \u0441\u043f\u0440\u0430\u0432\u044b? \u0423 \u043c\u044f\u043d\u0435 \u045e\u0441\u0451 \u0434\u043e\u0431\u0440\u0430! \u0422\u0430\u043a, \u043f\u0430\u0447\u044b\u043d\u0430\u0435\u0446\u0446\u0430 \u045e 15:00.");
+        prompts.put("bn", "\u09b9\u09cd\u09af\u09be\u09b2\u09cb, \u0995\u09c7\u09ae\u09a8 \u0986\u099b\u09c7\u09a8? \u0986\u09ae\u09bf \u09ad\u09be\u09b2\u09cb \u0986\u099b\u09bf! \u09b9\u09cd\u09af\u09be\u0981, \u098f\u099f\u09be \u09ac\u09bf\u0995\u09be\u09b2 \u09e9:00-\u09a4\u09c7 \u09b6\u09c1\u09b0\u09c1 \u09b9\u09af\u09bc\u0964");
+        prompts.put("bg", "\u0417\u0434\u0440\u0430\u0432\u0435\u0439\u0442\u0435, \u043a\u0430\u043a \u0441\u0442\u0435? \u0410\u0437 \u0441\u044a\u043c \u0434\u043e\u0431\u0440\u0435! \u0414\u0430, \u0437\u0430\u043f\u043e\u0447\u0432\u0430 \u0432 15:00 \u0447.");
+        prompts.put("yue-cn", "\u4f60\u597d\uff0c\u4f60\u70b9\u5440\uff1f\u6211\u51e0\u597d\uff01\u4fc2\u5440\uff0c\u4e0b\u663d3\u70b9\u5f00\u59cb\u3002");
+        prompts.put("yue-hk", "\u4f60\u597d\uff0c\u4f60\u9ede\u5440\uff1f\u6211\u5e7e\u597d\uff01\u4fc2\u5440\uff0c\u4e0b\u665d3\u9ede\u958b\u59cb\u3002");
+        prompts.put("ca", "Hola, com estàs? Estic bé! Sí, comença a les 15:00.");
+        prompts.put("cs", "Ahoj, jak se máš? Mám se dobře! Ano, začíná ve 15:00.");
+        prompts.put("da", "Hej, hvordan har du det? Jeg har det godt! Ja, det starter kl. 15:00.");
+        prompts.put("nl", "Hallo, hoe gaat het? Het gaat goed! Ja, het begint om 15:00 uur.");
         prompts.put("en", PROMPT_PUNCTUATION_CAPITALIZATION);
-        prompts.put("et", "Selles lauses on suurtähed ja kirjavahemärgid.");
-        prompts.put("fi", "Tässä lauseessa on isot kirjaimet ja välimerkit.");
-        prompts.put("fr", "Cette phrase contient des majuscules et de la ponctuation.");
-        prompts.put("gl", "Esta frase ten maiúsculas e puntuación.");
-        prompts.put("de", "Dieser Satz hat Großbuchstaben und Zeichensetzung.");
-        prompts.put("el", "Αυτή η πρόταση έχει κεφαλαία γράμματα και στίξη.");
-        prompts.put("he", "במשפט הזה יש אותיות גדולות וסימני פיסוק.");
-        prompts.put("hi", "इस वाक्य में बड़े अक्षर और विराम चिह्न हैं।");
-        prompts.put("hu", "Ez a mondat nagybetűket és írásjeleket tartalmaz.");
-        prompts.put("id", "Kalimat ini memiliki huruf kapital dan tanda baca.");
-        prompts.put("it", "Questa frase ha lettere maiuscole e punteggiatura.");
-        prompts.put("ja", "この文には大文字と句読点があります。");
-        prompts.put("kk", "Бұл сөйлемде бас әріптер мен тыныс белгілері бар.");
-        prompts.put("ko", "이 문장에는 대문자와 구두점이 있습니다.");
-        prompts.put("lv", "Šim teikumam ir lielie burti un pieturzīmes.");
-        prompts.put("lt", "Šiame sakinyje yra didžiosios raidės ir skyrybos ženklai.");
-        prompts.put("mk", "Оваа реченица има големи букви и интерпункција.");
-        prompts.put("zh-cn", "这句话有大写字母和标点符号。");
-        prompts.put("zh-tw", "這句話有大寫字母和標點符號。");
-        prompts.put("mr", "या वाक्यात मोठी अक्षरे आणि विरामचिन्हे आहेत.");
-        prompts.put("ne", "यो वाक्यमा ठूला अक्षर र विराम चिन्हहरू छन्।");
-        prompts.put("nn", "Denne setninga har store bokstavar og teiknsetting.");
-        prompts.put("fa", "این جمله دارای حروف بزرگ و علائم نگارشی است.");
-        prompts.put("pl", "To zdanie ma wielkie litery i znaki interpunkcyjne.");
-        prompts.put("pt", "Esta frase tem letras maiúsculas e pontuação.");
-        prompts.put("pa", "ਇਸ ਵਾਕ ਵਿੱਚ ਵੱਡੇ ਅੱਖਰ ਅਤੇ ਵਿਸ਼ਰਾਮ ਚਿੰਨ੍ਹ ਹਨ।");
-        prompts.put("ro", "Această propoziție are litere mari și punctuație.");
-        prompts.put("ru", "В этом предложении есть заглавные буквы и знаки препинания.");
-        prompts.put("sr", "Ова реченица има велика слова и интерпункцију.");
-        prompts.put("sk", "Táto veta má veľké písmená a interpunkciu.");
-        prompts.put("sl", "Ta poved ima velike črke in ločila.");
-        prompts.put("es", "Esta frase tiene mayúsculas y puntuación.");
-        prompts.put("sw", "Sentensi hii ina herufi kubwa na alama za uakifishaji.");
-        prompts.put("sv", "Denna mening har stora bokstäver och skiljetecken.");
-        prompts.put("ta", "இந்த வாக்கியத்தில் பெரிய எழுத்துக்கள் மற்றும் குறியீடுகள் உள்ளன.");
-        prompts.put("th", "ประโยคนี้มีตัวพิมพ์ใหญ่และเครื่องหมายวรรคตอน.");
-        prompts.put("tr", "Bu cümlede büyük harfler ve noktalama işaretleri var.");
-        prompts.put("uk", "У цьому реченні є великі літери та розділові знаки.");
-        prompts.put("ur", "اس جملے میں بڑے حروف اور اوقاف موجود ہیں۔");
-        prompts.put("vi", "Câu này có chữ hoa và dấu câu.");
-        prompts.put("cy", "Mae gan y frawddeg hon lythrennau mawr ac atalnodi.");
+        prompts.put("et", "Tere, kuidas läheb? Mul läheb hästi! Jah, see algab kell 15:00.");
+        prompts.put("fi", "Hei, mitä kuuluu? Minulla menee hyvin! Kyllä, se alkaa klo 15:00.");
+        prompts.put("fr", "Bonjour, comment allez-vous ? Je vais bien ! Oui, ça commence à 15 h 00.");
+        prompts.put("gl", "Ola, como estás? Estou ben! Si, comeza ás 15:00.");
+        prompts.put("de", "Hallo, wie geht es dir? Mir geht es gut! Ja, es beginnt um 15:00 Uhr.");
+        prompts.put("el", "\u0393\u03b5\u03b9\u03b1, \u03c0\u03ce\u03c2 \u03b5\u03af\u03c3\u03b1\u03b9; \u0395\u03af\u03bc\u03b1\u03b9 \u03ba\u03b1\u03bb\u03ac! \u039d\u03b1\u03b9, \u03be\u03b5\u03ba\u03b9\u03bd\u03ac \u03c3\u03c4\u03b9\u03c2 3:00 \u03bc.\u03bc.");
+        prompts.put("he", "\u05e9\u05dc\u05d5\u05dd, \u05de\u05d4 \u05e9\u05dc\u05d5\u05de\u05da? \u05d0\u05e0\u05d9 \u05d1\u05e1\u05d3\u05e8! \u05db\u05df, \u05d6\u05d4 \u05de\u05ea\u05d7\u05d9\u05dc \u05d1\u05e9\u05e2\u05d4 15:00.");
+        prompts.put("hi", "\u0928\u092e\u0938\u094d\u0924\u0947, \u0906\u092a \u0915\u0948\u0938\u0947 \u0939\u0948\u0902? \u092e\u0948\u0902 \u0920\u0940\u0915 \u0939\u0942\u0901! \u0939\u093e\u0901, \u092f\u0939 \u0926\u094b\u092a\u0939\u0930 3:00 \u092c\u091c\u0947 \u0936\u0941\u0930\u0942 \u0939\u094b\u0924\u093e \u0939\u0948\u0964");
+        prompts.put("hu", "Szia, hogy vagy? Jól vagyok! Igen, délután 3:00-kor kezdődik.");
+        prompts.put("id", "Halo, apa kabar? Saya baik-baik saja! Ya, dimulai pukul 15:00.");
+        prompts.put("it", "Ciao, come stai? Sto bene! Sì, inizia alle 15:00.");
+        prompts.put("ja", "\u3053\u3093\u306b\u3061\u306f\u3001\u304a\u5143\u6c17\u3067\u3059\u304b\uff1f\u5143\u6c17\u3067\u3059\uff01\u306f\u3044\u3001\u5348\u5f8c3\u6642\u306b\u59cb\u307e\u308a\u307e\u3059\u3002");
+        prompts.put("kk", "\u0421\u04d9\u043b\u0435\u043c, \u049b\u0430\u043b\u044b\u04a3\u044b\u0437 \u049b\u0430\u043b\u0430\u0439? \u041c\u0435\u043d \u0436\u0430\u049b\u0441\u044b\u043c\u044b\u043d! \u0418\u04d9, \u0441\u0430\u0493\u0430\u0442 15:00-\u0434\u0435 \u0431\u0430\u0441\u0442\u0430\u043b\u0430\u0434\u044b.");
+        prompts.put("ko", "\uc548\ub155\ud558\uc138\uc694, \uc5b4\ub5bb\uac8c \uc9c0\ub0b4\uc138\uc694? \uc798 \uc9c0\ub0b4\uace0 \uc788\uc5b4\uc694! \ub124, \uc624\ud6c4 3\uc2dc\uc5d0 \uc2dc\uc791\ud569\ub2c8\ub2e4.");
+        prompts.put("lv", "Sveiki, kā jums klājas? Man iet labi! Jā, tas sākas pulksten 15:00.");
+        prompts.put("lt", "Sveiki, kaip sekasi? Man viskas gerai! Taip, prasideda 15:00 val.");
+        prompts.put("mk", "\u0417\u0434\u0440\u0430\u0432\u043e, \u043a\u0430\u043a\u043e \u0441\u0442\u0435? \u0414\u043e\u0431\u0440\u043e \u0441\u0443\u043c! \u0414\u0430, \u043f\u043e\u0447\u043d\u0443\u0432\u0430 \u0432\u043e 15:00 \u0447.");
+        prompts.put("zh-cn", "\u4f60\u597d\uff0c\u4f60\u597d\u5417\uff1f\u6211\u5f88\u597d\uff01\u662f\u7684\uff0c\u4e0b\u5348 3:00 \u5f00\u59cb\u3002");
+        prompts.put("zh-tw", "\u4f60\u597d\uff0c\u4f60\u597d\u55ce\uff1f\u6211\u5f88\u597d\uff01\u662f\u7684\uff0c\u4e0b\u5348 3:00 \u958b\u59cb\u3002");
+        prompts.put("mr", "\u0928\u092e\u0938\u094d\u0915\u093e\u0930, \u0924\u0941\u092e\u094d\u0939\u0940 \u0915\u0938\u0947 \u0906\u0939\u093e\u0924? \u092e\u0940 \u0920\u0940\u0915 \u0906\u0939\u0947! \u0939\u094b, \u0924\u0947 \u0926\u0941\u092a\u093e\u0930\u0940 3:00 \u0935\u093e\u091c\u0924\u093e \u0938\u0941\u0930\u0942 \u0939\u094b\u0924\u0947.");
+        prompts.put("ne", "\u0928\u092e\u0938\u094d\u0924\u0947, \u0924\u092a\u093e\u0908\u0902\u0932\u093e\u0908 \u0915\u0938\u094d\u0924\u094b \u091b? \u092e\u0932\u093e\u0908 \u0938\u091e\u094d\u091a\u0948 \u091b! \u0939\u094b, \u092f\u094b \u0926\u093f\u0909\u0901\u0938\u094b 3:00 \u092c\u091c\u0947 \u0938\u0941\u0930\u0941 \u0939\u0941\u0928\u094d\u091b\u0964");
+        prompts.put("nn", "Hei, korleis går det? Det går bra! Ja, det startar klokka 15:00.");
+        prompts.put("fa", "\u0633\u0644\u0627\u0645\u060c \u062d\u0627\u0644\u062a \u0686\u0637\u0648\u0631\u0647\u061f \u0645\u0646 \u062e\u0648\u0628\u0645! \u0628\u0644\u0647\u060c \u0633\u0627\u0639\u062a 3:00 \u0628\u0639\u062f\u0627\u0632\u0638\u0647\u0631 \u0634\u0631\u0648\u0639 \u0645\u06cc\u200c\u0634\u0647.");
+        prompts.put("pl", "Cześć, jak się masz? U mnie dobrze! Tak, zaczyna się o 15:00.");
+        prompts.put("pt", "Olá, como vai? Estou bem! Sim, começa às 15:00.");
+        prompts.put("pa", "\u0a38\u0a24 \u0a38\u0a4d\u0a30\u0a40 \u0a05\u0a15\u0a3e\u0a32, \u0a24\u0a41\u0a38\u0a40\u0a02 \u0a15\u0a3f\u0a35\u0a47\u0a02 \u0a39\u0a4b? \u0a2e\u0a48\u0a02 \u0a20\u0a40\u0a15 \u0a39\u0a3e\u0a02! \u0a39\u0a3e\u0a02, \u0a07\u0a39 \u0a26\u0a41\u0a2a\u0a39\u0a3f\u0a30 3:00 \u0a35\u0a1c\u0a47 \u0a36\u0a41\u0a30\u0a42 \u0a39\u0a41\u0a70\u0a26\u0a3e \u0a39\u0a48\u0964");
+        prompts.put("ro", "Bună, ce mai faci? Sunt bine! Da, începe la ora 15:00.");
+        prompts.put("ru", "\u041f\u0440\u0438\u0432\u0435\u0442, \u043a\u0430\u043a \u0434\u0435\u043b\u0430? \u0423 \u043c\u0435\u043d\u044f \u0432\u0441\u0451 \u0445\u043e\u0440\u043e\u0448\u043e! \u0414\u0430, \u043d\u0430\u0447\u0438\u043d\u0430\u0435\u0442\u0441\u044f \u0432 15:00.");
+        prompts.put("sr", "\u0417\u0434\u0440\u0430\u0432\u043e, \u043a\u0430\u043a\u043e \u0441\u0442\u0435? \u0414\u043e\u0431\u0440\u043e \u0441\u0430\u043c! \u0414\u0430, \u043f\u043e\u0447\u0438\u045a\u0435 \u0443 15:00.");
+        prompts.put("sk", "Ahoj, ako sa máš? Mám sa dobre! Áno, začína o 15:00.");
+        prompts.put("sl", "Živijo, kako si? Imam se dobro! Ja, začne se ob 15:00.");
+        prompts.put("es", "Hola, ¿cómo estás? ¡Estoy bien! Sí, empieza a las 3:00 p. m.");
+        prompts.put("sw", "Habari, hujambo? Mimi ni mzima! Ndiyo, inaanza saa 9:00 mchana.");
+        prompts.put("sv", "Hej, hur mår du? Jag mår bra! Ja, det börjar klockan 15:00.");
+        prompts.put("ta", "\u0bb5\u0ba3\u0b95\u0bcd\u0b95\u0bae\u0bcd, \u0ba8\u0bc0\u0b99\u0bcd\u0b95\u0bb3\u0bcd \u0b8e\u0baa\u0bcd\u0baa\u0b9f\u0bbf \u0b87\u0bb0\u0bc1\u0b95\u0bcd\u0b95\u0bbf\u0bb1\u0bc0\u0bb0\u0bcd\u0b95\u0bb3\u0bcd? \u0ba8\u0bbe\u0ba9\u0bcd \u0ba8\u0bb2\u0bae\u0bbe\u0b95 \u0b87\u0bb0\u0bc1\u0b95\u0bcd\u0b95\u0bbf\u0bb1\u0bc7\u0ba9\u0bcd! \u0b86\u0bae\u0bcd, \u0b85\u0ba4\u0bc1 \u0bae\u0bbe\u0bb2\u0bc8 3:00 \u0bae\u0ba3\u0bbf\u0b95\u0bcd\u0b95\u0bc1 \u0ba4\u0bca\u0b9f\u0b99\u0bcd\u0b95\u0bc1\u0bae\u0bcd.");
+        prompts.put("th", "\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35\u0e04\u0e23\u0e31\u0e1a \u0e2a\u0e1a\u0e32\u0e22\u0e14\u0e35\u0e44\u0e2b\u0e21? \u0e2a\u0e1a\u0e32\u0e22\u0e14\u0e35\u0e04\u0e23\u0e31\u0e1a! \u0e43\u0e0a\u0e48\u0e04\u0e23\u0e31\u0e1a \u0e40\u0e23\u0e34\u0e48\u0e21\u0e15\u0e2d\u0e19\u0e1a\u0e48\u0e32\u0e22 3 \u0e42\u0e21\u0e07\u0e04\u0e23\u0e31\u0e1a");
+        prompts.put("tr", "Merhaba, nasılsınız? İyiyim! Evet, saat 15:00'te başlıyor.");
+        prompts.put("uk", "\u041f\u0440\u0438\u0432\u0456\u0442, \u044f\u043a \u0441\u043f\u0440\u0430\u0432\u0438? \u0423 \u043c\u0435\u043d\u0435 \u0432\u0441\u0435 \u0434\u043e\u0431\u0440\u0435! \u0422\u0430\u043a, \u043f\u043e\u0447\u0438\u043d\u0430\u0454\u0442\u044c\u0441\u044f \u043e 15:00.");
+        prompts.put("ur", "\u0627\u0633\u0644\u0627\u0645 \u0639\u0644\u06cc\u06a9\u0645\u060c \u06a9\u06cc\u0627 \u062d\u0627\u0644 \u06c1\u06d2\u061f \u0645\u06cc\u06ba \u0679\u06be\u06cc\u06a9 \u06c1\u0648\u06ba! \u062c\u06cc \u06c1\u0627\u06ba\u060c \u06cc\u06c1 \u062f\u0648\u067e\u06c1\u0631 3:00 \u0628\u062c\u06d2 \u0634\u0631\u0648\u0639 \u06c1\u0648\u062a\u0627 \u06c1\u06d2\u06d4");
+        prompts.put("vi", "Xin chào, bạn khỏe không? Tôi khỏe! Vâng, nó bắt đầu lúc 3:00 chiều.");
+        prompts.put("cy", "Helo, sut wyt ti? Dwi'n dda! Ie, mae'n dechrau am 3:00 y prynhawn.");
         PROMPT_PUNCTUATION_CAPITALIZATION_BY_LANGUAGE = Collections.unmodifiableMap(prompts);
     }
 
@@ -273,7 +277,7 @@ public class DictateUtils {
     public static String translateLanguageToEmoji(String language) {
         switch (language) {
             case "detect":
-                return "✨";
+                return "\u2728";
             case "af":
                 return "\uD83C\uDDFF\uD83C\uDDE6";
             case "sq":

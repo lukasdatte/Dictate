@@ -1066,7 +1066,7 @@ public class DictateInputMethodService extends InputMethodService
         int accentColorDark = DictateUtils.darkenColor(accentColor, 0.35f);
         TextView[] textColorViews = { infoTv, runningPromptTv, emojiPickerTitleTv, numbersPanelTitleTv };
         for (TextView tv : textColorViews) tv.setTextColor(accentColor);
-        applyButtonColor(smallModeButton, accentColorDark);
+        applyButtonColor(smallModeButton, accentColorMedium);
         applyButtonColor(editSettingsButton, accentColorMedium);
         applyButtonColor(recordButton, accentColor);
         applyButtonColor(resendButton, accentColorMedium);

@@ -27,7 +27,6 @@ import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.text.InputType;
-import android.text.TextUtils;
 import android.util.Log;
 import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
@@ -47,7 +46,6 @@ import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
 import android.widget.Button;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
@@ -64,17 +62,10 @@ import com.google.android.material.button.MaterialButton;
 
 import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateUtils;
-import net.devemperor.dictate.ai.AIFunction;
 import net.devemperor.dictate.ai.AIOrchestrator;
-import net.devemperor.dictate.ai.AIProviderException;
-import net.devemperor.dictate.ai.runner.CompletionResult;
-import net.devemperor.dictate.ai.runner.TranscriptionResult;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.entity.InsertionMethod;
 import net.devemperor.dictate.database.entity.InsertionSource;
-import net.devemperor.dictate.database.entity.SessionType;
-import net.devemperor.dictate.database.entity.StepStatus;
-import net.devemperor.dictate.database.entity.StepType;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.preferences.PrefsMigration;
 import net.devemperor.dictate.R;
@@ -89,11 +80,6 @@ import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
 
 import java.io.File;
-import java.io.InterruptedIOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -109,7 +95,8 @@ import java.util.concurrent.Executors;
 public class DictateInputMethodService extends InputMethodService
         implements RecordingManager.RecordingCallback,
                    BluetoothScoManager.BluetoothScoCallback,
-                   PromptQueueManager.PromptQueueCallback {
+                   PromptQueueManager.PromptQueueCallback,
+                   PipelineOrchestrator.PipelineCallback {
 
     // define handlers and runnables for background tasks
     private static final int DELETE_LOOKBACK_CHARACTERS = 64;
@@ -126,6 +113,7 @@ public class DictateInputMethodService extends InputMethodService
     private long startDeleteTime = 0;
     private int currentDeleteDelay = 50;
     private boolean livePrompt = false;
+    private volatile boolean pendingLivePromptChain = false; // true when transcription result should be chained into live prompt
     private boolean vibrationEnabled = true;
     private boolean audioFocusEnabled = true;
     private TextView selectedCharacter = null;
@@ -141,9 +129,9 @@ public class DictateInputMethodService extends InputMethodService
     private List<Integer> swipeWordBoundaries = null;
     private int swipeSelectedSteps = 0;
 
-    private ExecutorService speechApiThread;
-    private ExecutorService rewordingApiThread;
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
+    private PipelineOrchestrator pipelineOrchestrator;
+    private KeyboardUiController uiController;
     private File audioFile;
     private Vibrator vibrator;
     private SharedPreferences sp;
@@ -199,15 +187,8 @@ public class DictateInputMethodService extends InputMethodService
     private final List<MaterialButton> numberPanelButtons = new ArrayList<>();
     private LinearLayout overlayCharactersLl;
 
-    // Pipeline progress views (inside prompts_keyboard_cl)
-    private View pipelineProgressLl;
-    private LinearLayout pipelineStepsContainer;
-    private ScrollView pipelineScrollView;
+    // Pipeline cancel button (delegates to PipelineOrchestrator)
     private MaterialButton pipelineCancelBtn;
-    private volatile boolean pipelineCancelled = false;
-    private final List<View> pipelineStepRows = new ArrayList<>();
-    private int pipelineTotalSteps = 0;
-    private int pipelineCurrentStep = 0;
 
     // History button
     private MaterialButton editHistoryButton;
@@ -230,11 +211,6 @@ public class DictateInputMethodService extends InputMethodService
     private AutoFormattingService autoFormattingService;
     private SessionManager sessionManager;
     private SessionTracker sessionTracker;
-
-    private interface PromptResultCallback {
-        void onSuccess(String text);
-        void onFailure();
-    }
 
     // ===== RecordingManager.RecordingCallback =====
 
@@ -259,7 +235,7 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onRecordingStopped(File audioFile) {
-        // No-op: stop is always followed by explicit action (startWhisperApiRequest or UI reset)
+        // No-op: stop is always followed by explicit action (runTranscriptionViaOrchestrator or UI reset)
     }
 
     @Override
@@ -415,11 +391,26 @@ public class DictateInputMethodService extends InputMethodService
 
         overlayCharactersLl = dictateKeyboardView.findViewById(R.id.overlay_characters_ll);
 
-        // Pipeline progress views (inside prompts_keyboard_cl via <include>)
-        pipelineProgressLl = dictateKeyboardView.findViewById(R.id.pipeline_progress_ll);
-        pipelineStepsContainer = dictateKeyboardView.findViewById(R.id.pipeline_steps_container);
-        pipelineScrollView = dictateKeyboardView.findViewById(R.id.pipeline_scroll_view);
+        // Pipeline cancel button
         pipelineCancelBtn = dictateKeyboardView.findViewById(R.id.pipeline_cancel_btn);
+
+        // KeyboardUiController (wraps pipeline progress views)
+        uiController = new KeyboardUiController(new KeyboardUiController.PipelineViews(
+            promptsRv,
+            runningPromptTv,
+            runningPromptPb,
+            dictateKeyboardView.findViewById(R.id.pipeline_progress_ll),
+            dictateKeyboardView.findViewById(R.id.pipeline_steps_container),
+            dictateKeyboardView.findViewById(R.id.pipeline_scroll_view),
+            recordButton,
+            infoCl,
+            LayoutInflater.from(context)
+        ));
+
+        // PipelineOrchestrator
+        pipelineOrchestrator = new PipelineOrchestrator(
+            aiOrchestrator, autoFormattingService, promptQueueManager,
+            promptService, sessionManager, sessionTracker, promptDao, this);
 
         // History button
         editHistoryButton = dictateKeyboardView.findViewById(R.id.edit_history_btn);
@@ -473,42 +464,34 @@ public class DictateInputMethodService extends InputMethodService
         });
 
         pipelineCancelBtn.setOnClickListener(v -> {
-            // 1. Flag setzen (for queued-prompt chains)
-            pipelineCancelled = true;
+            PipelineOrchestrator.CancelInfo cancelInfo = pipelineOrchestrator.cancel();
+            pendingLivePromptChain = false;
 
-            // 2. Cancel current API calls
-            if (speechApiThread != null) speechApiThread.shutdownNow();
-            if (rewordingApiThread != null) rewordingApiThread.shutdownNow();
+            // UI sofort zurücksetzen (Main-Thread)
+            uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+            applyRecordingIconState(false);
+            uiController.restoreRecordButtonIdle(
+                getDictateButtonText(),
+                R.drawable.ic_baseline_mic_20,
+                R.drawable.ic_baseline_folder_open_20);
 
-            // 3. Commit last successful output + reset session (off main thread — DB access)
+            // DB: Letzten erfolgreichen Output committen (Off-Thread)
             dbExecutor.execute(() -> {
-                String lastSuccessfulOutput = sessionTracker.getCurrentStepId() != null
-                    ? sessionManager.getStepOutput(sessionTracker.getCurrentStepId())
-                    : (sessionTracker.getCurrentTranscriptionId() != null
-                        ? sessionManager.getTranscriptionText(sessionTracker.getCurrentTranscriptionId())
-                        : null);
+                String lastOutput = null;
+                if (cancelInfo.getLastStepId() != null) {
+                    lastOutput = sessionManager.getStepOutput(cancelInfo.getLastStepId());
+                } else if (cancelInfo.getLastTranscriptionId() != null) {
+                    lastOutput = sessionManager.getTranscriptionText(cancelInfo.getLastTranscriptionId());
+                }
 
-                // resetSession() does DB access (getFinalOutput) — must be off main thread
                 sessionTracker.resetSession();
                 sessionTracker.persistToPrefs(sp);
 
-                mainHandler.post(() -> {
-                    if (lastSuccessfulOutput != null) {
-                        commitTextToInputConnection(lastSuccessfulOutput, InsertionSource.TRANSCRIPTION);
-                    }
-                });
+                if (lastOutput != null) {
+                    String finalOutput = lastOutput;
+                    mainHandler.post(() -> commitTextToInputConnection(finalOutput, InsertionSource.TRANSCRIPTION));
+                }
             });
-
-            // 4. Reset UI state immediately (no DB access)
-            // Note: pipelineCancelled stays true — reset happens in showPipelineProgress() / restorePromptUi()
-            hidePipelineProgress();
-            if (promptsRv != null) promptsRv.setVisibility(View.VISIBLE);
-            if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
-            if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
-            recordButton.setText(getDictateButtonText());
-            applyRecordingIconState(false);
-            recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-            recordButton.setEnabled(true);
         });
 
         // initial state: mic left, folder-open right
@@ -555,7 +538,7 @@ public class DictateInputMethodService extends InputMethodService
             // Long-press: regenerate (new API call with cached audio)
             if (audioFile == null) audioFile = new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a"));
             sessionTracker.reuseLastSession();
-            startWhisperApiRequest();
+            runTranscriptionViaOrchestrator();
             return true;
         });
 
@@ -969,12 +952,7 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         // State (B): API request is running -> let it continue, just hide UI panels
-        if (speechApiThread != null && !speechApiThread.isShutdown()) {
-            emojiPickerCl.setVisibility(View.GONE);
-            numbersPanelCl.setVisibility(View.GONE);
-            return;
-        }
-        if (rewordingApiThread != null && !rewordingApiThread.isShutdown()) {
+        if (pipelineOrchestrator.isRunning()) {
             emojiPickerCl.setVisibility(View.GONE);
             numbersPanelCl.setVisibility(View.GONE);
             return;
@@ -984,8 +962,8 @@ public class DictateInputMethodService extends InputMethodService
         cancelScoWaitIfAny();
         recordingManager.release();
 
-        if (speechApiThread != null) speechApiThread.shutdownNow();
-        if (rewordingApiThread != null) rewordingApiThread.shutdownNow();
+        pipelineOrchestrator.cancel();
+        pendingLivePromptChain = false;
 
         bluetoothScoManager.unregisterReceiver();
 
@@ -996,8 +974,7 @@ public class DictateInputMethodService extends InputMethodService
         infoCl.setVisibility(View.GONE);
         emojiPickerCl.setVisibility(View.GONE);
         numbersPanelCl.setVisibility(View.GONE);
-        hidePipelineProgress();
-        pipelineCancelled = false;
+        uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
         livePrompt = false;
         recordingUsesBluetooth = false;
         updatePromptButtonsEnabledState();
@@ -1093,7 +1070,7 @@ public class DictateInputMethodService extends InputMethodService
                                 }
                             }
                         }
-                        startGPTApiRequest(model);  // another normal prompt clicked
+                        runStandalonePromptViaOrchestrator(model);  // another normal prompt clicked
                     }
                 }
 
@@ -1226,7 +1203,7 @@ public class DictateInputMethodService extends InputMethodService
             sp.edit().putString("net.devemperor.dictate.last_file_name", audioFile.getName()).apply();
 
             sp.edit().remove("net.devemperor.dictate.transcription_audio_file").apply();
-            startWhisperApiRequest();
+            runTranscriptionViaOrchestrator();
 
         } else if (sp.getBoolean("net.devemperor.dictate.instant_recording", false)) {
             recordButton.performClick();
@@ -1559,7 +1536,7 @@ public class DictateInputMethodService extends InputMethodService
         recordingManager.stop();
         updateKeepScreenAwake(false);
         bluetoothScoManager.release();
-        startWhisperApiRequest();
+        runTranscriptionViaOrchestrator();
     }
 
     private void updateKeepScreenAwake(boolean keepAwake) {
@@ -1596,11 +1573,15 @@ public class DictateInputMethodService extends InputMethodService
         keepScreenAwakeApplied = keepAwake;
     }
 
-    private void startWhisperApiRequest() {
+    /**
+     * Prepares UI and launches transcription pipeline via PipelineOrchestrator.
+     * Replaces the old startWhisperApiRequest() method.
+     */
+    private void runTranscriptionViaOrchestrator() {
         applyRecordingIconState(false);  // recording finished -> stop pulsing
 
         recordButton.setText(R.string.dictate_sending);
-        recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, 0, 0); // keep send icon while sending
+        recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, 0, 0);
         recordButton.setEnabled(false);
         pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
         pauseButton.setVisibility(View.GONE);
@@ -1612,367 +1593,161 @@ public class DictateInputMethodService extends InputMethodService
 
         // Show pipeline progress
         promptsCl.setVisibility(View.VISIBLE);
-        showPipelineProgress();
+        int totalSteps = 1; // transcription always
+        if (autoFormattingService.isEnabled()) totalSteps++;
+        totalSteps += promptQueueManager.getQueuedIds().size();
+        uiController.showPipelineProgress(totalSteps);
 
         if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
 
+        String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
+                ? currentInputLanguageValue : null;
         String stylePrompt = promptService.resolveWhisperStylePrompt(currentInputLanguageValue);
 
-        // Start RECORDING session before API call
         EditorInfo info = getCurrentInputEditorInfo();
-        sessionTracker.startSession(SessionType.RECORDING,
-            info != null ? info.packageName : null,
-            currentInputLanguageValue, audioFile != null ? audioFile.getAbsolutePath() : null, null);
+        boolean showResend = new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
+                && sp.getBoolean("net.devemperor.dictate.resend_button", false);
 
-        speechApiThread = Executors.newSingleThreadExecutor();
-        speechApiThread.execute(() -> {
-            try {
-                String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
-                        ? currentInputLanguageValue : null;
+        PipelineOrchestrator.PipelineConfig config = new PipelineOrchestrator.PipelineConfig(
+            audioFile, language, stylePrompt, livePrompt, autoSwitchKeyboard,
+            showResend, new File(getFilesDir(), "recordings"),
+            info != null ? info.packageName : null);
 
-                // Step 1: Transcription
-                mainHandler.post(() -> updatePipelineStepRunning(getString(R.string.dictate_pipeline_transcription)));
-                long transcriptionStart = System.nanoTime();
-                TranscriptionResult result = aiOrchestrator.transcribe(audioFile, language, stylePrompt);
-                String resultText = result.getText().strip();
-                long transcriptionDurationMs = (System.nanoTime() - transcriptionStart) / 1_000_000;
-                mainHandler.post(() -> updatePipelineStepDone(getString(R.string.dictate_pipeline_transcription), transcriptionDurationMs));
-                String transcriptionProvider = aiOrchestrator.getProvider(AIFunction.TRANSCRIPTION).name();
+        pendingLivePromptChain = livePrompt;
+        livePrompt = false;
+        autoSwitchKeyboard = false;
 
-                if (pipelineCancelled) return;
-
-                // Persist transcription version
-                String sid = sessionTracker.getCurrentSessionId();
-                if (sid != null) {
-                    String tId = sessionManager.addTranscriptionVersion(
-                        sid, resultText, result.getModelName(),
-                        transcriptionProvider, 0, 0, transcriptionDurationMs);
-                    sessionTracker.setTranscription(tId);
-
-                    // Completion log for transcription
-                    sessionManager.logCompletion("TRANSCRIPTION", sid,
-                        null, tId, null, null, true, null);
-
-                    // Persist audio file from cache to permanent storage
-                    if (audioFile != null && audioFile.exists()) {
-                        persistAudioFile(audioFile, sid);
-                    }
-                }
-
-                // Step 2: Auto-formatting (optional — only show progress if enabled)
-                if (autoFormattingService.isEnabled()) {
-                    mainHandler.post(() -> updatePipelineStepRunning(getString(R.string.dictate_pipeline_formatting)));
-                }
-                long formatStart = System.nanoTime();
-                FormatResult fr = autoFormattingService.formatIfEnabled(resultText, currentInputLanguageValue);
-                long formatDurationMs = (System.nanoTime() - formatStart) / 1_000_000;
-
-                if (fr.getCompletionResult() != null) {
-                    mainHandler.post(() -> updatePipelineStepDone(getString(R.string.dictate_pipeline_formatting), formatDurationMs));
-                } else if (fr.getError() != null) {
-                    mainHandler.post(() -> updatePipelineStepError(getString(R.string.dictate_pipeline_formatting)));
-                }
-
-                if (pipelineCancelled) return;
-
-                if (sid != null) {
-                    if (fr.getCompletionResult() != null) {
-                        // SUCCESS: Auto-format worked
-                        String provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name();
-                        String stepId = sessionManager.appendProcessingStep(
-                            sid, StepType.AUTO_FORMAT, resultText, fr.getText(),
-                            fr.getCompletionResult().getModelName(), provider,
-                            null, null,
-                            null, sessionTracker.getCurrentTranscriptionId(),
-                            null, fr.getCompletionResult().getPromptTokens(),
-                            fr.getCompletionResult().getCompletionTokens(),
-                            formatDurationMs, StepStatus.SUCCESS, null);
-                        sessionTracker.setStep(stepId);
-
-                        sessionManager.logCompletion("AUTO_FORMAT", sid,
-                            stepId, null, null, null, true, null);
-
-                    } else if (fr.getError() != null) {
-                        // ERROR: Auto-format failed — persist error step for audit trail
-                        String provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name();
-                        String model = aiOrchestrator.getModelName(AIFunction.COMPLETION);
-                        String stepId = sessionManager.appendProcessingStep(
-                            sid, StepType.AUTO_FORMAT, resultText, null,
-                            model, provider, null, null,
-                            null, sessionTracker.getCurrentTranscriptionId(),
-                            null, 0, 0, formatDurationMs,
-                            StepStatus.ERROR, fr.getError().getMessage());
-                        // No setStep() — output stays at the transcription
-
-                        sessionManager.logCompletion("AUTO_FORMAT", sid,
-                            stepId, null, null, null, false, fr.getError().getMessage());
-                    }
-                    // else: disabled — no step, no log
-                }
-                resultText = fr.getText();
-
-                List<Integer> promptsToApply = promptQueueManager.getQueuedIds();
-                if (!promptsToApply.isEmpty() && !livePrompt) {
-                    // Queued prompts run on their own rewordingApiThread(s).
-                    // The last prompt's restoreUiAfter=true will call restorePromptUi().
-                    // We MUST return here so speechApiThread doesn't call restorePromptUi() early.
-                    processQueuedPrompts(resultText, promptsToApply);
-
-                    // Show resend button + auto-switch (won't be reached after return)
-                    if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                            && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
-                        mainHandler.post(() -> resendButton.setVisibility(View.VISIBLE));
-                    }
-                    if (autoSwitchKeyboard) {
-                        autoSwitchKeyboard = false;
-                        mainHandler.post(this::switchToPreviousKeyboard);
-                    }
-                    return;
-                }
-
-                if (!livePrompt) {
-                    commitTextToInputConnection(resultText, InsertionSource.TRANSCRIPTION);
-                } else {
-                    livePrompt = false;
-                    startGPTApiRequest(new PromptEntity(-1, Integer.MIN_VALUE, "", resultText, true, false));
-                }
-
-                if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                        && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
-                    mainHandler.post(() -> resendButton.setVisibility(View.VISIBLE));
-                }
-
-                if (autoSwitchKeyboard) {
-                    autoSwitchKeyboard = false;
-                    mainHandler.post(this::switchToPreviousKeyboard);
-                }
-
-            } catch (AIProviderException e) {
-                if (e.getErrorType() != AIProviderException.ErrorType.CANCELLED) {
-                    logException(e);
-                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-                    mainHandler.post(() -> {
-                        resendButton.setVisibility(View.VISIBLE);
-                        showInfo(e.toInfoKey());
-                    });
-                }
-            } catch (RuntimeException e) {
-                if (!(e.getCause() instanceof InterruptedIOException)) {
-                    logException(e);
-                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-                    mainHandler.post(() -> {
-                        resendButton.setVisibility(View.VISIBLE);
-                        showInfo("internet_error");
-                    });
-                }
-            }
-
-            restorePromptUi();
-        });
+        pipelineOrchestrator.runTranscriptionPipeline(config);
     }
 
-    private void startGPTApiRequest(PromptEntity model) {
-        startGPTApiRequest(model, null, null, true);
-    }
-
-    /** Overload for Rewording/Live prompts: builds PromptPair from PromptEntity. */
-    private void startGPTApiRequest(PromptEntity model, String overrideSelection, PromptResultCallback callback, boolean restorePromptsOnFinish) {
-        String prompt = model.getPrompt();
-
-        // Static response [text] — no API call needed
-        if (promptService.isStaticResponse(prompt)) {
-            String text = promptService.extractStaticResponse(prompt);
-            if (callback != null) {
-                callback.onSuccess(text);
-            } else {
-                commitTextToInputConnection(text, InsertionSource.STATIC_PROMPT);
-            }
-            if (restorePromptsOnFinish || callback == null) restorePromptUi();
-            return;
-        }
-
-        // Determine selected text
+    /**
+     * Prepares UI and launches a standalone prompt via PipelineOrchestrator.
+     * Replaces the old startGPTApiRequest(model) method.
+     */
+    private void runStandalonePromptViaOrchestrator(PromptEntity model) {
+        // Determine selected text (must be read on main thread)
         CharSequence selectedText = null;
-        if (overrideSelection != null) {
-            selectedText = overrideSelection;
-        } else if (model.getRequiresSelection()) {
-            InputConnection selectedTextConnection = getCurrentInputConnection();
-            if (selectedTextConnection != null) {
-                selectedText = selectedTextConnection.getSelectedText(0);
+        if (model.getRequiresSelection()) {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) {
+                selectedText = ic.getSelectedText(0);
             }
         }
         String selStr = selectedText != null ? selectedText.toString() : null;
 
-        // Build PromptPair based on context
-        PromptService.PromptPair pp;
-        if (model.getId() == -1) {
-            pp = promptService.buildLivePrompt(prompt);
-        } else {
-            pp = promptService.buildRewording(prompt, selStr);
+        // Set UI mode BEFORE calling orchestrator
+        String displayName = model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName();
+        if (uiController.getCurrentMode() != KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+            uiController.showStandaloneSpinner(displayName);
         }
 
-        // Start REWORDING session for non-live, non-static prompts
-        if (model.getId() != -1) {
-            EditorInfo editorInfo = getCurrentInputEditorInfo();
-            sessionTracker.startSession(SessionType.REWORDING,
-                editorInfo != null ? editorInfo.packageName : null,
-                null, null, null);
-        }
+        EditorInfo editorInfo = getCurrentInputEditorInfo();
+        PipelineOrchestrator.StandaloneConfig config = new PipelineOrchestrator.StandaloneConfig(
+            model, selStr, null,
+            editorInfo != null ? editorInfo.packageName : null);
 
-        ProcessingContext ctx = new ProcessingContext(
-            StepType.REWORDING,
-            model.getPrompt(),
-            model.getId() >= 0 ? model.getId() : null);
-        startGPTApiRequestInternal(pp, model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName(), ctx, callback, restorePromptsOnFinish);
+        pipelineOrchestrator.runStandalonePrompt(config);
     }
 
-    /** Overload for Queued prompts: accepts a pre-built PromptPair. */
-    private void startGPTApiRequest(PromptService.PromptPair pp, String displayName, ProcessingContext ctx, PromptResultCallback callback, boolean restorePromptsOnFinish) {
-        startGPTApiRequestInternal(pp, displayName, ctx, callback, restorePromptsOnFinish);
-    }
+    // ===== PipelineOrchestrator.PipelineCallback =====
 
-    /** Internal: shared UI/threading/error-handling for all GPT API requests (DRY). */
-    private void startGPTApiRequestInternal(PromptService.PromptPair pp, String displayName,
-            ProcessingContext ctx, PromptResultCallback callback, boolean restorePromptsOnFinish) {
-        // Check if pipeline step list is already active (queued prompts after transcription)
-        final boolean usePipelineUi = pipelineProgressLl != null
-                && pipelineProgressLl.getVisibility() == View.VISIBLE;
-
+    @Override
+    public void onStepStarted(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
-            if (usePipelineUi) {
-                // Pipeline already showing — add step to the list
-                updatePipelineStepRunning(displayName);
+            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+                uiController.addRunningStep(stepName);
+            }
+        });
+    }
+
+    @Override
+    public void onStepCompleted(@androidx.annotation.NonNull String stepName, long durationMs) {
+        mainHandler.post(() -> {
+            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+                uiController.completeStep(stepName, durationMs);
+            }
+        });
+    }
+
+    @Override
+    public void onStepFailed(@androidx.annotation.NonNull String stepName) {
+        mainHandler.post(() -> {
+            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+                uiController.failStep(stepName);
+            }
+        });
+    }
+
+    @Override
+    public void onPipelineCompleted(@androidx.annotation.NonNull String text, @androidx.annotation.NonNull InsertionSource source) {
+        mainHandler.post(() -> {
+            if (pendingLivePromptChain) {
+                // Live prompt: transcription result becomes the prompt for a completion call
+                pendingLivePromptChain = false;
+                PromptEntity liveEntity = new PromptEntity(-1, Integer.MIN_VALUE, "", text, true, false);
+                runStandalonePromptViaOrchestrator(liveEntity);
             } else {
-                // Standalone prompt (no recording pipeline) — use old spinner
-                promptsRv.setVisibility(View.GONE);
-                runningPromptTv.setVisibility(View.VISIBLE);
-                runningPromptTv.setText(displayName);
-                runningPromptPb.setVisibility(View.VISIBLE);
-                infoCl.setVisibility(View.GONE);
+                commitTextToInputConnection(text, source);
             }
         });
+    }
 
-        rewordingApiThread = Executors.newSingleThreadExecutor();
-        rewordingApiThread.execute(() -> {
-            String sid = sessionTracker.getCurrentSessionId();
-            long startTime = System.nanoTime();
+    @Override
+    public void onPipelineError(@androidx.annotation.NonNull String errorInfoKey, boolean vibrate) {
+        mainHandler.post(() -> showInfo(errorInfoKey));
+        if (vibrate && vibrationEnabled) {
+            vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
+        }
+    }
+
+    @Override
+    public void onShowResend() {
+        mainHandler.post(() -> resendButton.setVisibility(View.VISIBLE));
+    }
+
+    @Override
+    public void onAutoSwitch() {
+        mainHandler.post(this::switchToPreviousKeyboard);
+    }
+
+    @Override
+    public void onAudioPersisted(@androidx.annotation.NonNull File audioFile, @androidx.annotation.NonNull String sessionId) {
+        // MediaMetadataRetriever is Android-API -> stays in the Service
+        dbExecutor.execute(() -> {
             try {
-                CompletionResult result = requestRewordingFromApi(pp.getUserPrompt(), pp.getSystemPrompt());
-                long durationMs = (System.nanoTime() - startTime) / 1_000_000;
-                String rewordedText = result.getText();
-
-                if (usePipelineUi) {
-                    mainHandler.post(() -> updatePipelineStepDone(displayName, durationMs));
+                MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+                retriever.setDataSource(audioFile.getAbsolutePath());
+                String durationStr = retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_DURATION);
+                retriever.release();
+                if (durationStr != null) {
+                    long durationSeconds = Long.parseLong(durationStr) / 1000;
+                    sessionManager.updateAudioDuration(sessionId, durationSeconds);
                 }
-
-                // SUCCESS: Step + Completion-Log persistieren
-                if (sid != null) {
-                    String provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name();
-                    String stepId = sessionManager.appendProcessingStep(
-                        sid, ctx.getStepType(),
-                        pp.getUserPrompt(), rewordedText,
-                        result.getModelName(), provider,
-                        ctx.getPromptUsed(), ctx.getPromptEntityId(),
-                        sessionTracker.getCurrentStepId(),
-                        sessionTracker.getCurrentTranscriptionId(),
-                        null, result.getPromptTokens(), result.getCompletionTokens(),
-                        durationMs, StepStatus.SUCCESS, null);
-
-                    sessionManager.logCompletion(ctx.getStepType().name(), sid,
-                        stepId, null,
-                        pp.getSystemPrompt(), pp.getUserPrompt(),
-                        true, null);
-
-                    sessionTracker.setStep(stepId);
-                }
-
-                if (callback != null) {
-                    callback.onSuccess(rewordedText);
-                } else {
-                    commitTextToInputConnection(rewordedText, InsertionSource.REWORDING);
-                }
-            } catch (AIProviderException e) {
-                long durationMs = (System.nanoTime() - startTime) / 1_000_000;
-
-                if (usePipelineUi) {
-                    mainHandler.post(() -> updatePipelineStepError(displayName));
-                }
-
-                // Skip persistence for user-cancelled requests (no audit trail needed)
-                if (e.getErrorType() != AIProviderException.ErrorType.CANCELLED) {
-                    persistErrorStep(sid, ctx, pp, durationMs, e.getMessage());
-                    logException(e);
-                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-                    mainHandler.post(() -> {
-                        resendButton.setVisibility(View.VISIBLE);
-                        showInfo(e.toInfoKey());
-                    });
-                }
-                if (callback != null) {
-                    callback.onFailure();
-                }
-            } catch (RuntimeException e) {
-                long durationMs = (System.nanoTime() - startTime) / 1_000_000;
-
-                if (usePipelineUi) {
-                    mainHandler.post(() -> updatePipelineStepError(displayName));
-                }
-
-                persistErrorStep(sid, ctx, pp, durationMs, e.getMessage());
-
-                if (!(e.getCause() instanceof InterruptedIOException)) {
-                    logException(e);
-                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-                    mainHandler.post(() -> {
-                        resendButton.setVisibility(View.VISIBLE);
-                        showInfo("internet_error");
-                    });
-                }
-                if (callback != null) {
-                    callback.onFailure();
-                }
-            }
-
-            if (restorePromptsOnFinish || callback == null) {
-                restorePromptUi();
+            } catch (Exception e) {
+                Log.w("DictateIME", "Failed to extract audio duration", e);
             }
         });
     }
 
-    /**
-     * Sends a completion request via AIOrchestrator.
-     * @param prompt The user message (may include selected text and prompt instructions)
-     * @param systemPrompt Optional system prompt (null = no system prompt)
-     * @return The full CompletionResult (text, model, tokens)
-     * @throws AIProviderException on API errors
-     */
-    private CompletionResult requestRewordingFromApi(String prompt, String systemPrompt) {
-        return aiOrchestrator.complete(prompt, systemPrompt);
-    }
+    @Override
+    public void onPipelineFinished() {
+        // If a live prompt chain is pending, skip the UI/session reset —
+        // runStandalonePromptViaOrchestrator will start a new pipeline that calls onPipelineFinished when done.
+        if (pendingLivePromptChain) return;
 
-    /**
-     * Persists an error step + completion log for failed API calls.
-     * Shared between AIProviderException and RuntimeException catch blocks.
-     */
-    private void persistErrorStep(String sid, ProcessingContext ctx,
-            PromptService.PromptPair pp, long durationMs, String errorMessage) {
-        if (sid == null) return;
-        String provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name();
-        String model = aiOrchestrator.getModelName(AIFunction.COMPLETION);
-        sessionManager.appendProcessingStep(
-            sid, ctx.getStepType(),
-            pp.getUserPrompt(), null,
-            model, provider,
-            ctx.getPromptUsed(), ctx.getPromptEntityId(),
-            sessionTracker.getCurrentStepId(),
-            sessionTracker.getCurrentTranscriptionId(),
-            null, 0, 0, durationMs,
-            StepStatus.ERROR, errorMessage);
-
-        sessionManager.logCompletion(ctx.getStepType().name(), sid,
-            null, null,
-            pp.getSystemPrompt(), pp.getUserPrompt(),
-            false, errorMessage);
+        dbExecutor.execute(() -> {
+            sessionTracker.resetSession();
+            sessionTracker.persistToPrefs(sp);
+            mainHandler.post(() -> {
+                uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+                applyRecordingIconState(false);
+                uiController.restoreRecordButtonIdle(
+                    getDictateButtonText(),
+                    R.drawable.ic_baseline_mic_20,
+                    R.drawable.ic_baseline_folder_open_20);
+            });
+        });
     }
 
     private void commitTextToInputConnection(String text, InsertionSource source) {
@@ -2036,89 +1811,6 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * Copies audio from cache to persistent storage and updates the session with audio duration.
-     * @param cacheFile the cached audio file (e.g. audio.m4a in getCacheDir())
-     * @param sessionId the session to associate the audio with
-     */
-    private void persistAudioFile(File cacheFile, String sessionId) {
-        try {
-            File destDir = new File(getFilesDir(), "recordings");
-            destDir.mkdirs();
-            File dest = new File(destDir, sessionId + ".m4a");
-            Files.copy(cacheFile.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
-
-            // Retrieve audio duration and update session
-            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
-            try {
-                retriever.setDataSource(dest.getAbsolutePath());
-                String durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-                if (durationStr != null) {
-                    long durationSeconds = Long.parseLong(durationStr) / 1000;
-                    sessionManager.updateAudioDuration(sessionId, durationSeconds);
-                }
-            } finally {
-                retriever.release();
-            }
-        } catch (Exception e) {
-            Log.w("DictateIME", "Failed to persist audio file for session " + sessionId, e);
-        }
-    }
-
-    private void processQueuedPrompts(String initialText, List<Integer> promptIds) {
-        if (promptIds == null || promptIds.isEmpty()) {
-            commitTextToInputConnection(initialText, InsertionSource.TRANSCRIPTION);
-            return;
-        }
-        applyQueuedPromptAtIndex(initialText, promptIds, 0);
-    }
-
-    private void applyQueuedPromptAtIndex(String currentText, List<Integer> promptIds, int index) {
-        // Check cancellation flag — commit last output and abort chain
-        if (pipelineCancelled) {
-            if (currentText != null) {
-                commitTextToInputConnection(currentText, InsertionSource.QUEUED_PROMPT);
-            }
-            return;
-        }
-
-        if (index >= promptIds.size()) {
-            commitTextToInputConnection(currentText, InsertionSource.QUEUED_PROMPT);
-            return;
-        }
-
-        PromptEntity prompt = promptDao.getById(promptIds.get(index));
-        if (prompt == null) {
-            applyQueuedPromptAtIndex(currentText, promptIds, index + 1);
-            return;
-        }
-
-        if (prompt.getRequiresSelection() && (currentText == null || currentText.isEmpty())) {
-            applyQueuedPromptAtIndex(currentText, promptIds, index + 1);
-            return;
-        }
-
-        String textForPrompt = prompt.getRequiresSelection() ? currentText : null;
-        PromptService.PromptPair pp = promptService.buildQueuedPrompt(prompt.getPrompt(), textForPrompt);
-        boolean restoreUiAfter = index == promptIds.size() - 1;
-
-        ProcessingContext ctx = new ProcessingContext(
-            StepType.QUEUED_PROMPT,
-            prompt.getPrompt(),
-            prompt.getId());
-        startGPTApiRequest(pp, prompt.getName(), ctx, new PromptResultCallback() {
-            @Override
-            public void onSuccess(String text) {
-                applyQueuedPromptAtIndex(text, promptIds, index + 1);
-            }
-
-            @Override
-            public void onFailure() {
-                commitTextToInputConnection(currentText == null ? "" : currentText, InsertionSource.QUEUED_PROMPT);
-            }
-        }, restoreUiAfter);
-    }
-
-    /**
      * Builds the keyboard prompt list with sentinel entries for instant prompt, select-all, clear-queue, and add button.
      */
     private List<PromptEntity> getPromptsForKeyboard() {
@@ -2144,133 +1836,6 @@ public class DictateInputMethodService extends InputMethodService
             promptsAdapter.setDisableNonSelectionPrompts(disableNonSelectionPrompts);
             updateSelectAllPromptState();
         }
-    }
-
-    // ===== Pipeline Progress =====
-
-    /**
-     * Shows the pipeline progress view and hides the prompts RecyclerView + running spinner.
-     * Must be called on the main thread.
-     */
-    private void showPipelineProgress() {
-        pipelineCancelled = false;
-        pipelineStepRows.clear();
-        pipelineCurrentStep = 0;
-        // Calculate total steps: transcription + optional auto-format + queued prompts
-        int total = 1; // transcription always
-        if (autoFormattingService.isEnabled()) total++;
-        total += promptQueueManager.getQueuedIds().size();
-        pipelineTotalSteps = total;
-
-        if (promptsRv != null) promptsRv.setVisibility(View.GONE);
-        if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
-        if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
-        if (pipelineProgressLl != null) {
-            pipelineProgressLl.setVisibility(View.VISIBLE);
-            pipelineStepsContainer.removeAllViews();
-        }
-    }
-
-    /**
-     * Adds a new step row in "running" state (spinner + name).
-     * Also updates the record button to show current step info.
-     * Must be called on the main thread.
-     */
-    private void updatePipelineStepRunning(String stepName) {
-        if (pipelineStepsContainer == null) return;
-        pipelineCurrentStep++;
-
-        View row = getLayoutInflater().inflate(R.layout.item_pipeline_step_row, pipelineStepsContainer, false);
-        TextView iconTv = row.findViewById(R.id.pipeline_step_icon_tv);
-        ProgressBar pb = row.findViewById(R.id.pipeline_step_pb);
-        TextView nameTv = row.findViewById(R.id.pipeline_step_name_tv);
-
-        iconTv.setVisibility(View.GONE);
-        pb.setVisibility(View.VISIBLE);
-        nameTv.setText(stepName);
-
-        pipelineStepsContainer.addView(row);
-        pipelineStepRows.add(row);
-
-        // Update record button with step info
-        if (pipelineTotalSteps > 2) {
-            recordButton.setText(String.format(Locale.getDefault(), "%s (%d/%d)", stepName, pipelineCurrentStep, pipelineTotalSteps));
-        } else {
-            recordButton.setText(stepName + " …");
-        }
-
-        // Auto-scroll to bottom
-        pipelineScrollView.post(() -> pipelineScrollView.fullScroll(View.FOCUS_DOWN));
-    }
-
-    /**
-     * Updates the last step row to "done" state (checkmark + duration).
-     * Must be called on the main thread.
-     */
-    private void updatePipelineStepDone(String stepName, long durationMs) {
-        if (pipelineStepRows.isEmpty()) return;
-        View row = pipelineStepRows.get(pipelineStepRows.size() - 1);
-        TextView iconTv = row.findViewById(R.id.pipeline_step_icon_tv);
-        ProgressBar pb = row.findViewById(R.id.pipeline_step_pb);
-        TextView nameTv = row.findViewById(R.id.pipeline_step_name_tv);
-        TextView durationTv = row.findViewById(R.id.pipeline_step_duration_tv);
-
-        pb.setVisibility(View.GONE);
-        iconTv.setVisibility(View.VISIBLE);
-        iconTv.setText("✓");
-        iconTv.setTextColor(0xFF4CAF50); // Material Green 500
-        nameTv.setText(stepName);
-        durationTv.setVisibility(View.VISIBLE);
-        durationTv.setText(String.format(Locale.US, getString(R.string.dictate_pipeline_duration), durationMs / 1000.0));
-    }
-
-    /**
-     * Updates the last step row to "error" state (X mark).
-     * Must be called on the main thread.
-     */
-    private void updatePipelineStepError(String stepName) {
-        if (pipelineStepRows.isEmpty()) return;
-        View row = pipelineStepRows.get(pipelineStepRows.size() - 1);
-        TextView iconTv = row.findViewById(R.id.pipeline_step_icon_tv);
-        ProgressBar pb = row.findViewById(R.id.pipeline_step_pb);
-        TextView nameTv = row.findViewById(R.id.pipeline_step_name_tv);
-
-        pb.setVisibility(View.GONE);
-        iconTv.setVisibility(View.VISIBLE);
-        iconTv.setText("✕");
-        iconTv.setTextColor(0xFFF44336); // Material Red 500
-        nameTv.setText(stepName);
-    }
-
-    /**
-     * Hides the pipeline progress view and clears step rows.
-     * Must be called on the main thread.
-     */
-    private void hidePipelineProgress() {
-        if (pipelineProgressLl != null) pipelineProgressLl.setVisibility(View.GONE);
-        if (pipelineStepsContainer != null) pipelineStepsContainer.removeAllViews();
-        pipelineStepRows.clear();
-    }
-
-    private void restorePromptUi() {
-        // resetSession() does DB access (getFinalOutput) — always run on dbExecutor
-        dbExecutor.execute(() -> {
-            sessionTracker.resetSession();
-            sessionTracker.persistToPrefs(sp);
-            pipelineCancelled = false;
-
-            if (mainHandler == null) return;
-            mainHandler.post(() -> {
-                if (promptsRv != null) promptsRv.setVisibility(View.VISIBLE);
-                if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
-                if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
-                hidePipelineProgress();
-                recordButton.setText(getDictateButtonText());
-                applyRecordingIconState(false);
-                recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-                recordButton.setEnabled(true);
-            });
-        });
     }
 
     private void switchToPreviousKeyboard() {
@@ -2314,12 +1879,6 @@ public class DictateInputMethodService extends InputMethodService
         } else {
             smallModeButton.setRotation(isSmallMode ? 180f : 0f);
         }
-    }
-
-    private void logException(Exception e) {
-        StringWriter sw = new StringWriter();
-        e.printStackTrace(new PrintWriter(sw));
-        Log.e("DictateInputMethodService", sw.toString());
     }
 
     private void showInfo(String type) {

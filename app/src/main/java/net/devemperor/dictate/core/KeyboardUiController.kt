@@ -1,5 +1,6 @@
 package net.devemperor.dictate.core
 
+import android.os.Handler
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.LinearLayout
@@ -12,12 +13,12 @@ import net.devemperor.dictate.R
 import java.util.Locale
 
 /**
- * Controls the keyboard prompt area UI: mode switching between prompt buttons,
- * standalone spinner, and pipeline progress view.
+ * Controls the keyboard prompt area UI: mode switching between prompt buttons
+ * and pipeline progress view with live elapsed timer per step.
  *
  * Responsibilities:
- * - Centralized visibility management for the three prompt area modes
- * - Pipeline step rows (add running, complete, fail)
+ * - Centralized visibility management for the two prompt area modes
+ * - Pipeline step rows (add running, complete, fail) with live duration timer
  * - Record button text updates during pipeline execution
  *
  * Does NOT handle threading — all methods must be called on the main thread.
@@ -26,19 +27,18 @@ import java.util.Locale
 class KeyboardUiController(private val views: PipelineViews) {
 
     enum class PromptAreaMode {
-        PROMPT_BUTTONS, STANDALONE_SPINNER, PIPELINE_PROGRESS
+        PROMPT_BUTTONS, PIPELINE_PROGRESS
     }
 
     data class PipelineViews(
         val promptsRv: RecyclerView,
-        val runningPromptTv: TextView,
-        val runningPromptPb: ProgressBar,
         val pipelineProgressLl: View,
         val pipelineStepsContainer: LinearLayout,
         val pipelineScrollView: ScrollView,
         val recordButton: MaterialButton,
         val infoCl: View,
-        val layoutInflater: LayoutInflater
+        val layoutInflater: LayoutInflater,
+        val mainHandler: Handler
     )
 
     var currentMode: PromptAreaMode = PromptAreaMode.PROMPT_BUTTONS
@@ -47,34 +47,27 @@ class KeyboardUiController(private val views: PipelineViews) {
     private val stepRows = mutableListOf<View>()
     private var totalSteps = 0
     private var currentStep = 0
+    private var activeTimer: ElapsedTimer? = null
 
     // ── Mode switching (centralizes ALL visibility changes) ──
 
     /**
      * Switches the prompt area to the given mode.
-     * Each mode has a distinct set of visible/hidden views.
+     * Stops any running timer when leaving PIPELINE_PROGRESS.
      */
     fun setMode(mode: PromptAreaMode) {
         currentMode = mode
         when (mode) {
             PromptAreaMode.PROMPT_BUTTONS -> {
                 views.promptsRv.visibility = View.VISIBLE
-                views.runningPromptTv.visibility = View.GONE
-                views.runningPromptPb.visibility = View.GONE
                 views.pipelineProgressLl.visibility = View.GONE
                 views.pipelineStepsContainer.removeAllViews()
                 stepRows.clear()
-            }
-            PromptAreaMode.STANDALONE_SPINNER -> {
-                views.promptsRv.visibility = View.GONE
-                views.runningPromptTv.visibility = View.VISIBLE
-                views.runningPromptPb.visibility = View.VISIBLE
-                views.pipelineProgressLl.visibility = View.GONE
+                activeTimer?.stop()
+                activeTimer = null
             }
             PromptAreaMode.PIPELINE_PROGRESS -> {
                 views.promptsRv.visibility = View.GONE
-                views.runningPromptTv.visibility = View.GONE
-                views.runningPromptPb.visibility = View.GONE
                 views.pipelineProgressLl.visibility = View.VISIBLE
             }
         }
@@ -95,28 +88,20 @@ class KeyboardUiController(private val views: PipelineViews) {
         views.infoCl.visibility = View.GONE
     }
 
-    /**
-     * Shows the standalone spinner with a display name.
-     * Used for single prompts outside a recording pipeline.
-     *
-     * @param displayName the prompt name to show next to the spinner
-     */
-    fun showStandaloneSpinner(displayName: String) {
-        setMode(PromptAreaMode.STANDALONE_SPINNER)
-        views.runningPromptTv.text = displayName
-        views.infoCl.visibility = View.GONE
-    }
-
     // ── Pipeline steps (PIPELINE_PROGRESS mode only, main thread) ──
 
     /**
-     * Adds a new step row in "running" state (spinner + name).
+     * Adds a new step row in "running" state (spinner + name + live timer).
+     * Starts a live elapsed timer that updates the duration text every 100ms.
      * Increments the step counter and updates the record button.
      *
      * @param stepName display name for the step (e.g., "Transkription", "Formatierung")
      */
     fun addRunningStep(stepName: String) {
         currentStep++
+
+        // Stop previous timer if still running (safety)
+        activeTimer?.stop()
 
         val row = views.layoutInflater.inflate(
             R.layout.item_pipeline_step_row,
@@ -126,13 +111,23 @@ class KeyboardUiController(private val views: PipelineViews) {
         val iconTv = row.findViewById<TextView>(R.id.pipeline_step_icon_tv)
         val pb = row.findViewById<ProgressBar>(R.id.pipeline_step_pb)
         val nameTv = row.findViewById<TextView>(R.id.pipeline_step_name_tv)
+        val durationTv = row.findViewById<TextView>(R.id.pipeline_step_duration_tv)
 
         iconTv.visibility = View.GONE
         pb.visibility = View.VISIBLE
         nameTv.text = stepName
 
+        // Show live timer from 0.0s
+        durationTv.visibility = View.VISIBLE
+        durationTv.text = formatDuration(0)
+
         views.pipelineStepsContainer.addView(row)
         stepRows.add(row)
+
+        // Start elapsed timer
+        activeTimer = ElapsedTimer.start(views.mainHandler) { ms ->
+            durationTv.text = formatDuration(ms)
+        }
 
         // Auto-scroll to bottom
         views.pipelineScrollView.post { views.pipelineScrollView.fullScroll(View.FOCUS_DOWN) }
@@ -141,12 +136,16 @@ class KeyboardUiController(private val views: PipelineViews) {
     }
 
     /**
-     * Updates the last step row to "done" state (checkmark + duration).
+     * Updates the last step row to "done" state (checkmark + final duration).
+     * Stops the live timer and replaces it with the authoritative duration from the orchestrator.
      *
      * @param stepName display name (re-set in case it changed)
-     * @param durationMs step duration in milliseconds
+     * @param durationMs step duration in milliseconds (from orchestrator, more accurate than timer)
      */
     fun completeStep(stepName: String, durationMs: Long) {
+        activeTimer?.stop()
+        activeTimer = null
+
         if (stepRows.isEmpty()) return
         val row = stepRows.last()
         val iconTv = row.findViewById<TextView>(R.id.pipeline_step_icon_tv)
@@ -160,15 +159,19 @@ class KeyboardUiController(private val views: PipelineViews) {
         iconTv.setTextColor(0xFF4CAF50.toInt()) // Material Green 500
         nameTv.text = stepName
         durationTv.visibility = View.VISIBLE
-        durationTv.text = String.format(Locale.US, "%.1fs", durationMs / 1000.0)
+        durationTv.text = formatDuration(durationMs)
     }
 
     /**
-     * Updates the last step row to "error" state (cross mark, red name).
+     * Updates the last step row to "error" state (cross mark).
+     * Stops the live timer.
      *
      * @param stepName display name of the failed step
      */
     fun failStep(stepName: String) {
+        activeTimer?.stop()
+        activeTimer = null
+
         if (stepRows.isEmpty()) return
         val row = stepRows.last()
         val iconTv = row.findViewById<TextView>(R.id.pipeline_step_icon_tv)
@@ -213,4 +216,9 @@ class KeyboardUiController(private val views: PipelineViews) {
         views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(leftIcon, 0, rightIcon, 0)
         views.recordButton.isEnabled = true
     }
+
+    // ── Helpers ──
+
+    private fun formatDuration(ms: Long): String =
+        String.format(Locale.US, "%.1fs", ms / 1000.0)
 }

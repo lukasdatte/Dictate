@@ -168,8 +168,6 @@ public class DictateInputMethodService extends InputMethodService
     private Button infoNoButton;
     private ConstraintLayout promptsCl;
     private RecyclerView promptsRv;
-    private TextView runningPromptTv;
-    private ProgressBar runningPromptPb;
     private MaterialButton editUndoButton;
     private MaterialButton editRedoButton;
     private MaterialButton editCutButton;
@@ -367,8 +365,6 @@ public class DictateInputMethodService extends InputMethodService
 
         promptsCl = dictateKeyboardView.findViewById(R.id.prompts_keyboard_cl);
         promptsRv = dictateKeyboardView.findViewById(R.id.prompts_keyboard_rv);
-        runningPromptPb = dictateKeyboardView.findViewById(R.id.prompts_keyboard_running_pb);
-        runningPromptTv = dictateKeyboardView.findViewById(R.id.prompts_keyboard_running_prompt_tv);
 
         editUndoButton = dictateKeyboardView.findViewById(R.id.edit_undo_btn);
         editRedoButton = dictateKeyboardView.findViewById(R.id.edit_redo_btn);
@@ -397,14 +393,13 @@ public class DictateInputMethodService extends InputMethodService
         // KeyboardUiController (wraps pipeline progress views)
         uiController = new KeyboardUiController(new KeyboardUiController.PipelineViews(
             promptsRv,
-            runningPromptTv,
-            runningPromptPb,
             dictateKeyboardView.findViewById(R.id.pipeline_progress_ll),
             dictateKeyboardView.findViewById(R.id.pipeline_steps_container),
             dictateKeyboardView.findViewById(R.id.pipeline_scroll_view),
             recordButton,
             infoCl,
-            LayoutInflater.from(context)
+            LayoutInflater.from(context),
+            mainHandler
         ));
 
         // PipelineOrchestrator
@@ -1152,7 +1147,7 @@ public class DictateInputMethodService extends InputMethodService
 
         int accentColorMedium = DictateUtils.darkenColor(accentColor, 0.18f);
         int accentColorDark = DictateUtils.darkenColor(accentColor, 0.35f);
-        TextView[] textColorViews = { infoTv, runningPromptTv, emojiPickerTitleTv, numbersPanelTitleTv };
+        TextView[] textColorViews = { infoTv, emojiPickerTitleTv, numbersPanelTitleTv };
         for (TextView tv : textColorViews) tv.setTextColor(accentColor);
         applyButtonColor(smallModeButton, accentColorMedium);
         applyButtonColor(editSettingsButton, accentColorMedium);
@@ -1182,7 +1177,6 @@ public class DictateInputMethodService extends InputMethodService
             int background = isEnter ? accentColor : (isDigit ? accentColorMedium : accentColorDark);
             applyButtonColor(button, background);
         }
-        runningPromptPb.getIndeterminateDrawable().setColorFilter(accentColor, android.graphics.PorterDuff.Mode.SRC_IN);
 
         // show infos for updates, ratings or donations
         Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
@@ -1638,7 +1632,7 @@ public class DictateInputMethodService extends InputMethodService
         // Set UI mode BEFORE calling orchestrator
         String displayName = model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName();
         if (uiController.getCurrentMode() != KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
-            uiController.showStandaloneSpinner(displayName);
+            uiController.showPipelineProgress(1);
         }
 
         EditorInfo editorInfo = getCurrentInputEditorInfo();

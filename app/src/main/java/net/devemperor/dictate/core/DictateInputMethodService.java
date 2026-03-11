@@ -97,6 +97,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -205,9 +206,12 @@ public class DictateInputMethodService extends InputMethodService
     private MaterialButton pipelineCancelBtn;
     private volatile boolean pipelineCancelled = false;
     private final List<View> pipelineStepRows = new ArrayList<>();
+    private int pipelineTotalSteps = 0;
+    private int pipelineCurrentStep = 0;
 
     // History button
     private MaterialButton editHistoryButton;
+
 
     // Recording visuals (pulsing)
     private ObjectAnimator recordPulseX;
@@ -419,6 +423,8 @@ public class DictateInputMethodService extends InputMethodService
 
         // History button
         editHistoryButton = dictateKeyboardView.findViewById(R.id.edit_history_btn);
+
+
 
         StaggeredGridLayoutManager promptsLayoutManager =
                 new StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.HORIZONTAL);
@@ -730,7 +736,6 @@ public class DictateInputMethodService extends InputMethodService
             }
 
             livePrompt = false;
-            promptQueueManager.clear();
             updatePromptButtonsEnabledState();
             recordButton.setText(getDictateButtonText());
             applyRecordingIconState(false);
@@ -916,7 +921,6 @@ public class DictateInputMethodService extends InputMethodService
             if (recordPulseX != null) recordPulseX.cancel();
             if (recordPulseY != null) recordPulseY.cancel();
             livePrompt = false;
-            promptQueueManager.clear();
             recordingUsesBluetooth = false;
             updatePromptButtonsEnabledState();
             mainHandler.post(() -> {
@@ -995,7 +999,6 @@ public class DictateInputMethodService extends InputMethodService
         hidePipelineProgress();
         pipelineCancelled = false;
         livePrompt = false;
-        promptQueueManager.clear();
         recordingUsesBluetooth = false;
         updatePromptButtonsEnabledState();
         if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
@@ -1060,6 +1063,9 @@ public class DictateInputMethodService extends InputMethodService
                         }
                     } else if (model.getId() == -3) {  // select all clicked
                         handleSelectAllToggle();
+                    } else if (model.getId() == -4) {  // clear queue clicked
+                        vibrate();
+                        promptQueueManager.clear();
                     } else if (model.getId() == -2) {  // add prompt clicked
                         Intent intent = new Intent(DictateInputMethodService.this, PromptsOverviewActivity.class);
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -1106,6 +1112,14 @@ public class DictateInputMethodService extends InputMethodService
             promptsRv.setAdapter(promptsAdapter);
             promptsAdapter.setDisableNonSelectionPrompts(disableNonSelectionPrompts);
             promptsAdapter.setSelectAllActive(hasSelection);
+
+            // Restore persisted queue selections (filter out deleted prompts)
+            Set<Integer> validIds = new HashSet<>();
+            for (PromptEntity p : data) {
+                if (p.getId() >= 0) validIds.add(p.getId());
+            }
+            promptQueueManager.restoreQueue(validIds);
+
             onQueueChanged(promptQueueManager.getQueuedIds());
             updateSelectAllPromptState();
         } else {
@@ -1700,7 +1714,6 @@ public class DictateInputMethodService extends InputMethodService
                 boolean processedByQueuedPrompts = false;
                 List<Integer> promptsToApply = promptQueueManager.getQueuedIds();
                 if (!promptsToApply.isEmpty()) {
-                    promptQueueManager.clear();
                     if (!livePrompt) {
                         processQueuedPrompts(resultText, promptsToApply);
                         processedByQueuedPrompts = true;
@@ -1811,12 +1824,22 @@ public class DictateInputMethodService extends InputMethodService
     /** Internal: shared UI/threading/error-handling for all GPT API requests (DRY). */
     private void startGPTApiRequestInternal(PromptService.PromptPair pp, String displayName,
             ProcessingContext ctx, PromptResultCallback callback, boolean restorePromptsOnFinish) {
+        // Check if pipeline step list is already active (queued prompts after transcription)
+        final boolean usePipelineUi = pipelineProgressLl != null
+                && pipelineProgressLl.getVisibility() == View.VISIBLE;
+
         mainHandler.post(() -> {
-            promptsRv.setVisibility(View.GONE);
-            runningPromptTv.setVisibility(View.VISIBLE);
-            runningPromptTv.setText(displayName);
-            runningPromptPb.setVisibility(View.VISIBLE);
-            infoCl.setVisibility(View.GONE);
+            if (usePipelineUi) {
+                // Pipeline already showing — add step to the list
+                updatePipelineStepRunning(displayName);
+            } else {
+                // Standalone prompt (no recording pipeline) — use old spinner
+                promptsRv.setVisibility(View.GONE);
+                runningPromptTv.setVisibility(View.VISIBLE);
+                runningPromptTv.setText(displayName);
+                runningPromptPb.setVisibility(View.VISIBLE);
+                infoCl.setVisibility(View.GONE);
+            }
         });
 
         rewordingApiThread = Executors.newSingleThreadExecutor();
@@ -1827,6 +1850,10 @@ public class DictateInputMethodService extends InputMethodService
                 CompletionResult result = requestRewordingFromApi(pp.getUserPrompt(), pp.getSystemPrompt());
                 long durationMs = (System.nanoTime() - startTime) / 1_000_000;
                 String rewordedText = result.getText();
+
+                if (usePipelineUi) {
+                    mainHandler.post(() -> updatePipelineStepDone(displayName, durationMs));
+                }
 
                 // SUCCESS: Step + Completion-Log persistieren
                 if (sid != null) {
@@ -1857,6 +1884,10 @@ public class DictateInputMethodService extends InputMethodService
             } catch (AIProviderException e) {
                 long durationMs = (System.nanoTime() - startTime) / 1_000_000;
 
+                if (usePipelineUi) {
+                    mainHandler.post(() -> updatePipelineStepError(displayName));
+                }
+
                 // Skip persistence for user-cancelled requests (no audit trail needed)
                 if (e.getErrorType() != AIProviderException.ErrorType.CANCELLED) {
                     persistErrorStep(sid, ctx, pp, durationMs, e.getMessage());
@@ -1872,6 +1903,10 @@ public class DictateInputMethodService extends InputMethodService
                 }
             } catch (RuntimeException e) {
                 long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+
+                if (usePipelineUi) {
+                    mainHandler.post(() -> updatePipelineStepError(displayName));
+                }
 
                 persistErrorStep(sid, ctx, pp, durationMs, e.getMessage());
 
@@ -2074,13 +2109,14 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * Builds the keyboard prompt list with sentinel entries for instant prompt, select-all, and add button.
+     * Builds the keyboard prompt list with sentinel entries for instant prompt, select-all, clear-queue, and add button.
      */
     private List<PromptEntity> getPromptsForKeyboard() {
         List<PromptEntity> dbPrompts = promptDao.getAll();
-        List<PromptEntity> result = new ArrayList<>(dbPrompts.size() + 3);
+        List<PromptEntity> result = new ArrayList<>(dbPrompts.size() + 4);
         result.add(new PromptEntity(-1, Integer.MIN_VALUE, null, null, false, false));      // instant prompt
         result.add(new PromptEntity(-3, Integer.MIN_VALUE + 1, null, null, false, false));  // select all
+        result.add(new PromptEntity(-4, Integer.MIN_VALUE + 2, null, null, false, false));  // clear queue
         result.addAll(dbPrompts);
         result.add(new PromptEntity(-2, Integer.MAX_VALUE, null, null, false, false));       // add button
         return result;
@@ -2109,6 +2145,13 @@ public class DictateInputMethodService extends InputMethodService
     private void showPipelineProgress() {
         pipelineCancelled = false;
         pipelineStepRows.clear();
+        pipelineCurrentStep = 0;
+        // Calculate total steps: transcription + optional auto-format + queued prompts
+        int total = 1; // transcription always
+        if (autoFormattingService.isEnabled()) total++;
+        total += promptQueueManager.getQueuedIds().size();
+        pipelineTotalSteps = total;
+
         if (promptsRv != null) promptsRv.setVisibility(View.GONE);
         if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
         if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
@@ -2120,10 +2163,13 @@ public class DictateInputMethodService extends InputMethodService
 
     /**
      * Adds a new step row in "running" state (spinner + name).
+     * Also updates the record button to show current step info.
      * Must be called on the main thread.
      */
     private void updatePipelineStepRunning(String stepName) {
         if (pipelineStepsContainer == null) return;
+        pipelineCurrentStep++;
+
         View row = getLayoutInflater().inflate(R.layout.item_pipeline_step_row, pipelineStepsContainer, false);
         TextView iconTv = row.findViewById(R.id.pipeline_step_icon_tv);
         ProgressBar pb = row.findViewById(R.id.pipeline_step_pb);
@@ -2135,6 +2181,13 @@ public class DictateInputMethodService extends InputMethodService
 
         pipelineStepsContainer.addView(row);
         pipelineStepRows.add(row);
+
+        // Update record button with step info
+        if (pipelineTotalSteps > 2) {
+            recordButton.setText(String.format(Locale.getDefault(), "%s (%d/%d)", stepName, pipelineCurrentStep, pipelineTotalSteps));
+        } else {
+            recordButton.setText(stepName + " …");
+        }
 
         // Auto-scroll to bottom
         pipelineScrollView.post(() -> pipelineScrollView.fullScroll(View.FOCUS_DOWN));

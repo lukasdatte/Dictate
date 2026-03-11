@@ -12,6 +12,7 @@ import android.view.animation.DecelerateInterpolator;
 import androidx.annotation.NonNull;
 import androidx.appcompat.content.res.AppCompatResources;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.StaggeredGridLayoutManager;
 
 import com.google.android.material.button.MaterialButton;
 
@@ -105,6 +106,15 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
             holder.promptBtn.setIconGravity(MaterialButton.ICON_GRAVITY_TEXT_START);
             selectAllButton = holder.promptBtn;
             updateSelectAllButtonIcon();
+        } else if (model.getId() == -4) {
+            holder.promptBtn.setText("");
+            holder.promptBtn.setForeground(AppCompatResources.getDrawable(holder.promptBtn.getContext(), R.drawable.ic_baseline_cleaning_services_24));
+            holder.promptBtn.setIcon(null);
+            holder.promptBtn.setIconGravity(MaterialButton.ICON_GRAVITY_TEXT_START);
+            // Gray out when queue is empty
+            boolean hasQueue = !queuedPromptOrder.isEmpty();
+            holder.promptBtn.setEnabled(hasQueue);
+            holder.promptBtn.setAlpha(hasQueue ? 1f : 0.35f);
         } else if (model.getId() == -2) {
             holder.promptBtn.setText("");
             holder.promptBtn.setForeground(AppCompatResources.getDrawable(holder.promptBtn.getContext(), R.drawable.ic_baseline_add_24));
@@ -139,7 +149,7 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
         int accentColorMedium = DictateUtils.darkenColor(accentColor, 0.18f);
         int accentColorDark = DictateUtils.darkenColor(accentColor, 0.35f);
         int backgroundColor;
-        if (model.getId() == -1 || model.getId() == -3) {
+        if (model.getId() == -1 || model.getId() == -3 || model.getId() == -4) {
             backgroundColor = accentColor;
         } else if (model.getId() == -2) {
             backgroundColor = accentColorDark;

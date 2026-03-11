@@ -1711,18 +1711,28 @@ public class DictateInputMethodService extends InputMethodService
                 }
                 resultText = fr.getText();
 
-                boolean processedByQueuedPrompts = false;
                 List<Integer> promptsToApply = promptQueueManager.getQueuedIds();
-                if (!promptsToApply.isEmpty()) {
-                    if (!livePrompt) {
-                        processQueuedPrompts(resultText, promptsToApply);
-                        processedByQueuedPrompts = true;
+                if (!promptsToApply.isEmpty() && !livePrompt) {
+                    // Queued prompts run on their own rewordingApiThread(s).
+                    // The last prompt's restoreUiAfter=true will call restorePromptUi().
+                    // We MUST return here so speechApiThread doesn't call restorePromptUi() early.
+                    processQueuedPrompts(resultText, promptsToApply);
+
+                    // Show resend button + auto-switch (won't be reached after return)
+                    if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
+                            && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
+                        mainHandler.post(() -> resendButton.setVisibility(View.VISIBLE));
                     }
+                    if (autoSwitchKeyboard) {
+                        autoSwitchKeyboard = false;
+                        mainHandler.post(this::switchToPreviousKeyboard);
+                    }
+                    return;
                 }
 
-                if (!processedByQueuedPrompts && !livePrompt) {
+                if (!livePrompt) {
                     commitTextToInputConnection(resultText, InsertionSource.TRANSCRIPTION);
-                } else if (livePrompt) {
+                } else {
                     livePrompt = false;
                     startGPTApiRequest(new PromptEntity(-1, Integer.MIN_VALUE, "", resultText, true, false));
                 }

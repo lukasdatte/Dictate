@@ -11,7 +11,8 @@ class AIProviderException(
     val errorType: ErrorType,
     message: String,
     cause: Throwable? = null,
-    val modelName: String? = null   // For MODEL_NOT_FOUND: which model is missing
+    val modelName: String? = null,   // For MODEL_NOT_FOUND: which model is missing
+    val provider: AIProvider? = null  // Which provider caused the error
 ) : RuntimeException(message, cause) {
 
     enum class ErrorType {

@@ -65,10 +65,10 @@
     <string name="dictate_recording_indicator">Aufnahme\u2026</string>
     <string name="dictate_send">Senden (%1$s)</string>
     <string name="dictate_sending">Sendet …</string>
-    <string name="dictate_timeout_msg">Timeout überschritten. Vielleicht ist OpenAI überlastet oder du hast eine langsame Internetverbindung.</string>
+    <string name="dictate_timeout_msg">Timeout überschritten. Vielleicht ist der Server überlastet oder du hast eine langsame Internetverbindung.</string>
     <string name="dictate_invalid_api_key_msg">Ungültiger API-Schlüssel. Einstellungen öffnen, um ihn zu korrigieren?</string>
-    <string name="dictate_quota_exceeded_msg">Dein Budget ist überschritten. OpenAI-Account öffnen, um neue Credits zu kaufen?</string>
-    <string name="dictate_internet_error_msg">Verbindung mit OpenAI fehlgeschlagen. Bitte prüfe deine Internetverbindung.</string>
+    <string name="dictate_quota_exceeded_msg">Dein %s-Budget ist überschritten. Abrechnungsseite öffnen, um neue Credits zu kaufen?</string>
+    <string name="dictate_internet_error_msg">Verbindung zur API fehlgeschlagen. Bitte prüfe deine Internetverbindung.</string>
     <string name="dictate_okay">Okay</string>
     <string name="dictate_cancel">Abbrechen</string>
     <string name="dictate_settings_api_key_title">OpenAI API-Schlüssel ändern 🔑</string>

@@ -62,6 +62,7 @@ import com.google.android.material.button.MaterialButton;
 import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.ai.AIOrchestrator;
+import net.devemperor.dictate.ai.AIProvider;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.entity.InsertionMethod;
 import net.devemperor.dictate.database.entity.InsertionSource;
@@ -1636,8 +1637,8 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     @Override
-    public void onPipelineError(@androidx.annotation.NonNull String errorInfoKey, boolean vibrate) {
-        mainHandler.post(() -> showInfo(errorInfoKey));
+    public void onPipelineError(@androidx.annotation.NonNull String errorInfoKey, boolean vibrate, @androidx.annotation.Nullable String providerName) {
+        mainHandler.post(() -> showInfo(errorInfoKey, providerName));
         if (vibrate && vibrationEnabled) {
             vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
         }
@@ -1827,6 +1828,10 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void showInfo(String type) {
+        showInfo(type, null);
+    }
+
+    private void showInfo(String type, String providerName) {
         if (isSmallMode) return;
         infoCl.setVisibility(View.VISIBLE);
         infoNoButton.setVisibility(View.VISIBLE);
@@ -1894,14 +1899,23 @@ public class DictateInputMethodService extends InputMethodService
                 infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
                 break;
             case "quota_exceeded":
-                infoTv.setText(R.string.dictate_quota_exceeded_msg);
-                infoYesButton.setVisibility(View.VISIBLE);
-                infoYesButton.setOnClickListener(v -> {
-                    Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://platform.openai.com/settings/organization/billing/overview"));
-                    browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(browserIntent);
-                    infoCl.setVisibility(View.GONE);
-                });
+                AIProvider provider = providerName != null ? AIProvider.fromPersistKey(providerName) : null;
+                String displayName = provider != null ? provider.getDisplayName() : "API";
+                String billingUrl = provider != null ? provider.getBillingUrl() : null;
+
+                infoTv.setText(getString(R.string.dictate_quota_exceeded_msg, displayName));
+
+                if (billingUrl != null) {
+                    infoYesButton.setVisibility(View.VISIBLE);
+                    infoYesButton.setOnClickListener(v -> {
+                        Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(billingUrl));
+                        browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(browserIntent);
+                        infoCl.setVisibility(View.GONE);
+                    });
+                } else {
+                    infoYesButton.setVisibility(View.GONE);
+                }
                 infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
                 break;
             case "model_not_found":

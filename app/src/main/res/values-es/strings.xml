@@ -63,10 +63,10 @@
     <string name="dictate_record">Grabar</string>
     <string name="dictate_send">Enviar (%1$s)</string>
     <string name="dictate_sending">Enviando …</string>
-    <string name="dictate_timeout_msg">Tiempo de espera superado. Puede que OpenAI esté saturado o que tengas una mala conexión a Internet.</string>
+    <string name="dictate_timeout_msg">Tiempo de espera superado. Puede que el servidor esté saturado o que tengas una mala conexión a Internet.</string>
     <string name="dictate_invalid_api_key_msg">Clave API no válida. ¿Abrir los ajustes para corregirla?</string>
-    <string name="dictate_quota_exceeded_msg">Se superó tu cuota. ¿Abrir la cuenta de OpenAI para comprar nuevos créditos?</string>
-    <string name="dictate_internet_error_msg">No se pudo conectar con OpenAI. Por favor, comprueba tu conexión a Internet.</string>
+    <string name="dictate_quota_exceeded_msg">Tu cuota de %s ha sido superada. ¿Abrir la página de facturación para comprar nuevos créditos?</string>
+    <string name="dictate_internet_error_msg">No se pudo conectar con la API. Por favor, comprueba tu conexión a Internet.</string>
     <string name="dictate_okay">Aceptar</string>
     <string name="dictate_cancel">Cancelar</string>
     <string name="dictate_settings_api_key_title">Cambiar la clave API de OpenAI 🔑</string>

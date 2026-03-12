@@ -55,12 +55,20 @@ class ElevenLabsTranscriptionRunner(
         try {
             return block()
         } catch (e: ElevenLabsApiException) {
-            throw when (e.statusCode) {
-                401 -> AIProviderException(ErrorType.INVALID_API_KEY, e.message ?: "", e)
-                429 -> AIProviderException(ErrorType.RATE_LIMITED, e.message ?: "", e)
-                404 -> AIProviderException(ErrorType.MODEL_NOT_FOUND, e.message ?: "", e, modelName = modelName)
-                400 -> AIProviderException(ErrorType.BAD_REQUEST, e.message ?: "", e)
-                in 500..599 -> AIProviderException(ErrorType.SERVER_ERROR, e.message ?: "", e)
+            // Parse response body for specific error status (e.g. quota_exceeded on HTTP 401)
+            val bodyStatus = try {
+                JSONObject(e.message ?: "").optJSONObject("detail")?.optString("status")
+            } catch (_: Exception) { null }
+
+            throw when {
+                bodyStatus == "quota_exceeded" -> AIProviderException(ErrorType.RATE_LIMITED, e.message ?: "", e)
+                e.statusCode == 401 -> AIProviderException(ErrorType.INVALID_API_KEY, e.message ?: "", e)
+                e.statusCode in listOf(402, 403) -> AIProviderException(ErrorType.RATE_LIMITED, e.message ?: "", e)
+                e.statusCode == 422 -> AIProviderException(ErrorType.BAD_REQUEST, e.message ?: "", e)
+                e.statusCode == 429 -> AIProviderException(ErrorType.RATE_LIMITED, e.message ?: "", e)
+                e.statusCode == 404 -> AIProviderException(ErrorType.MODEL_NOT_FOUND, e.message ?: "", e, modelName = modelName)
+                e.statusCode == 400 -> AIProviderException(ErrorType.BAD_REQUEST, e.message ?: "", e)
+                e.statusCode in 500..599 -> AIProviderException(ErrorType.SERVER_ERROR, e.message ?: "", e)
                 else -> AIProviderException(ErrorType.UNKNOWN, e.message ?: "", e)
             }
         } catch (e: IOException) {
@@ -93,25 +101,25 @@ class ElevenLabsTranscriptionRunner(
             .build()
 
         return wrapProviderCall(modelName = options.model) {
-            val response = client.newCall(request).execute()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string() ?: "Unknown error"
+                    throw ElevenLabsApiException(response.code, errorBody)
+                }
 
-            if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: "Unknown error"
-                throw ElevenLabsApiException(response.code, errorBody)
+                val responseBody = response.body?.string()
+                    ?: throw ElevenLabsApiException(500, "Empty response body")
+
+                val json = JSONObject(responseBody)
+                val text = json.optString("text", "").trim()
+                val audioDuration = DictateUtils.getAudioDuration(options.audioFile)
+
+                TranscriptionResult(
+                    text = text,
+                    audioDurationSeconds = audioDuration,
+                    modelName = options.model
+                )
             }
-
-            val responseBody = response.body?.string()
-                ?: throw ElevenLabsApiException(500, "Empty response body")
-
-            val json = JSONObject(responseBody)
-            val text = json.optString("text", "").trim()
-            val audioDuration = DictateUtils.getAudioDuration(options.audioFile)
-
-            TranscriptionResult(
-                text = text,
-                audioDurationSeconds = audioDuration,
-                modelName = options.model
-            )
         }
     }
 

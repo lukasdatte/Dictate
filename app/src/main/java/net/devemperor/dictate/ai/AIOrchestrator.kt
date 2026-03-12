@@ -44,24 +44,28 @@ class AIOrchestrator @JvmOverloads constructor(
         val runner = factory.createTranscriptionRunner()
         val provider = factory.getProvider(AIFunction.TRANSCRIPTION)
 
-        val result = runner.transcribe(
-            TranscriptionOptions(
-                audioFile = audioFile,
-                model = model,
-                language = language,
-                stylePrompt = stylePrompt
+        try {
+            val result = runner.transcribe(
+                TranscriptionOptions(
+                    audioFile = audioFile,
+                    model = model,
+                    language = language,
+                    stylePrompt = stylePrompt
+                )
             )
-        )
 
-        // Usage tracking
-        usageDao.addUsage(
-            result.modelName,
-            result.audioDurationSeconds,
-            0, 0,
-            provider.name
-        )
+            // Usage tracking
+            usageDao.addUsage(
+                result.modelName,
+                result.audioDurationSeconds,
+                0, 0,
+                provider.name
+            )
 
-        return result
+            return result
+        } catch (e: AIProviderException) {
+            throw AIProviderException(e.errorType, e.message ?: "", e.cause, e.modelName, provider)
+        }
     }
 
     /**
@@ -79,25 +83,29 @@ class AIOrchestrator @JvmOverloads constructor(
         // Build parameters from ParameterRegistry + SharedPreferences
         val resolvedParams = resolveParameters(provider, model)
 
-        val result = runner.complete(
-            CompletionOptions(
-                prompt = prompt,
-                model = model,
-                systemPrompt = systemPrompt,
-                parameters = resolvedParams
+        try {
+            val result = runner.complete(
+                CompletionOptions(
+                    prompt = prompt,
+                    model = model,
+                    systemPrompt = systemPrompt,
+                    parameters = resolvedParams
+                )
             )
-        )
 
-        // Usage tracking
-        usageDao.addUsage(
-            result.modelName,
-            0,
-            result.promptTokens,
-            result.completionTokens,
-            provider.name
-        )
+            // Usage tracking
+            usageDao.addUsage(
+                result.modelName,
+                0,
+                result.promptTokens,
+                result.completionTokens,
+                provider.name
+            )
 
-        return result
+            return result
+        } catch (e: AIProviderException) {
+            throw AIProviderException(e.errorType, e.message ?: "", e.cause, e.modelName, provider)
+        }
     }
 
     /**

@@ -51,7 +51,7 @@ class PipelineOrchestrator(
         fun onStepCompleted(stepName: String, durationMs: Long)
         fun onStepFailed(stepName: String)
         fun onPipelineCompleted(text: String, source: InsertionSource)
-        fun onPipelineError(errorInfoKey: String, vibrate: Boolean)
+        fun onPipelineError(errorInfoKey: String, vibrate: Boolean, providerName: String?)
         fun onPipelineFinished()
         fun onShowResend()
         fun onAutoSwitch()
@@ -101,7 +101,7 @@ class PipelineOrchestrator(
     fun runTranscriptionPipeline(config: PipelineConfig) {
         val audioFile = config.audioFile
         if (audioFile == null) {
-            callback.onPipelineError("internet_error", false)
+            callback.onPipelineError("internet_error", false, null)
             callback.onPipelineFinished()
             return
         }
@@ -470,20 +470,20 @@ class PipelineOrchestrator(
             }
             e is AIProviderException -> {
                 persistErrorStep(sid, ctx, pp, durationMs, e.message)
-                callback.onPipelineError(e.toInfoKey(), true)
+                callback.onPipelineError(e.toInfoKey(), true, e.provider?.name)
                 callback.onShowResend()
             }
             e is RuntimeException -> {
                 persistErrorStep(sid, ctx, pp, durationMs, e.message)
                 if (e.cause !is InterruptedIOException) {
                     // Not a cancel via shutdownNow - show error
-                    callback.onPipelineError("internet_error", true)
+                    callback.onPipelineError("internet_error", true, null)
                     callback.onShowResend()
                 }
             }
             else -> {
                 persistErrorStep(sid, ctx, pp, durationMs, e.message)
-                callback.onPipelineError("internet_error", true)
+                callback.onPipelineError("internet_error", true, null)
                 callback.onShowResend()
             }
         }
@@ -500,7 +500,7 @@ class PipelineOrchestrator(
             }
             e is AIProviderException -> {
                 Log.w(TAG, "Pipeline error", e)
-                callback.onPipelineError(e.toInfoKey(), true)
+                callback.onPipelineError(e.toInfoKey(), true, e.provider?.name)
                 callback.onShowResend()
             }
             e is RuntimeException && e.cause is InterruptedIOException -> {
@@ -508,7 +508,7 @@ class PipelineOrchestrator(
             }
             else -> {
                 Log.w(TAG, "Pipeline error", e)
-                callback.onPipelineError("internet_error", true)
+                callback.onPipelineError("internet_error", true, null)
                 callback.onShowResend()
             }
         }

@@ -911,9 +911,9 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onDestroy() {
-        mainHandler.removeCallbacks(pauseTimeoutRunnable);
-        bluetoothScoManager.unregisterReceiver();
-        recordingManager.release();
+        if (mainHandler != null) mainHandler.removeCallbacks(pauseTimeoutRunnable);
+        if (bluetoothScoManager != null) bluetoothScoManager.unregisterReceiver();
+        if (recordingManager != null) recordingManager.release();
         super.onDestroy();
     }
 

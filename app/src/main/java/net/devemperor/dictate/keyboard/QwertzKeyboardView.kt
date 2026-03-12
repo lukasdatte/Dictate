@@ -283,6 +283,7 @@ class QwertzKeyboardView @JvmOverloads constructor(
             KeyAction.CTRL_MODIFIER -> "Ctrl"
             KeyAction.SWITCH_LAYOUT -> keyDef.label.ifEmpty { "Switch layout" }
             KeyAction.COMMIT_TEXT -> keyDef.output ?: keyDef.label
+            KeyAction.CLOSE_KEYBOARD -> "Close keyboard"
         }
     }
 

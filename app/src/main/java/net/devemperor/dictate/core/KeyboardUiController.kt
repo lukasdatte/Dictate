@@ -1,8 +1,14 @@
 package net.devemperor.dictate.core
 
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
+import android.graphics.Color
 import android.os.Handler
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
+import android.view.animation.LinearInterpolator
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -27,7 +33,7 @@ import java.util.Locale
 class KeyboardUiController(private val views: PipelineViews) {
 
     enum class PromptAreaMode {
-        PROMPT_BUTTONS, PIPELINE_PROGRESS
+        PROMPT_BUTTONS, PIPELINE_PROGRESS, RECORDING_INDICATOR
     }
 
     data class PipelineViews(
@@ -49,6 +55,10 @@ class KeyboardUiController(private val views: PipelineViews) {
     private var currentStep = 0
     private var activeTimer: ElapsedTimer? = null
 
+    // Recording indicator (created lazily, reused)
+    private var recordingIndicatorView: LinearLayout? = null
+    private var recordingDotAnimator: ObjectAnimator? = null
+
     // ── Mode switching (centralizes ALL visibility changes) ──
 
     /**
@@ -61,6 +71,7 @@ class KeyboardUiController(private val views: PipelineViews) {
             PromptAreaMode.PROMPT_BUTTONS -> {
                 views.promptsRv.visibility = View.VISIBLE
                 views.pipelineProgressLl.visibility = View.GONE
+                hideRecordingIndicator()
                 views.pipelineStepsContainer.removeAllViews()
                 stepRows.clear()
                 activeTimer?.stop()
@@ -69,6 +80,12 @@ class KeyboardUiController(private val views: PipelineViews) {
             PromptAreaMode.PIPELINE_PROGRESS -> {
                 views.promptsRv.visibility = View.GONE
                 views.pipelineProgressLl.visibility = View.VISIBLE
+                hideRecordingIndicator()
+            }
+            PromptAreaMode.RECORDING_INDICATOR -> {
+                views.promptsRv.visibility = View.GONE
+                views.pipelineProgressLl.visibility = View.GONE
+                showRecordingIndicatorView()
             }
         }
     }
@@ -215,6 +232,86 @@ class KeyboardUiController(private val views: PipelineViews) {
         views.recordButton.text = text
         views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(leftIcon, 0, rightIcon, 0)
         views.recordButton.isEnabled = true
+    }
+
+    // ── Recording indicator ──
+
+    /**
+     * Shows a recording indicator in the prompt area (red blinking dot + "Aufnahme..." text).
+     * Call this when the user starts recording while the QWERTZ keyboard is visible.
+     */
+    fun showRecordingIndicator() {
+        setMode(PromptAreaMode.RECORDING_INDICATOR)
+    }
+
+    private fun showRecordingIndicatorView() {
+        val indicator = getOrCreateRecordingIndicator()
+        indicator.visibility = View.VISIBLE
+
+        // Start blinking animation on the red dot
+        val dot = indicator.getChildAt(0)
+        recordingDotAnimator?.cancel()
+        recordingDotAnimator = ObjectAnimator.ofFloat(dot, "alpha", 1f, 0.2f).apply {
+            duration = 800
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            interpolator = LinearInterpolator()
+            start()
+        }
+    }
+
+    private fun hideRecordingIndicator() {
+        recordingDotAnimator?.cancel()
+        recordingDotAnimator = null
+        recordingIndicatorView?.visibility = View.GONE
+    }
+
+    private fun getOrCreateRecordingIndicator(): LinearLayout {
+        recordingIndicatorView?.let { return it }
+
+        val context = views.promptsRv.context
+
+        val container = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        // Red dot
+        val dotSize = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP, 12f, context.resources.displayMetrics
+        ).toInt()
+        val dot = View(context).apply {
+            layoutParams = LinearLayout.LayoutParams(dotSize, dotSize).apply {
+                marginEnd = TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_DIP, 8f, context.resources.displayMetrics
+                ).toInt()
+            }
+            val drawable = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(Color.RED)
+            }
+            background = drawable
+        }
+        container.addView(dot)
+
+        // Recording indicator text (localized)
+        val textView = TextView(context).apply {
+            text = context.getString(R.string.dictate_recording_indicator)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextColor(Color.RED)
+        }
+        container.addView(textView)
+
+        // Add to the prompts_keyboard_cl parent (same level as RecyclerView and pipeline)
+        val parent = views.promptsRv.parent as? android.view.ViewGroup
+        parent?.addView(container)
+
+        recordingIndicatorView = container
+        return container
     }
 
     // ── Helpers ──

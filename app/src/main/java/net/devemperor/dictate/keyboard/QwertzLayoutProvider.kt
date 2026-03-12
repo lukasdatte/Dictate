@@ -98,8 +98,9 @@ object QwertzLayoutProvider {
             )
         )
 
-        // Row 4: [123] [Ctrl] [Tab] [Space] [.] [Enter]
+        // Row 4: [↓] [123] [Ctrl] [Tab] [Space] [.] [Enter]
         val row4 = listOf(
+            closeKeyDef(),
             QwertzKeyDef(
                 label = "123",
                 keyAction = KeyAction.SWITCH_LAYOUT,
@@ -197,8 +198,9 @@ object QwertzLayoutProvider {
             )
         )
 
-        // Row 3: [ABC] [,] [Space] [.] [Enter]
+        // Row 3: [↓] [ABC] [,] [Space] [.] [Enter]
         val row3 = listOf(
+            closeKeyDef(),
             QwertzKeyDef(
                 label = "ABC",
                 keyAction = KeyAction.SWITCH_LAYOUT,
@@ -286,8 +288,9 @@ object QwertzLayoutProvider {
             )
         )
 
-        // Row 3: [ABC] [,] [Space] [.] [Enter]
+        // Row 3: [↓] [ABC] [,] [Space] [.] [Enter]
         val row3 = listOf(
+            closeKeyDef(),
             QwertzKeyDef(
                 label = "ABC",
                 keyAction = KeyAction.SWITCH_LAYOUT,
@@ -322,4 +325,13 @@ object QwertzLayoutProvider {
 
         return listOf(row0, row1, row2, row3)
     }
+
+    /** Shared close-keyboard key definition used in all layouts' bottom row. */
+    private fun closeKeyDef() = QwertzKeyDef(
+        label = "",
+        keyAction = KeyAction.CLOSE_KEYBOARD,
+        widthWeight = 1f,
+        iconResId = R.drawable.ic_baseline_keyboard_hide_24,
+        colorTier = ColorTier.DARK
+    )
 }

@@ -63,6 +63,7 @@
     <string name="dictate_microphone_permission_granted">Microphone permission granted ✅.</string>
     <string name="dictate_microphone_permission_denied">Microphone permission denied ❌.</string>
     <string name="dictate_record">Record</string>
+    <string name="dictate_recording_indicator">Recording\u2026</string>
     <string name="dictate_send">Send (%1$s)</string>
     <string name="dictate_sending">Sending …</string>
     <string name="dictate_timeout_msg">Timeout exceeded. Maybe OpenAI is overloaded or you have a poor internet connection.</string>

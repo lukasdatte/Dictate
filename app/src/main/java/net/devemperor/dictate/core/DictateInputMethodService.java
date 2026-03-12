@@ -150,6 +150,7 @@ public class DictateInputMethodService extends InputMethodService
 
     // define views
     private ConstraintLayout dictateKeyboardView;
+    private View mainButtonsCl;
     private MaterialButton smallModeButton;
     private MaterialButton editSettingsButton;
     private ConstraintLayout editButtonsKeyboardLl;
@@ -183,6 +184,7 @@ public class DictateInputMethodService extends InputMethodService
     private QwertzKeyboardView qwertzKeyboardView;
     private QwertzKeyboardController qwertzController;
     private LinearLayout overlayCharactersLl;
+    private int infoClVisibilityBeforeQwertz = View.GONE; // saved infoCl visibility for restore
 
     // Pipeline cancel button (delegates to PipelineOrchestrator)
     private MaterialButton pipelineCancelBtn;
@@ -227,6 +229,10 @@ public class DictateInputMethodService extends InputMethodService
             pauseButton.setVisibility(View.VISIBLE);
             trashButton.setVisibility(View.VISIBLE);
             resendButton.setVisibility(View.GONE);
+            // Show recording indicator in prompt bar when QWERTZ keyboard is visible
+            if (qwertzContainer != null && qwertzContainer.getVisibility() == View.VISIBLE) {
+                uiController.showRecordingIndicator();
+            }
         });
     }
 
@@ -345,6 +351,7 @@ public class DictateInputMethodService extends InputMethodService
             return insets;  // fix for overlapping with navigation bar on Android 15+
         });
 
+        mainButtonsCl = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
         smallModeButton = dictateKeyboardView.findViewById(R.id.small_mode_btn);
         editSettingsButton = dictateKeyboardView.findViewById(R.id.edit_settings_btn);
         editButtonsKeyboardLl = dictateKeyboardView.findViewById(R.id.edit_buttons_keyboard_ll);
@@ -384,7 +391,8 @@ public class DictateInputMethodService extends InputMethodService
             () -> getCurrentInputConnection(),
             () -> { vibrate(); return kotlin.Unit.INSTANCE; },
             () -> { deleteOneCharacter(); return kotlin.Unit.INSTANCE; },
-            () -> { performEnterAction(); return kotlin.Unit.INSTANCE; }
+            () -> { performEnterAction(); return kotlin.Unit.INSTANCE; },
+            () -> { hideQwertzKeyboard(); return kotlin.Unit.INSTANCE; }
         );
         initializeKeyPressAnimations();
 
@@ -726,6 +734,10 @@ public class DictateInputMethodService extends InputMethodService
             pauseButton.setForeground(AppCompatResources.getDrawable(context, R.drawable.ic_baseline_pause_24));
             trashButton.setVisibility(View.GONE);
             updateKeepScreenAwake(false);
+            // Clear recording indicator in prompt bar if it was showing
+            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.RECORDING_INDICATOR) {
+                uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+            }
         });
 
         // space button that changes cursor position if user swipes over it
@@ -1284,7 +1296,15 @@ public class DictateInputMethodService extends InputMethodService
         if (qwertzContainer == null) return;
         hideEmojiPicker();
         overlayCharactersLl.setVisibility(View.GONE);
+        infoClVisibilityBeforeQwertz = infoCl.getVisibility();
         infoCl.setVisibility(View.GONE);
+        // Hide main buttons and edit bar so they don't show behind the keyboard
+        mainButtonsCl.setVisibility(View.GONE);
+        editButtonsKeyboardLl.setVisibility(View.GONE);
+        // Keep prompt bar visible above the keyboard
+        if (sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
+            promptsCl.setVisibility(View.VISIBLE);
+        }
         qwertzContainer.setVisibility(View.VISIBLE);
         qwertzContainer.bringToFront();
         // Auto-capitalize first letter when field is empty or cursor is at position 0
@@ -1294,6 +1314,22 @@ public class DictateInputMethodService extends InputMethodService
     private void hideQwertzKeyboard() {
         if (qwertzContainer == null) return;
         qwertzContainer.setVisibility(View.GONE);
+        // Restore main buttons and edit bar based on small mode
+        if (!isSmallMode) {
+            mainButtonsCl.setVisibility(View.VISIBLE);
+            editButtonsKeyboardLl.setVisibility(View.VISIBLE);
+        }
+        // Restore info bar visibility (showQwertzKeyboard saves and hides it)
+        infoCl.setVisibility(infoClVisibilityBeforeQwertz);
+        // Restore prompt bar visibility based on rewording preference
+        // (showQwertzKeyboard forces it VISIBLE, but it should be GONE if rewording is disabled)
+        if (!sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
+            promptsCl.setVisibility(View.GONE);
+        }
+        // Restore recording indicator to normal prompt buttons if it was showing
+        if (uiController != null && uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.RECORDING_INDICATOR) {
+            uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+        }
     }
 
     private void applyButtonColor(MaterialButton button, int backgroundColor) {
@@ -1772,12 +1808,14 @@ public class DictateInputMethodService extends InputMethodService
             infoCl.setVisibility(View.GONE);
             promptsCl.setVisibility(View.GONE);
             editButtonsKeyboardLl.setVisibility(View.GONE);
+            mainButtonsCl.setVisibility(View.GONE);
             hideQwertzKeyboard();
         } else {
             if (sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
                 promptsCl.setVisibility(View.VISIBLE);
             }
             editButtonsKeyboardLl.setVisibility(View.VISIBLE);
+            mainButtonsCl.setVisibility(View.VISIBLE);
         }
 
         if (animate && animationsEnabled) {

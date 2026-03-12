@@ -34,7 +34,8 @@ class QwertzKeyboardController(
     private val inputConnectionProvider: () -> InputConnection?,
     private val vibrate: () -> Unit,
     private val deleteOneCharacter: () -> Unit,
-    private val performEnterAction: () -> Unit
+    private val performEnterAction: () -> Unit,
+    private val onCloseKeyboard: () -> Unit
 ) : QwertzKeyboardView.KeyActionCallback {
 
     // ── State ──
@@ -78,6 +79,7 @@ class QwertzKeyboardController(
             KeyAction.SPACE -> handleSpace()
             KeyAction.TAB -> handleTab()
             KeyAction.CTRL_MODIFIER -> handleCtrlToggle()
+            KeyAction.CLOSE_KEYBOARD -> { vibrate(); onCloseKeyboard() }
         }
     }
 

@@ -44,7 +44,9 @@ enum class KeyAction {
     /** Tab character */
     TAB,
     /** Toggle Ctrl modifier state */
-    CTRL_MODIFIER
+    CTRL_MODIFIER,
+    /** Close the QWERTZ keyboard and return to main buttons */
+    CLOSE_KEYBOARD
 }
 
 /**

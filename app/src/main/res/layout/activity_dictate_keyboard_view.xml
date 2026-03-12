@@ -16,29 +16,17 @@
         app:layout_constraintEnd_toEndOf="parent">
 
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/small_mode_btn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_margin="16dp"
-            android:foreground="@drawable/ic_baseline_keyboard_arrow_down_24"
-            android:foregroundGravity="center"
-            android:minWidth="56dp"
-            app:layout_constraintBottom_toTopOf="@+id/switch_btn"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
-
-        <com.google.android.material.button.MaterialButton
             android:id="@+id/record_btn"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
+            android:layout_marginStart="72dp"
             android:layout_marginEnd="8dp"
             android:text="@string/dictate_record"
             android:textSize="14sp"
             android:maxLines="1"
             app:layout_constraintBottom_toTopOf="@+id/space_btn"
             app:layout_constraintEnd_toStartOf="@+id/resend_btn"
-            app:layout_constraintStart_toEndOf="@+id/small_mode_btn"
+            app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
         <com.google.android.material.button.MaterialButton
@@ -71,31 +59,17 @@
             app:layout_constraintTop_toTopOf="parent" />
 
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/switch_btn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
-            android:layout_marginEnd="8dp"
-            android:layout_marginBottom="16dp"
-            android:foreground="@drawable/ic_baseline_keyboard_hide_24"
-            android:foregroundGravity="center"
-            android:minWidth="56dp"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@id/trash_btn"
-            app:layout_constraintStart_toStartOf="parent" />
-
-        <com.google.android.material.button.MaterialButton
             android:id="@+id/trash_btn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="72dp"
             android:layout_marginBottom="16dp"
             android:foreground="@drawable/ic_baseline_delete_24"
             android:foregroundGravity="center"
             android:minWidth="0dp"
             android:visibility="gone"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintStart_toEndOf="@+id/switch_btn"
+            app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toStartOf="@id/space_btn"
             tools:visibility="visible" />
 
@@ -291,11 +265,23 @@
             android:layout_height="match_parent"
             android:layout_marginStart="4dp"
             android:layout_marginEnd="4dp"
+            android:foreground="@drawable/ic_baseline_keyboard_arrow_down_24"
+            android:foregroundGravity="center"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/edit_keyboard_btn"
+            app:layout_constraintStart_toEndOf="@+id/edit_emoji_btn"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/edit_keyboard_btn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginHorizontal="4dp"
             android:foreground="@drawable/ic_baseline_numbers_24"
             android:foregroundGravity="center"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toStartOf="@+id/edit_history_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_emoji_btn"
+            app:layout_constraintStart_toEndOf="@+id/edit_numbers_btn"
             app:layout_constraintTop_toTopOf="parent" />
 
         <com.google.android.material.button.MaterialButton
@@ -307,7 +293,7 @@
             android:foregroundGravity="center"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toStartOf="@+id/edit_settings_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_numbers_btn"
+            app:layout_constraintStart_toEndOf="@+id/edit_keyboard_btn"
             app:layout_constraintTop_toTopOf="parent" />
 
         <com.google.android.material.button.MaterialButton

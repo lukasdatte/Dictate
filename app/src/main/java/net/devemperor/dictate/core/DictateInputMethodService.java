@@ -151,14 +151,12 @@ public class DictateInputMethodService extends InputMethodService
     // define views
     private ConstraintLayout dictateKeyboardView;
     private View mainButtonsCl;
-    private MaterialButton smallModeButton;
     private MaterialButton editSettingsButton;
     private ConstraintLayout editButtonsKeyboardLl;
     private boolean isSmallMode = false;
     private MaterialButton recordButton;
     private MaterialButton resendButton;
     private MaterialButton backspaceButton;
-    private MaterialButton switchButton;
     private MaterialButton trashButton;
     private MaterialButton spaceButton;
     private MaterialButton pauseButton;
@@ -180,6 +178,7 @@ public class DictateInputMethodService extends InputMethodService
     private MaterialButton emojiPickerCloseButton;
     private EmojiPickerView emojiPickerView;
     private MaterialButton editNumbersButton;
+    private MaterialButton editKeyboardButton;
     private FrameLayout qwertzContainer;
     private QwertzKeyboardView qwertzKeyboardView;
     private QwertzKeyboardController qwertzController;
@@ -352,13 +351,11 @@ public class DictateInputMethodService extends InputMethodService
         });
 
         mainButtonsCl = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
-        smallModeButton = dictateKeyboardView.findViewById(R.id.small_mode_btn);
         editSettingsButton = dictateKeyboardView.findViewById(R.id.edit_settings_btn);
         editButtonsKeyboardLl = dictateKeyboardView.findViewById(R.id.edit_buttons_keyboard_ll);
         recordButton = dictateKeyboardView.findViewById(R.id.record_btn);
         resendButton = dictateKeyboardView.findViewById(R.id.resend_btn);
         backspaceButton = dictateKeyboardView.findViewById(R.id.backspace_btn);
-        switchButton = dictateKeyboardView.findViewById(R.id.switch_btn);
         trashButton = dictateKeyboardView.findViewById(R.id.trash_btn);
         spaceButton = dictateKeyboardView.findViewById(R.id.space_btn);
         pauseButton = dictateKeyboardView.findViewById(R.id.pause_btn);
@@ -379,6 +376,7 @@ public class DictateInputMethodService extends InputMethodService
         editPasteButton = dictateKeyboardView.findViewById(R.id.edit_paste_btn);
         editEmojiButton = dictateKeyboardView.findViewById(R.id.edit_emoji_btn);
         editNumbersButton = dictateKeyboardView.findViewById(R.id.edit_numbers_btn);
+        editKeyboardButton = dictateKeyboardView.findViewById(R.id.edit_keyboard_btn);
         emojiPickerCl = dictateKeyboardView.findViewById(R.id.emoji_picker_cl);
         emojiPickerTitleTv = dictateKeyboardView.findViewById(R.id.emoji_picker_title_tv);
         emojiPickerCloseButton = dictateKeyboardView.findViewById(R.id.emoji_picker_close_btn);
@@ -450,11 +448,18 @@ public class DictateInputMethodService extends InputMethodService
 
         isSmallMode = sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false);
 
-        smallModeButton.setOnClickListener(v -> {
+        editNumbersButton.setOnClickListener(v -> {
             vibrate();
             isSmallMode = !isSmallMode;
             sp.edit().putBoolean(Pref.SmallMode.INSTANCE.getKey(), isSmallMode).apply();
             applySmallMode(true);
+        });
+
+        editNumbersButton.setOnLongClickListener(v -> {
+            vibrate();
+            currentInputLanguagePos++;
+            recordButton.setText(getDictateButtonText());
+            return true;
         });
 
         editSettingsButton.setOnClickListener(v -> {
@@ -694,16 +699,14 @@ public class DictateInputMethodService extends InputMethodService
             }
         });
 
-        switchButton.setOnClickListener(v -> {
+        editKeyboardButton.setOnClickListener(v -> {
             vibrate();
-            switchToPreviousKeyboard();
+            toggleQwertzKeyboard();
         });
 
-        switchButton.setOnLongClickListener(v -> {
+        editKeyboardButton.setOnLongClickListener(v -> {
             vibrate();
-
-            currentInputLanguagePos++;
-            recordButton.setText(getDictateButtonText());
+            switchToPreviousKeyboard();
             return true;
         });
 
@@ -865,11 +868,6 @@ public class DictateInputMethodService extends InputMethodService
         editEmojiButton.setOnClickListener(v -> {
             vibrate();
             toggleEmojiPicker();
-        });
-
-        editNumbersButton.setOnClickListener(v -> {
-            vibrate();
-            toggleQwertzKeyboard();
         });
 
         emojiPickerCloseButton.setOnClickListener(v -> {
@@ -1163,12 +1161,11 @@ public class DictateInputMethodService extends InputMethodService
         int accentColorDark = DictateUtils.darkenColor(accentColor, 0.35f);
         TextView[] textColorViews = { infoTv, emojiPickerTitleTv };
         for (TextView tv : textColorViews) tv.setTextColor(accentColor);
-        applyButtonColor(smallModeButton, accentColorMedium);
         applyButtonColor(editSettingsButton, accentColorMedium);
         applyButtonColor(recordButton, accentColor);
         applyButtonColor(resendButton, accentColorMedium);
         applyButtonColor(backspaceButton, accentColorDark);
-        applyButtonColor(switchButton, accentColorDark);
+        applyButtonColor(editKeyboardButton, accentColorDark);
         applyButtonColor(trashButton, accentColorMedium);
         applyButtonColor(spaceButton, accentColorMedium);
         applyButtonColor(pauseButton, accentColorMedium);
@@ -1342,10 +1339,10 @@ public class DictateInputMethodService extends InputMethodService
         // so that animation logic is not duplicated between the service and the keyboard.
         KeyPressAnimator animator = qwertzKeyboardView.getKeyPressAnimator();
         View[] animatedViews = {
-                smallModeButton, editSettingsButton, recordButton, resendButton, switchButton, trashButton,
+                editSettingsButton, recordButton, resendButton, trashButton,
                 pauseButton, emojiPickerCloseButton,
                 editUndoButton, editRedoButton, editCutButton, editCopyButton,
-                editPasteButton, editEmojiButton, editNumbersButton, editHistoryButton,
+                editPasteButton, editEmojiButton, editNumbersButton, editKeyboardButton, editHistoryButton,
                 infoYesButton, infoNoButton
         };
         for (View view : animatedViews) {
@@ -1807,8 +1804,7 @@ public class DictateInputMethodService extends InputMethodService
         if (isSmallMode) {
             infoCl.setVisibility(View.GONE);
             promptsCl.setVisibility(View.GONE);
-            editButtonsKeyboardLl.setVisibility(View.GONE);
-            mainButtonsCl.setVisibility(View.GONE);
+            // editButtonsKeyboardLl + mainButtonsCl bleiben sichtbar
             hideQwertzKeyboard();
         } else {
             if (sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
@@ -1820,13 +1816,13 @@ public class DictateInputMethodService extends InputMethodService
 
         if (animate && animationsEnabled) {
             float target = isSmallMode ? 180f : 0f;
-            smallModeButton.animate()
+            editNumbersButton.animate()
                     .rotation(target)
                     .setDuration(200)
                     .setInterpolator(new DecelerateInterpolator())
                     .start();
         } else {
-            smallModeButton.setRotation(isSmallMode ? 180f : 0f);
+            editNumbersButton.setRotation(isSmallMode ? 180f : 0f);
         }
     }
 

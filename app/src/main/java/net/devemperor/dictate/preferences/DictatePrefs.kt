@@ -50,6 +50,8 @@ sealed class Pref<T>(val key: String, val default: T) {
     object TranscriptionApiKeyOpenRouter : Pref<String>("net.devemperor.dictate.transcription_api_key_openrouter", "")
     object TranscriptionOpenAIModel : Pref<String>("net.devemperor.dictate.transcription_openai_model", "gpt-4o-mini-transcribe")
     object TranscriptionGroqModel : Pref<String>("net.devemperor.dictate.transcription_groq_model", "whisper-large-v3-turbo")
+    object TranscriptionApiKeyElevenLabs : Pref<String>("net.devemperor.dictate.transcription_api_key_elevenlabs", "")
+    object TranscriptionElevenLabsModel : Pref<String>("net.devemperor.dictate.transcription_elevenlabs_model", "scribe_v1")
     object TranscriptionCustomModel : Pref<String>("net.devemperor.dictate.transcription_custom_model", "")
     object TranscriptionCustomHost : Pref<String>("net.devemperor.dictate.transcription_custom_host", "")
 

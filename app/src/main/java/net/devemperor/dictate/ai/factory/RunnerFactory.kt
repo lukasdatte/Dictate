@@ -5,6 +5,7 @@ import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.ai.runner.AnthropicCompletionRunner
 import net.devemperor.dictate.ai.runner.CompletionRunner
+import net.devemperor.dictate.ai.runner.ElevenLabsTranscriptionRunner
 import net.devemperor.dictate.ai.runner.OpenAICompatibleRunner
 import net.devemperor.dictate.ai.runner.TranscriptionRunner
 import net.devemperor.dictate.preferences.Pref
@@ -17,7 +18,14 @@ class RunnerFactory(private val sp: SharedPreferences) {
         require(provider.supportsTranscription) {
             "${provider.displayName} does not support transcription"
         }
-        return createOpenAICompatibleRunner(provider, AIFunction.TRANSCRIPTION)
+        return if (provider == AIProvider.ELEVENLABS) {
+            ElevenLabsTranscriptionRunner(
+                apiKey = getApiKey(provider, AIFunction.TRANSCRIPTION),
+                sp = sp
+            )
+        } else {
+            createOpenAICompatibleRunner(provider, AIFunction.TRANSCRIPTION)
+        }
     }
 
     fun createCompletionRunner(): CompletionRunner {
@@ -51,6 +59,7 @@ class RunnerFactory(private val sp: SharedPreferences) {
     private fun getTranscriptionModel(provider: AIProvider): String = when (provider) {
         AIProvider.OPENAI -> sp.get(Pref.TranscriptionOpenAIModel)
         AIProvider.GROQ -> sp.get(Pref.TranscriptionGroqModel)
+        AIProvider.ELEVENLABS -> sp.get(Pref.TranscriptionElevenLabsModel)
         AIProvider.CUSTOM -> sp.get(Pref.TranscriptionCustomModel)
         else -> throw IllegalStateException("${provider.displayName} does not support transcription")
     }
@@ -61,6 +70,7 @@ class RunnerFactory(private val sp: SharedPreferences) {
         AIProvider.ANTHROPIC -> sp.get(Pref.RewordingAnthropicModel)
         AIProvider.OPENROUTER -> sp.get(Pref.RewordingOpenRouterModel)
         AIProvider.CUSTOM -> sp.get(Pref.RewordingCustomModel)
+        AIProvider.ELEVENLABS -> throw IllegalStateException("ElevenLabs does not support completion")
     }
 
     private fun getApiKey(provider: AIProvider, function: AIFunction): String {
@@ -68,6 +78,7 @@ class RunnerFactory(private val sp: SharedPreferences) {
             AIFunction.TRANSCRIPTION -> when (provider) {
                 AIProvider.OPENAI -> Pref.TranscriptionApiKeyOpenAI
                 AIProvider.GROQ -> Pref.TranscriptionApiKeyGroq
+                AIProvider.ELEVENLABS -> Pref.TranscriptionApiKeyElevenLabs
                 AIProvider.OPENROUTER -> Pref.TranscriptionApiKeyOpenRouter
                 AIProvider.CUSTOM -> Pref.TranscriptionApiKeyCustom
                 else -> throw IllegalStateException("${provider.displayName} does not support transcription")
@@ -78,6 +89,7 @@ class RunnerFactory(private val sp: SharedPreferences) {
                 AIProvider.ANTHROPIC -> Pref.RewordingApiKeyAnthropic
                 AIProvider.OPENROUTER -> Pref.RewordingApiKeyOpenRouter
                 AIProvider.CUSTOM -> Pref.RewordingApiKeyCustom
+                AIProvider.ELEVENLABS -> throw IllegalStateException("ElevenLabs does not support completion")
             }
         }
         return sp.get(pref).replace(Regex("[^ -~]"), "") // Strip non-ASCII

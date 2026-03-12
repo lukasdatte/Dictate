@@ -224,12 +224,39 @@ public class APISettingsActivity extends AppCompatActivity {
             transcriptionCustomHostEt.setText(DictatePrefsKt.get(sp, Pref.TranscriptionCustomHost.INSTANCE));
             transcriptionCustomModelEt.setText(DictatePrefsKt.get(sp, Pref.TranscriptionCustomModel.INSTANCE));
             transcriptionModelGroup.setVisibility(View.GONE);
+        } else if (!ModelFetcher.getHardcodedModels(provider).isEmpty()) {
+            transcriptionModelGroup.setVisibility(View.VISIBLE);
+            loadHardcodedTranscriptionModels(provider);
         } else {
             transcriptionModelGroup.setVisibility(View.VISIBLE);
             fetchTranscriptionModels(provider, apiKey);
         }
 
         ignoreTextChange = false;
+    }
+
+    private void loadHardcodedTranscriptionModels(AIProvider provider) {
+        List<ModelInfo> models = ModelFetcher.getHardcodedModels(provider);
+        List<String> modelIds = models.stream().map(ModelInfo::getId).collect(Collectors.toList());
+
+        if (transcriptionModelProgress != null) transcriptionModelProgress.setVisibility(View.GONE);
+
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, modelIds);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        transcriptionModelSpn.setAdapter(adapter);
+
+        String savedModel = getSavedTranscriptionModel(provider);
+        int pos = modelIds.indexOf(savedModel);
+        if (pos >= 0) transcriptionModelSpn.setSelection(pos);
+
+        transcriptionModelSpn.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                saveTranscriptionModel(getSelectedTranscriptionProvider(), modelIds.get(position));
+            }
+            @Override
+            public void onNothingSelected(AdapterView<?> adapterView) {}
+        });
     }
 
     private void fetchTranscriptionModels(AIProvider provider, String apiKey) {
@@ -678,6 +705,7 @@ public class APISettingsActivity extends AppCompatActivity {
         switch (provider) {
             case OPENAI: return Pref.TranscriptionApiKeyOpenAI.INSTANCE;
             case GROQ: return Pref.TranscriptionApiKeyGroq.INSTANCE;
+            case ELEVENLABS: return Pref.TranscriptionApiKeyElevenLabs.INSTANCE;
             case CUSTOM: return Pref.TranscriptionApiKeyCustom.INSTANCE;
             default: return Pref.TranscriptionApiKeyOpenAI.INSTANCE;
         }
@@ -698,6 +726,7 @@ public class APISettingsActivity extends AppCompatActivity {
         switch (provider) {
             case OPENAI: return DictatePrefsKt.get(sp, Pref.TranscriptionOpenAIModel.INSTANCE);
             case GROQ: return DictatePrefsKt.get(sp, Pref.TranscriptionGroqModel.INSTANCE);
+            case ELEVENLABS: return DictatePrefsKt.get(sp, Pref.TranscriptionElevenLabsModel.INSTANCE);
             default: return "";
         }
     }
@@ -709,6 +738,9 @@ public class APISettingsActivity extends AppCompatActivity {
                 break;
             case GROQ:
                 sp.edit().putString(Pref.TranscriptionGroqModel.INSTANCE.getKey(), modelId).apply();
+                break;
+            case ELEVENLABS:
+                sp.edit().putString(Pref.TranscriptionElevenLabsModel.INSTANCE.getKey(), modelId).apply();
                 break;
         }
     }

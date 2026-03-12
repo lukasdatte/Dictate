@@ -28,6 +28,13 @@ enum class AIProvider(
         supportsCompletion = true,
         isOpenAICompatible = false
     ),
+    ELEVENLABS(
+        displayName = "ElevenLabs",
+        defaultBaseUrl = "https://api.elevenlabs.io/v1/",
+        supportsTranscription = true,
+        supportsCompletion = false,
+        isOpenAICompatible = false
+    ),
     OPENROUTER(
         displayName = "OpenRouter",
         defaultBaseUrl = "https://openrouter.ai/api/v1/",

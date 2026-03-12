@@ -46,9 +46,10 @@ object ModelFetcher {
         sp: SharedPreferences,
         forTranscription: Boolean
     ): List<ModelInfo> {
-        // Custom + Anthropic: No API fetching (free-text input in Settings UI)
+        // Custom + Anthropic + ElevenLabs: No API fetching
         // Anthropic has no OpenAI-compatible /models endpoint
-        if (provider == AIProvider.CUSTOM || provider == AIProvider.ANTHROPIC) return emptyList()
+        // ElevenLabs has no STT model listing endpoint (fixed enum: scribe_v1, scribe_v2)
+        if (provider == AIProvider.CUSTOM || provider == AIProvider.ANTHROPIC || provider == AIProvider.ELEVENLABS) return emptyList()
 
         val client = OpenAIOkHttpClient.builder()
             .apiKey(apiKey)
@@ -71,6 +72,18 @@ object ModelFetcher {
             .map { ModelInfo(id = it.id(), displayName = it.id()) }
             .filter { filterModel(it.id, provider, forTranscription) }
             .sortedBy { it.id }
+    }
+
+    /**
+     * Returns hardcoded models for providers that don't have a model listing API.
+     */
+    @JvmStatic
+    fun getHardcodedModels(provider: AIProvider): List<ModelInfo> = when (provider) {
+        AIProvider.ELEVENLABS -> listOf(
+            ModelInfo(id = "scribe_v1", displayName = "Scribe v1"),
+            ModelInfo(id = "scribe_v2", displayName = "Scribe v2")
+        )
+        else -> emptyList()
     }
 
     private fun filterModel(modelId: String, provider: AIProvider, forTranscription: Boolean): Boolean {

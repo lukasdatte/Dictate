@@ -48,12 +48,17 @@ object ParameterRegistry {
         ParameterDef("temperature", ParameterType.FLOAT_RANGE, 0.0f, 1.0f, 0.0f)
     )
 
+    private val ELEVENLABS_TRANSCRIPTION = listOf(
+        ParameterDef("temperature", ParameterType.FLOAT_RANGE, 0.0f, 2.0f, 0.0f)
+    )
+
     @JvmStatic
     fun getCompletionParameters(provider: AIProvider, modelId: String): List<ParameterDef> {
         val params = when (provider) {
             AIProvider.OPENAI -> OPENAI_COMPLETION
             AIProvider.ANTHROPIC -> ANTHROPIC_COMPLETION
             AIProvider.GROQ -> GROQ_COMPLETION
+            AIProvider.ELEVENLABS -> emptyList()  // No completion support
             AIProvider.OPENROUTER -> OPENAI_COMPLETION  // Fallback, later API enrichment
             AIProvider.CUSTOM -> OPENAI_COMPLETION
         }
@@ -71,6 +76,7 @@ object ParameterRegistry {
     fun getTranscriptionParameters(provider: AIProvider): List<ParameterDef> {
         return when (provider) {
             AIProvider.OPENAI, AIProvider.GROQ -> OPENAI_TRANSCRIPTION
+            AIProvider.ELEVENLABS -> ELEVENLABS_TRANSCRIPTION
             else -> emptyList()
         }
     }

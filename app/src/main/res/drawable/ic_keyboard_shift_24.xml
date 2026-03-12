@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:height="24dp"
+    android:tint="#000000"
+    android:viewportHeight="24"
+    android:viewportWidth="24"
+    android:width="24dp">
+    <!-- Shift outline: hollow upward arrow with flat base (evenOdd for cutout) -->
+    <path
+        android:fillColor="@android:color/white"
+        android:fillType="evenOdd"
+        android:pathData="M12,4 L3,14 h5 v5 h8 v-5 h5 Z M10,12.5 v4.5 h4 v-4.5 h2.5 L12,7 L5.5,12.5 Z" />
+</vector>

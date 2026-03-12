@@ -2,7 +2,6 @@ package net.devemperor.dictate.core;
 
 import android.Manifest;
 import android.animation.ObjectAnimator;
-import android.animation.TimeInterpolator;
 import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.app.Dialog;
@@ -34,7 +33,6 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
-import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
@@ -45,6 +43,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -66,6 +65,10 @@ import net.devemperor.dictate.ai.AIOrchestrator;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.entity.InsertionMethod;
 import net.devemperor.dictate.database.entity.InsertionSource;
+import net.devemperor.dictate.keyboard.KeyPressAnimator;
+import net.devemperor.dictate.keyboard.QwertzKeyboardController;
+import net.devemperor.dictate.keyboard.QwertzKeyboardLayout;
+import net.devemperor.dictate.keyboard.QwertzKeyboardView;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.preferences.PrefsMigration;
 import net.devemperor.dictate.R;
@@ -100,9 +103,6 @@ public class DictateInputMethodService extends InputMethodService
 
     // define handlers and runnables for background tasks
     private static final int DELETE_LOOKBACK_CHARACTERS = 64;
-    private static final float KEY_PRESS_SCALE = 0.92f;
-    private static final long KEY_PRESS_ANIM_DURATION = 80L;
-    private static final TimeInterpolator KEY_PRESS_INTERPOLATOR = new DecelerateInterpolator();
 
     private Handler mainHandler;
     private Handler deleteHandler;
@@ -179,10 +179,9 @@ public class DictateInputMethodService extends InputMethodService
     private MaterialButton emojiPickerCloseButton;
     private EmojiPickerView emojiPickerView;
     private MaterialButton editNumbersButton;
-    private ConstraintLayout numbersPanelCl;
-    private TextView numbersPanelTitleTv;
-    private MaterialButton numbersPanelCloseButton;
-    private final List<MaterialButton> numberPanelButtons = new ArrayList<>();
+    private FrameLayout qwertzContainer;
+    private QwertzKeyboardView qwertzKeyboardView;
+    private QwertzKeyboardController qwertzController;
     private LinearLayout overlayCharactersLl;
 
     // Pipeline cancel button (delegates to PipelineOrchestrator)
@@ -377,12 +376,16 @@ public class DictateInputMethodService extends InputMethodService
         emojiPickerTitleTv = dictateKeyboardView.findViewById(R.id.emoji_picker_title_tv);
         emojiPickerCloseButton = dictateKeyboardView.findViewById(R.id.emoji_picker_close_btn);
         emojiPickerView = dictateKeyboardView.findViewById(R.id.emoji_picker_view);
-        numbersPanelCl = dictateKeyboardView.findViewById(R.id.numbers_panel_cl);
-        numbersPanelTitleTv = dictateKeyboardView.findViewById(R.id.numbers_panel_title_tv);
-        numbersPanelCloseButton = dictateKeyboardView.findViewById(R.id.numbers_panel_close_btn);
-        LinearLayout numbersPanelKeysContainer = dictateKeyboardView.findViewById(R.id.numbers_panel_keys_container);
-        numberPanelButtons.clear();
-        collectNumberPanelButtons(numbersPanelKeysContainer);
+        qwertzContainer = dictateKeyboardView.findViewById(R.id.qwertz_keyboard_container);
+        qwertzKeyboardView = new QwertzKeyboardView(context);
+        qwertzContainer.addView(qwertzKeyboardView);
+        qwertzController = new QwertzKeyboardController(
+            qwertzKeyboardView,
+            () -> getCurrentInputConnection(),
+            () -> { vibrate(); return kotlin.Unit.INSTANCE; },
+            () -> { deleteOneCharacter(); return kotlin.Unit.INSTANCE; },
+            () -> { performEnterAction(); return kotlin.Unit.INSTANCE; }
+        );
         initializeKeyPressAnimations();
 
         overlayCharactersLl = dictateKeyboardView.findViewById(R.id.overlay_characters_ll);
@@ -572,7 +575,7 @@ public class DictateInputMethodService extends InputMethodService
 
         // Enhanced touch handling: swipe left while holding to select words progressively
         backspaceButton.setOnTouchListener((v, event) -> {
-            handlePressAnimationEvent(v, event);
+            qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
             InputConnection ic = getCurrentInputConnection();
             final float density = getResources().getDisplayMetrics().density;
             final int stepPx = (int) (24f * density + 0.5f);
@@ -727,7 +730,7 @@ public class DictateInputMethodService extends InputMethodService
 
         // space button that changes cursor position if user swipes over it
         spaceButton.setOnTouchListener((v, event) -> {
-            handlePressAnimationEvent(v, event);
+            qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
             InputConnection inputConnection = getCurrentInputConnection();
             int action = event.getActionMasked();
             if (inputConnection != null) {
@@ -795,7 +798,7 @@ public class DictateInputMethodService extends InputMethodService
         });
 
         enterButton.setOnTouchListener((v, event) -> {
-            handlePressAnimationEvent(v, event);
+            qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
             if (overlayCharactersLl.getVisibility() == View.VISIBLE) {
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_MOVE:
@@ -854,17 +857,12 @@ public class DictateInputMethodService extends InputMethodService
 
         editNumbersButton.setOnClickListener(v -> {
             vibrate();
-            toggleNumberPanel();
+            toggleQwertzKeyboard();
         });
 
         emojiPickerCloseButton.setOnClickListener(v -> {
             vibrate();
             hideEmojiPicker();
-        });
-
-        numbersPanelCloseButton.setOnClickListener(v -> {
-            vibrate();
-            hideNumberPanel();
         });
 
         emojiPickerView.setOnEmojiPickedListener(emoji -> {
@@ -918,6 +916,9 @@ public class DictateInputMethodService extends InputMethodService
     public void onFinishInputView(boolean finishingInput) {
         super.onFinishInputView(finishingInput);
 
+        // Hide QWERTZ keyboard when the input view is finishing (app switch, background, etc.)
+        hideQwertzKeyboard();
+
         // State (A): Recording is active (running or paused) -> pause and set timeout
         if (recordingManager.isRecording()) {
             cancelScoWaitIfAny();
@@ -942,14 +943,14 @@ public class DictateInputMethodService extends InputMethodService
 
             // Hide panels but keep recording state
             emojiPickerCl.setVisibility(View.GONE);
-            numbersPanelCl.setVisibility(View.GONE);
+            qwertzContainer.setVisibility(View.GONE);
             return;
         }
 
         // State (B): API request is running -> let it continue, just hide UI panels
         if (pipelineOrchestrator.isRunning()) {
             emojiPickerCl.setVisibility(View.GONE);
-            numbersPanelCl.setVisibility(View.GONE);
+            qwertzContainer.setVisibility(View.GONE);
             return;
         }
 
@@ -968,7 +969,7 @@ public class DictateInputMethodService extends InputMethodService
         resendButton.setVisibility(View.GONE);
         infoCl.setVisibility(View.GONE);
         emojiPickerCl.setVisibility(View.GONE);
-        numbersPanelCl.setVisibility(View.GONE);
+        qwertzContainer.setVisibility(View.GONE);
         uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
         livePrompt = false;
         recordingUsesBluetooth = false;
@@ -1098,10 +1099,11 @@ public class DictateInputMethodService extends InputMethodService
             promptsCl.setVisibility(View.GONE);
         }
 
-        if (shouldAutomaticallyShowNumberPanel(info)) {
-            showNumberPanel();
+        if (shouldAutomaticallyShowQwertzNumbers(info)) {
+            qwertzController.setLayout(QwertzKeyboardLayout.NUMBERS);
+            showQwertzKeyboard();
         } else {
-            hideNumberPanel();
+            hideQwertzKeyboard();
         }
 
         // enable resend button if previous audio file still exists in cache
@@ -1143,11 +1145,11 @@ public class DictateInputMethodService extends InputMethodService
         }
         dictateKeyboardView.setBackgroundColor(keyboardBackgroundColor);
         emojiPickerCl.setBackgroundColor(keyboardBackgroundColor);
-        numbersPanelCl.setBackgroundColor(keyboardBackgroundColor);
+        qwertzContainer.setBackgroundColor(keyboardBackgroundColor);
 
         int accentColorMedium = DictateUtils.darkenColor(accentColor, 0.18f);
         int accentColorDark = DictateUtils.darkenColor(accentColor, 0.35f);
-        TextView[] textColorViews = { infoTv, emojiPickerTitleTv, numbersPanelTitleTv };
+        TextView[] textColorViews = { infoTv, emojiPickerTitleTv };
         for (TextView tv : textColorViews) tv.setTextColor(accentColor);
         applyButtonColor(smallModeButton, accentColorMedium);
         applyButtonColor(editSettingsButton, accentColorMedium);
@@ -1168,15 +1170,7 @@ public class DictateInputMethodService extends InputMethodService
         applyButtonColor(editNumbersButton, accentColorMedium);
         applyButtonColor(editHistoryButton, accentColorMedium);
         applyButtonColor(emojiPickerCloseButton, accentColor);
-        applyButtonColor(numbersPanelCloseButton, accentColor);
-        for (MaterialButton button : numberPanelButtons) {
-            Object tag = button.getTag();
-            CharSequence text = button.getText();
-            boolean isEnter = tag != null && "ENTER".equalsIgnoreCase(tag.toString());
-            boolean isDigit = text != null && text.length() == 1 && Character.isDigit(text.charAt(0));
-            int background = isEnter ? accentColor : (isDigit ? accentColorMedium : accentColorDark);
-            applyButtonColor(button, background);
-        }
+        qwertzController.applyColors(accentColor, accentColorMedium, accentColorDark);
 
         // show infos for updates, ratings or donations
         Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
@@ -1188,6 +1182,10 @@ public class DictateInputMethodService extends InputMethodService
         } else if (totalAudioTime > 600 && !sp.getBoolean("net.devemperor.dictate.flag_has_donated", false)) {
             showInfo("donate");
         }
+
+        // Sync animations preference to QWERTZ keyboard
+        qwertzKeyboardView.getKeyPressAnimator().setAnimationsEnabled(
+                sp.getBoolean("net.devemperor.dictate.animations", true));
 
         applySmallMode(false);
 
@@ -1232,7 +1230,7 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void showEmojiPicker() {
-        hideNumberPanel();
+        hideQwertzKeyboard();
         overlayCharactersLl.setVisibility(View.GONE);
         infoCl.setVisibility(View.GONE);
         emojiPickerCl.setVisibility(View.VISIBLE);
@@ -1273,60 +1271,29 @@ public class DictateInputMethodService extends InputMethodService
         promptsAdapter.setSelectAllActive(hasSelection);
     }
 
-    private void toggleNumberPanel() {
-        if (numbersPanelCl == null) return;
-        if (numbersPanelCl.getVisibility() == View.VISIBLE) {
-            hideNumberPanel();
+    private void toggleQwertzKeyboard() {
+        if (qwertzContainer == null) return;
+        if (qwertzContainer.getVisibility() == View.VISIBLE) {
+            hideQwertzKeyboard();
         } else {
-            showNumberPanel();
+            showQwertzKeyboard();
         }
     }
 
-    private void showNumberPanel() {
-        if (numbersPanelCl == null) return;
+    private void showQwertzKeyboard() {
+        if (qwertzContainer == null) return;
         hideEmojiPicker();
         overlayCharactersLl.setVisibility(View.GONE);
         infoCl.setVisibility(View.GONE);
-        numbersPanelCl.setVisibility(View.VISIBLE);
-        numbersPanelCl.bringToFront();
+        qwertzContainer.setVisibility(View.VISIBLE);
+        qwertzContainer.bringToFront();
+        // Auto-capitalize first letter when field is empty or cursor is at position 0
+        qwertzController.checkAutoShiftAtCursor();
     }
 
-    private void hideNumberPanel() {
-        if (numbersPanelCl == null) return;
-        numbersPanelCl.setVisibility(View.GONE);
-    }
-
-    private void collectNumberPanelButtons(ViewGroup parent) {
-        if (parent == null) return;
-        for (int i = 0; i < parent.getChildCount(); i++) {
-            View child = parent.getChildAt(i);
-            if (child instanceof ViewGroup) {
-                collectNumberPanelButtons((ViewGroup) child);
-            } else if (child instanceof MaterialButton) {
-                MaterialButton button = (MaterialButton) child;
-                Object tag = button.getTag();
-                final String value;
-                if (tag != null) {
-                    value = tag.toString();
-                } else if (button.getText() != null) {
-                    value = button.getText().toString();
-                } else {
-                    value = "";
-                }
-                button.setOnClickListener(v -> {
-                    vibrate();
-                    if ("BACKSPACE".equalsIgnoreCase(value)) {
-                        deleteOneCharacter();
-                    } else if ("ENTER".equalsIgnoreCase(value)) {
-                        performEnterAction();
-                    } else {
-                        commitNumberPanelValue(value);
-                    }
-                });
-                applyPressAnimation(button);
-                numberPanelButtons.add(button);
-            }
-        }
+    private void hideQwertzKeyboard() {
+        if (qwertzContainer == null) return;
+        qwertzContainer.setVisibility(View.GONE);
     }
 
     private void applyButtonColor(MaterialButton button, int backgroundColor) {
@@ -1335,73 +1302,22 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void initializeKeyPressAnimations() {
+        // Use the shared KeyPressAnimator instance from the QWERTZ keyboard view
+        // so that animation logic is not duplicated between the service and the keyboard.
+        KeyPressAnimator animator = qwertzKeyboardView.getKeyPressAnimator();
         View[] animatedViews = {
                 smallModeButton, editSettingsButton, recordButton, resendButton, switchButton, trashButton,
-                pauseButton, emojiPickerCloseButton, numbersPanelCloseButton,
+                pauseButton, emojiPickerCloseButton,
                 editUndoButton, editRedoButton, editCutButton, editCopyButton,
                 editPasteButton, editEmojiButton, editNumbersButton, editHistoryButton,
                 infoYesButton, infoNoButton
         };
         for (View view : animatedViews) {
-            applyPressAnimation(view);
+            if (view != null) animator.applyPressAnimation(view);
         }
     }
 
-    @SuppressLint("ClickableViewAccessibility")
-    private void applyPressAnimation(View view) {
-        if (view == null) return;
-        view.setOnTouchListener((v, event) -> {
-            handlePressAnimationEvent(v, event);
-            return false;
-        });
-    }
-
-    private void handlePressAnimationEvent(View view, MotionEvent event) {
-        if (view == null || event == null) return;
-        if (!sp.getBoolean("net.devemperor.dictate.animations", true)) {
-            view.animate().cancel();
-            view.setScaleX(1f);
-            view.setScaleY(1f);
-            return;
-        }
-        switch (event.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN:
-                animateKeyPress(view, true);
-                break;
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_CANCEL:
-                animateKeyPress(view, false);
-                break;
-        }
-    }
-
-    private void animateKeyPress(View view, boolean pressed) {
-        if (!sp.getBoolean("net.devemperor.dictate.animations", true) || view == null) {
-            if (view != null) {
-                view.animate().cancel();
-                if (view.getScaleX() != 1f) view.setScaleX(1f);
-                if (view.getScaleY() != 1f) view.setScaleY(1f);
-            }
-            return;
-        }
-        float targetScale = pressed ? KEY_PRESS_SCALE : 1f;
-        view.animate()
-                .scaleX(targetScale)
-                .scaleY(targetScale)
-                .setDuration(KEY_PRESS_ANIM_DURATION)
-                .setInterpolator(KEY_PRESS_INTERPOLATOR)
-                .start();
-    }
-
-    private void commitNumberPanelValue(String value) {
-        if (value == null || value.isEmpty()) return;
-        InputConnection inputConnection = getCurrentInputConnection();
-        if (inputConnection != null) {
-            inputConnection.commitText(value, 1);
-        }
-    }
-
-    private boolean shouldAutomaticallyShowNumberPanel(EditorInfo info) {
+    private boolean shouldAutomaticallyShowQwertzNumbers(EditorInfo info) {
         if (info == null) return false;
         int inputType = info.inputType;
         int inputClass = inputType & InputType.TYPE_MASK_CLASS;
@@ -1856,6 +1772,7 @@ public class DictateInputMethodService extends InputMethodService
             infoCl.setVisibility(View.GONE);
             promptsCl.setVisibility(View.GONE);
             editButtonsKeyboardLl.setVisibility(View.GONE);
+            hideQwertzKeyboard();
         } else {
             if (sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
                 promptsCl.setVisibility(View.VISIBLE);

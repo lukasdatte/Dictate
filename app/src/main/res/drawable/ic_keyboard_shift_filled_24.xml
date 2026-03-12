@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:height="24dp"
+    android:tint="#000000"
+    android:viewportHeight="24"
+    android:viewportWidth="24"
+    android:width="24dp">
+    <!-- Filled shift arrow + underline (used for active shift / caps lock) -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M12,2 L3,12 h5 v5 h8 v-5 h5 Z M6,20 h12 v-2 H6 v2z" />
+</vector>

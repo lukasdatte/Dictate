@@ -328,5 +328,17 @@
     <string name="dictate_pipeline_formatting">Formatting</string>
     <string name="dictate_pipeline_duration">%1$.1fs</string>
 
+    <!-- QWERTZ Keyboard -->
+    <string name="dictate_qwertz_key_123">123</string>
+    <string name="dictate_qwertz_key_abc">ABC</string>
+    <string name="dictate_qwertz_key_symbols">=\\&lt;</string>
+    <string name="dictate_qwertz_shift_tooltip">Shift</string>
+    <string name="dictate_qwertz_caps_lock_tooltip">Caps Lock</string>
+    <string name="dictate_qwertz_backspace_tooltip">Backspace</string>
+    <string name="dictate_qwertz_tab_tooltip">Tab</string>
+    <string name="dictate_qwertz_enter_tooltip">Enter</string>
+    <string name="dictate_qwertz_space_tooltip">Space</string>
+    <string name="dictate_qwertz_ctrl_tooltip">Ctrl</string>
+
     <string name="dictate_changelog_30">v3.2.0\n\nThis update brings some major improvements and new features! 🚀\n\n- Separate API keys: You can now save separate API keys for each provider (OpenAI, Groq, Custom), making switching between them seamless. 🔑\n\n- Improved Bluetooth support: Connecting to Bluetooth headsets is now faster and more reliable. 🎧\n\n- Auto Enter: Added an option to automatically press Enter/Send after transcription. ⚡\n\n- New Models: Added support for OpenAI o1, o4-mini, and GPT-5.2, including updated pricing info. 🤖\n\n- Various bug fixes and improvements. ✨\n\nI wish you a blessed New Year 2026! 🎆\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
 </resources>

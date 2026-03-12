@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single pipeline step row: icon (20dp) + name + optional duration -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="20dp"
+    android:orientation="horizontal"
+    android:gravity="center_vertical">
+
+    <!-- Status icon: ✓ done, spinner running, ○ pending, ✕ error -->
+    <FrameLayout
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:layout_marginEnd="8dp">
+
+        <TextView
+            android:id="@+id/pipeline_step_icon_tv"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:textSize="12sp"
+            tools:text="✓" />
+
+        <ProgressBar
+            android:id="@+id/pipeline_step_pb"
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:layout_gravity="center"
+            android:indeterminate="true"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/pipeline_step_name_tv"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="13sp"
+        tools:text="Transkription" />
+
+    <TextView
+        android:id="@+id/pipeline_step_duration_tv"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:textSize="11sp"
+        android:textColor="?android:attr/textColorSecondary"
+        android:visibility="gone"
+        tools:text="1.8s" />
+
+</LinearLayout>

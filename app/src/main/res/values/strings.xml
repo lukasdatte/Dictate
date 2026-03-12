@@ -63,6 +63,7 @@
     <string name="dictate_microphone_permission_granted">Microphone permission granted ✅.</string>
     <string name="dictate_microphone_permission_denied">Microphone permission denied ❌.</string>
     <string name="dictate_record">Record</string>
+    <string name="dictate_recording_indicator">Recording\u2026</string>
     <string name="dictate_send">Send (%1$s)</string>
     <string name="dictate_sending">Sending …</string>
     <string name="dictate_timeout_msg">Timeout exceeded. Maybe OpenAI is overloaded or you have a poor internet connection.</string>
@@ -280,5 +281,65 @@
     <string name="dictate_changelog_27">v2.10.1\n\nThis is just a small update adding the ability to disable animations in the settings. Furthermore, Bluetooth support is disabled by default.\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
     <string name="dictate_changelog_28">v3.0.0\n\nThis is the second major update for Dictate with plenty of improvements 🤩\n\n- You no longer have to switch keyboards when you want to enter emojis or numbers. There are now dedicated buttons on the keyboard for that. 🥳\n\n- All rewording instructions are now displayed. When you tap an instruction, the entire text is selected and revised automatically. If you selected only part of the text, only that part will be reworded. If you tap instructions during a recording, they are applied to your text right after the transcription. 🤖\n\n- In the rewording instruction settings, you can now choose to have an instruction automatically applied after every transcription. That saves you plenty of unnecessary taps. 😌\n\n- You can now easily export and import all of your instructions whenever you switch to a new device or want to share them. 📤\n\n- The default style prompt is now sent to Whisper in the respective input language to avoid incorrect automatic translations. 💡\n\n- Spanish and Portuguese have been added as app languages, along with an option to choose the language manually. 🇪🇸\n\n- Some design changes and bug fixes have been made. ✨\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
     <string name="dictate_changelog_29">v3.1.0\n\nThis update adds an experimental feature called \"auto formatting\". If you have enabled auto formatting, you can use commands such as \"new paragraph,\" \"first,\" or \"Henry with i\" in the recording, which will then be automatically applied to your text. Processing will be a little bit slower, but the AI tries to process your instructions as good as possible. ✨\n\nFurthermore, some bug fixes and theme changes have been made.\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
+    <!-- History -->
+    <string name="dictate_settings_history">History 📜</string>
+    <string name="dictate_settings_history_summary">View past sessions and results</string>
+    <string name="dictate_history">History</string>
+    <string name="dictate_history_no_sessions">No sessions yet.\nStart using Dictate to see\nyour history here.</string>
+    <string name="dictate_history_filter_all">All</string>
+    <string name="dictate_history_filter_recordings">Recordings</string>
+    <string name="dictate_history_filter_rewording">Rewording</string>
+    <string name="dictate_history_filter_post_processing">Post-processing</string>
+    <string name="dictate_history_search_hint">Search sessions…</string>
+    <string name="dictate_history_delete_all_title">Delete all sessions?</string>
+    <string name="dictate_history_delete_all_message">Are you sure you want to delete all sessions? This cannot be undone.</string>
+    <string name="dictate_history_delete_session_title">Delete session?</string>
+    <string name="dictate_history_delete_session_message">Are you sure you want to delete this session?</string>
+    <string name="dictate_history_delete_all">Delete all</string>
+    <string name="dictate_history_duration">Duration: %1$d min, %2$d s</string>
+    <string name="dictate_history_based_on">Based on %1$s</string>
+    <string name="dictate_history_detail">Session detail</string>
+    <string name="dictate_history_audio">Audio</string>
+    <string name="dictate_history_transcription">Transcription</string>
+    <string name="dictate_history_auto_format">Auto-format</string>
+    <string name="dictate_history_rewording">Rewording</string>
+    <string name="dictate_history_queued_prompt">Prompt</string>
+    <string name="dictate_history_input">Input</string>
+    <string name="dictate_history_final_output">Final output</string>
+    <string name="dictate_history_source_session">Source session</string>
+    <string name="dictate_history_regenerate">Regenerate</string>
+    <string name="dictate_history_other_prompt">Other prompt</string>
+    <string name="dictate_history_post_process">Post-process</string>
+    <string name="dictate_history_copy">Copy</string>
+    <string name="dictate_history_share">Share</string>
+    <string name="dictate_history_version">v%1$d</string>
+    <string name="dictate_history_version_warning">Downstream steps are based on a different version</string>
+    <string name="dictate_history_open_parent">Open parent session</string>
+    <string name="dictate_history_error">Error: %1$s</string>
+    <string name="dictate_history_play">Play</string>
+    <string name="dictate_history_pause">Pause</string>
+    <string name="dictate_copied_to_clipboard">Copied to clipboard</string>
+    <string name="dictate_history_choose_prompt">Choose prompt</string>
+    <string name="dictate_history_freetext_hint">Enter a custom prompt…</string>
+    <string name="dictate_history_regenerating">Regenerating…</string>
+    <string name="dictate_history_regenerate_failed">Regeneration failed: %1$s</string>
+
+    <!-- Pipeline progress -->
+    <string name="dictate_pipeline_transcription">Transcription</string>
+    <string name="dictate_pipeline_formatting">Formatting</string>
+    <string name="dictate_pipeline_duration">%1$.1fs</string>
+
+    <!-- QWERTZ Keyboard -->
+    <string name="dictate_qwertz_key_123">123</string>
+    <string name="dictate_qwertz_key_abc">ABC</string>
+    <string name="dictate_qwertz_key_symbols">=\\&lt;</string>
+    <string name="dictate_qwertz_shift_tooltip">Shift</string>
+    <string name="dictate_qwertz_caps_lock_tooltip">Caps Lock</string>
+    <string name="dictate_qwertz_backspace_tooltip">Backspace</string>
+    <string name="dictate_qwertz_tab_tooltip">Tab</string>
+    <string name="dictate_qwertz_enter_tooltip">Enter</string>
+    <string name="dictate_qwertz_space_tooltip">Space</string>
+    <string name="dictate_qwertz_ctrl_tooltip">Ctrl</string>
+
     <string name="dictate_changelog_30">v3.2.0\n\nThis update brings some major improvements and new features! 🚀\n\n- Separate API keys: You can now save separate API keys for each provider (OpenAI, Groq, Custom), making switching between them seamless. 🔑\n\n- Improved Bluetooth support: Connecting to Bluetooth headsets is now faster and more reliable. 🎧\n\n- Auto Enter: Added an option to automatically press Enter/Send after transcription. ⚡\n\n- New Models: Added support for OpenAI o1, o4-mini, and GPT-5.2, including updated pricing info. 🤖\n\n- Various bug fixes and improvements. ✨\n\nI wish you a blessed New Year 2026! 🎆\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
 </resources>

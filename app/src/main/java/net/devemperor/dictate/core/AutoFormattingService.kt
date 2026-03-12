@@ -13,11 +13,14 @@ class AutoFormattingService(
     private val sp: SharedPreferences,
     private val aiOrchestrator: AIOrchestrator
 ) {
-    fun formatIfEnabled(transcript: String, languageHint: String?): String {
+    fun isEnabled(): Boolean =
+        sp.get(Pref.AutoFormattingEnabled) && sp.get(Pref.RewordingEnabled)
+
+    fun formatIfEnabled(transcript: String, languageHint: String?): FormatResult {
         if (TextUtils.isEmpty(transcript)
             || !sp.get(Pref.AutoFormattingEnabled)
             || !sp.get(Pref.RewordingEnabled)) {
-            return transcript
+            return FormatResult(transcript, null, null) // disabled
         }
 
         return try {
@@ -33,10 +36,10 @@ class AutoFormattingService(
                 .build()
 
             val result = aiOrchestrator.complete(userPrompt, systemPrompt)
-            result.text.trim().ifEmpty { transcript }
+            FormatResult(result.text.trim().ifEmpty { transcript }, result, null) // success
         } catch (e: Exception) {
             Log.w("AutoFormattingService", "Auto-formatting failed", e)
-            transcript
+            FormatResult(transcript, null, e) // failed — error passed for step creation
         }
     }
 

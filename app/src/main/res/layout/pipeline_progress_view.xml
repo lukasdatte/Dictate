@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pipeline progress: scrollable step list showing all pipeline steps.
+     Embedded inside prompts_keyboard_cl (72dp). Uses a vertical LinearLayout
+     as step container — steps are added/updated programmatically. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/pipeline_progress_ll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:visibility="gone"
+    tools:visibility="visible">
+
+    <!-- Scrollable step list (left side, takes most of the width) -->
+    <ScrollView
+        android:id="@+id/pipeline_scroll_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginEnd="48dp"
+        android:scrollbars="none"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:id="@+id/pipeline_steps_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="6dp" />
+    </ScrollView>
+
+    <!-- Cancel button (right side, fixed position) -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/pipeline_cancel_btn"
+        style="@style/Widget.Material3.Button.TonalButton"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_gravity="center_vertical|end"
+        android:layout_marginEnd="8dp"
+        android:insetTop="0dp"
+        android:insetBottom="0dp"
+        android:padding="0dp"
+        app:icon="@drawable/ic_baseline_cancel_24"
+        app:iconGravity="textStart"
+        app:iconPadding="0dp"
+        app:iconSize="20dp"
+        app:cornerRadius="20dp"
+        xmlns:app="http://schemas.android.com/apk/res-auto" />
+
+</FrameLayout>

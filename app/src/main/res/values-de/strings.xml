@@ -62,6 +62,7 @@
     <string name="dictate_microphone_permission_granted">Mikrofon Berechtigung erteilt ✅.</string>
     <string name="dictate_microphone_permission_denied">Mikrofon Berechtigung abgelehnt ❌.</string>
     <string name="dictate_record">Aufnehmen</string>
+    <string name="dictate_recording_indicator">Aufnahme\u2026</string>
     <string name="dictate_send">Senden (%1$s)</string>
     <string name="dictate_sending">Sendet …</string>
     <string name="dictate_timeout_msg">Timeout überschritten. Vielleicht ist OpenAI überlastet oder du hast eine langsame Internetverbindung.</string>
@@ -260,5 +261,21 @@
     <string name="dictate_changelog_27">v2.10.1\n\nDies ist nur ein kleines Update, mit dem die Möglichkeit hinzugefügt wurde, Animationen in den Einstellungen zu deaktivieren. Außerdem ist die Bluetooth-Unterstützung standardmäßig deaktiviert.\n\nWie immer, zögere nicht, mich mit Fragen und Ideen über GitHub oder den E-Mail-Button unten zu kontaktieren. ☺️\n\n\n</string>
     <string name="dictate_changelog_28">v3.0.0\n\nDiese ist das zweite große Update für Dictate mit einer Menge Verbesserungen 🤩\n\n- Du musst nun nicht mehr die Tastatur wechseln, wenn du Emojis oder Zahlen ergänzen möchtest. Dafür gibt es nun eigene Buttons auf der Tastatur. 🥳\n\n- Für die Überarbeitungen werden nun alle Anweisungen angezeigt. Wenn du auf eine Anweisung tippst, wird automatisch der gesamte Text ausgewählt und überarbeitet. Wenn du nur einen Teil markiert hast, wird selbstverständlich nur dieser Teil überarbeitet.\nWenn du während einer Aufnahme die Anweisungen antippst, werden diese nach der Aufnahme direkt auf deinen Text angewendet. 🤖\n\n- In den Einstellungen der Überarbeitungsanweisungen kannst du nun auswählen, ob eine Anweisung immer automatisch nach einer Aufnahme angewandt wird. Das erspart in vielen Fällen unnötig viele Klicks. 😌\n\n- Du kannst nun ganz einfach alle deine Anweisungen exportieren und importieren, falls du auf ein neues Gerät wechseln oder Anweisungen austauschen möchtest. 📤\n\n- Der Standart-Stil-Prompt wird automatisch in der jeweiligen Eingabe-Sprache an Whisper geschickt, um fehlerhafte automatische Übersetzungen zu vermeiden. 💡\n\n- Spanish und Portugiesisch wurden als App-Sprachen hinzugefügt, genau wie eine Option, die Sprache selbst auszuwählen. 🇪🇸\n\n- Einige Designänderungen und Fehlerbehebungen wurden vorgenommen. ✨\n\nWie immer, zögere nicht, mich mit Fragen und Ideen über GitHub oder den E-Mail-Button unten zu kontaktieren. ☺️\n\n\n</string>
     <string name="dictate_changelog_29">v3.1.0\n\nDieses Update fügt eine experimentelle Funktion namens \"automatische Formatierung\" hinzu. Wenn du die automatische Formatierung aktiviert hast, kannst du während der Aufnahme Befehle wie \"neuer Absatz\", \"erstens\" oder \"Henry mit i\" verwenden, die dann automatisch auf deinen Text angewendet werden. Die Verarbeitung wird etwas langsamer sein, aber die KI versucht, deine Anweisungen so gut wie möglich umzusetzen. ✨\n\nAußerdem wurden einige Fehler behoben und Änderungen am Design vorgenommen.\n\nWie immer, zögere nicht, mich mit Fragen und Ideen über GitHub oder den E-Mail-Button unten zu kontaktieren. ☺️\n\n\n</string>
+    <!-- Pipeline progress -->
+    <string name="dictate_pipeline_transcription">Transkription</string>
+    <string name="dictate_pipeline_formatting">Formatierung</string>
+
+    <!-- QWERTZ Keyboard -->
+    <string name="dictate_qwertz_key_123">123</string>
+    <string name="dictate_qwertz_key_abc">ABC</string>
+    <string name="dictate_qwertz_key_symbols">=\\&lt;</string>
+    <string name="dictate_qwertz_shift_tooltip">Umschalttaste</string>
+    <string name="dictate_qwertz_caps_lock_tooltip">Feststelltaste</string>
+    <string name="dictate_qwertz_backspace_tooltip">Löschen</string>
+    <string name="dictate_qwertz_tab_tooltip">Tabulator</string>
+    <string name="dictate_qwertz_enter_tooltip">Eingabe</string>
+    <string name="dictate_qwertz_space_tooltip">Leertaste</string>
+    <string name="dictate_qwertz_ctrl_tooltip">Strg</string>
+
     <string name="dictate_changelog_30">v3.2.0\n\nDieses Update bringt einige wichtige Verbesserungen und neue Funktionen! 🚀\n\n- Separate API-Schlüssel: Du kannst jetzt für jeden Anbieter (OpenAI, Groq, Custom) eigene API-Schlüssel speichern, was das Wechseln erleichtert. 🔑\n\n- Verbessertes Bluetooth: Die Verbindung zu Bluetooth-Headsets ist jetzt schneller und zuverlässiger. 🎧\n\n- Auto Enter: Eine neue Option drückt nach der Transkription automatisch Enter/Senden. ⚡\n\n- Neue Modelle: Unterstützung für OpenAI o1, o4-mini und GPT-5.2 hinzugefügt, inklusive aktualisierter Preise. 🤖\n\n- Verschiedene Fehlerbehebungen und Verbesserungen. ✨\n\nIch wünsche euch ein gesegnetes neues Jahr 2026! 🎆\n\nWie immer, zögere nicht, mich bei Fragen und Ideen über GitHub oder den E-Mail-Button unten zu kontaktieren. ☺️\n\n\n</string>
 </resources>

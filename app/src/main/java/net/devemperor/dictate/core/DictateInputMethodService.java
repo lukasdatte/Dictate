@@ -2,7 +2,6 @@ package net.devemperor.dictate.core;
 
 import android.Manifest;
 import android.animation.ObjectAnimator;
-import android.animation.TimeInterpolator;
 import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.app.Dialog;
@@ -18,6 +17,7 @@ import android.icu.text.BreakIterator;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Build;
@@ -26,7 +26,6 @@ import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.text.InputType;
-import android.text.TextUtils;
 import android.util.Log;
 import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
@@ -34,7 +33,6 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
-import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
@@ -45,6 +43,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -63,10 +62,13 @@ import com.google.android.material.button.MaterialButton;
 import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.ai.AIOrchestrator;
-import net.devemperor.dictate.ai.AIProviderException;
-import net.devemperor.dictate.ai.runner.CompletionResult;
-import net.devemperor.dictate.ai.runner.TranscriptionResult;
 import net.devemperor.dictate.database.DictateDatabase;
+import net.devemperor.dictate.database.entity.InsertionMethod;
+import net.devemperor.dictate.database.entity.InsertionSource;
+import net.devemperor.dictate.keyboard.KeyPressAnimator;
+import net.devemperor.dictate.keyboard.QwertzKeyboardController;
+import net.devemperor.dictate.keyboard.QwertzKeyboardLayout;
+import net.devemperor.dictate.keyboard.QwertzKeyboardView;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.preferences.PrefsMigration;
 import net.devemperor.dictate.R;
@@ -77,15 +79,14 @@ import net.devemperor.dictate.ai.prompt.PromptService;
 import net.devemperor.dictate.rewording.PromptEditActivity;
 import net.devemperor.dictate.rewording.PromptsKeyboardAdapter;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
+import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
 
 import java.io.File;
-import java.io.InterruptedIOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -97,13 +98,11 @@ import java.util.concurrent.Executors;
 public class DictateInputMethodService extends InputMethodService
         implements RecordingManager.RecordingCallback,
                    BluetoothScoManager.BluetoothScoCallback,
-                   PromptQueueManager.PromptQueueCallback {
+                   PromptQueueManager.PromptQueueCallback,
+                   PipelineOrchestrator.PipelineCallback {
 
     // define handlers and runnables for background tasks
     private static final int DELETE_LOOKBACK_CHARACTERS = 64;
-    private static final float KEY_PRESS_SCALE = 0.92f;
-    private static final long KEY_PRESS_ANIM_DURATION = 80L;
-    private static final TimeInterpolator KEY_PRESS_INTERPOLATOR = new DecelerateInterpolator();
 
     private Handler mainHandler;
     private Handler deleteHandler;
@@ -114,6 +113,7 @@ public class DictateInputMethodService extends InputMethodService
     private long startDeleteTime = 0;
     private int currentDeleteDelay = 50;
     private boolean livePrompt = false;
+    private volatile boolean pendingLivePromptChain = false; // true when transcription result should be chained into live prompt
     private boolean vibrationEnabled = true;
     private boolean audioFocusEnabled = true;
     private TextView selectedCharacter = null;
@@ -129,8 +129,9 @@ public class DictateInputMethodService extends InputMethodService
     private List<Integer> swipeWordBoundaries = null;
     private int swipeSelectedSteps = 0;
 
-    private ExecutorService speechApiThread;
-    private ExecutorService rewordingApiThread;
+    private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
+    private PipelineOrchestrator pipelineOrchestrator;
+    private KeyboardUiController uiController;
     private File audioFile;
     private Vibrator vibrator;
     private SharedPreferences sp;
@@ -149,6 +150,7 @@ public class DictateInputMethodService extends InputMethodService
 
     // define views
     private ConstraintLayout dictateKeyboardView;
+    private View mainButtonsCl;
     private MaterialButton smallModeButton;
     private MaterialButton editSettingsButton;
     private ConstraintLayout editButtonsKeyboardLl;
@@ -167,8 +169,6 @@ public class DictateInputMethodService extends InputMethodService
     private Button infoNoButton;
     private ConstraintLayout promptsCl;
     private RecyclerView promptsRv;
-    private TextView runningPromptTv;
-    private ProgressBar runningPromptPb;
     private MaterialButton editUndoButton;
     private MaterialButton editRedoButton;
     private MaterialButton editCutButton;
@@ -180,11 +180,18 @@ public class DictateInputMethodService extends InputMethodService
     private MaterialButton emojiPickerCloseButton;
     private EmojiPickerView emojiPickerView;
     private MaterialButton editNumbersButton;
-    private ConstraintLayout numbersPanelCl;
-    private TextView numbersPanelTitleTv;
-    private MaterialButton numbersPanelCloseButton;
-    private final List<MaterialButton> numberPanelButtons = new ArrayList<>();
+    private FrameLayout qwertzContainer;
+    private QwertzKeyboardView qwertzKeyboardView;
+    private QwertzKeyboardController qwertzController;
     private LinearLayout overlayCharactersLl;
+    private int infoClVisibilityBeforeQwertz = View.GONE; // saved infoCl visibility for restore
+
+    // Pipeline cancel button (delegates to PipelineOrchestrator)
+    private MaterialButton pipelineCancelBtn;
+
+    // History button
+    private MaterialButton editHistoryButton;
+
 
     // Recording visuals (pulsing)
     private ObjectAnimator recordPulseX;
@@ -201,11 +208,8 @@ public class DictateInputMethodService extends InputMethodService
     private AIOrchestrator aiOrchestrator;
     private PromptService promptService;
     private AutoFormattingService autoFormattingService;
-
-    private interface PromptResultCallback {
-        void onSuccess(String text);
-        void onFailure();
-    }
+    private SessionManager sessionManager;
+    private SessionTracker sessionTracker;
 
     // ===== RecordingManager.RecordingCallback =====
 
@@ -225,12 +229,16 @@ public class DictateInputMethodService extends InputMethodService
             pauseButton.setVisibility(View.VISIBLE);
             trashButton.setVisibility(View.VISIBLE);
             resendButton.setVisibility(View.GONE);
+            // Show recording indicator in prompt bar when QWERTZ keyboard is visible
+            if (qwertzContainer != null && qwertzContainer.getVisibility() == View.VISIBLE) {
+                uiController.showRecordingIndicator();
+            }
         });
     }
 
     @Override
     public void onRecordingStopped(File audioFile) {
-        // No-op: stop is always followed by explicit action (startWhisperApiRequest or UI reset)
+        // No-op: stop is always followed by explicit action (runTranscriptionViaOrchestrator or UI reset)
     }
 
     @Override
@@ -318,6 +326,11 @@ public class DictateInputMethodService extends InputMethodService
         aiOrchestrator = new AIOrchestrator(sp, dictateDb.usageDao());
         promptService = PromptService.create(sp);
         autoFormattingService = AutoFormattingService.create(sp, aiOrchestrator);
+        sessionManager = new SessionManager(DictateDatabase.getInstance(this));
+        sessionTracker = new SessionTracker(sessionManager);
+        // Restore lastSessionId synchronously (SharedPrefs only, no DB), then load lastOutput async
+        sessionTracker.restoreLastSessionIdFromPrefs(sp);
+        dbExecutor.execute(() -> sessionTracker.restoreLastOutputFromDb());
 
         // Initialize managers
         recordingManager = new RecordingManager(this);
@@ -338,6 +351,7 @@ public class DictateInputMethodService extends InputMethodService
             return insets;  // fix for overlapping with navigation bar on Android 15+
         });
 
+        mainButtonsCl = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
         smallModeButton = dictateKeyboardView.findViewById(R.id.small_mode_btn);
         editSettingsButton = dictateKeyboardView.findViewById(R.id.edit_settings_btn);
         editButtonsKeyboardLl = dictateKeyboardView.findViewById(R.id.edit_buttons_keyboard_ll);
@@ -357,8 +371,6 @@ public class DictateInputMethodService extends InputMethodService
 
         promptsCl = dictateKeyboardView.findViewById(R.id.prompts_keyboard_cl);
         promptsRv = dictateKeyboardView.findViewById(R.id.prompts_keyboard_rv);
-        runningPromptPb = dictateKeyboardView.findViewById(R.id.prompts_keyboard_running_pb);
-        runningPromptTv = dictateKeyboardView.findViewById(R.id.prompts_keyboard_running_prompt_tv);
 
         editUndoButton = dictateKeyboardView.findViewById(R.id.edit_undo_btn);
         editRedoButton = dictateKeyboardView.findViewById(R.id.edit_redo_btn);
@@ -371,15 +383,45 @@ public class DictateInputMethodService extends InputMethodService
         emojiPickerTitleTv = dictateKeyboardView.findViewById(R.id.emoji_picker_title_tv);
         emojiPickerCloseButton = dictateKeyboardView.findViewById(R.id.emoji_picker_close_btn);
         emojiPickerView = dictateKeyboardView.findViewById(R.id.emoji_picker_view);
-        numbersPanelCl = dictateKeyboardView.findViewById(R.id.numbers_panel_cl);
-        numbersPanelTitleTv = dictateKeyboardView.findViewById(R.id.numbers_panel_title_tv);
-        numbersPanelCloseButton = dictateKeyboardView.findViewById(R.id.numbers_panel_close_btn);
-        LinearLayout numbersPanelKeysContainer = dictateKeyboardView.findViewById(R.id.numbers_panel_keys_container);
-        numberPanelButtons.clear();
-        collectNumberPanelButtons(numbersPanelKeysContainer);
+        qwertzContainer = dictateKeyboardView.findViewById(R.id.qwertz_keyboard_container);
+        qwertzKeyboardView = new QwertzKeyboardView(context);
+        qwertzContainer.addView(qwertzKeyboardView);
+        qwertzController = new QwertzKeyboardController(
+            qwertzKeyboardView,
+            () -> getCurrentInputConnection(),
+            () -> { vibrate(); return kotlin.Unit.INSTANCE; },
+            () -> { deleteOneCharacter(); return kotlin.Unit.INSTANCE; },
+            () -> { performEnterAction(); return kotlin.Unit.INSTANCE; },
+            () -> { hideQwertzKeyboard(); return kotlin.Unit.INSTANCE; }
+        );
         initializeKeyPressAnimations();
 
         overlayCharactersLl = dictateKeyboardView.findViewById(R.id.overlay_characters_ll);
+
+        // Pipeline cancel button
+        pipelineCancelBtn = dictateKeyboardView.findViewById(R.id.pipeline_cancel_btn);
+
+        // KeyboardUiController (wraps pipeline progress views)
+        uiController = new KeyboardUiController(new KeyboardUiController.PipelineViews(
+            promptsRv,
+            dictateKeyboardView.findViewById(R.id.pipeline_progress_ll),
+            dictateKeyboardView.findViewById(R.id.pipeline_steps_container),
+            dictateKeyboardView.findViewById(R.id.pipeline_scroll_view),
+            recordButton,
+            infoCl,
+            LayoutInflater.from(context),
+            mainHandler
+        ));
+
+        // PipelineOrchestrator
+        pipelineOrchestrator = new PipelineOrchestrator(
+            aiOrchestrator, autoFormattingService, promptQueueManager,
+            promptService, sessionManager, sessionTracker, promptDao, this);
+
+        // History button
+        editHistoryButton = dictateKeyboardView.findViewById(R.id.edit_history_btn);
+
+
 
         StaggeredGridLayoutManager promptsLayoutManager =
                 new StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.HORIZONTAL);
@@ -421,6 +463,43 @@ public class DictateInputMethodService extends InputMethodService
             openSettingsActivity();
         });
 
+        editHistoryButton.setOnClickListener(v -> {
+            Intent intent = new Intent(this, HistoryActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        });
+
+        pipelineCancelBtn.setOnClickListener(v -> {
+            PipelineOrchestrator.CancelInfo cancelInfo = pipelineOrchestrator.cancel();
+            pendingLivePromptChain = false;
+
+            // UI sofort zurücksetzen (Main-Thread)
+            uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+            applyRecordingIconState(false);
+            uiController.restoreRecordButtonIdle(
+                getDictateButtonText(),
+                R.drawable.ic_baseline_mic_20,
+                R.drawable.ic_baseline_folder_open_20);
+
+            // DB: Letzten erfolgreichen Output committen (Off-Thread)
+            dbExecutor.execute(() -> {
+                String lastOutput = null;
+                if (cancelInfo.getLastStepId() != null) {
+                    lastOutput = sessionManager.getStepOutput(cancelInfo.getLastStepId());
+                } else if (cancelInfo.getLastTranscriptionId() != null) {
+                    lastOutput = sessionManager.getTranscriptionText(cancelInfo.getLastTranscriptionId());
+                }
+
+                sessionTracker.resetSession();
+                sessionTracker.persistToPrefs(sp);
+
+                if (lastOutput != null) {
+                    String finalOutput = lastOutput;
+                    mainHandler.post(() -> commitTextToInputConnection(finalOutput, InsertionSource.TRANSCRIPTION));
+                }
+            });
+        });
+
         // initial state: mic left, folder-open right
         recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
         recordButton.setOnClickListener(v -> {
@@ -453,9 +532,20 @@ public class DictateInputMethodService extends InputMethodService
 
         resendButton.setOnClickListener(v -> {
             vibrate();
-            // if user clicked on resendButton without error before, audioFile is default audio
+            // Tap: insert cached last output (no API call, no DB access on main thread)
+            String lastOutput = sessionTracker.getLastOutput();
+            if (lastOutput != null) {
+                commitTextToInputConnection(lastOutput, InsertionSource.TRANSCRIPTION);
+            }
+        });
+
+        resendButton.setOnLongClickListener(v -> {
+            vibrate();
+            // Long-press: regenerate (new API call with cached audio)
             if (audioFile == null) audioFile = new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a"));
-            startWhisperApiRequest();
+            sessionTracker.reuseLastSession();
+            runTranscriptionViaOrchestrator();
+            return true;
         });
 
         backspaceButton.setOnClickListener(v -> {
@@ -493,7 +583,7 @@ public class DictateInputMethodService extends InputMethodService
 
         // Enhanced touch handling: swipe left while holding to select words progressively
         backspaceButton.setOnTouchListener((v, event) -> {
-            handlePressAnimationEvent(v, event);
+            qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
             InputConnection ic = getCurrentInputConnection();
             final float density = getResources().getDisplayMetrics().density;
             final int stepPx = (int) (24f * density + 0.5f);
@@ -635,7 +725,6 @@ public class DictateInputMethodService extends InputMethodService
             }
 
             livePrompt = false;
-            promptQueueManager.clear();
             updatePromptButtonsEnabledState();
             recordButton.setText(getDictateButtonText());
             applyRecordingIconState(false);
@@ -645,11 +734,15 @@ public class DictateInputMethodService extends InputMethodService
             pauseButton.setForeground(AppCompatResources.getDrawable(context, R.drawable.ic_baseline_pause_24));
             trashButton.setVisibility(View.GONE);
             updateKeepScreenAwake(false);
+            // Clear recording indicator in prompt bar if it was showing
+            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.RECORDING_INDICATOR) {
+                uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+            }
         });
 
         // space button that changes cursor position if user swipes over it
         spaceButton.setOnTouchListener((v, event) -> {
-            handlePressAnimationEvent(v, event);
+            qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
             InputConnection inputConnection = getCurrentInputConnection();
             int action = event.getActionMasked();
             if (inputConnection != null) {
@@ -717,7 +810,7 @@ public class DictateInputMethodService extends InputMethodService
         });
 
         enterButton.setOnTouchListener((v, event) -> {
-            handlePressAnimationEvent(v, event);
+            qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
             if (overlayCharactersLl.getVisibility() == View.VISIBLE) {
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_MOVE:
@@ -776,17 +869,12 @@ public class DictateInputMethodService extends InputMethodService
 
         editNumbersButton.setOnClickListener(v -> {
             vibrate();
-            toggleNumberPanel();
+            toggleQwertzKeyboard();
         });
 
         emojiPickerCloseButton.setOnClickListener(v -> {
             vibrate();
             hideEmojiPicker();
-        });
-
-        numbersPanelCloseButton.setOnClickListener(v -> {
-            vibrate();
-            hideNumberPanel();
         });
 
         emojiPickerView.setOnEmojiPickedListener(emoji -> {
@@ -821,7 +909,6 @@ public class DictateInputMethodService extends InputMethodService
             if (recordPulseX != null) recordPulseX.cancel();
             if (recordPulseY != null) recordPulseY.cancel();
             livePrompt = false;
-            promptQueueManager.clear();
             recordingUsesBluetooth = false;
             updatePromptButtonsEnabledState();
             mainHandler.post(() -> {
@@ -840,6 +927,9 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onFinishInputView(boolean finishingInput) {
         super.onFinishInputView(finishingInput);
+
+        // Hide QWERTZ keyboard when the input view is finishing (app switch, background, etc.)
+        hideQwertzKeyboard();
 
         // State (A): Recording is active (running or paused) -> pause and set timeout
         if (recordingManager.isRecording()) {
@@ -865,19 +955,14 @@ public class DictateInputMethodService extends InputMethodService
 
             // Hide panels but keep recording state
             emojiPickerCl.setVisibility(View.GONE);
-            numbersPanelCl.setVisibility(View.GONE);
+            qwertzContainer.setVisibility(View.GONE);
             return;
         }
 
         // State (B): API request is running -> let it continue, just hide UI panels
-        if (speechApiThread != null && !speechApiThread.isShutdown()) {
+        if (pipelineOrchestrator.isRunning()) {
             emojiPickerCl.setVisibility(View.GONE);
-            numbersPanelCl.setVisibility(View.GONE);
-            return;
-        }
-        if (rewordingApiThread != null && !rewordingApiThread.isShutdown()) {
-            emojiPickerCl.setVisibility(View.GONE);
-            numbersPanelCl.setVisibility(View.GONE);
+            qwertzContainer.setVisibility(View.GONE);
             return;
         }
 
@@ -885,8 +970,8 @@ public class DictateInputMethodService extends InputMethodService
         cancelScoWaitIfAny();
         recordingManager.release();
 
-        if (speechApiThread != null) speechApiThread.shutdownNow();
-        if (rewordingApiThread != null) rewordingApiThread.shutdownNow();
+        pipelineOrchestrator.cancel();
+        pendingLivePromptChain = false;
 
         bluetoothScoManager.unregisterReceiver();
 
@@ -896,9 +981,9 @@ public class DictateInputMethodService extends InputMethodService
         resendButton.setVisibility(View.GONE);
         infoCl.setVisibility(View.GONE);
         emojiPickerCl.setVisibility(View.GONE);
-        numbersPanelCl.setVisibility(View.GONE);
+        qwertzContainer.setVisibility(View.GONE);
+        uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
         livePrompt = false;
-        promptQueueManager.clear();
         recordingUsesBluetooth = false;
         updatePromptButtonsEnabledState();
         if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
@@ -963,6 +1048,9 @@ public class DictateInputMethodService extends InputMethodService
                         }
                     } else if (model.getId() == -3) {  // select all clicked
                         handleSelectAllToggle();
+                    } else if (model.getId() == -4) {  // clear queue clicked
+                        vibrate();
+                        promptQueueManager.clear();
                     } else if (model.getId() == -2) {  // add prompt clicked
                         Intent intent = new Intent(DictateInputMethodService.this, PromptsOverviewActivity.class);
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -990,7 +1078,7 @@ public class DictateInputMethodService extends InputMethodService
                                 }
                             }
                         }
-                        startGPTApiRequest(model);  // another normal prompt clicked
+                        runStandalonePromptViaOrchestrator(model);  // another normal prompt clicked
                     }
                 }
 
@@ -1009,16 +1097,25 @@ public class DictateInputMethodService extends InputMethodService
             promptsRv.setAdapter(promptsAdapter);
             promptsAdapter.setDisableNonSelectionPrompts(disableNonSelectionPrompts);
             promptsAdapter.setSelectAllActive(hasSelection);
+
+            // Restore persisted queue selections (filter out deleted prompts)
+            Set<Integer> validIds = new HashSet<>();
+            for (PromptEntity p : data) {
+                if (p.getId() >= 0) validIds.add(p.getId());
+            }
+            promptQueueManager.restoreQueue(validIds);
+
             onQueueChanged(promptQueueManager.getQueuedIds());
             updateSelectAllPromptState();
         } else {
             promptsCl.setVisibility(View.GONE);
         }
 
-        if (shouldAutomaticallyShowNumberPanel(info)) {
-            showNumberPanel();
+        if (shouldAutomaticallyShowQwertzNumbers(info)) {
+            qwertzController.setLayout(QwertzKeyboardLayout.NUMBERS);
+            showQwertzKeyboard();
         } else {
-            hideNumberPanel();
+            hideQwertzKeyboard();
         }
 
         // enable resend button if previous audio file still exists in cache
@@ -1060,11 +1157,11 @@ public class DictateInputMethodService extends InputMethodService
         }
         dictateKeyboardView.setBackgroundColor(keyboardBackgroundColor);
         emojiPickerCl.setBackgroundColor(keyboardBackgroundColor);
-        numbersPanelCl.setBackgroundColor(keyboardBackgroundColor);
+        qwertzContainer.setBackgroundColor(keyboardBackgroundColor);
 
         int accentColorMedium = DictateUtils.darkenColor(accentColor, 0.18f);
         int accentColorDark = DictateUtils.darkenColor(accentColor, 0.35f);
-        TextView[] textColorViews = { infoTv, runningPromptTv, emojiPickerTitleTv, numbersPanelTitleTv };
+        TextView[] textColorViews = { infoTv, emojiPickerTitleTv };
         for (TextView tv : textColorViews) tv.setTextColor(accentColor);
         applyButtonColor(smallModeButton, accentColorMedium);
         applyButtonColor(editSettingsButton, accentColorMedium);
@@ -1083,17 +1180,9 @@ public class DictateInputMethodService extends InputMethodService
         applyButtonColor(editPasteButton, accentColorMedium);
         applyButtonColor(editEmojiButton, accentColorMedium);
         applyButtonColor(editNumbersButton, accentColorMedium);
+        applyButtonColor(editHistoryButton, accentColorMedium);
         applyButtonColor(emojiPickerCloseButton, accentColor);
-        applyButtonColor(numbersPanelCloseButton, accentColor);
-        for (MaterialButton button : numberPanelButtons) {
-            Object tag = button.getTag();
-            CharSequence text = button.getText();
-            boolean isEnter = tag != null && "ENTER".equalsIgnoreCase(tag.toString());
-            boolean isDigit = text != null && text.length() == 1 && Character.isDigit(text.charAt(0));
-            int background = isEnter ? accentColor : (isDigit ? accentColorMedium : accentColorDark);
-            applyButtonColor(button, background);
-        }
-        runningPromptPb.getIndeterminateDrawable().setColorFilter(accentColor, android.graphics.PorterDuff.Mode.SRC_IN);
+        qwertzController.applyColors(accentColor, accentColorMedium, accentColorDark);
 
         // show infos for updates, ratings or donations
         Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
@@ -1106,6 +1195,10 @@ public class DictateInputMethodService extends InputMethodService
             showInfo("donate");
         }
 
+        // Sync animations preference to QWERTZ keyboard
+        qwertzKeyboardView.getKeyPressAnimator().setAnimationsEnabled(
+                sp.getBoolean("net.devemperor.dictate.animations", true));
+
         applySmallMode(false);
 
         // start audio file transcription if user selected an audio file
@@ -1114,7 +1207,7 @@ public class DictateInputMethodService extends InputMethodService
             sp.edit().putString("net.devemperor.dictate.last_file_name", audioFile.getName()).apply();
 
             sp.edit().remove("net.devemperor.dictate.transcription_audio_file").apply();
-            startWhisperApiRequest();
+            runTranscriptionViaOrchestrator();
 
         } else if (sp.getBoolean("net.devemperor.dictate.instant_recording", false)) {
             recordButton.performClick();
@@ -1149,7 +1242,7 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void showEmojiPicker() {
-        hideNumberPanel();
+        hideQwertzKeyboard();
         overlayCharactersLl.setVisibility(View.GONE);
         infoCl.setVisibility(View.GONE);
         emojiPickerCl.setVisibility(View.VISIBLE);
@@ -1190,59 +1283,52 @@ public class DictateInputMethodService extends InputMethodService
         promptsAdapter.setSelectAllActive(hasSelection);
     }
 
-    private void toggleNumberPanel() {
-        if (numbersPanelCl == null) return;
-        if (numbersPanelCl.getVisibility() == View.VISIBLE) {
-            hideNumberPanel();
+    private void toggleQwertzKeyboard() {
+        if (qwertzContainer == null) return;
+        if (qwertzContainer.getVisibility() == View.VISIBLE) {
+            hideQwertzKeyboard();
         } else {
-            showNumberPanel();
+            showQwertzKeyboard();
         }
     }
 
-    private void showNumberPanel() {
-        if (numbersPanelCl == null) return;
+    private void showQwertzKeyboard() {
+        if (qwertzContainer == null) return;
         hideEmojiPicker();
         overlayCharactersLl.setVisibility(View.GONE);
+        infoClVisibilityBeforeQwertz = infoCl.getVisibility();
         infoCl.setVisibility(View.GONE);
-        numbersPanelCl.setVisibility(View.VISIBLE);
-        numbersPanelCl.bringToFront();
+        // Hide main buttons and edit bar so they don't show behind the keyboard
+        mainButtonsCl.setVisibility(View.GONE);
+        editButtonsKeyboardLl.setVisibility(View.GONE);
+        // Keep prompt bar visible above the keyboard
+        if (sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
+            promptsCl.setVisibility(View.VISIBLE);
+        }
+        qwertzContainer.setVisibility(View.VISIBLE);
+        qwertzContainer.bringToFront();
+        // Auto-capitalize first letter when field is empty or cursor is at position 0
+        qwertzController.checkAutoShiftAtCursor();
     }
 
-    private void hideNumberPanel() {
-        if (numbersPanelCl == null) return;
-        numbersPanelCl.setVisibility(View.GONE);
-    }
-
-    private void collectNumberPanelButtons(ViewGroup parent) {
-        if (parent == null) return;
-        for (int i = 0; i < parent.getChildCount(); i++) {
-            View child = parent.getChildAt(i);
-            if (child instanceof ViewGroup) {
-                collectNumberPanelButtons((ViewGroup) child);
-            } else if (child instanceof MaterialButton) {
-                MaterialButton button = (MaterialButton) child;
-                Object tag = button.getTag();
-                final String value;
-                if (tag != null) {
-                    value = tag.toString();
-                } else if (button.getText() != null) {
-                    value = button.getText().toString();
-                } else {
-                    value = "";
-                }
-                button.setOnClickListener(v -> {
-                    vibrate();
-                    if ("BACKSPACE".equalsIgnoreCase(value)) {
-                        deleteOneCharacter();
-                    } else if ("ENTER".equalsIgnoreCase(value)) {
-                        performEnterAction();
-                    } else {
-                        commitNumberPanelValue(value);
-                    }
-                });
-                applyPressAnimation(button);
-                numberPanelButtons.add(button);
-            }
+    private void hideQwertzKeyboard() {
+        if (qwertzContainer == null) return;
+        qwertzContainer.setVisibility(View.GONE);
+        // Restore main buttons and edit bar based on small mode
+        if (!isSmallMode) {
+            mainButtonsCl.setVisibility(View.VISIBLE);
+            editButtonsKeyboardLl.setVisibility(View.VISIBLE);
+        }
+        // Restore info bar visibility (showQwertzKeyboard saves and hides it)
+        infoCl.setVisibility(infoClVisibilityBeforeQwertz);
+        // Restore prompt bar visibility based on rewording preference
+        // (showQwertzKeyboard forces it VISIBLE, but it should be GONE if rewording is disabled)
+        if (!sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
+            promptsCl.setVisibility(View.GONE);
+        }
+        // Restore recording indicator to normal prompt buttons if it was showing
+        if (uiController != null && uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.RECORDING_INDICATOR) {
+            uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
         }
     }
 
@@ -1252,73 +1338,22 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void initializeKeyPressAnimations() {
+        // Use the shared KeyPressAnimator instance from the QWERTZ keyboard view
+        // so that animation logic is not duplicated between the service and the keyboard.
+        KeyPressAnimator animator = qwertzKeyboardView.getKeyPressAnimator();
         View[] animatedViews = {
                 smallModeButton, editSettingsButton, recordButton, resendButton, switchButton, trashButton,
-                pauseButton, emojiPickerCloseButton, numbersPanelCloseButton,
+                pauseButton, emojiPickerCloseButton,
                 editUndoButton, editRedoButton, editCutButton, editCopyButton,
-                editPasteButton, editEmojiButton, editNumbersButton,
+                editPasteButton, editEmojiButton, editNumbersButton, editHistoryButton,
                 infoYesButton, infoNoButton
         };
         for (View view : animatedViews) {
-            applyPressAnimation(view);
+            if (view != null) animator.applyPressAnimation(view);
         }
     }
 
-    @SuppressLint("ClickableViewAccessibility")
-    private void applyPressAnimation(View view) {
-        if (view == null) return;
-        view.setOnTouchListener((v, event) -> {
-            handlePressAnimationEvent(v, event);
-            return false;
-        });
-    }
-
-    private void handlePressAnimationEvent(View view, MotionEvent event) {
-        if (view == null || event == null) return;
-        if (!sp.getBoolean("net.devemperor.dictate.animations", true)) {
-            view.animate().cancel();
-            view.setScaleX(1f);
-            view.setScaleY(1f);
-            return;
-        }
-        switch (event.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN:
-                animateKeyPress(view, true);
-                break;
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_CANCEL:
-                animateKeyPress(view, false);
-                break;
-        }
-    }
-
-    private void animateKeyPress(View view, boolean pressed) {
-        if (!sp.getBoolean("net.devemperor.dictate.animations", true) || view == null) {
-            if (view != null) {
-                view.animate().cancel();
-                if (view.getScaleX() != 1f) view.setScaleX(1f);
-                if (view.getScaleY() != 1f) view.setScaleY(1f);
-            }
-            return;
-        }
-        float targetScale = pressed ? KEY_PRESS_SCALE : 1f;
-        view.animate()
-                .scaleX(targetScale)
-                .scaleY(targetScale)
-                .setDuration(KEY_PRESS_ANIM_DURATION)
-                .setInterpolator(KEY_PRESS_INTERPOLATOR)
-                .start();
-    }
-
-    private void commitNumberPanelValue(String value) {
-        if (value == null || value.isEmpty()) return;
-        InputConnection inputConnection = getCurrentInputConnection();
-        if (inputConnection != null) {
-            inputConnection.commitText(value, 1);
-        }
-    }
-
-    private boolean shouldAutomaticallyShowNumberPanel(EditorInfo info) {
+    private boolean shouldAutomaticallyShowQwertzNumbers(EditorInfo info) {
         if (info == null) return false;
         int inputType = info.inputType;
         int inputClass = inputType & InputType.TYPE_MASK_CLASS;
@@ -1447,7 +1482,7 @@ public class DictateInputMethodService extends InputMethodService
         recordingManager.stop();
         updateKeepScreenAwake(false);
         bluetoothScoManager.release();
-        startWhisperApiRequest();
+        runTranscriptionViaOrchestrator();
     }
 
     private void updateKeepScreenAwake(boolean keepAwake) {
@@ -1484,11 +1519,15 @@ public class DictateInputMethodService extends InputMethodService
         keepScreenAwakeApplied = keepAwake;
     }
 
-    private void startWhisperApiRequest() {
+    /**
+     * Prepares UI and launches transcription pipeline via PipelineOrchestrator.
+     * Replaces the old startWhisperApiRequest() method.
+     */
+    private void runTranscriptionViaOrchestrator() {
         applyRecordingIconState(false);  // recording finished -> stop pulsing
 
         recordButton.setText(R.string.dictate_sending);
-        recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, 0, 0); // keep send icon while sending
+        recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, 0, 0);
         recordButton.setEnabled(false);
         pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
         pauseButton.setVisibility(View.GONE);
@@ -1498,196 +1537,175 @@ public class DictateInputMethodService extends InputMethodService
         recordingUsesBluetooth = false;
         updatePromptButtonsEnabledState();
 
+        // Show pipeline progress
+        promptsCl.setVisibility(View.VISIBLE);
+        int totalSteps = 1; // transcription always
+        if (autoFormattingService.isEnabled()) totalSteps++;
+        totalSteps += promptQueueManager.getQueuedIds().size();
+        uiController.showPipelineProgress(totalSteps);
+
         if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
 
+        String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
+                ? currentInputLanguageValue : null;
         String stylePrompt = promptService.resolveWhisperStylePrompt(currentInputLanguageValue);
 
-        speechApiThread = Executors.newSingleThreadExecutor();
-        speechApiThread.execute(() -> {
-            try {
-                String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
-                        ? currentInputLanguageValue : null;
-                TranscriptionResult result = aiOrchestrator.transcribe(audioFile, language, stylePrompt);
-                String resultText = result.getText().strip();
-                resultText = autoFormattingService.formatIfEnabled(resultText, currentInputLanguageValue);
+        EditorInfo info = getCurrentInputEditorInfo();
+        boolean showResend = new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
+                && sp.getBoolean("net.devemperor.dictate.resend_button", false);
 
-                boolean processedByQueuedPrompts = false;
-                List<Integer> promptsToApply = promptQueueManager.getQueuedIds();
-                if (!promptsToApply.isEmpty()) {
-                    promptQueueManager.clear();
-                    if (!livePrompt) {
-                        processQueuedPrompts(resultText, promptsToApply);
-                        processedByQueuedPrompts = true;
-                    }
-                }
+        PipelineOrchestrator.PipelineConfig config = new PipelineOrchestrator.PipelineConfig(
+            audioFile, language, stylePrompt, livePrompt, autoSwitchKeyboard,
+            showResend, new File(getFilesDir(), "recordings"),
+            info != null ? info.packageName : null);
 
-                if (!processedByQueuedPrompts && !livePrompt) {
-                    commitTextToInputConnection(resultText);
-                } else if (livePrompt) {
-                    livePrompt = false;
-                    startGPTApiRequest(new PromptEntity(-1, Integer.MIN_VALUE, "", resultText, true, false));
-                }
+        pendingLivePromptChain = livePrompt;
+        livePrompt = false;
+        autoSwitchKeyboard = false;
 
-                if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                        && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
-                    mainHandler.post(() -> resendButton.setVisibility(View.VISIBLE));
-                }
-
-                if (autoSwitchKeyboard) {
-                    autoSwitchKeyboard = false;
-                    mainHandler.post(this::switchToPreviousKeyboard);
-                }
-
-            } catch (AIProviderException e) {
-                if (e.getErrorType() != AIProviderException.ErrorType.CANCELLED) {
-                    logException(e);
-                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-                    mainHandler.post(() -> {
-                        resendButton.setVisibility(View.VISIBLE);
-                        showInfo(e.toInfoKey());
-                    });
-                }
-            } catch (RuntimeException e) {
-                if (!(e.getCause() instanceof InterruptedIOException)) {
-                    logException(e);
-                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-                    mainHandler.post(() -> {
-                        resendButton.setVisibility(View.VISIBLE);
-                        showInfo("internet_error");
-                    });
-                }
-            }
-
-            mainHandler.post(() -> {
-                recordButton.setText(getDictateButtonText());
-                applyRecordingIconState(false);
-                recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-                recordButton.setEnabled(true);
-            });
-        });
+        pipelineOrchestrator.runTranscriptionPipeline(config);
     }
 
-    private void startGPTApiRequest(PromptEntity model) {
-        startGPTApiRequest(model, null, null, true);
-    }
-
-    /** Overload for Rewording/Live prompts: builds PromptPair from PromptEntity. */
-    private void startGPTApiRequest(PromptEntity model, String overrideSelection, PromptResultCallback callback, boolean restorePromptsOnFinish) {
-        String prompt = model.getPrompt();
-
-        // Static response [text] — no API call needed
-        if (promptService.isStaticResponse(prompt)) {
-            String text = promptService.extractStaticResponse(prompt);
-            if (callback != null) {
-                callback.onSuccess(text);
-            } else {
-                commitTextToInputConnection(text);
-            }
-            if (restorePromptsOnFinish || callback == null) restorePromptUi();
-            return;
-        }
-
-        // Determine selected text
+    /**
+     * Prepares UI and launches a standalone prompt via PipelineOrchestrator.
+     * Replaces the old startGPTApiRequest(model) method.
+     */
+    private void runStandalonePromptViaOrchestrator(PromptEntity model) {
+        // Determine selected text (must be read on main thread)
         CharSequence selectedText = null;
-        if (overrideSelection != null) {
-            selectedText = overrideSelection;
-        } else if (model.getRequiresSelection()) {
-            InputConnection selectedTextConnection = getCurrentInputConnection();
-            if (selectedTextConnection != null) {
-                selectedText = selectedTextConnection.getSelectedText(0);
+        if (model.getRequiresSelection()) {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) {
+                selectedText = ic.getSelectedText(0);
             }
         }
         String selStr = selectedText != null ? selectedText.toString() : null;
 
-        // Build PromptPair based on context
-        PromptService.PromptPair pp;
-        if (model.getId() == -1) {
-            pp = promptService.buildLivePrompt(prompt);
-        } else {
-            pp = promptService.buildRewording(prompt, selStr);
+        // Set UI mode BEFORE calling orchestrator
+        String displayName = model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName();
+        if (uiController.getCurrentMode() != KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+            uiController.showPipelineProgress(1);
         }
 
-        startGPTApiRequestInternal(pp, model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName(), callback, restorePromptsOnFinish);
+        EditorInfo editorInfo = getCurrentInputEditorInfo();
+        PipelineOrchestrator.StandaloneConfig config = new PipelineOrchestrator.StandaloneConfig(
+            model, selStr, null,
+            editorInfo != null ? editorInfo.packageName : null);
+
+        pipelineOrchestrator.runStandalonePrompt(config);
     }
 
-    /** Overload for Queued prompts: accepts a pre-built PromptPair. */
-    private void startGPTApiRequest(PromptService.PromptPair pp, String displayName, PromptResultCallback callback, boolean restorePromptsOnFinish) {
-        startGPTApiRequestInternal(pp, displayName, callback, restorePromptsOnFinish);
-    }
+    // ===== PipelineOrchestrator.PipelineCallback =====
 
-    /** Internal: shared UI/threading/error-handling for all GPT API requests (DRY). */
-    private void startGPTApiRequestInternal(PromptService.PromptPair pp, String displayName, PromptResultCallback callback, boolean restorePromptsOnFinish) {
+    @Override
+    public void onStepStarted(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
-            promptsRv.setVisibility(View.GONE);
-            runningPromptTv.setVisibility(View.VISIBLE);
-            runningPromptTv.setText(displayName);
-            runningPromptPb.setVisibility(View.VISIBLE);
-            infoCl.setVisibility(View.GONE);
+            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+                uiController.addRunningStep(stepName);
+            }
         });
+    }
 
-        rewordingApiThread = Executors.newSingleThreadExecutor();
-        rewordingApiThread.execute(() -> {
+    @Override
+    public void onStepCompleted(@androidx.annotation.NonNull String stepName, long durationMs) {
+        mainHandler.post(() -> {
+            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+                uiController.completeStep(stepName, durationMs);
+            }
+        });
+    }
+
+    @Override
+    public void onStepFailed(@androidx.annotation.NonNull String stepName) {
+        mainHandler.post(() -> {
+            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+                uiController.failStep(stepName);
+            }
+        });
+    }
+
+    @Override
+    public void onPipelineCompleted(@androidx.annotation.NonNull String text, @androidx.annotation.NonNull InsertionSource source) {
+        mainHandler.post(() -> {
+            if (pendingLivePromptChain) {
+                // Live prompt: transcription result becomes the prompt for a completion call
+                pendingLivePromptChain = false;
+                PromptEntity liveEntity = new PromptEntity(-1, Integer.MIN_VALUE, "", text, true, false);
+                runStandalonePromptViaOrchestrator(liveEntity);
+            } else {
+                commitTextToInputConnection(text, source);
+            }
+        });
+    }
+
+    @Override
+    public void onPipelineError(@androidx.annotation.NonNull String errorInfoKey, boolean vibrate) {
+        mainHandler.post(() -> showInfo(errorInfoKey));
+        if (vibrate && vibrationEnabled) {
+            vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
+        }
+    }
+
+    @Override
+    public void onShowResend() {
+        mainHandler.post(() -> resendButton.setVisibility(View.VISIBLE));
+    }
+
+    @Override
+    public void onAutoSwitch() {
+        mainHandler.post(this::switchToPreviousKeyboard);
+    }
+
+    @Override
+    public void onAudioPersisted(@androidx.annotation.NonNull File audioFile, @androidx.annotation.NonNull String sessionId) {
+        // MediaMetadataRetriever is Android-API -> stays in the Service
+        dbExecutor.execute(() -> {
             try {
-                String rewordedText = requestRewordingFromApi(pp.getUserPrompt(), pp.getSystemPrompt());
-
-                if (callback != null) {
-                    callback.onSuccess(rewordedText);
-                } else {
-                    commitTextToInputConnection(rewordedText);
+                MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+                retriever.setDataSource(audioFile.getAbsolutePath());
+                String durationStr = retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_DURATION);
+                retriever.release();
+                if (durationStr != null) {
+                    long durationSeconds = Long.parseLong(durationStr) / 1000;
+                    sessionManager.updateAudioDuration(sessionId, durationSeconds);
                 }
-            } catch (AIProviderException e) {
-                if (e.getErrorType() != AIProviderException.ErrorType.CANCELLED) {
-                    logException(e);
-                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-                    mainHandler.post(() -> {
-                        resendButton.setVisibility(View.VISIBLE);
-                        showInfo(e.toInfoKey());
-                    });
-                }
-                if (callback != null) {
-                    callback.onFailure();
-                }
-                if (!restorePromptsOnFinish) {
-                    restorePromptUi();
-                }
-            } catch (RuntimeException e) {
-                if (!(e.getCause() instanceof InterruptedIOException)) {
-                    logException(e);
-                    if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-                    mainHandler.post(() -> {
-                        resendButton.setVisibility(View.VISIBLE);
-                        showInfo("internet_error");
-                    });
-                }
-                if (callback != null) {
-                    callback.onFailure();
-                }
-                if (!restorePromptsOnFinish) {
-                    restorePromptUi();
-                }
-            }
-
-            if (restorePromptsOnFinish || callback == null) {
-                restorePromptUi();
+            } catch (Exception e) {
+                Log.w("DictateIME", "Failed to extract audio duration", e);
             }
         });
     }
 
-    /**
-     * Sends a completion request via AIOrchestrator.
-     * @param prompt The user message (may include selected text and prompt instructions)
-     * @param systemPrompt Optional system prompt (null = no system prompt)
-     * @return The completion text
-     * @throws AIProviderException on API errors
-     */
-    private String requestRewordingFromApi(String prompt, String systemPrompt) {
-        CompletionResult result = aiOrchestrator.complete(prompt, systemPrompt);
-        return result.getText();
+    @Override
+    public void onPipelineFinished() {
+        // If a live prompt chain is pending, skip the UI/session reset —
+        // runStandalonePromptViaOrchestrator will start a new pipeline that calls onPipelineFinished when done.
+        if (pendingLivePromptChain) return;
+
+        dbExecutor.execute(() -> {
+            sessionTracker.resetSession();
+            sessionTracker.persistToPrefs(sp);
+            mainHandler.post(() -> {
+                uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+                applyRecordingIconState(false);
+                uiController.restoreRecordButtonIdle(
+                    getDictateButtonText(),
+                    R.drawable.ic_baseline_mic_20,
+                    R.drawable.ic_baseline_folder_open_20);
+            });
+        });
     }
 
-    private void commitTextToInputConnection(String text) {
+    private void commitTextToInputConnection(String text, InsertionSource source) {
         InputConnection inputConnection = getCurrentInputConnection();
         if (inputConnection == null) return;
+
+        // Capture replaced (selected) text before commit for undo-buffer / audit
+        String replacedText = null;
+        if (source != null) {
+            CharSequence sel = inputConnection.getSelectedText(0);
+            if (sel != null && sel.length() > 0) replacedText = sel.toString();
+        }
 
         String output = text == null ? "" : text;
         if (sp.getBoolean("net.devemperor.dictate.instant_output", true)) {
@@ -1718,58 +1736,35 @@ public class DictateInputMethodService extends InputMethodService
                 performEnterAction();
             }
         }
-    }
 
-    private void processQueuedPrompts(String initialText, List<Integer> promptIds) {
-        if (promptIds == null || promptIds.isEmpty()) {
-            commitTextToInputConnection(initialText);
-            return;
+        // Persist text insertion and update session's final output
+        if (source != null && output.length() > 0) {
+            final String fReplacedText = replacedText;
+            final String fSessionId = sessionTracker.getCurrentSessionId();
+            final String fStepId = sessionTracker.getCurrentStepId();
+            final String fTranscriptionId = sessionTracker.getCurrentTranscriptionId();
+            final String pkg = getCurrentInputEditorInfo() != null
+                ? getCurrentInputEditorInfo().packageName : null;
+
+            dbExecutor.execute(() -> {
+                sessionManager.logTextInsertion(fSessionId, output, fReplacedText, pkg,
+                    null, fStepId, fTranscriptionId, InsertionMethod.COMMIT);
+                if (fSessionId != null) {
+                    sessionManager.updateFinalOutputText(fSessionId, output);
+                }
+            });
         }
-        applyQueuedPromptAtIndex(initialText, promptIds, 0);
-    }
-
-    private void applyQueuedPromptAtIndex(String currentText, List<Integer> promptIds, int index) {
-        if (index >= promptIds.size()) {
-            commitTextToInputConnection(currentText);
-            return;
-        }
-
-        PromptEntity prompt = promptDao.getById(promptIds.get(index));
-        if (prompt == null) {
-            applyQueuedPromptAtIndex(currentText, promptIds, index + 1);
-            return;
-        }
-
-        if (prompt.getRequiresSelection() && (currentText == null || currentText.isEmpty())) {
-            applyQueuedPromptAtIndex(currentText, promptIds, index + 1);
-            return;
-        }
-
-        String textForPrompt = prompt.getRequiresSelection() ? currentText : null;
-        PromptService.PromptPair pp = promptService.buildQueuedPrompt(prompt.getPrompt(), textForPrompt);
-        boolean restoreUiAfter = index == promptIds.size() - 1;
-
-        startGPTApiRequest(pp, prompt.getName(), new PromptResultCallback() {
-            @Override
-            public void onSuccess(String text) {
-                applyQueuedPromptAtIndex(text, promptIds, index + 1);
-            }
-
-            @Override
-            public void onFailure() {
-                commitTextToInputConnection(currentText == null ? "" : currentText);
-            }
-        }, restoreUiAfter);
     }
 
     /**
-     * Builds the keyboard prompt list with sentinel entries for instant prompt, select-all, and add button.
+     * Builds the keyboard prompt list with sentinel entries for instant prompt, select-all, clear-queue, and add button.
      */
     private List<PromptEntity> getPromptsForKeyboard() {
         List<PromptEntity> dbPrompts = promptDao.getAll();
-        List<PromptEntity> result = new ArrayList<>(dbPrompts.size() + 3);
+        List<PromptEntity> result = new ArrayList<>(dbPrompts.size() + 4);
         result.add(new PromptEntity(-1, Integer.MIN_VALUE, null, null, false, false));      // instant prompt
         result.add(new PromptEntity(-3, Integer.MIN_VALUE + 1, null, null, false, false));  // select all
+        result.add(new PromptEntity(-4, Integer.MIN_VALUE + 2, null, null, false, false));  // clear queue
         result.addAll(dbPrompts);
         result.add(new PromptEntity(-2, Integer.MAX_VALUE, null, null, false, false));       // add button
         return result;
@@ -1787,15 +1782,6 @@ public class DictateInputMethodService extends InputMethodService
             promptsAdapter.setDisableNonSelectionPrompts(disableNonSelectionPrompts);
             updateSelectAllPromptState();
         }
-    }
-
-    private void restorePromptUi() {
-        if (mainHandler == null) return;
-        mainHandler.post(() -> {
-            if (promptsRv != null) promptsRv.setVisibility(View.VISIBLE);
-            if (runningPromptTv != null) runningPromptTv.setVisibility(View.GONE);
-            if (runningPromptPb != null) runningPromptPb.setVisibility(View.GONE);
-        });
     }
 
     private void switchToPreviousKeyboard() {
@@ -1822,11 +1808,14 @@ public class DictateInputMethodService extends InputMethodService
             infoCl.setVisibility(View.GONE);
             promptsCl.setVisibility(View.GONE);
             editButtonsKeyboardLl.setVisibility(View.GONE);
+            mainButtonsCl.setVisibility(View.GONE);
+            hideQwertzKeyboard();
         } else {
             if (sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
                 promptsCl.setVisibility(View.VISIBLE);
             }
             editButtonsKeyboardLl.setVisibility(View.VISIBLE);
+            mainButtonsCl.setVisibility(View.VISIBLE);
         }
 
         if (animate && animationsEnabled) {
@@ -1839,12 +1828,6 @@ public class DictateInputMethodService extends InputMethodService
         } else {
             smallModeButton.setRotation(isSmallMode ? 180f : 0f);
         }
-    }
-
-    private void logException(Exception e) {
-        StringWriter sw = new StringWriter();
-        e.printStackTrace(new PrintWriter(sw));
-        Log.e("DictateInputMethodService", sw.toString());
     }
 
     private void showInfo(String type) {

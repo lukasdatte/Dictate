@@ -7,113 +7,131 @@
     android:layout_height="wrap_content"
     android:background="@color/dictate_keyboard_background_light">
 
-    <androidx.constraintlayout.widget.ConstraintLayout
+    <LinearLayout
         android:id="@+id/main_buttons_cl"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:orientation="vertical"
         app:layout_constraintTop_toBottomOf="@id/edit_buttons_keyboard_ll"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/record_btn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="72dp"
-            android:layout_marginEnd="8dp"
-            android:text="@string/dictate_record"
-            android:textSize="14sp"
-            android:maxLines="1"
-            app:layout_constraintBottom_toTopOf="@+id/space_btn"
-            app:layout_constraintEnd_toStartOf="@+id/resend_btn"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
+        <!-- Row 1: Action buttons (record, resend, backspace) -->
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/action_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/resend_btn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="8dp"
-            android:foreground="@drawable/ic_outline_change_circle_24"
-            android:foregroundGravity="center"
-            android:minWidth="0dp"
-            android:visibility="gone"
-            app:layout_constraintBottom_toTopOf="@+id/space_btn"
-            app:layout_constraintEnd_toStartOf="@+id/backspace_btn"
-            app:layout_constraintStart_toEndOf="@+id/record_btn"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:visibility="visible" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/record_btn"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="72dp"
+                android:layout_marginEnd="8dp"
+                android:text="@string/dictate_record"
+                android:textSize="14sp"
+                android:maxLines="1"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toStartOf="@+id/resend_btn"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/backspace_btn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_marginEnd="16dp"
-            android:foreground="@drawable/ic_baseline_keyboard_backspace_24"
-            android:foregroundGravity="center"
-            android:minWidth="56dp"
-            app:layout_constraintBottom_toTopOf="@+id/enter_btn"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toEndOf="@+id/resend_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/resend_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:foreground="@drawable/ic_outline_change_circle_24"
+                android:foregroundGravity="center"
+                android:minWidth="0dp"
+                android:visibility="gone"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toStartOf="@+id/backspace_btn"
+                app:layout_constraintStart_toEndOf="@+id/record_btn"
+                app:layout_constraintTop_toTopOf="parent"
+                tools:visibility="visible" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/trash_btn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="72dp"
-            android:layout_marginBottom="16dp"
-            android:foreground="@drawable/ic_baseline_delete_24"
-            android:foregroundGravity="center"
-            android:minWidth="0dp"
-            android:visibility="gone"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toStartOf="@id/space_btn"
-            tools:visibility="visible" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/backspace_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="16dp"
+                android:foreground="@drawable/ic_baseline_keyboard_backspace_24"
+                android:foregroundGravity="center"
+                android:minWidth="56dp"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toEndOf="@+id/resend_btn"
+                app:layout_constraintTop_toTopOf="parent" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/space_btn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_marginEnd="8dp"
-            android:layout_marginBottom="16dp"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/pause_btn"
-            app:layout_constraintStart_toEndOf="@+id/trash_btn" />
+        </androidx.constraintlayout.widget.ConstraintLayout>
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/pause_btn"
-            android:layout_width="wrap_content"
+        <!-- Row 2: Input buttons (trash, space, pause, enter) -->
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/input_row"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="8dp"
-            android:layout_marginBottom="16dp"
-            android:foreground="@drawable/ic_baseline_pause_24"
-            android:foregroundGravity="center"
-            android:minWidth="0dp"
-            android:visibility="gone"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/enter_btn"
-            app:layout_constraintStart_toEndOf="@id/space_btn"
-            tools:visibility="visible" />
+            android:layout_marginBottom="16dp">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/enter_btn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_marginEnd="16dp"
-            android:layout_marginBottom="16dp"
-            android:foreground="@drawable/ic_baseline_subdirectory_arrow_left_24"
-            android:foregroundGravity="center"
-            android:minWidth="56dp"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintStart_toEndOf="@id/pause_btn"
-            app:layout_constraintEnd_toEndOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/trash_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="72dp"
+                android:foreground="@drawable/ic_baseline_delete_24"
+                android:foregroundGravity="center"
+                android:minWidth="0dp"
+                android:visibility="gone"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toStartOf="@id/space_btn"
+                app:layout_constraintTop_toTopOf="parent"
+                tools:visibility="visible" />
 
-    </androidx.constraintlayout.widget.ConstraintLayout>
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/space_btn"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toStartOf="@+id/pause_btn"
+                app:layout_constraintStart_toEndOf="@+id/trash_btn"
+                app:layout_constraintTop_toTopOf="parent" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/pause_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:foreground="@drawable/ic_baseline_pause_24"
+                android:foregroundGravity="center"
+                android:minWidth="0dp"
+                android:visibility="gone"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toStartOf="@+id/enter_btn"
+                app:layout_constraintStart_toEndOf="@id/space_btn"
+                app:layout_constraintTop_toTopOf="parent"
+                tools:visibility="visible" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/enter_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="16dp"
+                android:foreground="@drawable/ic_baseline_subdirectory_arrow_left_24"
+                android:foregroundGravity="center"
+                android:minWidth="56dp"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toEndOf="@id/pause_btn"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintTop_toTopOf="parent" />
+
+        </androidx.constraintlayout.widget.ConstraintLayout>
+
+    </LinearLayout>
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/info_cl"

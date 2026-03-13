@@ -1,8 +1,6 @@
 package net.devemperor.dictate.core;
 
 import android.Manifest;
-import android.animation.ObjectAnimator;
-import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.app.Dialog;
 import android.content.Context;
@@ -10,8 +8,6 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
-import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
 import android.inputmethodservice.InputMethodService;
 import android.icu.text.BreakIterator;
 import android.media.AudioAttributes;
@@ -32,8 +28,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
-import android.view.animation.DecelerateInterpolator;
-import android.view.animation.LinearInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.ExtractedText;
 import android.view.inputmethod.ExtractedTextRequest;
@@ -61,10 +55,6 @@ import net.devemperor.dictate.ai.AIOrchestrator;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.entity.InsertionMethod;
 import net.devemperor.dictate.database.entity.InsertionSource;
-import net.devemperor.dictate.keyboard.BackspaceSwipeHandler;
-import net.devemperor.dictate.keyboard.CursorSwipeTouchHandler;
-import net.devemperor.dictate.keyboard.EnterOverlayHandler;
-import net.devemperor.dictate.keyboard.KeyPressAnimator;
 import net.devemperor.dictate.keyboard.QwertzKeyboardController;
 import net.devemperor.dictate.keyboard.QwertzKeyboardLayout;
 import net.devemperor.dictate.keyboard.QwertzKeyboardView;
@@ -97,7 +87,8 @@ public class DictateInputMethodService extends InputMethodService
         implements RecordingManager.RecordingCallback,
                    BluetoothScoManager.BluetoothScoCallback,
                    PromptQueueManager.PromptQueueCallback,
-                   PipelineOrchestrator.PipelineCallback {
+                   PipelineOrchestrator.PipelineCallback,
+                   MainButtonsController.Callback {
 
     // define handlers and runnables for background tasks
     private static final int DELETE_LOOKBACK_CHARACTERS = 64;
@@ -133,6 +124,7 @@ public class DictateInputMethodService extends InputMethodService
     private PromptQueueManager promptQueueManager;
     private KeyboardStateManager stateManager;
     private InfoBarController infoBarController;
+    private MainButtonsController mainButtonsController;
 
     // Bluetooth/SCO state kept in service (for startRecording coordination)
     private boolean isPreparingRecording = false; // true while we wait for SCO before starting recorder
@@ -181,10 +173,6 @@ public class DictateInputMethodService extends InputMethodService
     private MaterialButton editHistoryButton;
 
 
-    // Recording visuals (pulsing)
-    private ObjectAnimator recordPulseX;
-    private ObjectAnimator recordPulseY;
-
     // Keep screen awake while recording
     private boolean keepScreenAwakeApplied = false;
 
@@ -211,8 +199,8 @@ public class DictateInputMethodService extends InputMethodService
         mainHandler.post(() -> {
             recordButton.setEnabled(true);
             recordButton.setText(R.string.dictate_send);
-            applyRecordingIconState(true);
-            updateRecordButtonIconWhileRecording();
+            mainButtonsController.applyRecordingIconState(true);
+            mainButtonsController.updateRecordButtonIconWhileRecording(true, recordingUsesBluetooth);
             stateManager.refresh(); // updates pause/trash visibility + keep-screen-awake
             resendButton.setVisibility(View.GONE);
             // Show recording indicator in prompt bar when QWERTZ keyboard is visible
@@ -231,8 +219,7 @@ public class DictateInputMethodService extends InputMethodService
     public void onRecordingPaused() {
         mainHandler.post(() -> {
             pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_mic_24));
-            if (recordPulseX != null && recordPulseX.isRunning()) recordPulseX.pause();
-            if (recordPulseY != null && recordPulseY.isRunning()) recordPulseY.pause();
+            mainButtonsController.pausePulseAnimation();
         });
     }
 
@@ -240,8 +227,7 @@ public class DictateInputMethodService extends InputMethodService
     public void onRecordingResumed() {
         mainHandler.post(() -> {
             pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
-            if (recordPulseX != null && recordPulseX.isPaused()) recordPulseX.resume();
-            if (recordPulseY != null && recordPulseY.isPaused()) recordPulseY.resume();
+            mainButtonsController.resumePulseAnimation();
         });
     }
 
@@ -262,7 +248,7 @@ public class DictateInputMethodService extends InputMethodService
 
         // Update icon if we are recording and currently using BT
         if (recordingManager.isRecording()) {
-            updateRecordButtonIconWhileRecording();
+            mainButtonsController.updateRecordButtonIconWhileRecording(true, recordingUsesBluetooth);
         }
     }
 
@@ -271,7 +257,7 @@ public class DictateInputMethodService extends InputMethodService
         // If we were recording using BT and it got disconnected, keep recording and switch icon
         if (recordingManager.isRecording() && recordingUsesBluetooth) {
             recordingUsesBluetooth = false;
-            updateRecordButtonIconWhileRecording();
+            mainButtonsController.updateRecordButtonIconWhileRecording(true, false);
         }
     }
 
@@ -379,7 +365,6 @@ public class DictateInputMethodService extends InputMethodService
             () -> { performEnterAction(); return kotlin.Unit.INSTANCE; },
             () -> { hideQwertzKeyboard(); return kotlin.Unit.INSTANCE; }
         );
-        initializeKeyPressAnimations();
 
         overlayCharactersLl = dictateKeyboardView.findViewById(R.id.overlay_characters_ll);
 
@@ -455,322 +440,22 @@ public class DictateInputMethodService extends InputMethodService
 
         stateManager.setSmallMode(sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false));
 
-        editNumbersButton.setOnClickListener(v -> {
-            vibrate();
-            boolean newSmallMode = !stateManager.isSmallMode();
-            sp.edit().putBoolean(Pref.SmallMode.INSTANCE.getKey(), newSmallMode).apply();
-            stateManager.setSmallMode(newSmallMode);
-            applySmallModeAnimation(true);
-        });
-
-        editNumbersButton.setOnLongClickListener(v -> {
-            vibrate();
-            currentInputLanguagePos++;
-            recordButton.setText(getDictateButtonText());
-            return true;
-        });
-
-        editSettingsButton.setOnClickListener(v -> {
-            if (recordingManager.isRecording()) trashButton.performClick();
-            infoBarController.dismiss();
-            openSettingsActivity();
-        });
-
-        editHistoryButton.setOnClickListener(v -> {
-            Intent intent = new Intent(this, HistoryActivity.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(intent);
-        });
-
-        pipelineCancelBtn.setOnClickListener(v -> {
-            PipelineOrchestrator.CancelInfo cancelInfo = pipelineOrchestrator.cancel();
-            pendingLivePromptChain = false;
-
-            // UI sofort zurücksetzen (Main-Thread)
-            uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
-            applyRecordingIconState(false);
-            uiController.restoreRecordButtonIdle(
-                getDictateButtonText(),
-                R.drawable.ic_baseline_mic_20,
-                R.drawable.ic_baseline_folder_open_20);
-
-            // DB: Letzten erfolgreichen Output committen (Off-Thread)
-            dbExecutor.execute(() -> {
-                String lastOutput = null;
-                if (cancelInfo.getLastStepId() != null) {
-                    lastOutput = sessionManager.getStepOutput(cancelInfo.getLastStepId());
-                } else if (cancelInfo.getLastTranscriptionId() != null) {
-                    lastOutput = sessionManager.getTranscriptionText(cancelInfo.getLastTranscriptionId());
-                }
-
-                sessionTracker.resetSession();
-                sessionTracker.persistToPrefs(sp);
-
-                if (lastOutput != null) {
-                    String finalOutput = lastOutput;
-                    mainHandler.post(() -> commitTextToInputConnection(finalOutput, InsertionSource.TRANSCRIPTION));
-                }
-            });
-        });
-
-        // initial state: mic left, folder-open right
-        recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-        recordButton.setOnClickListener(v -> {
-            vibrate();
-
-            infoBarController.dismiss();
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                openSettingsActivity();
-            } else if (!recordingManager.isRecording() && !isPreparingRecording) {
-                startRecording();
-            } else if (recordingManager.isRecording()) {
-                stopRecording();
-            }
-        });
-
-        recordButton.setOnLongClickListener(v -> {
-            vibrate();
-
-            if (!recordingManager.isRecording() && !isPreparingRecording) {  // open real settings activity to start file picker
-                Intent intent = new Intent(this, DictateSettingsActivity.class);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                intent.putExtra("net.devemperor.dictate.open_file_picker", true);
-                startActivity(intent);
-            } else if (!livePrompt && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {  // long press during recording automatically switches keyboard after transcription
-                autoSwitchKeyboard= true;
-                stopRecording();
-            }
-            return true;
-        });
-
-        resendButton.setOnClickListener(v -> {
-            vibrate();
-            // Tap: insert cached last output (no API call, no DB access on main thread)
-            String lastOutput = sessionTracker.getLastOutput();
-            if (lastOutput != null) {
-                commitTextToInputConnection(lastOutput, InsertionSource.TRANSCRIPTION);
-            }
-        });
-
-        resendButton.setOnLongClickListener(v -> {
-            vibrate();
-            // Long-press: regenerate (new API call with cached audio)
-            if (audioFile == null) audioFile = new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a"));
-            sessionTracker.reuseLastSession();
-            runTranscriptionViaOrchestrator();
-            return true;
-        });
-
-        backspaceButton.setOnClickListener(v -> {
-            vibrate();
-            deleteOneCharacter();
-        });
-
-        backspaceButton.setOnLongClickListener(v -> {
-            isDeleting = true;
-            startDeleteTime = System.currentTimeMillis();
-            currentDeleteDelay = 50;
-            deleteRunnable = new Runnable() {
-                @Override
-                public void run() {
-                    if (isDeleting) {
-                        deleteOneCharacter();
-                        long diff = System.currentTimeMillis() - startDeleteTime;
-                        if (diff > 1500 && currentDeleteDelay == 50) {
-                            vibrate();
-                            currentDeleteDelay = 25;
-                        } else if (diff > 3000 && currentDeleteDelay == 25) {
-                            vibrate();
-                            currentDeleteDelay = 10;
-                        } else if (diff > 5000 && currentDeleteDelay == 10) {
-                            vibrate();
-                            currentDeleteDelay = 5;
-                        }
-                        deleteHandler.postDelayed(this, currentDeleteDelay);
-                    }
-                }
-            };
-            deleteHandler.post(deleteRunnable);
-            return true;
-        });
-
-        // Swipe-to-select-words touch handler (extracted to BackspaceSwipeHandler)
-        backspaceButton.setOnTouchListener(new BackspaceSwipeHandler(
+        // MainButtonsController: handles all button registration, overlay init, recording visuals, and theming
+        mainButtonsController = new MainButtonsController(
+            new MainButtonViews(
+                recordButton, resendButton, backspaceButton, trashButton,
+                spaceButton, pauseButton, enterButton, editSettingsButton,
+                editUndoButton, editRedoButton, editCutButton, editCopyButton,
+                editPasteButton, editEmojiButton, editNumbersButton, editKeyboardButton,
+                editHistoryButton, emojiPickerCloseButton, emojiPickerView,
+                overlayCharactersLl, pipelineCancelBtn, infoYesButton, infoNoButton
+            ),
+            sp, stateManager, this,
             () -> getCurrentInputConnection(),
-            () -> { vibrate(); return kotlin.Unit.INSTANCE; },
-            () -> {
-                isDeleting = false;
-                if (deleteRunnable != null) deleteHandler.removeCallbacks(deleteRunnable);
-                return kotlin.Unit.INSTANCE;
-            },
-            (v, event) -> {
-                qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
-                return kotlin.Unit.INSTANCE;
-            }
-        ));
-
-        editKeyboardButton.setOnClickListener(v -> {
-            vibrate();
-            toggleQwertzKeyboard();
-        });
-
-        editKeyboardButton.setOnLongClickListener(v -> {
-            vibrate();
-            switchToPreviousKeyboard();
-            return true;
-        });
-
-        // trash button to abort the recording and reset all variables and views
-        trashButton.setOnClickListener(v -> {
-            vibrate();
-
-            cancelScoWaitIfAny();
-            recordingManager.release();
-            recordingUsesBluetooth = false;
-            bluetoothScoManager.release();
-
-            if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-
-            livePrompt = false;
-            updatePromptButtonsEnabledState();
-            recordButton.setText(getDictateButtonText());
-            applyRecordingIconState(false);
-            recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-            recordButton.setEnabled(true);
-            pauseButton.setForeground(AppCompatResources.getDrawable(context, R.drawable.ic_baseline_pause_24));
-            stateManager.refresh(); // updates pause/trash/prompts visibility + keep-screen-awake
-
-            // enable resend button if previous audio file still exists in cache
-            if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                    && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
-                resendButton.setVisibility(View.VISIBLE);
-            }
-
-            // Clear recording indicator in prompt bar if it was showing
-            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.RECORDING_INDICATOR) {
-                uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
-            }
-        });
-
-        // Space button: cursor swipe left/right, tap for space (uses CursorSwipeTouchHandler)
-        CursorSwipeTouchHandler spaceTouchHandler = new CursorSwipeTouchHandler(
-            CursorSwipeTouchHandler.DEFAULT_SWIPE_THRESHOLD,
-            () -> {
-                vibrate();
-                InputConnection ic = getCurrentInputConnection();
-                if (ic != null) ic.commitText(" ", 1);
-                return kotlin.Unit.INSTANCE;
-            },
-            direction -> {
-                vibrate();
-                InputConnection ic = getCurrentInputConnection();
-                if (ic != null) ic.commitText("", direction > 0 ? 2 : -1);
-                return kotlin.Unit.INSTANCE;
-            },
-            isSwiping -> {
-                if (isSwiping) {
-                    spaceButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                        R.drawable.ic_baseline_keyboard_double_arrow_left_24, 0,
-                        R.drawable.ic_baseline_keyboard_double_arrow_right_24, 0);
-                } else {
-                    spaceButton.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0);
-                }
-                return kotlin.Unit.INSTANCE;
-            },
-            false // don't consume — let press animations work
+            qwertzKeyboardView.getKeyPressAnimator()
         );
-        spaceButton.setOnTouchListener((v, event) -> {
-            qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
-            if (getCurrentInputConnection() == null) {
-                spaceButton.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0);
-                return false;
-            }
-            return spaceTouchHandler.onTouch(v, event);
-        });
-
-        pauseButton.setOnClickListener(v -> {
-            vibrate();
-            if (recordingManager.isPaused()) {
-                if (audioFocusEnabled) am.requestAudioFocus(audioFocusRequest);
-                recordingManager.resume();
-                // BT SCO reconnect not done here - user accepted fallback to built-in mic on pause
-            } else {
-                if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-                recordingManager.pause();
-            }
-        });
-
-        enterButton.setOnClickListener(v -> {
-            vibrate();
-            performEnterAction();
-        });
-
-        enterButton.setOnLongClickListener(v -> {
-            vibrate();
-            overlayCharactersLl.setVisibility(View.VISIBLE);
-            return true;
-        });
-
-        // Enter overlay: drag-to-select special characters (extracted to EnterOverlayHandler)
-        enterButton.setOnTouchListener(new EnterOverlayHandler(
-            overlayCharactersLl,
-            () -> getCurrentInputConnection(),
-            () -> sp.getInt("net.devemperor.dictate.accent_color", -14700810),
-            (v, event) -> {
-                qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
-                return kotlin.Unit.INSTANCE;
-            }
-        ));
-
-        // initialize all edit buttons
-        Object[][] buttonsActions = {
-                { editUndoButton, android.R.id.undo },
-                { editRedoButton, android.R.id.redo },
-                { editCutButton,  android.R.id.cut },
-                { editCopyButton, android.R.id.copy },
-                { editPasteButton, android.R.id.paste }
-        };
-
-        for (Object[] pair : buttonsActions) {
-            ((Button) pair[0]).setOnClickListener(v -> {
-                vibrate();
-                InputConnection inputConnection = getCurrentInputConnection();
-                if (inputConnection != null) {
-                    inputConnection.performContextMenuAction((int) pair[1]);
-                }
-            });
-        }
-
-        editEmojiButton.setOnClickListener(v -> {
-            vibrate();
-            toggleEmojiPicker();
-        });
-
-        emojiPickerCloseButton.setOnClickListener(v -> {
-            vibrate();
-            hideEmojiPicker();
-        });
-
-        emojiPickerView.setOnEmojiPickedListener(emoji -> {
-            vibrate();
-            InputConnection inputConnection = getCurrentInputConnection();
-            if (inputConnection != null && emoji != null) {
-                inputConnection.commitText(emoji.getEmoji(), 1);
-            }
-        });
-
-        // initialize overlay characters
-        for (int i = 0; i < 8; i++) {
-            TextView charView = (TextView) LayoutInflater.from(context).inflate(R.layout.item_overlay_characters, overlayCharactersLl, false);
-            GradientDrawable bg = new GradientDrawable();
-            bg.setShape(GradientDrawable.RECTANGLE);
-            bg.setCornerRadius((int) (4 * context.getResources().getDisplayMetrics().density + 0.5f));
-            bg.setStroke((int) (1 * context.getResources().getDisplayMetrics().density + 0.5f), Color.BLACK);
-            charView.setBackground(bg);
-            overlayCharactersLl.addView(charView);
-        }
-
-        prepareRecordPulseAnimation();  // prepare pulsing animation for record button (used while recording)
+        mainButtonsController.registerAllListeners();
+        mainButtonsController.initializeKeyPressAnimations();
 
         return dictateKeyboardView;
     }
@@ -780,14 +465,13 @@ public class DictateInputMethodService extends InputMethodService
         if (recordingManager.isRecording() && recordingManager.isPaused()) {
             // Auto-stop after timeout: discard recording and reset UI
             recordingManager.release();
-            if (recordPulseX != null) recordPulseX.cancel();
-            if (recordPulseY != null) recordPulseY.cancel();
+            mainButtonsController.cancelPulseAnimation();
             livePrompt = false;
             recordingUsesBluetooth = false;
             updatePromptButtonsEnabledState();
             mainHandler.post(() -> {
                 recordButton.setText(getDictateButtonText());
-                applyRecordingIconState(false);
+                mainButtonsController.applyRecordingIconState(false);
                 recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
                 recordButton.setEnabled(true);
                 stateManager.refresh(); // updates pause/trash visibility + keep-screen-awake
@@ -856,7 +540,7 @@ public class DictateInputMethodService extends InputMethodService
         updatePromptButtonsEnabledState();
         if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
         recordButton.setText(R.string.dictate_record);
-        applyRecordingIconState(false);
+        mainButtonsController.applyRecordingIconState(false);
         recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
         recordButton.setEnabled(true);
     }
@@ -996,17 +680,7 @@ public class DictateInputMethodService extends InputMethodService
         // fill all overlay characters
         int accentColor = sp.getInt("net.devemperor.dictate.accent_color", -14700810);
         String charactersString = sp.getString("net.devemperor.dictate.overlay_characters", "()-:!?,.");
-        for (int i = 0; i < overlayCharactersLl.getChildCount(); i++) {
-            TextView charView = (TextView) overlayCharactersLl.getChildAt(i);
-            if (i >= charactersString.length()) {
-                charView.setVisibility(View.GONE);
-            } else {
-                charView.setVisibility(View.VISIBLE);
-                charView.setText(charactersString.substring(i, i + 1));
-                GradientDrawable bg = (GradientDrawable) charView.getBackground();
-                bg.setColor(accentColor);
-            }
-        }
+        mainButtonsController.updateOverlayCharacters(charactersString, accentColor);
 
         // update theme
         String theme = sp.getString("net.devemperor.dictate.theme", "system");
@@ -1020,29 +694,10 @@ public class DictateInputMethodService extends InputMethodService
         emojiPickerCl.setBackgroundColor(keyboardBackgroundColor);
         qwertzContainer.setBackgroundColor(keyboardBackgroundColor);
 
-        int accentColorMedium = DictateUtils.darkenColor(accentColor, 0.18f);
-        int accentColorDark = DictateUtils.darkenColor(accentColor, 0.35f);
         TextView[] textColorViews = { infoTv, emojiPickerTitleTv };
         for (TextView tv : textColorViews) tv.setTextColor(accentColor);
-        applyButtonColor(editSettingsButton, accentColorMedium);
-        applyButtonColor(recordButton, accentColor);
-        applyButtonColor(resendButton, accentColorMedium);
-        applyButtonColor(backspaceButton, accentColorDark);
-        applyButtonColor(editKeyboardButton, accentColorDark);
-        applyButtonColor(trashButton, accentColorMedium);
-        applyButtonColor(spaceButton, accentColorMedium);
-        applyButtonColor(pauseButton, accentColorMedium);
-        applyButtonColor(enterButton, accentColorDark);
-        applyButtonColor(editUndoButton, accentColorMedium);
-        applyButtonColor(editRedoButton, accentColorMedium);
-        applyButtonColor(editCutButton, accentColorMedium);
-        applyButtonColor(editCopyButton, accentColorMedium);
-        applyButtonColor(editPasteButton, accentColorMedium);
-        applyButtonColor(editEmojiButton, accentColorMedium);
-        applyButtonColor(editNumbersButton, accentColorMedium);
-        applyButtonColor(editHistoryButton, accentColorMedium);
-        applyButtonColor(emojiPickerCloseButton, accentColor);
-        qwertzController.applyColors(accentColor, accentColorMedium, accentColorDark);
+        mainButtonsController.applyTheme(accentColor);
+        qwertzController.applyColors(accentColor, DictateUtils.darkenColor(accentColor, 0.18f), DictateUtils.darkenColor(accentColor, 0.35f));
 
         // show infos for updates, ratings or donations
         Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
@@ -1061,7 +716,7 @@ public class DictateInputMethodService extends InputMethodService
 
         // Sync small mode from prefs and apply visibility + animation
         stateManager.setSmallMode(sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false));
-        applySmallModeAnimation(false);
+        mainButtonsController.animateSmallModeToggle(false);
 
         // start audio file transcription if user selected an audio file
         if (!sp.getString("net.devemperor.dictate.transcription_audio_file", "").isEmpty()) {
@@ -1171,26 +826,6 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
-    private void applyButtonColor(MaterialButton button, int backgroundColor) {
-        if (button == null) return;
-        button.setBackgroundColor(backgroundColor);
-    }
-
-    private void initializeKeyPressAnimations() {
-        // Use the shared KeyPressAnimator instance from the QWERTZ keyboard view
-        // so that animation logic is not duplicated between the service and the keyboard.
-        KeyPressAnimator animator = qwertzKeyboardView.getKeyPressAnimator();
-        View[] animatedViews = {
-                editSettingsButton, recordButton, resendButton, trashButton,
-                pauseButton, emojiPickerCloseButton,
-                editUndoButton, editRedoButton, editCutButton, editCopyButton,
-                editPasteButton, editEmojiButton, editNumbersButton, editKeyboardButton, editHistoryButton,
-                infoYesButton, infoNoButton
-        };
-        for (View view : animatedViews) {
-            if (view != null) animator.applyPressAnimation(view);
-        }
-    }
 
     private boolean shouldAutomaticallyShowQwertzNumbers(EditorInfo info) {
         if (info == null) return false;
@@ -1308,7 +943,7 @@ public class DictateInputMethodService extends InputMethodService
             if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
             mainHandler.post(() -> {
                 recordButton.setText(getDictateButtonText());
-                applyRecordingIconState(false);
+                mainButtonsController.applyRecordingIconState(false);
                 recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
                 recordButton.setEnabled(true);
             });
@@ -1363,7 +998,7 @@ public class DictateInputMethodService extends InputMethodService
      * Replaces the old startWhisperApiRequest() method.
      */
     private void runTranscriptionViaOrchestrator() {
-        applyRecordingIconState(false);  // recording finished -> stop pulsing
+        mainButtonsController.applyRecordingIconState(false);  // recording finished -> stop pulsing
 
         recordButton.setText(R.string.dictate_sending);
         recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, 0, 0);
@@ -1524,7 +1159,7 @@ public class DictateInputMethodService extends InputMethodService
             sessionTracker.persistToPrefs(sp);
             mainHandler.post(() -> {
                 uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
-                applyRecordingIconState(false);
+                mainButtonsController.applyRecordingIconState(false);
                 uiController.restoreRecordButtonIdle(
                     getDictateButtonText(),
                     R.drawable.ic_baseline_mic_20,
@@ -1638,23 +1273,6 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
-    /** Applies the small mode toggle animation (rotation of editNumbersButton). Visibility is handled by stateManager. */
-    private void applySmallModeAnimation(boolean animate) {
-        boolean animationsEnabled = sp.getBoolean(Pref.Animations.INSTANCE.getKey(), true);
-        boolean smallMode = stateManager.isSmallMode();
-
-        if (animate && animationsEnabled) {
-            float target = smallMode ? 180f : 0f;
-            editNumbersButton.animate()
-                    .rotation(target)
-                    .setDuration(200)
-                    .setInterpolator(new DecelerateInterpolator())
-                    .start();
-        } else {
-            editNumbersButton.setRotation(smallMode ? 180f : 0f);
-        }
-    }
-
     private void showInfo(String type) {
         infoBarController.showInfo(type);
     }
@@ -1721,48 +1339,219 @@ public class DictateInputMethodService extends InputMethodService
         inputConnection.deleteSurroundingText(charsToDelete, 0);
     }
 
-    // isPointInsideView, highlightSelectedCharacter → moved to EnterOverlayHandler
-    // computeWordBoundaries → moved to BackspaceSwipeHandler
+    // ===== MainButtonsController.Callback =====
 
-    // Recording visuals helpers (pulsing only; icons handled separately)
-    private void prepareRecordPulseAnimation() {
-        if (recordButton == null) return;
-        recordPulseX = ObjectAnimator.ofFloat(recordButton, View.SCALE_X, 1f, 1.12f);
-        recordPulseX.setDuration(600);
-        recordPulseX.setRepeatMode(ValueAnimator.REVERSE);
-        recordPulseX.setRepeatCount(ValueAnimator.INFINITE);
-        recordPulseX.setInterpolator(new LinearInterpolator());
-
-        recordPulseY = ObjectAnimator.ofFloat(recordButton, View.SCALE_Y, 1f, 1.12f);
-        recordPulseY.setDuration(600);
-        recordPulseY.setRepeatMode(ValueAnimator.REVERSE);
-        recordPulseY.setRepeatCount(ValueAnimator.INFINITE);
-        recordPulseY.setInterpolator(new LinearInterpolator());
+    @Override
+    public void onVibrate() {
+        vibrate();
     }
 
-    private void applyRecordingIconState(boolean active) {
-        if (recordButton == null || !sp.getBoolean("net.devemperor.dictate.animations", true)) return;
-
-        if (active) {
-            if (recordPulseX == null || recordPulseY == null) {
-                prepareRecordPulseAnimation();
-            }
-            if (recordPulseX != null && !recordPulseX.isRunning()) recordPulseX.start();
-            if (recordPulseY != null && !recordPulseY.isRunning()) recordPulseY.start();
-        } else {
-            if (recordPulseX != null) recordPulseX.cancel();
-            if (recordPulseY != null) recordPulseY.cancel();
-            recordButton.setScaleX(1f);
-            recordButton.setScaleY(1f);
+    @Override
+    public void onRecordClicked() {
+        infoBarController.dismiss();
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            openSettingsActivity();
+        } else if (!recordingManager.isRecording() && !isPreparingRecording) {
+            startRecording();
+        } else if (recordingManager.isRecording()) {
+            stopRecording();
         }
     }
 
-    private void updateRecordButtonIconWhileRecording() {
-        if (!recordingManager.isRecording()) return;
-        if (recordingUsesBluetooth) {
-            recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, R.drawable.ic_baseline_bluetooth_20, 0);
+    @Override
+    public void onRecordLongClicked() {
+        if (!recordingManager.isRecording() && !isPreparingRecording) {
+            Intent intent = new Intent(this, DictateSettingsActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.putExtra("net.devemperor.dictate.open_file_picker", true);
+            startActivity(intent);
+        } else if (!livePrompt && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            autoSwitchKeyboard = true;
+            stopRecording();
+        }
+    }
+
+    @Override
+    public void onResendClicked() {
+        String lastOutput = sessionTracker.getLastOutput();
+        if (lastOutput != null) {
+            commitTextToInputConnection(lastOutput, InsertionSource.TRANSCRIPTION);
+        }
+    }
+
+    @Override
+    public void onResendLongClicked() {
+        if (audioFile == null) audioFile = new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a"));
+        sessionTracker.reuseLastSession();
+        runTranscriptionViaOrchestrator();
+    }
+
+    @Override
+    public void onBackspaceClicked() {
+        deleteOneCharacter();
+    }
+
+    @Override
+    public void onBackspaceLongClicked() {
+        isDeleting = true;
+        startDeleteTime = System.currentTimeMillis();
+        currentDeleteDelay = 50;
+        deleteRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (isDeleting) {
+                    deleteOneCharacter();
+                    long diff = System.currentTimeMillis() - startDeleteTime;
+                    if (diff > 1500 && currentDeleteDelay == 50) {
+                        vibrate();
+                        currentDeleteDelay = 25;
+                    } else if (diff > 3000 && currentDeleteDelay == 25) {
+                        vibrate();
+                        currentDeleteDelay = 10;
+                    } else if (diff > 5000 && currentDeleteDelay == 10) {
+                        vibrate();
+                        currentDeleteDelay = 5;
+                    }
+                    deleteHandler.postDelayed(this, currentDeleteDelay);
+                }
+            }
+        };
+        deleteHandler.post(deleteRunnable);
+    }
+
+    @Override
+    public void onBackspaceDeleteCancelled() {
+        isDeleting = false;
+        if (deleteRunnable != null) deleteHandler.removeCallbacks(deleteRunnable);
+    }
+
+    @Override
+    public void onTrashClicked() {
+        cancelScoWaitIfAny();
+        recordingManager.release();
+        recordingUsesBluetooth = false;
+        bluetoothScoManager.release();
+
+        if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
+
+        livePrompt = false;
+        updatePromptButtonsEnabledState();
+        recordButton.setText(getDictateButtonText());
+        mainButtonsController.applyRecordingIconState(false);
+        recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
+        recordButton.setEnabled(true);
+        pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
+        stateManager.refresh();
+
+        if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
+                && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
+            resendButton.setVisibility(View.VISIBLE);
+        }
+
+        if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.RECORDING_INDICATOR) {
+            uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+        }
+    }
+
+    @Override
+    public void onPauseClicked() {
+        if (recordingManager.isPaused()) {
+            if (audioFocusEnabled) am.requestAudioFocus(audioFocusRequest);
+            recordingManager.resume();
         } else {
-            recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, 0, 0);
+            if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
+            recordingManager.pause();
+        }
+    }
+
+    @Override
+    public void onEnterClicked() {
+        performEnterAction();
+    }
+
+    @Override
+    public void onKeyboardToggleClicked() {
+        toggleQwertzKeyboard();
+    }
+
+    @Override
+    public void onKeyboardLongClicked() {
+        switchToPreviousKeyboard();
+    }
+
+    @Override
+    public void onEmojiToggleClicked() {
+        toggleEmojiPicker();
+    }
+
+    @Override
+    public void onEmojiCloseClicked() {
+        hideEmojiPicker();
+    }
+
+    @Override
+    public void onSettingsClicked() {
+        if (recordingManager.isRecording()) onTrashClicked();
+        infoBarController.dismiss();
+        openSettingsActivity();
+    }
+
+    @Override
+    public void onHistoryClicked() {
+        Intent intent = new Intent(this, HistoryActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(intent);
+    }
+
+    @Override
+    public void onPipelineCancelClicked() {
+        PipelineOrchestrator.CancelInfo cancelInfo = pipelineOrchestrator.cancel();
+        pendingLivePromptChain = false;
+
+        uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+        mainButtonsController.applyRecordingIconState(false);
+        uiController.restoreRecordButtonIdle(
+            getDictateButtonText(),
+            R.drawable.ic_baseline_mic_20,
+            R.drawable.ic_baseline_folder_open_20);
+
+        dbExecutor.execute(() -> {
+            String lastOutput = null;
+            if (cancelInfo.getLastStepId() != null) {
+                lastOutput = sessionManager.getStepOutput(cancelInfo.getLastStepId());
+            } else if (cancelInfo.getLastTranscriptionId() != null) {
+                lastOutput = sessionManager.getTranscriptionText(cancelInfo.getLastTranscriptionId());
+            }
+
+            sessionTracker.resetSession();
+            sessionTracker.persistToPrefs(sp);
+
+            if (lastOutput != null) {
+                String finalOutput = lastOutput;
+                mainHandler.post(() -> commitTextToInputConnection(finalOutput, InsertionSource.TRANSCRIPTION));
+            }
+        });
+    }
+
+    @Override
+    public void onSmallModeToggled() {
+        boolean newSmallMode = !stateManager.isSmallMode();
+        sp.edit().putBoolean(Pref.SmallMode.INSTANCE.getKey(), newSmallMode).apply();
+        stateManager.setSmallMode(newSmallMode);
+        mainButtonsController.animateSmallModeToggle(true);
+    }
+
+    @Override
+    public void onLanguageCycled() {
+        currentInputLanguagePos++;
+        recordButton.setText(getDictateButtonText());
+    }
+
+    @Override
+    public void onEditAction(int actionId) {
+        InputConnection inputConnection = getCurrentInputConnection();
+        if (inputConnection != null) {
+            inputConnection.performContextMenuAction(actionId);
         }
     }
 

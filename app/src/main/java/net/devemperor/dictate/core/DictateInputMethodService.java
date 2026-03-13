@@ -19,7 +19,6 @@ import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaRecorder;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -30,22 +29,19 @@ import android.util.Log;
 import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
-import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewConfiguration;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.ExtractedText;
-import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.ExtractedTextRequest;
+import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.InputConnection;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import androidx.appcompat.content.res.AppCompatResources;
@@ -65,6 +61,9 @@ import net.devemperor.dictate.ai.AIOrchestrator;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.entity.InsertionMethod;
 import net.devemperor.dictate.database.entity.InsertionSource;
+import net.devemperor.dictate.keyboard.BackspaceSwipeHandler;
+import net.devemperor.dictate.keyboard.CursorSwipeTouchHandler;
+import net.devemperor.dictate.keyboard.EnterOverlayHandler;
 import net.devemperor.dictate.keyboard.KeyPressAnimator;
 import net.devemperor.dictate.keyboard.QwertzKeyboardController;
 import net.devemperor.dictate.keyboard.QwertzKeyboardLayout;
@@ -85,7 +84,6 @@ import net.devemperor.dictate.settings.DictateSettingsActivity;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -116,18 +114,9 @@ public class DictateInputMethodService extends InputMethodService
     private volatile boolean pendingLivePromptChain = false; // true when transcription result should be chained into live prompt
     private boolean vibrationEnabled = true;
     private boolean audioFocusEnabled = true;
-    private TextView selectedCharacter = null;
-    private boolean spaceButtonUserHasSwiped = false;
     private int currentInputLanguagePos;
     private String currentInputLanguageValue;
     private boolean autoSwitchKeyboard = false;
-
-    // Swipe-to-select-words state
-    private boolean isSwipeSelectingWords = false;
-    private float backspaceStartX = 0f;
-    private int swipeBaseCursor = -1;
-    private List<Integer> swipeWordBoundaries = null;
-    private int swipeSelectedSteps = 0;
 
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private PipelineOrchestrator pipelineOrchestrator;
@@ -142,6 +131,8 @@ public class DictateInputMethodService extends InputMethodService
     private RecordingManager recordingManager;
     private BluetoothScoManager bluetoothScoManager;
     private PromptQueueManager promptQueueManager;
+    private KeyboardStateManager stateManager;
+    private InfoBarController infoBarController;
 
     // Bluetooth/SCO state kept in service (for startRecording coordination)
     private boolean isPreparingRecording = false; // true while we wait for SCO before starting recorder
@@ -153,7 +144,6 @@ public class DictateInputMethodService extends InputMethodService
     private View mainButtonsCl;
     private MaterialButton editSettingsButton;
     private ConstraintLayout editButtonsKeyboardLl;
-    private boolean isSmallMode = false;
     private MaterialButton recordButton;
     private MaterialButton resendButton;
     private MaterialButton backspaceButton;
@@ -183,7 +173,6 @@ public class DictateInputMethodService extends InputMethodService
     private QwertzKeyboardView qwertzKeyboardView;
     private QwertzKeyboardController qwertzController;
     private LinearLayout overlayCharactersLl;
-    private int infoClVisibilityBeforeQwertz = View.GONE; // saved infoCl visibility for restore
 
     // Pipeline cancel button (delegates to PipelineOrchestrator)
     private MaterialButton pipelineCancelBtn;
@@ -224,12 +213,10 @@ public class DictateInputMethodService extends InputMethodService
             recordButton.setText(R.string.dictate_send);
             applyRecordingIconState(true);
             updateRecordButtonIconWhileRecording();
-            updateKeepScreenAwake(true);
-            pauseButton.setVisibility(View.VISIBLE);
-            trashButton.setVisibility(View.VISIBLE);
+            stateManager.refresh(); // updates pause/trash visibility + keep-screen-awake
             resendButton.setVisibility(View.GONE);
             // Show recording indicator in prompt bar when QWERTZ keyboard is visible
-            if (qwertzContainer != null && qwertzContainer.getVisibility() == View.VISIBLE) {
+            if (stateManager.getContentArea() == ContentArea.QWERTZ) {
                 uiController.showRecordingIndicator();
             }
         });
@@ -411,6 +398,26 @@ public class DictateInputMethodService extends InputMethodService
             mainHandler
         ));
 
+        // InfoBarController
+        infoBarController = new InfoBarController(
+            infoCl, infoTv, infoYesButton, infoNoButton,
+            () -> { openSettingsActivity(); return kotlin.Unit.INSTANCE; },
+            intent -> { startActivity(intent); return kotlin.Unit.INSTANCE; },
+            sp, getResources(), () -> getTheme()
+        );
+
+        // KeyboardStateManager (deterministic visibility calculator)
+        stateManager = new KeyboardStateManager(
+            new KeyboardViews(mainButtonsCl, editButtonsKeyboardLl, promptsCl, emojiPickerCl,
+                qwertzContainer, overlayCharactersLl, pauseButton, trashButton),
+            () -> recordingManager.isRecording(),
+            () -> recordingManager.isPaused(),
+            () -> pipelineOrchestrator.isRunning(),
+            () -> sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true),
+            keepAwake -> { updateKeepScreenAwake(keepAwake); return kotlin.Unit.INSTANCE; },
+            infoBarController
+        );
+
         // PipelineOrchestrator
         pipelineOrchestrator = new PipelineOrchestrator(
             aiOrchestrator, autoFormattingService, promptQueueManager,
@@ -446,13 +453,14 @@ public class DictateInputMethodService extends InputMethodService
                 .build();
         bluetoothScoManager.registerReceiver();
 
-        isSmallMode = sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false);
+        stateManager.setSmallMode(sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false));
 
         editNumbersButton.setOnClickListener(v -> {
             vibrate();
-            isSmallMode = !isSmallMode;
-            sp.edit().putBoolean(Pref.SmallMode.INSTANCE.getKey(), isSmallMode).apply();
-            applySmallMode(true);
+            boolean newSmallMode = !stateManager.isSmallMode();
+            sp.edit().putBoolean(Pref.SmallMode.INSTANCE.getKey(), newSmallMode).apply();
+            stateManager.setSmallMode(newSmallMode);
+            applySmallModeAnimation(true);
         });
 
         editNumbersButton.setOnLongClickListener(v -> {
@@ -464,7 +472,7 @@ public class DictateInputMethodService extends InputMethodService
 
         editSettingsButton.setOnClickListener(v -> {
             if (recordingManager.isRecording()) trashButton.performClick();
-            infoCl.setVisibility(View.GONE);
+            infoBarController.dismiss();
             openSettingsActivity();
         });
 
@@ -510,7 +518,7 @@ public class DictateInputMethodService extends InputMethodService
         recordButton.setOnClickListener(v -> {
             vibrate();
 
-            infoCl.setVisibility(View.GONE);
+            infoBarController.dismiss();
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 openSettingsActivity();
             } else if (!recordingManager.isRecording() && !isPreparingRecording) {
@@ -586,118 +594,20 @@ public class DictateInputMethodService extends InputMethodService
             return true;
         });
 
-        // Enhanced touch handling: swipe left while holding to select words progressively
-        backspaceButton.setOnTouchListener((v, event) -> {
-            qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
-            InputConnection ic = getCurrentInputConnection();
-            final float density = getResources().getDisplayMetrics().density;
-            final int stepPx = (int) (24f * density + 0.5f);
-            final int activationPx = Math.max(ViewConfiguration.get(getApplicationContext()).getScaledTouchSlop(),
-                    (int) (8f * density + 0.5f)); // small threshold to enter swipe-select and cancel long-press early
-
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    // reset states; allow click/long-press detection
-                    isDeleting = false;
-                    if (deleteRunnable != null) deleteHandler.removeCallbacks(deleteRunnable);
-
-                    isSwipeSelectingWords = false;
-                    swipeSelectedSteps = 0;
-                    swipeWordBoundaries = null;
-                    swipeBaseCursor = -1;
-                    backspaceStartX = event.getX();
-                    return false;
-
-                case MotionEvent.ACTION_MOVE: {
-                    float dx = event.getX() - backspaceStartX;
-
-                    // if the user moves left beyond activation threshold, start swipe-select and cancel long-press
-                    if (dx < -activationPx) {
-                        if (!isSwipeSelectingWords) {
-                            isSwipeSelectingWords = true;
-
-                            // cancel system long-press to avoid auto-delete kick-in
-                            v.cancelLongPress();
-                            if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
-
-                            // stop auto-delete if it was started via long-press (safety)
-                            isDeleting = false;
-                            if (deleteRunnable != null) deleteHandler.removeCallbacks(deleteRunnable);
-
-                            if (ic != null) {
-                                ExtractedText et = ic.getExtractedText(new ExtractedTextRequest(), 0);
-                                if (et != null && et.text != null) {
-                                    swipeBaseCursor = Math.max(et.selectionStart, et.selectionEnd);
-                                    String before = et.text.subSequence(0, swipeBaseCursor).toString();
-                                    swipeWordBoundaries = computeWordBoundaries(before);
-                                }
-                            }
-                            if (swipeWordBoundaries == null) {
-                                swipeWordBoundaries = Collections.singletonList(0);
-                                swipeBaseCursor = 0;
-                            }
-                        }
-
-                        // step size defines when next word gets added to selection
-                        if (ic != null && swipeWordBoundaries != null && !swipeWordBoundaries.isEmpty()) {
-                            int maxSteps = swipeWordBoundaries.size() - 1;
-                            int steps = Math.min((int) ((-dx) / stepPx), maxSteps);
-                            steps = Math.max(0, steps);
-
-                            if (steps != swipeSelectedSteps) {
-                                swipeSelectedSteps = steps;
-                                int newStart = swipeWordBoundaries.get(steps);
-                                ic.setSelection(newStart, swipeBaseCursor);
-                                vibrate();
-                            }
-                        }
-                        return true; // consume while swipe-selecting
-                    } else if (isSwipeSelectingWords) {
-                        // moving back right reduces selection
-                        if (ic != null && swipeWordBoundaries != null && !swipeWordBoundaries.isEmpty()) {
-                            int steps = Math.max(0, (int) ((-dx) / stepPx));
-                            steps = Math.min(steps, swipeWordBoundaries.size() - 1);
-
-                            if (steps != swipeSelectedSteps) {
-                                swipeSelectedSteps = steps;
-                                int newStart = swipeWordBoundaries.get(steps);
-                                ic.setSelection(newStart, swipeBaseCursor);
-                                vibrate();
-                            }
-                            if (steps == 0) {
-                                ic.setSelection(swipeBaseCursor, swipeBaseCursor);
-                            }
-                        }
-                        return true;
-                    }
-
-                    return false; // not yet swiping -> keep default handling for click/long press
-                }
-
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    // always stop auto-delete
-                    isDeleting = false;
-                    if (deleteRunnable != null) deleteHandler.removeCallbacks(deleteRunnable);
-
-                    if (isSwipeSelectingWords) {
-                        if (ic != null) {
-                            if (swipeSelectedSteps > 0) {
-                                ic.commitText("", 1);
-                                vibrate();
-                            } else {
-                                ic.setSelection(swipeBaseCursor, swipeBaseCursor);
-                            }
-                        }
-                        isSwipeSelectingWords = false;
-                        return true; // consume
-                    }
-                    return false; // no swipe-select -> allow click/long-press outcomes
-
-                default:
-                    return false;
+        // Swipe-to-select-words touch handler (extracted to BackspaceSwipeHandler)
+        backspaceButton.setOnTouchListener(new BackspaceSwipeHandler(
+            () -> getCurrentInputConnection(),
+            () -> { vibrate(); return kotlin.Unit.INSTANCE; },
+            () -> {
+                isDeleting = false;
+                if (deleteRunnable != null) deleteHandler.removeCallbacks(deleteRunnable);
+                return kotlin.Unit.INSTANCE;
+            },
+            (v, event) -> {
+                qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
+                return kotlin.Unit.INSTANCE;
             }
-        });
+        ));
 
         editKeyboardButton.setOnClickListener(v -> {
             vibrate();
@@ -721,72 +631,61 @@ public class DictateInputMethodService extends InputMethodService
 
             if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
 
-            // enable resend button if previous audio file still exists in cache
-            if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                    && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
-                resendButton.setVisibility(View.VISIBLE);
-            }
-
             livePrompt = false;
             updatePromptButtonsEnabledState();
             recordButton.setText(getDictateButtonText());
             applyRecordingIconState(false);
             recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
             recordButton.setEnabled(true);
-            pauseButton.setVisibility(View.GONE);
             pauseButton.setForeground(AppCompatResources.getDrawable(context, R.drawable.ic_baseline_pause_24));
-            trashButton.setVisibility(View.GONE);
-            updateKeepScreenAwake(false);
+            stateManager.refresh(); // updates pause/trash/prompts visibility + keep-screen-awake
+
+            // enable resend button if previous audio file still exists in cache
+            if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
+                    && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
+                resendButton.setVisibility(View.VISIBLE);
+            }
+
             // Clear recording indicator in prompt bar if it was showing
             if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.RECORDING_INDICATOR) {
                 uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
             }
         });
 
-        // space button that changes cursor position if user swipes over it
+        // Space button: cursor swipe left/right, tap for space (uses CursorSwipeTouchHandler)
+        CursorSwipeTouchHandler spaceTouchHandler = new CursorSwipeTouchHandler(
+            CursorSwipeTouchHandler.DEFAULT_SWIPE_THRESHOLD,
+            () -> {
+                vibrate();
+                InputConnection ic = getCurrentInputConnection();
+                if (ic != null) ic.commitText(" ", 1);
+                return kotlin.Unit.INSTANCE;
+            },
+            direction -> {
+                vibrate();
+                InputConnection ic = getCurrentInputConnection();
+                if (ic != null) ic.commitText("", direction > 0 ? 2 : -1);
+                return kotlin.Unit.INSTANCE;
+            },
+            isSwiping -> {
+                if (isSwiping) {
+                    spaceButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                        R.drawable.ic_baseline_keyboard_double_arrow_left_24, 0,
+                        R.drawable.ic_baseline_keyboard_double_arrow_right_24, 0);
+                } else {
+                    spaceButton.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0);
+                }
+                return kotlin.Unit.INSTANCE;
+            },
+            false // don't consume — let press animations work
+        );
         spaceButton.setOnTouchListener((v, event) -> {
             qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
-            InputConnection inputConnection = getCurrentInputConnection();
-            int action = event.getActionMasked();
-            if (inputConnection != null) {
-                spaceButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_keyboard_double_arrow_left_24,
-                        0, R.drawable.ic_baseline_keyboard_double_arrow_right_24, 0);
-                switch (action) {
-                    case MotionEvent.ACTION_DOWN:
-                        spaceButtonUserHasSwiped = false;
-                        spaceButton.setTag(event.getX());
-                        break;
-
-                    case MotionEvent.ACTION_MOVE:
-                        float x = (float) spaceButton.getTag();
-                        if (event.getX() - x > 30) {
-                            vibrate();
-                            inputConnection.commitText("", 2);
-                            spaceButton.setTag(event.getX());
-                            spaceButtonUserHasSwiped = true;
-                        } else if (x - event.getX() > 30) {
-                            vibrate();
-                            inputConnection.commitText("", -1);
-                            spaceButton.setTag(event.getX());
-                            spaceButtonUserHasSwiped = true;
-                        }
-                        break;
-
-                    case MotionEvent.ACTION_UP:
-                        if (!spaceButtonUserHasSwiped) {
-                            vibrate();
-                            inputConnection.commitText(" ", 1);
-                        }
-                        spaceButton.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0);
-                        break;
-                    case MotionEvent.ACTION_CANCEL:
-                        spaceButton.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0);
-                        break;
-                }
-            } else {
+            if (getCurrentInputConnection() == null) {
                 spaceButton.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0);
+                return false;
             }
-            return false;
+            return spaceTouchHandler.onTouch(v, event);
         });
 
         pauseButton.setOnClickListener(v -> {
@@ -812,39 +711,16 @@ public class DictateInputMethodService extends InputMethodService
             return true;
         });
 
-        enterButton.setOnTouchListener((v, event) -> {
-            qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
-            if (overlayCharactersLl.getVisibility() == View.VISIBLE) {
-                switch (event.getActionMasked()) {
-                    case MotionEvent.ACTION_MOVE:
-                        for (int i = 0; i < overlayCharactersLl.getChildCount(); i++) {
-                            TextView charView = (TextView) overlayCharactersLl.getChildAt(i);
-                            if (isPointInsideView(event.getRawX(), charView)) {
-                                if (selectedCharacter != charView) {
-                                    selectedCharacter = charView;
-                                    highlightSelectedCharacter(selectedCharacter);
-                                }
-                                break;
-                            }
-                        }
-                        break;
-                    case MotionEvent.ACTION_UP:
-                        if (selectedCharacter != null) {
-                            InputConnection inputConnection = getCurrentInputConnection();
-                            if (inputConnection != null) {
-                                inputConnection.commitText(selectedCharacter.getText(), 1);
-                            }
-                            selectedCharacter = null;
-                        }
-                        overlayCharactersLl.setVisibility(View.GONE);
-                        return true;
-                    case MotionEvent.ACTION_CANCEL:
-                        overlayCharactersLl.setVisibility(View.GONE);
-                        return true;
-                }
+        // Enter overlay: drag-to-select special characters (extracted to EnterOverlayHandler)
+        enterButton.setOnTouchListener(new EnterOverlayHandler(
+            overlayCharactersLl,
+            () -> getCurrentInputConnection(),
+            () -> sp.getInt("net.devemperor.dictate.accent_color", -14700810),
+            (v, event) -> {
+                qwertzKeyboardView.getKeyPressAnimator().handlePressAnimationEvent(v, event);
+                return kotlin.Unit.INSTANCE;
             }
-            return false;
-        });
+        ));
 
         // initialize all edit buttons
         Object[][] buttonsActions = {
@@ -914,9 +790,7 @@ public class DictateInputMethodService extends InputMethodService
                 applyRecordingIconState(false);
                 recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
                 recordButton.setEnabled(true);
-                pauseButton.setVisibility(View.GONE);
-                trashButton.setVisibility(View.GONE);
-                updateKeepScreenAwake(false);
+                stateManager.refresh(); // updates pause/trash visibility + keep-screen-awake
             });
         }
     };
@@ -951,16 +825,14 @@ public class DictateInputMethodService extends InputMethodService
             mainHandler.removeCallbacks(pauseTimeoutRunnable);
             mainHandler.postDelayed(pauseTimeoutRunnable, 60_000);
 
-            // Hide panels but keep recording state
-            emojiPickerCl.setVisibility(View.GONE);
-            qwertzContainer.setVisibility(View.GONE);
+            // Hide content panels but keep recording state (not a state change, just panel cleanup)
+            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
             return;
         }
 
-        // State (B): API request is running -> let it continue, just hide UI panels
+        // State (B): API request is running -> let it continue, just hide content panels
         if (pipelineOrchestrator.isRunning()) {
-            emojiPickerCl.setVisibility(View.GONE);
-            qwertzContainer.setVisibility(View.GONE);
+            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
             return;
         }
 
@@ -974,12 +846,10 @@ public class DictateInputMethodService extends InputMethodService
         bluetoothScoManager.unregisterReceiver();
 
         pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
-        pauseButton.setVisibility(View.GONE);
-        trashButton.setVisibility(View.GONE);
         resendButton.setVisibility(View.GONE);
-        infoCl.setVisibility(View.GONE);
-        emojiPickerCl.setVisibility(View.GONE);
-        qwertzContainer.setVisibility(View.GONE);
+        infoBarController.dismiss();
+        stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
+        stateManager.refresh(); // updates pause/trash/prompts/keep-screen-awake
         uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
         livePrompt = false;
         recordingUsesBluetooth = false;
@@ -989,7 +859,6 @@ public class DictateInputMethodService extends InputMethodService
         applyRecordingIconState(false);
         recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
         recordButton.setEnabled(true);
-        updateKeepScreenAwake(false);
     }
 
     @Override
@@ -1007,23 +876,18 @@ public class DictateInputMethodService extends InputMethodService
         updateEnterButtonIcon(info);
         bluetoothScoManager.registerReceiver();
 
-        // If recording was paused (by onFinishInputView), show paused UI
+        // If recording was paused (by onFinishInputView), restore paused UI
         if (recordingManager.isRecording() && recordingManager.isPaused()) {
             mainHandler.removeCallbacks(pauseTimeoutRunnable);
-            // Show paused UI state - user must manually resume
             pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_mic_24));
-            pauseButton.setVisibility(View.VISIBLE);
-            trashButton.setVisibility(View.VISIBLE);
+            // pause/trash visibility handled by stateManager.refresh() below
             long elapsedMs = recordingManager.getElapsedTimeMs();
             recordButton.setText(getString(R.string.dictate_send,
                     String.format(Locale.getDefault(), "%02d:%02d", (int) (elapsedMs / 60000), (int) (elapsedMs / 1000) % 60)));
             recordButton.setEnabled(true);
-            // BT SCO will be rebuilt when user manually clicks resume (not here)
         }
 
         if (sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) {
-            promptsCl.setVisibility(View.VISIBLE);
-
             // collect all prompts from database
             final List<PromptEntity> data = getPromptsForKeyboard();
             InputConnection inputConnection = getCurrentInputConnection();
@@ -1105,9 +969,8 @@ public class DictateInputMethodService extends InputMethodService
 
             onQueueChanged(promptQueueManager.getQueuedIds());
             updateSelectAllPromptState();
-        } else {
-            promptsCl.setVisibility(View.GONE);
         }
+        // promptsCl visibility is handled by stateManager.refresh() via applySmallMode below
 
         if (shouldAutomaticallyShowQwertzNumbers(info)) {
             qwertzController.setLayout(QwertzKeyboardLayout.NUMBERS);
@@ -1196,7 +1059,9 @@ public class DictateInputMethodService extends InputMethodService
         qwertzKeyboardView.getKeyPressAnimator().setAnimationsEnabled(
                 sp.getBoolean("net.devemperor.dictate.animations", true));
 
-        applySmallMode(false);
+        // Sync small mode from prefs and apply visibility + animation
+        stateManager.setSmallMode(sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false));
+        applySmallModeAnimation(false);
 
         // start audio file transcription if user selected an audio file
         if (!sp.getString("net.devemperor.dictate.transcription_audio_file", "").isEmpty()) {
@@ -1231,7 +1096,7 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void toggleEmojiPicker() {
-        if (emojiPickerCl.getVisibility() == View.VISIBLE) {
+        if (stateManager.getContentArea() == ContentArea.EMOJI_PICKER) {
             hideEmojiPicker();
         } else {
             showEmojiPicker();
@@ -1239,15 +1104,14 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void showEmojiPicker() {
-        hideQwertzKeyboard();
-        overlayCharactersLl.setVisibility(View.GONE);
-        infoCl.setVisibility(View.GONE);
-        emojiPickerCl.setVisibility(View.VISIBLE);
+        stateManager.setContentArea(ContentArea.EMOJI_PICKER);
         emojiPickerCl.bringToFront();
     }
 
     private void hideEmojiPicker() {
-        emojiPickerCl.setVisibility(View.GONE);
+        if (stateManager.getContentArea() == ContentArea.EMOJI_PICKER) {
+            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
+        }
     }
 
     private void handleSelectAllToggle() {
@@ -1282,7 +1146,7 @@ public class DictateInputMethodService extends InputMethodService
 
     private void toggleQwertzKeyboard() {
         if (qwertzContainer == null) return;
-        if (qwertzContainer.getVisibility() == View.VISIBLE) {
+        if (stateManager.getContentArea() == ContentArea.QWERTZ) {
             hideQwertzKeyboard();
         } else {
             showQwertzKeyboard();
@@ -1291,37 +1155,15 @@ public class DictateInputMethodService extends InputMethodService
 
     private void showQwertzKeyboard() {
         if (qwertzContainer == null) return;
-        hideEmojiPicker();
-        overlayCharactersLl.setVisibility(View.GONE);
-        infoClVisibilityBeforeQwertz = infoCl.getVisibility();
-        infoCl.setVisibility(View.GONE);
-        // Hide main buttons and edit bar so they don't show behind the keyboard
-        mainButtonsCl.setVisibility(View.GONE);
-        editButtonsKeyboardLl.setVisibility(View.GONE);
-        // Keep prompt bar visible above the keyboard
-        if (sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
-            promptsCl.setVisibility(View.VISIBLE);
-        }
-        qwertzContainer.setVisibility(View.VISIBLE);
+        stateManager.setContentArea(ContentArea.QWERTZ);
         qwertzContainer.bringToFront();
-        // Auto-capitalize first letter when field is empty or cursor is at position 0
         qwertzController.checkAutoShiftAtCursor();
     }
 
     private void hideQwertzKeyboard() {
         if (qwertzContainer == null) return;
-        qwertzContainer.setVisibility(View.GONE);
-        // Restore main buttons and edit bar based on small mode
-        if (!isSmallMode) {
-            mainButtonsCl.setVisibility(View.VISIBLE);
-            editButtonsKeyboardLl.setVisibility(View.VISIBLE);
-        }
-        // Restore info bar visibility (showQwertzKeyboard saves and hides it)
-        infoCl.setVisibility(infoClVisibilityBeforeQwertz);
-        // Restore prompt bar visibility based on rewording preference
-        // (showQwertzKeyboard forces it VISIBLE, but it should be GONE if rewording is disabled)
-        if (!sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
-            promptsCl.setVisibility(View.GONE);
+        if (stateManager.getContentArea() == ContentArea.QWERTZ) {
+            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
         }
         // Restore recording indicator to normal prompt buttons if it was showing
         if (uiController != null && uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.RECORDING_INDICATOR) {
@@ -1527,15 +1369,13 @@ public class DictateInputMethodService extends InputMethodService
         recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, 0, 0);
         recordButton.setEnabled(false);
         pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
-        pauseButton.setVisibility(View.GONE);
-        trashButton.setVisibility(View.GONE);
         resendButton.setVisibility(View.GONE);
-        infoCl.setVisibility(View.GONE);
+        infoBarController.dismiss();
         recordingUsesBluetooth = false;
         updatePromptButtonsEnabledState();
+        stateManager.refresh(); // updates pause/trash/prompts visibility
 
         // Show pipeline progress
-        promptsCl.setVisibility(View.VISIBLE);
         int totalSteps = 1; // transcription always
         if (autoFormattingService.isEnabled()) totalSteps++;
         totalSteps += promptQueueManager.getQueuedIds().size();
@@ -1798,136 +1638,25 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
-    private void applySmallMode(boolean animate) {
+    /** Applies the small mode toggle animation (rotation of editNumbersButton). Visibility is handled by stateManager. */
+    private void applySmallModeAnimation(boolean animate) {
         boolean animationsEnabled = sp.getBoolean(Pref.Animations.INSTANCE.getKey(), true);
-
-        if (isSmallMode) {
-            infoCl.setVisibility(View.GONE);
-            promptsCl.setVisibility(View.GONE);
-            // editButtonsKeyboardLl + mainButtonsCl bleiben sichtbar
-            hideQwertzKeyboard();
-        } else {
-            if (sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true)) {
-                promptsCl.setVisibility(View.VISIBLE);
-            }
-            editButtonsKeyboardLl.setVisibility(View.VISIBLE);
-            mainButtonsCl.setVisibility(View.VISIBLE);
-        }
+        boolean smallMode = stateManager.isSmallMode();
 
         if (animate && animationsEnabled) {
-            float target = isSmallMode ? 180f : 0f;
+            float target = smallMode ? 180f : 0f;
             editNumbersButton.animate()
                     .rotation(target)
                     .setDuration(200)
                     .setInterpolator(new DecelerateInterpolator())
                     .start();
         } else {
-            editNumbersButton.setRotation(isSmallMode ? 180f : 0f);
+            editNumbersButton.setRotation(smallMode ? 180f : 0f);
         }
     }
 
     private void showInfo(String type) {
-        if (isSmallMode) return;
-        infoCl.setVisibility(View.VISIBLE);
-        infoNoButton.setVisibility(View.VISIBLE);
-        infoTv.setTextColor(getResources().getColor(R.color.dictate_red, getTheme()));
-        switch (type) {
-            case "update":
-                infoTv.setTextColor(getResources().getColor(R.color.dictate_blue, getTheme()));
-                infoTv.setText(R.string.dictate_update_installed_msg);
-                infoYesButton.setVisibility(View.VISIBLE);
-                infoYesButton.setOnClickListener(v -> {
-                    openSettingsActivity();
-                    infoCl.setVisibility(View.GONE);
-                });
-                infoNoButton.setOnClickListener(v -> {
-                    sp.edit().putInt("net.devemperor.dictate.last_version_code", BuildConfig.VERSION_CODE).apply();
-                    infoCl.setVisibility(View.GONE);
-                });
-                break;
-            case "rate":
-                infoTv.setTextColor(getResources().getColor(R.color.dictate_blue, getTheme()));
-                infoTv.setText(R.string.dictate_rate_app_msg);
-                infoYesButton.setVisibility(View.VISIBLE);
-                infoYesButton.setOnClickListener(v -> {
-                    Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=net.devemperor.dictate"));
-                    browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(browserIntent);
-                    sp.edit().putBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", true).apply();
-                    infoCl.setVisibility(View.GONE);
-                });
-                infoNoButton.setOnClickListener(v -> {
-                    sp.edit().putBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", true).apply();
-                    infoCl.setVisibility(View.GONE);
-                });
-                break;
-            case "donate":
-                infoTv.setTextColor(getResources().getColor(R.color.dictate_blue, getTheme()));
-                infoTv.setText(R.string.dictate_donate_msg);
-                infoYesButton.setVisibility(View.VISIBLE);
-                infoYesButton.setOnClickListener(v -> {
-                    Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://paypal.me/DevEmperor"));
-                    browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(browserIntent);
-                    sp.edit().putBoolean("net.devemperor.dictate.flag_has_donated", true)  // in case someone had Dictate installed before, he shouldn't get both messages
-                            .putBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", true).apply();
-                    infoCl.setVisibility(View.GONE);
-                });
-                infoNoButton.setOnClickListener(v -> {
-                    sp.edit().putBoolean("net.devemperor.dictate.flag_has_donated", true)
-                            .putBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", true).apply();
-                    infoCl.setVisibility(View.GONE);
-                });
-                break;
-            case "timeout":
-                infoTv.setText(R.string.dictate_timeout_msg);
-                infoYesButton.setVisibility(View.GONE);
-                infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
-                break;
-            case "invalid_api_key":
-                infoTv.setText(R.string.dictate_invalid_api_key_msg);
-                infoYesButton.setVisibility(View.VISIBLE);
-                infoYesButton.setOnClickListener(v -> {
-                    openSettingsActivity();
-                    infoCl.setVisibility(View.GONE);
-                });
-                infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
-                break;
-            case "quota_exceeded":
-                infoTv.setText(R.string.dictate_quota_exceeded_msg);
-                infoYesButton.setVisibility(View.VISIBLE);
-                infoYesButton.setOnClickListener(v -> {
-                    Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://platform.openai.com/settings/organization/billing/overview"));
-                    browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(browserIntent);
-                    infoCl.setVisibility(View.GONE);
-                });
-                infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
-                break;
-            case "model_not_found":
-                infoTv.setText(R.string.dictate_model_not_found_msg);
-                infoYesButton.setVisibility(View.VISIBLE);
-                infoYesButton.setOnClickListener(v -> {
-                    openSettingsActivity();
-                    infoCl.setVisibility(View.GONE);
-                });
-                infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
-                break;
-            case "bad_request":
-                infoTv.setText(R.string.dictate_bad_request_msg);
-                infoYesButton.setVisibility(View.VISIBLE);
-                infoYesButton.setOnClickListener(v -> {
-                    openSettingsActivity();
-                    infoCl.setVisibility(View.GONE);
-                });
-                infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
-                break;
-            case "internet_error":
-                infoTv.setText(R.string.dictate_internet_error_msg);
-                infoYesButton.setVisibility(View.GONE);
-                infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
-                break;
-        }
+        infoBarController.showInfo(type);
     }
 
     private String getDictateButtonText() {
@@ -1992,62 +1721,8 @@ public class DictateInputMethodService extends InputMethodService
         inputConnection.deleteSurroundingText(charsToDelete, 0);
     }
 
-    // checks whether a point is inside a view based on its horizontal position
-    private boolean isPointInsideView(float x, View view) {
-        int[] location = new int[2];
-        view.getLocationOnScreen(location);
-        return x > location[0] && x < location[0] + view.getWidth();
-    }
-
-    private void highlightSelectedCharacter(TextView selectedView) {
-        int accentColor = sp.getInt("net.devemperor.dictate.accent_color", -14700810);
-        int accentColorDark = Color.argb(
-                Color.alpha(accentColor),
-                (int) (Color.red(accentColor) * 0.8f),
-                (int) (Color.green(accentColor) * 0.8f),
-                (int) (Color.blue(accentColor) * 0.8f)
-        );
-        for (int i = 0; i < overlayCharactersLl.getChildCount(); i++) {
-            TextView charView = (TextView) overlayCharactersLl.getChildAt(i);
-            GradientDrawable bg = (GradientDrawable) charView.getBackground();
-            if (charView == selectedView) {
-                bg.setColor(accentColorDark);
-            } else {
-                bg.setColor(accentColor);
-            }
-        }
-    }
-
-    // Compute progressive word boundaries to the left of the cursor for swipe selection
-    private List<Integer> computeWordBoundaries(String before) {
-        // returns absolute start indices (0..cursor) for selection:
-        // boundaries[0] = cursor, boundaries[1] = start of previous "word incl. preceding spaces", etc.
-        java.util.ArrayList<Integer> res = new java.util.ArrayList<>();
-        int pos = before.length();
-        res.add(pos);
-
-        while (pos > 0) {
-            int i = pos;
-
-            while (i > 0 && Character.isWhitespace(before.charAt(i - 1))) i--;  // 1) skip whitespace to the left
-
-            while (i > 0) {  // 2) skip non-alnum punctuation to the left
-                char c = before.charAt(i - 1);
-                if (Character.isLetterOrDigit(c) || Character.isWhitespace(c)) break;
-                i--;
-            }
-
-            while (i > 0 && Character.isLetterOrDigit(before.charAt(i - 1))) i--;  // 3) skip letters/digits (the word)
-
-            while (i > 0 && Character.isWhitespace(before.charAt(i - 1))) i--;  // 4) also include preceding spaces so each step removes "space + word"
-
-            if (i == pos) i--;
-            pos = i;
-            res.add(pos);
-        }
-
-        return res;
-    }
+    // isPointInsideView, highlightSelectedCharacter → moved to EnterOverlayHandler
+    // computeWordBoundaries → moved to BackspaceSwipeHandler
 
     // Recording visuals helpers (pulsing only; icons handled separately)
     private void prepareRecordPulseAnimation() {

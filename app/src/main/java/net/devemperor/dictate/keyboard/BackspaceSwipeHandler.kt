@@ -122,6 +122,10 @@ class BackspaceSwipeHandler(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // Always stop auto-delete on finger lift, regardless of swipe state.
+                // Without this, a long-press without swipe leaves deleteRunnable running.
+                onDeleteCancelled()
+
                 if (isSwipeSelectingWords) {
                     if (ic != null) {
                         if (swipeSelectedSteps > 0) {

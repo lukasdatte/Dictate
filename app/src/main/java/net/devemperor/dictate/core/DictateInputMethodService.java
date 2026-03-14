@@ -70,6 +70,7 @@ import net.devemperor.dictate.rewording.PromptsKeyboardAdapter;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
 import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
+import net.devemperor.dictate.widget.PulseLayout;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -165,6 +166,9 @@ public class DictateInputMethodService extends InputMethodService
     private QwertzKeyboardView qwertzKeyboardView;
     private QwertzKeyboardController qwertzController;
     private LinearLayout overlayCharactersLl;
+
+    // PulseLayout for recording ripple animation
+    private PulseLayout recordPulseLayout;
 
     // Pipeline cancel button (delegates to PipelineOrchestrator)
     private MaterialButton pipelineCancelBtn;
@@ -326,6 +330,7 @@ public class DictateInputMethodService extends InputMethodService
         mainButtonsCl = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
         editSettingsButton = dictateKeyboardView.findViewById(R.id.edit_settings_btn);
         editButtonsKeyboardLl = dictateKeyboardView.findViewById(R.id.edit_buttons_keyboard_ll);
+        recordPulseLayout = dictateKeyboardView.findViewById(R.id.record_pulse_layout);
         recordButton = dictateKeyboardView.findViewById(R.id.record_btn);
         resendButton = dictateKeyboardView.findViewById(R.id.resend_btn);
         backspaceButton = dictateKeyboardView.findViewById(R.id.backspace_btn);
@@ -448,7 +453,8 @@ public class DictateInputMethodService extends InputMethodService
                 editUndoButton, editRedoButton, editCutButton, editCopyButton,
                 editPasteButton, editEmojiButton, editNumbersButton, editKeyboardButton,
                 editHistoryButton, emojiPickerCloseButton, emojiPickerView,
-                overlayCharactersLl, pipelineCancelBtn, infoYesButton, infoNoButton
+                overlayCharactersLl, pipelineCancelBtn, infoYesButton, infoNoButton,
+                recordPulseLayout
             ),
             sp, stateManager, this,
             () -> getCurrentInputConnection(),

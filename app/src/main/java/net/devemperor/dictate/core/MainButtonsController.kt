@@ -1,15 +1,11 @@
 package net.devemperor.dictate.core
 
-import android.animation.ObjectAnimator
-import android.animation.ValueAnimator
-import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.LayoutInflater
 import android.view.View
 import android.view.animation.DecelerateInterpolator
-import android.view.animation.LinearInterpolator
 import android.view.inputmethod.InputConnection
 import android.widget.Button
 import android.widget.LinearLayout
@@ -21,13 +17,16 @@ import net.devemperor.dictate.keyboard.BackspaceSwipeHandler
 import net.devemperor.dictate.keyboard.CursorSwipeTouchHandler
 import net.devemperor.dictate.keyboard.EnterOverlayHandler
 import net.devemperor.dictate.keyboard.KeyPressAnimator
+import net.devemperor.dictate.widget.PulseLayout
+import net.devemperor.dictate.widget.RecordingAnimation
+import net.devemperor.dictate.widget.RipplePulseAnimation
 
 /**
  * Manages main keyboard button UI: registration, recording visuals, theming, and animations.
  *
  * Responsibilities:
  * - Button click/long-click/touch listener registration (delegates actions to [Callback])
- * - Recording pulse animation (prepare, start, stop)
+ * - Recording animation via [RecordingAnimation] strategy (ripple pulse by default)
  * - Button color theming ([applyTheme])
  * - Key press animations ([initializeKeyPressAnimations])
  * - Overlay characters initialization
@@ -68,16 +67,15 @@ class MainButtonsController(
         fun onEditAction(actionId: Int)
     }
 
-    // Recording pulse animation
-    private var recordPulseX: ObjectAnimator? = null
-    private var recordPulseY: ObjectAnimator? = null
+    // Recording animation (strategy pattern — swappable at runtime)
+    private var recordingAnimation: RecordingAnimation = RipplePulseAnimation(views.recordPulseLayout)
 
     fun registerAllListeners() {
         registerEditBarListeners()
         registerMainButtonListeners()
         registerEmojiListeners()
         initializeOverlayCharacters()
-        prepareRecordPulseAnimation()
+        recordingAnimation.prepare(views.recordButton)
     }
 
     // ── Edit Bar ──
@@ -286,36 +284,15 @@ class MainButtonsController(
         }
     }
 
-    // ── Recording Visuals (Pulse Animation) ──
-
-    fun prepareRecordPulseAnimation() {
-        val button = views.recordButton
-        recordPulseX = ObjectAnimator.ofFloat(button, View.SCALE_X, 1f, 1.12f).apply {
-            duration = 600
-            repeatMode = ValueAnimator.REVERSE
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = LinearInterpolator()
-        }
-        recordPulseY = ObjectAnimator.ofFloat(button, View.SCALE_Y, 1f, 1.12f).apply {
-            duration = 600
-            repeatMode = ValueAnimator.REVERSE
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = LinearInterpolator()
-        }
-    }
+    // ── Recording Animation (Strategy Pattern) ──
 
     fun applyRecordingIconState(active: Boolean) {
         if (!sp.getBoolean("net.devemperor.dictate.animations", true)) return
 
         if (active) {
-            if (recordPulseX == null || recordPulseY == null) prepareRecordPulseAnimation()
-            recordPulseX?.let { if (!it.isRunning) it.start() }
-            recordPulseY?.let { if (!it.isRunning) it.start() }
+            recordingAnimation.start()
         } else {
-            recordPulseX?.cancel()
-            recordPulseY?.cancel()
-            views.recordButton.scaleX = 1f
-            views.recordButton.scaleY = 1f
+            recordingAnimation.cancel()
         }
     }
 
@@ -332,22 +309,15 @@ class MainButtonsController(
         }
     }
 
-    /** Cancel pulse animation directly (e.g., from pauseTimeoutRunnable). */
-    fun cancelPulseAnimation() {
-        recordPulseX?.cancel()
-        recordPulseY?.cancel()
-    }
+    fun cancelPulseAnimation() = recordingAnimation.cancel()
 
-    /** Pause pulse animation (e.g., when recording is paused). */
-    fun pausePulseAnimation() {
-        recordPulseX?.let { if (it.isRunning) it.pause() }
-        recordPulseY?.let { if (it.isRunning) it.pause() }
-    }
+    fun pausePulseAnimation() = recordingAnimation.pause()
 
-    /** Resume pulse animation (e.g., when recording is resumed after pause). */
-    fun resumePulseAnimation() {
-        recordPulseX?.let { if (it.isPaused) it.resume() }
-        recordPulseY?.let { if (it.isPaused) it.resume() }
+    fun resumePulseAnimation() = recordingAnimation.resume()
+
+    /** Update the pulse color to match the current accent color. */
+    fun updatePulseColor(accentColor: Int) {
+        views.recordPulseLayout.pulseColor = DictateUtils.darkenColor(accentColor, 0.1f)
     }
 
     // ── Button Color Theming ──
@@ -374,6 +344,8 @@ class MainButtonsController(
         applyButtonColor(views.editNumbersButton, accentMedium)
         applyButtonColor(views.editHistoryButton, accentMedium)
         applyButtonColor(views.emojiPickerCloseButton, accentColor)
+
+        updatePulseColor(accentColor)
     }
 
     private fun applyButtonColor(button: MaterialButton, color: Int) {
@@ -438,5 +410,6 @@ data class MainButtonViews(
     val overlayCharactersLl: LinearLayout,
     val pipelineCancelBtn: MaterialButton,
     val infoYesButton: Button,
-    val infoNoButton: Button
+    val infoNoButton: Button,
+    val recordPulseLayout: PulseLayout
 )

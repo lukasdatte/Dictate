@@ -31,7 +31,7 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
     private static final TimeInterpolator PRESS_INTERPOLATOR = new DecelerateInterpolator();
 
     private final SharedPreferences sp;
-    private final List<PromptEntity> data;
+    private List<PromptEntity> data;
     private final AdapterCallback callback;
     private final List<Integer> queuedPromptOrder = new ArrayList<>();
     private boolean disableNonSelectionPrompts = false;
@@ -47,6 +47,15 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
         this.sp = sp;
         this.data = data;
         this.callback = callback;
+    }
+
+    public void updateData(List<PromptEntity> newData) {
+        this.data = newData;
+        notifyDataSetChanged();
+    }
+
+    public PromptEntity getItem(int position) {
+        return data.get(position);
     }
 
     public void setQueuedPromptOrder(List<Integer> queuedPromptIds) {

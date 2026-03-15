@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <declare-styleable name="PulseLayout">
+        <attr name="pulseCount" format="integer" />
+        <attr name="pulseDuration" format="integer" />
+        <attr name="pulseColor" format="color" />
+        <attr name="pulseMaxRadiusFactor" format="float" />
+        <attr name="pulseStartAlpha" format="float" />
+        <attr name="pulseStrokeWidth" format="float" />
+        <attr name="pulseStyle" format="enum">
+            <enum name="fill" value="0" />
+            <enum name="stroke" value="1" />
+        </attr>
+    </declare-styleable>
+</resources>

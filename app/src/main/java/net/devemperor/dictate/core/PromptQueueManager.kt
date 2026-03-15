@@ -1,6 +1,9 @@
 package net.devemperor.dictate.core
 
 import android.content.SharedPreferences
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.preferences.put
 
 /**
  * Manages the prompt queue for rewording operations.
@@ -27,10 +30,6 @@ class PromptQueueManager(
     }
 
     private val queuedPromptIds = mutableListOf<Int>()
-
-    companion object {
-        private const val SP_KEY_QUEUED_IDS = "net.devemperor.dictate.queued_prompt_ids"
-    }
 
     /**
      * Toggle a prompt in/out of the queue.
@@ -85,7 +84,7 @@ class PromptQueueManager(
      * @param validPromptIds set of prompt IDs that currently exist
      */
     fun restoreQueue(validPromptIds: Set<Int>) {
-        val saved = sp.getString(SP_KEY_QUEUED_IDS, null)
+        val saved = sp.getString(Pref.QueuedPromptIds.key, null)
         if (saved.isNullOrEmpty()) return
 
         val restoredIds = saved.split(",")
@@ -130,7 +129,7 @@ class PromptQueueManager(
         synchronized(queuedPromptIds) {
             val manualIds = queuedPromptIds.filter { it !in autoApplyIds }
             val idsString = manualIds.joinToString(",")
-            sp.edit().putString(SP_KEY_QUEUED_IDS, idsString).apply()
+            sp.edit().putString(Pref.QueuedPromptIds.key, idsString).apply()
         }
     }
 

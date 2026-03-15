@@ -21,4 +21,7 @@ interface RecordingAnimation {
     fun pause()
     fun resume()
     fun cancel()
+    fun onAmplitude(level: Float) {}
+    fun onTimerTick(timerText: String) {}
+    fun updateColor(color: Int) {}
 }

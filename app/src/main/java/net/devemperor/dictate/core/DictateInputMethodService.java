@@ -14,7 +14,6 @@ import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaMetadataRetriever;
-import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -53,7 +52,6 @@ import com.google.android.material.button.MaterialButton;
 import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.ai.AIOrchestrator;
-import net.devemperor.dictate.ai.AIProvider;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.entity.InsertionMethod;
 import net.devemperor.dictate.database.entity.InsertionSource;
@@ -89,9 +87,7 @@ import java.util.concurrent.Executors;
 
 // MAIN CLASS
 public class DictateInputMethodService extends InputMethodService
-        implements RecordingManager.RecordingCallback,
-                   BluetoothScoManager.BluetoothScoCallback,
-                   PromptQueueManager.PromptQueueCallback,
+        implements PromptQueueManager.PromptQueueCallback,
                    PipelineOrchestrator.PipelineCallback,
                    MainButtonsController.Callback {
 
@@ -131,15 +127,14 @@ public class DictateInputMethodService extends InputMethodService
     private InfoBarController infoBarController;
     private MainButtonsController mainButtonsController;
 
+    // Recording controllers (extracted from God-Class)
+    private RecordingStateController recordingStateController;
+    private RecordingUiController recordingUiController;
+
     // Prompt data flow: InvalidationTracker auto-reloads prompts when DB changes
     private DictateDatabase dictateDb;
     private InvalidationTracker.Observer promptsInvalidationObserver;
     private final Runnable reloadPromptsRunnable = () -> reloadPrompts();
-
-    // Bluetooth/SCO state kept in service (for startRecording coordination)
-    private boolean isPreparingRecording = false; // true while we wait for SCO before starting recorder
-    private boolean recordingPending = false;     // flag to start recording after SCO connected
-    private boolean recordingUsesBluetooth = false; // current recording actually uses BT mic
 
     // define views
     private ConstraintLayout dictateKeyboardView;
@@ -200,88 +195,6 @@ public class DictateInputMethodService extends InputMethodService
     private SessionManager sessionManager;
     private SessionTracker sessionTracker;
 
-    // ===== RecordingManager.RecordingCallback =====
-
-    @Override
-    public void onRecordingStarted() {
-        recordingUsesBluetooth = bluetoothScoManager.isScoStarted();
-        isPreparingRecording = false;
-        recordingPending = false;
-        updatePromptButtonsEnabledState();
-
-        mainHandler.post(() -> {
-            recordButton.setEnabled(true);
-            recordButton.setText(R.string.dictate_send);
-            mainButtonsController.applyRecordingIconState(true);
-            mainButtonsController.updateRecordButtonIconWhileRecording(true, recordingUsesBluetooth);
-            stateManager.refresh(); // updates pause/trash visibility + keep-screen-awake
-            resendButton.setVisibility(View.GONE);
-            // Show recording indicator in prompt bar when QWERTZ keyboard is visible
-            if (stateManager.getContentArea() == ContentArea.QWERTZ) {
-                uiController.showRecordingIndicator();
-            }
-        });
-    }
-
-    @Override
-    public void onRecordingStopped(File audioFile) {
-        // No-op: stop is always followed by explicit action (runTranscriptionViaOrchestrator or UI reset)
-    }
-
-    @Override
-    public void onRecordingPaused() {
-        mainHandler.post(() -> {
-            pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_mic_24));
-            mainButtonsController.pausePulseAnimation();
-        });
-    }
-
-    @Override
-    public void onRecordingResumed() {
-        mainHandler.post(() -> {
-            pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
-            mainButtonsController.resumePulseAnimation();
-        });
-    }
-
-    @Override
-    public void onTimerTick(long elapsedMs) {
-        mainHandler.post(() -> recordButton.setText(getString(R.string.dictate_send,
-                String.format(Locale.getDefault(), "%02d:%02d", (int) (elapsedMs / 60000), (int) (elapsedMs / 1000) % 60))));
-    }
-
-    // ===== BluetoothScoManager.BluetoothScoCallback =====
-
-    @Override
-    public void onScoConnected() {
-        // If we were waiting to start the recording until SCO connects, start now
-        if (recordingPending) {
-            proceedStartRecording(MediaRecorder.AudioSource.VOICE_COMMUNICATION, true);
-        }
-
-        // Update icon if we are recording and currently using BT
-        if (recordingManager.isRecording()) {
-            mainButtonsController.updateRecordButtonIconWhileRecording(true, recordingUsesBluetooth);
-        }
-    }
-
-    @Override
-    public void onScoDisconnected() {
-        // If we were recording using BT and it got disconnected, keep recording and switch icon
-        if (recordingManager.isRecording() && recordingUsesBluetooth) {
-            recordingUsesBluetooth = false;
-            mainButtonsController.updateRecordButtonIconWhileRecording(true, false);
-        }
-    }
-
-    @Override
-    public void onScoFailed() {
-        // SCO timeout: fall back to MIC
-        if (recordingPending) {
-            proceedStartRecording(MediaRecorder.AudioSource.MIC, false);
-        }
-    }
-
     // ===== PromptQueueManager.PromptQueueCallback =====
 
     @Override
@@ -318,9 +231,7 @@ public class DictateInputMethodService extends InputMethodService
         dbExecutor.execute(() -> sessionTracker.restoreLastOutputFromDb());
 
         // Initialize managers
-        recordingManager = new RecordingManager(this);
         am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        bluetoothScoManager = new BluetoothScoManager(this, am, this);
         promptQueueManager = new PromptQueueManager(
                 promptDao::getAutoApplyIds,
                 sp, this);
@@ -406,11 +317,13 @@ public class DictateInputMethodService extends InputMethodService
         );
 
         // KeyboardStateManager (deterministic visibility calculator)
+        // Note: recordingStateController is initialized after stateManager,
+        // but lambdas are evaluated lazily, so this is safe
         stateManager = new KeyboardStateManager(
             new KeyboardViews(mainButtonsCl, editButtonsKeyboardLl, promptsCl, emojiPickerCl,
                 qwertzContainer, overlayCharactersLl, pauseButton, trashButton),
-            () -> recordingManager.isRecording(),
-            () -> recordingManager.isPaused(),
+            () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Active,
+            () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Paused,
             () -> pipelineOrchestrator.isRunning(),
             () -> sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true),
             keepAwake -> { updateKeepScreenAwake(keepAwake); return kotlin.Unit.INSTANCE; },
@@ -446,15 +359,29 @@ public class DictateInputMethodService extends InputMethodService
                 .setAcceptsDelayedFocusGain(true)
                 .setOnAudioFocusChangeListener(focusChange -> {
                     if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
-                        if (recordingManager.isRecording()) pauseButton.performClick();
+                        if (recordingStateController.getState() instanceof RecordingState.Active) {
+                            recordingStateController.togglePause();
+                        }
                     }
                 })
                 .build();
+
+        // Initialize recording controllers (setter-injection breaks circular dependency)
+        // 1. Create controller (without managers yet)
+        recordingStateController = new RecordingStateController(
+            am, audioFocusRequest, new AmplitudeProcessor(), mainHandler
+        );
+        // 2. Create managers with controller as callback
+        recordingManager = new RecordingManager(recordingStateController);
+        bluetoothScoManager = new BluetoothScoManager(this, am, recordingStateController);
+        // 3. Inject managers into controller
+        recordingStateController.setManagers(recordingManager, bluetoothScoManager);
+
         bluetoothScoManager.registerReceiver();
 
         stateManager.setSmallMode(sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false));
 
-        // MainButtonsController: handles all button registration, overlay init, recording visuals, and theming
+        // MainButtonsController: handles all button registration, overlay init, and theming
         mainButtonsController = new MainButtonsController(
             new MainButtonViews(
                 recordButton, resendButton, backspaceButton, trashButton,
@@ -472,6 +399,72 @@ public class DictateInputMethodService extends InputMethodService
         mainButtonsController.registerAllListeners();
         mainButtonsController.initializeKeyPressAnimations();
 
+        // 3. Create RecordingUiController (needs views + animation)
+        float displayDensity = recordButton.getResources().getDisplayMetrics().density;
+        net.devemperor.dictate.widget.RecordingAnimation recordingAnimation =
+            new net.devemperor.dictate.widget.BorderGlowAnimation(
+                sp.getInt("net.devemperor.dictate.accent_color", -14700810),
+                AppCompatResources.getDrawable(context, R.drawable.ic_baseline_send_20),
+                24,     // bar count
+                0.35f,  // max brightness boost
+                displayDensity
+            );
+        recordingUiController = new RecordingUiController(
+            recordButton, pauseButton, resendButton,
+            recordingAnimation, uiController, stateManager, this,
+            () -> getDictateButtonText(),
+            () -> sp.getBoolean("net.devemperor.dictate.animations", true),
+            () -> new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
+                    && sp.getBoolean("net.devemperor.dictate.resend_button", false)
+        );
+
+        // 4. Composite callback: UI events → UiController, Lifecycle events → Service
+        recordingStateController.setCallback(new RecordingStateController.Callback() {
+            @Override
+            public void onStateChanged(RecordingState oldState, RecordingState newState) {
+                mainHandler.post(() -> {
+                    recordingUiController.onStateChanged(oldState, newState);
+                    updatePromptButtonsEnabledState();
+                });
+            }
+
+            @Override
+            public void onAmplitudeUpdate(float level) {
+                mainHandler.post(() -> recordingUiController.onAmplitudeUpdate(level));
+            }
+
+            @Override
+            public void onTimerTick(long elapsedMs) {
+                mainHandler.post(() -> recordingUiController.onTimerTick(elapsedMs));
+            }
+
+            @Override
+            public void onRecordingCompleted(File file) {
+                mainHandler.post(() -> {
+                    audioFile = file;
+                    runTranscriptionViaOrchestrator();
+                });
+            }
+
+            @Override
+            public void onRecordingError(String errorKey) {
+                mainHandler.post(() -> showInfo(errorKey));
+            }
+
+            @Override
+            public void onKeepScreenAwakeChanged(boolean keepAwake) {
+                updateKeepScreenAwake(keepAwake);
+            }
+
+            @Override
+            public void onAutoStopTimeout() {
+                mainHandler.post(() -> {
+                    livePrompt = false;
+                    updatePromptButtonsEnabledState();
+                });
+            }
+        });
+
         // Create prompts adapter once (updated via reloadPrompts())
         promptsAdapter = new PromptsKeyboardAdapter(sp, new ArrayList<>(), new PromptsKeyboardAdapter.AdapterCallback() {
             @Override
@@ -483,9 +476,9 @@ public class DictateInputMethodService extends InputMethodService
                     livePrompt = true;
                     if (ContextCompat.checkSelfPermission(DictateInputMethodService.this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                         openSettingsActivity();
-                    } else if (!recordingManager.isRecording() && !isPreparingRecording) {
+                    } else if (recordingStateController.getState() instanceof RecordingState.Idle) {
                         startRecording();
-                    } else if (recordingManager.isRecording()) {
+                    } else if (recordingStateController.getState().isRecordingOrPaused()) {
                         stopRecording();
                     }
                 } else if (model.getId() == -3) {  // select all clicked
@@ -498,7 +491,8 @@ public class DictateInputMethodService extends InputMethodService
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     startActivity(intent);
                 } else {
-                    if ((recordingManager.isRecording() || isPreparingRecording) && !livePrompt) {
+                    if ((recordingStateController.getState().isRecordingOrPaused()
+                            || recordingStateController.getState() instanceof RecordingState.Preparing) && !livePrompt) {
                         promptQueueManager.togglePrompt(model.getId());
                         return;
                     }
@@ -551,25 +545,6 @@ public class DictateInputMethodService extends InputMethodService
         return dictateKeyboardView;
     }
 
-    // Auto-stop timeout when recording is paused due to keyboard minimization
-    private final Runnable pauseTimeoutRunnable = () -> {
-        if (recordingManager.isRecording() && recordingManager.isPaused()) {
-            // Auto-stop after timeout: discard recording and reset UI
-            recordingManager.release();
-            mainButtonsController.cancelPulseAnimation();
-            livePrompt = false;
-            recordingUsesBluetooth = false;
-            updatePromptButtonsEnabledState();
-            mainHandler.post(() -> {
-                recordButton.setText(getDictateButtonText());
-                mainButtonsController.applyRecordingIconState(false);
-                recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-                recordButton.setEnabled(true);
-                stateManager.refresh(); // updates pause/trash visibility + keep-screen-awake
-            });
-        }
-    };
-
     // method is called if the user closed the keyboard
     @Override
     public void onFinishInputView(boolean finishingInput) {
@@ -578,29 +553,10 @@ public class DictateInputMethodService extends InputMethodService
         // Hide QWERTZ keyboard when the input view is finishing (app switch, background, etc.)
         hideQwertzKeyboard();
 
-        // State (A): Recording is active (running or paused) -> pause and set timeout
-        if (recordingManager.isRecording()) {
-            cancelScoWaitIfAny();
-
-            if (!recordingManager.isPaused()) {
-                // Pause the recorder (delegates to RecordingManager which fires onRecordingPaused callback)
-                recordingManager.pause();
-
-                // Release BT SCO (will be rebuilt on resume)
-                boolean useBluetoothMic = sp.getBoolean("net.devemperor.dictate.use_bluetooth_mic", false);
-                if (useBluetoothMic && bluetoothScoManager.isScoStarted()) {
-                    bluetoothScoManager.release();
-                }
-
-                // Release audio focus while paused
-                if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-            }
-
-            // Auto-stop after 60s inactivity (reset if already pending)
-            mainHandler.removeCallbacks(pauseTimeoutRunnable);
-            mainHandler.postDelayed(pauseTimeoutRunnable, 60_000);
-
-            // Hide content panels but keep recording state (not a state change, just panel cleanup)
+        // State (A): Recording is active or paused -> delegate to controller (pause + timeout)
+        if (recordingStateController.getState().isRecordingOrPaused()
+                || recordingStateController.getState() instanceof RecordingState.Preparing) {
+            recordingStateController.onKeyboardHidden();
             stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
             return;
         }
@@ -611,42 +567,30 @@ public class DictateInputMethodService extends InputMethodService
             return;
         }
 
-        // State (C): Idle -> full cleanup (original behavior)
-        cancelScoWaitIfAny();
-        recordingManager.release();
-
+        // State (C): Idle -> full cleanup
         pipelineOrchestrator.cancel();
         pendingLivePromptChain = false;
 
         bluetoothScoManager.unregisterReceiver();
 
-        pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
-        resendButton.setVisibility(View.GONE);
         infoBarController.dismiss();
         stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
-        stateManager.refresh(); // updates pause/trash/prompts/keep-screen-awake
+        stateManager.refresh();
         uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
         livePrompt = false;
-        recordingUsesBluetooth = false;
         updatePromptButtonsEnabledState();
-        if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-        recordButton.setText(R.string.dictate_record);
-        mainButtonsController.applyRecordingIconState(false);
-        recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-        recordButton.setEnabled(true);
     }
 
     @Override
     public void onDestroy() {
         if (mainHandler != null) {
-            mainHandler.removeCallbacks(pauseTimeoutRunnable);
             mainHandler.removeCallbacks(reloadPromptsRunnable);
         }
+        if (recordingStateController != null) recordingStateController.onDestroy();
         if (promptsInvalidationObserver != null && dictateDb != null) {
             dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
         }
         if (bluetoothScoManager != null) bluetoothScoManager.unregisterReceiver();
-        if (recordingManager != null) recordingManager.release();
         super.onDestroy();
     }
 
@@ -657,16 +601,8 @@ public class DictateInputMethodService extends InputMethodService
         updateEnterButtonIcon(info);
         bluetoothScoManager.registerReceiver();
 
-        // If recording was paused (by onFinishInputView), restore paused UI
-        if (recordingManager.isRecording() && recordingManager.isPaused()) {
-            mainHandler.removeCallbacks(pauseTimeoutRunnable);
-            pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_mic_24));
-            // pause/trash visibility handled by stateManager.refresh() below
-            long elapsedMs = recordingManager.getElapsedTimeMs();
-            recordButton.setText(getString(R.string.dictate_send,
-                    String.format(Locale.getDefault(), "%02d:%02d", (int) (elapsedMs / 60000), (int) (elapsedMs / 1000) % 60)));
-            recordButton.setEnabled(true);
-        }
+        // If recording was paused (by onFinishInputView), cancel timeout and restore UI
+        recordingStateController.onKeyboardShown();
 
         if (sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) {
             InputConnection inputConnection = getCurrentInputConnection();
@@ -720,6 +656,7 @@ public class DictateInputMethodService extends InputMethodService
         TextView[] textColorViews = { infoTv, emojiPickerTitleTv };
         for (TextView tv : textColorViews) tv.setTextColor(accentColor);
         mainButtonsController.applyTheme(accentColor);
+        recordingUiController.updateAnimationColor(accentColor);
         qwertzController.applyColors(accentColor, DictateUtils.darkenColor(accentColor, 0.18f), DictateUtils.darkenColor(accentColor, 0.35f));
 
         // show infos for updates, ratings or donations (DB query on background thread)
@@ -932,60 +869,19 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void startRecording() {
-        if (recordingManager.isRecording() || isPreparingRecording) return;  // prevent re-entrance
-
         promptQueueManager.prepareAutoApplyQueue();
 
         audioFile = new File(getCacheDir(), "audio.m4a");
         sp.edit().putString("net.devemperor.dictate.last_file_name", audioFile.getName()).apply();
 
-        boolean useBluetoothMic = sp.getBoolean("net.devemperor.dictate.use_bluetooth_mic", false);
-        boolean btAvailable = bluetoothScoManager.isBluetoothAvailable(useBluetoothMic);
-
-        if (btAvailable) {
-            // Prepare to wait for SCO connection before starting the recorder
-            isPreparingRecording = true;
-            recordingPending = true;
-            updatePromptButtonsEnabledState();
-            mainHandler.post(() -> recordButton.setEnabled(false));
-
-            // startSco will call onScoConnected (immediate) or onScoFailed (timeout)
-            // onScoConnected/onScoFailed then call proceedStartRecording
-            bluetoothScoManager.startSco(2500);
-        } else {
-            proceedStartRecording(MediaRecorder.AudioSource.MIC, false);  // Start immediately with local MIC
-        }
-    }
-
-    private void proceedStartRecording(int audioSource, boolean useBtForThisRecording) {
-        recordingUsesBluetooth = useBtForThisRecording;
-
-        if (audioFocusEnabled) am.requestAudioFocus(audioFocusRequest);
-
-        boolean started = recordingManager.start(audioFile, audioSource);
-        if (!started) {
-            // reset UI/state on failure
-            isPreparingRecording = false;
-            recordingPending = false;
-            recordingUsesBluetooth = false;
-            updatePromptButtonsEnabledState();
-            if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-            mainHandler.post(() -> {
-                recordButton.setText(getDictateButtonText());
-                mainButtonsController.applyRecordingIconState(false);
-                recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-                recordButton.setEnabled(true);
-            });
-        }
-        // On success, RecordingManager fires onRecordingStarted callback which updates UI
+        boolean useBt = sp.getBoolean("net.devemperor.dictate.use_bluetooth_mic", false);
+        audioFocusEnabled = sp.getBoolean("net.devemperor.dictate.audio_focus", true);
+        recordingStateController.startRecording(audioFile, useBt, audioFocusEnabled);
     }
 
     private void stopRecording() {
-        cancelScoWaitIfAny();
-        recordingManager.stop();
-        updateKeepScreenAwake(false);
-        bluetoothScoManager.release();
-        runTranscriptionViaOrchestrator();
+        recordingStateController.stopRecording();
+        // onRecordingCompleted callback triggers runTranscriptionViaOrchestrator
     }
 
     private void updateKeepScreenAwake(boolean keepAwake) {
@@ -1027,15 +923,11 @@ public class DictateInputMethodService extends InputMethodService
      * Replaces the old startWhisperApiRequest() method.
      */
     private void runTranscriptionViaOrchestrator() {
-        mainButtonsController.applyRecordingIconState(false);  // recording finished -> stop pulsing
-
         recordButton.setText(R.string.dictate_sending);
         recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, 0, 0);
         recordButton.setEnabled(false);
-        pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
         resendButton.setVisibility(View.GONE);
         infoBarController.dismiss();
-        recordingUsesBluetooth = false;
         updatePromptButtonsEnabledState();
         stateManager.refresh(); // updates pause/trash/prompts visibility
 
@@ -1044,8 +936,6 @@ public class DictateInputMethodService extends InputMethodService
         if (autoFormattingService.isEnabled()) totalSteps++;
         totalSteps += promptQueueManager.getQueuedIds().size();
         uiController.showPipelineProgress(totalSteps);
-
-        if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
 
         String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
                 ? currentInputLanguageValue : null;
@@ -1188,7 +1078,6 @@ public class DictateInputMethodService extends InputMethodService
             sessionTracker.persistToPrefs(sp);
             mainHandler.post(() -> {
                 uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
-                mainButtonsController.applyRecordingIconState(false);
                 uiController.restoreRecordButtonIdle(
                     getDictateButtonText(),
                     R.drawable.ic_baseline_mic_20,
@@ -1297,7 +1186,8 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void updatePromptButtonsEnabledState() {
-        disableNonSelectionPrompts = recordingManager.isRecording() || isPreparingRecording;
+        RecordingState state = recordingStateController != null ? recordingStateController.getState() : RecordingState.Idle.INSTANCE;
+        disableNonSelectionPrompts = state.isRecordingOrPaused() || state instanceof RecordingState.Preparing;
         if (promptsAdapter == null) return;
         if (mainHandler != null) {
             mainHandler.post(() -> {
@@ -1409,21 +1299,22 @@ public class DictateInputMethodService extends InputMethodService
         infoBarController.dismiss();
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             openSettingsActivity();
-        } else if (!recordingManager.isRecording() && !isPreparingRecording) {
+        } else if (recordingStateController.getState() instanceof RecordingState.Idle) {
             startRecording();
-        } else if (recordingManager.isRecording()) {
+        } else if (recordingStateController.getState().isRecordingOrPaused()) {
             stopRecording();
         }
     }
 
     @Override
     public void onRecordLongClicked() {
-        if (!recordingManager.isRecording() && !isPreparingRecording) {
+        RecordingState currentState = recordingStateController.getState();
+        if (currentState instanceof RecordingState.Idle) {
             Intent intent = new Intent(this, DictateSettingsActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             intent.putExtra("net.devemperor.dictate.open_file_picker", true);
             startActivity(intent);
-        } else if (!livePrompt && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        } else if (currentState.isRecordingOrPaused() && !livePrompt && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             autoSwitchKeyboard = true;
             stopRecording();
         }
@@ -1485,41 +1376,14 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onTrashClicked() {
-        cancelScoWaitIfAny();
-        recordingManager.release();
-        recordingUsesBluetooth = false;
-        bluetoothScoManager.release();
-
-        if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-
+        recordingStateController.cancelRecording();
         livePrompt = false;
         updatePromptButtonsEnabledState();
-        recordButton.setText(getDictateButtonText());
-        mainButtonsController.applyRecordingIconState(false);
-        recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-        recordButton.setEnabled(true);
-        pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
-        stateManager.refresh();
-
-        if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
-            resendButton.setVisibility(View.VISIBLE);
-        }
-
-        if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.RECORDING_INDICATOR) {
-            uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
-        }
     }
 
     @Override
     public void onPauseClicked() {
-        if (recordingManager.isPaused()) {
-            if (audioFocusEnabled) am.requestAudioFocus(audioFocusRequest);
-            recordingManager.resume();
-        } else {
-            if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-            recordingManager.pause();
-        }
+        recordingStateController.togglePause();
     }
 
     @Override
@@ -1549,7 +1413,12 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onSettingsClicked() {
-        if (recordingManager.isRecording()) onTrashClicked();
+        if (recordingStateController.getState().isRecordingOrPaused()
+                || recordingStateController.getState() instanceof RecordingState.Preparing) {
+            recordingStateController.cancelRecording();
+            livePrompt = false;
+            updatePromptButtonsEnabledState();
+        }
         infoBarController.dismiss();
         openSettingsActivity();
     }
@@ -1567,7 +1436,6 @@ public class DictateInputMethodService extends InputMethodService
         pendingLivePromptChain = false;
 
         uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
-        mainButtonsController.applyRecordingIconState(false);
         uiController.restoreRecordButtonIdle(
             getDictateButtonText(),
             R.drawable.ic_baseline_mic_20,
@@ -1613,10 +1481,4 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
-    private void cancelScoWaitIfAny() {
-        recordingPending = false;
-        isPreparingRecording = false;
-        // BluetoothScoManager handles its own waiting state via release()
-        updatePromptButtonsEnabledState();
-    }
 }

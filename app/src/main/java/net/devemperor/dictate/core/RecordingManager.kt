@@ -25,6 +25,7 @@ class RecordingManager(private val callback: RecordingCallback) {
         fun onRecordingPaused()
         fun onRecordingResumed()
         fun onTimerTick(elapsedMs: Long)
+        fun onAmplitudeUpdate(maxAmplitude: Int) {}
     }
 
     private var recorder: MediaRecorder? = null
@@ -162,6 +163,9 @@ class RecordingManager(private val callback: RecordingCallback) {
             override fun run() {
                 elapsedTimeMs += 100
                 callback.onTimerTick(elapsedTimeMs)
+                try {
+                    recorder?.maxAmplitude?.let { callback.onAmplitudeUpdate(it) }
+                } catch (_: IllegalStateException) { }
                 timerHandler.postDelayed(this, 100)
             }
         }

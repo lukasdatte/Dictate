@@ -17,8 +17,6 @@ class RipplePulseAnimation(
 
     override fun prepare(target: View) {
         // PulseLayout is already configured via XML attributes.
-        // Dynamic configuration (e.g., color from SharedPreferences) can be set here:
-        // pulseLayout.pulseColor = ...
     }
 
     override fun start() = pulseLayout.startPulse()
@@ -28,4 +26,8 @@ class RipplePulseAnimation(
     override fun resume() = pulseLayout.resumePulse()
 
     override fun cancel() = pulseLayout.stopPulse()
+
+    override fun updateColor(color: Int) {
+        pulseLayout.pulseColor = color
+    }
 }

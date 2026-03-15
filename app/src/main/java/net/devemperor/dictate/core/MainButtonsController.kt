@@ -18,8 +18,6 @@ import net.devemperor.dictate.keyboard.CursorSwipeTouchHandler
 import net.devemperor.dictate.keyboard.EnterOverlayHandler
 import net.devemperor.dictate.keyboard.KeyPressAnimator
 import net.devemperor.dictate.widget.PulseLayout
-import net.devemperor.dictate.widget.RecordingAnimation
-import net.devemperor.dictate.widget.RipplePulseAnimation
 
 /**
  * Manages main keyboard button UI: registration, recording visuals, theming, and animations.
@@ -67,15 +65,11 @@ class MainButtonsController(
         fun onEditAction(actionId: Int)
     }
 
-    // Recording animation (strategy pattern — swappable at runtime)
-    private var recordingAnimation: RecordingAnimation = RipplePulseAnimation(views.recordPulseLayout)
-
     fun registerAllListeners() {
         registerEditBarListeners()
         registerMainButtonListeners()
         registerEmojiListeners()
         initializeOverlayCharacters()
-        recordingAnimation.prepare(views.recordButton)
     }
 
     // ── Edit Bar ──
@@ -284,42 +278,6 @@ class MainButtonsController(
         }
     }
 
-    // ── Recording Animation (Strategy Pattern) ──
-
-    fun applyRecordingIconState(active: Boolean) {
-        if (!sp.getBoolean("net.devemperor.dictate.animations", true)) return
-
-        if (active) {
-            recordingAnimation.start()
-        } else {
-            recordingAnimation.cancel()
-        }
-    }
-
-    fun updateRecordButtonIconWhileRecording(isRecording: Boolean, usesBluetooth: Boolean) {
-        if (!isRecording) return
-        if (usesBluetooth) {
-            views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                R.drawable.ic_baseline_send_20, 0, R.drawable.ic_baseline_bluetooth_20, 0
-            )
-        } else {
-            views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                R.drawable.ic_baseline_send_20, 0, 0, 0
-            )
-        }
-    }
-
-    fun cancelPulseAnimation() = recordingAnimation.cancel()
-
-    fun pausePulseAnimation() = recordingAnimation.pause()
-
-    fun resumePulseAnimation() = recordingAnimation.resume()
-
-    /** Update the pulse color to match the current accent color. */
-    fun updatePulseColor(accentColor: Int) {
-        views.recordPulseLayout.pulseColor = DictateUtils.darkenColor(accentColor, 0.1f)
-    }
-
     // ── Button Color Theming ──
 
     fun applyTheme(accentColor: Int) {
@@ -344,8 +302,6 @@ class MainButtonsController(
         applyButtonColor(views.editNumbersButton, accentMedium)
         applyButtonColor(views.editHistoryButton, accentMedium)
         applyButtonColor(views.emojiPickerCloseButton, accentColor)
-
-        updatePulseColor(accentColor)
     }
 
     private fun applyButtonColor(button: MaterialButton, color: Int) {

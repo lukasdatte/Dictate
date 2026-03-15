@@ -44,13 +44,19 @@ class AIOrchestrator @JvmOverloads constructor(
         val runner = factory.createTranscriptionRunner()
         val provider = factory.getProvider(AIFunction.TRANSCRIPTION)
 
+        val keyterms = if (provider == AIProvider.ELEVENLABS) {
+            ElevenLabsKeytermsParser.fromJson(sp.get(Pref.ElevenLabsKeytermsParsed))
+                .takeIf { it.isNotEmpty() }
+        } else null
+
         try {
             val result = runner.transcribe(
                 TranscriptionOptions(
                     audioFile = audioFile,
                     model = model,
                     language = language,
-                    stylePrompt = stylePrompt
+                    stylePrompt = stylePrompt,
+                    keyterms = keyterms
                 )
             )
 

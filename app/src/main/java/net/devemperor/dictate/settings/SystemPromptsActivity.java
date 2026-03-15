@@ -6,11 +6,13 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.view.MenuItem;
+import android.view.View;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
+import android.widget.TextView;
 
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.ActionBar;
@@ -19,8 +21,17 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import com.google.android.material.textfield.TextInputEditText;
+import com.google.android.material.textfield.TextInputLayout;
+
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.SimpleTextWatcher;
+import net.devemperor.dictate.ai.AIProvider;
+import net.devemperor.dictate.ai.ElevenLabsKeytermsParser;
+import net.devemperor.dictate.preferences.DictatePrefsKt;
+import net.devemperor.dictate.preferences.Pref;
+
+import java.util.List;
 
 public class SystemPromptsActivity extends AppCompatActivity {
 
@@ -37,6 +48,10 @@ public class SystemPromptsActivity extends AppCompatActivity {
     private RadioButton rewordingSystemPromptPredefinedRb;
     private RadioButton rewordingSystemPromptCustomRb;
     private EditText rewordingSystemPromptCustomEt;
+
+    private TextInputLayout keytermsTil;
+    private TextInputEditText keytermsEt;
+    private TextView keytermsStatusTv;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,6 +87,7 @@ public class SystemPromptsActivity extends AppCompatActivity {
 
         setupTranscriptionStylePrompt();
         setupRewordingSystemPrompt();
+        setupKeyterms();
 
         transcriptionStylePromptHelpIv.setOnClickListener(v -> {
             Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://platform.openai.com/docs/guides/speech-to-text#prompting"));
@@ -124,6 +140,12 @@ public class SystemPromptsActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        updateKeytermsEnabled();
+    }
+
+    @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == android.R.id.home) {
             finish();
@@ -146,5 +168,90 @@ public class SystemPromptsActivity extends AppCompatActivity {
         rewordingSystemPromptCustomRb.setChecked(selection == 2);
         rewordingSystemPromptCustomEt.setEnabled(selection == 2);
         sp.edit().putInt("net.devemperor.dictate.system_prompt_selection", selection).apply();
+    }
+
+    private void setupKeyterms() {
+        keytermsTil = findViewById(R.id.elevenlabs_keyterms_til);
+        keytermsEt = findViewById(R.id.elevenlabs_keyterms_et);
+        keytermsStatusTv = findViewById(R.id.elevenlabs_keyterms_status_tv);
+        keytermsEt.setText(DictatePrefsKt.get(sp, Pref.ElevenLabsKeytermsRaw.INSTANCE));
+
+        updateKeytermsEnabled();
+
+        updateKeytermsStatus(keytermsTil, keytermsStatusTv,
+            ElevenLabsKeytermsParser.INSTANCE.parse(
+                DictatePrefsKt.get(sp, Pref.ElevenLabsKeytermsRaw.INSTANCE)));
+
+        keytermsEt.addTextChangedListener(new SimpleTextWatcher() {
+            @Override
+            public void afterTextChanged(Editable s) {
+                String raw = s.toString();
+
+                ElevenLabsKeytermsParser.ParseResult result = ElevenLabsKeytermsParser.INSTANCE.parse(raw);
+
+                sp.edit()
+                    .putString(Pref.ElevenLabsKeytermsRaw.INSTANCE.getKey(), raw)
+                    .putString(Pref.ElevenLabsKeytermsParsed.INSTANCE.getKey(),
+                               ElevenLabsKeytermsParser.INSTANCE.toJson(result.getTerms()))
+                    .apply();
+
+                updateKeytermsStatus(keytermsTil, keytermsStatusTv, result);
+            }
+        });
+    }
+
+    private void updateKeytermsEnabled() {
+        AIProvider provider = AIProvider.fromPersistKey(
+            DictatePrefsKt.get(sp, Pref.TranscriptionProvider.INSTANCE));
+        String model = DictatePrefsKt.get(sp, Pref.TranscriptionElevenLabsModel.INSTANCE);
+        boolean enabled = provider == AIProvider.ELEVENLABS && "scribe_v2".equals(model);
+        keytermsEt.setEnabled(enabled);
+    }
+
+    private void updateKeytermsStatus(TextInputLayout til, TextView statusTv,
+                                       ElevenLabsKeytermsParser.ParseResult result) {
+        if (!result.getErrors().isEmpty()) {
+            til.setError(formatKeytermsErrors(result.getErrors()));
+        } else {
+            til.setError(null);
+        }
+
+        int termCount = result.getTerms().size();
+        int commentCount = result.getCommentCount();
+        if (termCount == 0 && commentCount == 0) {
+            statusTv.setVisibility(View.GONE);
+        } else {
+            statusTv.setVisibility(View.VISIBLE);
+            String status = getResources().getQuantityString(
+                R.plurals.dictate_keyterms_status_terms, termCount, termCount);
+            if (commentCount > 0) {
+                status += ", " + getResources().getQuantityString(
+                    R.plurals.dictate_keyterms_status_comments, commentCount, commentCount);
+            }
+            statusTv.setText(status);
+        }
+    }
+
+    private String formatKeytermsErrors(List<ElevenLabsKeytermsParser.ValidationError> errors) {
+        StringBuilder sb = new StringBuilder();
+        for (ElevenLabsKeytermsParser.ValidationError err : errors) {
+            String reason;
+            switch (err.getReason()) {
+                case TOO_LONG:
+                    reason = getString(R.string.dictate_keyterms_error_too_long);
+                    break;
+                case TOO_MANY_WORDS:
+                    reason = getString(R.string.dictate_keyterms_error_too_many_words);
+                    break;
+                case TOO_MANY_TERMS:
+                    reason = getString(R.string.dictate_keyterms_error_too_many_terms);
+                    break;
+                default:
+                    reason = "";
+            }
+            if (sb.length() > 0) sb.append("\n");
+            sb.append("\"").append(err.getTerm()).append("\": ").append(reason);
+        }
+        return sb.toString();
     }
 }

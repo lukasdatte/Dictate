@@ -259,5 +259,20 @@
     <string name="dictate_changelog_22">v2.7.2\n\nEsta es solo una actualización pequeña que añade la posibilidad de configurar un proxy HTTP en los ajustes para todas las conexiones con OpenAI. 🛡️\nAdemás, se han corregido algunos errores. ✨\n\nComo siempre, no dudes en ponerte en contacto conmigo con preguntas e ideas a través de GitHub o del botón de correo que encontrarás abajo. ☺️\n\n\n</string>
     <string name="dictate_settings_api_settings">Cambiar ajustes de API y modelos 🔑</string>
     <string name="dictate_changelog_29">v3.1.0\n\nEsta actualización añade una función experimental llamada \"formato automático\". Si tienes activado el formato automático, puedes usar comandos como \"nuevo párrafo\", \"primero\" o \"Henry con i\" durante la grabación, y se aplicarán automáticamente a tu texto. El procesamiento será un poco más lento, pero la IA intentará seguir tus instrucciones lo mejor posible. ✨\n\nAdemás, se han corregido algunos errores y realizado cambios en el tema.\n\nComo siempre, no dudes en contactarme con preguntas o ideas a través de GitHub o del botón de correo electrónico que aparece abajo. ☺️\n\n\n</string>
+    <string name="dictate_elevenlabs_keyterms_title">ElevenLabs Key Terms</string>
+    <string name="dictate_elevenlabs_keyterms_hint">Solo Scribe v2. Genera costes adicionales. Separar con comas o nuevas líneas. Las líneas con # se ignoran. Máx. 100 términos, 50 caracteres y 5 palabras cada uno.</string>
+    <string name="dictate_elevenlabs_keyterms_input_hint">p. ej. ElevenLabs, Dictate\no un término por línea</string>
+    <string name="dictate_keyterms_error_too_long">demasiado largo (máx. 50 caracteres)</string>
+    <string name="dictate_keyterms_error_too_many_words">demasiadas palabras (máx. 5)</string>
+    <string name="dictate_keyterms_error_too_many_terms">límite alcanzado (máx. 100 términos)</string>
+    <plurals name="dictate_keyterms_status_terms">
+        <item quantity="one">%d término</item>
+        <item quantity="other">%d términos</item>
+    </plurals>
+    <plurals name="dictate_keyterms_status_comments">
+        <item quantity="one">%d comentario ignorado</item>
+        <item quantity="other">%d comentarios ignorados</item>
+    </plurals>
+
     <string name="dictate_changelog_30">v3.2.0\n\n¡Esta actualización trae mejoras importantes y nuevas funciones! 🚀\n\n- Claves API separadas: Ahora puedes guardar claves API separadas para cada proveedor (OpenAI, Groq, Custom), facilitando el cambio entre ellos. 🔑\n\n- Bluetooth mejorado: La conexión con auriculares Bluetooth es ahora más rápida y fiable. 🎧\n\n- Auto Enter: Nueva opción para pulsar automáticamente Enter/Enviar tras la transcripción. ⚡\n\n- Nuevos modelos: Añadido soporte para OpenAI o1, o4-mini y GPT-5.2, con precios actualizados. 🤖\n\n- Correcciones de errores y mejoras. ✨\n\n¡Os deseo un bendecido año nuevo 2026! 🎆\n\nComo siempre, no dudes en contactarme con preguntas e ideas a través de GitHub o el botón de correo abajo. ☺️\n\n\n</string>
 </resources>

@@ -55,6 +55,10 @@ sealed class Pref<T>(val key: String, val default: T) {
     object TranscriptionCustomModel : Pref<String>("net.devemperor.dictate.transcription_custom_model", "")
     object TranscriptionCustomHost : Pref<String>("net.devemperor.dictate.transcription_custom_host", "")
 
+    // ── ElevenLabs Key Terms ──
+    object ElevenLabsKeytermsRaw : Pref<String>("net.devemperor.dictate.elevenlabs_keyterms_raw", "")
+    object ElevenLabsKeytermsParsed : Pref<String>("net.devemperor.dictate.elevenlabs_keyterms_parsed", "[]")
+
     // ── Rewording/Completion API ──
     object RewordingProvider : Pref<String>("net.devemperor.dictate.rewording_provider", "OPENAI")
     object RewordingApiKeyOpenAI : Pref<String>("net.devemperor.dictate.rewording_api_key_openai", "")

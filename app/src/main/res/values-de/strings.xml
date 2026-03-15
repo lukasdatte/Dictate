@@ -277,5 +277,20 @@
     <string name="dictate_qwertz_space_tooltip">Leertaste</string>
     <string name="dictate_qwertz_ctrl_tooltip">Strg</string>
 
+    <string name="dictate_elevenlabs_keyterms_title">ElevenLabs Key Terms</string>
+    <string name="dictate_elevenlabs_keyterms_hint">Nur Scribe v2. Verursacht Zusatzkosten. Mit Kommas oder neuen Zeilen trennen. Zeilen mit # werden ignoriert. Max. 100 Begriffe, je max. 50 Zeichen und 5 Wörter.</string>
+    <string name="dictate_elevenlabs_keyterms_input_hint">z.B. ElevenLabs, Dictate\noder ein Begriff pro Zeile</string>
+    <string name="dictate_keyterms_error_too_long">zu lang (max. 50 Zeichen)</string>
+    <string name="dictate_keyterms_error_too_many_words">zu viele Wörter (max. 5)</string>
+    <string name="dictate_keyterms_error_too_many_terms">Limit erreicht (max. 100 Begriffe)</string>
+    <plurals name="dictate_keyterms_status_terms">
+        <item quantity="one">%d Begriff</item>
+        <item quantity="other">%d Begriffe</item>
+    </plurals>
+    <plurals name="dictate_keyterms_status_comments">
+        <item quantity="one">%d Kommentar ignoriert</item>
+        <item quantity="other">%d Kommentare ignoriert</item>
+    </plurals>
+
     <string name="dictate_changelog_30">v3.2.0\n\nDieses Update bringt einige wichtige Verbesserungen und neue Funktionen! 🚀\n\n- Separate API-Schlüssel: Du kannst jetzt für jeden Anbieter (OpenAI, Groq, Custom) eigene API-Schlüssel speichern, was das Wechseln erleichtert. 🔑\n\n- Verbessertes Bluetooth: Die Verbindung zu Bluetooth-Headsets ist jetzt schneller und zuverlässiger. 🎧\n\n- Auto Enter: Eine neue Option drückt nach der Transkription automatisch Enter/Senden. ⚡\n\n- Neue Modelle: Unterstützung für OpenAI o1, o4-mini und GPT-5.2 hinzugefügt, inklusive aktualisierter Preise. 🤖\n\n- Verschiedene Fehlerbehebungen und Verbesserungen. ✨\n\nIch wünsche euch ein gesegnetes neues Jahr 2026! 🎆\n\nWie immer, zögere nicht, mich bei Fragen und Ideen über GitHub oder den E-Mail-Button unten zu kontaktieren. ☺️\n\n\n</string>
 </resources>

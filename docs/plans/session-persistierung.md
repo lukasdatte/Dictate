@@ -1,5 +1,36 @@
 # Feature Plan: Session-Persistierung, Versionierung & Historie UI
 
+<!-- EXECUTION-PLAN -->
+## Execution Plan
+
+**Erstellt:** 2026-03-10 19:45
+**Geschaetzte Chunks:** 5
+
+### Strategie
+
+Sequentielle Implementation entlang der Schichtengrenzen: DB -> Service -> UI.
+Chunk 4 (Historie-UI) ist unabhaengig von Chunk 2+3, wird aber trotzdem sequentiell
+nach Chunk 3 implementiert, um den Kontext sauber zu halten.
+
+### Geplante Chunks
+
+| # | Chunk | Plan-Abschnitte | Warum diese Gruppierung? |
+|---|-------|-----------------|--------------------------|
+| 1 | Datenbank-Schicht | Phase 1 (1.1-1.6) | Enums + Entities + DAOs + Migration + SessionManager = reine Datenschicht |
+| 2 | Core + Whisper + AutoFormat | Phase 2.1-2.4 | SessionTracker + ProcessingContext + Recording-Pfad = zusammenhaengende Infrastruktur |
+| 3 | Rewording + Commit + Reset | Phase 2.5-2.10 | Rewording-Pfad + Commit-Erweiterung + Audio = zweiter Service-Flow |
+| 4 | Historie-UI | Phase 3 | Eigenstaendige UI-Schicht, nur SessionManager-Abhaengigkeit |
+| 5 | Pipeline-Progress + Buttons | Phase 4 + 5 | Keyboard-UI aendert gleiches Layout, braucht alles vorherige |
+
+### Abhaengigkeiten
+
+```
+[1] DB ──┬──> [2] Core ──> [3] Rewording ──> [5] Keyboard-UI
+         └──> [4] Historie-UI ──────────────> (Integration)
+```
+
+<!-- /EXECUTION-PLAN -->
+
 ## Context
 
 Dictate ist eine Android-Tastatur-App mit einer mehrstufigen AI-Pipeline:

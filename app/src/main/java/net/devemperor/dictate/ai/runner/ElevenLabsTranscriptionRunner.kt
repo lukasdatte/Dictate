@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.ai.AIProviderException.ErrorType
+import net.devemperor.dictate.ai.ElevenLabsKeytermsParser
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 import okhttp3.MediaType.Companion.toMediaType
@@ -92,6 +93,12 @@ class ElevenLabsTranscriptionRunner(
 
         options.temperature?.let {
             multipartBuilder.addFormDataPart("temperature", it.toString())
+        }
+
+        if (options.model == "scribe_v2") {
+            options.keyterms?.takeIf { it.isNotEmpty() }?.let { terms ->
+                multipartBuilder.addFormDataPart("keyterms", ElevenLabsKeytermsParser.toJson(terms))
+            }
         }
 
         val request = Request.Builder()

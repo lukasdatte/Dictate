@@ -341,5 +341,20 @@
     <string name="dictate_qwertz_space_tooltip">Space</string>
     <string name="dictate_qwertz_ctrl_tooltip">Ctrl</string>
 
+    <string name="dictate_elevenlabs_keyterms_title">ElevenLabs Key Terms</string>
+    <string name="dictate_elevenlabs_keyterms_hint">Scribe v2 only. Incurs additional cost. Separate with commas or new lines. Lines starting with # are ignored. Max. 100 terms, 50 characters and 5 words each.</string>
+    <string name="dictate_elevenlabs_keyterms_input_hint">e.g. ElevenLabs, Dictate\nor one term per line</string>
+    <string name="dictate_keyterms_error_too_long">too long (max. 50 characters)</string>
+    <string name="dictate_keyterms_error_too_many_words">too many words (max. 5)</string>
+    <string name="dictate_keyterms_error_too_many_terms">limit reached (max. 100 terms)</string>
+    <plurals name="dictate_keyterms_status_terms">
+        <item quantity="one">%d term</item>
+        <item quantity="other">%d terms</item>
+    </plurals>
+    <plurals name="dictate_keyterms_status_comments">
+        <item quantity="one">%d comment ignored</item>
+        <item quantity="other">%d comments ignored</item>
+    </plurals>
+
     <string name="dictate_changelog_30">v3.2.0\n\nThis update brings some major improvements and new features! 🚀\n\n- Separate API keys: You can now save separate API keys for each provider (OpenAI, Groq, Custom), making switching between them seamless. 🔑\n\n- Improved Bluetooth support: Connecting to Bluetooth headsets is now faster and more reliable. 🎧\n\n- Auto Enter: Added an option to automatically press Enter/Send after transcription. ⚡\n\n- New Models: Added support for OpenAI o1, o4-mini, and GPT-5.2, including updated pricing info. 🤖\n\n- Various bug fixes and improvements. ✨\n\nI wish you a blessed New Year 2026! 🎆\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
 </resources>

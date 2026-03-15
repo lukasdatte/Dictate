@@ -38,6 +38,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.content.res.AppCompatResources;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.content.ContextCompat;
@@ -71,6 +72,8 @@ import net.devemperor.dictate.rewording.PromptsOverviewActivity;
 import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
 import net.devemperor.dictate.widget.PulseLayout;
+
+import androidx.room.InvalidationTracker;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -126,6 +129,11 @@ public class DictateInputMethodService extends InputMethodService
     private KeyboardStateManager stateManager;
     private InfoBarController infoBarController;
     private MainButtonsController mainButtonsController;
+
+    // Prompt data flow: InvalidationTracker auto-reloads prompts when DB changes
+    private DictateDatabase dictateDb;
+    private InvalidationTracker.Observer promptsInvalidationObserver;
+    private final Runnable reloadPromptsRunnable = () -> reloadPrompts();
 
     // Bluetooth/SCO state kept in service (for startRecording coordination)
     private boolean isPreparingRecording = false; // true while we wait for SCO before starting recorder
@@ -293,7 +301,7 @@ public class DictateInputMethodService extends InputMethodService
 
         vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE);
-        DictateDatabase dictateDb = DictateDatabase.getInstance(this);
+        dictateDb = DictateDatabase.getInstance(this);
         promptDao = dictateDb.promptDao();
         usageDao = dictateDb.usageDao();
 
@@ -463,6 +471,82 @@ public class DictateInputMethodService extends InputMethodService
         mainButtonsController.registerAllListeners();
         mainButtonsController.initializeKeyPressAnimations();
 
+        // Create prompts adapter once (updated via reloadPrompts())
+        promptsAdapter = new PromptsKeyboardAdapter(sp, new ArrayList<>(), new PromptsKeyboardAdapter.AdapterCallback() {
+            @Override
+            public void onItemClicked(Integer position) {
+                vibrate();
+                PromptEntity model = promptsAdapter.getItem(position);
+
+                if (model.getId() == -1) {  // instant prompt clicked
+                    livePrompt = true;
+                    if (ContextCompat.checkSelfPermission(DictateInputMethodService.this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                        openSettingsActivity();
+                    } else if (!recordingManager.isRecording() && !isPreparingRecording) {
+                        startRecording();
+                    } else if (recordingManager.isRecording()) {
+                        stopRecording();
+                    }
+                } else if (model.getId() == -3) {  // select all clicked
+                    handleSelectAllToggle();
+                } else if (model.getId() == -4) {  // clear queue clicked
+                    vibrate();
+                    promptQueueManager.clear();
+                } else if (model.getId() == -2) {  // add prompt clicked
+                    Intent intent = new Intent(DictateInputMethodService.this, PromptsOverviewActivity.class);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(intent);
+                } else {
+                    if ((recordingManager.isRecording() || isPreparingRecording) && !livePrompt) {
+                        promptQueueManager.togglePrompt(model.getId());
+                        return;
+                    }
+                    InputConnection currentConnection = getCurrentInputConnection();
+                    if (model.getRequiresSelection()) {
+                        if (currentConnection == null) {
+                            return;
+                        }
+                        ExtractedText extractedText = currentConnection.getExtractedText(new ExtractedTextRequest(), 0);
+                        if (extractedText == null || extractedText.text == null || extractedText.text.length() == 0) {
+                            return;
+                        }
+                        CharSequence selectedText = currentConnection.getSelectedText(0);
+                        if (selectedText == null || selectedText.length() == 0) {
+                            currentConnection.performContextMenuAction(android.R.id.selectAll);
+                            selectedText = currentConnection.getSelectedText(0);
+                            if (selectedText == null || selectedText.length() == 0) {
+                                return;
+                            }
+                        }
+                    }
+                    runStandalonePromptViaOrchestrator(model);
+                }
+            }
+
+            @Override
+            public void onItemLongClicked(Integer position) {
+                PromptEntity longClickModel = promptsAdapter.getItem(position);
+                if (longClickModel.getId() >= 0) {
+                    vibrate();
+                    Intent intent = new Intent(DictateInputMethodService.this, PromptEditActivity.class);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    intent.putExtra("net.devemperor.dictate.prompt_edit_activity_id", longClickModel.getId());
+                    startActivity(intent);
+                }
+            }
+        });
+        promptsRv.setAdapter(promptsAdapter);
+
+        // Register InvalidationTracker to auto-reload prompts when DB changes (debounced 200ms)
+        promptsInvalidationObserver = new InvalidationTracker.Observer("prompts") {
+            @Override
+            public void onInvalidated(@NonNull Set<String> tables) {
+                mainHandler.removeCallbacks(reloadPromptsRunnable);
+                mainHandler.postDelayed(reloadPromptsRunnable, 200);
+            }
+        };
+        dictateDb.getInvalidationTracker().addObserver(promptsInvalidationObserver);
+
         return dictateKeyboardView;
     }
 
@@ -554,6 +638,10 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onDestroy() {
         mainHandler.removeCallbacks(pauseTimeoutRunnable);
+        mainHandler.removeCallbacks(reloadPromptsRunnable);
+        if (promptsInvalidationObserver != null) {
+            dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
+        }
         bluetoothScoManager.unregisterReceiver();
         recordingManager.release();
         super.onDestroy();
@@ -578,87 +666,13 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         if (sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) {
-            // collect all prompts from database
-            final List<PromptEntity> data = getPromptsForKeyboard();
             InputConnection inputConnection = getCurrentInputConnection();
             boolean hasSelection = inputConnection != null && inputConnection.getSelectedText(0) != null;
-
-            promptsAdapter = new PromptsKeyboardAdapter(sp, data, new PromptsKeyboardAdapter.AdapterCallback() {
-                @Override
-                public void onItemClicked(Integer position) {
-                    vibrate();
-                    PromptEntity model = data.get(position);
-
-                    if (model.getId() == -1) {  // instant prompt clicked
-                        livePrompt = true;
-                        if (ContextCompat.checkSelfPermission(DictateInputMethodService.this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                            openSettingsActivity();
-                        } else if (!recordingManager.isRecording() && !isPreparingRecording) {
-                            startRecording();
-                        } else if (recordingManager.isRecording()) {
-                            stopRecording();
-                        }
-                    } else if (model.getId() == -3) {  // select all clicked
-                        handleSelectAllToggle();
-                    } else if (model.getId() == -4) {  // clear queue clicked
-                        vibrate();
-                        promptQueueManager.clear();
-                    } else if (model.getId() == -2) {  // add prompt clicked
-                        Intent intent = new Intent(DictateInputMethodService.this, PromptsOverviewActivity.class);
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        startActivity(intent);
-                    } else {
-                        if ((recordingManager.isRecording() || isPreparingRecording) && !livePrompt) {
-                            promptQueueManager.togglePrompt(model.getId());
-                            return;
-                        }
-                        InputConnection currentConnection = getCurrentInputConnection();
-                        if (model.getRequiresSelection()) {
-                            if (currentConnection == null) {
-                                return;
-                            }
-                            ExtractedText extractedText = currentConnection.getExtractedText(new ExtractedTextRequest(), 0);
-                            if (extractedText == null || extractedText.text == null || extractedText.text.length() == 0) {
-                                return;  // nothing to edit
-                            }
-                            CharSequence selectedText = currentConnection.getSelectedText(0);
-                            if (selectedText == null || selectedText.length() == 0) {
-                                currentConnection.performContextMenuAction(android.R.id.selectAll);
-                                selectedText = currentConnection.getSelectedText(0);
-                                if (selectedText == null || selectedText.length() == 0) {
-                                    return;
-                                }
-                            }
-                        }
-                        runStandalonePromptViaOrchestrator(model);  // another normal prompt clicked
-                    }
-                }
-
-                @Override
-                public void onItemLongClicked(Integer position) {
-                    PromptEntity longClickModel = data.get(position);
-                    if (longClickModel.getId() >= 0) {
-                        vibrate();
-                        Intent intent = new Intent(DictateInputMethodService.this, PromptEditActivity.class);
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        intent.putExtra("net.devemperor.dictate.prompt_edit_activity_id", longClickModel.getId());
-                        startActivity(intent);
-                    }
-                }
-            });
-            promptsRv.setAdapter(promptsAdapter);
             promptsAdapter.setDisableNonSelectionPrompts(disableNonSelectionPrompts);
             promptsAdapter.setSelectAllActive(hasSelection);
 
-            // Restore persisted queue selections (filter out deleted prompts)
-            Set<Integer> validIds = new HashSet<>();
-            for (PromptEntity p : data) {
-                if (p.getId() >= 0) validIds.add(p.getId());
-            }
-            promptQueueManager.restoreQueue(validIds);
-
-            onQueueChanged(promptQueueManager.getQueuedIds());
-            updateSelectAllPromptState();
+            // Reload prompts from DB (async — adapter is updated via reloadPrompts())
+            reloadPrompts();
         }
         // promptsCl visibility is handled by stateManager.refresh() via applySmallMode below
 
@@ -705,15 +719,21 @@ public class DictateInputMethodService extends InputMethodService
         mainButtonsController.applyTheme(accentColor);
         qwertzController.applyColors(accentColor, DictateUtils.darkenColor(accentColor, 0.18f), DictateUtils.darkenColor(accentColor, 0.35f));
 
-        // show infos for updates, ratings or donations
-        Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
-        long totalAudioTime = totalAudioTimeOrNull != null ? totalAudioTimeOrNull : 0;
+        // show infos for updates, ratings or donations (DB query on background thread)
         if (sp.getInt("net.devemperor.dictate.last_version_code", 0) < BuildConfig.VERSION_CODE) {
             showInfo("update");
-        } else if (totalAudioTime > 180 && totalAudioTime <= 600 && !sp.getBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", false)) {
-            showInfo("rate");  // in case someone had Dictate installed before, he shouldn't get both messages
-        } else if (totalAudioTime > 600 && !sp.getBoolean("net.devemperor.dictate.flag_has_donated", false)) {
-            showInfo("donate");
+        } else {
+            dbExecutor.execute(() -> {
+                Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
+                long totalAudioTime = totalAudioTimeOrNull != null ? totalAudioTimeOrNull : 0;
+                mainHandler.post(() -> {
+                    if (totalAudioTime > 180 && totalAudioTime <= 600 && !sp.getBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", false)) {
+                        showInfo("rate");
+                    } else if (totalAudioTime > 600 && !sp.getBoolean("net.devemperor.dictate.flag_has_donated", false)) {
+                        showInfo("donate");
+                    }
+                });
+            });
         }
 
         // Sync animations preference to QWERTZ keyboard
@@ -1237,8 +1257,7 @@ public class DictateInputMethodService extends InputMethodService
     /**
      * Builds the keyboard prompt list with sentinel entries for instant prompt, select-all, clear-queue, and add button.
      */
-    private List<PromptEntity> getPromptsForKeyboard() {
-        List<PromptEntity> dbPrompts = promptDao.getAll();
+    private List<PromptEntity> buildPromptsWithControlButtons(List<PromptEntity> dbPrompts) {
         List<PromptEntity> result = new ArrayList<>(dbPrompts.size() + 4);
         result.add(new PromptEntity(-1, Integer.MIN_VALUE, null, null, false, false));      // instant prompt
         result.add(new PromptEntity(-3, Integer.MIN_VALUE + 1, null, null, false, false));  // select all
@@ -1246,6 +1265,32 @@ public class DictateInputMethodService extends InputMethodService
         result.addAll(dbPrompts);
         result.add(new PromptEntity(-2, Integer.MAX_VALUE, null, null, false, false));       // add button
         return result;
+    }
+
+    /**
+     * Reloads prompts from the database on a background thread and updates the adapter on the main thread.
+     * Debounced via InvalidationTracker — safe to call multiple times in quick succession.
+     */
+    private void reloadPrompts() {
+        if (promptDao == null || mainHandler == null) return;
+        dbExecutor.execute(() -> {
+            List<PromptEntity> dbPrompts = promptDao.getAll();
+            List<PromptEntity> fullList = buildPromptsWithControlButtons(dbPrompts);
+
+            mainHandler.post(() -> {
+                if (promptsAdapter == null || promptQueueManager == null) return;
+                promptsAdapter.updateData(fullList);
+
+                // Sync queue state with current prompt IDs
+                Set<Integer> validIds = new HashSet<>();
+                for (PromptEntity p : fullList) {
+                    if (p.getId() >= 0) validIds.add(p.getId());
+                }
+                promptQueueManager.restoreQueue(validIds);
+                onQueueChanged(promptQueueManager.getQueuedIds());
+                updateSelectAllPromptState();
+            });
+        });
     }
 
     private void updatePromptButtonsEnabledState() {

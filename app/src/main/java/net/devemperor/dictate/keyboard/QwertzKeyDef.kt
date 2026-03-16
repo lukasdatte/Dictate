@@ -46,7 +46,9 @@ enum class KeyAction {
     /** Toggle Ctrl modifier state */
     CTRL_MODIFIER,
     /** Close the QWERTZ keyboard and return to main buttons */
-    CLOSE_KEYBOARD
+    CLOSE_KEYBOARD,
+    /** Start/stop voice recording */
+    RECORD
 }
 
 /**

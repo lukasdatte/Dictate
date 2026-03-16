@@ -1,21 +1,18 @@
 package net.devemperor.dictate.keyboard
 
 import android.annotation.SuppressLint
-import android.content.res.ColorStateList
 import android.view.inputmethod.InputConnection
 
 /**
- * Controller for the QWERTZ keyboard. Implements the state machine for shift, ctrl,
+ * Controller for the QWERTZ keyboard. Implements the state machine for shift
  * and layout switching, and dispatches all key actions to the InputConnection.
  *
  * Responsibilities:
  * - Shift state machine (OFF -> SINGLE -> CAPS_LOCK -> OFF)
- * - Ctrl modifier toggle with combo execution (A/C/V/X/Z)
  * - Layout switching (QWERTZ <-> NUMBERS <-> SYMBOLS)
- * - Character input with shift/ctrl handling
+ * - Character input with shift handling
  * - Backspace repeat delegation to AcceleratingRepeatHandler
  * - Space cursor-swipe delegation to CursorSwipeTouchHandler
- * - Tab input
  * - Color theming delegation
  *
  * NOT responsible for:
@@ -35,13 +32,14 @@ class QwertzKeyboardController(
     private val vibrate: () -> Unit,
     private val deleteOneCharacter: () -> Unit,
     private val performEnterAction: () -> Unit,
-    private val onCloseKeyboard: () -> Unit
+    private val onCloseKeyboard: () -> Unit,
+    private val onRecord: () -> Unit = {},
+    private val onLayoutRebuilt: () -> Unit = {}
 ) : QwertzKeyboardView.KeyActionCallback {
 
     // ── State ──
 
     private var shiftState = ShiftState.OFF
-    private var ctrlActive = false
     private var currentLayout = QwertzKeyboardLayout.QWERTZ
 
     // ── Handlers ──
@@ -77,9 +75,9 @@ class QwertzKeyboardController(
             KeyAction.SHIFT -> handleShiftToggle()
             KeyAction.SWITCH_LAYOUT -> handleLayoutSwitch(keyDef)
             KeyAction.SPACE -> handleSpace()
-            KeyAction.TAB -> handleTab()
-            KeyAction.CTRL_MODIFIER -> handleCtrlToggle()
+            KeyAction.TAB, KeyAction.CTRL_MODIFIER -> { /* not used in current layouts */ }
             KeyAction.CLOSE_KEYBOARD -> { vibrate(); onCloseKeyboard() }
+            KeyAction.RECORD -> { vibrate(); onRecord() }
         }
     }
 
@@ -129,15 +127,14 @@ class QwertzKeyboardController(
     }
 
     /**
-     * Applies theme colors to the keyboard view and updates modifier visuals.
+     * Applies theme colors to the keyboard view.
      *
-     * @param accentColor primary accent (Enter, active Shift/Ctrl)
+     * @param accentColor primary accent (Enter, active Shift)
      * @param accentColorMedium medium shade (letters, numbers, space)
      * @param accentColorDark dark shade (Backspace, modifiers)
      */
     fun applyColors(accentColor: Int, accentColorMedium: Int, accentColorDark: Int) {
         view.applyColors(accentColor, accentColorMedium, accentColorDark)
-        updateCtrlVisual()
     }
 
     // ── Input handling ──
@@ -145,13 +142,6 @@ class QwertzKeyboardController(
     private fun handleCharacterInput(keyDef: QwertzKeyDef) {
         val ic = inputConnectionProvider() ?: return
         vibrate()
-
-        if (ctrlActive) {
-            handleCtrlCombo(keyDef, ic)
-            ctrlActive = false
-            updateCtrlVisual()
-            return
-        }
 
         val text = when (shiftState) {
             ShiftState.OFF -> keyDef.output
@@ -166,20 +156,6 @@ class QwertzKeyboardController(
         }
 
         resetShiftIfSingle()
-    }
-
-    private fun handleCtrlCombo(keyDef: QwertzKeyDef, ic: InputConnection) {
-        when (keyDef.output?.lowercase()) {
-            "a" -> ic.performContextMenuAction(android.R.id.selectAll)
-            "c" -> ic.performContextMenuAction(android.R.id.copy)
-            "v" -> ic.performContextMenuAction(android.R.id.paste)
-            "x" -> ic.performContextMenuAction(android.R.id.cut)
-            "z" -> {
-                // undo is available on API 30+, but performContextMenuAction handles it gracefully
-                @Suppress("NewApi")
-                ic.performContextMenuAction(android.R.id.undo)
-            }
-        }
     }
 
     private fun handleBackspace() {
@@ -217,12 +193,6 @@ class QwertzKeyboardController(
         // only activates when shiftState is OFF.
         resetShiftIfSingle()
         checkAutoShiftAfterSpace(ic)
-    }
-
-    private fun handleTab() {
-        val ic = inputConnectionProvider() ?: return
-        vibrate()
-        ic.commitText("\t", 1)
     }
 
     // ── Auto-Shift ──
@@ -263,36 +233,6 @@ class QwertzKeyboardController(
         if (shiftState == ShiftState.SINGLE) {
             shiftState = ShiftState.OFF
             refreshLayout()
-        }
-    }
-
-    // ── State machine: Ctrl ──
-
-    private fun handleCtrlToggle() {
-        vibrate()
-        ctrlActive = !ctrlActive
-        updateCtrlVisual()
-    }
-
-    private fun updateCtrlVisual() {
-        val ctrlButton = view.findButtonForAction(KeyAction.CTRL_MODIFIER) ?: return
-        // Active ctrl: accent color; inactive: uses default color tier (DARK)
-        // We read the current colors from the view's applied colors via the button's current tint
-        // For simplicity, toggle between the known color tiers
-        if (ctrlActive) {
-            // Use the same accent color as the Enter button (ACCENT tier)
-            val enterButton = view.findButtonForAction(KeyAction.ENTER)
-            val accentColor = enterButton?.backgroundTintList?.defaultColor
-            if (accentColor != null) {
-                ctrlButton.backgroundTintList = ColorStateList.valueOf(accentColor)
-            }
-        } else {
-            // Use the same dark color as Backspace (DARK tier)
-            val backspaceButton = view.findButtonForAction(KeyAction.BACKSPACE)
-            val darkColor = backspaceButton?.backgroundTintList?.defaultColor
-            if (darkColor != null) {
-                ctrlButton.backgroundTintList = ColorStateList.valueOf(darkColor)
-            }
         }
     }
 
@@ -345,7 +285,7 @@ class QwertzKeyboardController(
             view.updateShiftVisuals(shiftActive, shiftState == ShiftState.CAPS_LOCK)
         }
 
-        // Update ctrl visual state
-        updateCtrlVisual()
+        // Notify caller so external state (e.g. recording icon) can be re-applied
+        onLayoutRebuilt()
     }
 }

@@ -26,7 +26,7 @@ import net.devemperor.dictate.R
  *
  * NOT responsible for:
  * - Input handling (delegated to KeyActionCallback)
- * - State management (Shift, Caps, Ctrl)
+ * - State management (Shift, Caps)
  */
 class QwertzKeyboardView @JvmOverloads constructor(
     context: Context,
@@ -105,7 +105,7 @@ class QwertzKeyboardView @JvmOverloads constructor(
     /**
      * Sets the theme colors and applies them to all buttons.
      *
-     * @param accentColor primary accent (Enter, active Shift/Ctrl)
+     * @param accentColor primary accent (Enter, active Shift)
      * @param accentColorMedium medium shade (letters, numbers, space)
      * @param accentColorDark dark shade (Backspace, modifiers)
      */
@@ -162,7 +162,7 @@ class QwertzKeyboardView @JvmOverloads constructor(
 
     /**
      * Finds the MaterialButton for a given key action. Useful for the controller
-     * to access specific buttons (e.g., Ctrl button for visual toggle).
+     * to access specific buttons (e.g., Space button for cursor swipe handler).
      *
      * @param action the key action to search for
      * @return the first matching button, or null
@@ -178,11 +178,14 @@ class QwertzKeyboardView @JvmOverloads constructor(
         return LinearLayout(context).apply {
             orientation = HORIZONTAL
 
-            // Row 2 (ASDF row) gets half-key padding for staggered layout,
-            // but only on the 5-row QWERTZ layout (NUMBERS/SYMBOLS have 4 rows)
-            if (rowIndex == 2 && currentKeys.size == QWERTZ_ROW_COUNT) {
-                val halfKeyPad = dpToPx(STAGGER_PADDING_DP)
-                setPadding(halfKeyPad, 0, halfKeyPad, 0)
+            // Per-row stagger padding for realistic QWERTZ layout,
+            // only on the 5-row QWERTZ layout (NUMBERS/SYMBOLS have 4 rows)
+            if (currentKeys.size == QWERTZ_ROW_COUNT) {
+                val stagger = QWERTZ_STAGGER_DP.getOrElse(rowIndex) { 0 }
+                if (stagger > 0) {
+                    val pad = dpToPx(stagger)
+                    setPadding(pad, 0, pad, 0)
+                }
             }
         }
     }
@@ -231,33 +234,41 @@ class QwertzKeyboardView @JvmOverloads constructor(
         // Accessibility: content description for icon-only and functional keys
         button.contentDescription = getContentDescription(keyDef)
 
-        // Click listener
+        // onClick only for non-COMMIT_TEXT keys (functional keys like Shift, Enter, etc.)
         button.setOnClickListener {
-            callback?.onKeyAction(keyDef)
+            if (keyDef.keyAction != KeyAction.COMMIT_TEXT) {
+                callback?.onKeyAction(keyDef)
+            }
         }
 
-        // Touch listener for press animation and repeatable key handling
+        // Touch listener for press animation, immediate character input, and repeatable keys
         button.setOnTouchListener { v, event ->
             // Press animation
             keyPressAnimator.handlePressAnimationEvent(v, event)
 
-            // Repeatable key long-press / release delegation
-            if (keyDef.repeatable) {
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        // Start long-press detection via postDelayed
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    // Immediate input for character keys (fire on touch, not on release)
+                    if (keyDef.keyAction == KeyAction.COMMIT_TEXT) {
+                        callback?.onKeyAction(keyDef)
+                    }
+                    // Repeatable key long-press detection
+                    if (keyDef.repeatable) {
                         v.tag = Runnable { callback?.onKeyLongPress(keyDef) }
                         v.postDelayed(v.tag as Runnable, LONG_PRESS_DELAY_MS)
                     }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        // Cancel pending long-press and notify release
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (keyDef.repeatable) {
                         (v.tag as? Runnable)?.let { v.removeCallbacks(it) }
                         callback?.onKeyReleased(keyDef)
                     }
                 }
             }
 
-            false // Don't consume -- let click listener work
+            // Consume for character keys to prevent onClick double-fire;
+            // don't consume for functional keys (they use onClick)
+            keyDef.keyAction == KeyAction.COMMIT_TEXT
         }
 
         return button
@@ -279,11 +290,12 @@ class QwertzKeyboardView @JvmOverloads constructor(
             KeyAction.ENTER -> "Enter"
             KeyAction.SHIFT -> "Shift"
             KeyAction.SPACE -> "Space"
-            KeyAction.TAB -> "Tab"
-            KeyAction.CTRL_MODIFIER -> "Ctrl"
+            KeyAction.TAB -> "Tab"  // not in current layouts, kept for enum exhaustiveness
+            KeyAction.CTRL_MODIFIER -> "Ctrl"  // not in current layouts, kept for enum exhaustiveness
             KeyAction.SWITCH_LAYOUT -> keyDef.label.ifEmpty { "Switch layout" }
             KeyAction.COMMIT_TEXT -> keyDef.output ?: keyDef.label
             KeyAction.CLOSE_KEYBOARD -> "Close keyboard"
+            KeyAction.RECORD -> "Record"
         }
     }
 
@@ -310,8 +322,8 @@ class QwertzKeyboardView @JvmOverloads constructor(
         /** Row height in dp. */
         private const val ROW_HEIGHT_DP = 42
 
-        /** Left/right padding for staggered row 2 (ASDF) in dp. */
-        private const val STAGGER_PADDING_DP = 12
+        /** Per-row stagger offsets in dp (rows 0-4). Row 2 = ASDF, Row 3 = YXCV. */
+        private val QWERTZ_STAGGER_DP = intArrayOf(0, 0, 8, 16, 0)
 
         /** Button corner radius in dp. */
         private const val CORNER_RADIUS_DP = 6
@@ -326,7 +338,7 @@ class QwertzKeyboardView @JvmOverloads constructor(
         private const val TEXT_SIZE_FUNCTIONAL_SP = 12f
 
         /** Long-press delay before triggering repeat in ms. */
-        private const val LONG_PRESS_DELAY_MS = 400L
+        private const val LONG_PRESS_DELAY_MS = 300L
 
         /** Default accent color (Material Blue). */
         private const val DEFAULT_ACCENT = 0xFF2196F3.toInt()

@@ -55,6 +55,7 @@ import net.devemperor.dictate.ai.AIOrchestrator;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.entity.InsertionMethod;
 import net.devemperor.dictate.database.entity.InsertionSource;
+import net.devemperor.dictate.keyboard.KeyAction;
 import net.devemperor.dictate.keyboard.QwertzKeyboardController;
 import net.devemperor.dictate.keyboard.QwertzKeyboardLayout;
 import net.devemperor.dictate.keyboard.QwertzKeyboardView;
@@ -180,6 +181,11 @@ public class DictateInputMethodService extends InputMethodService
     // History button
     private MaterialButton editHistoryButton;
 
+    // Action Bar recording controls
+    private MaterialButton editRecBtn;
+    private MaterialButton editActionPauseBtn;
+    private MaterialButton editActionTrashBtn;
+
 
     // Keep screen awake while recording
     private boolean keepScreenAwakeApplied = false;
@@ -288,7 +294,17 @@ public class DictateInputMethodService extends InputMethodService
             () -> { vibrate(); return kotlin.Unit.INSTANCE; },
             () -> { deleteOneCharacter(); return kotlin.Unit.INSTANCE; },
             () -> { performEnterAction(); return kotlin.Unit.INSTANCE; },
-            () -> { hideQwertzKeyboard(); return kotlin.Unit.INSTANCE; }
+            () -> { hideQwertzKeyboard(); return kotlin.Unit.INSTANCE; },
+            () -> { onRecordClicked(); return kotlin.Unit.INSTANCE; },
+            () -> {
+                // Re-apply recording icon after layout rebuild (shift toggle, layout switch)
+                if (recordingUiController != null && recordingStateController != null) {
+                    recordingUiController.updateQwertzRecButton(
+                        recordingStateController.getState().isRecordingOrPaused()
+                    );
+                }
+                return kotlin.Unit.INSTANCE;
+            }
         );
 
         overlayCharactersLl = dictateKeyboardView.findViewById(R.id.overlay_characters_ll);
@@ -316,12 +332,23 @@ public class DictateInputMethodService extends InputMethodService
             sp, getResources(), () -> getTheme()
         );
 
+        // History button
+        editHistoryButton = dictateKeyboardView.findViewById(R.id.edit_history_btn);
+
+        // Action Bar recording controls
+        editRecBtn = dictateKeyboardView.findViewById(R.id.edit_rec_btn);
+        editActionPauseBtn = dictateKeyboardView.findViewById(R.id.edit_action_pause_btn);
+        editActionTrashBtn = dictateKeyboardView.findViewById(R.id.edit_action_trash_btn);
+
         // KeyboardStateManager (deterministic visibility calculator)
         // Note: recordingStateController is initialized after stateManager,
         // but lambdas are evaluated lazily, so this is safe
         stateManager = new KeyboardStateManager(
             new KeyboardViews(mainButtonsCl, editButtonsKeyboardLl, promptsCl, emojiPickerCl,
-                qwertzContainer, overlayCharactersLl, pauseButton, trashButton),
+                qwertzContainer, overlayCharactersLl, pauseButton, trashButton,
+                editRecBtn, editActionPauseBtn, editActionTrashBtn,
+                editUndoButton, editRedoButton, editEmojiButton,
+                editNumbersButton, editKeyboardButton, editHistoryButton),
             () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Active,
             () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Paused,
             () -> pipelineOrchestrator.isRunning(),
@@ -334,11 +361,6 @@ public class DictateInputMethodService extends InputMethodService
         pipelineOrchestrator = new PipelineOrchestrator(
             aiOrchestrator, autoFormattingService, promptQueueManager,
             promptService, sessionManager, sessionTracker, promptDao, this);
-
-        // History button
-        editHistoryButton = dictateKeyboardView.findViewById(R.id.edit_history_btn);
-
-
 
         StaggeredGridLayoutManager promptsLayoutManager =
                 new StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.HORIZONTAL);
@@ -390,7 +412,8 @@ public class DictateInputMethodService extends InputMethodService
                 editPasteButton, editEmojiButton, editNumbersButton, editKeyboardButton,
                 editHistoryButton, emojiPickerCloseButton, emojiPickerView,
                 overlayCharactersLl, pipelineCancelBtn, infoYesButton, infoNoButton,
-                recordPulseLayout
+                recordPulseLayout,
+                editRecBtn, editActionPauseBtn, editActionTrashBtn
             ),
             sp, stateManager, this,
             () -> getCurrentInputConnection(),
@@ -405,7 +428,7 @@ public class DictateInputMethodService extends InputMethodService
             new net.devemperor.dictate.widget.BorderGlowAnimation(
                 sp.getInt("net.devemperor.dictate.accent_color", -14700810),
                 AppCompatResources.getDrawable(context, R.drawable.ic_baseline_send_20),
-                24,     // bar count
+                30,     // bar count
                 0.35f,  // max brightness boost
                 displayDensity
             );
@@ -415,7 +438,10 @@ public class DictateInputMethodService extends InputMethodService
             () -> getDictateButtonText(),
             () -> sp.getBoolean("net.devemperor.dictate.animations", true),
             () -> new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                    && sp.getBoolean("net.devemperor.dictate.resend_button", false)
+                    && sp.getBoolean("net.devemperor.dictate.resend_button", false),
+            () -> qwertzKeyboardView != null ? qwertzKeyboardView.findButtonForAction(KeyAction.RECORD) : null,
+            editRecBtn,
+            () -> sp.getInt("net.devemperor.dictate.accent_color", -14700810)
         );
 
         // 4. Composite callback: UI events → UiController, Lifecycle events → Service

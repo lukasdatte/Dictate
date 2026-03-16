@@ -101,6 +101,25 @@ class MainButtonsController(
             true
         }
 
+        // Action Bar recording controls
+        views.actionBarRecBtn.setOnClickListener {
+            callback.onVibrate()
+            callback.onRecordClicked()
+        }
+        views.actionBarRecBtn.setOnLongClickListener {
+            callback.onVibrate()
+            callback.onRecordLongClicked()
+            true
+        }
+        views.actionBarPauseBtn.setOnClickListener {
+            callback.onVibrate()
+            callback.onPauseClicked()
+        }
+        views.actionBarTrashBtn.setOnClickListener {
+            callback.onVibrate()
+            callback.onTrashClicked()
+        }
+
         // Edit actions (undo, redo, cut, copy, paste)
         val editActions = arrayOf(
             views.editUndoButton to android.R.id.undo,
@@ -271,7 +290,8 @@ class MainButtonsController(
             views.editUndoButton, views.editRedoButton, views.editCutButton, views.editCopyButton,
             views.editPasteButton, views.editEmojiButton, views.editNumbersButton,
             views.editKeyboardButton, views.editHistoryButton,
-            views.infoYesButton, views.infoNoButton
+            views.infoYesButton, views.infoNoButton,
+            views.actionBarRecBtn, views.actionBarPauseBtn, views.actionBarTrashBtn
         )
         for (view in animatedViews) {
             keyPressAnimator.applyPressAnimation(view)
@@ -301,6 +321,9 @@ class MainButtonsController(
         applyButtonColor(views.editEmojiButton, accentMedium)
         applyButtonColor(views.editNumbersButton, accentMedium)
         applyButtonColor(views.editHistoryButton, accentMedium)
+        applyButtonColor(views.actionBarRecBtn, accentColor)
+        applyButtonColor(views.actionBarPauseBtn, accentMedium)
+        applyButtonColor(views.actionBarTrashBtn, accentMedium)
         applyButtonColor(views.emojiPickerCloseButton, accentColor)
     }
 
@@ -367,5 +390,9 @@ data class MainButtonViews(
     val pipelineCancelBtn: MaterialButton,
     val infoYesButton: Button,
     val infoNoButton: Button,
-    val recordPulseLayout: PulseLayout
+    val recordPulseLayout: PulseLayout,
+    // Action Bar recording controls
+    val actionBarRecBtn: MaterialButton,
+    val actionBarPauseBtn: MaterialButton,
+    val actionBarTrashBtn: MaterialButton
 )

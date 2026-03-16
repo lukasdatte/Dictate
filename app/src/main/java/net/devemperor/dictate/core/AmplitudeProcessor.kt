@@ -19,8 +19,8 @@ import kotlin.math.min
  * @param effectiveMax practical maximum amplitude for speech (MediaRecorder max is 32767)
  */
 class AmplitudeProcessor(
-    private val attackFactor: Float = 0.6f,
-    private val decayFactor: Float = 0.4f,
+    private val attackFactor: Float = 1.0f,
+    private val decayFactor: Float = 1.0f,
     private val effectiveMax: Int = 12000
 ) {
     private var smoothedLevel: Float = 0f

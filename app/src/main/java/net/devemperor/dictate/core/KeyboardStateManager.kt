@@ -26,7 +26,18 @@ data class KeyboardViews(
     val qwertzContainer: FrameLayout,
     val overlayCharactersLl: LinearLayout,
     val pauseButton: View,
-    val trashButton: View
+    val trashButton: View,
+    // Action Bar recording controls
+    val actionBarRecBtn: View,
+    val actionBarPauseBtn: View,
+    val actionBarTrashBtn: View,
+    // Action Bar standard controls (hidden during recording)
+    val actionBarUndoBtn: View,
+    val actionBarRedoBtn: View,
+    val actionBarEmojiBtn: View,
+    val actionBarNumbersBtn: View,
+    val actionBarKeyboardBtn: View,
+    val actionBarHistoryBtn: View
 )
 
 class KeyboardStateManager(
@@ -75,8 +86,7 @@ class KeyboardStateManager(
         views.mainButtonsCl.visibility =
             if (contentArea == ContentArea.MAIN_BUTTONS) View.VISIBLE else View.GONE
         views.editButtonsLl.visibility =
-            if (contentArea == ContentArea.MAIN_BUTTONS && !isSmallMode) View.VISIBLE
-            else if (contentArea == ContentArea.MAIN_BUTTONS && isSmallMode) View.VISIBLE
+            if (contentArea == ContentArea.MAIN_BUTTONS || contentArea == ContentArea.QWERTZ) View.VISIBLE
             else View.GONE
         views.qwertzContainer.visibility =
             if (contentArea == ContentArea.QWERTZ) View.VISIBLE else View.GONE
@@ -88,6 +98,18 @@ class KeyboardStateManager(
         views.pauseButton.visibility = if (isActive) View.VISIBLE else View.GONE
         views.trashButton.visibility = if (isActive) View.VISIBLE else View.GONE
 
+        // Action Bar recording controls: visible during recording, hidden when idle
+        views.actionBarRecBtn.visibility = if (isActive) View.VISIBLE else View.GONE
+        views.actionBarPauseBtn.visibility = if (isActive) View.VISIBLE else View.GONE
+        views.actionBarTrashBtn.visibility = if (isActive) View.VISIBLE else View.GONE
+        // Action Bar standard controls: hidden during recording, visible when idle
+        views.actionBarUndoBtn.visibility = if (isActive) View.GONE else View.VISIBLE
+        views.actionBarRedoBtn.visibility = if (isActive) View.GONE else View.VISIBLE
+        views.actionBarEmojiBtn.visibility = if (isActive) View.GONE else View.VISIBLE
+        views.actionBarNumbersBtn.visibility = if (isActive) View.GONE else View.VISIBLE
+        views.actionBarKeyboardBtn.visibility = if (isActive) View.GONE else View.VISIBLE
+        views.actionBarHistoryBtn.visibility = if (isActive) View.GONE else View.VISIBLE
+
         // Prompts (combination of all axes)
         val showPrompts = when {
             isSmallMode -> false
@@ -96,6 +118,15 @@ class KeyboardStateManager(
             else -> isRewordingEnabled()
         }
         views.promptsCl.visibility = if (showPrompts) View.VISIBLE else View.GONE
+
+        // Compact prompts height in QWERTZ mode to save vertical space
+        if (showPrompts) {
+            val density = views.promptsCl.resources.displayMetrics.density
+            val promptHeightDp = if (contentArea == ContentArea.QWERTZ) 36 else 72
+            views.promptsCl.layoutParams = views.promptsCl.layoutParams.apply {
+                height = (promptHeightDp * density).toInt()
+            }
+        }
 
         // Overlay: always GONE (shown on demand by EnterOverlayHandler)
         views.overlayCharactersLl.visibility = View.GONE

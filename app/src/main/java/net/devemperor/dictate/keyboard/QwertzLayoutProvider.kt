@@ -82,7 +82,7 @@ object QwertzLayoutProvider {
             QwertzKeyDef(
                 label = "",
                 keyAction = KeyAction.SHIFT,
-                widthWeight = 1.5f,
+                widthWeight = 1.8f,
                 iconResId = R.drawable.ic_keyboard_shift_24,
                 colorTier = ColorTier.DARK
             ),
@@ -91,16 +91,15 @@ object QwertzLayoutProvider {
             QwertzKeyDef(
                 label = "",
                 keyAction = KeyAction.BACKSPACE,
-                widthWeight = 1.5f,
+                widthWeight = 1.8f,
                 iconResId = R.drawable.ic_baseline_keyboard_backspace_24,
                 repeatable = true,
                 colorTier = ColorTier.DARK
             )
         )
 
-        // Row 4: [↓] [123] [Ctrl] [Tab] [Space] [.] [Enter]
+        // Row 4: [123] [,] [Space] [.] [↓] [●Rec] [Enter]
         val row4 = listOf(
-            closeKeyDef(),
             QwertzKeyDef(
                 label = "123",
                 keyAction = KeyAction.SWITCH_LAYOUT,
@@ -108,17 +107,9 @@ object QwertzLayoutProvider {
                 colorTier = ColorTier.DARK
             ),
             QwertzKeyDef(
-                label = "Ctrl",
-                keyAction = KeyAction.CTRL_MODIFIER,
-                widthWeight = 1f,
-                colorTier = ColorTier.DARK
-            ),
-            QwertzKeyDef(
-                label = "",
-                keyAction = KeyAction.TAB,
-                widthWeight = 1f,
-                iconResId = R.drawable.ic_keyboard_tab_24,
-                colorTier = ColorTier.DARK
+                label = ",",
+                output = ",",
+                widthWeight = 1f
             ),
             QwertzKeyDef(
                 label = "",
@@ -132,6 +123,8 @@ object QwertzLayoutProvider {
                 output = ".",
                 widthWeight = 1f
             ),
+            closeKeyDef(),
+            recordKeyDef(),
             QwertzKeyDef(
                 label = "",
                 keyAction = KeyAction.ENTER,
@@ -198,7 +191,7 @@ object QwertzLayoutProvider {
             )
         )
 
-        // Row 3: [↓] [ABC] [,] [Space] [.] [Enter]
+        // Row 3: [↓] [ABC] [,] [Space] [.] [●Rec] [Enter]
         val row3 = listOf(
             closeKeyDef(),
             QwertzKeyDef(
@@ -224,6 +217,7 @@ object QwertzLayoutProvider {
                 output = ".",
                 widthWeight = 1f
             ),
+            recordKeyDef(),
             QwertzKeyDef(
                 label = "",
                 keyAction = KeyAction.ENTER,
@@ -288,11 +282,11 @@ object QwertzLayoutProvider {
             )
         )
 
-        // Row 3: [↓] [ABC] [,] [Space] [.] [Enter]
+        // Row 3: [↓] [123] [,] [Space] [.] [●Rec] [Enter]
         val row3 = listOf(
             closeKeyDef(),
             QwertzKeyDef(
-                label = "ABC",
+                label = "123",
                 keyAction = KeyAction.SWITCH_LAYOUT,
                 widthWeight = 1.2f,
                 colorTier = ColorTier.DARK
@@ -314,6 +308,7 @@ object QwertzLayoutProvider {
                 output = ".",
                 widthWeight = 1f
             ),
+            recordKeyDef(),
             QwertzKeyDef(
                 label = "",
                 keyAction = KeyAction.ENTER,
@@ -333,5 +328,14 @@ object QwertzLayoutProvider {
         widthWeight = 1f,
         iconResId = R.drawable.ic_baseline_keyboard_hide_24,
         colorTier = ColorTier.DARK
+    )
+
+    /** Shared record key definition used in all layouts' bottom row. */
+    private fun recordKeyDef() = QwertzKeyDef(
+        label = "",
+        keyAction = KeyAction.RECORD,
+        widthWeight = 1.2f,
+        iconResId = R.drawable.ic_baseline_mic_24,
+        colorTier = ColorTier.ACCENT
     )
 }

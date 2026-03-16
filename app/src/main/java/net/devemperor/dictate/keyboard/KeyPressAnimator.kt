@@ -21,7 +21,7 @@ class KeyPressAnimator(
         /** Scale factor when a key is pressed. */
         const val KEY_PRESS_SCALE = 0.92f
         /** Animation duration in milliseconds. */
-        const val KEY_PRESS_ANIM_DURATION = 80L
+        const val KEY_PRESS_ANIM_DURATION = 40L
         /** Interpolator for smooth deceleration. */
         private val INTERPOLATOR: Interpolator = DecelerateInterpolator()
     }

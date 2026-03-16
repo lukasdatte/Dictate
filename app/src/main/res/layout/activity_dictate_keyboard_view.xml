@@ -222,17 +222,63 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/prompts_keyboard_cl">
 
+        <!-- Recording controls (visible during recording, GONE when idle) -->
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_undo_btn"
+            android:id="@+id/edit_rec_btn"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_marginStart="16dp"
             android:layout_marginEnd="4dp"
+            android:foreground="@drawable/ic_baseline_mic_24"
+            android:foregroundGravity="center"
+            android:visibility="gone"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/edit_action_pause_btn"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            tools:visibility="visible" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/edit_action_pause_btn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginHorizontal="4dp"
+            android:foreground="@drawable/ic_baseline_pause_24"
+            android:foregroundGravity="center"
+            android:visibility="gone"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/edit_action_trash_btn"
+            app:layout_constraintStart_toEndOf="@+id/edit_rec_btn"
+            app:layout_constraintTop_toTopOf="parent"
+            tools:visibility="visible" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/edit_action_trash_btn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginHorizontal="4dp"
+            android:foreground="@drawable/ic_baseline_delete_24"
+            android:foregroundGravity="center"
+            android:visibility="gone"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/edit_undo_btn"
+            app:layout_constraintStart_toEndOf="@+id/edit_action_pause_btn"
+            app:layout_constraintTop_toTopOf="parent"
+            tools:visibility="visible" />
+
+        <!-- Standard edit controls (visible when idle, GONE during recording) -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/edit_undo_btn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            app:layout_goneMarginStart="16dp"
             android:foreground="@drawable/ic_baseline_undo_24"
             android:foregroundGravity="center"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toStartOf="@+id/edit_redo_btn"
-            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintStart_toEndOf="@+id/edit_action_trash_btn"
             app:layout_constraintTop_toTopOf="parent" />
 
         <com.google.android.material.button.MaterialButton
@@ -472,7 +518,7 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/prompts_keyboard_cl"
+        app:layout_constraintTop_toBottomOf="@id/edit_buttons_keyboard_ll"
         tools:visibility="gone" />
 
     <LinearLayout

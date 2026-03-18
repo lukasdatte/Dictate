@@ -1,19 +1,12 @@
 package net.devemperor.dictate.core
 
-import android.animation.ObjectAnimator
-import android.animation.ValueAnimator
-import android.graphics.Color
 import android.os.Handler
-import android.util.TypedValue
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
-import android.view.animation.LinearInterpolator
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.R
 import java.util.Locale
@@ -22,23 +15,22 @@ import java.util.Locale
  * Controls the keyboard prompt area UI: mode switching between prompt buttons
  * and pipeline progress view with live elapsed timer per step.
  *
- * Responsibilities:
- * - Centralized visibility management for the two prompt area modes
- * - Pipeline step rows (add running, complete, fail) with live duration timer
- * - Record button text updates during pipeline execution
+ * Owns the [currentMode] state and side-effects (timer stop, container clear).
+ * Visibility calculation is delegated to [KeyboardStateManager] via [stateManager.refresh()].
  *
  * Does NOT handle threading — all methods must be called on the main thread.
  * Does NOT make pipeline/orchestration decisions — the Service controls when to switch modes.
  */
-class KeyboardUiController(private val views: PipelineViews) {
+class KeyboardUiController(
+    private val views: PipelineViews,
+    private val stateManager: KeyboardStateManager
+) {
 
     enum class PromptAreaMode {
-        PROMPT_BUTTONS, PIPELINE_PROGRESS, RECORDING_INDICATOR
+        PROMPT_BUTTONS, PIPELINE_PROGRESS
     }
 
     data class PipelineViews(
-        val promptsRv: RecyclerView,
-        val pipelineProgressLl: View,
         val pipelineStepsContainer: LinearLayout,
         val pipelineScrollView: ScrollView,
         val recordButton: MaterialButton,
@@ -55,54 +47,37 @@ class KeyboardUiController(private val views: PipelineViews) {
     private var currentStep = 0
     private var activeTimer: ElapsedTimer? = null
 
-    // Recording indicator (created lazily, reused)
-    private var recordingIndicatorView: LinearLayout? = null
-    private var recordingDotAnimator: ObjectAnimator? = null
-
-    // ── Mode switching (centralizes ALL visibility changes) ──
-
-    /**
-     * Switches the prompt area to the given mode.
-     * Stops any running timer when leaving PIPELINE_PROGRESS.
-     */
-    fun setMode(mode: PromptAreaMode) {
-        currentMode = mode
-        when (mode) {
-            PromptAreaMode.PROMPT_BUTTONS -> {
-                views.promptsRv.visibility = View.VISIBLE
-                views.pipelineProgressLl.visibility = View.GONE
-                hideRecordingIndicator()
-                views.pipelineStepsContainer.removeAllViews()
-                stepRows.clear()
-                activeTimer?.stop()
-                activeTimer = null
-            }
-            PromptAreaMode.PIPELINE_PROGRESS -> {
-                views.promptsRv.visibility = View.GONE
-                views.pipelineProgressLl.visibility = View.VISIBLE
-                hideRecordingIndicator()
-            }
-            PromptAreaMode.RECORDING_INDICATOR -> {
-                views.promptsRv.visibility = View.GONE
-                views.pipelineProgressLl.visibility = View.GONE
-                showRecordingIndicatorView()
-            }
-        }
-    }
+    // ── Mode switching ──
 
     /**
      * Enters pipeline progress mode and resets step tracking.
-     * Hides the info bar to make room for step rows.
+     * Side-effects (container clear, info bar hide) stay here.
+     * Visibility recalculation is triggered via [stateManager.refresh].
      *
      * @param totalSteps total number of pipeline steps (transcription + format + prompts)
      */
     fun showPipelineProgress(totalSteps: Int) {
-        setMode(PromptAreaMode.PIPELINE_PROGRESS)
-        stepRows.clear()
+        currentMode = PromptAreaMode.PIPELINE_PROGRESS
         views.pipelineStepsContainer.removeAllViews()
+        views.infoCl.visibility = View.GONE
+        stepRows.clear()
         this.totalSteps = totalSteps
         currentStep = 0
-        views.infoCl.visibility = View.GONE
+        stateManager.refresh()
+    }
+
+    /**
+     * Resets back to prompt buttons mode.
+     * Side-effects (timer cancel) stay here.
+     * Visibility recalculation is triggered via [stateManager.refresh].
+     */
+    fun resetToPromptButtons() {
+        currentMode = PromptAreaMode.PROMPT_BUTTONS
+        activeTimer?.stop()
+        activeTimer = null
+        stepRows.clear()
+        views.pipelineStepsContainer.removeAllViews()
+        stateManager.refresh()
     }
 
     // ── Pipeline steps (PIPELINE_PROGRESS mode only, main thread) ──
@@ -232,86 +207,6 @@ class KeyboardUiController(private val views: PipelineViews) {
         views.recordButton.text = text
         views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(leftIcon, 0, rightIcon, 0)
         views.recordButton.isEnabled = true
-    }
-
-    // ── Recording indicator ──
-
-    /**
-     * Shows a recording indicator in the prompt area (red blinking dot + "Aufnahme..." text).
-     * Call this when the user starts recording while the QWERTZ keyboard is visible.
-     */
-    fun showRecordingIndicator() {
-        setMode(PromptAreaMode.RECORDING_INDICATOR)
-    }
-
-    private fun showRecordingIndicatorView() {
-        val indicator = getOrCreateRecordingIndicator()
-        indicator.visibility = View.VISIBLE
-
-        // Start blinking animation on the red dot
-        val dot = indicator.getChildAt(0)
-        recordingDotAnimator?.cancel()
-        recordingDotAnimator = ObjectAnimator.ofFloat(dot, "alpha", 1f, 0.2f).apply {
-            duration = 800
-            repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.REVERSE
-            interpolator = LinearInterpolator()
-            start()
-        }
-    }
-
-    private fun hideRecordingIndicator() {
-        recordingDotAnimator?.cancel()
-        recordingDotAnimator = null
-        recordingIndicatorView?.visibility = View.GONE
-    }
-
-    private fun getOrCreateRecordingIndicator(): LinearLayout {
-        recordingIndicatorView?.let { return it }
-
-        val context = views.promptsRv.context
-
-        val container = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
-            )
-        }
-
-        // Red dot
-        val dotSize = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP, 12f, context.resources.displayMetrics
-        ).toInt()
-        val dot = View(context).apply {
-            layoutParams = LinearLayout.LayoutParams(dotSize, dotSize).apply {
-                marginEnd = TypedValue.applyDimension(
-                    TypedValue.COMPLEX_UNIT_DIP, 8f, context.resources.displayMetrics
-                ).toInt()
-            }
-            val drawable = android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.OVAL
-                setColor(Color.RED)
-            }
-            background = drawable
-        }
-        container.addView(dot)
-
-        // Recording indicator text (localized)
-        val textView = TextView(context).apply {
-            text = context.getString(R.string.dictate_recording_indicator)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            setTextColor(Color.RED)
-        }
-        container.addView(textView)
-
-        // Add to the prompts_keyboard_cl parent (same level as RecyclerView and pipeline)
-        val parent = views.promptsRv.parent as? android.view.ViewGroup
-        parent?.addView(container)
-
-        recordingIndicatorView = container
-        return container
     }
 
     // ── Helpers ──

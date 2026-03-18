@@ -4,6 +4,8 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.StaggeredGridLayoutManager
 
 /**
  * Deterministic visibility calculator for the keyboard UI.
@@ -27,17 +29,11 @@ data class KeyboardViews(
     val overlayCharactersLl: LinearLayout,
     val pauseButton: View,
     val trashButton: View,
-    // Action Bar recording controls
-    val actionBarRecBtn: View,
-    val actionBarPauseBtn: View,
-    val actionBarTrashBtn: View,
-    // Action Bar standard controls (hidden during recording)
-    val actionBarUndoBtn: View,
-    val actionBarRedoBtn: View,
-    val actionBarEmojiBtn: View,
-    val actionBarNumbersBtn: View,
-    val actionBarKeyboardBtn: View,
-    val actionBarHistoryBtn: View
+    val promptRecordingControlsLl: LinearLayout? = null,
+    val promptPauseBtn: View? = null,
+    val promptTrashBtn: View? = null,
+    val promptsRv: RecyclerView? = null,
+    val pipelineProgressLl: View? = null
 )
 
 class KeyboardStateManager(
@@ -48,7 +44,8 @@ class KeyboardStateManager(
     private val isPipelineRunning: () -> Boolean,
     private val isRewordingEnabled: () -> Boolean,
     private val onKeepScreenAwakeChanged: (Boolean) -> Unit,
-    private val infoBarController: InfoBarController? = null
+    private val infoBarController: InfoBarController? = null,
+    private val getPromptAreaMode: () -> KeyboardUiController.PromptAreaMode
 ) {
     // === Own state (lives only here, nowhere else) ===
     var contentArea: ContentArea = ContentArea.MAIN_BUTTONS
@@ -82,7 +79,14 @@ class KeyboardStateManager(
     // === Deterministic visibility calculation ===
 
     private fun applyVisibility() {
-        // Content area (own state, mutually exclusive)
+        applyContentAreaVisibility()
+        applyRecordingControlsVisibility()
+        applyPromptsVisibility()
+        views.overlayCharactersLl.visibility = View.GONE
+        infoBarController?.onStateChanged(contentArea, isSmallMode)
+    }
+
+    private fun applyContentAreaVisibility() {
         views.mainButtonsCl.visibility =
             if (contentArea == ContentArea.MAIN_BUTTONS) View.VISIBLE else View.GONE
         views.editButtonsLl.visibility =
@@ -92,46 +96,58 @@ class KeyboardStateManager(
             if (contentArea == ContentArea.QWERTZ) View.VISIBLE else View.GONE
         views.emojiPickerCl.visibility =
             if (contentArea == ContentArea.EMOJI_PICKER) View.VISIBLE else View.GONE
+    }
 
-        // Recording controls (queried state)
+    private fun applyRecordingControlsVisibility() {
         val isActive = isRecording() || isPaused()
         views.pauseButton.visibility = if (isActive) View.VISIBLE else View.GONE
         views.trashButton.visibility = if (isActive) View.VISIBLE else View.GONE
+    }
 
-        // Action Bar recording controls: visible during recording, hidden when idle
-        views.actionBarRecBtn.visibility = if (isActive) View.VISIBLE else View.GONE
-        views.actionBarPauseBtn.visibility = if (isActive) View.VISIBLE else View.GONE
-        views.actionBarTrashBtn.visibility = if (isActive) View.VISIBLE else View.GONE
-        // Action Bar standard controls: hidden during recording, visible when idle
-        views.actionBarUndoBtn.visibility = if (isActive) View.GONE else View.VISIBLE
-        views.actionBarRedoBtn.visibility = if (isActive) View.GONE else View.VISIBLE
-        views.actionBarEmojiBtn.visibility = if (isActive) View.GONE else View.VISIBLE
-        views.actionBarNumbersBtn.visibility = if (isActive) View.GONE else View.VISIBLE
-        views.actionBarKeyboardBtn.visibility = if (isActive) View.GONE else View.VISIBLE
-        views.actionBarHistoryBtn.visibility = if (isActive) View.GONE else View.VISIBLE
+    private fun applyPromptsVisibility() {
+        val mode = getPromptAreaMode()
+        val isActive = isRecording() || isPaused()
 
-        // Prompts (combination of all axes)
+        // Prompts container (combination of all axes)
         val showPrompts = when {
             isSmallMode -> false
             contentArea == ContentArea.EMOJI_PICKER -> false
-            isRecording() || isPaused() || isPipelineRunning() -> true
+            isActive || isPipelineRunning() -> true
             else -> isRewordingEnabled()
         }
         views.promptsCl.visibility = if (showPrompts) View.VISIBLE else View.GONE
 
-        // Compact prompts height in QWERTZ mode to save vertical space
+        // Prompts content: RecyclerView vs pipeline progress
+        views.promptsRv?.visibility =
+            if (mode == KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS) View.VISIBLE else View.GONE
+        views.pipelineProgressLl?.visibility =
+            if (mode == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) View.VISIBLE else View.GONE
+
+        // Recording controls: only visible when active AND in PROMPT_BUTTONS mode
+        // (pipeline progress replaces the recording indicator)
+        val showRecControls = isActive && mode == KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS
+        views.promptRecordingControlsLl?.visibility =
+            if (showRecControls) View.VISIBLE else View.GONE
+
         if (showPrompts) {
-            val density = views.promptsCl.resources.displayMetrics.density
-            val promptHeightDp = if (contentArea == ContentArea.QWERTZ) 36 else 72
-            views.promptsCl.layoutParams = views.promptsCl.layoutParams.apply {
-                height = (promptHeightDp * density).toInt()
-            }
+            applyPromptsLayout(mode)
+        }
+    }
+
+    /** Adjusts prompts container height and RecyclerView span count for the current state. */
+    private fun applyPromptsLayout(mode: KeyboardUiController.PromptAreaMode) {
+        val isPipeline = mode == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS
+        val promptHeightDp = if (contentArea == ContentArea.QWERTZ && !isPipeline) 36 else 72
+        val newHeight = (promptHeightDp * views.promptsCl.resources.displayMetrics.density).toInt()
+        val lp = views.promptsCl.layoutParams
+        if (lp.height != newHeight) {
+            lp.height = newHeight
+            views.promptsCl.layoutParams = lp
         }
 
-        // Overlay: always GONE (shown on demand by EnterOverlayHandler)
-        views.overlayCharactersLl.visibility = View.GONE
-
-        // Notify InfoBarController about state change
-        infoBarController?.onStateChanged(contentArea, isSmallMode)
+        val targetSpanCount = if (contentArea == ContentArea.QWERTZ) 1 else 2
+        (views.promptsRv?.layoutManager as? StaggeredGridLayoutManager)?.let {
+            if (it.spanCount != targetSpanCount) it.spanCount = targetSpanCount
+        }
     }
 }

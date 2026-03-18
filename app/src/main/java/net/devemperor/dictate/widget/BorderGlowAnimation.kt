@@ -22,15 +22,14 @@ import com.google.android.material.button.MaterialButton
  *
  * @param baseColor button's resting accent color (for brightness modulation)
  * @param sendIcon drawable for the send icon inside the visualizer
- * @param barCount number of amplitude bars
- * @param maxBrightnessBoost how much the button brightens at full amplitude (0.0–1.0)
- * @param maxStrokePx maximum stroke width in pixels
+ * @param barCountMode how to determine the number of amplitude bars
+ * @param maxBrightnessBoost how much the button brightens at full amplitude (0.0-1.0)
  * @param density display density for dp-to-px conversion
  */
 class BorderGlowAnimation(
     private var baseColor: Int,
     private val sendIcon: Drawable?,
-    private val barCount: Int = 12,
+    private val barCountMode: AmplitudeVisualizerDrawable.BarCountMode = AmplitudeVisualizerDrawable.BarCountMode.Fixed(12),
     private val maxBrightnessBoost: Float = 0.45f,
     private val density: Float = 1f
 ) : RecordingAnimation {
@@ -77,7 +76,7 @@ class BorderGlowAnimation(
         visualizer = AmplitudeVisualizerDrawable(
             sendIcon = sendIcon,
             barColor = barVisualColor,
-            barCount = barCount,
+            barCountMode = barCountMode,
             textColor = Color.WHITE,
             textSizePx = density * 13f,
             insetTopPx = insetTop,
@@ -149,11 +148,6 @@ class BorderGlowAnimation(
 
     private fun recomputeColors() {
         Color.colorToHSV(baseColor, baseHsv)
-
-        // Bar color: lighter version of accent for contrast against button background
-        val barHsv = baseHsv.copyOf()
-        barHsv[1] = (barHsv[1] * 0.4f).coerceAtMost(1f)
-        barHsv[2] = 1f
-        barVisualColor = Color.HSVToColor(barHsv)
+        barVisualColor = computeVisualizerBarColor(baseColor)
     }
 }

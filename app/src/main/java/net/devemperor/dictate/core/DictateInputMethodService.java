@@ -155,6 +155,10 @@ public class DictateInputMethodService extends InputMethodService
     private Button infoNoButton;
     private ConstraintLayout promptsCl;
     private RecyclerView promptsRv;
+    private LinearLayout promptRecordingControlsLl;
+    private MaterialButton promptRecIndicatorBtn;
+    private MaterialButton promptPauseBtn;
+    private MaterialButton promptTrashBtn;
     private MaterialButton editUndoButton;
     private MaterialButton editRedoButton;
     private MaterialButton editCutButton;
@@ -180,12 +184,6 @@ public class DictateInputMethodService extends InputMethodService
 
     // History button
     private MaterialButton editHistoryButton;
-
-    // Action Bar recording controls
-    private MaterialButton editRecBtn;
-    private MaterialButton editActionPauseBtn;
-    private MaterialButton editActionTrashBtn;
-
 
     // Keep screen awake while recording
     private boolean keepScreenAwakeApplied = false;
@@ -272,6 +270,10 @@ public class DictateInputMethodService extends InputMethodService
 
         promptsCl = dictateKeyboardView.findViewById(R.id.prompts_keyboard_cl);
         promptsRv = dictateKeyboardView.findViewById(R.id.prompts_keyboard_rv);
+        promptRecordingControlsLl = dictateKeyboardView.findViewById(R.id.prompt_recording_controls_ll);
+        promptRecIndicatorBtn = dictateKeyboardView.findViewById(R.id.prompt_rec_indicator_btn);
+        promptPauseBtn = dictateKeyboardView.findViewById(R.id.prompt_pause_btn);
+        promptTrashBtn = dictateKeyboardView.findViewById(R.id.prompt_trash_btn);
 
         editUndoButton = dictateKeyboardView.findViewById(R.id.edit_undo_btn);
         editRedoButton = dictateKeyboardView.findViewById(R.id.edit_redo_btn);
@@ -312,18 +314,6 @@ public class DictateInputMethodService extends InputMethodService
         // Pipeline cancel button
         pipelineCancelBtn = dictateKeyboardView.findViewById(R.id.pipeline_cancel_btn);
 
-        // KeyboardUiController (wraps pipeline progress views)
-        uiController = new KeyboardUiController(new KeyboardUiController.PipelineViews(
-            promptsRv,
-            dictateKeyboardView.findViewById(R.id.pipeline_progress_ll),
-            dictateKeyboardView.findViewById(R.id.pipeline_steps_container),
-            dictateKeyboardView.findViewById(R.id.pipeline_scroll_view),
-            recordButton,
-            infoCl,
-            LayoutInflater.from(context),
-            mainHandler
-        ));
-
         // InfoBarController
         infoBarController = new InfoBarController(
             infoCl, infoTv, infoYesButton, infoNoButton,
@@ -335,27 +325,34 @@ public class DictateInputMethodService extends InputMethodService
         // History button
         editHistoryButton = dictateKeyboardView.findViewById(R.id.edit_history_btn);
 
-        // Action Bar recording controls
-        editRecBtn = dictateKeyboardView.findViewById(R.id.edit_rec_btn);
-        editActionPauseBtn = dictateKeyboardView.findViewById(R.id.edit_action_pause_btn);
-        editActionTrashBtn = dictateKeyboardView.findViewById(R.id.edit_action_trash_btn);
+        View pipelineProgressLl = dictateKeyboardView.findViewById(R.id.pipeline_progress_ll);
 
         // KeyboardStateManager (deterministic visibility calculator)
-        // Note: recordingStateController is initialized after stateManager,
+        // Note: recordingStateController and uiController are initialized after stateManager,
         // but lambdas are evaluated lazily, so this is safe
         stateManager = new KeyboardStateManager(
             new KeyboardViews(mainButtonsCl, editButtonsKeyboardLl, promptsCl, emojiPickerCl,
                 qwertzContainer, overlayCharactersLl, pauseButton, trashButton,
-                editRecBtn, editActionPauseBtn, editActionTrashBtn,
-                editUndoButton, editRedoButton, editEmojiButton,
-                editNumbersButton, editKeyboardButton, editHistoryButton),
+                promptRecordingControlsLl, promptPauseBtn, promptTrashBtn,
+                promptsRv, pipelineProgressLl),
             () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Active,
             () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Paused,
             () -> pipelineOrchestrator.isRunning(),
             () -> sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true),
             keepAwake -> { updateKeepScreenAwake(keepAwake); return kotlin.Unit.INSTANCE; },
-            infoBarController
+            infoBarController,
+            () -> uiController.getCurrentMode()
         );
+
+        // KeyboardUiController (wraps pipeline progress views, delegates visibility to stateManager)
+        uiController = new KeyboardUiController(new KeyboardUiController.PipelineViews(
+            dictateKeyboardView.findViewById(R.id.pipeline_steps_container),
+            dictateKeyboardView.findViewById(R.id.pipeline_scroll_view),
+            recordButton,
+            infoCl,
+            LayoutInflater.from(context),
+            mainHandler
+        ), stateManager);
 
         // PipelineOrchestrator
         pipelineOrchestrator = new PipelineOrchestrator(
@@ -412,8 +409,7 @@ public class DictateInputMethodService extends InputMethodService
                 editPasteButton, editEmojiButton, editNumbersButton, editKeyboardButton,
                 editHistoryButton, emojiPickerCloseButton, emojiPickerView,
                 overlayCharactersLl, pipelineCancelBtn, infoYesButton, infoNoButton,
-                recordPulseLayout,
-                editRecBtn, editActionPauseBtn, editActionTrashBtn
+                recordPulseLayout
             ),
             sp, stateManager, this,
             () -> getCurrentInputConnection(),
@@ -422,26 +418,35 @@ public class DictateInputMethodService extends InputMethodService
         mainButtonsController.registerAllListeners();
         mainButtonsController.initializeKeyPressAnimations();
 
+        // Prompt recording controls: delegate to same actions as main pause/trash
+        promptPauseBtn.setOnClickListener(v -> {
+            vibrate();
+            onPauseClicked();
+        });
+        promptTrashBtn.setOnClickListener(v -> {
+            vibrate();
+            onTrashClicked();
+        });
+
         // 3. Create RecordingUiController (needs views + animation)
         float displayDensity = recordButton.getResources().getDisplayMetrics().density;
         net.devemperor.dictate.widget.RecordingAnimation recordingAnimation =
             new net.devemperor.dictate.widget.BorderGlowAnimation(
                 sp.getInt("net.devemperor.dictate.accent_color", -14700810),
                 AppCompatResources.getDrawable(context, R.drawable.ic_baseline_send_20),
-                30,     // bar count
+                new net.devemperor.dictate.widget.AmplitudeVisualizerDrawable.BarCountMode.Fixed(30),
                 0.35f,  // max brightness boost
                 displayDensity
             );
         recordingUiController = new RecordingUiController(
             recordButton, pauseButton, resendButton,
-            recordingAnimation, uiController, stateManager, this,
+            recordingAnimation, stateManager, this,
             () -> getDictateButtonText(),
             () -> sp.getBoolean("net.devemperor.dictate.animations", true),
             () -> new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
                     && sp.getBoolean("net.devemperor.dictate.resend_button", false),
             () -> qwertzKeyboardView != null ? qwertzKeyboardView.findButtonForAction(KeyAction.RECORD) : null,
-            editRecBtn,
-            () -> sp.getInt("net.devemperor.dictate.accent_color", -14700810)
+            promptRecIndicatorBtn
         );
 
         // 4. Composite callback: UI events → UiController, Lifecycle events → Service
@@ -602,7 +607,7 @@ public class DictateInputMethodService extends InputMethodService
         infoBarController.dismiss();
         stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
         stateManager.refresh();
-        uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+        uiController.resetToPromptButtons();
         livePrompt = false;
         updatePromptButtonsEnabledState();
     }
@@ -811,10 +816,6 @@ public class DictateInputMethodService extends InputMethodService
         if (qwertzContainer == null) return;
         if (stateManager.getContentArea() == ContentArea.QWERTZ) {
             stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
-        }
-        // Restore recording indicator to normal prompt buttons if it was showing
-        if (uiController != null && uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.RECORDING_INDICATOR) {
-            uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
         }
     }
 
@@ -1103,7 +1104,7 @@ public class DictateInputMethodService extends InputMethodService
             sessionTracker.resetSession();
             sessionTracker.persistToPrefs(sp);
             mainHandler.post(() -> {
-                uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+                uiController.resetToPromptButtons();
                 uiController.restoreRecordButtonIdle(
                     getDictateButtonText(),
                     R.drawable.ic_baseline_mic_20,
@@ -1461,7 +1462,7 @@ public class DictateInputMethodService extends InputMethodService
         PipelineOrchestrator.CancelInfo cancelInfo = pipelineOrchestrator.cancel();
         pendingLivePromptChain = false;
 
-        uiController.setMode(KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS);
+        uiController.resetToPromptButtons();
         uiController.restoreRecordButtonIdle(
             getDictateButtonText(),
             R.drawable.ic_baseline_mic_20,

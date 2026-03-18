@@ -8,6 +8,7 @@ import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
+import kotlin.math.max
 
 /**
  * Custom Drawable that renders a mini amplitude waveform with timer text.
@@ -22,9 +23,14 @@ import android.graphics.drawable.Drawable
  *
  * Designed to be used as a MaterialButton's foreground during recording.
  *
+ * Supports two bar count modes:
+ * - [BarCountMode.Fixed]: Always renders exactly N bars
+ * - [BarCountMode.Adaptive]: Computes bar count from available width, gracefully
+ *   hiding the send icon and timer when space is tight
+ *
  * @param sendIcon drawable for the send icon (left side)
  * @param barColor color for the amplitude bars
- * @param barCount number of bars to display
+ * @param barCountMode how to determine the number of bars
  * @param textColor color for the timer text
  * @param textSizePx timer text size in pixels
  * @param insetTopPx MaterialButton insetTop in pixels (default 6dp)
@@ -33,14 +39,32 @@ import android.graphics.drawable.Drawable
 class AmplitudeVisualizerDrawable(
     private val sendIcon: Drawable?,
     private var barColor: Int,
-    private val barCount: Int = 12,
+    private val barCountMode: BarCountMode = BarCountMode.Fixed(12),
     textColor: Int = Color.WHITE,
     private val textSizePx: Float = 36f,
     private val insetTopPx: Float = 0f,
     private val insetBottomPx: Float = 0f
 ) : Drawable() {
 
-    private val amplitudeBuffer = FloatArray(barCount)
+    /**
+     * Determines how many amplitude bars to render.
+     */
+    sealed class BarCountMode {
+        /** Always render exactly [count] bars. */
+        data class Fixed(val count: Int) : BarCountMode()
+        /** Compute bar count from available width, with a floor of [minBars]. */
+        data class Adaptive(val minBars: Int = 3) : BarCountMode()
+    }
+
+    companion object {
+        /** Maximum number of amplitude samples kept in the rolling buffer. */
+        private const val MAX_BAR_COUNT = 30
+
+        /** Minimum bar width in pixels before we stop rendering. */
+        private const val MIN_BAR_WIDTH_PX = 3f
+    }
+
+    private val amplitudeBuffer = FloatArray(MAX_BAR_COUNT)
     private var timerText: String = ""
 
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -57,12 +81,13 @@ class AmplitudeVisualizerDrawable(
 
     private val barRect = RectF()
 
-    /** Pushes a new amplitude value (0.0–1.0) into the rolling buffer. */
+    /** Pushes a new amplitude value (0.0-1.0) into the rolling buffer. */
     fun pushAmplitude(level: Float) {
+        if (bounds.isEmpty) return
         // Shift left
-        System.arraycopy(amplitudeBuffer, 1, amplitudeBuffer, 0, barCount - 1)
+        System.arraycopy(amplitudeBuffer, 1, amplitudeBuffer, 0, MAX_BAR_COUNT - 1)
         // Add new value at the end (rightmost bar = most recent)
-        amplitudeBuffer[barCount - 1] = level.coerceIn(0f, 1f)
+        amplitudeBuffer[MAX_BAR_COUNT - 1] = level.coerceIn(0f, 1f)
         invalidateSelf()
     }
 
@@ -86,6 +111,17 @@ class AmplitudeVisualizerDrawable(
         invalidateSelf()
     }
 
+    private fun computeEffectiveBarCount(barsAreaWidth: Float): Int {
+        return when (barCountMode) {
+            is BarCountMode.Fixed -> barCountMode.count
+            is BarCountMode.Adaptive -> {
+                val barSpacing = barsAreaWidth * 0.02f
+                val computed = (barsAreaWidth / (MIN_BAR_WIDTH_PX + barSpacing)).toInt()
+                max(barCountMode.minBars, computed.coerceAtMost(MAX_BAR_COUNT))
+            }
+        }
+    }
+
     override fun draw(canvas: Canvas) {
         val b = bounds
         if (b.isEmpty) return
@@ -99,33 +135,49 @@ class AmplitudeVisualizerDrawable(
         val paddingH = contentHeight * 0.35f  // horizontal padding
         val contentLeft = b.left + paddingH
         val contentRight = b.right - paddingH
+        val contentWidth = contentRight - contentLeft
+        if (contentWidth <= 0) return
 
-        // ── 1. Send Icon (left side) ──
+        // ── 1. Send Icon (left side, only if enough space) ──
         val iconSize = (contentHeight * 0.45f).toInt()
-        val iconLeft = contentLeft.toInt()
-        val iconTop = (contentTop + (contentHeight - iconSize) / 2f).toInt()
-        sendIcon?.setBounds(iconLeft, iconTop, iconLeft + iconSize, iconTop + iconSize)
-        sendIcon?.draw(canvas)
-
-        val afterIcon = iconLeft + iconSize + paddingH * 0.5f
-
-        // ── 2. Timer Text (right side) ──
-        val timerWidth = if (timerText.isNotEmpty()) textPaint.measureText(timerText) else 0f
-        val timerX = contentRight
-        val timerY = contentTop + contentHeight / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
-        if (timerText.isNotEmpty()) {
-            canvas.drawText(timerText, timerX, timerY, textPaint)
+        val showIcon = barCountMode !is BarCountMode.Adaptive ||
+                contentWidth > iconSize * 4
+        val afterIcon: Float
+        if (showIcon && sendIcon != null) {
+            val iconLeft = contentLeft.toInt()
+            val iconTop = (contentTop + (contentHeight - iconSize) / 2f).toInt()
+            sendIcon.setBounds(iconLeft, iconTop, iconLeft + iconSize, iconTop + iconSize)
+            sendIcon.draw(canvas)
+            afterIcon = iconLeft + iconSize + paddingH * 0.5f
+        } else {
+            afterIcon = contentLeft
         }
 
-        val beforeTimer = timerX - timerWidth - paddingH * 0.5f
+        // ── 2. Timer Text (right side, only if enough space) ──
+        val timerWidth = if (timerText.isNotEmpty()) textPaint.measureText(timerText) else 0f
+        val showTimer = barCountMode !is BarCountMode.Adaptive ||
+                contentWidth > timerWidth * 2
+        val beforeTimer: Float
+        if (showTimer && timerText.isNotEmpty()) {
+            val timerX = contentRight
+            val timerY = contentTop + contentHeight / 2f -
+                    (textPaint.descent() + textPaint.ascent()) / 2f
+            canvas.drawText(timerText, timerX, timerY, textPaint)
+            beforeTimer = contentRight - timerWidth - paddingH * 0.5f
+        } else {
+            beforeTimer = contentRight
+        }
 
         // ── 3. Amplitude Bars (center area) ──
         val barsAreaWidth = beforeTimer - afterIcon
         if (barsAreaWidth <= 0) return
 
+        val effectiveBarCount = computeEffectiveBarCount(barsAreaWidth)
+        if (effectiveBarCount < 2) return
+
         val barSpacing = barsAreaWidth * 0.02f  // 2% gap between bars
-        val totalSpacing = barSpacing * (barCount - 1)
-        val barWidth = (barsAreaWidth - totalSpacing) / barCount
+        val totalSpacing = barSpacing * (effectiveBarCount - 1)
+        val barWidth = (barsAreaWidth - totalSpacing) / effectiveBarCount
         if (barWidth <= 0) return
 
         val maxBarHeight = contentHeight * 0.55f
@@ -133,15 +185,18 @@ class AmplitudeVisualizerDrawable(
         val barCenterY = contentTop + contentHeight / 2f
         val barCornerRadius = barWidth / 2f  // pill-shaped bars
 
-        for (i in 0 until barCount) {
-            val amplitude = amplitudeBuffer[i]
+        // Render the last N values from the buffer
+        val bufferOffset = MAX_BAR_COUNT - effectiveBarCount
+
+        for (i in 0 until effectiveBarCount) {
+            val amplitude = amplitudeBuffer[bufferOffset + i]
             val barHeight = minBarHeight + (maxBarHeight - minBarHeight) * amplitude
 
             val x = afterIcon + i * (barWidth + barSpacing)
             val halfH = barHeight / 2f
 
             // Fade older bars slightly (leftmost = oldest = more transparent)
-            val ageFactor = 0.4f + 0.6f * (i.toFloat() / (barCount - 1))
+            val ageFactor = 0.4f + 0.6f * (i.toFloat() / (effectiveBarCount - 1))
             barPaint.alpha = (255 * ageFactor).toInt()
 
             barRect.set(x, barCenterY - halfH, x + barWidth, barCenterY + halfH)

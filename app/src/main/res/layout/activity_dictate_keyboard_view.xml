@@ -222,63 +222,17 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/prompts_keyboard_cl">
 
-        <!-- Recording controls (visible during recording, GONE when idle) -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_rec_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginStart="16dp"
-            android:layout_marginEnd="4dp"
-            android:foreground="@drawable/ic_baseline_mic_24"
-            android:foregroundGravity="center"
-            android:visibility="gone"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_action_pause_btn"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:visibility="visible" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_action_pause_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_pause_24"
-            android:foregroundGravity="center"
-            android:visibility="gone"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_action_trash_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_rec_btn"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:visibility="visible" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_action_trash_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_delete_24"
-            android:foregroundGravity="center"
-            android:visibility="gone"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_undo_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_action_pause_btn"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:visibility="visible" />
-
-        <!-- Standard edit controls (visible when idle, GONE during recording) -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/edit_undo_btn"
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_marginStart="4dp"
+            android:layout_marginStart="16dp"
             android:layout_marginEnd="4dp"
-            app:layout_goneMarginStart="16dp"
             android:foreground="@drawable/ic_baseline_undo_24"
             android:foregroundGravity="center"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toStartOf="@+id/edit_redo_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_action_trash_btn"
+            app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
         <com.google.android.material.button.MaterialButton
@@ -405,52 +359,56 @@
         app:layout_constraintTop_toBottomOf="@id/info_cl"
         tools:visibility="visible">
 
+        <LinearLayout
+            android:id="@+id/prompt_recording_controls_ll"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:visibility="gone"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            tools:visibility="visible">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/prompt_rec_indicator_btn"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="3"
+                android:minWidth="0dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/prompt_pause_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_pause_24"
+                android:foregroundGravity="center"
+                android:minWidth="36dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/prompt_trash_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_delete_24"
+                android:foregroundGravity="center"
+                android:minWidth="36dp" />
+
+        </LinearLayout>
+
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/prompts_keyboard_rv"
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_marginHorizontal="12dp"
+            android:layout_marginEnd="12dp"
+            android:layout_marginStart="12dp"
+            app:layout_goneMarginStart="12dp"
             android:scrollbars="horizontal"
             android:scrollbarSize="1dp"
-            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintStart_toEndOf="@id/prompt_recording_controls_ll"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintBottom_toBottomOf="parent"
             tools:layout_height="32dp" />
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintBottom_toBottomOf="parent">
-
-            <TextView
-                android:id="@+id/prompts_keyboard_running_prompt_tv"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:layout_marginEnd="16dp"
-                android:maxLines="1"
-                android:textStyle="bold"
-                android:textSize="16sp"
-                android:textColor="@color/dictate_blue"
-                android:visibility="gone"
-                tools:visibility="visible"
-                tools:text="French translator"/>
-
-            <ProgressBar
-                android:id="@+id/prompts_keyboard_running_pb"
-                android:layout_width="28dp"
-                android:layout_height="28dp"
-                android:layout_gravity="center"
-                android:visibility="gone"
-                android:indeterminate="true"
-                tools:visibility="visible" />
-
-        </LinearLayout>
 
         <include
             layout="@layout/pipeline_progress_view"

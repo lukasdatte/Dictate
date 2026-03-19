@@ -1,5 +1,7 @@
 package net.devemperor.dictate.core
 
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.os.Handler
 import android.view.LayoutInflater
 import android.view.View
@@ -77,6 +79,7 @@ class KeyboardUiController(
         activeTimer = null
         stepRows.clear()
         views.pipelineStepsContainer.removeAllViews()
+        hideAutoEnterToggle()
         stateManager.refresh()
     }
 
@@ -192,7 +195,8 @@ class KeyboardUiController(
         } else {
             "$stepName \u2026"
         }
-        views.recordButton.isEnabled = false
+        views.recordButton.setTextColor(Color.WHITE)
+        // Record button stays enabled during pipeline for auto-enter toggle
     }
 
     /**
@@ -203,10 +207,95 @@ class KeyboardUiController(
      * @param leftIcon drawable resource for left compound drawable (0 for none)
      * @param rightIcon drawable resource for right compound drawable (0 for none)
      */
+    private var savedRecordButtonTextColors: android.content.res.ColorStateList? = null
+
     fun restoreRecordButtonIdle(text: String, leftIcon: Int, rightIcon: Int) {
         views.recordButton.text = text
         views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(leftIcon, 0, rightIcon, 0)
         views.recordButton.isEnabled = true
+        savedRecordButtonTextColors?.let { views.recordButton.setTextColor(it) }
+    }
+
+    // ── Auto-enter toggle (integrated into record button during pipeline) ──
+
+    private var autoEnterToggleCallback: (() -> Unit)? = null
+
+    /**
+     * Enables the auto-enter toggle on the record button during pipeline.
+     * The record button becomes clickable and shows an enter icon (⏎) on the right
+     * that is highlighted when auto-enter is active.
+     *
+     * @param onRestore called when the toggle is hidden to re-register the original click listener
+     */
+    fun showAutoEnterToggle(active: Boolean, onToggle: () -> Unit, onRestore: () -> Unit) {
+        autoEnterToggleCallback = onToggle
+        autoEnterRestoreCallback = onRestore
+        if (savedRecordButtonTextColors == null) {
+            savedRecordButtonTextColors = views.recordButton.textColors
+        }
+        views.recordButton.isEnabled = true
+        views.recordButton.setOnClickListener { onToggle() }
+        updateAutoEnterAppearance(active)
+    }
+
+    private var autoEnterRestoreCallback: (() -> Unit)? = null
+
+    fun updateAutoEnterToggle(active: Boolean) {
+        updateAutoEnterAppearance(active)
+    }
+
+    fun hideAutoEnterToggle() {
+        autoEnterToggleCallback = null
+        views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0)
+        // Restore original click listener via callback
+        autoEnterRestoreCallback?.invoke()
+        autoEnterRestoreCallback = null
+    }
+
+    private fun updateAutoEnterAppearance(active: Boolean) {
+        val ctx = views.recordButton.context
+        val density = ctx.resources.displayMetrics.density
+        val sizePx = (24 * density).toInt()
+
+        if (active) {
+            // Inverted: white rounded-rect with transparent icon cutout (knockout effect)
+            val enterIcon = ctx.getDrawable(R.drawable.ic_baseline_subdirectory_arrow_left_24)?.mutate()
+            enterIcon?.setBounds(0, 0, sizePx, sizePx)
+            enterIcon?.setTint(Color.WHITE)
+
+            // Render icon to a temporary bitmap, offset slightly left+up for optical centering
+            val iconBitmap = android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
+            val iconCanvas = android.graphics.Canvas(iconBitmap)
+            val offset = (-1.5f * density)
+            iconCanvas.translate(offset, offset)
+            enterIcon?.draw(iconCanvas)
+
+            // Create the knockout composite
+            val bitmap = android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bitmap)
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+
+            // Draw white circle
+            paint.color = Color.WHITE
+            canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, paint)
+
+            // Punch out the icon using DST_OUT on the icon bitmap
+            paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
+            canvas.drawBitmap(iconBitmap, 0f, 0f, paint)
+            paint.xfermode = null
+
+            iconBitmap.recycle()
+
+            val drawable = android.graphics.drawable.BitmapDrawable(ctx.resources, bitmap)
+            drawable.setBounds(0, 0, sizePx, sizePx)
+            views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, drawable, null)
+        } else {
+            // Default: white icon on transparent background
+            val enterIcon = ctx.getDrawable(R.drawable.ic_baseline_subdirectory_arrow_left_24)?.mutate()
+            enterIcon?.setTint(Color.WHITE)
+            enterIcon?.setBounds(0, 0, sizePx, sizePx)
+            views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, enterIcon, null)
+        }
     }
 
     // ── Helpers ──

@@ -65,11 +65,21 @@ class MainButtonsController(
         fun onEditAction(actionId: Int)
     }
 
+    private val recordClickListener = View.OnClickListener {
+        callback.onVibrate()
+        callback.onRecordClicked()
+    }
+
     fun registerAllListeners() {
         registerEditBarListeners()
         registerMainButtonListeners()
         registerEmojiListeners()
         initializeOverlayCharacters()
+    }
+
+    /** Re-registers the record button click listener after pipeline override. */
+    fun reRegisterRecordButtonListener() {
+        views.recordButton.setOnClickListener(recordClickListener)
     }
 
     // ── Edit Bar ──
@@ -124,10 +134,9 @@ class MainButtonsController(
         views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
             R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0
         )
-        views.recordButton.setOnClickListener {
-            callback.onVibrate()
-            callback.onRecordClicked()
-        }
+        views.recordButton.setOnClickListener(recordClickListener)
+
+        // Long click
         views.recordButton.setOnLongClickListener {
             callback.onVibrate()
             callback.onRecordLongClicked()

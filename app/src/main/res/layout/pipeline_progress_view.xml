@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Pipeline progress: scrollable step list showing all pipeline steps.
-     Embedded inside prompts_keyboard_cl (72dp). Uses a vertical LinearLayout
-     as step container — steps are added/updated programmatically. -->
+     Embedded inside prompts_keyboard_cl (72dp in MAIN_BUTTONS, 36dp in QWERTZ).
+     Uses a vertical LinearLayout as step container — steps are added/updated programmatically. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/pipeline_progress_ll"
     android:layout_width="match_parent"
@@ -29,7 +30,7 @@
             android:paddingVertical="6dp" />
     </ScrollView>
 
-    <!-- Cancel button (right side, fixed position) -->
+    <!-- Right side: cancel button only (auto-enter toggle moved to record button) -->
     <com.google.android.material.button.MaterialButton
         android:id="@+id/pipeline_cancel_btn"
         style="@style/Widget.Material3.Button.TonalButton"
@@ -44,7 +45,6 @@
         app:iconGravity="textStart"
         app:iconPadding="0dp"
         app:iconSize="20dp"
-        app:cornerRadius="20dp"
-        xmlns:app="http://schemas.android.com/apk/res-auto" />
+        app:cornerRadius="20dp" />
 
 </FrameLayout>

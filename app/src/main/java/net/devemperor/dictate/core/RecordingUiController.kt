@@ -32,7 +32,10 @@ class RecordingUiController(
     private val isAnimationEnabled: () -> Boolean,
     private val getLastAudioFileExists: () -> Boolean,
     private val qwertzRecButtonProvider: () -> MaterialButton? = { null },
-    private val promptRecButton: MaterialButton? = null
+    private val promptRecButton: MaterialButton? = null,
+    private val promptPauseButton: MaterialButton? = null,
+    private val onPauseToggle: () -> Unit = {},
+    private val onSend: () -> Unit = {}
 ) : RecordingStateController.Callback {
 
     private var promptsVisualizer: AmplitudeVisualizerDrawable? = null
@@ -66,9 +69,15 @@ class RecordingUiController(
             (elapsedMs / 60000).toInt(),
             ((elapsedMs / 1000) % 60).toInt()
         )
-        // Timer is displayed inside the amplitude visualizer, not as button text
         recordingAnimation.onTimerTick(timerText)
         promptsVisualizer?.setTimerText(timerText)
+
+        // QWERTZ rec button: two-line (send arrow icon on top, timer below)
+        qwertzRecButtonProvider()?.let { btn ->
+            btn.icon = AppCompatResources.getDrawable(context, R.drawable.ic_baseline_send_20)
+            btn.iconGravity = MaterialButton.ICON_GRAVITY_TOP
+            btn.text = timerText
+        }
     }
 
     /** Updates animation color (e.g. after theme change). */
@@ -114,9 +123,14 @@ class RecordingUiController(
             recordingAnimation.cancel()
         }
 
-        // Reset prompts visualizer
+        // Reset prompts rec button and click handlers
         promptsVisualizer?.reset()
         promptRecButton?.foreground = null
+        promptRecButton?.icon = null
+        promptRecButton?.text = ""
+        promptRecButton?.setOnClickListener(null)
+        promptPauseButton?.foreground = null
+        promptPauseButton?.setOnClickListener(null)
 
         // Show resend button if previous audio exists
         resendButton.visibility = if (getLastAudioFileExists()) View.VISIBLE else View.GONE
@@ -147,11 +161,21 @@ class RecordingUiController(
             recordingAnimation.start()
         }
 
-        // Activate prompts visualizer
+        // Activate prompts rec button — amplitude visualizer with send arrow + bars + timer
         promptRecButton?.let { btn ->
             btn.text = ""
+            btn.icon = null
             btn.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, null, null)
             btn.foreground = promptsVisualizer
+            btn.setOnClickListener { onSend() }
+        }
+
+        // Setup pause button (prompts bar): shows pause icon, tap toggles pause/resume
+        promptPauseButton?.let { btn ->
+            btn.text = ""
+            btn.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, null, null)
+            btn.foreground = AppCompatResources.getDrawable(context, R.drawable.ic_baseline_pause_24)
+            btn.setOnClickListener { onPauseToggle() }
         }
 
         // Recording controls visibility is handled by KeyboardStateManager.refresh()
@@ -164,6 +188,10 @@ class RecordingUiController(
         if (isAnimationEnabled()) {
             recordingAnimation.pause()
         }
+
+        // Prompts: rec button keeps visualizer (frozen), still sends on tap
+        // Pause button shows mic/resume icon
+        promptPauseButton?.foreground = AppCompatResources.getDrawable(context, R.drawable.ic_baseline_mic_24)
     }
 
     // ── QWERTZ Rec Button ──
@@ -172,9 +200,39 @@ class RecordingUiController(
      * Updates the QWERTZ bottom-row Rec button icon to reflect recording state.
      * Mic icon when idle, stop icon when recording/paused.
      */
+    private var qwertzRecOriginalIconPadding: Int? = null
+    private var qwertzRecOriginalTextColors: android.content.res.ColorStateList? = null
+    private var qwertzRecOriginalPadding: IntArray? = null
+
     fun updateQwertzRecButton(isActive: Boolean) {
         val recButton = qwertzRecButtonProvider() ?: return
-        val iconRes = if (isActive) R.drawable.ic_baseline_stop_24 else R.drawable.ic_baseline_mic_24
-        recButton.icon = AppCompatResources.getDrawable(context, iconRes)
+        if (isActive) {
+            // Save original values on first activation
+            if (qwertzRecOriginalIconPadding == null) {
+                qwertzRecOriginalIconPadding = recButton.iconPadding
+                qwertzRecOriginalTextColors = recButton.textColors
+                qwertzRecOriginalPadding = intArrayOf(
+                    recButton.paddingLeft, recButton.paddingTop,
+                    recButton.paddingRight, recButton.paddingBottom
+                )
+            }
+            // Show send arrow + timer (set by onTimerTick), white text + icon, tight spacing
+            val density = recButton.resources.displayMetrics.density
+            recButton.icon = AppCompatResources.getDrawable(context, R.drawable.ic_baseline_send_20)
+            recButton.iconTint = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            recButton.iconGravity = MaterialButton.ICON_GRAVITY_TOP
+            recButton.iconPadding = 0
+            recButton.setPadding(0, (4 * density).toInt(), 0, (2 * density).toInt()) // Push icon down
+            recButton.setTextColor(Color.WHITE)
+        } else {
+            recButton.text = ""
+            recButton.icon = AppCompatResources.getDrawable(context, R.drawable.ic_baseline_mic_24)
+            recButton.iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START
+            qwertzRecOriginalIconPadding?.let { recButton.iconPadding = it }
+            qwertzRecOriginalTextColors?.let { recButton.setTextColor(it) }
+            qwertzRecOriginalPadding?.let { p ->
+                recButton.setPadding(p[0], p[1], p[2], p[3])
+            }
+        }
     }
 }

@@ -375,12 +375,14 @@
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="3"
+                android:layout_marginEnd="4dp"
                 android:minWidth="0dp" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/prompt_pause_btn"
                 android:layout_width="wrap_content"
                 android:layout_height="match_parent"
+                android:layout_marginEnd="4dp"
                 android:foreground="@drawable/ic_baseline_pause_24"
                 android:foregroundGravity="center"
                 android:minWidth="36dp" />

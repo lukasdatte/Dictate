@@ -30,7 +30,6 @@ data class KeyboardViews(
     val pauseButton: View,
     val trashButton: View,
     val promptRecordingControlsLl: LinearLayout? = null,
-    val promptPauseBtn: View? = null,
     val promptTrashBtn: View? = null,
     val promptsRv: RecyclerView? = null,
     val pipelineProgressLl: View? = null
@@ -125,7 +124,7 @@ class KeyboardStateManager(
 
         // Recording controls: only visible when active AND in PROMPT_BUTTONS mode
         // (pipeline progress replaces the recording indicator)
-        val showRecControls = isActive && mode == KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS
+        val showRecControls = isActive && mode == KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS && contentArea == ContentArea.QWERTZ
         views.promptRecordingControlsLl?.visibility =
             if (showRecControls) View.VISIBLE else View.GONE
 
@@ -137,7 +136,7 @@ class KeyboardStateManager(
     /** Adjusts prompts container height and RecyclerView span count for the current state. */
     private fun applyPromptsLayout(mode: KeyboardUiController.PromptAreaMode) {
         val isPipeline = mode == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS
-        val promptHeightDp = if (contentArea == ContentArea.QWERTZ && !isPipeline) 36 else 72
+        val promptHeightDp = if (contentArea == ContentArea.QWERTZ) 36 else 72
         val newHeight = (promptHeightDp * views.promptsCl.resources.displayMetrics.density).toInt()
         val lp = views.promptsCl.layoutParams
         if (lp.height != newHeight) {

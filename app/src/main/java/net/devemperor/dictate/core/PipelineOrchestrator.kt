@@ -84,11 +84,15 @@ class PipelineOrchestrator(
 
     // region State
 
-    @Volatile var cancelled = false
-        private set
+    @Volatile private var cancelled = false
     @Volatile var running = false
         private set
     private var executor: ExecutorService = Executors.newSingleThreadExecutor()
+
+    // Step tracking (for UI state restoration after view-recreation)
+    @Volatile private var totalSteps = 0
+    @Volatile private var currentStepIndex = 0
+    @Volatile private var currentStepName: String? = null
 
     // endregion
 
@@ -108,6 +112,14 @@ class PipelineOrchestrator(
 
         cancelled = false
         running = true
+
+        // Calculate total steps for state restoration
+        totalSteps = 1 // transcription always
+        if (autoFormattingService.isEnabled()) totalSteps++
+        if (!config.livePrompt) totalSteps += promptQueueManager.getQueuedIds().size
+        currentStepIndex = 0
+        currentStepName = null
+
         executor.execute {
             try {
                 // Start RECORDING session
@@ -178,6 +190,9 @@ class PipelineOrchestrator(
         val displayName = if (model.id == -1) "Live-Prompt" else (model.name ?: "")
         cancelled = false
         running = true
+        totalSteps = 1
+        currentStepIndex = 0
+        currentStepName = null
         executor.execute {
             // Declare outside try so catch can access them
             var sid: String? = null
@@ -212,7 +227,7 @@ class PipelineOrchestrator(
                     if (model.id >= 0) model.id else null
                 )
 
-                callback.onStepStarted(displayName)
+                trackAndNotifyStepStarted(displayName)
                 val result = executeCompletion(pp, displayName, ctx, sid)
                 val durationMs = (System.nanoTime() - startTime) / 1_000_000
                 callback.onStepCompleted(displayName, durationMs)
@@ -249,10 +264,30 @@ class PipelineOrchestrator(
         executor.shutdownNow()
         executor = Executors.newSingleThreadExecutor()
         running = false
+        currentStepName = null
         return info
     }
 
     fun isRunning(): Boolean = running
+
+    /** Returns the total number of pipeline steps (set at pipeline start). */
+    fun getTotalSteps(): Int = totalSteps
+
+    /** Returns the current step index (1-based, incremented on each onStepStarted). */
+    fun getCurrentStep(): Int = currentStepIndex
+
+    /** Returns the display name of the currently running step, or null if idle. */
+    fun getCurrentStepName(): String? = currentStepName
+
+    /**
+     * Shuts down the executor without creating a new one.
+     * Use this in onDestroy() when the Service is being permanently destroyed.
+     * For cancellation during normal operation, use [cancel] instead.
+     */
+    fun shutdown() {
+        executor.shutdownNow()
+        running = false
+    }
 
     data class CancelInfo(
         val lastStepId: String?,
@@ -273,7 +308,7 @@ class PipelineOrchestrator(
         sid: String,
         recordingsDir: File
     ): String {
-        callback.onStepStarted("Transkription")
+        trackAndNotifyStepStarted("Transkription")
         val startTime = System.nanoTime()
 
         val result = aiOrchestrator.transcribe(audioFile, language, stylePrompt)
@@ -311,7 +346,7 @@ class PipelineOrchestrator(
     private fun executeAutoFormat(text: String, languageHint: String?, sid: String): String {
         val showStep = autoFormattingService.isEnabled()
         if (showStep) {
-            callback.onStepStarted("Formatierung")
+            trackAndNotifyStepStarted("Formatierung")
         }
 
         val startTime = System.nanoTime()
@@ -384,7 +419,7 @@ class PipelineOrchestrator(
             val ctx = ProcessingContext(StepType.QUEUED_PROMPT, prompt.prompt, prompt.id)
             val displayName = prompt.name ?: ""
 
-            callback.onStepStarted(displayName)
+            trackAndNotifyStepStarted(displayName)
             val startTime = System.nanoTime()
             try {
                 currentText = executeCompletion(pp, displayName, ctx, sid)
@@ -560,6 +595,17 @@ class PipelineOrchestrator(
             pp.systemPrompt, pp.userPrompt,
             false, errorMessage
         )
+    }
+
+    // endregion
+
+    // region Step tracking
+
+    /** Tracks the step and notifies the callback. */
+    private fun trackAndNotifyStepStarted(stepName: String) {
+        currentStepIndex++
+        currentStepName = stepName
+        callback.onStepStarted(stepName)
     }
 
     // endregion

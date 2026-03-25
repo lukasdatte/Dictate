@@ -210,42 +210,88 @@ public class DictateInputMethodService extends InputMethodService
         mainHandler.post(() -> promptsAdapter.setQueuedPromptOrder(queuedIds));
     }
 
-    // start method that is called when user opens the keyboard
-    @SuppressLint("ClickableViewAccessibility")
+    // ===== Lifecycle: onCreate() — long-lived objects (survive view recreation) =====
+
     @Override
-    public View onCreateInputView() {
-        Context context = new ContextThemeWrapper(this, R.style.Theme_Dictate);
+    public void onCreate() {
+        super.onCreate();
+        initLongLivedObjects();
+    }
 
-        // initialize some stuff
+    private void initLongLivedObjects() {
+        // 1. Foundation
         mainHandler = new Handler(Looper.getMainLooper());
-        deleteHandler = new Handler();
-
+        deleteHandler = new Handler(Looper.getMainLooper());
         vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE);
         dictateDb = DictateDatabase.getInstance(this);
         promptDao = dictateDb.promptDao();
         usageDao = dictateDb.usageDao();
+        am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
 
-        // Migrate old int-based provider prefs (0/1/2) to String-based ("OPENAI"/"GROQ"/"CUSTOM")
+        // 2. Services
         PrefsMigration.migrateProviderPrefs(sp);
         aiOrchestrator = new AIOrchestrator(sp, dictateDb.usageDao());
         promptService = PromptService.create(sp);
         autoFormattingService = AutoFormattingService.create(sp, aiOrchestrator);
         sessionManager = new SessionManager(DictateDatabase.getInstance(this));
         sessionTracker = new SessionTracker(sessionManager);
-        // Restore lastSessionId synchronously (SharedPrefs only, no DB), then load lastOutput async
         sessionTracker.restoreLastSessionIdFromPrefs(sp);
         dbExecutor.execute(() -> sessionTracker.restoreLastOutputFromDb());
 
-        // Initialize managers
-        am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        promptQueueManager = new PromptQueueManager(
-                promptDao::getAutoApplyIds,
-                sp, this);
+        // 3. Managers
+        promptQueueManager = new PromptQueueManager(promptDao::getAutoApplyIds, sp, this);
 
+        // 4. Audio Focus (Lambda captures this.recordingStateController — safe: lazy eval)
+        audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                .setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build())
+                .setAcceptsDelayedFocusGain(true)
+                .setOnAudioFocusChangeListener(focusChange -> {
+                    if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
+                        if (recordingStateController != null
+                                && recordingStateController.getState() instanceof RecordingState.Active) {
+                            recordingStateController.togglePause();
+                        }
+                    }
+                })
+                .build();
+
+        // 5. Recording (setter-injection breaks circular dependency)
+        recordingStateController = new RecordingStateController(
+            am, audioFocusRequest, new AmplitudeProcessor(), mainHandler);
+        recordingManager = new RecordingManager(recordingStateController);
+        bluetoothScoManager = new BluetoothScoManager(this, am, recordingStateController);
+        recordingStateController.setManagers(recordingManager, bluetoothScoManager);
+
+        // 6. Pipeline (this = PipelineCallback, survives rotation)
+        pipelineOrchestrator = new PipelineOrchestrator(
+            aiOrchestrator, autoFormattingService, promptQueueManager,
+            promptService, sessionManager, sessionTracker, promptDao, this);
+
+        // 7. User ID (one-time)
+        if (sp.getString("net.devemperor.dictate.user_id", "null").equals("null")) {
+            sp.edit().putString("net.devemperor.dictate.user_id",
+                String.valueOf((int) (Math.random() * 1000000))).apply();
+        }
+    }
+
+    // start method that is called when user opens the keyboard (also on view recreation / rotation)
+    @SuppressLint("ClickableViewAccessibility")
+    @Override
+    public View onCreateInputView() {
+        Context context = new ContextThemeWrapper(this, R.style.Theme_Dictate);
+
+        // ── 1. Clean up old controllers (on view recreation, not first call) ──
+        cleanupOldControllers();
+
+        // ── 2. Preferences that may change between rotations ──
         vibrationEnabled = sp.getBoolean("net.devemperor.dictate.vibration", true);
         currentInputLanguagePos = sp.getInt("net.devemperor.dictate.input_language_pos", 0);
 
+        // ── 3. View inflation + findViewByIds ──
         dictateKeyboardView = (ConstraintLayout) LayoutInflater.from(context).inflate(R.layout.activity_dictate_keyboard_view, null);
         dictateKeyboardView.setKeepScreenOn(false);
         keepScreenAwakeApplied = false;
@@ -317,7 +363,7 @@ public class DictateInputMethodService extends InputMethodService
         // Pipeline cancel button
         pipelineCancelBtn = dictateKeyboardView.findViewById(R.id.pipeline_cancel_btn);
 
-        // InfoBarController
+        // ── 4. View-dependent controllers ──
         infoBarController = new InfoBarController(
             infoCl, infoTv, infoYesButton, infoNoButton,
             () -> { openSettingsActivity(); return kotlin.Unit.INSTANCE; },
@@ -357,51 +403,10 @@ public class DictateInputMethodService extends InputMethodService
             mainHandler
         ), stateManager);
 
-        // PipelineOrchestrator
-        pipelineOrchestrator = new PipelineOrchestrator(
-            aiOrchestrator, autoFormattingService, promptQueueManager,
-            promptService, sessionManager, sessionTracker, promptDao, this);
-
         StaggeredGridLayoutManager promptsLayoutManager =
                 new StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.HORIZONTAL);
         promptsLayoutManager.setGapStrategy(StaggeredGridLayoutManager.GAP_HANDLING_MOVE_ITEMS_BETWEEN_SPANS);
         promptsRv.setLayoutManager(promptsLayoutManager);
-
-        // if user id is not set, set a random number as user id
-        if (sp.getString("net.devemperor.dictate.user_id", "null").equals("null")) {
-            sp.edit().putString("net.devemperor.dictate.user_id", String.valueOf((int) (Math.random() * 1000000))).apply();
-        }
-
-        // initialize audio manager to stop and start background audio
-        audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-                .setAudioAttributes(new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build())
-                .setAcceptsDelayedFocusGain(true)
-                .setOnAudioFocusChangeListener(focusChange -> {
-                    if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
-                        if (recordingStateController.getState() instanceof RecordingState.Active) {
-                            recordingStateController.togglePause();
-                        }
-                    }
-                })
-                .build();
-
-        // Initialize recording controllers (setter-injection breaks circular dependency)
-        // 1. Create controller (without managers yet)
-        recordingStateController = new RecordingStateController(
-            am, audioFocusRequest, new AmplitudeProcessor(), mainHandler
-        );
-        // 2. Create managers with controller as callback
-        recordingManager = new RecordingManager(recordingStateController);
-        bluetoothScoManager = new BluetoothScoManager(this, am, recordingStateController);
-        // 3. Inject managers into controller
-        recordingStateController.setManagers(recordingManager, bluetoothScoManager);
-
-        bluetoothScoManager.registerReceiver();
-
-        stateManager.setSmallMode(sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false));
 
         // MainButtonsController: handles all button registration, overlay init, and theming
         mainButtonsController = new MainButtonsController(
@@ -427,7 +432,7 @@ public class DictateInputMethodService extends InputMethodService
             onTrashClicked();
         });
 
-        // 3. Create RecordingUiController (needs views + animation)
+        // RecordingUiController (needs views + animation)
         float displayDensity = recordButton.getResources().getDisplayMetrics().density;
         net.devemperor.dictate.widget.RecordingAnimation recordingAnimation =
             new net.devemperor.dictate.widget.BorderGlowAnimation(
@@ -451,7 +456,107 @@ public class DictateInputMethodService extends InputMethodService
             () -> { vibrate(); stopRecording(); return kotlin.Unit.INSTANCE; }
         );
 
-        // 4. Composite callback: UI events → UiController, Lifecycle events → Service
+        // ── 5. Rewire callbacks (connect long-lived objects to new UI controllers) ──
+        // INVARIANT: Order is controllers (above) → rewireCallbacks() → restoreUiState()
+        // restoreUiState() triggers state changes that need the callback set in rewireCallbacks().
+        // Without prior re-wiring, state changes go nowhere.
+        rewireCallbacks();
+
+        // ── 6. Restore current state onto fresh UI ──
+        restoreUiState();
+
+        // ── 7. Prompts adapter + InvalidationTracker ──
+        setupPromptsAdapter(context);
+
+        return dictateKeyboardView;
+    }
+
+    // method is called if the user closed the keyboard
+    @Override
+    public void onFinishInputView(boolean finishingInput) {
+        super.onFinishInputView(finishingInput);
+
+        // Hide QWERTZ keyboard when the input view is finishing (app switch, background, etc.)
+        hideQwertzKeyboard();
+
+        // State (A): Recording is active or paused -> delegate to controller (pause + timeout)
+        if (recordingStateController.getState().isRecordingOrPaused()
+                || recordingStateController.getState() instanceof RecordingState.Preparing) {
+            recordingStateController.onKeyboardHidden();
+            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
+            return;
+        }
+
+        // State (B): API request is running -> let it continue, just hide content panels
+        if (pipelineOrchestrator.isRunning()) {
+            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
+            return;
+        }
+
+        // State (C): Idle -> full cleanup
+        pipelineOrchestrator.cancel();
+        pendingLivePromptChain = false;
+        autoEnterOverride = null;
+
+        bluetoothScoManager.unregisterReceiver();
+
+        infoBarController.dismiss();
+        stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
+        stateManager.refresh();
+        uiController.resetToPromptButtons();
+        livePrompt = false;
+        updatePromptButtonsEnabledState();
+    }
+
+    @Override
+    public void onDestroy() {
+        // Clean up long-lived objects
+        if (mainHandler != null) {
+            mainHandler.removeCallbacks(reloadPromptsRunnable);
+        }
+        if (recordingStateController != null) recordingStateController.onDestroy();
+        if (pipelineOrchestrator != null) {
+            pipelineOrchestrator.shutdown();
+        }
+        if (promptsInvalidationObserver != null && dictateDb != null) {
+            dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
+        }
+        if (bluetoothScoManager != null) bluetoothScoManager.unregisterReceiver();
+        super.onDestroy();
+    }
+
+    // ===== View-recreation helpers (called from onCreateInputView) =====
+
+    /**
+     * Cleans up old view-dependent controllers before creating new ones.
+     * Stops orphaned timers, removes InvalidationTracker observer, de-registers BT receiver.
+     *
+     * IMPORTANT: Does NOT call resetToPromptButtons() — that has side-effects
+     * (mode reset, hideAutoEnterToggle callback on old mainButtonsController).
+     */
+    private void cleanupOldControllers() {
+        // Stop only the elapsed timer — no mode reset, no side-effects
+        if (uiController != null) {
+            uiController.stopActiveTimer();
+        }
+        // Remove old InvalidationTracker observer (will be re-added in setupPromptsAdapter)
+        if (promptsInvalidationObserver != null && dictateDb != null) {
+            dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
+        }
+        // De-register BT receiver (will be re-registered in rewireCallbacks)
+        if (bluetoothScoManager != null) {
+            bluetoothScoManager.unregisterReceiver();
+        }
+    }
+
+    /**
+     * Connects long-lived objects (from onCreate) to the newly created UI controllers.
+     * Must be called AFTER view-dependent controllers are created, BEFORE restoreUiState().
+     */
+    private void rewireCallbacks() {
+        // 1. RecordingStateController → new UI controllers
+        //    The closures reference Service fields (recordingUiController etc.)
+        //    which now point to the NEW controllers.
         recordingStateController.setCallback(new RecordingStateController.Callback() {
             @Override
             public void onStateChanged(RecordingState oldState, RecordingState newState) {
@@ -498,7 +603,60 @@ public class DictateInputMethodService extends InputMethodService
             }
         });
 
-        // Create prompts adapter once (updated via reloadPrompts())
+        // 2. Re-register BT receiver (was de-registered in cleanupOldControllers)
+        bluetoothScoManager.registerReceiver();
+
+        // 3. RecordingManager + BluetoothScoManager need NO re-wiring:
+        //    - RecordingManager.callback = recordingStateController (long-lived, unchanged)
+        //    - BluetoothScoManager.callback = recordingStateController (long-lived, unchanged)
+        //    - recordingStateController.managers remain set (setManagers was in onCreate)
+    }
+
+    /**
+     * Synchronizes current state onto the fresh UI after view recreation.
+     * Must be called AFTER rewireCallbacks() — otherwise state changes go nowhere.
+     */
+    private void restoreUiState() {
+        // 1. Recording state → UI
+        RecordingState currentState = recordingStateController.getState();
+        if (!(currentState instanceof RecordingState.Idle)) {
+            // Fake a state transition Idle → currentState so RecordingUiController
+            // builds the correct UI (button text, animation, visibility)
+            recordingUiController.onStateChanged(RecordingState.Idle.INSTANCE, currentState);
+            updatePromptButtonsEnabledState();
+            updateKeepScreenAwake(currentState.isRecordingOrPaused());
+        }
+
+        // 2. Pipeline state → UI
+        if (pipelineOrchestrator.isRunning()) {
+            int total = pipelineOrchestrator.getTotalSteps();
+            String stepName = pipelineOrchestrator.getCurrentStepName();
+
+            uiController.showPipelineProgress(total > 0 ? total : 1);
+
+            // Show the currently running step. Previously completed steps cannot be
+            // reconstructed (no history), but the current step is displayed correctly.
+            uiController.addRunningStep(stepName != null ? stepName : "\u2026");
+
+            // Restore auto-enter toggle if active
+            if (autoEnterOverride != null) {
+                uiController.showAutoEnterToggle(
+                    autoEnterOverride,
+                    () -> { toggleAutoEnterOverride(); return kotlin.Unit.INSTANCE; },
+                    () -> { mainButtonsController.reRegisterRecordButtonListener(); return kotlin.Unit.INSTANCE; }
+                );
+            }
+        }
+
+        // 3. Small mode from preferences
+        stateManager.setSmallMode(sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false));
+    }
+
+    /**
+     * Creates the prompts adapter, sets it on the RecyclerView, and registers
+     * the InvalidationTracker observer for auto-reload on DB changes.
+     */
+    private void setupPromptsAdapter(Context context) {
         promptsAdapter = new PromptsKeyboardAdapter(sp, new ArrayList<>(), new PromptsKeyboardAdapter.AdapterCallback() {
             @Override
             public void onItemClicked(Integer position) {
@@ -574,58 +732,6 @@ public class DictateInputMethodService extends InputMethodService
             }
         };
         dictateDb.getInvalidationTracker().addObserver(promptsInvalidationObserver);
-
-        return dictateKeyboardView;
-    }
-
-    // method is called if the user closed the keyboard
-    @Override
-    public void onFinishInputView(boolean finishingInput) {
-        super.onFinishInputView(finishingInput);
-
-        // Hide QWERTZ keyboard when the input view is finishing (app switch, background, etc.)
-        hideQwertzKeyboard();
-
-        // State (A): Recording is active or paused -> delegate to controller (pause + timeout)
-        if (recordingStateController.getState().isRecordingOrPaused()
-                || recordingStateController.getState() instanceof RecordingState.Preparing) {
-            recordingStateController.onKeyboardHidden();
-            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
-            return;
-        }
-
-        // State (B): API request is running -> let it continue, just hide content panels
-        if (pipelineOrchestrator.isRunning()) {
-            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
-            return;
-        }
-
-        // State (C): Idle -> full cleanup
-        pipelineOrchestrator.cancel();
-        pendingLivePromptChain = false;
-        autoEnterOverride = null;
-
-        bluetoothScoManager.unregisterReceiver();
-
-        infoBarController.dismiss();
-        stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
-        stateManager.refresh();
-        uiController.resetToPromptButtons();
-        livePrompt = false;
-        updatePromptButtonsEnabledState();
-    }
-
-    @Override
-    public void onDestroy() {
-        if (mainHandler != null) {
-            mainHandler.removeCallbacks(reloadPromptsRunnable);
-        }
-        if (recordingStateController != null) recordingStateController.onDestroy();
-        if (promptsInvalidationObserver != null && dictateDb != null) {
-            dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
-        }
-        if (bluetoothScoManager != null) bluetoothScoManager.unregisterReceiver();
-        super.onDestroy();
     }
 
     // method is called if the keyboard appears again
@@ -638,11 +744,18 @@ public class DictateInputMethodService extends InputMethodService
         // If recording was paused (by onFinishInputView), cancel timeout and restore UI
         recordingStateController.onKeyboardShown();
 
+        // Determine if we are truly idle (no recording, no pipeline running).
+        // When not idle, skip UI resets that would overwrite state restored by restoreUiState().
+        boolean isIdle = recordingStateController.getState() instanceof RecordingState.Idle
+                && !pipelineOrchestrator.isRunning();
+
         if (sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) {
-            InputConnection inputConnection = getCurrentInputConnection();
-            boolean hasSelection = inputConnection != null && inputConnection.getSelectedText(0) != null;
-            promptsAdapter.setDisableNonSelectionPrompts(disableNonSelectionPrompts);
-            promptsAdapter.setSelectAllActive(hasSelection);
+            if (isIdle) {
+                InputConnection inputConnection = getCurrentInputConnection();
+                boolean hasSelection = inputConnection != null && inputConnection.getSelectedText(0) != null;
+                promptsAdapter.setDisableNonSelectionPrompts(disableNonSelectionPrompts);
+                promptsAdapter.setSelectAllActive(hasSelection);
+            }
 
             // Reload prompts from DB (async — adapter is updated via reloadPrompts())
             reloadPrompts();
@@ -656,16 +769,18 @@ public class DictateInputMethodService extends InputMethodService
             hideQwertzKeyboard();
         }
 
-        // enable resend button if previous audio file still exists in cache
-        if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
-            resendButton.setVisibility(View.VISIBLE);
-        } else {
-            resendButton.setVisibility(View.GONE);
-        }
+        if (isIdle) {
+            // enable resend button if previous audio file still exists in cache
+            if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
+                    && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
+                resendButton.setVisibility(View.VISIBLE);
+            } else {
+                resendButton.setVisibility(View.GONE);
+            }
 
-        // get the currently selected input language
-        recordButton.setText(getDictateButtonText());
+            // get the currently selected input language
+            recordButton.setText(getDictateButtonText());
+        }
 
         // check if user enabled audio focus
         audioFocusEnabled = sp.getBoolean("net.devemperor.dictate.audio_focus", true);
@@ -1040,6 +1155,7 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStepStarted(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
+            if (uiController == null) return;  // View recreation not yet complete
             if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
                 uiController.addRunningStep(stepName);
             }
@@ -1049,6 +1165,7 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStepCompleted(@androidx.annotation.NonNull String stepName, long durationMs) {
         mainHandler.post(() -> {
+            if (uiController == null) return;  // View recreation not yet complete
             if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
                 uiController.completeStep(stepName, durationMs);
             }
@@ -1058,6 +1175,7 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStepFailed(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
+            if (uiController == null) return;  // View recreation not yet complete
             if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
                 uiController.failStep(stepName);
             }
@@ -1070,6 +1188,7 @@ public class DictateInputMethodService extends InputMethodService
             if (pendingLivePromptChain) {
                 // Live prompt: transcription result becomes the prompt for a completion call
                 pendingLivePromptChain = false;
+                if (uiController == null) return;  // View recreation not yet complete
                 PromptEntity liveEntity = new PromptEntity(-1, Integer.MIN_VALUE, "", text, true, false);
                 runStandalonePromptViaOrchestrator(liveEntity);
             } else {
@@ -1080,7 +1199,10 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onPipelineError(@androidx.annotation.NonNull String errorInfoKey, boolean vibrate, @androidx.annotation.Nullable String providerName) {
-        mainHandler.post(() -> showInfo(errorInfoKey, providerName));
+        mainHandler.post(() -> {
+            if (infoBarController == null) return;  // View recreation not yet complete
+            showInfo(errorInfoKey, providerName);
+        });
         if (vibrate && vibrationEnabled) {
             vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
         }
@@ -1088,7 +1210,10 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onShowResend() {
-        mainHandler.post(() -> resendButton.setVisibility(View.VISIBLE));
+        mainHandler.post(() -> {
+            if (resendButton == null) return;  // View recreation not yet complete
+            resendButton.setVisibility(View.VISIBLE);
+        });
     }
 
     @Override
@@ -1130,6 +1255,7 @@ public class DictateInputMethodService extends InputMethodService
             sessionTracker.resetSession();
             sessionTracker.persistToPrefs(sp);
             mainHandler.post(() -> {
+                if (uiController == null) return;  // View recreation not yet complete
                 uiController.resetToPromptButtons();
                 uiController.restoreRecordButtonIdle(
                     getDictateButtonText(),

@@ -49,6 +49,14 @@ class KeyboardUiController(
     private var currentStep = 0
     private var activeTimer: ElapsedTimer? = null
 
+    // ── Timer cleanup (for view-recreation without side-effects) ──
+
+    /** Stops only the active elapsed timer without resetting mode or triggering side-effects. */
+    fun stopActiveTimer() {
+        activeTimer?.stop()
+        activeTimer = null
+    }
+
     // ── Mode switching ──
 
     /**
@@ -207,7 +215,7 @@ class KeyboardUiController(
      * @param leftIcon drawable resource for left compound drawable (0 for none)
      * @param rightIcon drawable resource for right compound drawable (0 for none)
      */
-    private var savedRecordButtonTextColors: android.content.res.ColorStateList? = null
+    private var savedRecordButtonTextColors: ColorStateList? = null
 
     fun restoreRecordButtonIdle(text: String, leftIcon: Int, rightIcon: Int) {
         views.recordButton.text = text

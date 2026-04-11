@@ -49,11 +49,15 @@ class KeyboardUiController(
     var state: PipelineUiState = PipelineUiState.Idle
         private set
 
-    /** Fires on actual state changes (step completed, auto-enter toggled, pipeline start/stop). */
-    var onPipelineUiStateChanged: ((old: PipelineUiState, newState: PipelineUiState) -> Unit)? = null
+    private var callback: PipelineUiCallback? = null
 
-    /** Fires every 100ms while pipeline runs — for QWERTZ timer updates. */
-    var onPipelineTimerTick: ((state: PipelineUiState.Running, elapsedMs: Long) -> Unit)? = null
+    /**
+     * Registers a callback for pipeline state changes and timer ticks.
+     * Replaces the previous lambda-pair (`onPipelineUiStateChanged`/`onPipelineTimerTick`).
+     */
+    fun setCallback(callback: PipelineUiCallback) {
+        this.callback = callback
+    }
 
     private var pipelineTotalTimer: ElapsedTimer? = null
     private var latestPipelineElapsedMs: Long = 0
@@ -89,7 +93,7 @@ class KeyboardUiController(
         state = newState
         refreshRecordButtonFromState()
         if (old != newState) {
-            onPipelineUiStateChanged?.invoke(old, newState)
+            callback?.onPipelineUiStateChanged(old, newState)
             stateManager.refresh()
         }
     }
@@ -181,7 +185,7 @@ class KeyboardUiController(
             refreshRecordButtonFromState()
             val s = state
             if (s is PipelineUiState.Running) {
-                onPipelineTimerTick?.invoke(s, ms)
+                callback?.onPipelineTimerTick(s, ms)
             }
         }
     }

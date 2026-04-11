@@ -465,15 +465,17 @@ public class DictateInputMethodService extends InputMethodService
         );
 
         // Pipeline UI callbacks: QWERTZ button updates from pipeline state
-        uiController.setOnPipelineTimerTick((runningState, elapsedMs) -> {
-            if (recordingUiController != null) {
-                recordingUiController.updateQwertzRecButtonForPipeline(runningState, elapsedMs);
+        uiController.setCallback(new PipelineUiCallback() {
+            @Override
+            public void onPipelineTimerTick(@NonNull PipelineUiState.Running state, long elapsedMs) {
+                if (recordingUiController != null) {
+                    recordingUiController.updateQwertzRecButtonForPipeline(state, elapsedMs);
+                }
             }
-            return kotlin.Unit.INSTANCE;
-        });
 
-        uiController.setOnPipelineUiStateChanged((oldState, newState) -> {
-            if (recordingUiController != null) {
+            @Override
+            public void onPipelineUiStateChanged(@NonNull PipelineUiState oldState, @NonNull PipelineUiState newState) {
+                if (recordingUiController == null) return;
                 if (newState instanceof PipelineUiState.Idle) {
                     recordingUiController.updateQwertzRecButton(false);  // QWERTZ → Mic-Icon
                 } else if (newState instanceof PipelineUiState.Running) {
@@ -490,7 +492,6 @@ public class DictateInputMethodService extends InputMethodService
                     recordingUiController.updateQwertzRecButton(false);
                 }
             }
-            return kotlin.Unit.INSTANCE;
         });
 
         // ── 5. Rewire callbacks (connect long-lived objects to new UI controllers) ──

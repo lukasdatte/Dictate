@@ -77,11 +77,10 @@ class KeyboardUiController(
 
     private var savedRecordButtonTextColors: ColorStateList? = null
 
-    // Cached auto-enter compound drawables (one per active/inactive state).
-    // Rebuilt lazily once per density and invalidated in [stopPipeline] so theme-/config-changes
-    // after view recreation get a fresh copy.
-    private var cachedAutoEnterActiveDrawable: android.graphics.drawable.Drawable? = null
-    private var cachedAutoEnterInactiveDrawable: android.graphics.drawable.Drawable? = null
+    // Auto-enter drawable renderer — cached lazily, one per controller lifetime.
+    // The renderer captures the record button's view-scoped Context; recreating the controller
+    // (e.g. on configuration change) yields a fresh renderer with an up-to-date Context.
+    private val autoEnterRenderer by lazy { AutoEnterIconRenderer(views.recordButton.context) }
 
     // ── State mutation ──
 
@@ -198,8 +197,7 @@ class KeyboardUiController(
         activeTimer = null
         // Invalidate cached auto-enter drawables so the next pipeline (potentially after
         // a config/theme change or view recreation) rebuilds them from the current context.
-        cachedAutoEnterActiveDrawable = null
-        cachedAutoEnterInactiveDrawable = null
+        autoEnterRenderer.invalidate()
         // IMPORTANT: Set mode BEFORE state, so stateManager.refresh() (via updatePipelineState)
         // calculates correct visibility. The existing resetToPromptButtons() does the same.
         currentMode = PromptAreaMode.PROMPT_BUTTONS
@@ -376,69 +374,7 @@ class KeyboardUiController(
     // ── Auto-enter appearance (visual only, no click listener management) ──
 
     private fun updateAutoEnterAppearance(active: Boolean) {
-        val drawable = if (active) {
-            cachedAutoEnterActiveDrawable
-                ?: buildAutoEnterActiveDrawable().also { cachedAutoEnterActiveDrawable = it }
-        } else {
-            cachedAutoEnterInactiveDrawable
-                ?: buildAutoEnterInactiveDrawable().also { cachedAutoEnterInactiveDrawable = it }
-        }
-        views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, drawable, null)
-    }
-
-    /**
-     * Builds the "active" knockout drawable: white circle with a transparent arrow cutout
-     * (PorterDuff DST_OUT). Allocated once and cached in [cachedAutoEnterActiveDrawable].
-     */
-    private fun buildAutoEnterActiveDrawable(): android.graphics.drawable.Drawable {
-        val ctx = views.recordButton.context
-        val density = ctx.resources.displayMetrics.density
-        val sizePx = (24 * density).toInt()
-
-        val enterIcon = ctx.getDrawable(R.drawable.ic_baseline_subdirectory_arrow_left_24)?.mutate()
-        enterIcon?.setBounds(0, 0, sizePx, sizePx)
-        enterIcon?.setTint(Color.WHITE)
-
-        // Render icon to a temporary bitmap, offset slightly left+up for optical centering
-        val iconBitmap = android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
-        val iconCanvas = android.graphics.Canvas(iconBitmap)
-        val offset = (-1.5f * density)
-        iconCanvas.translate(offset, offset)
-        enterIcon?.draw(iconCanvas)
-
-        // Create the knockout composite
-        val bitmap = android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(bitmap)
-        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-
-        // Draw white circle
-        paint.color = Color.WHITE
-        canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, paint)
-
-        // Punch out the icon using DST_OUT on the icon bitmap
-        paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
-        canvas.drawBitmap(iconBitmap, 0f, 0f, paint)
-        paint.xfermode = null
-
-        iconBitmap.recycle()
-
-        val drawable = android.graphics.drawable.BitmapDrawable(ctx.resources, bitmap)
-        drawable.setBounds(0, 0, sizePx, sizePx)
-        return drawable
-    }
-
-    /**
-     * Builds the "inactive" drawable: white arrow icon on a transparent background.
-     * Allocated once and cached in [cachedAutoEnterInactiveDrawable].
-     */
-    private fun buildAutoEnterInactiveDrawable(): android.graphics.drawable.Drawable {
-        val ctx = views.recordButton.context
-        val density = ctx.resources.displayMetrics.density
-        val sizePx = (24 * density).toInt()
-
-        val enterIcon = ctx.getDrawable(R.drawable.ic_baseline_subdirectory_arrow_left_24)?.mutate()!!
-        enterIcon.setTint(Color.WHITE)
-        enterIcon.setBounds(0, 0, sizePx, sizePx)
-        return enterIcon
+        views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
+            null, null, autoEnterRenderer.get(active), null)
     }
 }

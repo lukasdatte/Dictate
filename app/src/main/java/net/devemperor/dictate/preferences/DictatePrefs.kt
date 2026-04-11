@@ -23,6 +23,7 @@ sealed class Pref<T>(val key: String, val default: T) {
     object AutoFormattingEnabled : Pref<Boolean>("net.devemperor.dictate.auto_formatting_enabled", false)
     object InstantOutput : Pref<Boolean>("net.devemperor.dictate.instant_output", true)
     object AutoEnter : Pref<Boolean>("net.devemperor.dictate.auto_enter", false)
+    object AutoEnterDelay : Pref<Int>("net.devemperor.dictate.auto_enter_delay", 50)
     object InstantRecording : Pref<Boolean>("net.devemperor.dictate.instant_recording", false)
     object ResendButton : Pref<Boolean>("net.devemperor.dictate.resend_button", false)
     object Vibration : Pref<Boolean>("net.devemperor.dictate.vibration", true)
@@ -98,6 +99,7 @@ sealed class Pref<T>(val key: String, val default: T) {
     object LastFileName : Pref<String>("net.devemperor.dictate.last_file_name", "audio.m4a")
     object TranscriptionAudioFile : Pref<String>("net.devemperor.dictate.transcription_audio_file", "")
     object QueuedPromptIds : Pref<String>("net.devemperor.dictate.queued_prompt_ids", "")
+    object LastSessionId : Pref<String>("net.devemperor.dictate.last_session_id", "")
 
     // ── Input Languages (Set<String>, separate access) ──
     object InputLanguages : Pref<String>("net.devemperor.dictate.input_languages", "")  // Sentinel, actually Set<String>

@@ -59,6 +59,12 @@
             android:defaultValue="false"
             app:iconSpaceReserved="false"/>
 
+        <net.devemperor.dictate.settings.IntEditTextPreference
+            android:key="net.devemperor.dictate.auto_enter_delay"
+            android:title="@string/dictate_settings_auto_enter_delay_title"
+            android:defaultValue="50"
+            app:iconSpaceReserved="false"/>
+
         <androidx.preference.SwitchPreference
             android:key="net.devemperor.dictate.resend_button"
             android:title="@string/dictate_settings_enable_resend_button_title"

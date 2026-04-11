@@ -26,6 +26,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.ai.AIProvider;
+import net.devemperor.dictate.preferences.DictatePrefsKt;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
 
@@ -131,17 +132,18 @@ public class OnboardingAdapter extends RecyclerView.Adapter<OnboardingAdapter.Vi
                         SharedPreferences sp = activity.getSharedPreferences("net.devemperor.dictate", Context.MODE_PRIVATE);
                         String apiKey = apiKeyEt.getText().toString().trim();
                         // if user decided to use Groq, switch to all Groq settings
+                        SharedPreferences.Editor editor = sp.edit();
                         if (apiKey.startsWith("gsk_")) {
-                            sp.edit().putString(Pref.TranscriptionProvider.INSTANCE.getKey(), AIProvider.GROQ.name()).apply();
-                            sp.edit().putString(Pref.RewordingProvider.INSTANCE.getKey(), AIProvider.GROQ.name()).apply();
-                            sp.edit().putString(Pref.TranscriptionApiKeyGroq.INSTANCE.getKey(), apiKey).apply();
-                            sp.edit().putString(Pref.RewordingApiKeyGroq.INSTANCE.getKey(), apiKey).apply();
+                            DictatePrefsKt.put(editor, Pref.TranscriptionProvider.INSTANCE, AIProvider.GROQ.name());
+                            DictatePrefsKt.put(editor, Pref.RewordingProvider.INSTANCE, AIProvider.GROQ.name());
+                            DictatePrefsKt.put(editor, Pref.TranscriptionApiKeyGroq.INSTANCE, apiKey);
+                            DictatePrefsKt.put(editor, Pref.RewordingApiKeyGroq.INSTANCE, apiKey);
                         } else {
-                            sp.edit().putString(Pref.TranscriptionApiKeyOpenAI.INSTANCE.getKey(), apiKey).apply();
-                            sp.edit().putString(Pref.RewordingApiKeyOpenAI.INSTANCE.getKey(), apiKey).apply();
+                            DictatePrefsKt.put(editor, Pref.TranscriptionApiKeyOpenAI.INSTANCE, apiKey);
+                            DictatePrefsKt.put(editor, Pref.RewordingApiKeyOpenAI.INSTANCE, apiKey);
                         }
-
-                        sp.edit().putBoolean(Pref.OnboardingComplete.INSTANCE.getKey(), true).apply();
+                        DictatePrefsKt.put(editor, Pref.OnboardingComplete.INSTANCE, true);
+                        editor.apply();
                         activity.startActivity(new Intent(activity, DictateSettingsActivity.class));
                         activity.finish();
                     })

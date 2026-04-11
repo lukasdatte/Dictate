@@ -84,7 +84,7 @@ class PromptQueueManager(
      * @param validPromptIds set of prompt IDs that currently exist
      */
     fun restoreQueue(validPromptIds: Set<Int>) {
-        val saved = sp.getString(Pref.QueuedPromptIds.key, null)
+        val saved = sp.get(Pref.QueuedPromptIds).ifEmpty { null }
         if (saved.isNullOrEmpty()) return
 
         val restoredIds = saved.split(",")
@@ -110,7 +110,7 @@ class PromptQueueManager(
      * Does NOT persist — auto-apply additions are transient.
      */
     fun prepareAutoApplyQueue() {
-        val rewordingEnabled = sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)
+        val rewordingEnabled = sp.get(Pref.RewordingEnabled)
         if (!rewordingEnabled) return
 
         val autoApplyIds = autoApplyIdsProvider.getAutoApplyIds()
@@ -129,7 +129,7 @@ class PromptQueueManager(
         synchronized(queuedPromptIds) {
             val manualIds = queuedPromptIds.filter { it !in autoApplyIds }
             val idsString = manualIds.joinToString(",")
-            sp.edit().putString(Pref.QueuedPromptIds.key, idsString).apply()
+            sp.edit().put(Pref.QueuedPromptIds, idsString).apply()
         }
     }
 

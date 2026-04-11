@@ -29,6 +29,8 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.onboarding.OnboardingActivity;
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.preferences.DictatePrefsKt;
+import net.devemperor.dictate.preferences.Pref;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -59,7 +61,7 @@ public class DictateSettingsActivity extends AppCompatActivity {
         SharedPreferences sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE);
 
         // start onboarding if this is the first time for the user to open Dictate
-        if (!sp.getBoolean("net.devemperor.dictate.onboarding_complete", false)) {
+        if (!DictatePrefsKt.get(sp, Pref.OnboardingComplete.INSTANCE)) {
             startActivity(new Intent(this, OnboardingActivity.class));
             finish();
 
@@ -112,7 +114,7 @@ public class DictateSettingsActivity extends AppCompatActivity {
                                 throw new RuntimeException(e);
                             }
 
-                            sp.edit().putString("net.devemperor.dictate.transcription_audio_file", fileName).apply();
+                            DictatePrefsKt.put(sp.edit(), Pref.TranscriptionAudioFile.INSTANCE, fileName).apply();
                         }
                     }
                     finish();  // close the activity after the file has been picked
@@ -128,11 +130,11 @@ public class DictateSettingsActivity extends AppCompatActivity {
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             filePickerLauncher.launch(Intent.createChooser(intent, getString(R.string.dictate_choose_audio_file)));
 
-        } else if (sp.getInt("net.devemperor.dictate.last_version_code", 0) < BuildConfig.VERSION_CODE) {
+        } else if (DictatePrefsKt.get(sp, Pref.LastVersionCode.INSTANCE) < BuildConfig.VERSION_CODE) {
 
             // show changelog if user has a new version
             StringBuilder whatsNewMessage = new StringBuilder(getString(R.string.dictate_changelog_donate));
-            int lastVersionCode = sp.getInt("net.devemperor.dictate.last_version_code", 0);
+            int lastVersionCode = DictatePrefsKt.get(sp, Pref.LastVersionCode.INSTANCE);
             for (int version = BuildConfig.VERSION_CODE; version >= 5; version--) {
                 if (lastVersionCode < version) {
                     int resId = getResources().getIdentifier("dictate_changelog_" + version, "string", getPackageName());
@@ -142,10 +144,10 @@ public class DictateSettingsActivity extends AppCompatActivity {
             new MaterialAlertDialogBuilder(this)
                     .setTitle(R.string.dictate_whats_new)
                     .setMessage(whatsNewMessage.toString())
-                    .setPositiveButton(R.string.dictate_okay, (di, i) -> sp.edit().putInt("net.devemperor.dictate.last_version_code", BuildConfig.VERSION_CODE).apply())
+                    .setPositiveButton(R.string.dictate_okay, (di, i) -> DictatePrefsKt.put(sp.edit(), Pref.LastVersionCode.INSTANCE, BuildConfig.VERSION_CODE).apply())
                     .show();
 
-            if (lastVersionCode <= 26) sp.edit().putBoolean("net.devemperor.dictate.use_bluetooth_mic", false).apply();  // reset bluetooth mic setting to false due to issues in 2.10.0
+            if (lastVersionCode <= 26) DictatePrefsKt.put(sp.edit(), Pref.UseBluetoothMic.INSTANCE, false).apply();  // reset bluetooth mic setting to false due to issues in 2.10.0
 
         } else if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{ Manifest.permission.RECORD_AUDIO }, 1337);

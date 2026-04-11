@@ -96,8 +96,8 @@ public class SystemPromptsActivity extends AppCompatActivity {
     }
 
     private void setupTranscriptionStylePrompt() {
-        changeTranscriptionSelection(sp.getInt("net.devemperor.dictate.style_prompt_selection", 1));
-        transcriptionStylePromptCustomEt.setText(sp.getString("net.devemperor.dictate.style_prompt_custom_text", ""));
+        changeTranscriptionSelection(DictatePrefsKt.get(sp, Pref.StylePromptSelection.INSTANCE));
+        transcriptionStylePromptCustomEt.setText(DictatePrefsKt.get(sp, Pref.StylePromptCustomText.INSTANCE));
 
         transcriptionStylePromptRg.setOnCheckedChangeListener((group, checkedId) -> {
             if (checkedId == R.id.transcription_style_prompt_nothing_rb) {
@@ -112,14 +112,14 @@ public class SystemPromptsActivity extends AppCompatActivity {
         transcriptionStylePromptCustomEt.addTextChangedListener(new SimpleTextWatcher() {
             @Override
             public void afterTextChanged(Editable s) {
-                sp.edit().putString("net.devemperor.dictate.style_prompt_custom_text", s.toString()).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.StylePromptCustomText.INSTANCE, s.toString()).apply();
             }
         });
     }
 
     private void setupRewordingSystemPrompt() {
-        changeRewordingSelection(sp.getInt("net.devemperor.dictate.system_prompt_selection", 1));
-        rewordingSystemPromptCustomEt.setText(sp.getString("net.devemperor.dictate.system_prompt_custom_text", ""));
+        changeRewordingSelection(DictatePrefsKt.get(sp, Pref.SystemPromptSelection.INSTANCE));
+        rewordingSystemPromptCustomEt.setText(DictatePrefsKt.get(sp, Pref.SystemPromptCustomText.INSTANCE));
 
         rewordingSystemPromptRg.setOnCheckedChangeListener((group, checkedId) -> {
             if (checkedId == R.id.rewording_system_prompt_nothing_rb) {
@@ -134,7 +134,7 @@ public class SystemPromptsActivity extends AppCompatActivity {
         rewordingSystemPromptCustomEt.addTextChangedListener(new SimpleTextWatcher() {
             @Override
             public void afterTextChanged(Editable s) {
-                sp.edit().putString("net.devemperor.dictate.system_prompt_custom_text", s.toString()).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.SystemPromptCustomText.INSTANCE, s.toString()).apply();
             }
         });
     }
@@ -159,7 +159,7 @@ public class SystemPromptsActivity extends AppCompatActivity {
         transcriptionStylePromptPredefinedRb.setChecked(selection == 1);
         transcriptionStylePromptCustomRb.setChecked(selection == 2);
         transcriptionStylePromptCustomEt.setEnabled(selection == 2);
-        sp.edit().putInt("net.devemperor.dictate.style_prompt_selection", selection).apply();
+        DictatePrefsKt.put(sp.edit(), Pref.StylePromptSelection.INSTANCE, selection).apply();
     }
 
     private void changeRewordingSelection(int selection) {
@@ -167,7 +167,7 @@ public class SystemPromptsActivity extends AppCompatActivity {
         rewordingSystemPromptPredefinedRb.setChecked(selection == 1);
         rewordingSystemPromptCustomRb.setChecked(selection == 2);
         rewordingSystemPromptCustomEt.setEnabled(selection == 2);
-        sp.edit().putInt("net.devemperor.dictate.system_prompt_selection", selection).apply();
+        DictatePrefsKt.put(sp.edit(), Pref.SystemPromptSelection.INSTANCE, selection).apply();
     }
 
     private void setupKeyterms() {
@@ -189,11 +189,11 @@ public class SystemPromptsActivity extends AppCompatActivity {
 
                 ElevenLabsKeytermsParser.ParseResult result = ElevenLabsKeytermsParser.INSTANCE.parse(raw);
 
-                sp.edit()
-                    .putString(Pref.ElevenLabsKeytermsRaw.INSTANCE.getKey(), raw)
-                    .putString(Pref.ElevenLabsKeytermsParsed.INSTANCE.getKey(),
-                               ElevenLabsKeytermsParser.INSTANCE.toJson(result.getTerms()))
-                    .apply();
+                SharedPreferences.Editor editor = sp.edit();
+                DictatePrefsKt.put(editor, Pref.ElevenLabsKeytermsRaw.INSTANCE, raw);
+                DictatePrefsKt.put(editor, Pref.ElevenLabsKeytermsParsed.INSTANCE,
+                               ElevenLabsKeytermsParser.INSTANCE.toJson(result.getTerms()));
+                editor.apply();
 
                 updateKeytermsStatus(keytermsTil, keytermsStatusTv, result);
             }

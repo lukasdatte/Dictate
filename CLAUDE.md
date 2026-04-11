@@ -54,6 +54,12 @@ No linter or formatter is configured.
 - AI provider integration goes through `AIOrchestrator` → `RunnerFactory` → Runner interfaces. Never call AI SDKs directly from UI/service code.
 - Database access via Room DAOs, singleton `DictateDatabase.getInstance()`.
 
+## Database Patterns
+
+All database conventions (schema design, migrations, Double-Enum pattern for finite-set columns, denormalized caches) are documented in [`docs/DATABASE-PATTERNS.md`](docs/DATABASE-PATTERNS.md). Read that file before touching Room entities, DAOs, or migrations.
+
+**Key rule — Double-Enum pattern:** Any column holding a value from a finite set (status, origin, type, role, error classifier) MUST be modelled as a Kotlin `enum class` AND a SQL `CHECK` constraint. This forces schema changes to go through migrations and prevents silent data corruption. See `docs/DATABASE-PATTERNS.md` for the full structure, migration workflow, and test template.
+
 ## Dependencies (key)
 
 - OpenAI Java SDK (`com.openai:openai-java`), Anthropic Java SDK (`com.anthropic:anthropic-java`)

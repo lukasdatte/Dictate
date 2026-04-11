@@ -11,6 +11,8 @@ import androidx.constraintlayout.widget.ConstraintLayout
 import net.devemperor.dictate.BuildConfig
 import net.devemperor.dictate.R
 import net.devemperor.dictate.ai.AIProvider
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.put
 
 /**
  * Controls the info bar (update, rate, donate, error messages).
@@ -66,7 +68,7 @@ class InfoBarController(
                     dismiss()
                 }
                 infoNoButton.setOnClickListener {
-                    sp.edit().putInt("net.devemperor.dictate.last_version_code", BuildConfig.VERSION_CODE).apply()
+                    sp.edit().put(Pref.LastVersionCode, BuildConfig.VERSION_CODE).apply()
                     dismiss()
                 }
             }
@@ -78,11 +80,11 @@ class InfoBarController(
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=net.devemperor.dictate"))
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     startActivityAction(intent)
-                    sp.edit().putBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", true).apply()
+                    sp.edit().put(Pref.FlagHasRated, true).apply()
                     dismiss()
                 }
                 infoNoButton.setOnClickListener {
-                    sp.edit().putBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", true).apply()
+                    sp.edit().put(Pref.FlagHasRated, true).apply()
                     dismiss()
                 }
             }
@@ -94,13 +96,13 @@ class InfoBarController(
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://paypal.me/DevEmperor"))
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     startActivityAction(intent)
-                    sp.edit().putBoolean("net.devemperor.dictate.flag_has_donated", true)
-                        .putBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", true).apply()
+                    sp.edit().put(Pref.FlagHasDonated, true)
+                        .put(Pref.FlagHasRated, true).apply()
                     dismiss()
                 }
                 infoNoButton.setOnClickListener {
-                    sp.edit().putBoolean("net.devemperor.dictate.flag_has_donated", true)
-                        .putBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", true).apply()
+                    sp.edit().put(Pref.FlagHasDonated, true)
+                        .put(Pref.FlagHasRated, true).apply()
                     dismiss()
                 }
             }

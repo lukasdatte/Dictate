@@ -24,6 +24,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import net.devemperor.dictate.ai.prompt.PromptTemplates;
+import net.devemperor.dictate.preferences.DictatePrefsKt;
+import net.devemperor.dictate.preferences.Pref;
 
 public class DictateUtils {
 
@@ -134,7 +136,7 @@ public class DictateUtils {
 
     public static void applyApplicationLocale(Context context) {
         SharedPreferences sp = context.getSharedPreferences("net.devemperor.dictate", Context.MODE_PRIVATE);
-        String language = sp.getString("net.devemperor.dictate.app_language", "system");
+        String language = DictatePrefsKt.get(sp, Pref.AppLanguage.INSTANCE);
         applyApplicationLocale(language);
     }
 
@@ -201,8 +203,8 @@ public class DictateUtils {
      * @return Proxy instance, or null if proxy is not enabled/configured
      */
     public static Proxy createProxy(SharedPreferences sp) {
-        String proxyInput = sp.getString("net.devemperor.dictate.proxy_host", "");
-        boolean proxyEnabled = sp.getBoolean("net.devemperor.dictate.proxy_enabled", false);
+        String proxyInput = DictatePrefsKt.get(sp, Pref.ProxyHost.INSTANCE);
+        boolean proxyEnabled = DictatePrefsKt.get(sp, Pref.ProxyEnabled.INSTANCE);
 
         if (!proxyEnabled || proxyInput.isEmpty()) return null;
 
@@ -227,8 +229,8 @@ public class DictateUtils {
      * Sets it as the default Authenticator.
      */
     public static void applyProxyAuthenticator(SharedPreferences sp) {
-        String proxyInput = sp.getString("net.devemperor.dictate.proxy_host", "");
-        boolean proxyEnabled = sp.getBoolean("net.devemperor.dictate.proxy_enabled", false);
+        String proxyInput = DictatePrefsKt.get(sp, Pref.ProxyHost.INSTANCE);
+        boolean proxyEnabled = DictatePrefsKt.get(sp, Pref.ProxyEnabled.INSTANCE);
 
         if (!proxyEnabled || proxyInput.isEmpty()) return;
 

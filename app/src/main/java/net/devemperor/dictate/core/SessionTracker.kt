@@ -2,6 +2,9 @@ package net.devemperor.dictate.core
 
 import android.content.SharedPreferences
 import net.devemperor.dictate.database.entity.SessionType
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.preferences.put
 
 /**
  * Tracks the current session and step IDs during a dictation/rewording flow.
@@ -76,7 +79,7 @@ class SessionTracker(private val sessionManager: SessionManager) {
      * Restores last session ID from SharedPreferences (no DB access — safe for main thread).
      */
     fun restoreLastSessionIdFromPrefs(sp: SharedPreferences) {
-        lastSessionId = sp.getString(PREF_LAST_SESSION_ID, null)
+        lastSessionId = sp.get(Pref.LastSessionId).ifEmpty { null }
     }
 
     /**
@@ -93,7 +96,7 @@ class SessionTracker(private val sessionManager: SessionManager) {
      * Persists last session ID to SharedPreferences (for keyboard restart resilience).
      */
     fun persistToPrefs(sp: SharedPreferences) {
-        sp.edit().putString(PREF_LAST_SESSION_ID, lastSessionId).apply()
+        sp.edit().put(Pref.LastSessionId, lastSessionId ?: "").apply()
     }
 
     /**
@@ -101,9 +104,5 @@ class SessionTracker(private val sessionManager: SessionManager) {
      */
     fun reuseLastSession() {
         currentSessionId = lastSessionId
-    }
-
-    companion object {
-        private const val PREF_LAST_SESSION_ID = "net.devemperor.dictate.last_session_id"
     }
 }

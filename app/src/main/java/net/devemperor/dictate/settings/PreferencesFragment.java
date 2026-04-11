@@ -22,6 +22,8 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.preferences.DictatePrefsKt;
+import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
 import net.devemperor.dictate.database.DictateDatabase;
@@ -66,7 +68,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
                     Toast.makeText(requireContext(), R.string.dictate_input_languages_empty, Toast.LENGTH_SHORT).show();
                     return false;
                 }
-                sp.edit().putInt("net.devemperor.dictate.input_language_pos", 0).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.InputLanguagePos.INSTANCE, 0).apply();
                 return true;
             });
         }
@@ -105,6 +107,28 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
                     return false;
                 }
                 return true;
+            });
+        }
+
+        IntEditTextPreference autoEnterDelayPref = findPreference("net.devemperor.dictate.auto_enter_delay");
+        if (autoEnterDelayPref != null) {
+            autoEnterDelayPref.setSummaryProvider(pref ->
+                    ((EditTextPreference) pref).getText() + " ms");
+
+            autoEnterDelayPref.setOnBindEditTextListener(editText -> {
+                editText.setInputType(InputType.TYPE_CLASS_NUMBER);
+                editText.setSingleLine(true);
+                editText.setFilters(new InputFilter[] { new InputFilter.LengthFilter(3) });
+                editText.setSelection(editText.getText().length());
+            });
+
+            autoEnterDelayPref.setOnPreferenceChangeListener((pref, newValue) -> {
+                try {
+                    int delay = Integer.parseInt((String) newValue);
+                    return delay >= 0 && delay <= 999;
+                } catch (NumberFormatException e) {
+                    return false;
+                }
             });
         }
 
@@ -234,7 +258,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
                 emailIntent.setData(Uri.parse("mailto:contact@devemperor.net"));
                 emailIntent.putExtra(Intent.EXTRA_SUBJECT, getString(R.string.dictate_feedback_subject));
                 emailIntent.putExtra(Intent.EXTRA_TEXT, getString(R.string.dictate_feedback_body)
-                        + "\n\nDictate User-ID: " + sp.getString("net.devemperor.dictate.user_id", "null"));
+                        + "\n\nDictate User-ID: " + DictatePrefsKt.get(sp, Pref.UserId.INSTANCE));
                 startActivity(Intent.createChooser(emailIntent, getString(R.string.dictate_feedback_title)));
                 return true;
             });
@@ -253,7 +277,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
         if (aboutPreference != null) {
             aboutPreference.setTitle(getString(R.string.dictate_about, BuildConfig.VERSION_NAME));
             aboutPreference.setOnPreferenceClickListener(preference -> {
-                Toast.makeText(requireContext(), "User-ID: " + sp.getString("net.devemperor.dictate.user_id", "null"), Toast.LENGTH_LONG).show();
+                Toast.makeText(requireContext(), "User-ID: " + DictatePrefsKt.get(sp, Pref.UserId.INSTANCE), Toast.LENGTH_LONG).show();
                 return true;
             });
         }

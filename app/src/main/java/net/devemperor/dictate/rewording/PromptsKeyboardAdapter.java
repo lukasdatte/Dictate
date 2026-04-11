@@ -18,6 +18,8 @@ import com.google.android.material.button.MaterialButton;
 
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.preferences.DictatePrefsKt;
+import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.database.entity.PromptEntity;
 
 import java.util.ArrayList;
@@ -154,7 +156,7 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
             callback.onItemLongClicked(position);
             return true;
         });
-        int accentColor = sp.getInt("net.devemperor.dictate.accent_color", -14700810);
+        int accentColor = DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
         int accentColorMedium = DictateUtils.darkenColor(accentColor, 0.18f);
         int accentColorDark = DictateUtils.darkenColor(accentColor, 0.35f);
         int backgroundColor;
@@ -166,7 +168,7 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
             backgroundColor = accentColorMedium;
         }
         applyPromptButtonColors(holder.promptBtn, backgroundColor);
-        if (sp.getBoolean("net.devemperor.dictate.animations", true)) {
+        if (DictatePrefsKt.get(sp, Pref.Animations.INSTANCE)) {
             holder.promptBtn.setOnTouchListener((v, event) -> {
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:

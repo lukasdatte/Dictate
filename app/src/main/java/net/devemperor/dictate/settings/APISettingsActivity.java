@@ -172,7 +172,7 @@ public class APISettingsActivity extends AppCompatActivity {
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (ignoreSpinnerChange) return;
                 AIProvider selected = transcriptionProviders.get(position);
-                sp.edit().putString(Pref.TranscriptionProvider.INSTANCE.getKey(), selected.name()).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.TranscriptionProvider.INSTANCE, selected.name()).apply();
                 updateTranscriptionUI(selected);
             }
             @Override
@@ -186,7 +186,7 @@ public class APISettingsActivity extends AppCompatActivity {
                 if (ignoreTextChange) return;
                 AIProvider provider = getSelectedTranscriptionProvider();
                 Pref<String> keyPref = getTranscriptionApiKeyPref(provider);
-                sp.edit().putString(keyPref.getKey(), editable.toString()).apply();
+                DictatePrefsKt.put(sp.edit(), keyPref, editable.toString()).apply();
             }
         });
 
@@ -195,14 +195,14 @@ public class APISettingsActivity extends AppCompatActivity {
             @Override
             public void afterTextChanged(Editable editable) {
                 if (ignoreTextChange) return;
-                sp.edit().putString(Pref.TranscriptionCustomHost.INSTANCE.getKey(), editable.toString()).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.TranscriptionCustomHost.INSTANCE, editable.toString()).apply();
             }
         });
         transcriptionCustomModelEt.addTextChangedListener(new SimpleTextWatcher() {
             @Override
             public void afterTextChanged(Editable editable) {
                 if (ignoreTextChange) return;
-                sp.edit().putString(Pref.TranscriptionCustomModel.INSTANCE.getKey(), editable.toString()).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.TranscriptionCustomModel.INSTANCE, editable.toString()).apply();
             }
         });
 
@@ -329,7 +329,7 @@ public class APISettingsActivity extends AppCompatActivity {
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (ignoreSpinnerChange) return;
                 AIProvider selected = rewordingProviders.get(position);
-                sp.edit().putString(Pref.RewordingProvider.INSTANCE.getKey(), selected.name()).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.RewordingProvider.INSTANCE, selected.name()).apply();
                 updateRewordingUI(selected);
             }
             @Override
@@ -343,7 +343,7 @@ public class APISettingsActivity extends AppCompatActivity {
                 if (ignoreTextChange) return;
                 AIProvider provider = getSelectedRewordingProvider();
                 Pref<String> keyPref = getRewordingApiKeyPref(provider);
-                sp.edit().putString(keyPref.getKey(), editable.toString()).apply();
+                DictatePrefsKt.put(sp.edit(), keyPref, editable.toString()).apply();
             }
         });
 
@@ -352,7 +352,7 @@ public class APISettingsActivity extends AppCompatActivity {
             @Override
             public void afterTextChanged(Editable editable) {
                 if (ignoreTextChange) return;
-                sp.edit().putString(Pref.RewordingCustomHost.INSTANCE.getKey(), editable.toString()).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.RewordingCustomHost.INSTANCE, editable.toString()).apply();
             }
         });
         rewordingCustomModelEt.addTextChangedListener(new SimpleTextWatcher() {
@@ -361,9 +361,9 @@ public class APISettingsActivity extends AppCompatActivity {
                 if (ignoreTextChange) return;
                 AIProvider current = getSelectedRewordingProvider();
                 if (current == AIProvider.ANTHROPIC) {
-                    sp.edit().putString(Pref.RewordingAnthropicModel.INSTANCE.getKey(), editable.toString()).apply();
+                    DictatePrefsKt.put(sp.edit(), Pref.RewordingAnthropicModel.INSTANCE, editable.toString()).apply();
                 } else {
-                    sp.edit().putString(Pref.RewordingCustomModel.INSTANCE.getKey(), editable.toString()).apply();
+                    DictatePrefsKt.put(sp.edit(), Pref.RewordingCustomModel.INSTANCE, editable.toString()).apply();
                 }
             }
         });
@@ -530,7 +530,7 @@ public class APISettingsActivity extends AppCompatActivity {
                     value = min + (progress - 1) / 10f;
                     label.setText(formatFloatLabel(displayName, value));
                 }
-                sp.edit().putFloat(pref.getKey(), value).apply();
+                DictatePrefsKt.put(sp.edit(), pref, value).apply();
                 handleMutualExclusion(def, value >= 0, paramViews);
             }
             @Override
@@ -577,7 +577,7 @@ public class APISettingsActivity extends AppCompatActivity {
                         value = -1;
                     }
                 }
-                sp.edit().putInt(pref.getKey(), value).apply();
+                DictatePrefsKt.put(sp.edit(), pref, value).apply();
             }
         });
         rewordingParameterContainer.addView(editText);
@@ -620,7 +620,7 @@ public class APISettingsActivity extends AppCompatActivity {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 String value = position == 0 ? "" : values.get(position - 1);
-                sp.edit().putString(pref.getKey(), value).apply();
+                DictatePrefsKt.put(sp.edit(), pref, value).apply();
             }
             @Override
             public void onNothingSelected(AdapterView<?> adapterView) {}
@@ -734,13 +734,13 @@ public class APISettingsActivity extends AppCompatActivity {
     private void saveTranscriptionModel(AIProvider provider, String modelId) {
         switch (provider) {
             case OPENAI:
-                sp.edit().putString(Pref.TranscriptionOpenAIModel.INSTANCE.getKey(), modelId).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.TranscriptionOpenAIModel.INSTANCE, modelId).apply();
                 break;
             case GROQ:
-                sp.edit().putString(Pref.TranscriptionGroqModel.INSTANCE.getKey(), modelId).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.TranscriptionGroqModel.INSTANCE, modelId).apply();
                 break;
             case ELEVENLABS:
-                sp.edit().putString(Pref.TranscriptionElevenLabsModel.INSTANCE.getKey(), modelId).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.TranscriptionElevenLabsModel.INSTANCE, modelId).apply();
                 break;
         }
     }
@@ -758,16 +758,16 @@ public class APISettingsActivity extends AppCompatActivity {
     private void saveRewordingModel(AIProvider provider, String modelId) {
         switch (provider) {
             case OPENAI:
-                sp.edit().putString(Pref.RewordingOpenAIModel.INSTANCE.getKey(), modelId).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.RewordingOpenAIModel.INSTANCE, modelId).apply();
                 break;
             case GROQ:
-                sp.edit().putString(Pref.RewordingGroqModel.INSTANCE.getKey(), modelId).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.RewordingGroqModel.INSTANCE, modelId).apply();
                 break;
             case OPENROUTER:
-                sp.edit().putString(Pref.RewordingOpenRouterModel.INSTANCE.getKey(), modelId).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.RewordingOpenRouterModel.INSTANCE, modelId).apply();
                 break;
             case ANTHROPIC:
-                sp.edit().putString(Pref.RewordingAnthropicModel.INSTANCE.getKey(), modelId).apply();
+                DictatePrefsKt.put(sp.edit(), Pref.RewordingAnthropicModel.INSTANCE, modelId).apply();
                 break;
         }
     }

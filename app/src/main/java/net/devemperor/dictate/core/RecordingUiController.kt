@@ -246,20 +246,33 @@ class RecordingUiController(
     }
 
     /**
-     * Updates the QWERTZ rec button to show pipeline progress.
-     * Two-line display: counter + optional enter indicator on top, timer below.
+     * One-shot setup for pipeline display mode on the QWERTZ rec button.
+     * Sets icon/color/padding once; subsequent per-tick updates only touch text
+     * (see [updatePipelineTimer]). Should only be called on Idle→Running (or layout-rebuild)
+     * transitions — calling it per tick would cause redundant [setPadding] re-layout triggers.
      */
-    fun updateQwertzRecButtonForPipeline(state: PipelineUiState.Running, elapsedMs: Long) {
+    fun enterPipelineDisplay(state: PipelineUiState.Running) {
         val recButton = qwertzRecButtonProvider() ?: return
         ensureQwertzOriginalsSaved(recButton)
-        // Two-line display: counter + optional enter indicator on top, timer below
-        val counter = "${state.completedSteps}/${state.totalSteps}"
-        val enterIndicator = if (state.autoEnterActive) " \u21B5" else ""
-        val timer = formatElapsedCompact(elapsedMs)
         recButton.icon = null
-        recButton.text = "$counter$enterIndicator\n$timer"
         recButton.setTextColor(if (state.hasFailure) 0xFFF44336.toInt() else Color.WHITE)
         val density = recButton.resources.displayMetrics.density
         recButton.setPadding(0, (2 * density).toInt(), 0, (2 * density).toInt())
+        // Initial text (elapsed 0) so the button is not blank between enter and first tick.
+        updatePipelineTimer(state, 0L)
+    }
+
+    /**
+     * Per-tick update — only touches text, no layout-triggering property changes.
+     * Also keeps the text color in sync with [PipelineUiState.Running.hasFailure], which may
+     * flip mid-pipeline.
+     */
+    fun updatePipelineTimer(state: PipelineUiState.Running, elapsedMs: Long) {
+        val recButton = qwertzRecButtonProvider() ?: return
+        val counter = "${state.completedSteps}/${state.totalSteps}"
+        val enterIndicator = if (state.autoEnterActive) " \u21B5" else ""
+        val timer = formatElapsedCompact(elapsedMs)
+        recButton.text = "$counter$enterIndicator\n$timer"
+        recButton.setTextColor(if (state.hasFailure) 0xFFF44336.toInt() else Color.WHITE)
     }
 }

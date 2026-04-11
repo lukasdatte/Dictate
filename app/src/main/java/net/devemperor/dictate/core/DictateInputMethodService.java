@@ -352,9 +352,11 @@ public class DictateInputMethodService extends InputMethodService
                 // Re-apply recording/pipeline icon after layout rebuild (shift toggle, layout switch)
                 if (recordingUiController != null && recordingStateController != null) {
                     if (uiController != null && uiController.getState() instanceof PipelineUiState.Running) {
-                        // Pipeline active — set current state, timer tick will keep updating
+                        // Pipeline active — layout rebuild: we need a fresh one-shot setup AND
+                        // an immediate timer text update so the button isn't stale until the next tick.
                         PipelineUiState.Running s = (PipelineUiState.Running) uiController.getState();
-                        recordingUiController.updateQwertzRecButtonForPipeline(
+                        recordingUiController.enterPipelineDisplay(s);
+                        recordingUiController.updatePipelineTimer(
                             s, uiController.getLatestPipelineElapsedMs());
                     } else {
                         recordingUiController.updateQwertzRecButton(
@@ -469,7 +471,7 @@ public class DictateInputMethodService extends InputMethodService
             @Override
             public void onPipelineTimerTick(@NonNull PipelineUiState.Running state, long elapsedMs) {
                 if (recordingUiController != null) {
-                    recordingUiController.updateQwertzRecButtonForPipeline(state, elapsedMs);
+                    recordingUiController.updatePipelineTimer(state, elapsedMs);
                 }
             }
 
@@ -479,13 +481,16 @@ public class DictateInputMethodService extends InputMethodService
                 if (newState instanceof PipelineUiState.Idle) {
                     recordingUiController.updateQwertzRecButton(false);  // QWERTZ → Mic-Icon
                 } else if (newState instanceof PipelineUiState.Running) {
-                    // One-shot initialization of the QWERTZ button for pipeline display.
-                    // Subsequent per-tick updates arrive via onPipelineTimerTick.
-                    // NOTE: The monolithic updateQwertzRecButtonForPipeline() is used here
-                    // because the planned split into enterPipelineDisplay()/updatePipelineTimer()
-                    // is a documented ground-truth deviation (see plan §3b).
-                    recordingUiController.updateQwertzRecButtonForPipeline(
-                        (PipelineUiState.Running) newState, uiController.getLatestPipelineElapsedMs());
+                    // One-shot setup only on the actual Idle/Preparing → Running transition.
+                    // Running → Running transitions (step completion, auto-enter toggle) skip
+                    // enterPipelineDisplay() to avoid redundant setPadding()/re-layout calls;
+                    // a trailing updatePipelineTimer() keeps the text in sync.
+                    PipelineUiState.Running runningState = (PipelineUiState.Running) newState;
+                    if (!(oldState instanceof PipelineUiState.Running)) {
+                        recordingUiController.enterPipelineDisplay(runningState);
+                    }
+                    recordingUiController.updatePipelineTimer(
+                        runningState, uiController.getLatestPipelineElapsedMs());
                 } else if (newState instanceof PipelineUiState.Preparing) {
                     // Upload phase: make sure the QWERTZ button shows the idle mic icon
                     // (clears any leftover recording-state rendering).

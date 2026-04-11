@@ -16,7 +16,9 @@ import net.devemperor.dictate.R
  * Controls the keyboard prompt area UI: mode switching between prompt buttons
  * and pipeline progress view with live elapsed timer per step.
  *
- * Owns the [currentMode] state and the [state] (pipeline UI state).
+ * Owns the pipeline UI [state]. The prompt-area "mode" is derived from [state] directly:
+ * [KeyboardStateManager] queries `state is PipelineUiState.Running` via a lambda, so there
+ * is a single source of truth.
  * Side-effects (timer stop, container clear) stay here.
  * Visibility calculation is delegated to [KeyboardStateManager] via [stateManager.refresh()].
  *
@@ -28,10 +30,6 @@ class KeyboardUiController(
     private val stateManager: KeyboardStateManager
 ) {
 
-    enum class PromptAreaMode {
-        PROMPT_BUTTONS, PIPELINE_PROGRESS
-    }
-
     data class PipelineViews(
         val pipelineStepsContainer: LinearLayout,
         val pipelineScrollView: ScrollView,
@@ -40,9 +38,6 @@ class KeyboardUiController(
         val layoutInflater: LayoutInflater,
         val mainHandler: Handler
     )
-
-    var currentMode: PromptAreaMode = PromptAreaMode.PROMPT_BUTTONS
-        private set
 
     // ── Pipeline UI State ──
 
@@ -161,8 +156,7 @@ class KeyboardUiController(
             savedRecordButtonTextColors = views.recordButton.textColors
         }
 
-        // Prompts area: pipeline progress mode
-        currentMode = PromptAreaMode.PIPELINE_PROGRESS
+        // Prompts area: pipeline progress mode (derived from state by KeyboardStateManager)
         views.pipelineStepsContainer.removeAllViews()
         views.infoCl.visibility = View.GONE
         stepRows.clear()
@@ -202,11 +196,10 @@ class KeyboardUiController(
         // Invalidate cached auto-enter drawables so the next pipeline (potentially after
         // a config/theme change or view recreation) rebuilds them from the current context.
         autoEnterRenderer.invalidate()
-        // IMPORTANT: Set mode BEFORE state, so stateManager.refresh() (via updatePipelineState)
-        // calculates correct visibility. The existing resetToPromptButtons() does the same.
-        currentMode = PromptAreaMode.PROMPT_BUTTONS
+        // The prompt-area mode is derived from state, so no separate assignment is needed —
+        // KeyboardStateManager will query state == Running via the isPipelineProgressVisible lambda.
         updatePipelineState(PipelineUiState.Idle)
-        // onPipelineUiStateChanged fires → Service can reset QWERTZ
+        // PipelineUiCallback.onPipelineUiStateChanged fires → Service can reset QWERTZ
     }
 
     /**
@@ -220,7 +213,7 @@ class KeyboardUiController(
         }
     }
 
-    // ── Pipeline steps (PIPELINE_PROGRESS mode only, main thread) ──
+    // ── Pipeline steps (Running state only, main thread) ──
 
     /**
      * Adds a new step row in "running" state (spinner + name + live timer).

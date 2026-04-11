@@ -44,7 +44,13 @@ class KeyboardStateManager(
     private val isRewordingEnabled: () -> Boolean,
     private val onKeepScreenAwakeChanged: (Boolean) -> Unit,
     private val infoBarController: InfoBarController? = null,
-    private val getPromptAreaMode: () -> KeyboardUiController.PromptAreaMode
+    /**
+     * Returns `true` iff the prompt area should render the pipeline progress list
+     * instead of the regular prompt buttons. Corresponds to
+     * `state is PipelineUiState.Running` on the [KeyboardUiController] — NOT `Preparing`,
+     * because during upload the prompt buttons remain visible.
+     */
+    private val isPipelineProgressVisible: () -> Boolean
 ) {
     // === Own state (lives only here, nowhere else) ===
     var contentArea: ContentArea = ContentArea.MAIN_BUTTONS
@@ -104,7 +110,7 @@ class KeyboardStateManager(
     }
 
     private fun applyPromptsVisibility() {
-        val mode = getPromptAreaMode()
+        val isPipelineProgress = isPipelineProgressVisible()
         val isActive = isRecording() || isPaused()
 
         // Prompts container (combination of all axes)
@@ -118,24 +124,23 @@ class KeyboardStateManager(
 
         // Prompts content: RecyclerView vs pipeline progress
         views.promptsRv?.visibility =
-            if (mode == KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS) View.VISIBLE else View.GONE
+            if (!isPipelineProgress) View.VISIBLE else View.GONE
         views.pipelineProgressLl?.visibility =
-            if (mode == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) View.VISIBLE else View.GONE
+            if (isPipelineProgress) View.VISIBLE else View.GONE
 
-        // Recording controls: only visible when active AND in PROMPT_BUTTONS mode
+        // Recording controls: only visible when active AND NOT in pipeline progress mode
         // (pipeline progress replaces the recording indicator)
-        val showRecControls = isActive && mode == KeyboardUiController.PromptAreaMode.PROMPT_BUTTONS && contentArea == ContentArea.QWERTZ
+        val showRecControls = isActive && !isPipelineProgress && contentArea == ContentArea.QWERTZ
         views.promptRecordingControlsLl?.visibility =
             if (showRecControls) View.VISIBLE else View.GONE
 
         if (showPrompts) {
-            applyPromptsLayout(mode)
+            applyPromptsLayout()
         }
     }
 
     /** Adjusts prompts container height and RecyclerView span count for the current state. */
-    private fun applyPromptsLayout(mode: KeyboardUiController.PromptAreaMode) {
-        val isPipeline = mode == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS
+    private fun applyPromptsLayout() {
         val promptHeightDp = if (contentArea == ContentArea.QWERTZ) 36 else 72
         val newHeight = (promptHeightDp * views.promptsCl.resources.displayMetrics.density).toInt()
         val lp = views.promptsCl.layoutParams

@@ -400,7 +400,7 @@ public class DictateInputMethodService extends InputMethodService
             () -> DictatePrefsKt.get(sp, Pref.RewordingEnabled.INSTANCE),
             keepAwake -> { updateKeepScreenAwake(keepAwake); return kotlin.Unit.INSTANCE; },
             infoBarController,
-            () -> uiController.getCurrentMode()
+            () -> uiController != null && uiController.getState() instanceof PipelineUiState.Running
         );
 
         // KeyboardUiController (wraps pipeline progress views, delegates visibility to stateManager)

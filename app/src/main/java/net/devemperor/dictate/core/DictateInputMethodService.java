@@ -354,7 +354,8 @@ public class DictateInputMethodService extends InputMethodService
                     if (uiController != null && uiController.getState() instanceof PipelineUiState.Running) {
                         // Pipeline active — set current state, timer tick will keep updating
                         PipelineUiState.Running s = (PipelineUiState.Running) uiController.getState();
-                        recordingUiController.updateQwertzRecButtonForPipeline(s, 0);
+                        recordingUiController.updateQwertzRecButtonForPipeline(
+                            s, uiController.getLatestPipelineElapsedMs());
                     } else {
                         recordingUiController.updateQwertzRecButton(
                             recordingStateController.getState().isRecordingOrPaused()
@@ -482,7 +483,7 @@ public class DictateInputMethodService extends InputMethodService
                     // because the planned split into enterPipelineDisplay()/updatePipelineTimer()
                     // is a documented ground-truth deviation (see plan §3b).
                     recordingUiController.updateQwertzRecButtonForPipeline(
-                        (PipelineUiState.Running) newState, 0L);
+                        (PipelineUiState.Running) newState, uiController.getLatestPipelineElapsedMs());
                 } else if (newState instanceof PipelineUiState.Preparing) {
                     // Upload phase: make sure the QWERTZ button shows the idle mic icon
                     // (clears any leftover recording-state rendering).
@@ -1179,7 +1180,12 @@ public class DictateInputMethodService extends InputMethodService
         // the stale counter of the prior transcription would remain on screen.
         // autoEnterOverride is the service-side source of truth (see plan edge-case "Auto-Enter-Wahrheit").
         String displayName = model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName();
-        uiController.startPipeline(1, (boolean) autoEnterOverride, 0);
+        // Direct-prompt-button callers never initialize autoEnterOverride — seed it from prefs
+        // to avoid NPE on auto-unbox (the removed guard used to do this implicitly).
+        if (autoEnterOverride == null) {
+            autoEnterOverride = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
+        }
+        uiController.startPipeline(1, autoEnterOverride, 0);
 
         EditorInfo editorInfo = getCurrentInputEditorInfo();
         PipelineOrchestrator.StandaloneConfig config = new PipelineOrchestrator.StandaloneConfig(
@@ -1311,6 +1317,9 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void toggleAutoEnterOverride() {
+        // Only meaningful during Running — during Preparing the auto-enter chip is not visible,
+        // and during Idle there is no pipeline to toggle against.
+        if (!uiController.isPipelineRunning()) return;
         if (autoEnterOverride == null) return;
         autoEnterOverride = !autoEnterOverride;
         // Service is single source of truth for autoEnterOverride —
@@ -1525,8 +1534,10 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onRecordClicked() {
         infoBarController.dismiss();
-        if (uiController.isPipelineRunning()) {
-            // Pipeline running → toggle auto-enter (works for both main and QWERTZ button)
+        if (uiController.isPipelineActive()) {
+            // Pipeline running or preparing → toggle auto-enter (no-op during Preparing).
+            // Using isPipelineActive() closes the Preparing-window race on the QWERTZ record
+            // button, which otherwise fell through to startRecording() during audio upload.
             toggleAutoEnterOverride();
         } else if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             openSettingsActivity();

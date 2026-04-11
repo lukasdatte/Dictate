@@ -58,12 +58,30 @@ class KeyboardUiController(
     private var pipelineTotalTimer: ElapsedTimer? = null
     private var latestPipelineElapsedMs: Long = 0
 
-    private val stepRows = mutableListOf<View>()
+    /**
+     * Holds resolved view references for a single step row so that
+     * [addRunningStep]/[completeStep]/[failStep] don't re-run findViewById lookups.
+     */
+    private data class StepRowBinding(
+        val root: View,
+        val iconTv: TextView,
+        val pb: ProgressBar,
+        val nameTv: TextView,
+        val durationTv: TextView
+    )
+
+    private val stepRows = mutableListOf<StepRowBinding>()
     private var totalSteps = 0
     private var currentStep = 0
     private var activeTimer: ElapsedTimer? = null
 
     private var savedRecordButtonTextColors: ColorStateList? = null
+
+    // Cached auto-enter compound drawables (one per active/inactive state).
+    // Rebuilt lazily once per density and invalidated in [stopPipeline] so theme-/config-changes
+    // after view recreation get a fresh copy.
+    private var cachedAutoEnterActiveDrawable: android.graphics.drawable.Drawable? = null
+    private var cachedAutoEnterInactiveDrawable: android.graphics.drawable.Drawable? = null
 
     // ── State mutation ──
 
@@ -178,6 +196,10 @@ class KeyboardUiController(
         pipelineTotalTimer = null
         activeTimer?.stop()
         activeTimer = null
+        // Invalidate cached auto-enter drawables so the next pipeline (potentially after
+        // a config/theme change or view recreation) rebuilds them from the current context.
+        cachedAutoEnterActiveDrawable = null
+        cachedAutoEnterInactiveDrawable = null
         // IMPORTANT: Set mode BEFORE state, so stateManager.refresh() (via updatePipelineState)
         // calculates correct visibility. The existing resetToPromptButtons() does the same.
         currentMode = PromptAreaMode.PROMPT_BUTTONS
@@ -216,25 +238,28 @@ class KeyboardUiController(
             views.pipelineStepsContainer,
             false
         )
-        val iconTv = row.findViewById<TextView>(R.id.pipeline_step_icon_tv)
-        val pb = row.findViewById<ProgressBar>(R.id.pipeline_step_pb)
-        val nameTv = row.findViewById<TextView>(R.id.pipeline_step_name_tv)
-        val durationTv = row.findViewById<TextView>(R.id.pipeline_step_duration_tv)
+        val binding = StepRowBinding(
+            root = row,
+            iconTv = row.findViewById(R.id.pipeline_step_icon_tv),
+            pb = row.findViewById(R.id.pipeline_step_pb),
+            nameTv = row.findViewById(R.id.pipeline_step_name_tv),
+            durationTv = row.findViewById(R.id.pipeline_step_duration_tv)
+        )
 
-        iconTv.visibility = View.GONE
-        pb.visibility = View.VISIBLE
-        nameTv.text = stepName
+        binding.iconTv.visibility = View.GONE
+        binding.pb.visibility = View.VISIBLE
+        binding.nameTv.text = stepName
 
         // Show live timer from 0.0s
-        durationTv.visibility = View.VISIBLE
-        durationTv.text = formatElapsedCompact(0)
+        binding.durationTv.visibility = View.VISIBLE
+        binding.durationTv.text = formatElapsedCompact(0)
 
         views.pipelineStepsContainer.addView(row)
-        stepRows.add(row)
+        stepRows.add(binding)
 
         // Start elapsed timer
         activeTimer = ElapsedTimer.start(views.mainHandler) { ms ->
-            durationTv.text = formatElapsedCompact(ms)
+            binding.durationTv.text = formatElapsedCompact(ms)
         }
 
         // Auto-scroll to bottom
@@ -257,19 +282,15 @@ class KeyboardUiController(
         activeTimer = null
 
         if (stepRows.isEmpty()) return
-        val row = stepRows.last()
-        val iconTv = row.findViewById<TextView>(R.id.pipeline_step_icon_tv)
-        val pb = row.findViewById<ProgressBar>(R.id.pipeline_step_pb)
-        val nameTv = row.findViewById<TextView>(R.id.pipeline_step_name_tv)
-        val durationTv = row.findViewById<TextView>(R.id.pipeline_step_duration_tv)
+        val binding = stepRows.last()
 
-        pb.visibility = View.GONE
-        iconTv.visibility = View.VISIBLE
-        iconTv.text = "\u2713" // ✓
-        iconTv.setTextColor(0xFF4CAF50.toInt()) // Material Green 500
-        nameTv.text = stepName
-        durationTv.visibility = View.VISIBLE
-        durationTv.text = formatElapsedCompact(durationMs)
+        binding.pb.visibility = View.GONE
+        binding.iconTv.visibility = View.VISIBLE
+        binding.iconTv.text = "\u2713" // ✓
+        binding.iconTv.setTextColor(0xFF4CAF50.toInt()) // Material Green 500
+        binding.nameTv.text = stepName
+        binding.durationTv.visibility = View.VISIBLE
+        binding.durationTv.text = formatElapsedCompact(durationMs)
 
         // Update pipeline state: increment completed steps
         updateRunningState { it.copy(completedSteps = it.completedSteps + 1) }
@@ -287,16 +308,13 @@ class KeyboardUiController(
         activeTimer = null
 
         if (stepRows.isEmpty()) return
-        val row = stepRows.last()
-        val iconTv = row.findViewById<TextView>(R.id.pipeline_step_icon_tv)
-        val pb = row.findViewById<ProgressBar>(R.id.pipeline_step_pb)
-        val nameTv = row.findViewById<TextView>(R.id.pipeline_step_name_tv)
+        val binding = stepRows.last()
 
-        pb.visibility = View.GONE
-        iconTv.visibility = View.VISIBLE
-        iconTv.text = "\u2715" // ✕
-        iconTv.setTextColor(0xFFF44336.toInt()) // Material Red 500
-        nameTv.text = stepName
+        binding.pb.visibility = View.GONE
+        binding.iconTv.visibility = View.VISIBLE
+        binding.iconTv.text = "\u2715" // ✕
+        binding.iconTv.setTextColor(0xFFF44336.toInt()) // Material Red 500
+        binding.nameTv.text = stepName
 
         // Update pipeline state: increment completed steps (failed = still "done" for progress)
         updateRunningState { it.copy(completedSteps = it.completedSteps + 1) }
@@ -356,48 +374,69 @@ class KeyboardUiController(
     // ── Auto-enter appearance (visual only, no click listener management) ──
 
     private fun updateAutoEnterAppearance(active: Boolean) {
+        val drawable = if (active) {
+            cachedAutoEnterActiveDrawable
+                ?: buildAutoEnterActiveDrawable().also { cachedAutoEnterActiveDrawable = it }
+        } else {
+            cachedAutoEnterInactiveDrawable
+                ?: buildAutoEnterInactiveDrawable().also { cachedAutoEnterInactiveDrawable = it }
+        }
+        views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, drawable, null)
+    }
+
+    /**
+     * Builds the "active" knockout drawable: white circle with a transparent arrow cutout
+     * (PorterDuff DST_OUT). Allocated once and cached in [cachedAutoEnterActiveDrawable].
+     */
+    private fun buildAutoEnterActiveDrawable(): android.graphics.drawable.Drawable {
         val ctx = views.recordButton.context
         val density = ctx.resources.displayMetrics.density
         val sizePx = (24 * density).toInt()
 
-        if (active) {
-            // Inverted: white rounded-rect with transparent icon cutout (knockout effect)
-            val enterIcon = ctx.getDrawable(R.drawable.ic_baseline_subdirectory_arrow_left_24)?.mutate()
-            enterIcon?.setBounds(0, 0, sizePx, sizePx)
-            enterIcon?.setTint(Color.WHITE)
+        val enterIcon = ctx.getDrawable(R.drawable.ic_baseline_subdirectory_arrow_left_24)?.mutate()
+        enterIcon?.setBounds(0, 0, sizePx, sizePx)
+        enterIcon?.setTint(Color.WHITE)
 
-            // Render icon to a temporary bitmap, offset slightly left+up for optical centering
-            val iconBitmap = android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
-            val iconCanvas = android.graphics.Canvas(iconBitmap)
-            val offset = (-1.5f * density)
-            iconCanvas.translate(offset, offset)
-            enterIcon?.draw(iconCanvas)
+        // Render icon to a temporary bitmap, offset slightly left+up for optical centering
+        val iconBitmap = android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
+        val iconCanvas = android.graphics.Canvas(iconBitmap)
+        val offset = (-1.5f * density)
+        iconCanvas.translate(offset, offset)
+        enterIcon?.draw(iconCanvas)
 
-            // Create the knockout composite
-            val bitmap = android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bitmap)
-            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        // Create the knockout composite
+        val bitmap = android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
 
-            // Draw white circle
-            paint.color = Color.WHITE
-            canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, paint)
+        // Draw white circle
+        paint.color = Color.WHITE
+        canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, paint)
 
-            // Punch out the icon using DST_OUT on the icon bitmap
-            paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
-            canvas.drawBitmap(iconBitmap, 0f, 0f, paint)
-            paint.xfermode = null
+        // Punch out the icon using DST_OUT on the icon bitmap
+        paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
+        canvas.drawBitmap(iconBitmap, 0f, 0f, paint)
+        paint.xfermode = null
 
-            iconBitmap.recycle()
+        iconBitmap.recycle()
 
-            val drawable = android.graphics.drawable.BitmapDrawable(ctx.resources, bitmap)
-            drawable.setBounds(0, 0, sizePx, sizePx)
-            views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, drawable, null)
-        } else {
-            // Default: white icon on transparent background
-            val enterIcon = ctx.getDrawable(R.drawable.ic_baseline_subdirectory_arrow_left_24)?.mutate()
-            enterIcon?.setTint(Color.WHITE)
-            enterIcon?.setBounds(0, 0, sizePx, sizePx)
-            views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, enterIcon, null)
-        }
+        val drawable = android.graphics.drawable.BitmapDrawable(ctx.resources, bitmap)
+        drawable.setBounds(0, 0, sizePx, sizePx)
+        return drawable
+    }
+
+    /**
+     * Builds the "inactive" drawable: white arrow icon on a transparent background.
+     * Allocated once and cached in [cachedAutoEnterInactiveDrawable].
+     */
+    private fun buildAutoEnterInactiveDrawable(): android.graphics.drawable.Drawable {
+        val ctx = views.recordButton.context
+        val density = ctx.resources.displayMetrics.density
+        val sizePx = (24 * density).toInt()
+
+        val enterIcon = ctx.getDrawable(R.drawable.ic_baseline_subdirectory_arrow_left_24)?.mutate()!!
+        enterIcon.setTint(Color.WHITE)
+        enterIcon.setBounds(0, 0, sizePx, sizePx)
+        return enterIcon
     }
 }

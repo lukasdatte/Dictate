@@ -30,6 +30,17 @@ class KeyboardUiController(
     private val stateManager: KeyboardStateManager
 ) {
 
+    /**
+     * Controller-owned pipeline configuration. Single source of truth for per-run settings
+     * that formerly lived partly on the Service side (`autoEnterOverride`). Handed in via
+     * [startPipeline] and mutated via [toggleAutoEnter].
+     *
+     * Lifecycle: non-null from [startPipeline] until [stopPipeline] — i.e. while
+     * the UI is in [PipelineUiState.Running]. The Service's `commitTextToInputConnection`
+     * path reads this synchronously via [getPipelineConfig] before [stopPipeline] nulls it out.
+     */
+    data class PipelineConfig(val autoEnterActive: Boolean)
+
     data class PipelineViews(
         val pipelineStepsContainer: LinearLayout,
         val pipelineScrollView: ScrollView,
@@ -43,6 +54,12 @@ class KeyboardUiController(
 
     var state: PipelineUiState = PipelineUiState.Idle
         private set
+
+    /** Active pipeline configuration; null iff no pipeline run is in progress. */
+    private var config: PipelineConfig? = null
+
+    /** @return the active [PipelineConfig], or null if no pipeline run is in progress. */
+    fun getPipelineConfig(): PipelineConfig? = config
 
     private var callback: PipelineUiCallback? = null
 
@@ -146,15 +163,18 @@ class KeyboardUiController(
      * Starts the overall pipeline timer and sets the initial [PipelineUiState.Running] state.
      *
      * @param totalSteps total number of pipeline steps (transcription + format + prompts)
-     * @param autoEnterActive whether auto-enter is active at pipeline start
+     * @param config pipeline configuration (e.g. auto-enter); owned by the controller until [stopPipeline]
      * @param initialCompletedSteps number of already completed steps (for UI restore after view recreation)
      */
     @JvmOverloads
-    fun startPipeline(totalSteps: Int, autoEnterActive: Boolean, initialCompletedSteps: Int = 0) {
+    fun startPipeline(totalSteps: Int, config: PipelineConfig, initialCompletedSteps: Int = 0) {
         // Save text colors for restoreRecordButtonIdle after pipeline end
         if (savedRecordButtonTextColors == null) {
             savedRecordButtonTextColors = views.recordButton.textColors
         }
+
+        // Adopt config as the controller-owned single source of truth for this pipeline run.
+        this.config = config
 
         // Prompts area: pipeline progress mode (derived from state by KeyboardStateManager)
         views.pipelineStepsContainer.removeAllViews()
@@ -168,7 +188,7 @@ class KeyboardUiController(
             totalSteps = totalSteps,
             completedSteps = initialCompletedSteps,
             currentStepName = "",
-            autoEnterActive = autoEnterActive
+            autoEnterActive = config.autoEnterActive
         ))
 
         // Start overall pipeline timer
@@ -199,18 +219,23 @@ class KeyboardUiController(
         // The prompt-area mode is derived from state, so no separate assignment is needed —
         // KeyboardStateManager will query state == Running via the isPipelineProgressVisible lambda.
         updatePipelineState(PipelineUiState.Idle)
+        // Drop the per-run config — the next pipeline must hand in a fresh one via startPipeline.
+        config = null
         // PipelineUiCallback.onPipelineUiStateChanged fires → Service can reset QWERTZ
     }
 
     /**
-     * Updates the auto-enter flag in the pipeline state.
-     * No-op if the pipeline is not running or the value hasn't changed.
+     * Toggles the auto-enter flag on the active pipeline configuration and mirrors the
+     * new value into [PipelineUiState.Running.autoEnterActive]. No-op if no pipeline is
+     * currently running — the caller is responsible for guarding against Idle/Preparing.
      */
-    fun setAutoEnter(active: Boolean) {
+    fun toggleAutoEnter() {
+        val c = config ?: return
         val s = state
-        if (s is PipelineUiState.Running && s.autoEnterActive != active) {
-            updatePipelineState(s.copy(autoEnterActive = active))
-        }
+        if (s !is PipelineUiState.Running) return
+        val newConfig = c.copy(autoEnterActive = !c.autoEnterActive)
+        config = newConfig
+        updatePipelineState(s.copy(autoEnterActive = newConfig.autoEnterActive))
     }
 
     // ── Pipeline steps (Running state only, main thread) ──

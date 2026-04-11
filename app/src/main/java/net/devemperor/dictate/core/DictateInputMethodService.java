@@ -112,8 +112,27 @@ public class DictateInputMethodService extends InputMethodService
     private String currentInputLanguageValue;
     private boolean autoSwitchKeyboard = false;
 
-    /** Transient per-send override for auto-enter. null = no pipeline active (use global pref). */
-    private Boolean autoEnterOverride = null;
+    /**
+     * True during the short synchronous window between {@link #uiController}'s
+     * {@code preparePipeline()} and {@code startPipeline(...)} calls in
+     * {@link #runTranscriptionViaOrchestrator()}. Under the current architecture this window
+     * is a main-thread microwindow (no async work between prepare and start), so a rotation
+     * in this window is practically impossible and the flag will never be observed true by
+     * {@link #restoreUiState()}. The flag is retained as a defensive preparation for a
+     * future refactor that makes the upload phase genuinely asynchronous — see the refactor
+     * plan §R-6 discussion.
+     */
+    private volatile boolean isPreparing = false;
+
+    /**
+     * Transient bridge that lets {@link #restoreUiState()} after view recreation recover the
+     * user's auto-enter toggle from the about-to-be-discarded controller instance. Captured in
+     * {@link #cleanupOldControllers()} and consumed (then reset to null) in
+     * {@link #restoreUiState()}. Without this bridge an in-pipeline user toggle would silently
+     * revert to the default preference on rotation (the controller-owned config is new).
+     * See refactor plan O-2.
+     */
+    private Boolean restoreAutoEnter = null;
 
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private PipelineOrchestrator pipelineOrchestrator;
@@ -539,7 +558,8 @@ public class DictateInputMethodService extends InputMethodService
         // State (C): Idle -> full cleanup
         pipelineOrchestrator.cancel();
         pendingLivePromptChain = false;
-        autoEnterOverride = null;
+        isPreparing = false;
+        // Note: PipelineConfig is owned by uiController; stopPipeline() nulls it below.
 
         bluetoothScoManager.unregisterReceiver();
 
@@ -580,6 +600,11 @@ public class DictateInputMethodService extends InputMethodService
     private void cleanupOldControllers() {
         // Stop only the elapsed timer — no mode reset, no side-effects
         if (uiController != null) {
+            // Capture the current pipeline auto-enter value so the upcoming fresh controller
+            // (created in onCreateInputView) can re-adopt it in restoreUiState() — otherwise
+            // a user's in-pipeline toggle would silently revert to the pref default on rotation.
+            KeyboardUiController.PipelineConfig cfg = uiController.getPipelineConfig();
+            restoreAutoEnter = (cfg != null) ? cfg.getAutoEnterActive() : null;
             uiController.stopActiveTimer();
         }
         // Remove old InvalidationTracker observer (will be re-added in setupPromptsAdapter)
@@ -671,18 +696,35 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         // 2. Pipeline state → UI
-        if (pipelineOrchestrator.isRunning()) {
+        if (isPreparing) {
+            // Defensive: under the current synchronous Preparing window this branch is
+            // practically unreachable (see isPreparing field docs). Kept as prep for a
+            // future async-upload phase so the Sending... indicator can survive rotation.
+            uiController.preparePipeline();
+        } else if (pipelineOrchestrator.isRunning()) {
             int total = pipelineOrchestrator.getTotalSteps();
             int completedSoFar = pipelineOrchestrator.getCompletedSteps();
             String stepName = pipelineOrchestrator.getCurrentStepName();
 
-            // startPipeline instead of showPipelineProgress — state is set correctly
-            boolean autoEnter = autoEnterOverride != null ? autoEnterOverride
+            // Restore the user's in-pipeline auto-enter toggle if we have one from the
+            // about-to-be-discarded old controller; otherwise fall back to the pref default.
+            // NOTE: hasFailure is intentionally NOT restored — the orchestrator doesn't
+            // track past-failure state, so a rotated pipeline that had already failed loses
+            // the red button color until the next failStep. Accepted per refactor plan O-1.
+            boolean autoEnter = restoreAutoEnter != null
+                ? restoreAutoEnter
                 : DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-            uiController.startPipeline(total > 0 ? total : 1, autoEnter, completedSoFar);
+            restoreAutoEnter = null;
+            uiController.startPipeline(
+                total > 0 ? total : 1,
+                new KeyboardUiController.PipelineConfig(autoEnter),
+                completedSoFar);
 
             // Show the currently running step
             uiController.addRunningStep(stepName != null ? stepName : "\u2026");
+        } else {
+            // No pipeline active — clear any stale bridge value so it can't leak into a later run.
+            restoreAutoEnter = null;
         }
 
         // 3. Small mode from preferences
@@ -1130,38 +1172,46 @@ public class DictateInputMethodService extends InputMethodService
      */
     private void runTranscriptionViaOrchestrator() {
         // Preparing state: button disabled, shows "Sending..." (state-driven via PipelineUiState.Preparing)
-        uiController.preparePipeline();
-        resendButton.setVisibility(View.GONE);
-        infoBarController.dismiss();
-        updatePromptButtonsEnabledState();
-        stateManager.refresh(); // updates pause/trash/prompts visibility
+        isPreparing = true;
+        try {
+            uiController.preparePipeline();
+            resendButton.setVisibility(View.GONE);
+            infoBarController.dismiss();
+            updatePromptButtonsEnabledState();
+            stateManager.refresh(); // updates pause/trash/prompts visibility
 
-        // Show pipeline progress
-        int totalSteps = 1; // transcription always
-        if (autoFormattingService.isEnabled()) totalSteps++;
-        totalSteps += promptQueueManager.getQueuedIds().size();
+            // Show pipeline progress
+            int totalSteps = 1; // transcription always
+            if (autoFormattingService.isEnabled()) totalSteps++;
+            totalSteps += promptQueueManager.getQueuedIds().size();
 
-        autoEnterOverride = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-        uiController.startPipeline(totalSteps, (boolean) autoEnterOverride);
+            boolean autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
+            uiController.startPipeline(totalSteps, new KeyboardUiController.PipelineConfig(autoEnter));
 
-        String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
-                ? currentInputLanguageValue : null;
-        String stylePrompt = promptService.resolveWhisperStylePrompt(currentInputLanguageValue);
+            String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
+                    ? currentInputLanguageValue : null;
+            String stylePrompt = promptService.resolveWhisperStylePrompt(currentInputLanguageValue);
 
-        EditorInfo info = getCurrentInputEditorInfo();
-        boolean showResend = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
-                && DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE);
+            EditorInfo info = getCurrentInputEditorInfo();
+            boolean showResend = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
+                    && DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE);
 
-        PipelineOrchestrator.PipelineConfig config = new PipelineOrchestrator.PipelineConfig(
-            audioFile, language, stylePrompt, livePrompt, autoSwitchKeyboard,
-            showResend, new File(getFilesDir(), "recordings"),
-            info != null ? info.packageName : null);
+            PipelineOrchestrator.PipelineConfig config = new PipelineOrchestrator.PipelineConfig(
+                audioFile, language, stylePrompt, livePrompt, autoSwitchKeyboard,
+                showResend, new File(getFilesDir(), "recordings"),
+                info != null ? info.packageName : null);
 
-        pendingLivePromptChain = livePrompt;
-        livePrompt = false;
-        autoSwitchKeyboard = false;
+            pendingLivePromptChain = livePrompt;
+            livePrompt = false;
+            autoSwitchKeyboard = false;
 
-        pipelineOrchestrator.runTranscriptionPipeline(config);
+            pipelineOrchestrator.runTranscriptionPipeline(config);
+        } finally {
+            // runTranscriptionPipeline is non-blocking (returns immediately after queuing on the
+            // executor), so clearing the flag here is correct: from this point on the pipeline
+            // is owned by pipelineOrchestrator and observed via isRunning().
+            isPreparing = false;
+        }
     }
 
     /**
@@ -1184,14 +1234,16 @@ public class DictateInputMethodService extends InputMethodService
         // pipeline's state is still Running with completedSteps == totalSteps. Calling
         // startPipeline(1, ..., 0) unconditionally resets the counter to "0/1" — without this
         // the stale counter of the prior transcription would remain on screen.
-        // autoEnterOverride is the service-side source of truth (see plan edge-case "Auto-Enter-Wahrheit").
+        //
+        // Auto-enter handling: the previous pipeline's controller-owned PipelineConfig is the
+        // authoritative source (it reflects any in-pipeline user toggle). Direct-prompt-button
+        // callers have no previous config — we seed from prefs in that case.
         String displayName = model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName();
-        // Direct-prompt-button callers never initialize autoEnterOverride — seed it from prefs
-        // to avoid NPE on auto-unbox (the removed guard used to do this implicitly).
-        if (autoEnterOverride == null) {
-            autoEnterOverride = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-        }
-        uiController.startPipeline(1, autoEnterOverride, 0);
+        KeyboardUiController.PipelineConfig prevCfg = uiController.getPipelineConfig();
+        boolean autoEnter = (prevCfg != null)
+            ? prevCfg.getAutoEnterActive()
+            : DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
+        uiController.startPipeline(1, new KeyboardUiController.PipelineConfig(autoEnter), 0);
 
         EditorInfo editorInfo = getCurrentInputEditorInfo();
         PipelineOrchestrator.StandaloneConfig config = new PipelineOrchestrator.StandaloneConfig(
@@ -1298,9 +1350,9 @@ public class DictateInputMethodService extends InputMethodService
         // runStandalonePromptViaOrchestrator will start a new pipeline that calls onPipelineFinished when done.
         if (pendingLivePromptChain) return;
 
-        // Reset auto-enter override on main thread (AFTER commitTextToInputConnection which was
-        // also posted to main thread by onPipelineCompleted — order is guaranteed by mainHandler queue)
-        mainHandler.post(() -> autoEnterOverride = null);
+        // isPreparing is cleared synchronously in runTranscriptionViaOrchestrator's finally
+        // block; this is a safety net in case a future async Preparing phase forgets.
+        isPreparing = false;
 
         dbExecutor.execute(() -> {
             sessionTracker.resetSession();
@@ -1318,19 +1370,17 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private boolean isAutoEnterActive() {
-        if (autoEnterOverride != null) return autoEnterOverride;
+        KeyboardUiController.PipelineConfig cfg = uiController != null ? uiController.getPipelineConfig() : null;
+        if (cfg != null) return cfg.getAutoEnterActive();
         return DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
     }
 
     private void toggleAutoEnterOverride() {
         // Only meaningful during Running — during Preparing the auto-enter chip is not visible,
         // and during Idle there is no pipeline to toggle against.
-        if (!uiController.isPipelineRunning()) return;
-        if (autoEnterOverride == null) return;
-        autoEnterOverride = !autoEnterOverride;
-        // Service is single source of truth for autoEnterOverride —
-        // sets the concrete value (no sync risk between service and controller)
-        uiController.setAutoEnter(autoEnterOverride);
+        if (uiController == null || !uiController.isPipelineRunning()) return;
+        // Controller owns the PipelineConfig; it atomically flips config + Running.autoEnterActive.
+        uiController.toggleAutoEnter();
     }
 
     private void commitTextToInputConnection(String text, InsertionSource source) {
@@ -1682,7 +1732,9 @@ public class DictateInputMethodService extends InputMethodService
     public void onPipelineCancelClicked() {
         PipelineOrchestrator.CancelInfo cancelInfo = pipelineOrchestrator.cancel();
         pendingLivePromptChain = false;
-        autoEnterOverride = null;
+        isPreparing = false;
+        // PipelineConfig ownership is now on uiController; stopPipeline() nulls it,
+        // so any post-cancel commit will fall back to the pref default via isAutoEnterActive().
 
         uiController.stopPipeline();
         uiController.restoreRecordButtonIdle(

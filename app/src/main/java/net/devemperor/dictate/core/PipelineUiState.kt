@@ -20,6 +20,7 @@ sealed class PipelineUiState {
         val totalSteps: Int,
         val completedSteps: Int,
         val currentStepName: String,
-        val autoEnterActive: Boolean
+        val autoEnterActive: Boolean,
+        val hasFailure: Boolean = false
     ) : PipelineUiState()
 }

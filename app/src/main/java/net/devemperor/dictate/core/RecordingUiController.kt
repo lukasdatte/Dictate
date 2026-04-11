@@ -258,7 +258,7 @@ class RecordingUiController(
         val timer = formatElapsedCompact(elapsedMs)
         recButton.icon = null
         recButton.text = "$counter$enterIndicator\n$timer"
-        recButton.setTextColor(Color.WHITE)
+        recButton.setTextColor(if (state.hasFailure) 0xFFF44336.toInt() else Color.WHITE)
         val density = recButton.resources.displayMetrics.density
         recButton.setPadding(0, (2 * density).toInt(), 0, (2 * density).toInt())
     }

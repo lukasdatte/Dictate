@@ -317,7 +317,8 @@ class KeyboardUiController(
         binding.nameTv.text = stepName
 
         // Update pipeline state: increment completed steps (failed = still "done" for progress)
-        updateRunningState { it.copy(completedSteps = it.completedSteps + 1) }
+        // and mark the state so the record button text turns red.
+        updateRunningState { it.copy(completedSteps = it.completedSteps + 1, hasFailure = true) }
     }
 
     // ── Record button rendering from state ──
@@ -350,7 +351,8 @@ class KeyboardUiController(
                 } else {
                     "$counter  $timer"
                 }
-                views.recordButton.setTextColor(Color.WHITE)
+                views.recordButton.setTextColor(
+                    if (s.hasFailure) 0xFFF44336.toInt() else Color.WHITE)
                 updateAutoEnterAppearance(s.autoEnterActive)
             }
         }

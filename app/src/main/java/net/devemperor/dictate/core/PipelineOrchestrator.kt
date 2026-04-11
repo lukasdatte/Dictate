@@ -279,6 +279,9 @@ class PipelineOrchestrator(
     /** Returns the display name of the currently running step, or null if idle. */
     fun getCurrentStepName(): String? = currentStepName
 
+    /** Number of steps that have finished (= started steps minus the currently running one). */
+    fun getCompletedSteps(): Int = maxOf(0, currentStepIndex - 1)
+
     /**
      * Shuts down the executor without creating a new one.
      * Use this in onDestroy() when the Service is being permanently destroyed.

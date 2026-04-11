@@ -13,6 +13,8 @@ import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.R
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.keyboard.BackspaceSwipeHandler
 import net.devemperor.dictate.keyboard.CursorSwipeTouchHandler
 import net.devemperor.dictate.keyboard.EnterOverlayHandler
@@ -75,11 +77,6 @@ class MainButtonsController(
         registerMainButtonListeners()
         registerEmojiListeners()
         initializeOverlayCharacters()
-    }
-
-    /** Re-registers the record button click listener after pipeline override. */
-    fun reRegisterRecordButtonListener() {
-        views.recordButton.setOnClickListener(recordClickListener)
     }
 
     // ── Edit Bar ──
@@ -227,7 +224,7 @@ class MainButtonsController(
         views.enterButton.setOnTouchListener(EnterOverlayHandler(
             views.overlayCharactersLl,
             inputConnectionProvider,
-            { sp.getInt("net.devemperor.dictate.accent_color", -14700810) },
+            { sp.get(Pref.AccentColor) },
             { v, event -> keyPressAnimator.handlePressAnimationEvent(v, event) }
         ))
     }
@@ -320,7 +317,7 @@ class MainButtonsController(
     // ── Small Mode Animation ──
 
     fun animateSmallModeToggle(animate: Boolean) {
-        val animationsEnabled = sp.getBoolean("net.devemperor.dictate.animations", true)
+        val animationsEnabled = sp.get(Pref.Animations)
         val target = if (stateManager.isSmallMode) 180f else 0f
 
         if (animate && animationsEnabled) {

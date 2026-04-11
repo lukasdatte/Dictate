@@ -64,3 +64,7 @@ class ElapsedTimer private constructor(
         }, token, intervalMs)
     }
 }
+
+/** Formats elapsed milliseconds as compact duration string, e.g. "4.2s". */
+fun formatElapsedCompact(ms: Long): String =
+    String.format(java.util.Locale.US, "%.1fs", ms / 1000.0)

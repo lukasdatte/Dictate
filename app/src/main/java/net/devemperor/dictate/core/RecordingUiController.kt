@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.view.View
 import androidx.appcompat.content.res.AppCompatResources
 import com.google.android.material.button.MaterialButton
+import android.content.res.ColorStateList
 import net.devemperor.dictate.R
 import net.devemperor.dictate.widget.AmplitudeVisualizerDrawable
 import net.devemperor.dictate.widget.RecordingAnimation
@@ -201,25 +202,32 @@ class RecordingUiController(
      * Mic icon when idle, stop icon when recording/paused.
      */
     private var qwertzRecOriginalIconPadding: Int? = null
-    private var qwertzRecOriginalTextColors: android.content.res.ColorStateList? = null
+    private var qwertzRecOriginalTextColors: ColorStateList? = null
+    private var qwertzRecOriginalIconTint: ColorStateList? = null
     private var qwertzRecOriginalPadding: IntArray? = null
+    private var qwertzRecOriginalIconGravity: Int? = null
+
+    private fun ensureQwertzOriginalsSaved(btn: MaterialButton) {
+        if (qwertzRecOriginalIconPadding == null) {
+            qwertzRecOriginalIconPadding = btn.iconPadding
+            qwertzRecOriginalTextColors = btn.textColors
+            qwertzRecOriginalIconTint = btn.iconTint
+            qwertzRecOriginalIconGravity = btn.iconGravity
+            qwertzRecOriginalPadding = intArrayOf(
+                btn.paddingLeft, btn.paddingTop,
+                btn.paddingRight, btn.paddingBottom
+            )
+        }
+    }
 
     fun updateQwertzRecButton(isActive: Boolean) {
         val recButton = qwertzRecButtonProvider() ?: return
         if (isActive) {
-            // Save original values on first activation
-            if (qwertzRecOriginalIconPadding == null) {
-                qwertzRecOriginalIconPadding = recButton.iconPadding
-                qwertzRecOriginalTextColors = recButton.textColors
-                qwertzRecOriginalPadding = intArrayOf(
-                    recButton.paddingLeft, recButton.paddingTop,
-                    recButton.paddingRight, recButton.paddingBottom
-                )
-            }
+            ensureQwertzOriginalsSaved(recButton)
             // Show send arrow + timer (set by onTimerTick), white text + icon, tight spacing
             val density = recButton.resources.displayMetrics.density
             recButton.icon = AppCompatResources.getDrawable(context, R.drawable.ic_baseline_send_20)
-            recButton.iconTint = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            recButton.iconTint = ColorStateList.valueOf(Color.WHITE)
             recButton.iconGravity = MaterialButton.ICON_GRAVITY_TOP
             recButton.iconPadding = 0
             recButton.setPadding(0, (4 * density).toInt(), 0, (2 * density).toInt()) // Push icon down
@@ -227,12 +235,31 @@ class RecordingUiController(
         } else {
             recButton.text = ""
             recButton.icon = AppCompatResources.getDrawable(context, R.drawable.ic_baseline_mic_24)
-            recButton.iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START
+            recButton.iconGravity = qwertzRecOriginalIconGravity ?: MaterialButton.ICON_GRAVITY_TEXT_START
             qwertzRecOriginalIconPadding?.let { recButton.iconPadding = it }
             qwertzRecOriginalTextColors?.let { recButton.setTextColor(it) }
+            qwertzRecOriginalIconTint?.let { recButton.iconTint = it }
             qwertzRecOriginalPadding?.let { p ->
                 recButton.setPadding(p[0], p[1], p[2], p[3])
             }
         }
+    }
+
+    /**
+     * Updates the QWERTZ rec button to show pipeline progress.
+     * Two-line display: counter + optional enter indicator on top, timer below.
+     */
+    fun updateQwertzRecButtonForPipeline(state: PipelineUiState.Running, elapsedMs: Long) {
+        val recButton = qwertzRecButtonProvider() ?: return
+        ensureQwertzOriginalsSaved(recButton)
+        // Two-line display: counter + optional enter indicator on top, timer below
+        val counter = "${state.completedSteps}/${state.totalSteps}"
+        val enterIndicator = if (state.autoEnterActive) " \u21B5" else ""
+        val timer = formatElapsedCompact(elapsedMs)
+        recButton.icon = null
+        recButton.text = "$counter$enterIndicator\n$timer"
+        recButton.setTextColor(Color.WHITE)
+        val density = recButton.resources.displayMetrics.density
+        recButton.setPadding(0, (2 * density).toInt(), 0, (2 * density).toInt())
     }
 }

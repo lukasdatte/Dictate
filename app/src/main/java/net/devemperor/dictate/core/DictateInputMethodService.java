@@ -59,6 +59,7 @@ import net.devemperor.dictate.keyboard.KeyAction;
 import net.devemperor.dictate.keyboard.QwertzKeyboardController;
 import net.devemperor.dictate.keyboard.QwertzKeyboardLayout;
 import net.devemperor.dictate.keyboard.QwertzKeyboardView;
+import net.devemperor.dictate.preferences.DictatePrefsKt;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.preferences.PrefsMigration;
 import net.devemperor.dictate.R;
@@ -272,8 +273,8 @@ public class DictateInputMethodService extends InputMethodService
             promptService, sessionManager, sessionTracker, promptDao, this);
 
         // 7. User ID (one-time)
-        if (sp.getString("net.devemperor.dictate.user_id", "null").equals("null")) {
-            sp.edit().putString("net.devemperor.dictate.user_id",
+        if (DictatePrefsKt.get(sp, Pref.UserId.INSTANCE).equals("null")) {
+            DictatePrefsKt.put(sp.edit(), Pref.UserId.INSTANCE,
                 String.valueOf((int) (Math.random() * 1000000))).apply();
         }
     }
@@ -288,8 +289,8 @@ public class DictateInputMethodService extends InputMethodService
         cleanupOldControllers();
 
         // ── 2. Preferences that may change between rotations ──
-        vibrationEnabled = sp.getBoolean("net.devemperor.dictate.vibration", true);
-        currentInputLanguagePos = sp.getInt("net.devemperor.dictate.input_language_pos", 0);
+        vibrationEnabled = DictatePrefsKt.get(sp, Pref.Vibration.INSTANCE);
+        currentInputLanguagePos = DictatePrefsKt.get(sp, Pref.InputLanguagePos.INSTANCE);
 
         // ── 3. View inflation + findViewByIds ──
         dictateKeyboardView = (ConstraintLayout) LayoutInflater.from(context).inflate(R.layout.activity_dictate_keyboard_view, null);
@@ -348,11 +349,17 @@ public class DictateInputMethodService extends InputMethodService
             () -> { hideQwertzKeyboard(); return kotlin.Unit.INSTANCE; },
             () -> { onRecordClicked(); return kotlin.Unit.INSTANCE; },
             () -> {
-                // Re-apply recording icon after layout rebuild (shift toggle, layout switch)
+                // Re-apply recording/pipeline icon after layout rebuild (shift toggle, layout switch)
                 if (recordingUiController != null && recordingStateController != null) {
-                    recordingUiController.updateQwertzRecButton(
-                        recordingStateController.getState().isRecordingOrPaused()
-                    );
+                    if (uiController != null && uiController.getState() instanceof PipelineUiState.Running) {
+                        // Pipeline active — set current state, timer tick will keep updating
+                        PipelineUiState.Running s = (PipelineUiState.Running) uiController.getState();
+                        recordingUiController.updateQwertzRecButtonForPipeline(s, 0);
+                    } else {
+                        recordingUiController.updateQwertzRecButton(
+                            recordingStateController.getState().isRecordingOrPaused()
+                        );
+                    }
                 }
                 return kotlin.Unit.INSTANCE;
             }
@@ -387,7 +394,7 @@ public class DictateInputMethodService extends InputMethodService
             () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Active,
             () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Paused,
             () -> pipelineOrchestrator.isRunning(),
-            () -> sp.getBoolean(Pref.RewordingEnabled.INSTANCE.getKey(), true),
+            () -> DictatePrefsKt.get(sp, Pref.RewordingEnabled.INSTANCE),
             keepAwake -> { updateKeepScreenAwake(keepAwake); return kotlin.Unit.INSTANCE; },
             infoBarController,
             () -> uiController.getCurrentMode()
@@ -436,7 +443,7 @@ public class DictateInputMethodService extends InputMethodService
         float displayDensity = recordButton.getResources().getDisplayMetrics().density;
         net.devemperor.dictate.widget.RecordingAnimation recordingAnimation =
             new net.devemperor.dictate.widget.BorderGlowAnimation(
-                sp.getInt("net.devemperor.dictate.accent_color", -14700810),
+                DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE),
                 AppCompatResources.getDrawable(context, R.drawable.ic_baseline_send_20),
                 new net.devemperor.dictate.widget.AmplitudeVisualizerDrawable.BarCountMode.Fixed(30),
                 0.35f,  // max brightness boost
@@ -446,15 +453,44 @@ public class DictateInputMethodService extends InputMethodService
             recordButton, pauseButton, resendButton,
             recordingAnimation, stateManager, this,
             () -> getDictateButtonText(),
-            () -> sp.getBoolean("net.devemperor.dictate.animations", true),
-            () -> new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                    && sp.getBoolean("net.devemperor.dictate.resend_button", false),
+            () -> DictatePrefsKt.get(sp, Pref.Animations.INSTANCE),
+            () -> new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
+                    && DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
             () -> qwertzKeyboardView != null ? qwertzKeyboardView.findButtonForAction(KeyAction.RECORD) : null,
             promptRecIndicatorBtn,
             promptPauseBtn,
             () -> { vibrate(); onPauseClicked(); return kotlin.Unit.INSTANCE; },
             () -> { vibrate(); stopRecording(); return kotlin.Unit.INSTANCE; }
         );
+
+        // Pipeline UI callbacks: QWERTZ button updates from pipeline state
+        uiController.setOnPipelineTimerTick((runningState, elapsedMs) -> {
+            if (recordingUiController != null) {
+                recordingUiController.updateQwertzRecButtonForPipeline(runningState, elapsedMs);
+            }
+            return kotlin.Unit.INSTANCE;
+        });
+
+        uiController.setOnPipelineUiStateChanged((oldState, newState) -> {
+            if (recordingUiController != null) {
+                if (newState instanceof PipelineUiState.Idle) {
+                    recordingUiController.updateQwertzRecButton(false);  // QWERTZ → Mic-Icon
+                } else if (newState instanceof PipelineUiState.Running) {
+                    // One-shot initialization of the QWERTZ button for pipeline display.
+                    // Subsequent per-tick updates arrive via onPipelineTimerTick.
+                    // NOTE: The monolithic updateQwertzRecButtonForPipeline() is used here
+                    // because the planned split into enterPipelineDisplay()/updatePipelineTimer()
+                    // is a documented ground-truth deviation (see plan §3b).
+                    recordingUiController.updateQwertzRecButtonForPipeline(
+                        (PipelineUiState.Running) newState, 0L);
+                } else if (newState instanceof PipelineUiState.Preparing) {
+                    // Upload phase: make sure the QWERTZ button shows the idle mic icon
+                    // (clears any leftover recording-state rendering).
+                    recordingUiController.updateQwertzRecButton(false);
+                }
+            }
+            return kotlin.Unit.INSTANCE;
+        });
 
         // ── 5. Rewire callbacks (connect long-lived objects to new UI controllers) ──
         // INVARIANT: Order is controllers (above) → rewireCallbacks() → restoreUiState()
@@ -503,7 +539,7 @@ public class DictateInputMethodService extends InputMethodService
         infoBarController.dismiss();
         stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
         stateManager.refresh();
-        uiController.resetToPromptButtons();
+        uiController.stopPipeline();
         livePrompt = false;
         updatePromptButtonsEnabledState();
     }
@@ -531,8 +567,8 @@ public class DictateInputMethodService extends InputMethodService
      * Cleans up old view-dependent controllers before creating new ones.
      * Stops orphaned timers, removes InvalidationTracker observer, de-registers BT receiver.
      *
-     * IMPORTANT: Does NOT call resetToPromptButtons() — that has side-effects
-     * (mode reset, hideAutoEnterToggle callback on old mainButtonsController).
+     * IMPORTANT: Does NOT call stopPipeline() — that has side-effects
+     * (mode reset, state change callbacks on old controllers).
      */
     private void cleanupOldControllers() {
         // Stop only the elapsed timer — no mode reset, no side-effects
@@ -630,26 +666,20 @@ public class DictateInputMethodService extends InputMethodService
         // 2. Pipeline state → UI
         if (pipelineOrchestrator.isRunning()) {
             int total = pipelineOrchestrator.getTotalSteps();
+            int completedSoFar = pipelineOrchestrator.getCompletedSteps();
             String stepName = pipelineOrchestrator.getCurrentStepName();
 
-            uiController.showPipelineProgress(total > 0 ? total : 1);
+            // startPipeline instead of showPipelineProgress — state is set correctly
+            boolean autoEnter = autoEnterOverride != null ? autoEnterOverride
+                : DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
+            uiController.startPipeline(total > 0 ? total : 1, autoEnter, completedSoFar);
 
-            // Show the currently running step. Previously completed steps cannot be
-            // reconstructed (no history), but the current step is displayed correctly.
+            // Show the currently running step
             uiController.addRunningStep(stepName != null ? stepName : "\u2026");
-
-            // Restore auto-enter toggle if active
-            if (autoEnterOverride != null) {
-                uiController.showAutoEnterToggle(
-                    autoEnterOverride,
-                    () -> { toggleAutoEnterOverride(); return kotlin.Unit.INSTANCE; },
-                    () -> { mainButtonsController.reRegisterRecordButtonListener(); return kotlin.Unit.INSTANCE; }
-                );
-            }
         }
 
         // 3. Small mode from preferences
-        stateManager.setSmallMode(sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false));
+        stateManager.setSmallMode(DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE));
     }
 
     /**
@@ -749,7 +779,7 @@ public class DictateInputMethodService extends InputMethodService
         boolean isIdle = recordingStateController.getState() instanceof RecordingState.Idle
                 && !pipelineOrchestrator.isRunning();
 
-        if (sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) {
+        if (DictatePrefsKt.get(sp, Pref.RewordingEnabled.INSTANCE)) {
             if (isIdle) {
                 InputConnection inputConnection = getCurrentInputConnection();
                 boolean hasSelection = inputConnection != null && inputConnection.getSelectedText(0) != null;
@@ -771,8 +801,8 @@ public class DictateInputMethodService extends InputMethodService
 
         if (isIdle) {
             // enable resend button if previous audio file still exists in cache
-            if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                    && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
+            if (new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
+                    && DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE)) {
                 resendButton.setVisibility(View.VISIBLE);
             } else {
                 resendButton.setVisibility(View.GONE);
@@ -783,15 +813,15 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         // check if user enabled audio focus
-        audioFocusEnabled = sp.getBoolean("net.devemperor.dictate.audio_focus", true);
+        audioFocusEnabled = DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE);
 
         // fill all overlay characters
-        int accentColor = sp.getInt("net.devemperor.dictate.accent_color", -14700810);
-        String charactersString = sp.getString("net.devemperor.dictate.overlay_characters", "()-:!?,.");
+        int accentColor = DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
+        String charactersString = DictatePrefsKt.get(sp, Pref.OverlayCharacters.INSTANCE);
         mainButtonsController.updateOverlayCharacters(charactersString, accentColor);
 
         // update theme
-        String theme = sp.getString("net.devemperor.dictate.theme", "system");
+        String theme = DictatePrefsKt.get(sp, Pref.Theme.INSTANCE);
         int keyboardBackgroundColor;
         if ("dark".equals(theme) || ("system".equals(theme) && (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES)) {
             keyboardBackgroundColor = getResources().getColor(R.color.dictate_keyboard_background_dark, getTheme());
@@ -809,16 +839,16 @@ public class DictateInputMethodService extends InputMethodService
         qwertzController.applyColors(accentColor, DictateUtils.darkenColor(accentColor, 0.18f), DictateUtils.darkenColor(accentColor, 0.35f));
 
         // show infos for updates, ratings or donations (DB query on background thread)
-        if (sp.getInt("net.devemperor.dictate.last_version_code", 0) < BuildConfig.VERSION_CODE) {
+        if (DictatePrefsKt.get(sp, Pref.LastVersionCode.INSTANCE) < BuildConfig.VERSION_CODE) {
             showInfo("update");
         } else {
             dbExecutor.execute(() -> {
                 Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
                 long totalAudioTime = totalAudioTimeOrNull != null ? totalAudioTimeOrNull : 0;
                 mainHandler.post(() -> {
-                    if (totalAudioTime > 180 && totalAudioTime <= 600 && !sp.getBoolean("net.devemperor.dictate.flag_has_rated_in_playstore", false)) {
+                    if (totalAudioTime > 180 && totalAudioTime <= 600 && !DictatePrefsKt.get(sp, Pref.FlagHasRated.INSTANCE)) {
                         showInfo("rate");
-                    } else if (totalAudioTime > 600 && !sp.getBoolean("net.devemperor.dictate.flag_has_donated", false)) {
+                    } else if (totalAudioTime > 600 && !DictatePrefsKt.get(sp, Pref.FlagHasDonated.INSTANCE)) {
                         showInfo("donate");
                     }
                 });
@@ -827,21 +857,21 @@ public class DictateInputMethodService extends InputMethodService
 
         // Sync animations preference to QWERTZ keyboard
         qwertzKeyboardView.getKeyPressAnimator().setAnimationsEnabled(
-                sp.getBoolean("net.devemperor.dictate.animations", true));
+                DictatePrefsKt.get(sp, Pref.Animations.INSTANCE));
 
         // Sync small mode from prefs and apply visibility + animation
-        stateManager.setSmallMode(sp.getBoolean(Pref.SmallMode.INSTANCE.getKey(), false));
+        stateManager.setSmallMode(DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE));
         mainButtonsController.animateSmallModeToggle(false);
 
         // start audio file transcription if user selected an audio file
-        if (!sp.getString("net.devemperor.dictate.transcription_audio_file", "").isEmpty()) {
-            audioFile = new File(getCacheDir(), sp.getString("net.devemperor.dictate.transcription_audio_file", ""));
-            sp.edit().putString("net.devemperor.dictate.last_file_name", audioFile.getName()).apply();
+        if (!DictatePrefsKt.get(sp, Pref.TranscriptionAudioFile.INSTANCE).isEmpty()) {
+            audioFile = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.TranscriptionAudioFile.INSTANCE));
+            DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, audioFile.getName()).apply();
 
-            sp.edit().remove("net.devemperor.dictate.transcription_audio_file").apply();
+            sp.edit().remove(Pref.TranscriptionAudioFile.INSTANCE.getKey()).apply();
             runTranscriptionViaOrchestrator();
 
-        } else if (sp.getBoolean("net.devemperor.dictate.instant_recording", false)) {
+        } else if (DictatePrefsKt.get(sp, Pref.InstantRecording.INSTANCE)) {
             recordButton.performClick();
         }
     }
@@ -852,7 +882,7 @@ public class DictateInputMethodService extends InputMethodService
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd);
 
         // refill all prompts
-        if (sp != null && sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) {
+        if (sp != null && DictatePrefsKt.get(sp, Pref.RewordingEnabled.INSTANCE)) {
             updateSelectAllPromptState();
         }
     }
@@ -981,6 +1011,30 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
+    /**
+     * Schedules {@link #performEnterAction()} with a delay after text commit.
+     * The delay ensures terminal emulators (e.g. Termux → Claude Code) treat Enter
+     * as a separate keystroke rather than part of the pasted text block.
+     * For character-by-character mode, the delay is added after the last character's delay.
+     */
+    private void scheduleAutoEnter(String output) {
+        if (mainHandler == null) {
+            // No handler available — fall back to immediate (best effort)
+            performEnterAction();
+            return;
+        }
+
+        long baseDelay = DictatePrefsKt.get(sp, Pref.AutoEnterDelay.INSTANCE);
+        if (!DictatePrefsKt.get(sp, Pref.InstantOutput.INSTANCE) && output.length() > 0) {
+            // Character-by-character: add delay after the last character finishes
+            int speed = DictatePrefsKt.get(sp, Pref.OutputSpeed.INSTANCE);
+            long lastCharDelay = (long) ((output.length() - 1) * (20L / (speed / 5f)));
+            baseDelay += lastCharDelay;
+        }
+
+        mainHandler.postDelayed(this::performEnterAction, baseDelay);
+    }
+
     private void updateEnterButtonIcon(EditorInfo info) {
         if (info == null || enterButton == null) return;
 
@@ -1017,10 +1071,10 @@ public class DictateInputMethodService extends InputMethodService
         promptQueueManager.prepareAutoApplyQueue();
 
         audioFile = new File(getCacheDir(), "audio.m4a");
-        sp.edit().putString("net.devemperor.dictate.last_file_name", audioFile.getName()).apply();
+        DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, audioFile.getName()).apply();
 
-        boolean useBt = sp.getBoolean("net.devemperor.dictate.use_bluetooth_mic", false);
-        audioFocusEnabled = sp.getBoolean("net.devemperor.dictate.audio_focus", true);
+        boolean useBt = DictatePrefsKt.get(sp, Pref.UseBluetoothMic.INSTANCE);
+        audioFocusEnabled = DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE);
         recordingStateController.startRecording(audioFile, useBt, audioFocusEnabled);
     }
 
@@ -1068,9 +1122,8 @@ public class DictateInputMethodService extends InputMethodService
      * Replaces the old startWhisperApiRequest() method.
      */
     private void runTranscriptionViaOrchestrator() {
-        recordButton.setText(R.string.dictate_sending);
-        recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, 0, 0);
-        recordButton.setEnabled(false);
+        // Preparing state: button disabled, shows "Sending..." (state-driven via PipelineUiState.Preparing)
+        uiController.preparePipeline();
         resendButton.setVisibility(View.GONE);
         infoBarController.dismiss();
         updatePromptButtonsEnabledState();
@@ -1080,25 +1133,17 @@ public class DictateInputMethodService extends InputMethodService
         int totalSteps = 1; // transcription always
         if (autoFormattingService.isEnabled()) totalSteps++;
         totalSteps += promptQueueManager.getQueuedIds().size();
-        uiController.showPipelineProgress(totalSteps);
 
-        autoEnterOverride = sp.getBoolean("net.devemperor.dictate.auto_enter", false);
-        uiController.showAutoEnterToggle(autoEnterOverride, () -> {
-            toggleAutoEnterOverride();
-            return kotlin.Unit.INSTANCE;
-        }, () -> {
-            // Restore original record button click listener
-            mainButtonsController.reRegisterRecordButtonListener();
-            return kotlin.Unit.INSTANCE;
-        });
+        autoEnterOverride = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
+        uiController.startPipeline(totalSteps, (boolean) autoEnterOverride);
 
         String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
                 ? currentInputLanguageValue : null;
         String stylePrompt = promptService.resolveWhisperStylePrompt(currentInputLanguageValue);
 
         EditorInfo info = getCurrentInputEditorInfo();
-        boolean showResend = new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a")).exists()
-                && sp.getBoolean("net.devemperor.dictate.resend_button", false);
+        boolean showResend = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
+                && DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE);
 
         PipelineOrchestrator.PipelineConfig config = new PipelineOrchestrator.PipelineConfig(
             audioFile, language, stylePrompt, livePrompt, autoSwitchKeyboard,
@@ -1127,20 +1172,14 @@ public class DictateInputMethodService extends InputMethodService
         }
         String selStr = selectedText != null ? selectedText.toString() : null;
 
-        // Set UI mode BEFORE calling orchestrator
+        // Set UI mode BEFORE calling orchestrator.
+        // Guard removed intentionally (plan §4e): in the live-prompt-chain case the previous
+        // pipeline's state is still Running with completedSteps == totalSteps. Calling
+        // startPipeline(1, ..., 0) unconditionally resets the counter to "0/1" — without this
+        // the stale counter of the prior transcription would remain on screen.
+        // autoEnterOverride is the service-side source of truth (see plan edge-case "Auto-Enter-Wahrheit").
         String displayName = model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName();
-        if (uiController.getCurrentMode() != KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
-            uiController.showPipelineProgress(1);
-
-            autoEnterOverride = sp.getBoolean("net.devemperor.dictate.auto_enter", false);
-            uiController.showAutoEnterToggle(autoEnterOverride, () -> {
-                toggleAutoEnterOverride();
-                return kotlin.Unit.INSTANCE;
-            }, () -> {
-                mainButtonsController.reRegisterRecordButtonListener();
-                return kotlin.Unit.INSTANCE;
-            });
-        }
+        uiController.startPipeline(1, (boolean) autoEnterOverride, 0);
 
         EditorInfo editorInfo = getCurrentInputEditorInfo();
         PipelineOrchestrator.StandaloneConfig config = new PipelineOrchestrator.StandaloneConfig(
@@ -1156,7 +1195,7 @@ public class DictateInputMethodService extends InputMethodService
     public void onStepStarted(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
             if (uiController == null) return;  // View recreation not yet complete
-            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+            if (uiController.getState() instanceof PipelineUiState.Running) {
                 uiController.addRunningStep(stepName);
             }
         });
@@ -1166,7 +1205,7 @@ public class DictateInputMethodService extends InputMethodService
     public void onStepCompleted(@androidx.annotation.NonNull String stepName, long durationMs) {
         mainHandler.post(() -> {
             if (uiController == null) return;  // View recreation not yet complete
-            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+            if (uiController.getState() instanceof PipelineUiState.Running) {
                 uiController.completeStep(stepName, durationMs);
             }
         });
@@ -1176,7 +1215,7 @@ public class DictateInputMethodService extends InputMethodService
     public void onStepFailed(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
             if (uiController == null) return;  // View recreation not yet complete
-            if (uiController.getCurrentMode() == KeyboardUiController.PromptAreaMode.PIPELINE_PROGRESS) {
+            if (uiController.getState() instanceof PipelineUiState.Running) {
                 uiController.failStep(stepName);
             }
         });
@@ -1256,24 +1295,27 @@ public class DictateInputMethodService extends InputMethodService
             sessionTracker.persistToPrefs(sp);
             mainHandler.post(() -> {
                 if (uiController == null) return;  // View recreation not yet complete
-                uiController.resetToPromptButtons();
+                uiController.stopPipeline();  // → updatePipelineState(Idle) → Callback → QWERTZ reset
                 uiController.restoreRecordButtonIdle(
                     getDictateButtonText(),
                     R.drawable.ic_baseline_mic_20,
                     R.drawable.ic_baseline_folder_open_20);
+                // QWERTZ-Reset happens automatically via onPipelineUiStateChanged callback
             });
         });
     }
 
     private boolean isAutoEnterActive() {
         if (autoEnterOverride != null) return autoEnterOverride;
-        return sp.getBoolean("net.devemperor.dictate.auto_enter", false);
+        return DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
     }
 
     private void toggleAutoEnterOverride() {
         if (autoEnterOverride == null) return;
         autoEnterOverride = !autoEnterOverride;
-        uiController.updateAutoEnterToggle(autoEnterOverride);
+        // Service is single source of truth for autoEnterOverride —
+        // sets the concrete value (no sync risk between service and controller)
+        uiController.setAutoEnter(autoEnterOverride);
     }
 
     private void commitTextToInputConnection(String text, InsertionSource source) {
@@ -1288,33 +1330,29 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         String output = text == null ? "" : text;
-        if (sp.getBoolean("net.devemperor.dictate.instant_output", true)) {
+        if (DictatePrefsKt.get(sp, Pref.InstantOutput.INSTANCE)) {
             inputConnection.commitText(output, 1);
-            if (isAutoEnterActive()) {
-                performEnterAction();
-            }
         } else if (mainHandler != null) {
-            int speed = sp.getInt("net.devemperor.dictate.output_speed", 5);
+            int speed = DictatePrefsKt.get(sp, Pref.OutputSpeed.INSTANCE);
             for (int i = 0; i < output.length(); i++) {
                 char character = output.charAt(i);
                 String characterString = String.valueOf(character);
                 long delay = (long) (i * (20L / (speed / 5f)));
-                boolean isLastChar = i == output.length() - 1;
                 mainHandler.postDelayed(() -> {
                     InputConnection ic = getCurrentInputConnection();
                     if (ic != null) {
                         ic.commitText(characterString, 1);
-                        if (isLastChar && isAutoEnterActive()) {
-                            performEnterAction();
-                        }
                     }
                 }, delay);
             }
         } else {
             inputConnection.commitText(output, 1);
-            if (isAutoEnterActive()) {
-                performEnterAction();
-            }
+        }
+
+        // Auto-enter: send as separate control character with delay so terminal emulators
+        // (e.g. Termux/Claude Code) treat it as a distinct keystroke, not part of the paste block
+        if (isAutoEnterActive()) {
+            scheduleAutoEnter(output);
         }
 
         // Persist text insertion and update session's final output
@@ -1420,19 +1458,19 @@ public class DictateInputMethodService extends InputMethodService
         List<String> recordDifferentLanguages = Arrays.asList(getResources().getStringArray(R.array.dictate_record_different_languages));
 
         LinkedHashSet<String> defaultLanguages = new LinkedHashSet<>(Arrays.asList(getResources().getStringArray(R.array.dictate_default_input_languages)));
-        Set<String> storedLanguages = sp.getStringSet("net.devemperor.dictate.input_languages", defaultLanguages);
+        Set<String> storedLanguages = DictatePrefsKt.getStringSet(sp, Pref.InputLanguages.INSTANCE, defaultLanguages);
         LinkedHashSet<String> sanitizedLanguages = new LinkedHashSet<>();
         for (String language : storedLanguages) {
             if (allLanguagesValues.contains(language)) sanitizedLanguages.add(language);
         }
         if (sanitizedLanguages.isEmpty()) sanitizedLanguages.addAll(defaultLanguages);
         if (!sanitizedLanguages.equals(storedLanguages)) {
-            sp.edit().putStringSet("net.devemperor.dictate.input_languages", sanitizedLanguages).apply();
+            DictatePrefsKt.putStringSet(sp.edit(), Pref.InputLanguages.INSTANCE, sanitizedLanguages).apply();
         }
 
         List<String> languagesList = new ArrayList<>(sanitizedLanguages);
         if (currentInputLanguagePos >= languagesList.size()) currentInputLanguagePos = 0;
-        sp.edit().putInt("net.devemperor.dictate.input_language_pos", currentInputLanguagePos).apply();
+        DictatePrefsKt.put(sp.edit(), Pref.InputLanguagePos.INSTANCE, currentInputLanguagePos).apply();
 
         currentInputLanguageValue = languagesList.get(currentInputLanguagePos);
         int languageIndex = allLanguagesValues.indexOf(currentInputLanguageValue);
@@ -1487,7 +1525,10 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onRecordClicked() {
         infoBarController.dismiss();
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+        if (uiController.isPipelineRunning()) {
+            // Pipeline running → toggle auto-enter (works for both main and QWERTZ button)
+            toggleAutoEnterOverride();
+        } else if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             openSettingsActivity();
         } else if (recordingStateController.getState() instanceof RecordingState.Idle) {
             startRecording();
@@ -1520,7 +1561,7 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onResendLongClicked() {
-        if (audioFile == null) audioFile = new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.m4a"));
+        if (audioFile == null) audioFile = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE));
         sessionTracker.reuseLastSession();
         runTranscriptionViaOrchestrator();
     }
@@ -1626,7 +1667,7 @@ public class DictateInputMethodService extends InputMethodService
         pendingLivePromptChain = false;
         autoEnterOverride = null;
 
-        uiController.resetToPromptButtons();
+        uiController.stopPipeline();
         uiController.restoreRecordButtonIdle(
             getDictateButtonText(),
             R.drawable.ic_baseline_mic_20,
@@ -1653,7 +1694,7 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onSmallModeToggled() {
         boolean newSmallMode = !stateManager.isSmallMode();
-        sp.edit().putBoolean(Pref.SmallMode.INSTANCE.getKey(), newSmallMode).apply();
+        DictatePrefsKt.put(sp.edit(), Pref.SmallMode.INSTANCE, newSmallMode).apply();
         stateManager.setSmallMode(newSmallMode);
         mainButtonsController.animateSmallModeToggle(true);
     }

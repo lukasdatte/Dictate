@@ -10,7 +10,6 @@ package net.devemperor.dictate.core
  *
  * Registered on [KeyboardUiController] via [KeyboardUiController.setCallback].
  */
-@JvmDefaultWithCompatibility
 interface PipelineUiCallback {
     /** Fires on actual state changes (step completed, auto-enter toggled, pipeline start/stop). */
     fun onPipelineUiStateChanged(oldState: PipelineUiState, newState: PipelineUiState) {}

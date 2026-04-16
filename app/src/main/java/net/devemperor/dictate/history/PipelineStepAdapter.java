@@ -14,8 +14,6 @@ import com.google.android.material.chip.ChipGroup;
 
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.database.entity.ProcessingStepEntity;
-import net.devemperor.dictate.database.entity.StepStatus;
-import net.devemperor.dictate.database.entity.StepType;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -59,6 +57,12 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
         public final boolean showOtherPrompt;
         public final boolean showPostProcess;
 
+        // Phase 10.3 / 10.4 — audio-row actions
+        public final String sessionId;
+        public final boolean showDirectReprocess;
+        public final boolean showReprocessWithEdit;
+        public final boolean showDeleteAudio;
+
         // For source session link
         public final String sourceSessionId;
 
@@ -76,6 +80,10 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
             this.showRegenerate = builder.showRegenerate;
             this.showOtherPrompt = builder.showOtherPrompt;
             this.showPostProcess = builder.showPostProcess;
+            this.sessionId = builder.sessionId;
+            this.showDirectReprocess = builder.showDirectReprocess;
+            this.showReprocessWithEdit = builder.showReprocessWithEdit;
+            this.showDeleteAudio = builder.showDeleteAudio;
             this.sourceSessionId = builder.sourceSessionId;
         }
 
@@ -93,6 +101,10 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
             private boolean showRegenerate;
             private boolean showOtherPrompt;
             private boolean showPostProcess;
+            private String sessionId;
+            private boolean showDirectReprocess;
+            private boolean showReprocessWithEdit;
+            private boolean showDeleteAudio;
             private String sourceSessionId;
 
             public Builder(Type type) {
@@ -111,6 +123,10 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
             public Builder showRegenerate(boolean show) { this.showRegenerate = show; return this; }
             public Builder showOtherPrompt(boolean show) { this.showOtherPrompt = show; return this; }
             public Builder showPostProcess(boolean show) { this.showPostProcess = show; return this; }
+            public Builder sessionId(String id) { this.sessionId = id; return this; }
+            public Builder showDirectReprocess(boolean show) { this.showDirectReprocess = show; return this; }
+            public Builder showReprocessWithEdit(boolean show) { this.showReprocessWithEdit = show; return this; }
+            public Builder showDeleteAudio(boolean show) { this.showDeleteAudio = show; return this; }
             public Builder sourceSessionId(String id) { this.sourceSessionId = id; return this; }
 
             public PipelineStep build() { return new PipelineStep(this); }
@@ -124,6 +140,9 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
         void onPostProcess(ProcessingStepEntity step);
         void onVersionSelected(int chainIndex, ProcessingStepEntity selectedVersion);
         void onOpenSourceSession(String sessionId);
+        void onDirectReprocess(String sessionId);
+        void onReprocessWithEdit(String sessionId);
+        void onDeleteAudio(String sessionId);
     }
 
     public PipelineStepAdapter(List<PipelineStep> steps, StepActionCallback callback) {
@@ -179,6 +198,26 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
             holder.playBtn.setOnClickListener(v -> callback.onPlayAudio(step.audioFilePath));
         } else {
             holder.playBtn.setVisibility(View.GONE);
+        }
+
+        // Audio-row actions (Phase 10.4)
+        if (step.showDirectReprocess && step.sessionId != null) {
+            holder.directReprocessBtn.setVisibility(View.VISIBLE);
+            holder.directReprocessBtn.setOnClickListener(v -> callback.onDirectReprocess(step.sessionId));
+        } else {
+            holder.directReprocessBtn.setVisibility(View.GONE);
+        }
+        if (step.showReprocessWithEdit && step.sessionId != null) {
+            holder.reprocessEditBtn.setVisibility(View.VISIBLE);
+            holder.reprocessEditBtn.setOnClickListener(v -> callback.onReprocessWithEdit(step.sessionId));
+        } else {
+            holder.reprocessEditBtn.setVisibility(View.GONE);
+        }
+        if (step.showDeleteAudio && step.sessionId != null) {
+            holder.deleteAudioBtn.setVisibility(View.VISIBLE);
+            holder.deleteAudioBtn.setOnClickListener(v -> callback.onDeleteAudio(step.sessionId));
+        } else {
+            holder.deleteAudioBtn.setVisibility(View.GONE);
         }
 
         // Regenerate button
@@ -262,6 +301,9 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
         final ImageButton regenerateBtn;
         final ImageButton otherPromptBtn;
         final ImageButton postProcessBtn;
+        final ImageButton directReprocessBtn;
+        final ImageButton reprocessEditBtn;
+        final ImageButton deleteAudioBtn;
         final TextView outputTv;
         final TextView errorTv;
         final TextView metaTv;
@@ -277,6 +319,9 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
             regenerateBtn = itemView.findViewById(R.id.item_pipeline_regenerate_btn);
             otherPromptBtn = itemView.findViewById(R.id.item_pipeline_other_prompt_btn);
             postProcessBtn = itemView.findViewById(R.id.item_pipeline_post_process_btn);
+            directReprocessBtn = itemView.findViewById(R.id.item_pipeline_direct_reprocess_btn);
+            reprocessEditBtn = itemView.findViewById(R.id.item_pipeline_reprocess_edit_btn);
+            deleteAudioBtn = itemView.findViewById(R.id.item_pipeline_delete_audio_btn);
             outputTv = itemView.findViewById(R.id.item_pipeline_output_tv);
             errorTv = itemView.findViewById(R.id.item_pipeline_error_tv);
             metaTv = itemView.findViewById(R.id.item_pipeline_meta_tv);

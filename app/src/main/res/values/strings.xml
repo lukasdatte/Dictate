@@ -325,6 +325,28 @@
     <string name="dictate_history_regenerating">Regenerating…</string>
     <string name="dictate_history_regenerate_failed">Regeneration failed: %1$s</string>
 
+    <!-- Status badges -->
+    <string name="dictate_status_recorded">Not processed</string>
+    <string name="dictate_status_failed">Failed</string>
+    <string name="dictate_status_cancelled">Cancelled</string>
+    <string name="dictate_status_running">Processing…</string>
+
+    <!-- History detail actions -->
+    <string name="dictate_history_direct_reprocess">Run directly</string>
+    <string name="dictate_history_reprocess_edit">Reprocess</string>
+    <string name="dictate_history_reprocess_edit_needs_saved_prompt">Please pick a saved prompt.</string>
+
+    <!-- Reprocess staging -->
+    <string name="dictate_reprocess_audio_available">Audio %1$s · Send</string>
+    <string name="dictate_job_already_active">Processing already running</string>
+    <string name="dictate_audio_file_missing">Audio file no longer available</string>
+    <string name="dictate_reprocess_language">Language</string>
+
+    <!-- Delete audio -->
+    <string name="dictate_delete_audio_title">Delete audio</string>
+    <string name="dictate_delete_audio_message">Audio will be permanently deleted. Transcription and results remain.</string>
+    <string name="dictate_delete_audio_confirm">Delete</string>
+
     <!-- Pipeline progress -->
     <string name="dictate_pipeline_transcription">Transcription</string>
     <string name="dictate_pipeline_formatting">Formatting</string>

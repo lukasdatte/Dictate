@@ -21,6 +21,8 @@ import com.google.android.material.chip.ChipGroup;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.core.ActiveJobRegistry;
+import net.devemperor.dictate.core.ActiveJobRegistryObserver;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.dao.SessionDao;
 import net.devemperor.dictate.database.entity.SessionEntity;
@@ -137,6 +139,13 @@ public class HistoryActivity extends AppCompatActivity {
                 .show());
 
         refreshData();
+
+        // K3: reactive badges. When a job starts/stops for any session, reload
+        // the list so persistent status (finalOutputText, SessionStatus) and
+        // the running-badge overlay both reflect the latest state. We ignore
+        // the snapshot contents and let `HistoryAdapter.applyStatusBadge` read
+        // `ActiveJobRegistry.isActive(sessionId)` during rebind.
+        ActiveJobRegistryObserver.observe(this, snapshot -> refreshData());
     }
 
     @Override

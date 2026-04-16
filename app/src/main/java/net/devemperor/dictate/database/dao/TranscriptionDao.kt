@@ -25,4 +25,10 @@ interface TranscriptionDao {
 
     @Query("SELECT * FROM transcriptions WHERE session_id = :sessionId ORDER BY version")
     fun getAllVersions(sessionId: String): List<TranscriptionEntity>
+
+    // ── Reprocess versioning helpers (Phase 5.1.1) ──────────────────────────
+
+    /** Promotes a specific transcription row to current. */
+    @Query("UPDATE transcriptions SET is_current = 1 WHERE id = :transcriptionId")
+    fun setCurrentById(transcriptionId: String)
 }

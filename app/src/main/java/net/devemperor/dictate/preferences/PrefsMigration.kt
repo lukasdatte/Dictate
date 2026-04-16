@@ -13,6 +13,20 @@ object PrefsMigration {
     fun migrateProviderPrefs(sp: SharedPreferences) {
         migrateKey(sp, Pref.TranscriptionProvider.key)
         migrateKey(sp, Pref.RewordingProvider.key)
+        removeObsoletePrefs(sp)
+    }
+
+    /**
+     * One-shot removal of prefs that are no longer read anywhere in the app.
+     * Phase 9 of the reprocess refactor dropped the `last_session_id` pointer —
+     * the DB is now the source of truth (see
+     * [net.devemperor.dictate.core.SessionTracker.getLastKeyboardSession]).
+     */
+    private fun removeObsoletePrefs(sp: SharedPreferences) {
+        val obsolete = "net.devemperor.dictate.last_session_id"
+        if (sp.contains(obsolete)) {
+            sp.edit().remove(obsolete).apply()
+        }
     }
 
     private fun migrateKey(sp: SharedPreferences, key: String) {

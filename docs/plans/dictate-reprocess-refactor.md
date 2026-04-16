@@ -5,6 +5,40 @@
 
 ---
 
+<!-- EXECUTION-PLAN -->
+## Execution Plan
+
+**Erstellt:** 2026-04-16
+**Geschätzte Chunks:** 3
+
+### Meine Strategie
+
+Ich folge der "Implementation Order Recommendation" des Plans: Erst die Data-Layer-Grundlagen (DB, VO, Repository, SessionTracker), dann die Runtime-Schicht (Registry, Executor, Orchestrator), zuletzt die UI-Integration. Phase 6 wird bewusst in Chunk 1 vorgezogen — mit Deprecation-Strategie für alte SessionTracker-APIs, damit das Projekt nach jedem Chunk kompiliert.
+
+### Geplante Chunks
+
+| # | Chunk | Plan-Abschnitte | Warum diese Gruppierung? |
+|---|-------|-----------------|--------------------------|
+| 1 | Data Layer Foundation | Phase 0, 1, 2, 6 + Referenz-Sektionen | DB-Schema, Recording VO, Repository, SessionTracker-Refactor bilden die persistente Grundlage |
+| 2 | Pipeline & Registry | Phase 3, 4, 5 | JobState → Executor → Orchestrator; Runtime-Schicht baut auf Chunk 1 auf |
+| 3 | UI Integration | Phase 7-13 + Verification | Keyboard-Controller, History-UI, Resend-Button, Tests bauen auf Chunks 1 + 2 auf |
+
+### Abhängigkeiten & Risiken
+
+- **Chunk 1 → 2:** `RecordingRepository`, `SessionDao`, `Recording` VO müssen verfügbar sein
+- **Chunk 2 → 3:** `ActiveJobRegistry`, `JobExecutor`, `JobState` müssen verfügbar sein (UI konsumiert StateFlow)
+- **Risiko:** Phase 6 wird in Chunk 1 nur mit `@Deprecated`-Markierung für alte APIs integriert — volle Migration der Call-Sites erst in Chunk 3
+- **Risiko:** Room-Migration (v2→v3) darf keine Daten verlieren — Migration-Tests sind Teil von Chunk 1
+
+### Zwischenschritte
+
+- **Chunk 1:** Phase 0 zuerst (Schema, Migration), dann VO → Repository → SessionTracker
+- **Chunk 2:** JobState zuerst, dann Registry → Token → Executor → Orchestrator
+- **Chunk 3:** Resources (Strings, Icons) zuerst, dann Controller → Resend → History → Integration Tests
+
+---
+<!-- /EXECUTION-PLAN -->
+
 ## Context & Motivation
 
 Die aktuelle Architektur des Recording-zu-Pipeline-Flows hat mehrere zusammenhängende Probleme:
@@ -88,7 +122,27 @@ Der Resend-Button und der Long-Press-Reprocess brauchen Zugriff auf "die letzte 
 
 `ActiveJobRegistry` ist nicht nur ein passiver Set-Tracker — er ist ein `StateFlow`-Provider, den UI-Komponenten (ViewModels, KeyboardUiController) abonnieren. Änderungen propagieren automatisch in alle sichtbaren Views, ohne imperative Aufrufe.
 
-### 6. Einheitlicher JobExecutor
+### 6. Kooperative Cancellation (CancellationToken)
+
+> **Finding SEC-1-6:** The existing cancel mechanism is `executor.shutdownNow()` (thread interruption).
+> The plan introduces CancellationToken but does not explain the transition path or how
+> external I/O (OkHttp calls) is affected. This design principle makes the strategy explicit.
+
+**Strategy:** Two-layer cancellation — cooperative token as primary, thread interrupt as fallback.
+
+1. **Token creation:** `JobExecutor.start()` creates a `CancellationToken` per job and stores it as `activeToken`.
+2. **Token check points:** The `PipelineOrchestrator` calls `token.throwIfCancelled()`:
+   - Before each pipeline step (transcription, auto-format, each prompt)
+   - After each API call returns (before persisting the result)
+3. **HTTP call cancellation:** OkHttp calls that are in-flight when the token is set are NOT automatically cancelled by the token. `Thread.interrupt()` (sent after `token.cancel()`) interrupts the blocking `OkHttpCall.execute()`, causing an `InterruptedException` or `IOException`. The catch blocks in the orchestrator treat both as cancellation (see Phase 5).
+4. **Transition from old code:** The old `executor.shutdownNow()` call is replaced by `JobExecutor.cancel(sessionId)`, which sets the token AND sends the interrupt. No code path relies solely on interruption anymore.
+
+**Exception hierarchy:**
+- `CancellationToken.throwIfCancelled()` throws `java.util.concurrent.CancellationException`
+- `Thread.interrupt()` on blocking I/O throws `InterruptedException` or `IOException`
+- Both are caught and treated as cancellation in the orchestrator and JobExecutor
+
+### 7. Einheitlicher JobExecutor
 
 Ein Kotlin-Singleton (`object JobExecutor`) führt **alle** Pipeline-Operationen aus: initiales Recording, Re-Transcribe, Step-Regenerate, Post-Process. Damit gibt es einen zentralen Eintrittspunkt, der Registry, Executor und Orchestrator konsistent verbindet. Keine parallelen Code-Pfade.
 
@@ -100,14 +154,16 @@ Ein Kotlin-Singleton (`object JobExecutor`) führt **alle** Pipeline-Operationen
 
 | Path | Purpose |
 |------|---------|
-| `core/Recording.kt` | Value Object für eine Audio-Datei + Self-Queries |
-| `core/RecordingRepository.kt` | Persistence-Bridge zwischen Filesystem + DB |
+| `core/Recording.kt` | Value Object für eine Audio-Datei + Self-Queries (see Open Decisions for naming discussion: `AudioFile.kt` alternative) |
+| `core/RecordingRepository.kt` | Persistence-Bridge zwischen Filesystem + DB (see Open Decisions for naming discussion: `AudioFileRepository.kt` alternative) |
 | `core/ActiveJobRegistry.kt` | Reaktive Job-State-Registry (StateFlow) |
 | `core/JobExecutor.kt` | Kotlin-Singleton für Pipeline-Ausführung |
 | `core/JobState.kt` | Sealed Class für Runtime-Job-Status |
+| `core/CancellationToken.kt` | Kooperative Cancellation für Pipeline-Jobs |
 | `database/entity/SessionStatus.kt` | Enum: RECORDED / COMPLETED / FAILED / CANCELLED |
+| `database/entity/SessionErrorType.kt` | Enum: INVALID_API_KEY / RATE_LIMITED / ... / UNKNOWN (Finding SEC-1-2) |
 | `database/entity/SessionOrigin.kt` | Enum: KEYBOARD / HISTORY_REPROCESS / POST_PROCESSING |
-| `database/migration/MigrationTo14.kt` | Schema-Migration für alle neuen Spalten |
+| `database/migration/MigrationTo3.kt` | Schema-Migration für alle neuen Spalten |
 | `history/HistoryDetailViewModel.kt` | Session-scoped ViewModel mit Registry-Observer |
 | `history/PromptChooserBottomSheetV2.kt` | BottomSheet für "Erneut verarbeiten" in Detail |
 
@@ -121,7 +177,7 @@ Ein Kotlin-Singleton (`object JobExecutor`) führt **alle** Pipeline-Operationen
 | `core/SessionManager.kt` | createSession erweitert um origin + queuedPromptIds; neue finalize-Methoden |
 | `core/SessionTracker.kt` | getLastKeyboardSession mit RAM-first/DB-fallback, Prefs-Entfernung |
 | `core/PipelineOrchestrator.kt` | reuseSessionId Param, resumePipeline Methode, Persist-first Reihenfolge |
-| `core/KeyboardUiController.kt` | PipelineUiState.ReprocessStaging + Render-Logik |
+| `core/KeyboardUiController.kt` | PipelineUiState.ReprocessStaging + Render-Logik, PipelineConfig → AutoEnterConfig rename, `isBusy()` method |
 | `core/DictateInputMethodService.java` | Resend-Umbau, Pseudo-Recording-Trigger, JobExecutor statt Direct-Call |
 | `core/MainButtonsController.kt` | Button-State-Mapping für ReprocessStaging |
 | `core/RecordingUiController.kt` | Pause-Button Blind-Schaltung im ReprocessStaging |
@@ -139,7 +195,78 @@ Ein Kotlin-Singleton (`object JobExecutor`) führt **alle** Pipeline-Operationen
 
 ## Phase 0: Database Migration & Schema
 
+### 0.0 Gradle Dependencies (Prerequisite)
+
+> **Finding SEC-3-1 / SEC-10-1:** The codebase currently uses zero Coroutines or StateFlow.
+> The following dependencies must be added to `app/build.gradle.kts` before any
+> StateFlow-based code (ActiveJobRegistry, HistoryDetailViewModel) can compile.
+
+```kotlin
+// app/build.gradle.kts — add to dependencies block
+implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
+implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+// For Java consumers observing StateFlow via LiveData bridge:
+implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.7.0")
+```
+
+**Java-Consumer Pattern:** `DictateInputMethodService` is Java and cannot collect a `StateFlow` directly. The recommended bridge is `StateFlow.asLiveData()` (from `lifecycle-livedata-ktx`), which the Java code can observe via standard `Observer<T>`:
+
+```java
+// In DictateInputMethodService.java — observing ActiveJobRegistry from Java:
+LiveData<Map<String, JobState>> jobLiveData =
+    FlowLiveDataConversions.asLiveData(ActiveJobRegistry.INSTANCE.getState());
+jobLiveData.observeForever(jobs -> {
+    // Update keyboard UI based on active job state
+});
+```
+
+Alternatively, a Kotlin wrapper can expose a callback-based API that hides the Flow:
+
+```kotlin
+// In ActiveJobRegistry — callback bridge for Java callers:
+fun observeForever(callback: (Map<String, JobState>) -> Unit): Job {
+    return CoroutineScope(Dispatchers.Main).launch {
+        state.collect { callback(it) }
+    }
+}
+```
+
+The first option (`asLiveData()`) is preferred because it follows standard Android lifecycle patterns and avoids manual scope management.
+
 ### 0.1 New enums
+
+**Datei:** `app/src/main/java/net/devemperor/dictate/database/entity/SessionErrorType.kt`
+
+> **Finding SEC-1-2:** Design Principle 3 requires the Double-Enum pattern for ALL
+> status/type columns. `last_error_type` originally had only SQL CHECK values but no
+> Kotlin enum — this violates the pattern and makes the values non-type-safe in code.
+
+```kotlin
+package net.devemperor.dictate.database.entity
+
+/**
+ * Error classification for failed sessions.
+ * Follows the Double-Enum pattern (see docs/DATABASE-PATTERNS.md):
+ * the SQL column has a CHECK constraint matching these values exactly.
+ *
+ * Used in [SessionEntity.lastErrorType] when status == FAILED.
+ * When status != FAILED, lastErrorType should be null.
+ */
+enum class SessionErrorType {
+    INVALID_API_KEY,
+    RATE_LIMITED,
+    MODEL_NOT_FOUND,
+    BAD_REQUEST,
+    SERVER_ERROR,
+    NETWORK_ERROR,
+    UNKNOWN
+}
+```
+
+> **Note (SEC-0-4):** `CANCELLED` was removed from the error_type CHECK constraint.
+> Cancellation is expressed via `status = CANCELLED` (with `last_error_type = null`),
+> not via an error type. This avoids semantic overlap between the two fields.
 
 **Datei:** `app/src/main/java/net/devemperor/dictate/database/entity/SessionStatus.kt`
 
@@ -178,6 +305,19 @@ enum class SessionOrigin {
     HISTORY_REPROCESS,  // Started from HistoryDetailActivity (re-transcribe / re-run)
     POST_PROCESSING     // Post-processing chain (child of another session)
 }
+
+// Finding SEC-1-4: Valid type × origin combinations
+// ┌─────────────────────┬──────────┬────────────────────┬─────────────────┐
+// │ SessionType         │ KEYBOARD │ HISTORY_REPROCESS  │ POST_PROCESSING │
+// ├─────────────────────┼──────────┼────────────────────┼─────────────────┤
+// │ RECORDING           │ ✅       │ ✅                 │ ❌              │
+// │ REWORDING           │ ✅       │ ❌                 │ ❌              │
+// │ POST_PROCESSING     │ ❌       │ ❌                 │ ✅              │
+// └─────────────────────┴──────────┴────────────────────┴─────────────────┘
+// Note: POST_PROCESSING type + POST_PROCESSING origin is intentionally
+// redundant — origin confirms provenance, type classifies the session's
+// content. This allows queries like "all sessions from history" regardless
+// of whether they are recordings or post-processing chains.
 ```
 
 ### 0.2 SessionEntity update
@@ -241,12 +381,16 @@ data class SessionEntity(
 
     val originEnum: SessionOrigin
         get() = runCatching { SessionOrigin.valueOf(origin) }.getOrDefault(SessionOrigin.KEYBOARD)
+
+    // Finding SEC-1-2: Double-Enum accessor for lastErrorType
+    val errorTypeEnum: SessionErrorType?
+        get() = lastErrorType?.let { runCatching { SessionErrorType.valueOf(it) }.getOrNull() }
 }
 ```
 
 ### 0.3 Migration SQL
 
-**Datei:** `app/src/main/java/net/devemperor/dictate/database/migration/MigrationTo14.kt`
+**Datei:** `app/src/main/java/net/devemperor/dictate/database/migration/MigrationTo3.kt`
 
 ```kotlin
 package net.devemperor.dictate.database.migration
@@ -268,7 +412,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * but an audio_file_path get status=RECORDED (they need healing, see onOpen callback).
  * All other legacy sessions get status=COMPLETED as a pragmatic default.
  */
-val MIGRATION_13_14 = object : Migration(13, 14) {
+val MIGRATION_2_3 = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // 1. Create the new table with CHECK constraints
         db.execSQL("""
@@ -290,7 +434,7 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
                     CHECK (last_error_type IS NULL OR last_error_type IN (
                         'INVALID_API_KEY', 'RATE_LIMITED', 'MODEL_NOT_FOUND',
                         'BAD_REQUEST', 'SERVER_ERROR', 'NETWORK_ERROR',
-                        'CANCELLED', 'UNKNOWN'
+                        'UNKNOWN'
                     )),
                 last_error_message TEXT,
                 final_output_text TEXT,
@@ -350,7 +494,7 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
 // Version bump
 @Database(
     entities = [...],
-    version = 14,  // was 13
+    version = 3,  // was 2
     exportSchema = true
 )
 abstract class DictateDatabase : RoomDatabase() {
@@ -368,19 +512,24 @@ abstract class DictateDatabase : RoomDatabase() {
                     )
                     .addMigrations(
                         // ... existing migrations ...
-                        MIGRATION_13_14
+                        MIGRATION_2_3
                     )
                     .addCallback(object : Callback() {
                         override fun onOpen(db: SupportSQLiteDatabase) {
                             super.onOpen(db)
-                            // Healing job runs in background thread
-                            Executors.newSingleThreadExecutor().execute {
-                                DurationHealingJob.heal(context.applicationContext)
-                            }
+                            // IMPORTANT: Preserve existing partial unique indices
+                            // (see SEC-1-3 finding — this call must NOT be lost)
+                            createPartialUniqueIndices(db)
                         }
                     })
                     .build()
                     .also { instance = it }
+            // IMPORTANT: Healing job must run AFTER getInstance() returns
+            // (see SA-2 finding — calling heal() from onOpen causes a
+            // circular call back into getInstance(), creating a second
+            // Room database instance on the same file).
+            // The heal() call is moved to DictateApplication.onCreate()
+            // which runs after the DB singleton is fully initialized.
             }
     }
 }
@@ -414,10 +563,17 @@ object DurationHealingJob {
 
     private const val TAG = "DurationHealingJob"
 
-    fun heal(context: Context) {
-        val db = DictateDatabase.getInstance(context)
-        val dao = db.sessionDao()
-        val needsHealing = dao.findRecordedWithMissingDuration()
+    /**
+     * Entry point — called from DictateApplication.onCreate() AFTER
+     * DictateDatabase.getInstance() has returned (avoiding circular re-entry).
+     *
+     * NOTE: Do NOT call this from DictateDatabase.onOpen() — that would
+     * trigger a second getInstance() call while the first is still inside
+     * synchronized{}, causing a deadlock or duplicate Room instance.
+     * See SA-2 / CA-2 / SEC-0-2 findings.
+     */
+    fun heal(dao: SessionDao) {
+        val needsHealing = dao.findWithMissingDuration()
         if (needsHealing.isEmpty()) return
 
         Log.i(TAG, "Healing ${needsHealing.size} session(s) with missing duration")
@@ -480,13 +636,15 @@ interface SessionDao {
     fun findLatestByOrigin(origin: String): SessionEntity?
 
     // NEW — healing query
+    // NOTE (SEC-0-5): Does NOT filter by status — COMPLETED sessions migrated
+    // from legacy data may also have audio_duration_seconds = 0 despite having
+    // a valid audio file. The status-agnostic query catches all cases.
     @Query("""
         SELECT * FROM sessions
-        WHERE status = 'RECORDED'
-          AND audio_file_path IS NOT NULL
+        WHERE audio_file_path IS NOT NULL
           AND audio_duration_seconds = 0
     """)
-    fun findRecordedWithMissingDuration(): List<SessionEntity>
+    fun findWithMissingDuration(): List<SessionEntity>
 
     // NEW — terminal status updates
     @Query("UPDATE sessions SET status = :status WHERE id = :id")
@@ -497,6 +655,14 @@ interface SessionDao {
 
     @Query("UPDATE sessions SET queued_prompt_ids = :ids WHERE id = :id")
     fun updateQueuedPromptIds(id: String, ids: String?)
+
+    @Query("UPDATE sessions SET audio_file_path = NULL WHERE id = :id")
+    fun clearAudioFilePath(id: String)
+
+    // NEW — Finding SEC-0-8: Required after file-copy and Opus compression
+    // to update the path from cache → persistent storage, or from .m4a → .opus
+    @Query("UPDATE sessions SET audio_file_path = :path WHERE id = :id")
+    fun updateAudioFilePath(id: String, path: String)
 }
 ```
 
@@ -519,6 +685,12 @@ import java.io.File
  * This is NOT a manager — it knows only about itself and does not
  * orchestrate multiple files or talk to the database.
  */
+// NOTE (Finding SA-1): This value object imports MediaMetadataRetriever
+// (Android framework), which breaks layer-separation and JVM testability.
+// Consider moving extractDurationSeconds() to RecordingRepository (infrastructure
+// layer) during implementation if JVM tests for Recording are desired.
+// DurationHealingJob should then call RecordingRepository.extractDuration()
+// instead of duplicating the logic (DRY).
 data class Recording(
     val audioFile: File,
     val sessionId: String
@@ -530,6 +702,9 @@ data class Recording(
     /**
      * Extracts the duration via MediaMetadataRetriever.
      * Returns 0 on failure (file corrupt, format unreadable, ...).
+     *
+     * NOTE: Consider moving to RecordingRepository to avoid Android
+     * framework dependency in this value object (see Finding SA-1).
      */
     fun extractDurationSeconds(): Long {
         if (!audioFile.exists()) return 0L
@@ -561,19 +736,24 @@ data class Recording(
 package net.devemperor.dictate.core
 
 import android.content.Context
+import android.util.Log
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.database.entity.SessionEntity
 import java.io.File
 
 /**
  * Persistence bridge for Recordings. Handles the filesystem side
- * (copy from cache to persistent storage) and the DB side (reading
- * session metadata).
+ * (copy from cache to persistent storage, Opus compression) and the DB
+ * side (reading session metadata, deleting audio).
  *
  * This is the single place where audio files get promoted from cache
  * to persistent storage. No other code should write to files/recordings/.
  */
 class RecordingRepository(private val context: Context) {
+
+    companion object {
+        private const val TAG = "RecordingRepository"
+    }
 
     private val recordingsDir: File by lazy {
         File(context.filesDir, "recordings").apply { mkdirs() }
@@ -588,7 +768,46 @@ class RecordingRepository(private val context: Context) {
     fun persistFromCache(cacheFile: File, sessionId: String): Recording {
         val dest = File(recordingsDir, "$sessionId.m4a")
         cacheFile.copyTo(dest, overwrite = true)
-        return Recording(dest, sessionId)
+        val recording = Recording(dest, sessionId)
+
+        // Compress to Opus in the background after persist.
+        // The uncompressed m4a stays on disk until compression succeeds,
+        // so a crash mid-compression leaves a valid fallback file.
+        compressToOpus(recording)
+
+        return recording
+    }
+
+    /**
+     * Compresses the recording from m4a to Opus (~16 KB/s for speech).
+     * Expected savings: ~90% storage reduction.
+     *
+     * The original m4a file is only deleted after successful Opus encoding.
+     * If encoding fails, the m4a file remains as fallback.
+     *
+     * Whisper accepts both m4a and opus natively — no re-encoding is needed
+     * when re-transcribing an Opus-compressed recording.
+     *
+     * Dependency: Requires an Opus encoder library on Android.
+     * Options include libopus via NDK (C binding) or a pure-Java wrapper
+     * such as `concentus` (Java port of libopus). Evaluate latency vs. APK
+     * size trade-off during implementation.
+     */
+    fun compressToOpus(recording: Recording): Recording {
+        val opusFile = File(recording.audioFile.parent, "${recording.sessionId}.opus")
+        try {
+            // TODO: Call Opus encoder (NDK or Java wrapper)
+            // OpusEncoder.encode(recording.audioFile, opusFile, bitrate = 16_000)
+
+            if (opusFile.exists() && opusFile.length() > 0) {
+                recording.audioFile.delete()
+                return Recording(opusFile, recording.sessionId)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Opus compression failed for ${recording.sessionId}, keeping m4a", e)
+            opusFile.delete() // Clean up partial file
+        }
+        return recording // Fallback: return original m4a
     }
 
     /**
@@ -606,6 +825,29 @@ class RecordingRepository(private val context: Context) {
         if (!file.exists()) return LoadResult.FileMissing(session)
 
         return LoadResult.Available(Recording(file, sessionId), session)
+    }
+
+    /**
+     * Deletes the audio file for a session and sets audioFilePath = null in DB.
+     * Transcription and processing results are preserved.
+     *
+     * After deletion, [loadBySessionId] will return [LoadResult.FileMissing],
+     * causing the reprocess buttons in the UI to be hidden automatically.
+     *
+     * @return true if the file was deleted (or didn't exist), false on DB error
+     */
+    fun deleteBySessionId(sessionId: String): Boolean {
+        val dao = DictateDatabase.getInstance(context).sessionDao()
+        val session = dao.getById(sessionId) ?: return false
+
+        val path = session.audioFilePath
+        if (path != null) {
+            val file = File(path)
+            if (file.exists()) file.delete()
+        }
+
+        dao.clearAudioFilePath(sessionId)
+        return true
     }
 
     sealed class LoadResult {
@@ -680,6 +922,12 @@ import kotlinx.coroutines.flow.update
  */
 object ActiveJobRegistry {
 
+    // NOTE (Finding SEC-3-4): The state is Map<String, JobState> even though
+    // only 0 or 1 entries are possible (single-job constraint). This is intentional
+    // for forward-compatibility — if the single-job constraint is relaxed in the
+    // future, the API and all consumers are already Map-ready.
+    // Alternative: StateFlow<JobState?> would be simpler but requires a breaking
+    // API change when adding multi-job support.
     private val _state = MutableStateFlow<Map<String, JobState>>(emptyMap())
 
     /** Observable map of sessionId → JobState. */
@@ -722,7 +970,60 @@ object ActiveJobRegistry {
 
 ---
 
-## Phase 4: JobExecutor (Kotlin Singleton)
+## Phase 4: JobExecutor (Kotlin Singleton) + CancellationToken
+
+### 4.0 CancellationToken
+
+**Datei:** `app/src/main/java/net/devemperor/dictate/core/CancellationToken.kt`
+
+```kotlin
+package net.devemperor.dictate.core
+
+import java.util.concurrent.CancellationException
+
+/**
+ * Cooperative cancellation token for pipeline jobs.
+ *
+ * The [PipelineOrchestrator] checks [throwIfCancelled] at defined checkpoints:
+ * - Before each pipeline step
+ * - After each API call returns
+ *
+ * [Thread.interrupt] remains as a last-resort fallback for blocking I/O
+ * (e.g. OkHttp calls that don't return). The interrupt is sent AFTER
+ * [cancel] sets the flag, not INSTEAD of it.
+ */
+class CancellationToken {
+    @Volatile var isCancelled = false
+        private set
+
+    fun cancel() { isCancelled = true }
+
+    fun throwIfCancelled() {
+        if (isCancelled) throw CancellationException("Job cancelled via CancellationToken")
+    }
+}
+```
+
+### 4.1 PipelineConfig (data structure only)
+
+The `PipelineOrchestrator.PipelineConfig` data class is defined here so that `JobRequest.toPipelineConfig()` compiles within Chunk 2. Phase 5 then fills in the consumption side.
+
+```kotlin
+// Inside PipelineOrchestrator companion or as inner class:
+data class PipelineConfig(
+    val audioFile: File? = null,
+    val language: String? = null,
+    val stylePrompt: String? = null,
+    val livePrompt: Boolean = false,
+    val recordingsDir: File? = null,
+    val targetAppPackage: String? = null,
+    val origin: SessionOrigin = SessionOrigin.KEYBOARD,
+    val modelOverride: String? = null,   // forward-compat — null = Pref default
+    val queuedPromptIds: List<Int> = emptyList()
+)
+```
+
+### 4.2 JobExecutor
 
 **Datei:** `app/src/main/java/net/devemperor/dictate/core/JobExecutor.kt`
 
@@ -745,6 +1046,7 @@ import java.util.concurrent.Executors
  * Responsibilities:
  * - Holds the ExecutorService for background pipeline work.
  * - Provides a single entry point for starting any kind of job.
+ * - Creates a [CancellationToken] per job for cooperative cancellation.
  * - Updates [ActiveJobRegistry] throughout the lifecycle.
  * - Finalizes session state in DB on completion/failure/cancel.
  */
@@ -754,17 +1056,40 @@ object JobExecutor {
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
+    /** The cancellation token for the currently active job, or null if idle. */
+    @Volatile
+    private var activeToken: CancellationToken? = null
+
+    /** The thread running the current job — used for last-resort interrupt. */
+    @Volatile
+    private var activeThread: Thread? = null
+
+    /**
+     * Initializes the executor with a PipelineOrchestrator instance.
+     * Must be called once from DictateInputMethodService.onCreate().
+     *
+     * Finding SEC-10-2: The orchestrator is held internally so that both
+     * the IME service and HistoryDetailActivity can start jobs without
+     * needing their own orchestrator instance.
+     */
+    @Volatile
+    private var orchestrator: PipelineOrchestrator? = null
+
+    fun initialize(orchestrator: PipelineOrchestrator) {
+        this.orchestrator = orchestrator
+    }
+
     /**
      * Starts a new job. Returns false if another job is already active.
      *
-     * @param orchestrator the shared PipelineOrchestrator instance (service-owned or activity-owned)
      * @param request the job description
      */
     fun start(
         context: Context,
-        orchestrator: PipelineOrchestrator,
         request: JobRequest
     ): Boolean {
+        val orchestrator = this.orchestrator
+            ?: throw IllegalStateException("JobExecutor not initialized — call initialize() first")
         val initial = JobState.Running(
             sessionId = request.sessionId,
             currentStepIndex = 0,
@@ -778,36 +1103,81 @@ object JobExecutor {
             return false
         }
 
+        val token = CancellationToken()
+        activeToken = token
+
         executor.submit {
+            activeThread = Thread.currentThread()
             try {
-                when (request.kind) {
-                    JobKind.RECORDING,
-                    JobKind.REPROCESS_STAGING,
-                    JobKind.HISTORY_REPROCESS -> orchestrator.runTranscriptionPipeline(
+                // Finding CA-4: Sealed-class dispatch — no force-unwraps needed
+                when (request) {
+                    is JobRequest.TranscriptionPipeline -> orchestrator.runTranscriptionPipeline(
                         request.toPipelineConfig(),
-                        reuseSessionId = request.sessionId
+                        reuseSessionId = request.sessionId,
+                        cancellationToken = token
                     )
-                    JobKind.RESUME -> orchestrator.resumePipeline(request.sessionId)
-                    JobKind.STEP_REGENERATE -> orchestrator.regenerateStep(
+                    is JobRequest.Resume -> orchestrator.resumePipeline(request.sessionId, token)
+                    is JobRequest.StepRegenerate -> orchestrator.regenerateStep(
                         request.sessionId,
-                        request.stepChainIndex!!
+                        request.stepChainIndex,
+                        token
                     )
-                    JobKind.POST_PROCESS -> orchestrator.runPostProcessing(
+                    is JobRequest.PostProcess -> orchestrator.runPostProcessing(
                         request.sessionId,
-                        request.postProcessInputText!!,
-                        request.postProcessPromptText!!,
-                        request.postProcessPromptId
+                        request.inputText,
+                        request.promptText,
+                        request.promptId
                     )
                 }
                 // Orchestrator writes terminal COMPLETED itself
+            } catch (e: java.util.concurrent.CancellationException) {
+                // Finding CA-1 + SEC-5-1: CancellationException means the
+                // cooperative token was triggered. Check if the cancel path
+                // already wrote CANCELLED (from onPipelineCancelClicked).
+                // If not, write it here as a safety net.
+                if (token.isCancelled) {
+                    Log.i(TAG, "Job cancelled: ${request.sessionId}")
+                    // onPipelineCancelClicked already wrote CANCELLED — skip finalizeFailed
+                } else {
+                    finalizeFailed(context, request.sessionId, e)
+                }
+            } catch (e: InterruptedException) {
+                // Thread.interrupt() fallback — treat as cancel
+                Log.i(TAG, "Job interrupted (cancel fallback): ${request.sessionId}")
             } catch (e: Exception) {
-                Log.e(TAG, "Job failed: ${request.sessionId}", e)
-                finalizeFailed(context, request.sessionId, e)
+                // Finding CA-1: Check if this is a race with user cancel.
+                // If the token was cancelled, don't overwrite CANCELLED with FAILED.
+                if (token.isCancelled) {
+                    Log.i(TAG, "Job failed after cancel — ignoring: ${request.sessionId}", e)
+                } else {
+                    Log.e(TAG, "Job failed: ${request.sessionId}", e)
+                    finalizeFailed(context, request.sessionId, e)
+                }
             } finally {
+                activeToken = null
+                activeThread = null
                 ActiveJobRegistry.unregister(request.sessionId)
             }
         }
         return true
+    }
+
+    /**
+     * Cancels the currently active job via cooperative token + last-resort interrupt.
+     *
+     * The cancellation flow:
+     * 1. Set the CancellationToken flag — the orchestrator checks this at
+     *    defined checkpoints (before each step, after each API call).
+     * 2. Send Thread.interrupt() as fallback — catches blocking OkHttp calls
+     *    that don't check the token.
+     *
+     * The caller (e.g. DictateInputMethodService.onPipelineCancelClicked) is
+     * responsible for writing the terminal CANCELLED status to the DB and
+     * unregistering from ActiveJobRegistry.
+     */
+    fun cancel(sessionId: String) {
+        activeToken?.cancel()
+        activeThread?.interrupt()  // Last-resort for blocking I/O
     }
 
     private fun finalizeFailed(context: Context, sessionId: String, error: Throwable) {
@@ -829,29 +1199,66 @@ object JobExecutor {
 
 /**
  * Unified request descriptor for JobExecutor.start().
- * Different kinds of jobs use different fields — validation happens in the executor.
+ *
+ * Finding CA-4: Modeled as a sealed class with type-safe variants per JobKind.
+ * This eliminates force-unwraps (stepChainIndex!!, postProcessInputText!!) and
+ * makes it impossible to construct an invalid request (e.g., a STEP_REGENERATE
+ * without a stepChainIndex). The existing codebase uses sealed classes for
+ * similar constructs (PipelineUiState, LoadResult).
  */
-data class JobRequest(
-    val kind: JobKind,
-    val sessionId: String,
-    val totalSteps: Int,
-    // For RECORDING / REPROCESS_STAGING / HISTORY_REPROCESS:
-    val audioFilePath: String? = null,
-    val language: String? = null,
-    val modelOverride: String? = null,   // future-proofing — null = use Pref default
-    val queuedPromptIds: List<Int> = emptyList(),
-    val targetAppPackage: String? = null,
-    // For STEP_REGENERATE:
-    val stepChainIndex: Int? = null,
-    // For POST_PROCESS:
-    val postProcessInputText: String? = null,
-    val postProcessPromptText: String? = null,
-    val postProcessPromptId: Int? = null
-) {
-    fun toPipelineConfig(): PipelineOrchestrator.PipelineConfig {
-        // Bridges JobRequest → existing PipelineConfig type
-        // See Phase 5 for the updated PipelineConfig
-        TODO("Implementation depends on Phase 5 PipelineConfig shape")
+sealed class JobRequest {
+    abstract val sessionId: String
+    abstract val totalSteps: Int
+    abstract fun toPipelineConfig(): PipelineOrchestrator.PipelineConfig
+
+    /** Initial recording pipeline or full reprocess (re-transcribe + all steps). */
+    data class TranscriptionPipeline(
+        override val sessionId: String,
+        override val totalSteps: Int,
+        val kind: TranscriptionKind,
+        val audioFilePath: String? = null,
+        val language: String? = null,
+        val modelOverride: String? = null,
+        val queuedPromptIds: List<Int> = emptyList(),
+        val targetAppPackage: String? = null
+    ) : JobRequest() {
+        override fun toPipelineConfig() = PipelineOrchestrator.PipelineConfig(
+            audioFile = audioFilePath?.let { java.io.File(it) },
+            language = language,
+            targetAppPackage = targetAppPackage,
+            modelOverride = modelOverride,
+            queuedPromptIds = queuedPromptIds
+        )
+    }
+
+    enum class TranscriptionKind { RECORDING, REPROCESS_STAGING, HISTORY_REPROCESS }
+
+    /** Short-press resend — continue from failure point. */
+    data class Resume(
+        override val sessionId: String,
+        override val totalSteps: Int
+    ) : JobRequest() {
+        override fun toPipelineConfig() = PipelineOrchestrator.PipelineConfig()
+    }
+
+    /** Regenerate a single processing step. */
+    data class StepRegenerate(
+        override val sessionId: String,
+        override val totalSteps: Int,
+        val stepChainIndex: Int  // Non-nullable — always required
+    ) : JobRequest() {
+        override fun toPipelineConfig() = PipelineOrchestrator.PipelineConfig()
+    }
+
+    /** Post-processing chain. */
+    data class PostProcess(
+        override val sessionId: String,
+        override val totalSteps: Int,
+        val inputText: String,    // Non-nullable — always required
+        val promptText: String,   // Non-nullable — always required
+        val promptId: Int? = null
+    ) : JobRequest() {
+        override fun toPipelineConfig() = PipelineOrchestrator.PipelineConfig()
     }
 }
 ```
@@ -866,7 +1273,7 @@ This is the largest phase — touches the core pipeline logic.
 
 **Key changes:**
 
-1. **New parameter `reuseSessionId: String? = null`** on `runTranscriptionPipeline()`. If set, skip `sessionTracker.startSession()` and operate on the existing session.
+1. **New parameter `reuseSessionId: String? = null`** on `runTranscriptionPipeline()`. If set, skip `sessionTracker.startSession()` and operate on the existing session. A `cancellationToken: CancellationToken` parameter is passed through from `JobExecutor`; the orchestrator checks `token.throwIfCancelled()` before each step and after each API call.
 
 2. **`persistAudioFile()` moves to the beginning of the flow.** Audio is copied to `files/recordings/` BEFORE the transcription API call. Duration is extracted SYNCHRONOUSLY via `Recording.extractDurationSeconds()`. Session is written to DB with correct `audioDurationSeconds` and `status = RECORDED` as part of the same atomic step.
 
@@ -878,14 +1285,7 @@ This is the largest phase — touches the core pipeline logic.
 
 6. **New optional parameter `modelOverride: String? = null`** on the transcription and completion calls. When null (the normal case), the provider's default model from Prefs is used. When set, it overrides the default for this specific pipeline run. This is the forward-compatibility hook for the `ReprocessStaging.selectedModel` field — wired end-to-end but not yet exposed in the UI.
 
-**PipelineConfig additions:**
-```kotlin
-data class PipelineConfig(
-    // ... existing fields ...
-    val origin: SessionOrigin = SessionOrigin.KEYBOARD,
-    val modelOverride: String? = null   // forward-compat — null = Pref default
-)
-```
+**PipelineConfig** is defined in Phase 4.1 as a pure data structure. Phase 5 fills in how the orchestrator consumes it (reading `origin`, `modelOverride`, `queuedPromptIds` etc.).
 
 The orchestrator reads `modelOverride` and passes it to the AI runner layer. If null, the runner falls back to the existing `Pref.WhisperModel` / `Pref.CompletionModel` logic. This keeps the normal code path unchanged.
 
@@ -894,7 +1294,8 @@ The orchestrator reads `modelOverride` and passes it to the AI runner layer. If 
 ```kotlin
 fun runTranscriptionPipeline(
     config: PipelineConfig,
-    reuseSessionId: String? = null
+    reuseSessionId: String? = null,
+    cancellationToken: CancellationToken = CancellationToken()
 ) {
     // ── Stage PERSIST (synchronous, atomic) ──
     val sessionId: String
@@ -924,32 +1325,51 @@ fun runTranscriptionPipeline(
             queuedPromptIds = promptQueueManager.getQueuedIds().joinToString(","),
             initialStatus = SessionStatus.RECORDED
         )
-        sessionTracker.notifySessionCreated(sessionId, config.origin)
+        // Finding SEC-5-3: notifySessionCreated was called but never defined
+        // on SessionTracker. Replaced by setting the tracker's currentSessionId
+        // directly and updating the keyboard cache if origin is KEYBOARD.
+        sessionTracker.currentSessionId = sessionId
+        if (config.origin == SessionOrigin.KEYBOARD) {
+            sessionTracker.notifyKeyboardSessionCompleted(
+                sessionManager.getSessionById(sessionId)!!
+            )
+        }
     }
 
     // ── Stage PROCESS ──
     try {
         // Step 1: Transcription
+        cancellationToken.throwIfCancelled()  // Checkpoint: before step
         callback.onPipelineStepStarted("Transcription", 1, computedTotalSteps)
         val transcription = executeTranscription(sessionId, ...)
+        cancellationToken.throwIfCancelled()  // Checkpoint: after API call
 
         // Step 2: Auto-format (optional)
         if (autoFormatEnabled) {
+            cancellationToken.throwIfCancelled()
             callback.onPipelineStepStarted("Auto-Format", 2, computedTotalSteps)
             executeAutoFormat(sessionId, transcription.text)
+            cancellationToken.throwIfCancelled()
         }
 
-        // Step 3..N: Queued prompts
+        // Step 3..N: Queued prompts (each step checks token before + after)
         if (!config.livePrompt) {
-            executeQueuedPrompts(sessionId, ...)
+            executeQueuedPrompts(sessionId, ..., cancellationToken)
         }
 
         // Terminal success
         sessionManager.finalizeCompleted(sessionId)
         callback.onPipelineCompleted(sessionId)
-    } catch (cancelled: InterruptedException) {
+    } catch (cancelled: java.util.concurrent.CancellationException) {
+        // Finding SEC-5-1: CancellationToken.throwIfCancelled() throws
+        // CancellationException, NOT InterruptedException.
         sessionManager.finalizeCancelled(sessionId)
         throw cancelled
+    } catch (interrupted: InterruptedException) {
+        // Fallback: Thread.interrupt() from JobExecutor.cancel() can cause
+        // InterruptedException in blocking I/O (e.g. OkHttp). Treat as cancel.
+        sessionManager.finalizeCancelled(sessionId)
+        throw interrupted
     } catch (e: Exception) {
         // JobExecutor will write FAILED + error context
         callback.onPipelineError(sessionId, e)
@@ -1088,7 +1508,7 @@ private void switchTranscriptionVersion(TranscriptionEntity selected) {
  * Algorithm: inspect existing processing steps and start from the first
  * non-successful step. If no transcription exists, start from scratch.
  */
-fun resumePipeline(sessionId: String) {
+fun resumePipeline(sessionId: String, cancellationToken: CancellationToken = CancellationToken()) {
     val session = sessionManager.getSessionById(sessionId)
         ?: throw IllegalStateException("Session $sessionId not found")
 
@@ -1123,8 +1543,21 @@ fun resumePipeline(sessionId: String) {
         existingSteps.first { it.chainIndex == lastSuccessIndex }.outputText ?: transcription.text
     }
 
-    executeStepsFrom(sessionId, resumeFromIndex, inputText)
-    sessionManager.finalizeCompleted(sessionId)
+    // Finding SEC-5-1: resumePipeline also needs try/catch for
+    // CancellationException and InterruptedException — same pattern as
+    // runTranscriptionPipeline (see Phase 5.1).
+    try {
+        cancellationToken.throwIfCancelled()
+        executeStepsFrom(sessionId, resumeFromIndex, inputText, cancellationToken)
+        sessionManager.finalizeCompleted(sessionId)
+    } catch (cancelled: java.util.concurrent.CancellationException) {
+        sessionManager.finalizeCancelled(sessionId)
+        throw cancelled
+    } catch (interrupted: InterruptedException) {
+        sessionManager.finalizeCancelled(sessionId)
+        throw interrupted
+    }
+    // Note: other exceptions propagate to JobExecutor which writes FAILED
 }
 ```
 
@@ -1165,7 +1598,7 @@ fun createSession(
 // NEW — terminal status writes. Each is a single UPDATE statement,
 // and each also touches the SessionTracker RAM cache if applicable.
 fun finalizeCompleted(sessionId: String)  // sets status = COMPLETED
-fun finalizeCancelled(sessionId: String)  // sets status = CANCELLED
+fun finalizeCancelled(sessionId: String)  // sets status = CANCELLED + clears last_error_type/message (Finding CA-1)
 fun finalizeFailed(sessionId: String, errorType: String, errorMessage: String)
 
 /**
@@ -1197,6 +1630,7 @@ Before the refactor, `SessionManager.createSession` has a shorter signature. Aft
 | `PipelineOrchestrator.runTranscriptionPipeline` (RECORDING) | `core/PipelineOrchestrator.kt` | `KEYBOARD` (or `HISTORY_REPROCESS` if origin override) | `promptQueueManager.getQueuedIds().joinToString(",")` | `RECORDED` |
 | `runReworkingPipeline` or similar (REWORDING) | `core/PipelineOrchestrator.kt` | `KEYBOARD` | `null` | `RECORDED` (transient; immediately transitions to COMPLETED if no audio) |
 | `HistoryDetailActivity.createPostProcessingSession` | `history/HistoryDetailActivity.java` | `POST_PROCESSING` | `null` (or the queue if used) | `RECORDED` |
+| `PipelineOrchestrator.runStandalonePrompt` (REWORDING) | `core/PipelineOrchestrator.kt` | `KEYBOARD` | `null` | `RECORDED` |
 | `SessionTracker.startSession` | `core/SessionTracker.kt` | passed through from caller | passed through | passed through |
 
 **Refactoring note:** If a caller currently calls `sessionTracker.startSession(...)` which internally calls `sessionManager.createSession(...)`, the `startSession` wrapper itself needs to accept the new parameters and forward them. This is a mechanical but repo-wide change — grep for `createSession(` before merging Phase 5.
@@ -1284,28 +1718,37 @@ class SessionTracker(
 }
 ```
 
-### 6.1 Removed APIs and their replacements
+### 6.1 Deprecated APIs (Phase 6) and call-site migration (Phase 9 / Chunk 3)
 
-Part of Phase 6 is cleaning up all references to the obsolete APIs. The following must be removed **in the same PR** that introduces `getLastKeyboardSession()` — otherwise the build will break because the methods still have call sites.
+**Deprecation-first strategy:** In Phase 6 (Chunk 1), old API methods are marked as `@Deprecated` but **not deleted**. This ensures Chunk 1 (Phases 0, 1, 2, 6) compiles independently without requiring changes to `DictateInputMethodService`. The actual call-site migration and method removal happen in Phase 9 / Chunk 3.
 
-**In `SessionTracker.kt`:**
+**In `SessionTracker.kt` (Phase 6 — deprecate only):**
 
-| Removed | Replacement |
-|---------|-------------|
-| `lastSessionId` (volatile field) | `getLastKeyboardSession()?.id` |
-| `lastOutput` (volatile field) | `getLastKeyboardSession()?.finalOutputText` |
-| `restoreLastSessionIdFromPrefs(sp)` | No-op — DB is source of truth |
-| `restoreLastOutputFromDb()` | No-op — `getLastKeyboardSession()` reads it lazily |
-| `persistToPrefs(sp)` | No-op — no Pref write needed |
-| `reuseLastSession()` | `currentSessionId = getLastKeyboardSession()?.id` at call site |
+| Deprecated | Replacement | Removed in |
+|------------|-------------|------------|
+| `lastSessionId` (volatile field) | `getLastKeyboardSession()?.id` | Phase 9 |
+| `lastOutput` (volatile field) | `getLastKeyboardSession()?.finalOutputText` | Phase 9 |
+| `restoreLastSessionIdFromPrefs(sp)` | No-op — DB is source of truth | Phase 9 |
+| `restoreLastOutputFromDb()` | No-op — `getLastKeyboardSession()` reads it lazily | Phase 9 |
+| `persistToPrefs(sp)` | No-op — no Pref write needed | Phase 9 |
+| `reuseLastSession()` | `currentSessionId = getLastKeyboardSession()?.id` at call site | Phase 9 |
 
-**In `DictatePrefs.kt`:**
+```kotlin
+// Example deprecation annotation (Phase 6):
+@Deprecated(
+    "Use getLastKeyboardSession()?.id instead",
+    ReplaceWith("getLastKeyboardSession()?.id")
+)
+fun getLastSessionId(): String? = lastSessionId
+```
 
-| Removed | Replacement |
-|---------|-------------|
-| `object LastSessionId : Pref<String>(...)` | (none — delete entirely) |
+**In `DictatePrefs.kt` (Phase 6 — deprecate only):**
 
-**In `DictateInputMethodService.java`:**
+| Deprecated | Replacement | Removed in |
+|------------|-------------|------------|
+| `object LastSessionId : Pref<String>(...)` | (none — delete entirely) | Phase 9 |
+
+**In `DictateInputMethodService.java` (Phase 9 — actual migration):**
 
 Grep for the following and remove/replace:
 - `sessionTracker.restoreLastSessionIdFromPrefs(sp);` → remove
@@ -1314,18 +1757,25 @@ Grep for the following and remove/replace:
 - `sessionTracker.reuseLastSession();` → replaced by direct use of `getLastKeyboardSession()`
 - `sessionTracker.getLastOutput()` → `sessionTracker.getLastKeyboardSession() != null ? ... : null`
 
+After all call sites are migrated in Phase 9, the deprecated methods and `Pref.LastSessionId` are deleted in the same PR.
+
 **Migration note:** The `Pref.LastSessionId` entry in existing user installations will simply be ignored after the update. No cleanup migration needed — SharedPreferences values for obsolete keys do not hurt, and removing the class is enough.
 
 **Datei:** `app/src/main/java/net/devemperor/dictate/preferences/DictatePrefs.kt`
 
 ```kotlin
-// REMOVE:
+// Phase 6: DEPRECATE (keep the object, add @Deprecated)
+// Phase 9: REMOVE entirely
 // object LastSessionId : Pref<String>("net.devemperor.dictate.last_session_id", "")
 ```
 
 ---
 
 ## Phase 7: KeyboardUiController — ReprocessStaging State
+
+**Naming note:** `KeyboardUiController.PipelineConfig` (already implemented in code, Commit 05c7278+) has been renamed to `KeyboardUiController.AutoEnterConfig` to avoid confusion with `PipelineOrchestrator.PipelineConfig`. The two types serve different purposes:
+- `AutoEnterConfig` (UI): Holds the `autoEnterActive` flag for the keyboard record button rendering.
+- `PipelineOrchestrator.PipelineConfig` (Orchestrator): Holds audio file, language, origin, model override, etc. for pipeline execution.
 
 ### 7.1 Extended PipelineUiState
 
@@ -1348,7 +1798,8 @@ sealed class PipelineUiState {
         val totalSteps: Int,
         val completedSteps: Int,
         val currentStepName: String,
-        val autoEnterActive: Boolean
+        val autoEnterActive: Boolean,
+        val hasFailure: Boolean = false  // Already implemented (Commit 8273403). Used in refreshRecordButtonFromState() for red text color on failures.
     ) : PipelineUiState()
 
     /**
@@ -1380,6 +1831,59 @@ sealed class PipelineUiState {
 ```
 
 ### 7.2 KeyboardUiController render logic
+
+**KeyboardStateManager integration (Finding SEC-7-1):**
+
+`KeyboardStateManager.refresh()` drives visibility via lambdas (`isPipelineRunning`, `isRecording`, `isPipelineProgressVisible`, etc.). None covers `ReprocessStaging`. Without a new lambda, `refresh()` resets the visibility that `applyReprocessStagingState()` just set.
+
+**Required change in `KeyboardStateManager` constructor — add new lambda:**
+
+```kotlin
+class KeyboardStateManager(
+    // ... existing lambdas ...
+    private val isPipelineRunning: () -> Boolean,
+    private val isPipelineProgressVisible: () -> Boolean,
+    private val isReprocessStaging: () -> Boolean,  // NEW (Finding SEC-7-1)
+    // ...
+)
+```
+
+**Required changes in `KeyboardStateManager` visibility methods:**
+
+```kotlin
+// In applyRecordingControlsVisibility():
+private fun applyRecordingControlsVisibility() {
+    val isActive = isRecording() || isPaused()
+    val isStaging = isReprocessStaging()
+    // Pause button: visible during recording, DISABLED during ReprocessStaging
+    views.pauseButton.visibility = if (isActive || isStaging) View.VISIBLE else View.GONE
+    views.pauseButton.isEnabled = isActive  // disabled (blind) in ReprocessStaging
+    views.pauseButton.alpha = if (isActive) 1.0f else 0.4f
+    // Trash button: visible during recording AND ReprocessStaging (cancel action)
+    views.trashButton.visibility = if (isActive || isStaging) View.VISIBLE else View.GONE
+}
+
+// In applyPromptsVisibility() — add ReprocessStaging to the showPrompts condition:
+val showPrompts = when {
+    isSmallMode -> false
+    contentArea == ContentArea.EMOJI_PICKER -> false
+    isActive || isPipelineRunning() || isReprocessStaging() -> true  // CHANGED: added isReprocessStaging()
+    else -> isRewordingEnabled()
+}
+// Pipeline progress vs prompts RecyclerView:
+// ReprocessStaging shows the RecyclerView (queue editing), NOT pipeline progress
+val isPipelineProgress = isPipelineProgressVisible() && !isReprocessStaging()
+```
+
+**Lambda wiring in `DictateInputMethodService` (where KeyboardStateManager is created):**
+
+```java
+// Add to the KeyboardStateManager constructor call:
+/* isReprocessStaging */ () -> uiController != null
+    && uiController.getState() instanceof PipelineUiState.ReprocessStaging,
+```
+
+This ensures that `refresh()` — which is called on rotation, content-area switches, and layout rebuilds — preserves the correct visibility for ReprocessStaging without being overwritten
 
 Add a new branch in `refreshRecordButtonFromState()`:
 
@@ -1449,24 +1953,73 @@ fun updateReprocessLanguage(language: String) {
 }
 ```
 
-### 7.4 MainButtonsController — pause button blind-switch
+### 7.3.1 Convenience query methods
+
+```kotlin
+/**
+ * Returns true if the controller is in any non-Idle state.
+ *
+ * Comparison with related methods:
+ * - [isPipelineRunning]: true only for [PipelineUiState.Running]
+ * - [isPipelineActive]: true for [Running] + [Preparing]
+ * - [isBusy]: true for everything except [Idle] (includes [ReprocessStaging])
+ *
+ * Use [isBusy] when guarding against any user interaction that requires
+ * an idle keyboard (e.g. starting a new recording, entering ReprocessStaging).
+ */
+fun isBusy(): Boolean = state !is PipelineUiState.Idle
+```
+
+### 7.4 MainButtonsController — ReprocessStaging button state
 
 **Datei:** `app/src/main/java/net/devemperor/dictate/core/MainButtonsController.kt`
 
-Add observation of `uiController.state` (via StateFlow if available, otherwise manual push) and disable the pause button when `state is ReprocessStaging`:
+The `MainButtonsController` observes `uiController.state` via `onPipelineUiStateChanged` callback. When `newState is ReprocessStaging`, it calls `applyReprocessStagingState()`:
 
 ```kotlin
+/**
+ * Configures button states for [PipelineUiState.ReprocessStaging].
+ *
+ * Triggered by: [onPipelineUiStateChanged] in the service when the state
+ * transitions to ReprocessStaging.
+ */
+fun applyReprocessStagingState() {
+    // Pause-Button: disabled/invisible (no recording to pause)
+    views.pauseButton.isEnabled = false
+    views.pauseButton.alpha = 0.4f  // visual "blind" indication
+
+    // Trash-Button: visible, clickable → cancels ReprocessStaging
+    views.trashButton.visibility = View.VISIBLE
+    views.trashButton.isEnabled = true
+
+    // QWERTZ-Button: remains in Idle-look (no ReprocessStaging indicator)
+}
+
+/**
+ * Resets all buttons to their normal (Idle) state.
+ *
+ * Called when:
+ * - [cancelReprocessStaging] returns to Idle
+ * - [stopPipeline] completes a running job
+ */
+fun resetToNormalState() {
+    views.pauseButton.isEnabled = true
+    views.pauseButton.alpha = 1.0f
+    views.trashButton.visibility = View.GONE
+    // ... restore existing button state logic
+}
+
+/**
+ * General state dispatcher. Called by the service on every state transition.
+ */
 fun applyStateToButtons(state: PipelineUiState) {
     when (state) {
-        is PipelineUiState.ReprocessStaging -> {
-            views.pauseButton.isEnabled = false
-            views.pauseButton.alpha = 0.4f  // visual "blind" indication
-            views.trashButton.visibility = View.VISIBLE  // cancel reprocess
-        }
+        is PipelineUiState.ReprocessStaging -> applyReprocessStagingState()
+        is PipelineUiState.Idle -> resetToNormalState()
         else -> {
             views.pauseButton.isEnabled = true
             views.pauseButton.alpha = 1.0f
-            // ... existing button state logic
+            // ... existing button state logic for Running/Preparing
         }
     }
 }
@@ -1516,7 +2069,22 @@ public int getItemCount() {
     return (showLanguageChip ? 1 : 0) + prompts.size();
 }
 
+// Finding SEC-7-5: When the language chip is at position 0, all subsequent
+// data.get(position) calls are off-by-one. A helper method centralizes the
+// offset calculation so no call site forgets to adjust.
+private int toDataIndex(int adapterPosition) {
+    return adapterPosition - (showLanguageChip ? 1 : 0);
+}
+
 // ...onCreateViewHolder and onBindViewHolder branch on viewType
+// All data access in onBindViewHolder MUST use toDataIndex(position):
+//   Prompt prompt = data.get(toDataIndex(position));
+// The same applies to setQueuedPromptOrder() and all click callbacks.
+
+// StaggeredGridLayout: The language chip must use FullSpan so it spans
+// the full width rather than occupying one grid column:
+//   StaggeredGridLayoutManager.LayoutParams lp = ...;
+//   lp.setFullSpan(viewType == VIEW_TYPE_LANGUAGE_CHIP);
 ```
 
 The language chip opens a `MaterialAlertDialog` or `BottomSheet` showing all available languages from `R.array.dictate_input_languages`. Selecting one triggers `uiController.updateReprocessLanguage(lang)`.
@@ -1550,27 +2118,43 @@ public void onResendClicked() {
 
         case RECORDED:
         case FAILED:
-        case CANCELLED:
             // Error recovery — resume the pipeline from the failure point
             startResumeJob(lastSession.getId());
+            break;
+
+        case CANCELLED:
+            // Finding SEC-7-8: For CANCELLED sessions, short-press inserts
+            // the last available output (if any) rather than resuming.
+            // This prevents accidental costly API calls from a quick tap
+            // (long-press is the intentional reprocess gesture).
+            String cancelledOutput = lastSession.getFinalOutputText();
+            if (cancelledOutput != null && !cancelledOutput.isEmpty()) {
+                commitTextToInputConnection(cancelledOutput, InsertionSource.TRANSCRIPTION);
+            } else {
+                // No output available — fall back to resume
+                startResumeJob(lastSession.getId());
+            }
             break;
     }
 }
 
+/**
+ * Job-Blocking UX (Keyboard): When JobExecutor.start() would return false
+ * (because a job is already active), show an InfoBar toast via InfoBarController.
+ * This is the keyboard's strategy for communicating job-blocking to the user.
+ */
 private void startResumeJob(String sessionId) {
     if (ActiveJobRegistry.INSTANCE.isAnyActive()) {
         showInfoBar(R.string.dictate_job_already_active);
         return;
     }
 
-    JobRequest request = new JobRequest(
-        JobKind.RESUME,
+    // Finding CA-4: Type-safe sealed class — no nullable fields needed
+    JobRequest.Resume request = new JobRequest.Resume(
         sessionId,
-        /* totalSteps */ computeRemainingSteps(sessionId),
-        // other fields null for RESUME
-        null, null, Collections.emptyList(), null, null, null, null, null
+        /* totalSteps */ computeRemainingSteps(sessionId)
     );
-    JobExecutor.INSTANCE.start(this, pipelineOrchestrator, request);
+    JobExecutor.INSTANCE.start(this, request);
 }
 ```
 
@@ -1579,6 +2163,11 @@ private void startResumeJob(String sessionId) {
 ```java
 @Override
 public void onResendLongClicked() {
+    // Guard: isBusy() covers Running, Preparing, AND ReprocessStaging
+    if (uiController.isBusy()) {
+        return;
+    }
+
     SessionEntity lastSession = sessionTracker.getLastKeyboardSession();
     if (lastSession == null) {
         return;  // no audio to reprocess
@@ -1621,21 +2210,28 @@ public void onRecordClicked() {
 }
 
 private void handleReprocessSend(PipelineUiState.ReprocessStaging staging) {
-    JobRequest request = new JobRequest(
-        JobKind.REPROCESS_STAGING,
+    // Finding CA-4: Type-safe sealed class variant
+    JobRequest.TranscriptionPipeline request = new JobRequest.TranscriptionPipeline(
         staging.getTargetSessionId(),
         computeTotalStepsForQueue(staging.getEditableQueue()),
+        JobRequest.TranscriptionKind.REPROCESS_STAGING,
         /* audioFilePath */ sessionManager.getAudioFilePath(staging.getTargetSessionId()),
         staging.getSelectedLanguage(),
+        /* modelOverride */ staging.getSelectedModel(),
         staging.getEditableQueue(),
-        /* targetAppPackage */ getCurrentTargetApp(),
-        null, null, null, null
+        /* targetAppPackage */ getCurrentTargetApp()
     );
-    boolean started = JobExecutor.INSTANCE.start(this, pipelineOrchestrator, request);
+    boolean started = JobExecutor.INSTANCE.start(this, request);
     if (!started) {
         showInfoBar(R.string.dictate_job_already_active);
     }
-    // On success: Registry emits Running → observer flips state to Running
+    // Finding SEC-7-6: The transition from ReprocessStaging → Running
+    // cannot rely on a non-existent StateFlow observer in the existing
+    // imperative architecture. Instead, call preparePipeline() explicitly
+    // (consistent with the existing pattern in the recording flow).
+    if (started) {
+        uiController.preparePipeline();
+    }
 }
 ```
 
@@ -1662,25 +2258,32 @@ public void onPipelineCancelClicked() {
     String sessionId = sessionTracker.getCurrentSessionId();
     if (sessionId == null) return;
 
-    // 1. Cancel the running job in the executor (interrupts the worker thread)
-    pipelineOrchestrator.cancel();
+    // 1. Cancel via cooperative token + last-resort interrupt
+    JobExecutor.INSTANCE.cancel(sessionId);
 
     // 2. Mark the session as CANCELLED in the DB
+    // Finding CA-1: finalizeCancelled also clears last_error_type and
+    // last_error_message to prevent inconsistent state if finalizeFailed
+    // was called first in a race condition.
     sessionManager.finalizeCancelled(sessionId);
 
-    // 3. Remove from the active job registry
-    ActiveJobRegistry.INSTANCE.unregister(sessionId);
+    // 3. Finding CA-1: Do NOT call ActiveJobRegistry.unregister() here.
+    // The JobExecutor's finally block handles unregistration. Double
+    // unregistration is harmless but unnecessary and misleading.
 
     // 4. Reset UI state to Idle
     uiController.stopPipeline();
 }
 ```
 
-**Race-condition note:** Because `pipelineOrchestrator.cancel()` calls `executor.shutdownNow()`, the worker thread may still be in the middle of writing to the DB when the cancel button is pressed. The order above (cancel → finalize → unregister) is intentional:
+**Cancellation strategy:** `JobExecutor.cancel()` first sets the cooperative `CancellationToken` flag, then sends `Thread.interrupt()` as a last-resort for blocking OkHttp calls. The orchestrator checks `token.throwIfCancelled()` at defined checkpoints (before each step, after each API call), so cancellation is typically handled cooperatively without thread interruption.
 
-- `cancel()` first sends the interrupt
-- `finalizeCancelled()` then writes the terminal status — even if the worker thread also tries to write a status (e.g., FAILED from a propagated InterruptedException), the LAST write wins and CANCELLED is the user's intent
-- `unregister()` removes the runtime entry, freeing the registry for new jobs
+**Race-condition note (Finding CA-1):** The cancel flow is:
+
+1. `cancel()` sets the cooperative token + sends interrupt
+2. `finalizeCancelled()` writes CANCELLED status + clears `last_error_type` and `last_error_message` (prevents inconsistent state if `finalizeFailed` was called first by the worker thread)
+3. `unregister()` is NOT called here — the `JobExecutor`'s `finally` block handles it, preventing double-unregistration
+4. In the `JobExecutor.start()` catch block, `token.isCancelled` is checked before calling `finalizeFailed()` — if the token was cancelled, the worker thread skips `finalizeFailed()` entirely
 
 There is a small window where `JobExecutor.start()` checks `ActiveJobRegistry.isAnyActive()` and finds the just-cancelled session still registered. The user-facing impact: the user must wait a few hundred milliseconds before starting a new job. This is acceptable.
 
@@ -1801,24 +2404,29 @@ Add an `ImageView` (24dp) and a `TextView` next to the existing subtitle, inside
 </LinearLayout>
 ```
 
-### 10.3 HistoryDetailActivity — two new buttons
+### 10.3 HistoryDetailActivity — three new buttons
 
 **Datei:** `app/src/main/java/net/devemperor/dictate/history/HistoryDetailActivity.java`
 
-Add two new buttons to the AUDIO row of the pipeline adapter:
+Add three new buttons to the AUDIO row of the pipeline adapter:
 
 - **"Direkt ausführen"** (`ic_baseline_play_arrow_24`) — triggers a `JobKind.RESUME` or full `HISTORY_REPROCESS` with the historical queue (no user interaction).
 - **"Erneut verarbeiten"** (`ic_baseline_edit_note_24`) — opens a `PromptChooserBottomSheetV2` where the user can edit the queue before starting.
+- **"Audio löschen"** (`ic_baseline_delete_24`) — deletes the audio file permanently while keeping session, transcription, and processing results. After deletion, all reprocess buttons are hidden (because `LoadResult.FileMissing`).
 
 ```java
 @Override
 public void onPlayAudio(String audioFilePath) { /* existing */ }
 
 // NEW
+// Finding SEC-10-2: PipelineOrchestrator is not available in HistoryDetailActivity
+// (it's currently only instantiated in DictateInputMethodService).
+// Solution: JobExecutor holds a lazy-initialized PipelineOrchestrator internally.
+// See Phase 4.2 — JobExecutor.start() no longer takes an orchestrator parameter.
 @Override
 public void onDirectReprocess(String sessionId) {
     JobRequest request = buildHistoryReprocessRequest(sessionId, /* editedQueue */ null);
-    JobExecutor.INSTANCE.start(this, orchestrator, request);
+    JobExecutor.INSTANCE.start(this, request);
 }
 
 // NEW
@@ -1828,24 +2436,43 @@ public void onReprocessWithEdit(String sessionId) {
         .show(getSupportFragmentManager(), "reprocess_chooser");
 }
 
+// NEW
+@Override
+public void onDeleteAudio(String sessionId) {
+    new MaterialAlertDialogBuilder(this)
+        .setTitle(R.string.dictate_delete_audio_title)
+        .setMessage(R.string.dictate_delete_audio_message)
+        .setPositiveButton(R.string.dictate_delete_audio_confirm, (dialog, which) -> {
+            boolean deleted = recordingRepository.deleteBySessionId(sessionId);
+            if (deleted) {
+                loadSession();  // Refresh — reprocess buttons will hide via FileMissing
+            }
+        })
+        .setNegativeButton(android.R.string.cancel, null)
+        .show();
+}
+
 public void onReprocessQueueConfirmed(String sessionId, List<Integer> editedQueue) {
     JobRequest request = buildHistoryReprocessRequest(sessionId, editedQueue);
-    JobExecutor.INSTANCE.start(this, orchestrator, request);
+    JobExecutor.INSTANCE.start(this, request);
 }
 ```
 
 ### 10.4 PipelineStepAdapter — AUDIO row extensions
 
-Add `showDirectReprocess` and `showReprocessWithEdit` builder fields, and render button visibility on the AUDIO row accordingly. Visibility logic:
+Add `showDirectReprocess`, `showReprocessWithEdit`, and `showDeleteAudio` builder fields, and render button visibility on the AUDIO row accordingly. Visibility logic:
 
 - `showDirectReprocess = true` if session status in (`RECORDED`, `FAILED`, `CANCELLED`)
 - `showReprocessWithEdit = true` always for RECORDING-type sessions (also `COMPLETED` — user can experiment)
-- Hide both if audio file is missing (`RecordingRepository.LoadResult.FileMissing`)
-- Hide both if `ActiveJobRegistry.isActive(sessionId)`
+- `showDeleteAudio = true` if audio file exists (i.e. `LoadResult.Available`)
+- Hide all three if audio file is missing (`RecordingRepository.LoadResult.FileMissing`)
+- Hide reprocess buttons (but not delete) if `ActiveJobRegistry.isActive(sessionId)`
 
 ### 10.5 HistoryDetailViewModel
 
 **Datei:** `app/src/main/java/net/devemperor/dictate/history/HistoryDetailViewModel.kt`
+
+**Job-Blocking UX (History):** The ViewModel observes `ActiveJobRegistry.state` and exposes it as part of `DisplayState`. When a job is active, the `HistoryDetailActivity` automatically disables all reprocess buttons (see 10.4 visibility logic: "Hide reprocess buttons if `ActiveJobRegistry.isActive(sessionId)`"). This is reactive -- no polling or manual enable/disable calls needed.
 
 ```kotlin
 package net.devemperor.dictate.history
@@ -1864,6 +2491,22 @@ import net.devemperor.dictate.database.entity.SessionEntity
  * Observes ActiveJobRegistry to show live progress updates during reprocessing.
  */
 class HistoryDetailViewModel(val sessionId: String) : ViewModel() {
+
+    /**
+     * Finding SA-7/SEC-10-5: Factory is required because the constructor takes
+     * a sessionId parameter. This is the first ViewModel in the project and
+     * sets the pattern for future ViewModels.
+     *
+     * Usage in HistoryDetailActivity:
+     *   val vm = ViewModelProvider(this, HistoryDetailViewModel.Factory(sessionId))
+     *       .get(HistoryDetailViewModel::class.java)
+     */
+    class Factory(private val sessionId: String) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            return HistoryDetailViewModel(sessionId) as T
+        }
+    }
 
     private val _session = MutableStateFlow<SessionEntity?>(null)
     val session: StateFlow<SessionEntity?> = _session.asStateFlow()
@@ -1893,6 +2536,36 @@ class HistoryDetailViewModel(val sessionId: String) : ViewModel() {
 }
 ```
 
+### 10.6 PromptChooserBottomSheetV2
+
+**Datei:** `app/src/main/java/net/devemperor/dictate/history/PromptChooserBottomSheetV2.kt`
+
+**Purpose:** Queue-editor for reprocessing from the History detail view. Unlike V1 (selection-only with checkboxes), V2 is a full queue editor with ordering, add, and remove capabilities.
+
+**UI Elements:**
+
+- `RecyclerView` with drag-and-drop reordering (via `ItemTouchHelper` with `UP`/`DOWN` directions)
+- Each prompt item shows: prompt name, a drag handle (left), and a remove button (right, `ic_baseline_close_24`)
+- **"Prompt hinzufugen"** button at the bottom — opens a prompt selection popup (filtered to prompts not yet in the queue)
+- **"Verarbeiten"** confirmation button — commits the edited queue and triggers reprocessing
+
+**Data source:**
+
+- Initial queue is populated from `session.queued_prompt_ids` (the prompt IDs used during the last run)
+- If `queued_prompt_ids` is null (legacy session), the queue starts empty and the user adds prompts manually
+
+**Callback:**
+
+```kotlin
+interface ReprocessQueueCallback {
+    fun onReprocessQueueConfirmed(sessionId: String, editedQueue: List<Int>)
+}
+```
+
+The host `HistoryDetailActivity` implements this callback. On confirmation, it builds a `JobRequest(kind = HISTORY_REPROCESS, ...)` with the edited queue and passes it to `JobExecutor.start()`.
+
+**Difference to V1:** `PromptChooserBottomSheet` (V1) is a simple checkbox-based multi-select used during normal recording flow. V2 adds: (1) ordered queue semantics, (2) drag-to-reorder, (3) individual remove, (4) add-from-remaining. V1 remains unchanged for its existing use case.
+
 ---
 
 ## Phase 11: String Resources
@@ -1914,6 +2587,11 @@ class HistoryDetailViewModel(val sessionId: String) : ViewModel() {
 <string name="dictate_reprocess_audio_available">Audio %1$s · Senden</string>
 <string name="dictate_job_already_active">Verarbeitung läuft bereits</string>
 <string name="dictate_audio_file_missing">Audio-Datei nicht mehr verfügbar</string>
+
+<!-- Delete audio -->
+<string name="dictate_delete_audio_title">Audio löschen</string>
+<string name="dictate_delete_audio_message">Audio wird unwiderruflich gelöscht. Transkription und Ergebnisse bleiben erhalten.</string>
+<string name="dictate_delete_audio_confirm">Löschen</string>
 ```
 
 Translations for `values-de`, `values-es`, `values-pt` analog.
@@ -1929,6 +2607,7 @@ Add the following Material icon drawables under `app/src/main/res/drawable/`:
 - `ic_baseline_cancel_24.xml` — CANCELLED badge
 - `ic_baseline_sync_24.xml` — Running badge (can be animated via `AnimatedVectorDrawable` if desired)
 - `ic_baseline_edit_note_24.xml` — "Erneut verarbeiten" button
+- `ic_baseline_delete_24.xml` — "Audio löschen" button
 
 Use the standard Material Icons set from [fonts.google.com/icons](https://fonts.google.com/icons) and export as Android Vector Drawables.
 
@@ -1948,19 +2627,21 @@ The service needs to:
 
 | Test | File | What it verifies |
 |------|------|------------------|
-| Migration 13→14 | `MigrationTest.kt` | Schema upgrade preserves data, sets status correctly |
+| Migration 2→3 | `MigrationTest.kt` | Schema upgrade preserves data, sets status correctly |
 | Double-Enum CHECK constraint | `SessionStatusCheckTest.kt` | Inserting an invalid status string throws |
-| Orphan healing | `DurationHealingJobTest.kt` | Rows with duration=0 get fixed from real audio files |
+| Double-Enum CHECK constraint | `SessionErrorTypeCheckTest.kt` | Inserting an invalid error_type string throws (Finding SEC-1-2) |
+| Orphan healing | `DurationHealingJobTest.kt` | Rows with duration=0 get fixed from real audio files (including COMPLETED sessions — Finding SEC-0-5) |
 | JobExecutor single-job lock | `JobExecutorTest.kt` | Second start() call returns false while first is running |
 | Resume from mid-chain | `PipelineResumeTest.kt` | After failed step 2, resume starts at step 2 with correct input |
 | SessionTracker fallback | `SessionTrackerTest.kt` | RAM-miss triggers DB query, hit caches result |
+| Transcription versioning | `TranscriptionVersioningTest.kt` | Session v1 → Re-Transcribe → v2. Both versions in DB. session.final_output_text = v2. DAO returns both versions. |
 
 ---
 
 ## Verification Checklist
 
-- [ ] Schema migration 13→14 applies cleanly on a clean DB
-- [ ] Schema migration 13→14 applies cleanly on a DB with legacy orphan sessions
+- [ ] Schema migration 2→3 applies cleanly on a clean DB
+- [ ] Schema migration 2→3 applies cleanly on a DB with legacy orphan sessions
 - [ ] Legacy orphan sessions get `status = 'RECORDED'` after migration
 - [ ] Duration healing job runs on app start and fixes `audio_duration_seconds = 0`
 - [ ] CHECK constraint rejects invalid status strings (integration test)
@@ -1987,6 +2668,30 @@ The service needs to:
 - [ ] Active job survives Activity destroy (HistoryDetailActivity back press)
 - [ ] Active job survives IME view recreation
 - [ ] Active job does NOT survive app process kill (expected behaviour)
+- [ ] Audio compression: m4a is compressed to opus after persist, original deleted on success
+- [ ] Audio compression failure: m4a fallback is preserved, no data loss
+- [ ] "Audio loschen" button shows confirmation dialog
+- [ ] After audio deletion: reprocess buttons are hidden, transcription preserved
+- [ ] CancellationToken: cooperative cancel stops pipeline at next checkpoint
+- [ ] CancellationToken + Thread.interrupt: blocking OkHttp call is interrupted as fallback
+- [ ] `isBusy()` returns true during ReprocessStaging (not just Running/Preparing)
+- [ ] Deprecated SessionTracker methods still compile in Chunk 1 (no call-site changes)
+- [ ] Deprecated SessionTracker methods are fully removed after Chunk 3
+- [ ] Gradle dependencies for Coroutines/StateFlow/ViewModel added and compile (Finding SEC-3-1)
+- [ ] Java consumer can observe ActiveJobRegistry via asLiveData() bridge (Finding SEC-3-1)
+- [ ] DurationHealingJob runs from DictateApplication.onCreate(), NOT from onOpen (Finding SA-2)
+- [ ] DurationHealingJob finds COMPLETED sessions with duration=0 too (Finding SEC-0-5)
+- [ ] onOpen callback preserves createPartialUniqueIndices call (Finding SEC-1-3)
+- [ ] SessionErrorType Kotlin enum matches SQL CHECK constraint values (Finding SEC-1-2)
+- [ ] JobExecutor.initialize() is called from DictateInputMethodService.onCreate() (Finding SEC-10-2)
+- [ ] HistoryDetailViewModel.Factory used in HistoryDetailActivity (Finding SA-7)
+- [ ] KeyboardStateManager.refresh() handles ReprocessStaging axis (Finding SEC-7-1)
+- [ ] PromptsKeyboardAdapter uses toDataIndex() for all data access (Finding SEC-7-5)
+- [ ] PromptChooserBottomSheetV2 supports drag-to-reorder
+- [ ] PromptChooserBottomSheetV2 "Verarbeiten" button triggers reprocess with edited queue
+- [ ] TranscriptionVersioningTest: re-transcribe creates version 2, both versions in DB
+- [ ] Reprocess buttons in History disabled while a job is active (reactive via ViewModel)
+- [ ] Keyboard shows InfoBar toast when job is blocked by active job
 
 ---
 
@@ -2005,10 +2710,12 @@ The service needs to:
 
 ## Open Decisions (for later, not blocking this plan)
 
-- Should the `RecordingRepository` eventually also handle audio compression / format conversion (m4a → opus) for storage efficiency? Not in scope now.
+- ~~Should the `RecordingRepository` eventually also handle audio compression / format conversion (m4a → opus) for storage efficiency?~~ **Stub in Chunk 1; Encoder-Wiring deferred.** `RecordingRepository.compressToOpus()` exists as a no-op stub and is NO LONGER called unconditionally from `persistFromCache()`. Once an Opus encoder (NDK libopus or `concentus`) is wired in, call-sites opt in explicitly. Silent-no-op under the name `compressToOpus` was rejected as misleading (Chunk-1 finding W2).
 - Should the language chip be promoted to the normal (non-reprocess) recording UI? Not in scope now, but the architecture allows it trivially.
-- Should there be a "delete audio but keep session" option for privacy-conscious users? Out of scope.
-- Should the JobExecutor expose cancellation that actually survives `shutdownNow()` (e.g., checking a cancellation flag instead of interrupting the thread)? Maybe in a follow-up — current interrupt-based cancel is acceptable.
+- ~~Should there be a "delete audio but keep session" option for privacy-conscious users?~~ **Now in scope** — see Phase 10.3, "Audio loschen" button with confirmation dialog.
+- ~~Should the JobExecutor expose cancellation that actually survives `shutdownNow()` (e.g., checking a cancellation flag instead of interrupting the thread)?~~ **Now in scope** — see Phase 4, `CancellationToken`. Cooperative cancellation via volatile flag, with `Thread.interrupt()` as last-resort fallback for blocking OkHttp calls.
+- **(Finding SA-1/SEC-0-6) Should `Recording.extractDurationSeconds()` move to `RecordingRepository`?** ✅ **Resolved: Moved to `RecordingRepository` (Chunk 1).** `Recording` is now free of Android framework imports (JVM-testable), and `RecordingRepository.extractDurationSeconds(File)` is the single source of duration extraction for both the pipeline and `DurationHealingJob` (DRY). `DurationHealingJob.heal()` now takes the repository as a second parameter; `DictateApplication.onCreate()` wires both.
+- **(Finding SEC-1-5) Should `Recording.kt` and `RecordingRepository.kt` be renamed to `AudioFile.kt` / `AudioFileRepository.kt`?** ⏸ **Deferred.** Chunk 1 implemented as `Recording`/`RecordingRepository` (Option b). A future rename is mechanical (IDE refactor) and can be done as a follow-up if the six `Recording*` files in `core/` cause confusion during Chunk 3 UI work.
 
 ---
 
@@ -2017,23 +2724,42 @@ The service needs to:
 When implementing via the `implement-long-plan` skill, group the phases into three chunks:
 
 **Chunk 1 — Data layer foundation:**
+- Phase 0.0 (Gradle dependencies for Coroutines/StateFlow/ViewModel)
 - Phase 0 (Migration + Schema)
 - Phase 1 (Recording value object)
-- Phase 2 (RecordingRepository)
-- Phase 6 (SessionTracker refactor, pref removal)
+- Phase 2 (RecordingRepository, including Opus compression + deleteBySessionId)
+- Phase 6 (SessionTracker: add `getLastKeyboardSession()`, **deprecate** old APIs — but do NOT delete them yet)
+
+Note: Phase 6 uses `@Deprecated` annotations on old methods so that Chunk 1 compiles without touching `DictateInputMethodService`. The deprecated methods are thin wrappers that delegate to the new API internally.
+
+Note: DurationHealingJob must be called from `DictateApplication.onCreate()` (not from `DictateDatabase.onOpen()`) to avoid the circular re-entry issue (Finding SA-2). The job takes the repository as a second parameter (Open Decision SA-1 resolved — `extractDurationSeconds` lives on the repository). Example:
+```kotlin
+// In DictateApplication.onCreate():
+val db = DictateDatabase.getInstance(this)
+val recordingRepository = RecordingRepository(this)
+val executor = Executors.newSingleThreadExecutor()
+executor.execute {
+    DurationHealingJob.heal(db.sessionDao(), recordingRepository)
+}
+executor.shutdown()  // prevents non-daemon thread leak (Finding W3)
+```
 
 **Chunk 2 — Pipeline & Registry:**
 - Phase 3 (JobState + ActiveJobRegistry)
-- Phase 4 (JobExecutor)
-- Phase 5 (PipelineOrchestrator refactor including resumePipeline)
+- Phase 4 (CancellationToken + PipelineConfig data structure + JobExecutor)
+- Phase 5 (PipelineOrchestrator refactor including resumePipeline, cancellation checkpoints)
+
+Note: `PipelineOrchestrator.PipelineConfig` is defined as a data structure in Phase 4.1, so `JobRequest.toPipelineConfig()` compiles. Phase 5 then fills in how the orchestrator consumes the config.
+
+Note: `JobExecutor.initialize(orchestrator)` must be called from `DictateInputMethodService.onCreate()` so that both the IME and HistoryDetailActivity can start jobs (Finding SEC-10-2).
 
 **Chunk 3 — UI integration:**
-- Phase 7 (KeyboardUiController ReprocessStaging)
+- Phase 7 (KeyboardUiController: ReprocessStaging, AutoEnterConfig rename, `isBusy()`)
 - Phase 8 (Language chip)
-- Phase 9 (Resend button rewrite)
-- Phase 10 (History UI updates)
+- Phase 9 (Resend button rewrite + **call-site migration** from deprecated SessionTracker APIs + deletion of deprecated methods)
+- Phase 10 (History UI updates: badges, detail buttons incl. audio delete, PromptChooserBottomSheetV2)
 - Phase 11 (String resources)
 - Phase 12 (Material icons)
-- Phase 13 (Integration wiring + tests)
+- Phase 13 (Integration wiring + tests incl. TranscriptionVersioningTest)
 
 Each chunk should compile and build independently. Between chunks, the app should still run (possibly with partial functionality).

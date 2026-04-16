@@ -276,4 +276,26 @@
     </plurals>
 
     <string name="dictate_changelog_30">v3.2.0\n\nEsta atualização traz melhorias importantes e novas funcionalidades! 🚀\n\n- Chaves API separadas: Agora você pode salvar chaves API separadas para cada provedor (OpenAI, Groq, Custom), facilitando a troca. 🔑\n\n- Bluetooth melhorado: A conexão com fones Bluetooth está mais rápida e confiável. 🎧\n\n- Auto Enter: Nova opção para pressionar automaticamente Enter/Enviar após a transcrição. ⚡\n\n- Novos modelos: Suporte adicionado para OpenAI o1, o4-mini e GPT-5.2, com preços atualizados. 🤖\n\n- Correções de bugs e melhorias. ✨\n\nDesejo a vocês um abençoado ano novo de 2026! 🎆\n\nComo sempre, sinta-se à vontade para entrar em contato com dúvidas e ideias via GitHub ou pelo botão de e-mail abaixo. ☺️\n\n\n</string>
+
+    <!-- Status badges -->
+    <string name="dictate_status_recorded">Não processado</string>
+    <string name="dictate_status_failed">Falhou</string>
+    <string name="dictate_status_cancelled">Cancelado</string>
+    <string name="dictate_status_running">Processando…</string>
+
+    <!-- History detail actions -->
+    <string name="dictate_history_direct_reprocess">Executar diretamente</string>
+    <string name="dictate_history_reprocess_edit">Reprocessar</string>
+    <string name="dictate_history_reprocess_edit_needs_saved_prompt">Escolha um prompt salvo.</string>
+
+    <!-- Reprocess staging -->
+    <string name="dictate_reprocess_audio_available">Áudio %1$s · Enviar</string>
+    <string name="dictate_job_already_active">Já existe um processamento em andamento</string>
+    <string name="dictate_audio_file_missing">O arquivo de áudio não está mais disponível</string>
+    <string name="dictate_reprocess_language">Idioma</string>
+
+    <!-- Delete audio -->
+    <string name="dictate_delete_audio_title">Excluir áudio</string>
+    <string name="dictate_delete_audio_message">O áudio será excluído permanentemente. A transcrição e os resultados são preservados.</string>
+    <string name="dictate_delete_audio_confirm">Excluir</string>
 </resources>

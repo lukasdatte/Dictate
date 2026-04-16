@@ -99,7 +99,6 @@ sealed class Pref<T>(val key: String, val default: T) {
     object LastFileName : Pref<String>("net.devemperor.dictate.last_file_name", "audio.m4a")
     object TranscriptionAudioFile : Pref<String>("net.devemperor.dictate.transcription_audio_file", "")
     object QueuedPromptIds : Pref<String>("net.devemperor.dictate.queued_prompt_ids", "")
-    object LastSessionId : Pref<String>("net.devemperor.dictate.last_session_id", "")
 
     // ── Input Languages (Set<String>, separate access) ──
     object InputLanguages : Pref<String>("net.devemperor.dictate.input_languages", "")  // Sentinel, actually Set<String>

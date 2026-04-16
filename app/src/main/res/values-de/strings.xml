@@ -294,4 +294,26 @@
     </plurals>
 
     <string name="dictate_changelog_30">v3.2.0\n\nDieses Update bringt einige wichtige Verbesserungen und neue Funktionen! 🚀\n\n- Separate API-Schlüssel: Du kannst jetzt für jeden Anbieter (OpenAI, Groq, Custom) eigene API-Schlüssel speichern, was das Wechseln erleichtert. 🔑\n\n- Verbessertes Bluetooth: Die Verbindung zu Bluetooth-Headsets ist jetzt schneller und zuverlässiger. 🎧\n\n- Auto Enter: Eine neue Option drückt nach der Transkription automatisch Enter/Senden. ⚡\n\n- Neue Modelle: Unterstützung für OpenAI o1, o4-mini und GPT-5.2 hinzugefügt, inklusive aktualisierter Preise. 🤖\n\n- Verschiedene Fehlerbehebungen und Verbesserungen. ✨\n\nIch wünsche euch ein gesegnetes neues Jahr 2026! 🎆\n\nWie immer, zögere nicht, mich bei Fragen und Ideen über GitHub oder den E-Mail-Button unten zu kontaktieren. ☺️\n\n\n</string>
+
+    <!-- Status badges -->
+    <string name="dictate_status_recorded">Nicht verarbeitet</string>
+    <string name="dictate_status_failed">Fehlgeschlagen</string>
+    <string name="dictate_status_cancelled">Abgebrochen</string>
+    <string name="dictate_status_running">Wird verarbeitet…</string>
+
+    <!-- History detail actions -->
+    <string name="dictate_history_direct_reprocess">Direkt ausführen</string>
+    <string name="dictate_history_reprocess_edit">Erneut verarbeiten</string>
+    <string name="dictate_history_reprocess_edit_needs_saved_prompt">Bitte einen gespeicherten Prompt wählen.</string>
+
+    <!-- Reprocess staging -->
+    <string name="dictate_reprocess_audio_available">Audio %1$s · Senden</string>
+    <string name="dictate_job_already_active">Verarbeitung läuft bereits</string>
+    <string name="dictate_audio_file_missing">Audio-Datei nicht mehr verfügbar</string>
+    <string name="dictate_reprocess_language">Sprache</string>
+
+    <!-- Delete audio -->
+    <string name="dictate_delete_audio_title">Audio löschen</string>
+    <string name="dictate_delete_audio_message">Audio wird unwiderruflich gelöscht. Transkription und Ergebnisse bleiben erhalten.</string>
+    <string name="dictate_delete_audio_confirm">Löschen</string>
 </resources>

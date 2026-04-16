@@ -3,13 +3,16 @@ package net.devemperor.dictate.history;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.core.ActiveJobRegistry;
 import net.devemperor.dictate.database.entity.SessionEntity;
+import net.devemperor.dictate.database.entity.SessionStatus;
 import net.devemperor.dictate.database.entity.SessionType;
 
 import java.text.SimpleDateFormat;
@@ -103,12 +106,57 @@ public class HistoryAdapter extends RecyclerView.Adapter<HistoryAdapter.ViewHold
         holder.previewTv.setText(preview != null ? preview : "");
         holder.previewTv.setVisibility(preview != null && !preview.isEmpty() ? View.VISIBLE : View.GONE);
 
+        // Status badge — persistent status or runtime overlay (Phase 10.1)
+        applyStatusBadge(holder, session);
+
         // Click handlers
         holder.itemView.setOnClickListener(v -> callback.onItemClicked(session));
         holder.itemView.setOnLongClickListener(v -> {
             callback.onItemLongClicked(session, holder.getAdapterPosition());
             return true;
         });
+    }
+
+    private void applyStatusBadge(ViewHolder holder, SessionEntity session) {
+        // Runtime overlay takes precedence over persisted status.
+        if (ActiveJobRegistry.INSTANCE.isActive(session.getId())) {
+            holder.statusIcon.setVisibility(View.VISIBLE);
+            holder.statusIcon.setImageResource(R.drawable.ic_baseline_sync_24);
+            holder.statusTv.setVisibility(View.VISIBLE);
+            holder.statusTv.setText(R.string.dictate_status_running);
+            return;
+        }
+
+        SessionStatus status;
+        try {
+            status = SessionStatus.valueOf(session.getStatus());
+        } catch (IllegalArgumentException e) {
+            status = SessionStatus.RECORDED;
+        }
+        switch (status) {
+            case COMPLETED:
+                holder.statusIcon.setVisibility(View.GONE);
+                holder.statusTv.setVisibility(View.GONE);
+                break;
+            case RECORDED:
+                holder.statusIcon.setVisibility(View.VISIBLE);
+                holder.statusIcon.setImageResource(R.drawable.ic_baseline_pending_24);
+                holder.statusTv.setVisibility(View.VISIBLE);
+                holder.statusTv.setText(R.string.dictate_status_recorded);
+                break;
+            case FAILED:
+                holder.statusIcon.setVisibility(View.VISIBLE);
+                holder.statusIcon.setImageResource(R.drawable.ic_baseline_error_outline_24);
+                holder.statusTv.setVisibility(View.VISIBLE);
+                holder.statusTv.setText(R.string.dictate_status_failed);
+                break;
+            case CANCELLED:
+                holder.statusIcon.setVisibility(View.VISIBLE);
+                holder.statusIcon.setImageResource(R.drawable.ic_baseline_cancel_24);
+                holder.statusTv.setVisibility(View.VISIBLE);
+                holder.statusTv.setText(R.string.dictate_status_cancelled);
+                break;
+        }
     }
 
     @Override
@@ -121,6 +169,8 @@ public class HistoryAdapter extends RecyclerView.Adapter<HistoryAdapter.ViewHold
         final TextView dateTv;
         final TextView subtitleTv;
         final TextView previewTv;
+        final ImageView statusIcon;
+        final TextView statusTv;
 
         public ViewHolder(View itemView) {
             super(itemView);
@@ -128,6 +178,8 @@ public class HistoryAdapter extends RecyclerView.Adapter<HistoryAdapter.ViewHold
             dateTv = itemView.findViewById(R.id.item_history_date_tv);
             subtitleTv = itemView.findViewById(R.id.item_history_subtitle_tv);
             previewTv = itemView.findViewById(R.id.item_history_preview_tv);
+            statusIcon = itemView.findViewById(R.id.item_history_status_icon);
+            statusTv = itemView.findViewById(R.id.item_history_status_tv);
         }
     }
 }

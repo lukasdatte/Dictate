@@ -1,0 +1,143 @@
+{
+  "source": "/home/lukas/WebStorm/Dictate/docs/plans/dictate-reprocess-refactor.md",
+  "sections": [
+    {
+      "heading": "Context & Motivation",
+      "estimatedTokens": 518
+    },
+    {
+      "heading": "Design Principles",
+      "estimatedTokens": 1233
+    },
+    {
+      "heading": "File Overview",
+      "estimatedTokens": 747
+    },
+    {
+      "heading": "Phase 0: Database Migration & Schema",
+      "estimatedTokens": 4758
+    },
+    {
+      "heading": "Phase 1: Domain Layer — Recording Value Object",
+      "estimatedTokens": 501
+    },
+    {
+      "heading": "Phase 2: Repository Layer — RecordingRepository",
+      "estimatedTokens": 1209
+    },
+    {
+      "heading": "Phase 3: JobState + ActiveJobRegistry",
+      "estimatedTokens": 951
+    },
+    {
+      "heading": "Phase 4: JobExecutor (Kotlin Singleton) + CancellationToken",
+      "estimatedTokens": 2834
+    },
+    {
+      "heading": "Phase 5: PipelineOrchestrator Refactor",
+      "estimatedTokens": 4555
+    },
+    {
+      "heading": "Phase 6: SessionTracker with RAM-first / DB-fallback",
+      "estimatedTokens": 1347
+    },
+    {
+      "heading": "Phase 7: KeyboardUiController — ReprocessStaging State",
+      "estimatedTokens": 2395
+    },
+    {
+      "heading": "Phase 8: Language Chip in Prompt Bar",
+      "estimatedTokens": 650
+    },
+    {
+      "heading": "Phase 9: Resend Button Rewrite",
+      "estimatedTokens": 2811
+    },
+    {
+      "heading": "Phase 10: History UI — Status Badges & Detail Buttons",
+      "estimatedTokens": 2509
+    },
+    {
+      "heading": "Phase 11: String Resources",
+      "estimatedTokens": 293
+    },
+    {
+      "heading": "Phase 12: New Material Icons",
+      "estimatedTokens": 156
+    },
+    {
+      "heading": "Phase 13: Wire-up & Integration Tests",
+      "estimatedTokens": 392
+    },
+    {
+      "heading": "Verification Checklist",
+      "estimatedTokens": 1027
+    },
+    {
+      "heading": "Migration Risks & Mitigations",
+      "estimatedTokens": 282
+    },
+    {
+      "heading": "Open Decisions (for later, not blocking this plan)",
+      "estimatedTokens": 514
+    },
+    {
+      "heading": "Implementation Order Recommendation",
+      "estimatedTokens": 587
+    }
+  ],
+  "chunks": [
+    {
+      "title": "Chunk 1: Data Layer Foundation",
+      "description": "Database migration, schema changes, Recording value object, RecordingRepository with Opus compression, and SessionTracker refactor with RAM-first/DB-fallback. Establishes the persist-first data layer that all subsequent chunks depend on.",
+      "main": [
+        "Context & Motivation",
+        "Design Principles",
+        "File Overview",
+        "Phase 0: Database Migration & Schema",
+        "Phase 1: Domain Layer — Recording Value Object",
+        "Phase 2: Repository Layer — RecordingRepository",
+        "Phase 6: SessionTracker with RAM-first / DB-fallback",
+        "Migration Risks & Mitigations",
+        "Open Decisions (for later, not blocking this plan)",
+        "Implementation Order Recommendation"
+      ],
+      "context": []
+    },
+    {
+      "title": "Chunk 2: Pipeline & Registry",
+      "description": "JobState sealed class, ActiveJobRegistry with StateFlow, CancellationToken for cooperative cancellation, JobExecutor singleton, and PipelineOrchestrator refactor with resumePipeline and cancellation checkpoints. Builds the runtime execution layer on top of Chunk 1's data foundation.",
+      "main": [
+        "Phase 3: JobState + ActiveJobRegistry",
+        "Phase 4: JobExecutor (Kotlin Singleton) + CancellationToken",
+        "Phase 5: PipelineOrchestrator Refactor"
+      ],
+      "context": [
+        "Context & Motivation",
+        "Design Principles",
+        "File Overview",
+        "Implementation Order Recommendation"
+      ]
+    },
+    {
+      "title": "Chunk 3: UI Integration",
+      "description": "All UI-facing changes: KeyboardUiController ReprocessStaging state, language chip, resend button rewrite with deprecated API migration, History UI status badges and detail buttons, string resources, material icons, and integration tests with verification.",
+      "main": [
+        "Phase 7: KeyboardUiController — ReprocessStaging State",
+        "Phase 8: Language Chip in Prompt Bar",
+        "Phase 9: Resend Button Rewrite",
+        "Phase 10: History UI — Status Badges & Detail Buttons",
+        "Phase 11: String Resources",
+        "Phase 12: New Material Icons",
+        "Phase 13: Wire-up & Integration Tests",
+        "Verification Checklist"
+      ],
+      "context": [
+        "Context & Motivation",
+        "Design Principles",
+        "File Overview",
+        "Implementation Order Recommendation"
+      ]
+    }
+  ]
+}

@@ -276,4 +276,26 @@
     </plurals>
 
     <string name="dictate_changelog_30">v3.2.0\n\n¡Esta actualización trae mejoras importantes y nuevas funciones! 🚀\n\n- Claves API separadas: Ahora puedes guardar claves API separadas para cada proveedor (OpenAI, Groq, Custom), facilitando el cambio entre ellos. 🔑\n\n- Bluetooth mejorado: La conexión con auriculares Bluetooth es ahora más rápida y fiable. 🎧\n\n- Auto Enter: Nueva opción para pulsar automáticamente Enter/Enviar tras la transcripción. ⚡\n\n- Nuevos modelos: Añadido soporte para OpenAI o1, o4-mini y GPT-5.2, con precios actualizados. 🤖\n\n- Correcciones de errores y mejoras. ✨\n\n¡Os deseo un bendecido año nuevo 2026! 🎆\n\nComo siempre, no dudes en contactarme con preguntas e ideas a través de GitHub o el botón de correo abajo. ☺️\n\n\n</string>
+
+    <!-- Status badges -->
+    <string name="dictate_status_recorded">Sin procesar</string>
+    <string name="dictate_status_failed">Fallido</string>
+    <string name="dictate_status_cancelled">Cancelado</string>
+    <string name="dictate_status_running">Procesando…</string>
+
+    <!-- History detail actions -->
+    <string name="dictate_history_direct_reprocess">Ejecutar directamente</string>
+    <string name="dictate_history_reprocess_edit">Reprocesar</string>
+    <string name="dictate_history_reprocess_edit_needs_saved_prompt">Elige un prompt guardado.</string>
+
+    <!-- Reprocess staging -->
+    <string name="dictate_reprocess_audio_available">Audio %1$s · Enviar</string>
+    <string name="dictate_job_already_active">Ya hay un procesamiento en curso</string>
+    <string name="dictate_audio_file_missing">El archivo de audio ya no está disponible</string>
+    <string name="dictate_reprocess_language">Idioma</string>
+
+    <!-- Delete audio -->
+    <string name="dictate_delete_audio_title">Eliminar audio</string>
+    <string name="dictate_delete_audio_message">El audio se eliminará de forma permanente. La transcripción y los resultados se conservan.</string>
+    <string name="dictate_delete_audio_confirm">Eliminar</string>
 </resources>

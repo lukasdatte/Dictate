@@ -45,6 +45,13 @@ android {
     packagingOptions {
         exclude 'META-INF/DEPENDENCIES'
     }
+
+    testOptions {
+        // Return default values instead of throwing for unmocked Android APIs
+        // (e.g. android.util.Log). Keeps unit tests light — Robolectric is
+        // overkill for the pure-logic tests we currently have.
+        unitTests.returnDefaultValues = true
+    }
 }
 
 ksp {
@@ -72,4 +79,10 @@ dependencies {
     implementation libs.room.runtime
     implementation libs.room.ktx
     ksp libs.room.compiler
+
+    // Coroutines + Lifecycle (for StateFlow-based ActiveJobRegistry / ViewModels)
+    implementation libs.kotlinx.coroutines.android
+    implementation libs.lifecycle.viewmodel.ktx
+    implementation libs.lifecycle.runtime.ktx
+    implementation libs.lifecycle.livedata.ktx
 }

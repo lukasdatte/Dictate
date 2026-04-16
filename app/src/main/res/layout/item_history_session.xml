@@ -29,18 +29,53 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
-    <TextView
-        android:id="@+id/item_history_subtitle_tv"
+    <LinearLayout
+        android:id="@+id/item_history_subtitle_row"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="8dp"
         android:layout_marginTop="2dp"
-        android:textSize="12sp"
-        android:textColor="?android:attr/textColorSecondary"
-        tools:text="Duration: 2 min, 30 s"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
         app:layout_constraintStart_toEndOf="@+id/item_history_type_icon_tv"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/item_history_date_tv" />
+        app:layout_constraintTop_toBottomOf="@+id/item_history_date_tv">
+
+        <TextView
+            android:id="@+id/item_history_subtitle_tv"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:textColor="?android:attr/textColorSecondary"
+            tools:text="Duration: 2 min, 30 s" />
+
+        <Space
+            android:layout_width="8dp"
+            android:layout_height="1dp" />
+
+        <ImageView
+            android:id="@+id/item_history_status_icon"
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:visibility="gone"
+            android:importantForAccessibility="no"
+            tools:src="@drawable/ic_baseline_pending_24"
+            tools:visibility="visible" />
+
+        <Space
+            android:layout_width="4dp"
+            android:layout_height="1dp" />
+
+        <TextView
+            android:id="@+id/item_history_status_tv"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:visibility="gone"
+            tools:text="Not processed"
+            tools:visibility="visible" />
+
+    </LinearLayout>
 
     <TextView
         android:id="@+id/item_history_preview_tv"
@@ -54,7 +89,7 @@
         tools:text="This is a preview of the final output text that was generated..."
         app:layout_constraintStart_toEndOf="@+id/item_history_type_icon_tv"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/item_history_subtitle_tv"
+        app:layout_constraintTop_toBottomOf="@+id/item_history_subtitle_row"
         app:layout_constraintBottom_toBottomOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

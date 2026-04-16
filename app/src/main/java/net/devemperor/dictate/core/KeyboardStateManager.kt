@@ -50,7 +50,14 @@ class KeyboardStateManager(
      * `state is PipelineUiState.Running` on the [KeyboardUiController] — NOT `Preparing`,
      * because during upload the prompt buttons remain visible.
      */
-    private val isPipelineProgressVisible: () -> Boolean
+    private val isPipelineProgressVisible: () -> Boolean,
+    /**
+     * Returns `true` iff the controller is in [PipelineUiState.ReprocessStaging]
+     * (Phase 7 / Finding SEC-7-1). Required so that [refresh] preserves the
+     * correct visibility for ReprocessStaging without being overwritten when
+     * called from rotation / content-area switches / layout rebuilds.
+     */
+    private val isReprocessStaging: () -> Boolean = { false }
 ) {
     // === Own state (lives only here, nowhere else) ===
     var contentArea: ContentArea = ContentArea.MAIN_BUTTONS
@@ -105,24 +112,31 @@ class KeyboardStateManager(
 
     private fun applyRecordingControlsVisibility() {
         val isActive = isRecording() || isPaused()
-        views.pauseButton.visibility = if (isActive) View.VISIBLE else View.GONE
-        views.trashButton.visibility = if (isActive) View.VISIBLE else View.GONE
+        val isStaging = isReprocessStaging()
+        // Pause button: visible during recording; also visible but DISABLED ("blind") during ReprocessStaging.
+        views.pauseButton.visibility = if (isActive || isStaging) View.VISIBLE else View.GONE
+        views.pauseButton.isEnabled = isActive
+        views.pauseButton.alpha = if (isActive) 1.0f else 0.4f
+        // Trash button: visible during recording AND ReprocessStaging (cancel action in both cases)
+        views.trashButton.visibility = if (isActive || isStaging) View.VISIBLE else View.GONE
     }
 
     private fun applyPromptsVisibility() {
-        val isPipelineProgress = isPipelineProgressVisible()
+        val isPipelineProgress = isPipelineProgressVisible() && !isReprocessStaging()
         val isActive = isRecording() || isPaused()
+        val isStaging = isReprocessStaging()
 
         // Prompts container (combination of all axes)
         val showPrompts = when {
             isSmallMode -> false
             contentArea == ContentArea.EMOJI_PICKER -> false
-            isActive || isPipelineRunning() -> true
+            isActive || isPipelineRunning() || isStaging -> true
             else -> isRewordingEnabled()
         }
         views.promptsCl.visibility = if (showPrompts) View.VISIBLE else View.GONE
 
-        // Prompts content: RecyclerView vs pipeline progress
+        // Prompts content: RecyclerView vs pipeline progress.
+        // ReprocessStaging shows the RecyclerView (queue editing), NOT pipeline progress.
         views.promptsRv?.visibility =
             if (!isPipelineProgress) View.VISIBLE else View.GONE
         views.pipelineProgressLl?.visibility =

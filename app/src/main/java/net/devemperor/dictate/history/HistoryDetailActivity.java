@@ -23,28 +23,37 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.ai.AIOrchestrator;
 import net.devemperor.dictate.ai.runner.CompletionResult;
 import net.devemperor.dictate.ai.AIFunction;
+import net.devemperor.dictate.core.ActiveJobRegistry;
+import net.devemperor.dictate.core.ActiveJobRegistryObserver;
+import net.devemperor.dictate.core.JobExecutor;
+import net.devemperor.dictate.core.JobRequest;
+import net.devemperor.dictate.core.RecordingRepository;
 import net.devemperor.dictate.core.SessionManager;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.dao.ProcessingStepDao;
 import net.devemperor.dictate.database.dao.TranscriptionDao;
-import net.devemperor.dictate.database.entity.InsertionMethod;
 import net.devemperor.dictate.database.entity.ProcessingStepEntity;
 import net.devemperor.dictate.database.entity.SessionEntity;
+import net.devemperor.dictate.database.entity.SessionOrigin;
+import net.devemperor.dictate.database.entity.SessionStatus;
 import net.devemperor.dictate.database.entity.SessionType;
 import net.devemperor.dictate.database.entity.StepStatus;
 import net.devemperor.dictate.database.entity.StepType;
 import net.devemperor.dictate.database.entity.TranscriptionEntity;
 
+import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -53,6 +62,7 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     private static final String TAG_REGENERATE = "regenerate";
     private static final String TAG_POST_PROCESS = "post_process";
+    private static final String TAG_REPROCESS_EDIT_PREFIX = "history_reprocess_edit:";
 
     private enum UiState { IDLE, LOADING, ERROR }
 
@@ -61,6 +71,7 @@ public class HistoryDetailActivity extends AppCompatActivity
     private AIOrchestrator orchestrator;
     private ProcessingStepDao stepDao;
     private TranscriptionDao transcriptionDao;
+    private RecordingRepository recordingRepository;
 
     private String sessionId;
     private SessionEntity session;
@@ -107,6 +118,7 @@ public class HistoryDetailActivity extends AppCompatActivity
         sessionManager = new SessionManager(db);
         stepDao = db.processingStepDao();
         transcriptionDao = db.transcriptionDao();
+        recordingRepository = new RecordingRepository(this);
 
         SharedPreferences sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE);
         orchestrator = new AIOrchestrator(sp, db.usageDao());
@@ -146,6 +158,32 @@ public class HistoryDetailActivity extends AppCompatActivity
                 intent.putExtra(HistoryActivity.EXTRA_SESSION_ID, sourceSessionId);
                 startActivity(intent);
             }
+
+            @Override
+            public void onDirectReprocess(String sessionId) {
+                startHistoryReprocess(sessionId, /* editedQueue */ null);
+            }
+
+            @Override
+            public void onReprocessWithEdit(String sessionId) {
+                // Plan 10.6 calls for a full drag-to-reorder queue-editor
+                // (PromptChooserBottomSheetV2). That UI is tracked as a
+                // follow-up. Until it ships, we reuse the existing V1 chooser
+                // as a minimal queue-editor: the user picks a single prompt
+                // and that prompt becomes the one-element edited queue.
+                //
+                // This differs from onDirectReprocess (above) which reuses the
+                // session's historical queue unchanged — so the two buttons
+                // are no longer identical.
+                PromptChooserBottomSheet
+                        .newInstance(TAG_REPROCESS_EDIT_PREFIX + sessionId)
+                        .show(getSupportFragmentManager(), "prompt_chooser_reprocess");
+            }
+
+            @Override
+            public void onDeleteAudio(String sessionId) {
+                confirmDeleteAudio(sessionId);
+            }
         });
 
         RecyclerView pipelineRv = findViewById(R.id.history_detail_pipeline_rv);
@@ -160,6 +198,23 @@ public class HistoryDetailActivity extends AppCompatActivity
         MaterialButton shareBtn = findViewById(R.id.history_detail_share_btn);
         shareBtn.setOnClickListener(v -> shareFinalOutput());
 
+        loadSession();
+
+        // K3: reactive UI. When a job starts/stops for this session, reload
+        // so the running-badge + disabled-reprocess-button logic picks it up
+        // immediately — no more `onResume`-only refresh. The observer is
+        // lifecycle-scoped, so it idles while the Activity is stopped and
+        // resumes on return with the latest snapshot.
+        ActiveJobRegistryObserver.observe(this, snapshot -> {
+            if (sessionId != null) loadSession();
+        });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Re-load in case the DB changed while we were paused (registry
+        // observer handles live updates; this catches external changes).
         loadSession();
     }
 
@@ -223,13 +278,36 @@ public class HistoryDetailActivity extends AppCompatActivity
     }
 
     private void buildRecordingPipeline() {
-        // Audio step
+        // Audio step — with reprocess actions (Phase 10.4)
         long dur = session.getAudioDurationSeconds();
         String durationStr = getString(R.string.dictate_history_duration, dur / 60, dur % 60);
+        boolean audioAvailable = resolveAudioAvailability();
+        boolean jobActive = ActiveJobRegistry.INSTANCE.isActive(sessionId);
+
+        SessionStatus status;
+        try {
+            status = SessionStatus.valueOf(session.getStatus());
+        } catch (IllegalArgumentException e) {
+            status = SessionStatus.RECORDED;
+        }
+        boolean canReprocess = audioAvailable && !jobActive && (
+                status == SessionStatus.RECORDED
+                || status == SessionStatus.FAILED
+                || status == SessionStatus.CANCELLED
+                || status == SessionStatus.COMPLETED
+        );
+        boolean showDirect = canReprocess && status != SessionStatus.COMPLETED;
+        boolean showEdit = canReprocess;
+        boolean showDelete = audioAvailable && !jobActive;
+
         pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.AUDIO)
                 .icon("\uD83C\uDFA4") // mic
                 .title(getString(R.string.dictate_history_audio) + " (" + durationStr + ")")
-                .audioFilePath(session.getAudioFilePath())
+                .audioFilePath(audioAvailable ? session.getAudioFilePath() : null)
+                .sessionId(sessionId)
+                .showDirectReprocess(showDirect)
+                .showReprocessWithEdit(showEdit)
+                .showDeleteAudio(showDelete)
                 .build());
 
         // Transcription step
@@ -249,6 +327,12 @@ public class HistoryDetailActivity extends AppCompatActivity
 
         // Processing steps
         addProcessingSteps();
+    }
+
+    private boolean resolveAudioAvailability() {
+        String path = session.getAudioFilePath();
+        if (path == null) return false;
+        return new File(path).exists();
     }
 
     private void buildRewordingPipeline() {
@@ -364,6 +448,71 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     // endregion
 
+    // region Reprocess actions (Phase 10.3)
+
+    private void startHistoryReprocess(String targetSessionId, List<Integer> editedQueue) {
+        if (ActiveJobRegistry.INSTANCE.isAnyActive()) {
+            Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        SessionEntity target = db.sessionDao().getById(targetSessionId);
+        if (target == null) return;
+
+        String audioPath = target.getAudioFilePath();
+        if (audioPath == null || !new File(audioPath).exists()) {
+            Toast.makeText(this, R.string.dictate_audio_file_missing, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        List<Integer> queue = editedQueue != null
+                ? editedQueue
+                : sessionManager.getHistoricalQueuedPromptIds(targetSessionId);
+
+        int totalSteps = 1; // transcription
+        totalSteps += queue.size();
+
+        JobRequest.TranscriptionPipeline request = new JobRequest.TranscriptionPipeline(
+                targetSessionId,
+                totalSteps,
+                JobRequest.TranscriptionKind.HISTORY_REPROCESS,
+                /* audioFilePath */ audioPath,
+                /* language */ target.getLanguage(),
+                /* modelOverride */ null,
+                /* queuedPromptIds */ queue,
+                /* targetAppPackage */ target.getTargetAppPackage(),
+                /* recordingsDir */ new File(audioPath).getParentFile() != null
+                        ? new File(audioPath).getParentFile()
+                        : getFilesDir(),
+                /* reuseSessionId */ targetSessionId,
+                /* stylePrompt */ null,
+                /* origin */ SessionOrigin.HISTORY_REPROCESS
+        );
+
+        boolean started = JobExecutor.INSTANCE.start(this, request);
+        if (!started) {
+            Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        setUiState(UiState.LOADING);
+    }
+
+    private void confirmDeleteAudio(String targetSessionId) {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.dictate_delete_audio_title)
+                .setMessage(R.string.dictate_delete_audio_message)
+                .setPositiveButton(R.string.dictate_delete_audio_confirm, (dialog, which) -> {
+                    regenerateExecutor.execute(() -> {
+                        recordingRepository.deleteBySessionId(targetSessionId);
+                        if (!isFinishing()) runOnUiThread(this::loadSession);
+                    });
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    // endregion
+
     // region Regeneration
 
     private void regenerateStep(ProcessingStepEntity step, int chainIndex, String promptText, Integer promptEntityId) {
@@ -427,12 +576,18 @@ public class HistoryDetailActivity extends AppCompatActivity
         String outputText = step.getOutputText();
         if (outputText == null || outputText.isEmpty()) return;
 
-        String newSessionId = sessionManager.createSession(
+        String newSessionId = UUID.randomUUID().toString();
+        sessionManager.createSession(
+                newSessionId,
                 SessionType.POST_PROCESSING,
                 session.getTargetAppPackage(),
                 session.getLanguage(),
-                null,
-                sessionId
+                /* audioFilePath */ null,
+                /* audioDurationSeconds */ 0L,
+                /* parentId */ sessionId,
+                SessionOrigin.POST_PROCESSING,
+                /* queuedPromptIds */ null,
+                SessionStatus.RECORDED
         );
         sessionManager.updateInputText(newSessionId, outputText);
 
@@ -448,6 +603,20 @@ public class HistoryDetailActivity extends AppCompatActivity
             regenerateStep(pendingStep, pendingChainIndex, promptText, promptEntityId);
         } else if (TAG_POST_PROCESS.equals(tag) && pendingPostProcessNewSessionId != null) {
             runPostProcessing(pendingPostProcessNewSessionId, pendingPostProcessOutputText, promptText, promptEntityId);
+        } else if (tag != null && tag.startsWith(TAG_REPROCESS_EDIT_PREFIX)) {
+            // K2 minimal-fallback: V1 chooser feeds a single-prompt queue into
+            // the reprocess pipeline. Free-text prompts (promptEntityId == null)
+            // are skipped because JobRequest's queuedPromptIds carries entity
+            // IDs only — the V2 editor will supersede this path.
+            String targetSessionId = tag.substring(TAG_REPROCESS_EDIT_PREFIX.length());
+            if (promptEntityId != null) {
+                startHistoryReprocess(targetSessionId,
+                        java.util.Collections.singletonList(promptEntityId));
+            } else {
+                Toast.makeText(this,
+                        getString(R.string.dictate_history_reprocess_edit_needs_saved_prompt),
+                        Toast.LENGTH_LONG).show();
+            }
         }
     }
 
@@ -471,6 +640,7 @@ public class HistoryDetailActivity extends AppCompatActivity
                         StepStatus.SUCCESS, null
                 );
                 sessionManager.updateFinalOutputText(newSessionId, result.getText());
+                sessionManager.finalizeCompleted(newSessionId);
 
                 if (!isFinishing()) {
                     runOnUiThread(() -> {

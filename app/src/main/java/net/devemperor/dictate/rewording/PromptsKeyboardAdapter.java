@@ -26,11 +26,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboardAdapter.RecyclerViewHolder> {
+public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     private static final float PRESSED_SCALE = 0.92f;
     private static final long PRESS_ANIM_DURATION = 80L;
     private static final TimeInterpolator PRESS_INTERPOLATOR = new DecelerateInterpolator();
+
+    // Finding SEC-7-5 (Phase 8): header-at-0 + prompts from index 1 onward.
+    // When showLanguageChip is true, all data.get() calls in onBindViewHolder()
+    // MUST go through toDataIndex() — otherwise every prompt is off-by-one.
+    private static final int VIEW_TYPE_LANGUAGE_CHIP = 0;
+    private static final int VIEW_TYPE_PROMPT = 1;
 
     private final SharedPreferences sp;
     private List<PromptEntity> data;
@@ -40,9 +46,17 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
     private MaterialButton selectAllButton;
     private boolean selectAllActive = false;
 
+    private boolean showLanguageChip = false;
+    private String currentLanguageLabel = null;
+    private LanguageChipClickListener languageChipListener = null;
+
     public interface AdapterCallback {
         void onItemClicked(Integer position);
         void onItemLongClicked(Integer position);
+    }
+
+    public interface LanguageChipClickListener {
+        void onLanguageChipClicked();
     }
 
     public PromptsKeyboardAdapter(SharedPreferences sp, List<PromptEntity> data, AdapterCallback callback) {
@@ -80,10 +94,56 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
         }
     }
 
+    /**
+     * Enables/disables the language chip at the start of the list. When visible,
+     * item positions shift by one (chip at 0, prompts from 1). All data lookups
+     * use {@link #toDataIndex(int)}.
+     *
+     * @param visible       whether the chip should be shown
+     * @param languageLabel display label for the currently-selected language
+     *                      (e.g. "Deutsch"); null renders the generic label
+     */
+    public void setLanguageChipVisible(boolean visible, String languageLabel) {
+        boolean changed = (this.showLanguageChip != visible)
+                || (visible && !java.util.Objects.equals(this.currentLanguageLabel, languageLabel));
+        this.showLanguageChip = visible;
+        this.currentLanguageLabel = languageLabel;
+        if (changed) notifyDataSetChanged();
+    }
+
+    public void setLanguageChipListener(LanguageChipClickListener listener) {
+        this.languageChipListener = listener;
+    }
+
+    /**
+     * Finding SEC-7-5: Translates an adapter position into a data-list index,
+     * accounting for the optional language chip at position 0.
+     */
+    private int toDataIndex(int adapterPosition) {
+        return adapterPosition - (showLanguageChip ? 1 : 0);
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+        if (showLanguageChip && position == 0) return VIEW_TYPE_LANGUAGE_CHIP;
+        return VIEW_TYPE_PROMPT;
+    }
+
+    @Override
+    public int getItemCount() {
+        return (showLanguageChip ? 1 : 0) + data.size();
+    }
+
     @NonNull
     @Override
-    public RecyclerViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_prompts_keyboard, parent, false);
+    public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        if (viewType == VIEW_TYPE_LANGUAGE_CHIP) {
+            View view = LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.item_prompts_keyboard_language_chip, parent, false);
+            return new LanguageChipViewHolder(view);
+        }
+        View view = LayoutInflater.from(parent.getContext())
+                .inflate(R.layout.item_prompts_keyboard, parent, false);
         return new RecyclerViewHolder(view);
     }
 
@@ -96,13 +156,36 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
         }
     }
 
+    public static class LanguageChipViewHolder extends RecyclerView.ViewHolder {
+        final MaterialButton chipBtn;
+
+        public LanguageChipViewHolder(View itemView) {
+            super(itemView);
+            chipBtn = itemView.findViewById(R.id.prompts_keyboard_language_chip_btn);
+        }
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     @Override
-    public void onBindViewHolder(@NonNull RecyclerViewHolder holder, final int position) {
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder rawHolder, final int position) {
+        // StaggeredGridLayout: the language chip spans the full width so it doesn't
+        // collapse into a single grid column (SEC-7-5).
+        ViewGroup.LayoutParams lp = rawHolder.itemView.getLayoutParams();
+        if (lp instanceof StaggeredGridLayoutManager.LayoutParams) {
+            ((StaggeredGridLayoutManager.LayoutParams) lp)
+                    .setFullSpan(getItemViewType(position) == VIEW_TYPE_LANGUAGE_CHIP);
+        }
+
+        if (rawHolder instanceof LanguageChipViewHolder) {
+            bindLanguageChip((LanguageChipViewHolder) rawHolder);
+            return;
+        }
+
+        RecyclerViewHolder holder = (RecyclerViewHolder) rawHolder;
         holder.promptBtn.animate().cancel();
         holder.promptBtn.setScaleX(1f);
         holder.promptBtn.setScaleY(1f);
-        PromptEntity model = data.get(position);
+        PromptEntity model = data.get(toDataIndex(position));
         if (holder.promptBtn == selectAllButton && model.getId() != -3) {
             selectAllButton = null;
         }
@@ -151,9 +234,10 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
         } else {
             holder.promptBtn.setIcon(null);
         }
-        holder.promptBtn.setOnClickListener(v -> callback.onItemClicked(position));
+        final int dataPos = toDataIndex(position);
+        holder.promptBtn.setOnClickListener(v -> callback.onItemClicked(dataPos));
         holder.promptBtn.setOnLongClickListener(v -> {
-            callback.onItemLongClicked(position);
+            callback.onItemLongClicked(dataPos);
             return true;
         });
         int accentColor = DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
@@ -198,9 +282,14 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<PromptsKeyboard
         }
     }
 
-    @Override
-    public int getItemCount() {
-        return data.size();
+    private void bindLanguageChip(LanguageChipViewHolder holder) {
+        String label = currentLanguageLabel != null
+                ? currentLanguageLabel
+                : holder.itemView.getContext().getString(R.string.dictate_reprocess_language);
+        holder.chipBtn.setText(label);
+        holder.chipBtn.setOnClickListener(v -> {
+            if (languageChipListener != null) languageChipListener.onLanguageChipClicked();
+        });
     }
 
     private void applyPromptButtonColors(MaterialButton button, int backgroundColor) {

@@ -21,6 +21,7 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.text.InputType;
 import android.util.Log;
+import android.widget.Toast;
 import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -55,6 +56,8 @@ import net.devemperor.dictate.ai.AIOrchestrator;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.entity.InsertionMethod;
 import net.devemperor.dictate.database.entity.InsertionSource;
+import net.devemperor.dictate.database.entity.SessionEntity;
+import net.devemperor.dictate.database.entity.SessionStatus;
 import net.devemperor.dictate.keyboard.KeyAction;
 import net.devemperor.dictate.keyboard.QwertzKeyboardController;
 import net.devemperor.dictate.keyboard.QwertzKeyboardLayout;
@@ -133,6 +136,17 @@ public class DictateInputMethodService extends InputMethodService
      * See refactor plan O-2.
      */
     private Boolean restoreAutoEnter = null;
+
+    /**
+     * W1: Transient bridge for restoring ReprocessStaging across view-recreation.
+     * Captured in {@link #cleanupOldControllers()} when the active
+     * {@link PipelineUiState} is a {@link PipelineUiState.ReprocessStaging},
+     * consumed (and reset to null) in {@link #restoreUiState()} by re-entering
+     * the staging mode on the fresh controller. Without this bridge, a rotation
+     * or theme change during staging drops the user's edited queue/language
+     * silently back to Idle.
+     */
+    private PipelineUiState.ReprocessStaging restoreReprocessStaging = null;
 
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private PipelineOrchestrator pipelineOrchestrator;
@@ -221,6 +235,7 @@ public class DictateInputMethodService extends InputMethodService
     private AutoFormattingService autoFormattingService;
     private SessionManager sessionManager;
     private SessionTracker sessionTracker;
+    private RecordingRepository recordingRepository;
 
     // ===== PromptQueueManager.PromptQueueCallback =====
 
@@ -255,9 +270,8 @@ public class DictateInputMethodService extends InputMethodService
         promptService = PromptService.create(sp);
         autoFormattingService = AutoFormattingService.create(sp, aiOrchestrator);
         sessionManager = new SessionManager(DictateDatabase.getInstance(this));
-        sessionTracker = new SessionTracker(sessionManager);
-        sessionTracker.restoreLastSessionIdFromPrefs(sp);
-        dbExecutor.execute(() -> sessionTracker.restoreLastOutputFromDb());
+        sessionTracker = new SessionTracker(DictateDatabase.getInstance(this).sessionDao());
+        recordingRepository = new RecordingRepository(this);
 
         // 3. Managers
         promptQueueManager = new PromptQueueManager(promptDao::getAutoApplyIds, sp, this);
@@ -289,7 +303,15 @@ public class DictateInputMethodService extends InputMethodService
         // 6. Pipeline (this = PipelineCallback, survives rotation)
         pipelineOrchestrator = new PipelineOrchestrator(
             aiOrchestrator, autoFormattingService, promptQueueManager,
-            promptService, sessionManager, sessionTracker, promptDao, this);
+            promptService, sessionManager, sessionTracker, promptDao, this,
+            recordingRepository,
+            dictateDb.transcriptionDao(),
+            dictateDb.processingStepDao(),
+            dictateDb);
+
+        // 6b. Initialise JobExecutor with the orchestrator so any caller
+        // (IME + HistoryDetailActivity) can start jobs (Finding SEC-10-2).
+        JobExecutor.INSTANCE.initialize(pipelineOrchestrator);
 
         // 7. User ID (one-time)
         if (DictatePrefsKt.get(sp, Pref.UserId.INSTANCE).equals("null")) {
@@ -419,7 +441,9 @@ public class DictateInputMethodService extends InputMethodService
             () -> DictatePrefsKt.get(sp, Pref.RewordingEnabled.INSTANCE),
             keepAwake -> { updateKeepScreenAwake(keepAwake); return kotlin.Unit.INSTANCE; },
             infoBarController,
-            () -> uiController != null && uiController.getState() instanceof PipelineUiState.Running
+            () -> uiController != null && uiController.getState() instanceof PipelineUiState.Running,
+            /* isReprocessStaging */ () -> uiController != null
+                    && uiController.getState() instanceof PipelineUiState.ReprocessStaging
         );
 
         // KeyboardUiController (wraps pipeline progress views, delegates visibility to stateManager)
@@ -496,6 +520,9 @@ public class DictateInputMethodService extends InputMethodService
 
             @Override
             public void onPipelineUiStateChanged(@NonNull PipelineUiState oldState, @NonNull PipelineUiState newState) {
+                // Language chip visibility + queue sync follow the ReprocessStaging state.
+                applyReprocessStagingAdapter(newState);
+
                 if (recordingUiController == null) return;
                 if (newState instanceof PipelineUiState.Idle) {
                     recordingUiController.updateQwertzRecButton(false);  // QWERTZ → Mic-Icon
@@ -600,11 +627,22 @@ public class DictateInputMethodService extends InputMethodService
     private void cleanupOldControllers() {
         // Stop only the elapsed timer — no mode reset, no side-effects
         if (uiController != null) {
-            // Capture the current pipeline auto-enter value so the upcoming fresh controller
+            // Capture the current auto-enter value so the upcoming fresh controller
             // (created in onCreateInputView) can re-adopt it in restoreUiState() — otherwise
             // a user's in-pipeline toggle would silently revert to the pref default on rotation.
-            KeyboardUiController.PipelineConfig cfg = uiController.getPipelineConfig();
+            KeyboardUiController.AutoEnterConfig cfg = uiController.getAutoEnterConfig();
             restoreAutoEnter = (cfg != null) ? cfg.getAutoEnterActive() : null;
+
+            // W1: Capture the active ReprocessStaging so we can re-enter it on
+            // the fresh controller. Only the data matters — the state itself
+            // is owned by the old controller and gets discarded.
+            PipelineUiState oldState = uiController.getState();
+            if (oldState instanceof PipelineUiState.ReprocessStaging) {
+                restoreReprocessStaging = (PipelineUiState.ReprocessStaging) oldState;
+            } else {
+                restoreReprocessStaging = null;
+            }
+
             uiController.stopActiveTimer();
         }
         // Remove old InvalidationTracker observer (will be re-added in setupPromptsAdapter)
@@ -696,7 +734,20 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         // 2. Pipeline state → UI
-        if (isPreparing) {
+        if (restoreReprocessStaging != null) {
+            // W1: The user was editing the reprocess queue when the view was
+            // recreated (rotation / theme change). Re-enter staging on the
+            // fresh controller so the record-button label, the editable
+            // prompt queue, and the selected language all survive.
+            PipelineUiState.ReprocessStaging staging = restoreReprocessStaging;
+            restoreReprocessStaging = null;
+            uiController.enterReprocessStaging(
+                staging.getTargetSessionId(),
+                staging.getAudioDurationSeconds(),
+                staging.getEditableQueue(),
+                staging.getSelectedLanguage()
+            );
+        } else if (isPreparing) {
             // Defensive: under the current synchronous Preparing window this branch is
             // practically unreachable (see isPreparing field docs). Kept as prep for a
             // future async-upload phase so the Sending... indicator can survive rotation.
@@ -717,7 +768,7 @@ public class DictateInputMethodService extends InputMethodService
             restoreAutoEnter = null;
             uiController.startPipeline(
                 total > 0 ? total : 1,
-                new KeyboardUiController.PipelineConfig(autoEnter),
+                new KeyboardUiController.AutoEnterConfig(autoEnter),
                 completedSoFar);
 
             // Show the currently running step
@@ -741,6 +792,13 @@ public class DictateInputMethodService extends InputMethodService
             public void onItemClicked(Integer position) {
                 vibrate();
                 PromptEntity model = promptsAdapter.getItem(position);
+
+                // ReprocessStaging: prompt clicks toggle into/out of the editable queue.
+                PipelineUiState currentState = uiController != null ? uiController.getState() : null;
+                if (currentState instanceof PipelineUiState.ReprocessStaging) {
+                    handleReprocessPromptToggle(model, (PipelineUiState.ReprocessStaging) currentState);
+                    return;
+                }
 
                 if (model.getId() == -1) {  // instant prompt clicked
                     livePrompt = true;
@@ -801,6 +859,7 @@ public class DictateInputMethodService extends InputMethodService
             }
         });
         promptsRv.setAdapter(promptsAdapter);
+        promptsAdapter.setLanguageChipListener(this::showReprocessLanguageDialog);
 
         // Register InvalidationTracker to auto-reload prompts when DB changes (debounced 200ms)
         promptsInvalidationObserver = new InvalidationTracker.Observer("prompts") {
@@ -811,6 +870,104 @@ public class DictateInputMethodService extends InputMethodService
             }
         };
         dictateDb.getInvalidationTracker().addObserver(promptsInvalidationObserver);
+    }
+
+    /**
+     * Syncs the prompts adapter's header chip + queued order to the given state.
+     * - ReprocessStaging: show language chip, queued order = editable queue
+     * - Any other state: hide chip, queued order = the regular PromptQueueManager ids
+     *
+     * Called from the pipeline UI callback on every state transition (Phase 8).
+     */
+    private void applyReprocessStagingAdapter(PipelineUiState newState) {
+        if (promptsAdapter == null) return;
+        if (newState instanceof PipelineUiState.ReprocessStaging) {
+            PipelineUiState.ReprocessStaging s = (PipelineUiState.ReprocessStaging) newState;
+            promptsAdapter.setLanguageChipVisible(true, resolveLanguageLabel(s.getSelectedLanguage()));
+            promptsAdapter.setQueuedPromptOrder(s.getEditableQueue());
+        } else {
+            promptsAdapter.setLanguageChipVisible(false, null);
+            promptsAdapter.setQueuedPromptOrder(promptQueueManager.getQueuedIds());
+        }
+    }
+
+    /**
+     * Resolves a language value (e.g. "de") to its display label from the
+     * `dictate_input_languages` resource array. Falls back to the "Language"
+     * label if the value is null or unknown.
+     */
+    private String resolveLanguageLabel(String value) {
+        if (value == null) return null;
+        String[] labels = getResources().getStringArray(R.array.dictate_input_languages);
+        String[] values = getResources().getStringArray(R.array.dictate_input_languages_values);
+        for (int i = 0; i < values.length && i < labels.length; i++) {
+            if (value.equals(values[i])) return labels[i];
+        }
+        return null;
+    }
+
+    /**
+     * Toggles a prompt into/out of the editable queue while in ReprocessStaging.
+     * Skips sentinel/control items (id < 0).
+     *
+     * W6: Single source of truth — we write the new queue onto
+     * {@link PipelineUiState.ReprocessStaging} via
+     * {@code uiController.updateReprocessQueue}, and the state-change
+     * callback routes back through {@link #applyReprocessStagingAdapter}
+     * which updates the adapter. No direct adapter write here.
+     */
+    private void handleReprocessPromptToggle(PromptEntity model, PipelineUiState.ReprocessStaging staging) {
+        if (model.getId() < 0) return;  // sentinel items have no meaning here
+        List<Integer> queue = new ArrayList<>(staging.getEditableQueue());
+        int promptId = model.getId();
+        if (queue.contains(promptId)) {
+            queue.removeIf(id -> id == promptId);
+        } else {
+            queue.add(promptId);
+        }
+        uiController.updateReprocessQueue(queue);
+    }
+
+    /**
+     * Opens a simple dialog listing all available transcription languages. The
+     * picked value is written back to the ReprocessStaging state.
+     *
+     * Uses the keyboard-IME dialog pattern (token-based window) so the dialog
+     * renders above the IME instead of being blocked by it.
+     */
+    private void showReprocessLanguageDialog() {
+        if (!(uiController.getState() instanceof PipelineUiState.ReprocessStaging)) return;
+        PipelineUiState.ReprocessStaging staging =
+                (PipelineUiState.ReprocessStaging) uiController.getState();
+
+        String[] labels = getResources().getStringArray(R.array.dictate_input_languages);
+        String[] values = getResources().getStringArray(R.array.dictate_input_languages_values);
+
+        int selected = 0;
+        String current = staging.getSelectedLanguage();
+        if (current != null) {
+            for (int i = 0; i < values.length; i++) {
+                if (current.equals(values[i])) { selected = i; break; }
+            }
+        }
+
+        androidx.appcompat.app.AlertDialog dialog =
+                new com.google.android.material.dialog.MaterialAlertDialogBuilder(
+                        new ContextThemeWrapper(this, R.style.Theme_Dictate))
+                        .setTitle(R.string.dictate_reprocess_language)
+                        .setSingleChoiceItems(labels, selected, (d, which) -> {
+                            uiController.updateReprocessLanguage(values[which]);
+                            d.dismiss();
+                        })
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .create();
+
+        Window dialogWindow = dialog.getWindow();
+        if (dialogWindow != null && getWindow() != null && getWindow().getWindow() != null) {
+            dialogWindow.setType(WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG);
+            dialogWindow.getAttributes().token = getWindow().getWindow().getAttributes().token;
+        }
+        dialog.show();
     }
 
     // method is called if the keyboard appears again
@@ -1186,7 +1343,7 @@ public class DictateInputMethodService extends InputMethodService
             totalSteps += promptQueueManager.getQueuedIds().size();
 
             boolean autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-            uiController.startPipeline(totalSteps, new KeyboardUiController.PipelineConfig(autoEnter));
+            uiController.startPipeline(totalSteps, new KeyboardUiController.AutoEnterConfig(autoEnter));
 
             String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
                     ? currentInputLanguageValue : null;
@@ -1196,20 +1353,45 @@ public class DictateInputMethodService extends InputMethodService
             boolean showResend = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
                     && DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE);
 
-            PipelineOrchestrator.PipelineConfig config = new PipelineOrchestrator.PipelineConfig(
-                audioFile, language, stylePrompt, livePrompt, autoSwitchKeyboard,
-                showResend, new File(getFilesDir(), "recordings"),
-                info != null ? info.packageName : null);
+            // W3: Route the initial recording pipeline through JobExecutor so
+            // the lifecycle is tracked in ActiveJobRegistry, the single-job
+            // lock applies, and cancel() goes through the cooperative token.
+            // Pre-allocate the sessionId so JobExecutor.register() happens
+            // BEFORE the orchestrator persists the session row.
+            String preAllocatedId = java.util.UUID.randomUUID().toString();
+            JobRequest.TranscriptionPipeline request = new JobRequest.TranscriptionPipeline(
+                    preAllocatedId,
+                    totalSteps,
+                    JobRequest.TranscriptionKind.RECORDING,
+                    /* audioFilePath */ audioFile.getAbsolutePath(),
+                    /* language */ language,
+                    /* modelOverride */ null,
+                    /* queuedPromptIds */ promptQueueManager.getQueuedIds(),
+                    /* targetAppPackage */ info != null ? info.packageName.toString() : null,
+                    /* recordingsDir */ new File(getFilesDir(), "recordings"),
+                    /* reuseSessionId */ null,
+                    /* stylePrompt */ stylePrompt,
+                    /* origin */ net.devemperor.dictate.database.entity.SessionOrigin.KEYBOARD,
+                    /* livePrompt */ livePrompt,
+                    /* autoSwitchKeyboard */ autoSwitchKeyboard,
+                    /* showResendButton */ showResend
+            );
 
             pendingLivePromptChain = livePrompt;
             livePrompt = false;
             autoSwitchKeyboard = false;
 
-            pipelineOrchestrator.runTranscriptionPipeline(config);
+            boolean started = JobExecutor.INSTANCE.start(this, request);
+            if (!started) {
+                // Another job is active — the UI we just set up for "preparing"
+                // is out of sync. Reset and inform the user.
+                uiController.stopPipeline();
+                showJobBusyToast();
+            }
         } finally {
-            // runTranscriptionPipeline is non-blocking (returns immediately after queuing on the
-            // executor), so clearing the flag here is correct: from this point on the pipeline
-            // is owned by pipelineOrchestrator and observed via isRunning().
+            // JobExecutor.start is non-blocking (submits onto its own executor),
+            // so clearing the flag here is correct: from this point on the
+            // pipeline is owned by JobExecutor and observed via the registry.
             isPreparing = false;
         }
     }
@@ -1235,15 +1417,15 @@ public class DictateInputMethodService extends InputMethodService
         // startPipeline(1, ..., 0) unconditionally resets the counter to "0/1" — without this
         // the stale counter of the prior transcription would remain on screen.
         //
-        // Auto-enter handling: the previous pipeline's controller-owned PipelineConfig is the
+        // Auto-enter handling: the previous pipeline's controller-owned AutoEnterConfig is the
         // authoritative source (it reflects any in-pipeline user toggle). Direct-prompt-button
         // callers have no previous config — we seed from prefs in that case.
         String displayName = model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName();
-        KeyboardUiController.PipelineConfig prevCfg = uiController.getPipelineConfig();
+        KeyboardUiController.AutoEnterConfig prevCfg = uiController.getAutoEnterConfig();
         boolean autoEnter = (prevCfg != null)
             ? prevCfg.getAutoEnterActive()
             : DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-        uiController.startPipeline(1, new KeyboardUiController.PipelineConfig(autoEnter), 0);
+        uiController.startPipeline(1, new KeyboardUiController.AutoEnterConfig(autoEnter), 0);
 
         EditorInfo editorInfo = getCurrentInputEditorInfo();
         PipelineOrchestrator.StandaloneConfig config = new PipelineOrchestrator.StandaloneConfig(
@@ -1354,23 +1536,22 @@ public class DictateInputMethodService extends InputMethodService
         // block; this is a safety net in case a future async Preparing phase forgets.
         isPreparing = false;
 
-        dbExecutor.execute(() -> {
-            sessionTracker.resetSession();
-            sessionTracker.persistToPrefs(sp);
-            mainHandler.post(() -> {
-                if (uiController == null) return;  // View recreation not yet complete
-                uiController.stopPipeline();  // → updatePipelineState(Idle) → Callback → QWERTZ reset
-                uiController.restoreRecordButtonIdle(
-                    getDictateButtonText(),
-                    R.drawable.ic_baseline_mic_20,
-                    R.drawable.ic_baseline_folder_open_20);
-                // QWERTZ-Reset happens automatically via onPipelineUiStateChanged callback
-            });
+        // Clear the transient current-session tracking (DB is source of truth
+        // for "last keyboard session" — see SessionTracker.getLastKeyboardSession).
+        sessionTracker.clearCurrent();
+        mainHandler.post(() -> {
+            if (uiController == null) return;  // View recreation not yet complete
+            uiController.stopPipeline();  // → updatePipelineState(Idle) → Callback → QWERTZ reset
+            uiController.restoreRecordButtonIdle(
+                getDictateButtonText(),
+                R.drawable.ic_baseline_mic_20,
+                R.drawable.ic_baseline_folder_open_20);
+            // QWERTZ-Reset happens automatically via onPipelineUiStateChanged callback
         });
     }
 
     private boolean isAutoEnterActive() {
-        KeyboardUiController.PipelineConfig cfg = uiController != null ? uiController.getPipelineConfig() : null;
+        KeyboardUiController.AutoEnterConfig cfg = uiController != null ? uiController.getAutoEnterConfig() : null;
         if (cfg != null) return cfg.getAutoEnterActive();
         return DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
     }
@@ -1590,6 +1771,15 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onRecordClicked() {
         infoBarController.dismiss();
+
+        // ReprocessStaging: the big record button becomes a Send trigger for the
+        // currently staged queue (Phase 9.3).
+        PipelineUiState state = uiController != null ? uiController.getState() : null;
+        if (state instanceof PipelineUiState.ReprocessStaging) {
+            handleReprocessSend((PipelineUiState.ReprocessStaging) state);
+            return;
+        }
+
         if (uiController.isPipelineActive()) {
             // Pipeline running or preparing → toggle auto-enter (no-op during Preparing).
             // Using isPipelineActive() closes the Preparing-window race on the QWERTZ record
@@ -1620,17 +1810,103 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onResendClicked() {
-        String lastOutput = sessionTracker.getLastOutput();
-        if (lastOutput != null) {
-            commitTextToInputConnection(lastOutput, InsertionSource.TRANSCRIPTION);
+        // Phase 9.1 — status-based dispatch on the last keyboard session.
+        // Heavy DB access happens on background thread; UI updates post back.
+        dbExecutor.execute(() -> {
+            SessionEntity lastSession = sessionTracker.getLastKeyboardSession();
+            if (lastSession == null) return;
+
+            SessionStatus status = lastSession.getStatusEnum();
+            String output = lastSession.getFinalOutputText();
+
+            switch (status) {
+                case COMPLETED:
+                    // Happy path — re-insert the existing final output text.
+                    if (output != null && !output.isEmpty()) {
+                        mainHandler.post(() -> commitTextToInputConnection(
+                                output, InsertionSource.TRANSCRIPTION));
+                    }
+                    break;
+
+                case RECORDED:
+                case FAILED:
+                    // Error recovery — resume the pipeline from the failure point.
+                    mainHandler.post(() -> startResumeJob(lastSession.getId()));
+                    break;
+
+                case CANCELLED:
+                    // Short-press on CANCELLED inserts the last available output
+                    // if any, otherwise falls back to resume (SEC-7-8).
+                    if (output != null && !output.isEmpty()) {
+                        mainHandler.post(() -> commitTextToInputConnection(
+                                output, InsertionSource.TRANSCRIPTION));
+                    } else {
+                        mainHandler.post(() -> startResumeJob(lastSession.getId()));
+                    }
+                    break;
+            }
+        });
+    }
+
+    /**
+     * Short-press resend helper: launches a JobKind.RESUME for the given session.
+     * Returns early if another job is already active, showing an informational toast.
+     */
+    private void startResumeJob(String sessionId) {
+        if (ActiveJobRegistry.INSTANCE.isAnyActive()) {
+            showJobBusyToast();
+            return;
         }
+        int remainingSteps = computeRemainingSteps(sessionId);
+        JobRequest.Resume request = new JobRequest.Resume(sessionId, remainingSteps);
+        boolean started = JobExecutor.INSTANCE.start(this, request);
+        if (!started) {
+            showJobBusyToast();
+        }
+    }
+
+    private void showJobBusyToast() {
+        Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+    }
+
+    /**
+     * Rough estimate of steps still to run for a Resume job: queued prompts
+     * minus completed steps. Used only for progress UI; off-by-one is harmless.
+     */
+    private int computeRemainingSteps(String sessionId) {
+        List<Integer> queuedIds = sessionManager.getHistoricalQueuedPromptIds(sessionId);
+        int totalQueued = queuedIds.size();
+        int completed = dictateDb.processingStepDao().getCurrentChain(sessionId).size();
+        return Math.max(1, totalQueued - completed);
     }
 
     @Override
     public void onResendLongClicked() {
-        if (audioFile == null) audioFile = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE));
-        sessionTracker.reuseLastSession();
-        runTranscriptionViaOrchestrator();
+        // Phase 9.2 — enter ReprocessStaging with the last keyboard session.
+        if (uiController.isBusy()) return;
+
+        dbExecutor.execute(() -> {
+            SessionEntity lastSession = sessionTracker.getLastKeyboardSession();
+            if (lastSession == null) return;
+
+            RecordingRepository.LoadResult result = recordingRepository.loadBySessionId(lastSession.getId());
+            if (!(result instanceof RecordingRepository.LoadResult.Available)) {
+                mainHandler.post(() -> Toast.makeText(
+                        this, R.string.dictate_audio_file_missing, Toast.LENGTH_SHORT).show());
+                return;
+            }
+
+            List<Integer> historicalQueue = sessionManager.getHistoricalQueuedPromptIds(lastSession.getId());
+            mainHandler.post(() -> {
+                if (uiController == null) return;
+                uiController.enterReprocessStaging(
+                        lastSession.getId(),
+                        lastSession.getAudioDurationSeconds(),
+                        historicalQueue,
+                        lastSession.getLanguage());
+                updatePromptButtonsEnabledState();
+            });
+        });
     }
 
     @Override
@@ -1674,9 +1950,84 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onTrashClicked() {
+        // ReprocessStaging: the trash button cancels back to Idle.
+        if (uiController != null && uiController.getState() instanceof PipelineUiState.ReprocessStaging) {
+            uiController.cancelReprocessStaging();
+            updatePromptButtonsEnabledState();
+            return;
+        }
+
         recordingStateController.cancelRecording();
         livePrompt = false;
         updatePromptButtonsEnabledState();
+    }
+
+    /**
+     * Triggered by the record button press while in ReprocessStaging. Starts a
+     * JobKind.REPROCESS_STAGING job with the edited queue (Phase 9.3).
+     *
+     * W5: The session read is dispatched onto dbExecutor (Room forbids main-
+     * thread queries). W4: audio file existence is checked before starting
+     * the job, matching startHistoryReprocess so the user gets a specific
+     * error instead of a generic pipeline failure.
+     */
+    private void handleReprocessSend(PipelineUiState.ReprocessStaging staging) {
+        // Snapshot UI-owned data on the main thread so the worker sees a
+        // stable view — staging is mutable via the UI controller.
+        final String targetSessionId = staging.getTargetSessionId();
+        final String selectedLanguage = staging.getSelectedLanguage();
+        final String selectedModel = staging.getSelectedModel();
+        final List<Integer> editableQueue = staging.getEditableQueue();
+        final EditorInfo info = getCurrentInputEditorInfo();
+        final String targetAppPackage = info != null && info.packageName != null
+                ? info.packageName.toString() : null;
+
+        dbExecutor.execute(() -> {
+            SessionEntity session = sessionManager.getSessionById(targetSessionId);
+            String audioPath = session != null ? session.getAudioFilePath() : null;
+            // W4: file-existence check mirrors startHistoryReprocess so the
+            // user gets a specific "audio missing" toast instead of a late
+            // pipeline failure at the transcription stage.
+            boolean missing = audioPath == null || !new File(audioPath).exists();
+
+            mainHandler.post(() -> {
+                if (missing) {
+                    Toast.makeText(this, R.string.dictate_audio_file_missing, Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                int totalSteps = 1; // transcription always
+                if (autoFormattingService.isEnabled()) totalSteps++;
+                totalSteps += editableQueue.size();
+
+                JobRequest.TranscriptionPipeline request = new JobRequest.TranscriptionPipeline(
+                        targetSessionId,
+                        totalSteps,
+                        JobRequest.TranscriptionKind.REPROCESS_STAGING,
+                        /* audioFilePath */ audioPath,
+                        /* language */ selectedLanguage,
+                        /* modelOverride */ selectedModel,
+                        /* queuedPromptIds */ editableQueue,
+                        /* targetAppPackage */ targetAppPackage,
+                        /* recordingsDir */ new File(getFilesDir(), "recordings"),
+                        /* reuseSessionId */ targetSessionId,
+                        /* stylePrompt */ null,
+                        /* origin */ net.devemperor.dictate.database.entity.SessionOrigin.KEYBOARD
+                );
+
+                boolean started = JobExecutor.INSTANCE.start(this, request);
+                if (!started) {
+                    showJobBusyToast();
+                    return;
+                }
+
+                // Transition staging → Preparing → Running via the same path used by
+                // the fresh-recording flow (SEC-7-6).
+                uiController.preparePipeline();
+                boolean autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
+                uiController.startPipeline(totalSteps, new KeyboardUiController.AutoEnterConfig(autoEnter));
+            });
+        });
     }
 
     @Override
@@ -1730,11 +2081,24 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onPipelineCancelClicked() {
-        PipelineOrchestrator.CancelInfo cancelInfo = pipelineOrchestrator.cancel();
+        // Prefer the JobExecutor-based cancellation (cooperative token + last-resort interrupt).
+        // Fall back to the orchestrator's executor.shutdownNow() for legacy code paths that
+        // may still be running outside the registry (e.g. standalone prompt from a prompt button).
+        String activeSessionId = sessionTracker.getCurrentSessionId();
+        PipelineOrchestrator.CancelInfo cancelInfo;
+        if (activeSessionId != null && ActiveJobRegistry.INSTANCE.isActive(activeSessionId)) {
+            JobExecutor.INSTANCE.cancel(activeSessionId);
+            // JobExecutor.finally handles the registry; orchestrator writes CANCELLED itself.
+            cancelInfo = new PipelineOrchestrator.CancelInfo(
+                    sessionTracker.getCurrentStepId(),
+                    sessionTracker.getCurrentTranscriptionId());
+        } else {
+            // Legacy standalone-prompt path (no Registry entry).
+            cancelInfo = pipelineOrchestrator.cancel();
+        }
+
         pendingLivePromptChain = false;
         isPreparing = false;
-        // PipelineConfig ownership is now on uiController; stopPipeline() nulls it,
-        // so any post-cancel commit will fall back to the pref default via isAutoEnterActive().
 
         uiController.stopPipeline();
         uiController.restoreRecordButtonIdle(
@@ -1750,8 +2114,7 @@ public class DictateInputMethodService extends InputMethodService
                 lastOutput = sessionManager.getTranscriptionText(cancelInfo.getLastTranscriptionId());
             }
 
-            sessionTracker.resetSession();
-            sessionTracker.persistToPrefs(sp);
+            sessionTracker.clearCurrent();
 
             if (lastOutput != null) {
                 String finalOutput = lastOutput;

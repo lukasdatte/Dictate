@@ -23,6 +23,7 @@ import net.devemperor.dictate.database.entity.TextInsertionEntity
 import net.devemperor.dictate.database.entity.TranscriptionEntity
 import net.devemperor.dictate.database.entity.UsageEntity
 import net.devemperor.dictate.database.migration.MIGRATION_1_2
+import net.devemperor.dictate.database.migration.MIGRATION_2_3
 import net.devemperor.dictate.database.migration.createPartialUniqueIndices
 
 @Database(
@@ -35,7 +36,7 @@ import net.devemperor.dictate.database.migration.createPartialUniqueIndices
         CompletionLogEntity::class,
         TextInsertionEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -70,7 +71,7 @@ abstract class DictateDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .allowMainThreadQueries()
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)

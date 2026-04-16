@@ -11,6 +11,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.R
+import java.util.Locale
 
 /**
  * Controls the keyboard prompt area UI: mode switching between prompt buttons
@@ -31,15 +32,21 @@ class KeyboardUiController(
 ) {
 
     /**
-     * Controller-owned pipeline configuration. Single source of truth for per-run settings
-     * that formerly lived partly on the Service side (`autoEnterOverride`). Handed in via
-     * [startPipeline] and mutated via [toggleAutoEnter].
+     * Controller-owned per-run UI configuration for the record button.
+     *
+     * Renamed from `PipelineConfig` to `AutoEnterConfig` in Phase 7 to avoid
+     * confusion with [PipelineOrchestrator.PipelineConfig]. The two types serve
+     * different purposes:
+     * - [AutoEnterConfig] (UI): Holds the `autoEnterActive` flag for the keyboard
+     *   record button rendering.
+     * - [PipelineOrchestrator.PipelineConfig] (Orchestrator): Holds audio file,
+     *   language, origin, model override, etc. for pipeline execution.
      *
      * Lifecycle: non-null from [startPipeline] until [stopPipeline] — i.e. while
      * the UI is in [PipelineUiState.Running]. The Service's `commitTextToInputConnection`
-     * path reads this synchronously via [getPipelineConfig] before [stopPipeline] nulls it out.
+     * path reads this synchronously via [getAutoEnterConfig] before [stopPipeline] nulls it out.
      */
-    data class PipelineConfig(val autoEnterActive: Boolean)
+    data class AutoEnterConfig(val autoEnterActive: Boolean)
 
     data class PipelineViews(
         val pipelineStepsContainer: LinearLayout,
@@ -55,11 +62,11 @@ class KeyboardUiController(
     var state: PipelineUiState = PipelineUiState.Idle
         private set
 
-    /** Active pipeline configuration; null iff no pipeline run is in progress. */
-    private var config: PipelineConfig? = null
+    /** Active auto-enter configuration; null iff no pipeline run is in progress. */
+    private var config: AutoEnterConfig? = null
 
-    /** @return the active [PipelineConfig], or null if no pipeline run is in progress. */
-    fun getPipelineConfig(): PipelineConfig? = config
+    /** @return the active [AutoEnterConfig], or null if no pipeline run is in progress. */
+    fun getAutoEnterConfig(): AutoEnterConfig? = config
 
     private var callback: PipelineUiCallback? = null
 
@@ -130,6 +137,22 @@ class KeyboardUiController(
     fun isPipelineActive(): Boolean =
         state is PipelineUiState.Running || state is PipelineUiState.Preparing
 
+    /**
+     * Returns true if the controller is in any non-Idle state.
+     *
+     * Comparison with related methods:
+     * - [isPipelineRunning]: true only for [PipelineUiState.Running]
+     * - [isPipelineActive]: true for [PipelineUiState.Running] + [PipelineUiState.Preparing]
+     * - [isBusy]: true for everything except [PipelineUiState.Idle] (includes [PipelineUiState.ReprocessStaging])
+     *
+     * Use [isBusy] when guarding against any user interaction that requires
+     * an idle keyboard (e.g. starting a new recording, entering ReprocessStaging).
+     */
+    fun isBusy(): Boolean = state !is PipelineUiState.Idle
+
+    /** True iff the controller is in [PipelineUiState.ReprocessStaging]. */
+    fun isReprocessStaging(): Boolean = state is PipelineUiState.ReprocessStaging
+
     /** Last elapsed-timer value observed by the running pipeline (0 if none). */
     fun getLatestPipelineElapsedMs(): Long = latestPipelineElapsedMs
 
@@ -167,7 +190,7 @@ class KeyboardUiController(
      * @param initialCompletedSteps number of already completed steps (for UI restore after view recreation)
      */
     @JvmOverloads
-    fun startPipeline(totalSteps: Int, config: PipelineConfig, initialCompletedSteps: Int = 0) {
+    fun startPipeline(totalSteps: Int, config: AutoEnterConfig, initialCompletedSteps: Int = 0) {
         // Save text colors for restoreRecordButtonIdle after pipeline end
         if (savedRecordButtonTextColors == null) {
             savedRecordButtonTextColors = views.recordButton.textColors
@@ -236,6 +259,57 @@ class KeyboardUiController(
         val newConfig = c.copy(autoEnterActive = !c.autoEnterActive)
         config = newConfig
         updatePipelineState(s.copy(autoEnterActive = newConfig.autoEnterActive))
+    }
+
+    // ── ReprocessStaging state mutations (Phase 7.3) ──
+
+    /**
+     * Enters ReprocessStaging mode with the given session as reference.
+     * Called by DictateInputMethodService.onResendLongClicked().
+     */
+    fun enterReprocessStaging(
+        targetSessionId: String,
+        audioDurationSeconds: Long,
+        initialQueue: List<Int>,
+        language: String?
+    ) {
+        updatePipelineState(
+            PipelineUiState.ReprocessStaging(
+                targetSessionId = targetSessionId,
+                audioDurationSeconds = audioDurationSeconds,
+                editableQueue = initialQueue,
+                selectedLanguage = language
+            )
+        )
+    }
+
+    /**
+     * Cancels the ReprocessStaging (trash button pressed). Returns to Idle.
+     */
+    fun cancelReprocessStaging() {
+        if (state is PipelineUiState.ReprocessStaging) {
+            updatePipelineState(PipelineUiState.Idle)
+        }
+    }
+
+    /**
+     * Updates the editable queue (when user toggles a prompt chip).
+     */
+    fun updateReprocessQueue(queue: List<Int>) {
+        val s = state
+        if (s is PipelineUiState.ReprocessStaging) {
+            updatePipelineState(s.copy(editableQueue = queue))
+        }
+    }
+
+    /**
+     * Updates the selected language (when user picks from the language chip dropdown).
+     */
+    fun updateReprocessLanguage(language: String) {
+        val s = state
+        if (s is PipelineUiState.ReprocessStaging) {
+            updatePipelineState(s.copy(selectedLanguage = language))
+        }
     }
 
     // ── Pipeline steps (Running state only, main thread) ──
@@ -375,7 +449,32 @@ class KeyboardUiController(
                     if (s.hasFailure) 0xFFF44336.toInt() else Color.WHITE)
                 updateAutoEnterAppearance(s.autoEnterActive)
             }
+            is PipelineUiState.ReprocessStaging -> {
+                // Audio loaded — ready to send with edited queue.
+                // The button behaves as an explicit Send trigger (handled in the Service).
+                views.recordButton.isEnabled = true
+                views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                    R.drawable.ic_baseline_play_arrow_24,  // left: play icon (audio exists)
+                    0,
+                    R.drawable.ic_baseline_send_24,         // right: send icon (action hint)
+                    0
+                )
+                val durationStr = formatDurationMinSec(s.audioDurationSeconds)
+                views.recordButton.text = views.recordButton.resources.getString(
+                    R.string.dictate_reprocess_audio_available, durationStr
+                )
+                views.recordButton.setTextColor(Color.WHITE)
+            }
         }
+    }
+
+    /**
+     * Formats a seconds duration as `M:SS` for the ReprocessStaging record button.
+     */
+    private fun formatDurationMinSec(seconds: Long): String {
+        val m = seconds / 60
+        val s = seconds % 60
+        return String.format(Locale.getDefault(), "%d:%02d", m, s)
     }
 
     /**

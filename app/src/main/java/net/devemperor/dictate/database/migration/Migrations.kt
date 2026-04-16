@@ -122,17 +122,3 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-/**
- * Creates partial unique indices that Room annotations cannot express (WHERE clause).
- * Called from DictateDatabase.onOpen() to ensure they exist after both migration and fresh install.
- */
-fun createPartialUniqueIndices(db: SupportSQLiteDatabase) {
-    db.execSQL("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_transcriptions_current
-        ON transcriptions(session_id) WHERE is_current = 1
-    """.trimIndent())
-    db.execSQL("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_steps_current
-        ON processing_steps(session_id, chain_index) WHERE is_current = 1
-    """.trimIndent())
-}

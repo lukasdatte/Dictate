@@ -24,7 +24,6 @@ import net.devemperor.dictate.database.entity.TranscriptionEntity
 import net.devemperor.dictate.database.entity.UsageEntity
 import net.devemperor.dictate.database.migration.MIGRATION_1_2
 import net.devemperor.dictate.database.migration.MIGRATION_2_3
-import net.devemperor.dictate.database.migration.createPartialUniqueIndices
 
 @Database(
     entities = [
@@ -100,12 +99,6 @@ abstract class DictateDatabase : RoomDatabase() {
                         }
                     }
 
-                    override fun onOpen(db: SupportSQLiteDatabase) {
-                        super.onOpen(db)
-                        // Create partial unique indices that Room annotations cannot express.
-                        // Using IF NOT EXISTS so this is safe to run on every open.
-                        createPartialUniqueIndices(db)
-                    }
                 })
                 .build()
         }

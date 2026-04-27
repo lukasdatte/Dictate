@@ -67,6 +67,10 @@ dependencies {
     implementation libs.preference
     implementation libs.emoji2.emojipicker
     testImplementation libs.junit
+    // Quality-Gate W-2: real JSONObject/JSONArray/JSONTokener in the JVM
+    // unit-test classpath instead of stubs (cf. ElevenLabsKeytermsParserTest
+    // line 133-135). Required by VersionedPrefs/Serializer roundtrip tests.
+    testImplementation 'org.json:json:20240303'
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core
 

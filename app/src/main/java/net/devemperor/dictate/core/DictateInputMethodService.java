@@ -929,45 +929,36 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * Opens a simple dialog listing all available transcription languages. The
-     * picked value is written back to the ReprocessStaging state.
+     * Opens a PopupMenu anchored on the language chip, listing all available
+     * transcription languages. The picked value is written back to the
+     * ReprocessStaging state.
      *
-     * Uses the keyboard-IME dialog pattern (token-based window) so the dialog
-     * renders above the IME instead of being blocked by it.
+     * PopupMenu is used instead of a Dialog because IMEs don't own a
+     * window token compatible with TYPE_APPLICATION_ATTACHED_DIALOG on
+     * all OEM skins (Samsung One UI throws BadTokenException). PopupMenu
+     * anchors its window on the passed view and therefore inherits the
+     * IME's window context correctly.
      */
-    private void showReprocessLanguageDialog() {
+    private void showReprocessLanguageDialog(View anchor) {
         if (!(uiController.getState() instanceof PipelineUiState.ReprocessStaging)) return;
-        PipelineUiState.ReprocessStaging staging =
-                (PipelineUiState.ReprocessStaging) uiController.getState();
 
         String[] labels = getResources().getStringArray(R.array.dictate_input_languages);
         String[] values = getResources().getStringArray(R.array.dictate_input_languages_values);
 
-        int selected = 0;
-        String current = staging.getSelectedLanguage();
-        if (current != null) {
-            for (int i = 0; i < values.length; i++) {
-                if (current.equals(values[i])) { selected = i; break; }
+        android.widget.PopupMenu popup = new android.widget.PopupMenu(
+                new ContextThemeWrapper(this, R.style.Theme_Dictate), anchor);
+        for (int i = 0; i < labels.length; i++) {
+            popup.getMenu().add(android.view.Menu.NONE, i, i, labels[i]);
+        }
+        popup.setOnMenuItemClickListener(item -> {
+            int idx = item.getItemId();
+            if (idx >= 0 && idx < values.length) {
+                uiController.updateReprocessLanguage(values[idx]);
+                return true;
             }
-        }
-
-        androidx.appcompat.app.AlertDialog dialog =
-                new com.google.android.material.dialog.MaterialAlertDialogBuilder(
-                        new ContextThemeWrapper(this, R.style.Theme_Dictate))
-                        .setTitle(R.string.dictate_reprocess_language)
-                        .setSingleChoiceItems(labels, selected, (d, which) -> {
-                            uiController.updateReprocessLanguage(values[which]);
-                            d.dismiss();
-                        })
-                        .setNegativeButton(android.R.string.cancel, null)
-                        .create();
-
-        Window dialogWindow = dialog.getWindow();
-        if (dialogWindow != null && getWindow() != null && getWindow().getWindow() != null) {
-            dialogWindow.setType(WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG);
-            dialogWindow.getAttributes().token = getWindow().getWindow().getAttributes().token;
-        }
-        dialog.show();
+            return false;
+        });
+        popup.show();
     }
 
     // method is called if the keyboard appears again

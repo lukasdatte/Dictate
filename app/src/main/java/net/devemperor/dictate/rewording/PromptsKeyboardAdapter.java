@@ -56,7 +56,10 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
     }
 
     public interface LanguageChipClickListener {
-        void onLanguageChipClicked();
+        // The anchor view is passed so the handler can attach a PopupMenu
+        // (IME-window-safe, unlike TYPE_APPLICATION_ATTACHED_DIALOG which
+        // throws BadTokenException on some OEM skins).
+        void onLanguageChipClicked(View anchor);
     }
 
     public PromptsKeyboardAdapter(SharedPreferences sp, List<PromptEntity> data, AdapterCallback callback) {
@@ -288,7 +291,7 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
                 : holder.itemView.getContext().getString(R.string.dictate_reprocess_language);
         holder.chipBtn.setText(label);
         holder.chipBtn.setOnClickListener(v -> {
-            if (languageChipListener != null) languageChipListener.onLanguageChipClicked();
+            if (languageChipListener != null) languageChipListener.onLanguageChipClicked(v);
         });
     }
 

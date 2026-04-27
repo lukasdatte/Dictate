@@ -49,6 +49,13 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
     private boolean showLanguageChip = false;
     private String currentLanguageLabel = null;
     private LanguageChipClickListener languageChipListener = null;
+    /**
+     * Quality-Gate W-6: chip enabled-state is tracked separately from
+     * visibility so the pipeline-running disable can be applied without
+     * touching {@link #setLanguageChipVisible(boolean, String)}'s 2-arg
+     * signature. Defaults to {@code true} (clickable) on init.
+     */
+    private boolean chipEnabled = true;
 
     public interface AdapterCallback {
         void onItemClicked(Integer position);
@@ -116,6 +123,24 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
 
     public void setLanguageChipListener(LanguageChipClickListener listener) {
         this.languageChipListener = listener;
+    }
+
+    /**
+     * Toggles the chip's clickable state without affecting its visibility.
+     * Called by the Service when the pipeline transitions through Running /
+     * Preparing — the chip stays visible but greys out and no longer
+     * responds to clicks while a transcription is in flight.
+     *
+     * <p>Quality-Gate W-6: kept separate from
+     * {@link #setLanguageChipVisible(boolean, String)} so the existing
+     * 2-arg signature does not break and visibility/enabled stay
+     * semantically distinct.</p>
+     */
+    public void setLanguageChipEnabled(boolean enabled) {
+        if (this.chipEnabled != enabled) {
+            this.chipEnabled = enabled;
+            notifyItemChanged(0);  // Position 0 = Chip when visible
+        }
     }
 
     /**
@@ -290,6 +315,8 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
                 ? currentLanguageLabel
                 : holder.itemView.getContext().getString(R.string.dictate_reprocess_language);
         holder.chipBtn.setText(label);
+        holder.chipBtn.setEnabled(chipEnabled);
+        holder.chipBtn.setAlpha(chipEnabled ? 1f : 0.5f);
         holder.chipBtn.setOnClickListener(v -> {
             if (languageChipListener != null) languageChipListener.onLanguageChipClicked(v);
         });

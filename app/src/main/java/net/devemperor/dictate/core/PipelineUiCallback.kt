@@ -8,7 +8,7 @@ package net.devemperor.dictate.core
  * lambda-pair (`onPipelineUiStateChanged`/`onPipelineTimerTick`) that required `kotlin.Unit`
  * boilerplate on the Java side.
  *
- * Registered on [KeyboardUiController] via [KeyboardUiController.setCallback].
+ * Registered on [KeyboardUiController] via [KeyboardUiController.addCallback].
  */
 interface PipelineUiCallback {
     /** Fires on actual state changes (step completed, auto-enter toggled, pipeline start/stop). */

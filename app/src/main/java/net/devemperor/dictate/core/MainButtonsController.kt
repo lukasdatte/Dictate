@@ -286,6 +286,31 @@ class MainButtonsController(
 
     // ── Button Color Theming ──
 
+    /**
+     * Enable/disable the resend button.
+     *
+     * Used by the Phase-5 short-press path to suppress double-clicks while
+     * the asynchronous DB lookup + insertion strategy is in flight. The
+     * service flips this to `false` in the click moment and re-enables it
+     * after a 500 ms cooldown via [android.os.Handler.postDelayed].
+     */
+    fun setResendEnabled(enabled: Boolean) {
+        views.resendButton.isEnabled = enabled
+    }
+
+    /**
+     * Update the record button's text label.
+     *
+     * Used by the language-chip-curation flow (Phase 2): when the
+     * effective language changes — either via the chip's PopupMenu or
+     * because the pipeline state moved into/out of ReprocessStaging —
+     * the record button label must follow so the user sees a consistent
+     * "current language" indication across the keyboard surface.
+     */
+    fun updateRecordButtonText(text: String) {
+        views.recordButton.text = text
+    }
+
     fun applyTheme(accentColor: Int) {
         val accentMedium = DictateUtils.darkenColor(accentColor, 0.18f)
         val accentDark = DictateUtils.darkenColor(accentColor, 0.35f)

@@ -340,7 +340,10 @@
     <string name="dictate_reprocess_audio_available">Audio %1$s · Send</string>
     <string name="dictate_job_already_active">Processing already running</string>
     <string name="dictate_audio_file_missing">Audio file no longer available</string>
+    <string name="dictate_resend_focus_lost">Input field unavailable — restarting pipeline</string>
     <string name="dictate_reprocess_language">Language</string>
+    <string name="dictate_language_manage">⚙ Manage languages…</string>
+    <string name="dictate_language_other_separator">────── other languages ──────</string>
 
     <!-- Delete audio -->
     <string name="dictate_delete_audio_title">Delete audio</string>

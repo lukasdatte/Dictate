@@ -12,6 +12,7 @@ import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.R
 import java.util.Locale
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Controls the keyboard prompt area UI: mode switching between prompt buttons
@@ -29,7 +30,7 @@ import java.util.Locale
 class KeyboardUiController(
     private val views: PipelineViews,
     private val stateManager: KeyboardStateManager
-) {
+) : PipelineUiStateReader {
 
     /**
      * Controller-owned per-run UI configuration for the record button.
@@ -59,7 +60,7 @@ class KeyboardUiController(
 
     // ── Pipeline UI State ──
 
-    var state: PipelineUiState = PipelineUiState.Idle
+    override var state: PipelineUiState = PipelineUiState.Idle
         private set
 
     /** Active auto-enter configuration; null iff no pipeline run is in progress. */
@@ -68,14 +69,50 @@ class KeyboardUiController(
     /** @return the active [AutoEnterConfig], or null if no pipeline run is in progress. */
     fun getAutoEnterConfig(): AutoEnterConfig? = config
 
-    private var callback: PipelineUiCallback? = null
+    /**
+     * Registered pipeline-state observers. Implements the listener-list side
+     * of the [PipelineUiStateReader] contract (Quality-Gate K-2 + Design-Prinzip 7).
+     *
+     * `CopyOnWriteArrayList` was chosen over a plain `ArrayList` because a
+     * callback may add or remove other callbacks during a `forEach` dispatch
+     * (rare, but possible during view-recreate / pipeline-stop sequences).
+     * The copy-on-write semantics mean concurrent modification during
+     * iteration does not throw `ConcurrentModificationException`.
+     */
+    private val callbacks = CopyOnWriteArrayList<PipelineUiCallback>()
 
     /**
      * Registers a callback for pipeline state changes and timer ticks.
-     * Replaces the previous lambda-pair (`onPipelineUiStateChanged`/`onPipelineTimerTick`).
+     * Multiple callbacks coexist (e.g. Service for chip-refresh +
+     * `LanguageController` for effective-language sync). Idempotent —
+     * registering the same instance twice is a no-op.
      */
+    override fun addCallback(callback: PipelineUiCallback) {
+        callbacks.addIfAbsent(callback)
+    }
+
+    /**
+     * Deregister [callback]. Safe when [callback] was never registered.
+     * Required from `LanguageController.dispose()` and from the Service's
+     * view-recreate path so callback list does not leak across view life.
+     */
+    override fun removeCallback(callback: PipelineUiCallback) {
+        callbacks.remove(callback)
+    }
+
+    /**
+     * Single-callback compatibility shim for migration. Existing call sites
+     * (e.g. the Service's onCreateInputView) still call `setCallback(...)`;
+     * this clears the list and registers the new instance. Will be removed
+     * once all call sites have moved to [addCallback]/[removeCallback].
+     */
+    @Deprecated(
+        "Use addCallback() — supports multiple consumers",
+        ReplaceWith("addCallback(callback)")
+    )
     fun setCallback(callback: PipelineUiCallback) {
-        this.callback = callback
+        callbacks.clear()
+        callbacks.addIfAbsent(callback)
     }
 
     private var pipelineTotalTimer: ElapsedTimer? = null
@@ -112,7 +149,7 @@ class KeyboardUiController(
         state = newState
         refreshRecordButtonFromState()
         if (old != newState) {
-            callback?.onPipelineUiStateChanged(old, newState)
+            callbacks.forEach { it.onPipelineUiStateChanged(old, newState) }
             stateManager.refresh()
         }
     }
@@ -222,7 +259,7 @@ class KeyboardUiController(
             refreshRecordButtonFromState()
             val s = state
             if (s is PipelineUiState.Running) {
-                callback?.onPipelineTimerTick(s, ms)
+                callbacks.forEach { it.onPipelineTimerTick(s, ms) }
             }
         }
     }
@@ -304,11 +341,14 @@ class KeyboardUiController(
 
     /**
      * Updates the selected language (when user picks from the language chip dropdown).
+     *
+     * Implements [PipelineUiStateReader.updateReprocessLanguage]. No-op when
+     * the controller is not in [PipelineUiState.ReprocessStaging].
      */
-    fun updateReprocessLanguage(language: String) {
+    override fun updateReprocessLanguage(code: String) {
         val s = state
         if (s is PipelineUiState.ReprocessStaging) {
-            updatePipelineState(s.copy(selectedLanguage = language))
+            updatePipelineState(s.copy(selectedLanguage = code))
         }
     }
 

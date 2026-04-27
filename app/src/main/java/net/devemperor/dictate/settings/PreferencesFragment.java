@@ -20,8 +20,10 @@ import androidx.preference.SwitchPreference;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import net.devemperor.dictate.BuildConfig;
+import net.devemperor.dictate.DictateApplication;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.core.LanguageController;
 import net.devemperor.dictate.preferences.DictatePrefsKt;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.history.HistoryActivity;
@@ -31,7 +33,10 @@ import net.devemperor.dictate.database.dao.UsageDao;
 import net.devemperor.dictate.usage.UsageActivity;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -57,18 +62,57 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
 
         MultiSelectListPreference inputLanguagesPreference = findPreference("net.devemperor.dictate.input_languages");
         if (inputLanguagesPreference != null) {
+            // Phase 3 §3.1 (Quality-Gate K-5/K-6): the preference is marked
+            // app:persistent="false" in XML so MultiSelectListPreference.setValues
+            // does not call persistStringSet() and overwrite the JSON envelope.
+            // The on-disk source-of-truth is read via the LanguageController
+            // (which delegates to VersionedPrefs internally) and writes are
+            // routed through LanguageController.setCuratedLanguages so the
+            // pos-resync algorithm lives in exactly one place.
+            LanguageController controller =
+                    ((DictateApplication) requireActivity().getApplicationContext())
+                            .getOrCreateLanguageController();
+
+            List<String> curated = controller.getCuratedLanguages();
+
+            // Order matters: setSummaryProvider must run BEFORE setValues, because
+            // setValues() fires notifyChanged() and the framework rebuilds the summary
+            // immediately. With the provider still null the very first render shows an
+            // empty summary until something else triggers another notifyChanged().
             inputLanguagesPreference.setSummaryProvider((Preference.SummaryProvider<MultiSelectListPreference>) preference -> {
                 String[] selectedLanguagesValues = preference.getValues().toArray(new String[0]);
                 return Arrays.stream(selectedLanguagesValues).map(DictateUtils::translateLanguageToEmoji).collect(Collectors.joining(" "));
             });
 
+            inputLanguagesPreference.setValues(new HashSet<>(curated));
+
             inputLanguagesPreference.setOnPreferenceChangeListener((preference, newValue) -> {
+                @SuppressWarnings("unchecked")
                 Set<String> selectedLanguages = (Set<String>) newValue;
                 if (selectedLanguages.isEmpty()) {
                     Toast.makeText(requireContext(), R.string.dictate_input_languages_empty, Toast.LENGTH_SHORT).show();
                     return false;
                 }
-                DictatePrefsKt.put(sp.edit(), Pref.InputLanguagePos.INSTANCE, 0).apply();
+
+                // Determine the currently-active code (pos-anchor). Reading
+                // the persisted list through the controller mirrors the Service
+                // path and avoids a stale in-memory copy if another component
+                // (the IME) wrote between fragment creation and this listener
+                // firing.
+                List<String> oldList = controller.getCuratedLanguages();
+                int oldPos = DictatePrefsKt.get(sp, Pref.InputLanguagePos.INSTANCE);
+                String oldActive = (oldPos >= 0 && oldPos < oldList.size())
+                        ? oldList.get(oldPos)
+                        : null;
+
+                // Persist via the controller — sanitize (dedupe + allowlist
+                // filter + label sort) and pos-resync are centralized there.
+                controller.setCuratedLanguages(new ArrayList<>(selectedLanguages), oldActive);
+
+                // app:persistent="false" already prevents the framework from
+                // writing a StringSet to the same key. Returning true here
+                // would not cause a write, but returning true is also semantically
+                // correct: the preference UI should reflect the new selection.
                 return true;
             });
         }
@@ -280,6 +324,19 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
                 Toast.makeText(requireContext(), "User-ID: " + DictatePrefsKt.get(sp, Pref.UserId.INSTANCE), Toast.LENGTH_LONG).show();
                 return true;
             });
+        }
+
+        // Phase 2 §2.2a (Quality-Gate K-7): if launched with a "scroll_to"
+        // bundle arg, scroll the matching preference into view. Used by the
+        // keyboard's "⚙ Sprachen verwalten…" PopupMenu action so the user
+        // lands directly on the language curation list without having to
+        // hunt for it in the long settings screen.
+        Bundle args = getArguments();
+        if (args != null) {
+            String scrollTo = args.getString("scroll_to");
+            if (scrollTo != null) {
+                scrollToPreference(scrollTo);
+            }
         }
     }
 }

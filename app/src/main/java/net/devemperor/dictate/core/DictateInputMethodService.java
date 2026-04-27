@@ -25,6 +25,8 @@ import android.widget.Toast;
 import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
@@ -57,12 +59,13 @@ import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.entity.InsertionMethod;
 import net.devemperor.dictate.database.entity.InsertionSource;
 import net.devemperor.dictate.database.entity.SessionEntity;
-import net.devemperor.dictate.database.entity.SessionStatus;
 import net.devemperor.dictate.keyboard.KeyAction;
 import net.devemperor.dictate.keyboard.QwertzKeyboardController;
 import net.devemperor.dictate.keyboard.QwertzKeyboardLayout;
 import net.devemperor.dictate.keyboard.QwertzKeyboardView;
 import net.devemperor.dictate.preferences.DictatePrefsKt;
+import net.devemperor.dictate.preferences.InputLanguagesPlugin;
+import net.devemperor.dictate.preferences.LanguageLabelResolver;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.preferences.PrefsMigration;
 import net.devemperor.dictate.R;
@@ -81,9 +84,7 @@ import androidx.room.InvalidationTracker;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -111,8 +112,9 @@ public class DictateInputMethodService extends InputMethodService
     private volatile boolean pendingLivePromptChain = false; // true when transcription result should be chained into live prompt
     private boolean vibrationEnabled = true;
     private boolean audioFocusEnabled = true;
-    private int currentInputLanguagePos;
-    private String currentInputLanguageValue;
+    // Language state moved into LanguageController (Phase 2 Quality-Gate W-7).
+    // Read effective language via languageController.getEffectiveLanguage();
+    // mutate via languageController.setLanguage(code).
     private boolean autoSwitchKeyboard = false;
 
     /**
@@ -151,6 +153,49 @@ public class DictateInputMethodService extends InputMethodService
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private PipelineOrchestrator pipelineOrchestrator;
     private KeyboardUiController uiController;
+    /**
+     * Service-Layer language controller (Phase 1 of language-chip-curation).
+     *
+     * Instantiated in {@link #onCreateInputView()} once {@link #uiController}
+     * exists; disposed in {@link #cleanupOldControllers()} so the
+     * {@link KeyboardUiController}'s callback list does not accumulate stale
+     * entries across view re-creates.
+     *
+     * <p>Phase 1 only wires the controller — Phase 2 will hook
+     * {@link LanguageController.Callback} into the chip-refresh path. Until
+     * then the controller runs silently in the background; its only visible
+     * effect is the SharedPreferences migration that already ran in
+     * {@link DictateApplication#onCreate()}.</p>
+     */
+    private LanguageController languageController;
+
+    /**
+     * Phase 3 cross-instance bridge: invalidates the IME's per-view
+     * {@link LanguageController}'s {@code lastEffective} cache when an
+     * external writer (the Settings activity's Application-singleton
+     * controller) mutates the {@code input_languages} or
+     * {@code input_language_pos} keys.
+     *
+     * <p>Without this listener, returning from Settings to the IME shows a
+     * stale chip until the next pipeline-state transition retriggers the
+     * controller's {@code notifyIfChanged()} path.</p>
+     *
+     * <p>Registered in {@link #onCreateInputView()} after
+     * {@link #languageController} construction; deregistered in
+     * {@link #cleanupOldControllers()} so the listener does not survive
+     * view-recreate alongside the discarded controller.</p>
+     */
+    private SharedPreferences.OnSharedPreferenceChangeListener inputLanguagesListener;
+
+    /**
+     * Service-side pipeline observer. Held as a field so it can be detached
+     * via {@link KeyboardUiController#removeCallback(PipelineUiCallback)} on
+     * view recreate. Phase 1 cross-phase refactor (Quality-Gate K-2): the
+     * Service registers via {@code addCallback}, not the deprecated
+     * single-slot {@code setCallback}, so multiple consumers (Service +
+     * {@link LanguageController}) coexist without a Composite-Wrapper.
+     */
+    private PipelineUiCallback servicePipelineCallback;
     private File audioFile;
     private Vibrator vibrator;
     private SharedPreferences sp;
@@ -331,7 +376,9 @@ public class DictateInputMethodService extends InputMethodService
 
         // ── 2. Preferences that may change between rotations ──
         vibrationEnabled = DictatePrefsKt.get(sp, Pref.Vibration.INSTANCE);
-        currentInputLanguagePos = DictatePrefsKt.get(sp, Pref.InputLanguagePos.INSTANCE);
+        // Phase 2 Quality-Gate W-7: language state lives in LanguageController.
+        // Pos preference is managed exclusively through the controller's
+        // persistInputLanguagesAndPos pathway.
 
         // ── 3. View inflation + findViewByIds ──
         dictateKeyboardView = (ConstraintLayout) LayoutInflater.from(context).inflate(R.layout.activity_dictate_keyboard_view, null);
@@ -509,8 +556,52 @@ public class DictateInputMethodService extends InputMethodService
             () -> { vibrate(); stopRecording(); return kotlin.Unit.INSTANCE; }
         );
 
-        // Pipeline UI callbacks: QWERTZ button updates from pipeline state
-        uiController.setCallback(new PipelineUiCallback() {
+        // ── 4a. LanguageController (Phase 1 + Phase 2 wiring) ──
+        // Built AFTER uiController exists because it depends on the
+        // PipelineUiStateReader implemented by KeyboardUiController. Self-
+        // registers as a PipelineUiCallback inside its constructor; the
+        // matching dispose() in cleanupOldControllers() removes it before
+        // the next view-recreate so the callback list does not leak.
+        //
+        // Phase 2: the Callback drives the chip refresh + record-button
+        // label update on every effective-language change (auto-curation
+        // in idle-mode, transient override during ReprocessStaging).
+        //
+        // Quality-Gate W-12: languageController zuerst, damit lastEffective
+        // vor servicePipelineCallback aktualisiert wird (callbacks-Index 0).
+        languageController = new LanguageController(sp, uiController);
+        languageController.setCallback((oldCode, newCode) -> {
+            refreshLanguageChip();
+            if (mainButtonsController != null) {
+                mainButtonsController.updateRecordButtonText(getDictateButtonText());
+            }
+        });
+
+        // Phase 3 cross-instance bridge: the Settings activity owns a separate
+        // Application-singleton LanguageController. When the user edits the
+        // curated list there, both controllers' SharedPreferences-backed reads
+        // see the new value, but only the writing controller's lastEffective
+        // cache is up-to-date. Without an explicit invalidation, returning
+        // to the IME shows a stale chip until the next pipeline state change.
+        // Listening on the two relevant keys plugs that gap with a single
+        // refreshFromPrefs() call (idempotent through the lastEffective guard).
+        inputLanguagesListener = (changedPrefs, key) -> {
+            if (Pref.InputLanguages.INSTANCE.getKey().equals(key)
+                    || Pref.InputLanguagePos.INSTANCE.getKey().equals(key)) {
+                if (languageController != null) {
+                    languageController.refreshFromPrefs();
+                }
+            }
+        };
+        sp.registerOnSharedPreferenceChangeListener(inputLanguagesListener);
+
+        // Pipeline UI callbacks: QWERTZ button updates from pipeline state.
+        // Phase 1 cross-phase refactor: Service now uses addCallback() rather than the
+        // deprecated setCallback() so multiple consumers (Service + LanguageController)
+        // coexist on the same KeyboardUiController without a Composite-Wrapper.
+        // Registered AFTER languageController so it sits at callbacks-Index 1
+        // (W-12: language state must update before any UI consumer reads it).
+        servicePipelineCallback = new PipelineUiCallback() {
             @Override
             public void onPipelineTimerTick(@NonNull PipelineUiState.Running state, long elapsedMs) {
                 if (recordingUiController != null) {
@@ -520,8 +611,18 @@ public class DictateInputMethodService extends InputMethodService
 
             @Override
             public void onPipelineUiStateChanged(@NonNull PipelineUiState oldState, @NonNull PipelineUiState newState) {
-                // Language chip visibility + queue sync follow the ReprocessStaging state.
-                applyReprocessStagingAdapter(newState);
+                // Phase 2: language chip is permanently visible; only the
+                // editable-queue order tracks ReprocessStaging now (the
+                // chip's *enabled* state follows pipeline-running below).
+                syncQueueOrder(newState);
+
+                // Phase 2 Quality-Gate W-6: chip stays clickable except while
+                // a transcription is in flight (Running / Preparing).
+                if (promptsAdapter != null) {
+                    boolean pipelineRunning = newState instanceof PipelineUiState.Running
+                                          || newState instanceof PipelineUiState.Preparing;
+                    promptsAdapter.setLanguageChipEnabled(!pipelineRunning);
+                }
 
                 if (recordingUiController == null) return;
                 if (newState instanceof PipelineUiState.Idle) {
@@ -543,7 +644,8 @@ public class DictateInputMethodService extends InputMethodService
                     recordingUiController.updateQwertzRecButton(false);
                 }
             }
-        });
+        };
+        uiController.addCallback(servicePipelineCallback);
 
         // ── 5. Rewire callbacks (connect long-lived objects to new UI controllers) ──
         // INVARIANT: Order is controllers (above) → rewireCallbacks() → restoreUiState()
@@ -556,6 +658,12 @@ public class DictateInputMethodService extends InputMethodService
 
         // ── 7. Prompts adapter + InvalidationTracker ──
         setupPromptsAdapter(context);
+
+        // ── 8. Initial language-chip render (Phase 2 §2.1) ──
+        // Chip is always visible; refresh sets the label from the current
+        // effective language so the very first frame shows the right value
+        // before the user interacts with anything.
+        refreshLanguageChip();
 
         return dictateKeyboardView;
     }
@@ -612,6 +720,21 @@ public class DictateInputMethodService extends InputMethodService
             dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
         }
         if (bluetoothScoManager != null) bluetoothScoManager.unregisterReceiver();
+        // Phase 4 follow-up: dispose the language controller and its prefs listener.
+        // The Service may be destroyed without a preceding view-recreate (the IME
+        // process can be torn down by the OS while a view is still attached), in
+        // which case cleanupOldControllers() is never called and the listener +
+        // controller would leak through the SharedPreferences and the
+        // PipelineUiStateReader callback list. Disposing here is idempotent with
+        // cleanupOldControllers() because both null out the references afterwards.
+        if (languageController != null) {
+            languageController.dispose();
+            languageController = null;
+        }
+        if (inputLanguagesListener != null && sp != null) {
+            sp.unregisterOnSharedPreferenceChangeListener(inputLanguagesListener);
+            inputLanguagesListener = null;
+        }
         super.onDestroy();
     }
 
@@ -643,7 +766,32 @@ public class DictateInputMethodService extends InputMethodService
                 restoreReprocessStaging = null;
             }
 
+            // Phase 1 cross-phase: detach Service-side pipeline observer so the
+            // CopyOnWriteArrayList in the soon-to-be-discarded controller does
+            // not retain a reference. The new uiController will get a fresh
+            // servicePipelineCallback in onCreateInputView.
+            if (servicePipelineCallback != null) {
+                uiController.removeCallback(servicePipelineCallback);
+                servicePipelineCallback = null;
+            }
+
             uiController.stopActiveTimer();
+        }
+        // Phase 1 cross-phase: dispose the language controller bound to the old
+        // uiController so its self-registration is reverted before the new
+        // controller is constructed in onCreateInputView. Without this the old
+        // controller would keep observing a discarded view's state.
+        if (languageController != null) {
+            languageController.dispose();
+            languageController = null;
+        }
+        // Phase 3 cross-instance bridge: deregister the prefs listener that was
+        // forwarding external Settings-writes into the (now disposed) language
+        // controller. The fresh controller in the upcoming onCreateInputView
+        // will register a new listener bound to the new instance.
+        if (inputLanguagesListener != null) {
+            sp.unregisterOnSharedPreferenceChangeListener(inputLanguagesListener);
+            inputLanguagesListener = null;
         }
         // Remove old InvalidationTracker observer (will be re-added in setupPromptsAdapter)
         if (promptsInvalidationObserver != null && dictateDb != null) {
@@ -859,7 +1007,10 @@ public class DictateInputMethodService extends InputMethodService
             }
         });
         promptsRv.setAdapter(promptsAdapter);
-        promptsAdapter.setLanguageChipListener(this::showReprocessLanguageDialog);
+        // Phase 2 §2.4: chip-click listener is wired ONCE here (not per mode).
+        // Click opens the grouped PopupMenu — curated languages on top, all
+        // others below, "Verwalten…" action at the end.
+        promptsAdapter.setLanguageChipListener(this::showLanguagePicker);
 
         // Register InvalidationTracker to auto-reload prompts when DB changes (debounced 200ms)
         promptsInvalidationObserver = new InvalidationTracker.Observer("prompts") {
@@ -873,37 +1024,35 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * Syncs the prompts adapter's header chip + queued order to the given state.
-     * - ReprocessStaging: show language chip, queued order = editable queue
-     * - Any other state: hide chip, queued order = the regular PromptQueueManager ids
-     *
-     * Called from the pipeline UI callback on every state transition (Phase 8).
+     * Phase 2 §2.7b: Syncs the prompts-adapter's queued-prompt order to the
+     * pipeline state. The language chip is now permanently visible (its
+     * label is refreshed via {@link #refreshLanguageChip()} on every
+     * effective-language change), so this method has only a single
+     * responsibility — keep the editable queue or the regular queue in
+     * the adapter, depending on the active state.
      */
-    private void applyReprocessStagingAdapter(PipelineUiState newState) {
+    private void syncQueueOrder(PipelineUiState newState) {
         if (promptsAdapter == null) return;
         if (newState instanceof PipelineUiState.ReprocessStaging) {
             PipelineUiState.ReprocessStaging s = (PipelineUiState.ReprocessStaging) newState;
-            promptsAdapter.setLanguageChipVisible(true, resolveLanguageLabel(s.getSelectedLanguage()));
             promptsAdapter.setQueuedPromptOrder(s.getEditableQueue());
         } else {
-            promptsAdapter.setLanguageChipVisible(false, null);
             promptsAdapter.setQueuedPromptOrder(promptQueueManager.getQueuedIds());
         }
     }
 
     /**
-     * Resolves a language value (e.g. "de") to its display label from the
-     * `dictate_input_languages` resource array. Falls back to the "Language"
-     * label if the value is null or unknown.
+     * Phase 2 §2.1: refreshes the always-visible language chip's label
+     * from the current effective language. Called on initial render, on
+     * every {@link LanguageController.Callback#onEffectiveLanguageChanged}
+     * fire, and any place the service explicitly wants the chip in lock-
+     * step with the controller's view of "current language".
      */
-    private String resolveLanguageLabel(String value) {
-        if (value == null) return null;
-        String[] labels = getResources().getStringArray(R.array.dictate_input_languages);
-        String[] values = getResources().getStringArray(R.array.dictate_input_languages_values);
-        for (int i = 0; i < values.length && i < labels.length; i++) {
-            if (value.equals(values[i])) return labels[i];
-        }
-        return null;
+    private void refreshLanguageChip() {
+        if (promptsAdapter == null || languageController == null) return;
+        String code = languageController.getEffectiveLanguage();
+        String label = LanguageLabelResolver.INSTANCE.resolveLabel(code);
+        promptsAdapter.setLanguageChipVisible(true, label);
     }
 
     /**
@@ -913,7 +1062,7 @@ public class DictateInputMethodService extends InputMethodService
      * W6: Single source of truth — we write the new queue onto
      * {@link PipelineUiState.ReprocessStaging} via
      * {@code uiController.updateReprocessQueue}, and the state-change
-     * callback routes back through {@link #applyReprocessStagingAdapter}
+     * callback routes back through {@link #syncQueueOrder}
      * which updates the adapter. No direct adapter write here.
      */
     private void handleReprocessPromptToggle(PromptEntity model, PipelineUiState.ReprocessStaging staging) {
@@ -929,37 +1078,132 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * Opens a PopupMenu anchored on the language chip, listing all available
-     * transcription languages. The picked value is written back to the
-     * ReprocessStaging state.
+     * Phase 2 §2.2: opens a grouped PopupMenu listing all transcription
+     * languages. The chip is always-visible, so this method runs in both
+     * the idle and the ReprocessStaging modes; the {@link LanguageController}
+     * decides whether the click results in a permanent write (with auto-
+     * curation) or a transient ReprocessStaging override.
      *
-     * PopupMenu is used instead of a Dialog because IMEs don't own a
+     * <p>Layout:
+     * <ol>
+     *   <li>Curated languages (top, label-sorted)</li>
+     *   <li>Visual divider — native group divider on API 28+, Unicode
+     *       label fallback on API 26-27</li>
+     *   <li>All other languages (label-sorted)</li>
+     *   <li>"⚙ Sprachen verwalten…" action that opens settings</li>
+     * </ol>
+     *
+     * <p>PopupMenu is used instead of a Dialog because IMEs don't own a
      * window token compatible with TYPE_APPLICATION_ATTACHED_DIALOG on
      * all OEM skins (Samsung One UI throws BadTokenException). PopupMenu
      * anchors its window on the passed view and therefore inherits the
-     * IME's window context correctly.
+     * IME's window context correctly.</p>
      */
-    private void showReprocessLanguageDialog(View anchor) {
-        if (!(uiController.getState() instanceof PipelineUiState.ReprocessStaging)) return;
+    private void showLanguagePicker(View anchor) {
+        if (languageController == null) return;
 
-        String[] labels = getResources().getStringArray(R.array.dictate_input_languages);
-        String[] values = getResources().getStringArray(R.array.dictate_input_languages_values);
+        // Quality-Gate N-6: getCuratedLanguages() returns the list already
+        // label-sorted and free of duplicates / unknown codes (plugin
+        // sanitize contract). Just compute "others" for the lower block.
+        List<String> curatedOrdered = languageController.getCuratedLanguages();
+        List<String> othersOrdered = LanguageLabelResolver.INSTANCE.othersThan(curatedOrdered);
 
         android.widget.PopupMenu popup = new android.widget.PopupMenu(
                 new ContextThemeWrapper(this, R.style.Theme_Dictate), anchor);
-        for (int i = 0; i < labels.length; i++) {
-            popup.getMenu().add(android.view.Menu.NONE, i, i, labels[i]);
+        Menu menu = popup.getMenu();
+
+        // --- Upper block: curated languages ---
+        int order = 0;
+        for (String code : curatedOrdered) {
+            String label = LanguageLabelResolver.INSTANCE.resolveLabel(code);
+            menu.add(GROUP_CURATED, stableIdForCode(code), order++, label);
         }
+
+        // --- Visual divider ---
+        // Edge-case (Plan §2.2): when all 62 supported languages are curated
+        // there is no "Others" group, so a divider would render an empty
+        // section. Guard both branches against the empty-others case.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            if (!othersOrdered.isEmpty()) {
+                // Native horizontal divider between groups (API 28+ / Android 9).
+                menu.setGroupDividerEnabled(true);
+            }
+        } else if (!othersOrdered.isEmpty()) {
+            // API 26/27 fallback — disabled label item with Unicode dashes.
+            MenuItem sep = menu.add(GROUP_OTHERS, Menu.NONE, order++,
+                    getString(R.string.dictate_language_other_separator));
+            sep.setEnabled(false);
+        }
+
+        // --- Lower block: all other languages ---
+        for (String code : othersOrdered) {
+            String label = LanguageLabelResolver.INSTANCE.resolveLabel(code);
+            menu.add(GROUP_OTHERS, stableIdForCode(code), order++, label);
+        }
+
+        // --- Action at the end: open settings with focus on the curation list ---
+        menu.add(GROUP_ACTION, MENU_ID_MANAGE, order++,
+                getString(R.string.dictate_language_manage));
+
         popup.setOnMenuItemClickListener(item -> {
-            int idx = item.getItemId();
-            if (idx >= 0 && idx < values.length) {
-                uiController.updateReprocessLanguage(values[idx]);
+            int id = item.getItemId();
+            if (id == MENU_ID_MANAGE) {
+                openLanguageSettings();
+                return true;
+            }
+            String code = codeForStableId(id);
+            if (code != null) {
+                languageController.setLanguage(code);
                 return true;
             }
             return false;
         });
         popup.show();
     }
+
+    /**
+     * Phase 2 §2.2: opens the settings activity with a request to scroll
+     * to the input-languages preference so the user can curate the list.
+     */
+    private void openLanguageSettings() {
+        Intent intent = new Intent(this, DictateSettingsActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.putExtra(DictateSettingsActivity.EXTRA_SCROLL_TO,
+                "net.devemperor.dictate.input_languages");
+        startActivity(intent);
+    }
+
+    // Phase 2 §2.2: stable PopupMenu IDs derived from the resolver's
+    // resource-array index of each ISO code. Quality-Gate N-7 — uses
+    // a constant offset so a code's index never collides with the
+    // sentinel MENU_ID_MANAGE (-1) or Menu.NONE.
+    private static final int MENU_ID_MANAGE = -1;
+    // Larger than the count of supported language codes (currently 58 in
+    // R.array.dictate_input_languages_values) to prevent stable-ID
+    // collisions with MENU_ID_MANAGE (-1) or framework constants like
+    // Menu.NONE (0). If the language list ever grows beyond ~95 entries,
+    // raise this offset accordingly. A static_init compile-time guard
+    // would be cleaner, but LanguageLabelResolver is not yet initialised
+    // when the Service's static block runs, so we rely on this comment
+    // and the Quality-Gate review as the contract.
+    private static final int MENU_ID_OFFSET = 100;
+
+    private static int stableIdForCode(String code) {
+        int idx = LanguageLabelResolver.INSTANCE.indexOfCode(code);
+        return idx >= 0 ? idx + MENU_ID_OFFSET : Menu.NONE;
+    }
+
+    private static String codeForStableId(int id) {
+        if (id < MENU_ID_OFFSET) return null;
+        int idx = id - MENU_ID_OFFSET;
+        List<String> all = LanguageLabelResolver.INSTANCE.allCodes();
+        return idx < all.size() ? all.get(idx) : null;
+    }
+
+    // Phase 2 §2.2: Menu group-IDs for the grouped PopupMenu.
+    private static final int GROUP_CURATED = 1;
+    private static final int GROUP_OTHERS = 2;
+    private static final int GROUP_ACTION = 3;
 
     // method is called if the keyboard appears again
     @Override
@@ -1336,9 +1580,15 @@ public class DictateInputMethodService extends InputMethodService
             boolean autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
             uiController.startPipeline(totalSteps, new KeyboardUiController.AutoEnterConfig(autoEnter));
 
-            String language = currentInputLanguageValue != null && !currentInputLanguageValue.equals("detect")
-                    ? currentInputLanguageValue : null;
-            String stylePrompt = promptService.resolveWhisperStylePrompt(currentInputLanguageValue);
+            // Phase 2 §2.6: language source is now the LanguageController
+            // (Single-Source-of-Truth across normal mode + ReprocessStaging
+            // override). "detect" remains the explicit "let Whisper detect"
+            // sentinel — passed as null on the wire.
+            String effectiveLanguage = languageController != null
+                    ? languageController.getEffectiveLanguage()
+                    : "detect";
+            String language = !"detect".equals(effectiveLanguage) ? effectiveLanguage : null;
+            String stylePrompt = promptService.resolveWhisperStylePrompt(effectiveLanguage);
 
             EditorInfo info = getCurrentInputEditorInfo();
             boolean showResend = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
@@ -1555,51 +1805,110 @@ public class DictateInputMethodService extends InputMethodService
         uiController.toggleAutoEnter();
     }
 
+    /**
+     * Backward-compat wrapper — captures the live IC + EditorInfo and
+     * delegates to the parametrised overload with auto-enter enabled. All
+     * existing pipeline call sites continue to work unchanged.
+     */
     private void commitTextToInputConnection(String text, InsertionSource source) {
-        InputConnection inputConnection = getCurrentInputConnection();
-        if (inputConnection == null) return;
+        commitTextToInputConnection(
+                getCurrentInputConnection(),
+                getCurrentInputEditorInfo(),
+                text,
+                source,
+                /* sessionIdOverride = */ null,
+                /* enableAutoEnter   = */ true);
+    }
 
-        // Capture replaced (selected) text before commit for undo-buffer / audit
+    /**
+     * Commit text via an explicit {@link InputConnection}.
+     *
+     * Used by the Phase-5 resend-button short-press path so the IC captured
+     * at click time can be reused if the editor focus has drifted by the
+     * time the DB lookup completes. Side-effects (replaced-text capture,
+     * slow-output animation, auto-enter, DB log) are funnelled through this
+     * single path so all stages of the resend strategy behave consistently.
+     *
+     * @param ic                  the {@link InputConnection} to commit on.
+     *                            {@code null} → returns {@code false} (no-op).
+     * @param editor              the {@link EditorInfo} that pairs with
+     *                            {@code ic}; used only for the audit log
+     *                            (package name).
+     * @param text                the text to insert. {@code null} treated as
+     *                            empty string.
+     * @param source              audit/telemetry classifier; {@code null}
+     *                            disables the DB write.
+     * @param sessionIdOverride   when non-{@code null} the audit log binds
+     *                            to this session id instead of the
+     *                            {@link SessionTracker#getCurrentSessionId() current}
+     *                            one. Resend-clicks pass the
+     *                            {@code lastSession.getId()} here because the
+     *                            tracker has already been cleared by the
+     *                            time the click runs.
+     * @param enableAutoEnter     when {@code true} the auto-enter side-effect
+     *                            ({@link #scheduleAutoEnter}) runs after a
+     *                            successful commit; when {@code false} it is
+     *                            suppressed. The pipeline transcription/
+     *                            standalone-prompt paths pass {@code true} —
+     *                            the resend-button paths (Stage 1 + Stage 2
+     *                            of {@link ResendInsertStrategy}) pass
+     *                            {@code false} because (a) Stage 2 commits
+     *                            on a captured IC while
+     *                            {@link #scheduleAutoEnter}/{@link #performEnterAction}
+     *                            would later fire on the live IC — Enter
+     *                            would land in the wrong field — and (b) a
+     *                            Resend click is a recovery insert, not a
+     *                            new transcription, so silently appending
+     *                            Enter is unwanted UX in either stage.
+     * @return {@code true} if the commit succeeded, {@code false} if the IC
+     *         was {@code null} or {@code commitText()} reported failure.
+     */
+    private boolean commitTextToInputConnection(
+            InputConnection ic,
+            EditorInfo editor,
+            String text,
+            InsertionSource source,
+            String sessionIdOverride,
+            boolean enableAutoEnter) {
+        if (ic == null) return false;
+
+        // 1. Capture replaced (selected) text before commit for undo-buffer / audit
         String replacedText = null;
         if (source != null) {
-            CharSequence sel = inputConnection.getSelectedText(0);
-            if (sel != null && sel.length() > 0) replacedText = sel.toString();
+            replacedText = safeReadSelectedText(ic);
         }
 
         String output = text == null ? "" : text;
-        if (DictatePrefsKt.get(sp, Pref.InstantOutput.INSTANCE)) {
-            inputConnection.commitText(output, 1);
-        } else if (mainHandler != null) {
-            int speed = DictatePrefsKt.get(sp, Pref.OutputSpeed.INSTANCE);
-            for (int i = 0; i < output.length(); i++) {
-                char character = output.charAt(i);
-                String characterString = String.valueOf(character);
-                long delay = (long) (i * (20L / (speed / 5f)));
-                mainHandler.postDelayed(() -> {
-                    InputConnection ic = getCurrentInputConnection();
-                    if (ic != null) {
-                        ic.commitText(characterString, 1);
-                    }
-                }, delay);
-            }
-        } else {
-            inputConnection.commitText(output, 1);
-        }
 
-        // Auto-enter: send as separate control character with delay so terminal emulators
-        // (e.g. Termux/Claude Code) treat it as a distinct keystroke, not part of the paste block
-        if (isAutoEnterActive()) {
+        // 2. InstantOutput vs slow-output branch — same path for live and
+        //    captured IC so UX (char-by-char animation) stays consistent.
+        boolean success;
+        if (DictatePrefsKt.get(sp, Pref.InstantOutput.INSTANCE)) {
+            success = ic.commitText(output, 1);
+        } else if (mainHandler != null) {
+            success = commitSlowOutput(ic, output);
+        } else {
+            success = ic.commitText(output, 1);
+        }
+        if (!success) return false;
+
+        // 3. Auto-enter: send as separate control character with delay so
+        //    terminal emulators (e.g. Termux/Claude Code) treat it as a
+        //    distinct keystroke, not part of the paste block. Suppressed
+        //    for resend paths — see KDoc on the {@code enableAutoEnter}
+        //    parameter for the rationale.
+        if (enableAutoEnter && isAutoEnterActive()) {
             scheduleAutoEnter(output);
         }
 
-        // Persist text insertion and update session's final output
+        // 4. Persist text insertion and update session's final output
         if (source != null && output.length() > 0) {
             final String fReplacedText = replacedText;
-            final String fSessionId = sessionTracker.getCurrentSessionId();
+            final String fSessionId = sessionIdOverride != null
+                    ? sessionIdOverride : sessionTracker.getCurrentSessionId();
             final String fStepId = sessionTracker.getCurrentStepId();
             final String fTranscriptionId = sessionTracker.getCurrentTranscriptionId();
-            final String pkg = getCurrentInputEditorInfo() != null
-                ? getCurrentInputEditorInfo().packageName : null;
+            final String pkg = editor != null ? editor.packageName : null;
 
             dbExecutor.execute(() -> {
                 sessionManager.logTextInsertion(fSessionId, output, fReplacedText, pkg,
@@ -1608,6 +1917,57 @@ public class DictateInputMethodService extends InputMethodService
                     sessionManager.updateFinalOutputText(fSessionId, output);
                 }
             });
+        }
+        return true;
+    }
+
+    /**
+     * Slow-output animation: char-by-char commit on the captured (or live)
+     * IC, scheduled on {@code mainHandler}. Returns whether the first
+     * character was committed successfully — a {@code false} here signals an
+     * IC that rejects writes (stale / closed) and the caller can fall
+     * through to the next stage.
+     *
+     * <p><b>IC-capture semantics (Phase 5 refactor):</b> the {@link
+     * InputConnection} is captured <i>once</i> at the start of the animation
+     * and reused for every scheduled character. This is a deliberate
+     * behaviour change from the pre-refactor loop, which re-fetched
+     * {@code getCurrentInputConnection()} per character. As a result, if the
+     * user changes editor focus mid-animation, the remaining scheduled
+     * characters will fail silently — {@code commitText()} returns
+     * {@code false} on the now-stale IC and we drop them. For the
+     * captured-IC resend use case (Stage 2 of {@link ResendInsertStrategy})
+     * this is the desired behaviour: the resend explicitly targets the
+     * editor that was focused at click time, not whatever the user has
+     * navigated to since.</p>
+     */
+    private boolean commitSlowOutput(InputConnection ic, String output) {
+        if (output.isEmpty()) return ic.commitText(output, 1);
+
+        int speed = DictatePrefsKt.get(sp, Pref.OutputSpeed.INSTANCE);
+        // Commit first character synchronously so we can detect a dead IC
+        // immediately and report the failure to the caller.
+        boolean firstOk = ic.commitText(String.valueOf(output.charAt(0)), 1);
+        if (!firstOk) return false;
+        for (int i = 1; i < output.length(); i++) {
+            String characterString = String.valueOf(output.charAt(i));
+            long delay = (long) (i * (20L / (speed / 5f)));
+            mainHandler.postDelayed(() -> ic.commitText(characterString, 1), delay);
+        }
+        return true;
+    }
+
+    /**
+     * Quality-Gate W-3 — central try-catch for {@link InputConnection#getSelectedText(int)}.
+     * Stale IC implementations are documented to throw on read attempts; we
+     * swallow the exception and treat the result as "no selected text".
+     */
+    private static String safeReadSelectedText(InputConnection ic) {
+        try {
+            CharSequence sel = ic.getSelectedText(0);
+            return (sel != null && sel.length() > 0) ? sel.toString() : null;
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 
@@ -1690,32 +2050,25 @@ public class DictateInputMethodService extends InputMethodService
         infoBarController.showInfo(type, providerName);
     }
 
+    /**
+     * Phase 2 §2.5b: record-button label for the current effective
+     * language. The full self-heal + StringSet sanitisation block has
+     * moved into {@link InputLanguagesPlugin#sanitize} and the
+     * {@link LanguageController} pos resync; this method is now a pure
+     * lookup.
+     */
     private String getDictateButtonText() {
-        List<String> allLanguagesValues = Arrays.asList(getResources().getStringArray(R.array.dictate_input_languages_values));
-        List<String> recordDifferentLanguages = Arrays.asList(getResources().getStringArray(R.array.dictate_record_different_languages));
-
-        LinkedHashSet<String> defaultLanguages = new LinkedHashSet<>(Arrays.asList(getResources().getStringArray(R.array.dictate_default_input_languages)));
-        Set<String> storedLanguages = DictatePrefsKt.getStringSet(sp, Pref.InputLanguages.INSTANCE, defaultLanguages);
-        LinkedHashSet<String> sanitizedLanguages = new LinkedHashSet<>();
-        for (String language : storedLanguages) {
-            if (allLanguagesValues.contains(language)) sanitizedLanguages.add(language);
+        if (languageController == null) {
+            // Defensive: only happens during the brief window before
+            // onCreateInputView wires the controller. Fall back to the
+            // first entry of InputLanguagesPlugin.defaultValue so there is
+            // a single source of truth for the default code (avoids a
+            // hard-coded "detect" drifting out of sync with the plugin).
+            String defaultCode = InputLanguagesPlugin.INSTANCE.getDefaultValue().get(0);
+            return LanguageLabelResolver.INSTANCE.recordLabelFor(defaultCode);
         }
-        if (sanitizedLanguages.isEmpty()) sanitizedLanguages.addAll(defaultLanguages);
-        if (!sanitizedLanguages.equals(storedLanguages)) {
-            DictatePrefsKt.putStringSet(sp.edit(), Pref.InputLanguages.INSTANCE, sanitizedLanguages).apply();
-        }
-
-        List<String> languagesList = new ArrayList<>(sanitizedLanguages);
-        if (currentInputLanguagePos >= languagesList.size()) currentInputLanguagePos = 0;
-        DictatePrefsKt.put(sp.edit(), Pref.InputLanguagePos.INSTANCE, currentInputLanguagePos).apply();
-
-        currentInputLanguageValue = languagesList.get(currentInputLanguagePos);
-        int languageIndex = allLanguagesValues.indexOf(currentInputLanguageValue);
-        if (languageIndex < 0) {
-            currentInputLanguageValue = allLanguagesValues.get(0);
-            languageIndex = 0;
-        }
-        return recordDifferentLanguages.get(languageIndex);
+        String code = languageController.getEffectiveLanguage();
+        return LanguageLabelResolver.INSTANCE.recordLabelFor(code);
     }
 
     private void deleteOneCharacter() {
@@ -1801,42 +2154,109 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onResendClicked() {
-        // Phase 9.1 — status-based dispatch on the last keyboard session.
-        // Heavy DB access happens on background thread; UI updates post back.
+        // Phase 5 — status-based dispatch with InputConnection capture.
+        //
+        // The IC + EditorInfo are captured *here* on the main thread, before
+        // the DB lookup begins. If the user changes focus while the lookup
+        // runs, the live IC obtained later may belong to a different field;
+        // insertOrFallback() then falls back to the captured channel.
+        final InputConnection capturedIc = getCurrentInputConnection();
+        final EditorInfo capturedEditor = getCurrentInputEditorInfo();
+
+        // Quality-Gate N-2 — double-click race: disable the button on the
+        // main thread immediately so a second tap within the cooldown window
+        // can't kick off a parallel DB lookup + insertion. Re-enabled in the
+        // worker's finally block via mainHandler.postDelayed.
+        if (mainButtonsController != null) {
+            mainButtonsController.setResendEnabled(false);
+        }
+
         dbExecutor.execute(() -> {
-            SessionEntity lastSession = sessionTracker.getLastKeyboardSession();
-            if (lastSession == null) return;
+            try {
+                SessionEntity lastSession = sessionTracker.getLastKeyboardSession();
+                if (lastSession == null) return;
 
-            SessionStatus status = lastSession.getStatusEnum();
-            String output = lastSession.getFinalOutputText();
+                ResendAction action = ResendStatusDispatcher.INSTANCE.decide(
+                        lastSession.getStatusEnum(),
+                        lastSession.getFinalOutputText(),
+                        lastSession.getId());
 
-            switch (status) {
-                case COMPLETED:
-                    // Happy path — re-insert the existing final output text.
-                    if (output != null && !output.isEmpty()) {
-                        mainHandler.post(() -> commitTextToInputConnection(
-                                output, InsertionSource.TRANSCRIPTION));
+                if (action instanceof ResendAction.Insert) {
+                    ResendAction.Insert insert = (ResendAction.Insert) action;
+                    mainHandler.post(() -> insertOrFallback(
+                            capturedIc, capturedEditor,
+                            insert.getOutput(), insert.getSessionId()));
+                } else if (action instanceof ResendAction.Resume) {
+                    ResendAction.Resume resume = (ResendAction.Resume) action;
+                    mainHandler.post(() -> startResumeJob(resume.getSessionId()));
+                }
+                // ResendAction.NoOp falls through silently — FAILED status
+                // and defensive empty-output COMPLETED both land here.
+            } finally {
+                // Quality-Gate N-2 — re-enable after a 500 ms cooldown so the
+                // capture + dispatch phase has time to settle without a
+                // second click slipping through.
+                mainHandler.postDelayed(() -> {
+                    if (mainButtonsController != null) {
+                        mainButtonsController.setResendEnabled(true);
                     }
-                    break;
-
-                case RECORDED:
-                case FAILED:
-                    // Error recovery — resume the pipeline from the failure point.
-                    mainHandler.post(() -> startResumeJob(lastSession.getId()));
-                    break;
-
-                case CANCELLED:
-                    // Short-press on CANCELLED inserts the last available output
-                    // if any, otherwise falls back to resume (SEC-7-8).
-                    if (output != null && !output.isEmpty()) {
-                        mainHandler.post(() -> commitTextToInputConnection(
-                                output, InsertionSource.TRANSCRIPTION));
-                    } else {
-                        mainHandler.post(() -> startResumeJob(lastSession.getId()));
-                    }
-                    break;
+                }, 500);
             }
         });
+    }
+
+    /**
+     * Three-stage insertion strategy for the short-press resend path.
+     *
+     * <p>Called on the main thread <i>after</i> the worker-thread DB lookup
+     * has resolved the last keyboard session. The {@code capturedIc} +
+     * {@code capturedEditor} were obtained when the button was clicked, so
+     * they are still valid even if the user has since focused a different
+     * field.</p>
+     *
+     * <p>Stages, tried in order:</p>
+     * <ol>
+     *   <li><b>Live IC + same editor</b> — preferred, identical to the normal
+     *       transcription-commit path.</li>
+     *   <li><b>Captured IC</b> — used when the live IC is {@code null} or
+     *       points to a different editor. Android does not invalidate IC
+     *       objects synchronously on focus change, so the captured handle
+     *       often still works for the original field.</li>
+     *   <li><b>Toast + resume job</b> — last resort if both IC channels are
+     *       dead (capture's {@code commitText()} reported failure or both
+     *       were {@code null}). Shows the user a clear focus-lost message
+     *       and starts a pipeline resume so they don't lose the output.</li>
+     * </ol>
+     */
+    private void insertOrFallback(
+            InputConnection capturedIc,
+            EditorInfo capturedEditor,
+            String output,
+            String sessionId) {
+        // Delegates the strategy to the pure-logic helper so the 3-stage
+        // decision tree stays unit-testable (see ResendInsertStrategy +
+        // InsertOrFallbackTest). Side-effect adapters (commit, toast,
+        // resume) are bound here.
+        ResendInsertStrategy.INSTANCE.execute(
+                getCurrentInputConnection(),
+                getCurrentInputEditorInfo(),
+                capturedIc,
+                capturedEditor,
+                output,
+                sessionId,
+                // enableAutoEnter = false in BOTH resend stages:
+                // - Stage 2 (captured IC): scheduleAutoEnter would later fire
+                //   performEnterAction, which reads the *live* IC — Enter would
+                //   land in whatever field has focus now, not the captured one.
+                // - Stage 1 (live IC, same editor): a Resend click is a recovery
+                //   insert, not a new transcription, so appending Enter is
+                //   undesirable UX. Both stages route through this adapter.
+                (ic, editor, text, sid) -> commitTextToInputConnection(
+                        ic, editor, text, InsertionSource.TRANSCRIPTION, sid,
+                        /* enableAutoEnter = */ false),
+                () -> Toast.makeText(
+                        this, R.string.dictate_resend_focus_lost, Toast.LENGTH_SHORT).show(),
+                this::startResumeJob);
     }
 
     /**
@@ -2124,8 +2544,30 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onLanguageCycled() {
-        currentInputLanguagePos++;
-        recordButton.setText(getDictateButtonText());
+        // Phase 2 §2.8: rotate through the curated list (label-sorted by
+        // the InputLanguagesPlugin contract). The setLanguage call routes
+        // through the LanguageController; in idle mode that triggers a
+        // permanent write + pos resync, in ReprocessStaging it would set
+        // a transient override (cycle is wired only to the long-press on
+        // the main record button, which is itself disabled during staging).
+        if (languageController == null) return;
+        // Validator-Fix: early-return during ReprocessStaging. setLanguage
+        // routes as a transient override there and does NOT mutate
+        // Pref.InputLanguagePos, so a second cycle click would jump to the
+        // SAME follow-up language — UX-feindlich. In ReprocessStaging the
+        // user must pick the override language explicitly via the chip
+        // popup; cycling has no consistent meaning.
+        if (uiController != null
+                && uiController.getState() instanceof PipelineUiState.ReprocessStaging) {
+            return;
+        }
+        List<String> curated = languageController.getCuratedLanguages();
+        if (curated.isEmpty()) return;
+        int pos = DictatePrefsKt.get(sp, Pref.InputLanguagePos.INSTANCE);
+        int next = (pos + 1) % curated.size();
+        languageController.setLanguage(curated.get(next));
+        // The record-button label is refreshed via the LanguageController
+        // callback wired in onCreateInputView — no manual setText here.
     }
 
     @Override

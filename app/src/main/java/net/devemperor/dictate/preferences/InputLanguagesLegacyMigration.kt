@@ -71,11 +71,10 @@ object InputLanguagesLegacyMigration {
         prefs.edit().remove(KEY).apply()
         persistInputLanguagesAndPos(prefs, legacySet.toList(), oldActive)
 
-        val persisted = VersionedPrefs.load(prefs, InputLanguagesPlugin)
         val newPos = prefs.get(Pref.InputLanguagePos)
         Log.i(
             TAG,
-            "Migrated ${persisted.size} languages from StringSet to versioned envelope; " +
+            "Migrated ${legacySet.size} languages from StringSet to versioned envelope; " +
                 "pos $oldPos ($oldActive) -> $newPos"
         )
     }

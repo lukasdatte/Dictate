@@ -71,14 +71,44 @@ class VersionedSerializerTest {
         val plugin = StringListV1Plugin(currentVersion = 1)
         val serializer = VersionedSerializer(plugin)
 
-        // Force a Long: a value > Int.MAX_VALUE is parsed as Long by org.json.
-        // We use the JSONObject.put(int, Number) form to be explicit.
+        // Force a Long that fits into Int range — verifies that `is Number`
+        // detection works for Long-typed `version` fields produced by org.json
+        // for integer JSON literals.
         val obj = JSONObject().apply {
-            put("version", 1L)  // Long literal
+            put("version", 1L)  // Long literal, in-int-range
             put("value", org.json.JSONArray(listOf("a", "b")))
         }
         val result = serializer.deserialize(obj.toString())
         assertEquals(listOf("a", "b"), result)
+    }
+
+    @Test
+    fun `deserialize on out-of-int-range Long version silently truncates and resets to default (W-10 accepted limitation)`() {
+        // Pathological-path complement to the in-range Long test. This pins
+        // the **accepted limitation** documented on
+        // [VersionedSerializer.isVersionedEnvelope]: org.json's `getInt()`
+        // silently truncates Long values that don't fit Int range, so a
+        // `version: 3_000_000_000L` becomes some negative Int after
+        // truncation. That truncated version has no matching migration
+        // entry, which routes through `OnMissingMigration.RESET_TO_DEFAULT`
+        // (the default strategy) and yields `plugin.defaultValue`.
+        //
+        // The behaviour is not "hard error" but it is also not silent raw-
+        // as-v1 corruption: the value path collapses to the plugin default
+        // instead of being interpreted as an unversioned legacy payload.
+        // Pinning this here protects the contract against future refactors
+        // that might replace `getInt` with `getLong` (which would silently
+        // start accepting these versions and break the migration chain).
+        val plugin = StringListV1Plugin(defaultValue = listOf("fallback"))
+        val serializer = VersionedSerializer(plugin)
+
+        val obj = JSONObject().apply {
+            put("version", 3_000_000_000L) // > Int.MAX_VALUE; cannot fit in Int
+            put("value", org.json.JSONArray(listOf("a", "b")))
+        }
+
+        val result = serializer.deserialize(obj.toString())
+        assertEquals(listOf("fallback"), result)
     }
 
     @Test

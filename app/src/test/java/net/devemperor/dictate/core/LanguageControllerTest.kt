@@ -307,6 +307,71 @@ class LanguageControllerTest {
         assertTrue(callbackEvents.isEmpty())
     }
 
+    // ── long-press cycle wraparound (Verification §8) ──
+
+    @Test
+    fun `cycle pattern walks linearly through curated and lands on each entry`() {
+        // The cycle algorithm in DictateInputMethodService.onLanguageCycled is
+        // `next = (pos + 1) % curated.size(); setLanguage(curated[next])`. The
+        // pure-logic part lives in setLanguage's pos-resync; the cycle itself
+        // is one line in the Service. We simulate the cycle here by feeding
+        // the controller the same sequence the Service would, and pin that
+        // every step lands on the expected curated entry.
+        controller.setCuratedLanguages(listOf("de", "en", "fr"))
+        // Starting pos: 0 (de). Cycle expected: en, fr, de, en, fr, de, ...
+        val expected = listOf("en", "fr", "de", "en", "fr", "de")
+        for (target in expected) {
+            val curated = controller.getCuratedLanguages()
+            val pos = prefs.getInt(Pref.InputLanguagePos.key, 0)
+            val next = (pos + 1) % curated.size
+            controller.setLanguage(curated[next])
+            assertEquals(target, controller.getEffectiveLanguage())
+            // Pos must point at the freshly cycled entry post-resync.
+            assertEquals(target, curated[(pos + 1) % curated.size])
+        }
+    }
+
+    @Test
+    fun `cycle from last entry wraps to first (pos resync to 0)`() {
+        controller.setCuratedLanguages(
+            codes = listOf("de", "en", "fr"),
+            preferActive = "fr"
+        )
+        // Pos now anchors on "fr" (last entry).
+        val curated = controller.getCuratedLanguages()
+        val pos = prefs.getInt(Pref.InputLanguagePos.key, 0)
+        assertEquals(curated.size - 1, pos)
+
+        // Simulate one cycle step: should wrap to index 0.
+        val next = (pos + 1) % curated.size
+        controller.setLanguage(curated[next])
+
+        assertEquals(0, prefs.getInt(Pref.InputLanguagePos.key, -1))
+        assertEquals("de", controller.getEffectiveLanguage())
+    }
+
+    @Test
+    fun `cycle on single-element curated list is a no-op visible state`() {
+        controller.setCuratedLanguages(listOf("en"))
+        val curated = controller.getCuratedLanguages()
+        assertEquals(listOf("en"), curated)
+        callbackEvents.clear()
+
+        // Cycle step on a 1-element list: (0 + 1) % 1 == 0 → setLanguage("en").
+        // setLanguage with an unchanged effective code must NOT fire the
+        // callback (lastEffective guard) — the visible UX is "nothing happened".
+        val pos = prefs.getInt(Pref.InputLanguagePos.key, 0)
+        val next = (pos + 1) % curated.size
+        controller.setLanguage(curated[next])
+
+        assertEquals("en", controller.getEffectiveLanguage())
+        assertEquals(0, prefs.getInt(Pref.InputLanguagePos.key, -1))
+        assertTrue(
+            "single-element cycle must not fire a spurious callback",
+            callbackEvents.isEmpty()
+        )
+    }
+
     @Test
     fun `getEffectiveLanguageOrNull-style fallback returns null when curated is empty`() {
         // Edge case: although sanitize prevents empty curated lists, a corrupted

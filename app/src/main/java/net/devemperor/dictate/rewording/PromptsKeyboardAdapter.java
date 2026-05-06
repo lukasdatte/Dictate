@@ -196,12 +196,14 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder rawHolder, final int position) {
-        // StaggeredGridLayout: the language chip spans the full width so it doesn't
-        // collapse into a single grid column (SEC-7-5).
+        // The language chip is now a regular grid cell (same wrap_content sizing
+        // as every other prompt pill). Earlier drafts spanned it across the full
+        // row via `setFullSpan(true)` — that produced a header-style strip with
+        // a different visible height. We explicitly clear that flag here so a
+        // recycled ViewHolder cannot inherit it from a prior assignment.
         ViewGroup.LayoutParams lp = rawHolder.itemView.getLayoutParams();
         if (lp instanceof StaggeredGridLayoutManager.LayoutParams) {
-            ((StaggeredGridLayoutManager.LayoutParams) lp)
-                    .setFullSpan(getItemViewType(position) == VIEW_TYPE_LANGUAGE_CHIP);
+            ((StaggeredGridLayoutManager.LayoutParams) lp).setFullSpan(false);
         }
 
         if (rawHolder instanceof LanguageChipViewHolder) {
@@ -317,6 +319,13 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
         holder.chipBtn.setText(label);
         holder.chipBtn.setEnabled(chipEnabled);
         holder.chipBtn.setAlpha(chipEnabled ? 1f : 0.5f);
+        // Match the visual treatment of normal prompt pills: filled background
+        // tinted with the medium-darkness accent shade (same value as a regular
+        // PromptEntity row in onBindViewHolder). Keeps the chip indistinguishable
+        // from its neighbours apart from its position-zero anchor.
+        int accentColor = DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
+        int accentColorMedium = DictateUtils.darkenColor(accentColor, 0.18f);
+        applyPromptButtonColors(holder.chipBtn, accentColorMedium);
         holder.chipBtn.setOnClickListener(v -> {
             if (languageChipListener != null) languageChipListener.onLanguageChipClicked(v);
         });

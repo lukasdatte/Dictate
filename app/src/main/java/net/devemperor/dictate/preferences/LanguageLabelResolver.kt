@@ -99,6 +99,30 @@ object LanguageLabelResolver {
     }
 
     /**
+     * Compact 2-letter pill label derived directly from the ISO code. This
+     * is the abbreviation shown on the always-visible language chip in the
+     * prompts bar — the long label is reserved for the popup menu.
+     *
+     * Rules:
+     *  - `"detect"` → `"Auto"` (special case; `take(2)` would collide with
+     *    `"DE"` for German).
+     *  - Hyphenated codes (`"zh-CN"`, `"yue-HK"`) drop the region suffix and
+     *    use the primary subtag uppercased: `"zh-CN"` → `"ZH"`,
+     *    `"yue-HK"` → `"YU"`. Region info is visible in the long popup label.
+     *  - Standard codes return their first two characters in uppercase:
+     *    `"en"` → `"EN"`, `"de"` → `"DE"`.
+     *
+     * No `init`-check: the function is purely string-arithmetic and does not
+     * touch the lateinit fields, so it can be called before
+     * [initialize] (e.g. in unit tests that don't bother seeding the
+     * resource arrays).
+     */
+    fun resolveShortLabel(code: String): String {
+        if (code == "detect") return "Auto"
+        return code.substringBefore('-').take(2).uppercase()
+    }
+
+    /**
      * Resource-array index of [code], or `-1` when unknown. Useful when
      * mapping legacy positional state (e.g. `Pref.InputLanguagePos`) onto a
      * specific code.

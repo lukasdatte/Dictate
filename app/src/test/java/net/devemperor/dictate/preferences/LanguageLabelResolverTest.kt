@@ -46,6 +46,53 @@ class LanguageLabelResolverTest {
     }
 
     @Test
+    fun `resolveShortLabel uppercases two-letter ISO codes`() {
+        assertEquals("EN", LanguageLabelResolver.resolveShortLabel("en"))
+        assertEquals("DE", LanguageLabelResolver.resolveShortLabel("de"))
+        assertEquals("FR", LanguageLabelResolver.resolveShortLabel("fr"))
+    }
+
+    @Test
+    fun `resolveShortLabel maps 'detect' to 'Auto' to avoid collision with 'DE'`() {
+        // The pill needs an unambiguous abbreviation; `take(2)` on "detect"
+        // would yield "DE" and clash with German. Special-case ensures the
+        // chip stays readable when "detect" sits in the curated list.
+        assertEquals("Auto", LanguageLabelResolver.resolveShortLabel("detect"))
+    }
+
+    @Test
+    fun `resolveShortLabel drops region suffix on hyphenated codes`() {
+        // "zh-CN" / "zh-TW" both render as "ZH" — the popup label still
+        // distinguishes the regions ("Mandarin (CN)" vs "Mandarin (TW)").
+        assertEquals("ZH", LanguageLabelResolver.resolveShortLabel("zh-CN"))
+        assertEquals("ZH", LanguageLabelResolver.resolveShortLabel("zh-TW"))
+        // "yue-CN" / "yue-HK" — primary subtag is the 3-letter ISO 639-3
+        // "yue", so we take the first two letters only ("YU"). Acceptable
+        // because the long form remains visible in the picker.
+        assertEquals("YU", LanguageLabelResolver.resolveShortLabel("yue-CN"))
+        assertEquals("YU", LanguageLabelResolver.resolveShortLabel("yue-HK"))
+    }
+
+    @Test
+    fun `resolveShortLabel does not require initialize()`() {
+        // The function is pure string arithmetic on its argument; it must
+        // not invoke the Defense-in-Depth init-check. This lets the chip
+        // render correctly even on the very first onCreateInputView pass
+        // before any other resolver accessor has been touched.
+        val resolverClass = LanguageLabelResolver::class.java
+        val codesField = resolverClass.getDeclaredField("codes")
+        codesField.isAccessible = true
+        val saved = codesField.get(LanguageLabelResolver)
+        codesField.set(LanguageLabelResolver, null)
+        try {
+            assertEquals("EN", LanguageLabelResolver.resolveShortLabel("en"))
+            assertEquals("Auto", LanguageLabelResolver.resolveShortLabel("detect"))
+        } finally {
+            codesField.set(LanguageLabelResolver, saved)
+        }
+    }
+
+    @Test
     fun `recordLabelFor returns its own array when explicitly supplied`() {
         LanguageLabelResolver.initializeForTest(
             codes = arrayOf("en", "de"),

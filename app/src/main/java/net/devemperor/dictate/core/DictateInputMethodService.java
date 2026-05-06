@@ -1051,7 +1051,10 @@ public class DictateInputMethodService extends InputMethodService
     private void refreshLanguageChip() {
         if (promptsAdapter == null || languageController == null) return;
         String code = languageController.getEffectiveLanguage();
-        String label = LanguageLabelResolver.INSTANCE.resolveLabel(code);
+        // The chip uses the compact 2-letter form (e.g. "DE", "EN") so it
+        // matches the size and styling of regular prompt pills. The full
+        // language name is shown when the user opens the popup picker.
+        String label = LanguageLabelResolver.INSTANCE.resolveShortLabel(code);
         promptsAdapter.setLanguageChipVisible(true, label);
     }
 

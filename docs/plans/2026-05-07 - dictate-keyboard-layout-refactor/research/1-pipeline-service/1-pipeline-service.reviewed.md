@@ -1458,9 +1458,11 @@ für den Voll-Skeleton). Damit der Implementierer nicht raten muss,
 welcher Schritt vor welchem läuft, hier die geordnete Sequenz:
 
 <!-- FIX: Phase-B S-1 (2026-05-13) – Sequence-Tabelle auf DictateOrchestrator + ModuleServicesFactory umgestellt (F-11 Modular-Orchestrator-Pattern; PipelineStateManager existiert nicht mehr) -->
+<!-- FIX: Phase-B S-5 (2026-05-13) – Schritt 1.5 (ensureNotificationChannel) + Schritt 9 (startForeground) explizit in der Sequenz verankert. Ohne diese beiden Schritte wurde aus der "5-Sekunden-Timeout-Klausel" (§11.1.4) ein implizites Detail; jetzt ist die Sequenz vollständig (Channel → DI → FGS-Notification → async-Recovery + async-Cleanup). Plus: Schritt 10 (JobExecutor.initialize) explizit als letzter sync-Schritt — G7 §13.5.a verankert, dass der alte PipelineOrchestrator (nicht der neue DictateOrchestrator) übergeben wird (Naming-Konflikt-Falle, siehe §1.x). -->
 | # | Schritt | Sync/Async | Anmerkung |
 |---|---|---|---|
 | 1 | `super.onCreate()` | sync | Service-Basis-Setup |
+| 1.5 | `ensureNotificationChannel()` | sync | **MUSS vor Schritt 9** (startForeground). Channel-Erzeugung ist in-memory + getSystemService-Call, < 5 ms. API < 26 no-op. |
 | 2 | DI-Wiring (Store, Repos, Runner, PrefMirror, Recovery) | sync | §7.3 Composition Root |
 | 3 | `audioFileFactory = CacheDirAudioFileFactory(applicationContext)` | sync | Factory construct |
 | 4 | `servicesFactory = ModuleServicesFactory { ModuleServices(audioFileFactory = audioFileFactory, …) }` | sync | DI-Container (siehe §4.7) |
@@ -1469,6 +1471,8 @@ welcher Schritt vor welchem läuft, hier die geordnete Sequenz:
 | 6.5 | `LegacyAudioFileMigration.run(applicationContext)` | sync | One-shot idempotent (KG-AFF-2). Läuft VOR Schritt 7/8 |
 | 7 | (`recovery.recover(store)` läuft bereits async via `Orchestrator.init`, Schritt 5) | async | §11.6.1 |
 | 8 | `serviceScope.launch(Dispatchers.IO) { audioFileFactory.cleanupOrphans(referenced) }` | async | siehe oben |
+| 9 | `startForeground(NOTIF_ID, notifCoordinator.buildInitial())` — gerufen aus `onStartCommand`, NICHT aus `onCreate` | sync | **MUSS vor 5 s nach `startForegroundService`-Call** (§11.1.4). `buildInitial()` ist pure State→Notification-Render, in-memory, < 5 ms. Schritt 9 lebt im `onStartCommand`-Pfad, weil Android `onCreate` ohne `onStartCommand` nicht via `startForegroundService` durchläuft. |
+| 10 | `JobExecutor.initialize(pipelineOrchestrator)` | sync | G7 §13.5.a. ⚠ Erwartet den **alten** `PipelineOrchestrator` (Audio-Pipeline-Runner, Spec 1 §1.x Naming-Konvention), NICHT den neuen `DictateOrchestrator`. Position nach Recovery-Async-Start ist OK (JobExecutor wird erst von User-Action / pendingSessions-Resume gerufen, also nach Recovery-Completion). |
 
 **Reihenfolge-Invarianten:**
 
@@ -3663,10 +3667,21 @@ DictatePipelineService (Process-Lifecycle-Owner)
 
 ### §7.2 Start
 
+<!-- FIX: Phase-B S-5 (2026-05-13) – Bind-Site auf onCreateInputView konsistent mit §11.3.1 gesetzt; vorher stand "IME-Service onCreate" — falscher Lifecycle-Hook (onCreate kann theoretisch vor erstem View-Inflate laufen; bind-Counter würde dann gegen IME-Service zählen, der nicht die Hands-on-Konsumenten-Klasse ist). §11.3.1 ist SoT für die Begründung (Latenz-Argument). -->
 ```kotlin
-// IME-Service onCreate (oder beim ersten Recording):
-ContextCompat.startForegroundService(this, Intent(this, DictatePipelineService::class.java))
-bindService(Intent(this, DictatePipelineService::class.java), connection, BIND_AUTO_CREATE)
+// IME-Service: Bind-Site ist `onCreateInputView` (siehe §11.3.1 für Begründung — Latenz-
+// Argument: 50-200 ms first-bind, in onCreateInputView ist Zeitreserve da, weil der
+// IME-View ohnehin inflate-blocking ist). NICHT in `onCreate` der IME — das ist zu früh
+// (IME-onCreate kann VOR erstem View-Inflate laufen, manche OEM-IME-Settings rufen es).
+@Override
+public View onCreateInputView() {
+    if (pipelineBinder == null) {
+        Intent intent = new Intent(this, DictatePipelineService.class);
+        ContextCompat.startForegroundService(this, intent);
+        bindService(intent, pipelineConnection, BIND_AUTO_CREATE);
+    }
+    // ... View-Inflate ...
+}
 ```
 
 ### §7.3 onStartCommand (schlank)
@@ -3678,18 +3693,44 @@ class DictatePipelineService : Service() {
     private lateinit var orchestrator: DictateOrchestrator
     private lateinit var notifCoordinator: PipelineNotificationCoordinator
     private lateinit var actionRouter: PipelineActionRouter
+    // FIX: Phase-B S-5 (2026-05-13) – audioFileFactory als lateinit-Field deklariert, weil
+    // §11.2.2 Block 2 das Field bereits in der `ModuleServicesFactory`-Lambda referenziert
+    // (Block 4 wired den realen `CacheDirAudioFileFactory`). In Block 2 ist es initial
+    // `CacheDirAudioFileFactory(applicationContext)` (no-op-ready, alloc-only), die Pre-
+    // Dispatch-Allocate-Logik landet erst in Block 4. Ohne diese Vorab-Deklaration scheitert
+    // der Block-2-Composition-Root-Snippet aus §7.3.
+    private lateinit var audioFileFactory: AudioFileFactory
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     override fun onCreate() {
         super.onCreate()
+        // FIX: Phase-B S-5 (2026-05-13) – NotificationChannel MUSS vor startForeground() (§11.1.4)
+        // existieren. `onStartCommand` ruft `startForegroundCompat(notifCoordinator.buildInitial())`;
+        // `buildInitial()` referenziert CHANNEL_ID. Auf API ≥ 26 wirft NotificationManager eine
+        // `IllegalArgumentException`, wenn der Channel beim ersten `notify`/`startForeground`-Call
+        // noch nicht erzeugt ist — selbst, wenn die Notification-Builder-Pipeline syntaktisch
+        // valide ist. Synchroner In-Memory-Setup, < 5 ms, kein FGS-Frist-Risiko.
+        ensureNotificationChannel()                              // synchron, < 5 ms
+
         // Composition Root — alle Hilfsklassen werden hier konstruiert + verdrahtet.
         val database = DictateDatabase.getInstance(this)
         val store = DictateUiStateStore(DictateUiState.initial())
         val sessionRepo: PipelineSessionRepo = RoomPipelineSessionRepo(database.sessionsDao())
+        // FIX: Phase-B S-5 (2026-05-13) – PipelineOrchestrator (ALT, Audio-Pipeline, Spec 1 §1.x)
+        // vs. DictateOrchestrator (NEU, State-Action-Routing) — JobExecutor erwartet den alten.
+        // Hier konstruiert; per Schritt 10 der Sequenz (§4.11.5.1) an JobExecutor.initialize
+        // übergeben. NICHT mit `orchestrator` (DictateOrchestrator) verwechseln.
+        val pipelineOrchestrator = PipelineOrchestrator(
+            aiOrchestrator = AIOrchestrator(sp, database.usageDao()),
+            // ... (weitere Args identisch zu DictateInputMethodService.initLongLivedObjects Z. 379-385)
+        )
         val runner: PipelineRunner = JobExecutor
         val prefMirror = PipelinePrefMirror(getSharedPreferences("dictate_prefs", MODE_PRIVATE))
         val recovery = PipelineRecovery(sessionRepo)
-        val audioFileFactory: AudioFileFactory = CacheDirAudioFileFactory(applicationContext)
+        // FIX: Phase-B S-5 (2026-05-13) – Zuweisung auf Member-`lateinit var audioFileFactory`
+        // (siehe Field-Deklaration oben). Vermeidet shadowing — Block 4 muss das Field aus
+        // anderen Service-Methoden (z.B. cleanupOrphanedTerminalAudio in stopSelfPath) lesen.
+        audioFileFactory = CacheDirAudioFileFactory(applicationContext)
 
         // F-11: ModuleServicesFactory injiziert die Hardware-Adapter pro EffectHandler-Aufruf.
         // emitAction wird über eine Late-Reference auf orchestrator gehalten (Konstruktor-Zyklus),
@@ -3721,7 +3762,10 @@ class DictatePipelineService : Service() {
         notifCoordinator = PipelineNotificationCoordinator(this, orchestrator.state, serviceScope)
         actionRouter = PipelineActionRouter(orchestrator)
 
-        runner.initialize(orchestrator)   // G7: JobExecutor-init wandert hierher (vom IME-onCreate)
+        // FIX: Phase-B S-5 (2026-05-13) – JobExecutor.initialize erwartet den ALTEN PipelineOrchestrator
+        // (Audio-Pipeline-Runner), NICHT den neuen DictateOrchestrator (State-Action-Router) — siehe
+        // Spec 1 §1.x Naming-Konvention + §13.5.a G7-Block. Type-Mismatch hier ist Compile-Error.
+        JobExecutor.initialize(pipelineOrchestrator)   // G7: wandert vom IME-onCreate hierher
 
         // Crash-Orphan-Cleanup async (parallel zur Recovery, beide read-only)
         serviceScope.launch(Dispatchers.IO) {
@@ -3751,11 +3795,43 @@ class DictatePipelineService : Service() {
     }
 
     override fun onBind(intent: Intent): IBinder = LocalBinder(orchestrator)
+
+    // FIX: Phase-B S-5 (2026-05-13) – onDestroy mit `runBlocking`-Timeout-Wrapper konkret
+    // gezeigt (§4.3 KDoc behauptet "läuft unter runBlocking-Timeout des Service.onDestroy",
+    // aber kein Snippet zeigte das tatsächlich). Service.onDestroy hat selbst ein OS-seitiges
+    // Timeout-Fenster (auf API ≥ 8: 20 s, faktisch idR < 5 s vor SIGKILL); ein einzelnes Modul
+    // mit fehlerhaftem `terminate`-Effect darf den Service nicht hängen lassen.
     override fun onDestroy() {
         super.onDestroy()
-        // Module-`terminate()`-Sequenz (Issue 2.1.12 / D7): orchestrator delegiert an alle Module.
-        orchestrator.shutdown()
+        // 1. Module-Cleanup mit Timeout: `shutdown()` ruft jedes Modul-`terminate(services)`.
+        //    `services.scope` ist noch lebendig (Aufrufer-Vertrag §4.3), aber wir umschließen
+        //    den Aufruf zusätzlich mit `runBlocking`-Timeout, damit ein blockierendes Modul
+        //    den OS-Service-Destroy-Timer nicht verbraucht. 2 s Cap = konservativ <
+        //    OS-seitigem 5-s-Limit + Reserve für Schritt 2/3.
+        try {
+            kotlinx.coroutines.runBlocking {
+                kotlinx.coroutines.withTimeout(2_000L) {
+                    orchestrator.shutdown()
+                }
+            }
+        } catch (t: kotlinx.coroutines.TimeoutCancellationException) {
+            android.util.Log.w(TAG, "orchestrator.shutdown() timeout — leaking module resources", t)
+            // Fail-safe: weiter zu Schritt 2/3. Hardware-Releases sind primär synchron
+            // (RecordingManager.release etc.), also typischerweise bereits durch — der
+            // Timeout schützt nur gegen pathologische Cases.
+        }
+        // 2. Restliche in-flight Coroutines cancellen (§7.3 Schritt 5: cleanupOrphans, etc.).
+        //    MUSS NACH `shutdown()` laufen (Aufrufer-Vertrag §4.3) — sonst laufen die
+        //    Module-terminate-Calls auf einem gecancellten Scope und async-Cleanups sind
+        //    silent-no-op.
         serviceScope.cancel()
+        // 3. Notification entfernen — auch wenn `stopSelfWhenTerminal` schon gerufen wurde,
+        //    schadet ein doppelter `nm.cancel(NOTIF_ID)` nicht (idempotent).
+        NotificationManagerCompat.from(this).cancel(PipelineNotificationCoordinator.NOTIF_ID)
+    }
+
+    companion object {
+        private const val TAG = "DictatePipelineSvc"
     }
 }
 ```
@@ -4095,6 +4171,24 @@ Block 2 (DictatePipelineService) gilt als done, wenn:
 - [ ] Recording starten, Tastatur zur Gboard wechseln, 30s warten, zurück zu Dictate → Recording läuft noch, Pulse-Animation läuft im IME-View, Pause-Button funktioniert.
 - [ ] Pipeline starten, App-Switch, 30s warten, zurück → Pipeline-Status korrekt restauriert, Notification zeigt Status.
 - [ ] Beim Recording: persistente Notification sichtbar, zeigt korrekte Action-Buttons.
+<!-- FIX: Phase-B S-5 (2026-05-13) – Tastatur-Wechsel-Survival + Mic-Indikator-Sichtbarkeit explizit als Acceptance verankert. Heute schweigt der Plan, was der User in der "Zwischenzeit" (IME-Service tot, Service läuft weiter mit Recording) sieht. Diese Acceptance schließt die User-Visibility-Lücke. -->
+- [ ] **Phase-B S-5 Mic-Indikator beim Tastatur-Wechsel:** während der IME-Service tot ist (User hat zu Gboard gewechselt) und der DictatePipelineService noch ein aktives Recording hält, ist im System-Tray ein Mikrofon-Indikator sichtbar (API ≥ 31 OS-feature, kostet uns nichts — `FOREGROUND_SERVICE_TYPE_MICROPHONE` triggert ihn automatisch). Die persistente Notification ist sichtbar und zeigt `[Pause] [Stopp] [Senden]`-Buttons; User kann via Notification-Action das Recording cancellen, ohne zur Dictate-Tastatur zurückzuwechseln. Verifiziert manuell (E2E-Test mit zwei Tastaturen) + via `DictatePipelineServiceForegroundSurvivalTest.kt` (verifiziert dass `pipelineBinder.unbind()` + `serviceScope.isActive == true` → Recording-State bleibt `Active`).
+<!-- FIX: Phase-B S-5 (2026-05-13) – FGS-Killed-by-System (low memory) Recovery-Pfad acceptance. Plan dokumentiert START_NOT_STICKY ohne User-Visibility-Klausel; bei OOM-Kill verschwindet die Notification, Recording-Tonspur ist weg, User muss aktiv beim nächsten Bind das pendingSessions sehen. -->
+- [ ] **Phase-B S-5 FGS-Killed-by-System (Low-Memory):** Service-Kill via `adb shell am kill` während aktives Recording simuliert OOM-Kill. `START_NOT_STICKY` bedeutet: Service wird NICHT automatisch neu gestartet. Beim nächsten IME-`onCreateInputView` läuft Service-onCreate frisch durch, `PipelineRecovery.recover` lädt die Session aus der DB (`RECORDING → FAILED` per R.16a, Block-3-Acceptance), `state.pendingSessions` enthält die unterbrochene Session mit `lastErrorType=UNKNOWN, lastErrorMessage="recording-interrupted-by-process-death"`. Der User sieht im Resend-Pfad / History den FAILED-Eintrag. Verifiziert via `DictatePipelineServiceKillRestartTest.kt` (Robolectric oder instrumented).
+<!-- FIX: Phase-B S-5 (2026-05-13) – Channel-Erstellung-Reihenfolge expliziter Acceptance-Test. -->
+- [ ] **Phase-B S-5 NotificationChannel-vor-startForeground:** ein Unit-Test mit fresh-App-Install (kein Channel existiert) verifiziert dass `DictatePipelineService.onCreate` den Channel erzeugt VOR `onStartCommand → startForeground(…)`. Test-Setup: `NotificationManager.deleteNotificationChannel("dictate_pipeline")` als Fixture, Service-Boot, assert dass `startForeground` keinen `IllegalArgumentException` wirft. Test-Datei: `DictatePipelineServiceChannelOrderTest.kt`.
+<!-- FIX: Phase-B S-5 (2026-05-13) – FGS-5s-Frist als reproduzierbarer Test verankert. -->
+- [ ] **Phase-B S-5 FGS-Boot < 5 s:** Robolectric- oder instrumented-Test misst Zeit zwischen `Context.startForegroundService(...)` und `startForeground(...)`-Call. Acceptance: **< 1 s p99** auf API-34-Test-Device. Test deckt §11.1.4 (5-s-Timeout-Mitigation) ab und schützt gegen zukünftige Regression (z.B. wenn jemand einen sync-DB-Read in `onCreate` einbaut, der die Frist verbraucht). Test-Datei: `DictatePipelineServiceFgsBootLatencyTest.kt`.
+<!-- FIX: Phase-B S-5 (2026-05-13) – NOTIF_ID-SoT-Test. -->
+- [ ] **Phase-B S-5 NOTIF_ID-Konsistenz:** Architektur-Test (Kotlin Reflection oder ESLint-Style-Lint) verifiziert dass NUR `PipelineNotificationCoordinator.NOTIF_ID` als Konstante existiert; kein `const val NOTIF_ID` im `DictatePipelineService.companion`. Schützt gegen erneutes Aufkommen der `1001` vs `0xD1C7A7E`-Drift (Phase-B S-5 F-2).
+<!-- FIX: Phase-B S-5 (2026-05-13) – runBlocking-Timeout-Test. -->
+- [ ] **Phase-B S-5 onDestroy-Timeout:** `DictatePipelineServiceShutdownTimeoutTest.kt` — Mock-Module mit `terminate(services)`-Implementation, die 5 s blockiert (`Thread.sleep(5000)`). Assert: `onDestroy` returnt nach < 2.5 s (2 s Timeout + Reserve). Verifiziert dass ein pathologisches Modul den Service-Destroy-Path nicht hängen lassen kann.
+<!-- FIX: Phase-B S-5 (2026-05-13) – Multi-Bind-Acceptance verankert (§11.3.4). -->
+- [ ] **Phase-B S-5 Multi-Bind:** `DictatePipelineServiceMultiBindTest.kt` mit zwei ServiceConnections in einem Test — Bind-A in Setup, Bind-B in Body. Assert: beide `onServiceConnected` empfangen denselben `IBinder`-Instanz (Singleton-Vertrag); Unbind-B alleine hält Service alive; Unbind-A + `state.isAllTerminal() == true` führt zu `onDestroy`.
+<!-- FIX: Phase-B S-5 (2026-05-13) – Pre-Bind-Action-Pfad als Robustheits-Test verankert. -->
+- [ ] **Phase-B S-5 Pre-Bind-Action-Toast:** `DictateInputMethodServiceBindRaceTest.kt` simuliert Click vor `onServiceConnected`. Assert: `pipelineBinder == null` → `Toast.makeText(..., R.string.dictate_service_not_ready, ...)` wird gerufen, kein Crash, kein silent-drop. (§11.3.2a). Plus: String-Resource `dictate_service_not_ready` ist in `values/strings.xml` + `values-de/strings.xml` angelegt.
+<!-- FIX: Phase-B S-5 (2026-05-13) – POST_NOTIFICATIONS-Prompt-Test. -->
+- [ ] **Phase-B S-5 POST_NOTIFICATIONS-Prompt:** auf API-33+-Test-Device öffnet `OnboardingActivity` den Permission-Prompt; auf Decline ist der Banner im IME-View bei aktivem Recording sichtbar; Klick auf Banner öffnet `Settings.ACTION_APP_NOTIFICATION_SETTINGS`. (§11.5.1). Verifiziert manuell + via `OnboardingPostNotifPromptTest.kt`.
 - [ ] `stopSelf()` greift: nach Insertion verschwindet die Notification ohne weitere Aktion.
 - [ ] Force-Stop der App: beim nächsten Tastatur-Open wird Restart-Button mit pending-Session gezeigt.
 - [ ] Manueller Restart-Button-Klick: PipelineService startet neu, Pipeline läuft mit korrektem State.
@@ -4250,14 +4344,46 @@ Begründung pro Zeile:
 - `android:exported="false"` — Service ist nur für die App selbst (kein IPC).
 - `android:description` — String-Ressource neu anlegen: `@string/dictate_pipeline_service_description = "Hintergrund-Service für Diktier-Pipeline"`.
 
+<!-- FIX: Phase-B S-5 (2026-05-13) – SYSTEM_ALERT_WINDOW-Cross-Link verankert. Plan hat sie
+     in Spec 3 §5.7 als "Manifest-Eintrag" — Block 2 ist der Service-Manifest-Diff, also
+     gehört der Cross-Link hier, damit der Implementer beide Permission-Sets in EINEM
+     Manifest-Patch landet (keine getrennten Commits). -->
+**SYSTEM_ALERT_WINDOW (Cross-Link auf Spec 3 §5.7):** Das Floating-Overlay-Feature (Block 6)
+benötigt zusätzlich `<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />`.
+Diese Permission ist auf API < 23 install-time-granted, auf API ≥ 23 special-permission via
+`Settings.canDrawOverlays()`. Der Block-2-Manifest-Diff kann die Permission BEREITS DEKLARIEREN
+(no-op bis das Overlay-Feature in Block 6 verdrahtet ist) — das eliminiert einen zweiten
+Manifest-Commit + macht Phase-1 / Phase-2-Trennung weniger spröde.
+
+**Block-2-Manifest-Diff (final, alle drei Permission-Gruppen kombiniert):**
+
+```xml
+<!-- Block 2 (Service-Permissions) -->
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+<!-- Block 6 (Overlay-Permission), aber im Block-2-Manifest-Diff vorab deklariert: -->
+<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+```
+
 #### §11.1.2 Notification.Builder — konkrete Implementation
 
-**Channel-Setup** (im `DictatePipelineService.onCreate`):
+**Channel-Setup** (im `DictatePipelineService.onCreate` — siehe §7.3 + §11.1.4 für die
+verbindliche Aufruf-Reihenfolge: `ensureNotificationChannel()` läuft **vor**
+`startForegroundCompat(…)`, sonst `startForeground` mit ungültigem Channel → ANR-Risk
+auf API < 26 nicht relevant, aber auf API ≥ 26 wirft `NotificationManager` eine
+`IllegalArgumentException`):
 
+<!-- FIX: Phase-B S-5 (2026-05-13) – NOTIF_ID-Doppel-Definition gestrichen. NOTIF_ID lebt
+     im PipelineNotificationCoordinator-companion (§7.4), Service referenziert es per
+     `PipelineNotificationCoordinator.NOTIF_ID`. Zweite Definition mit anderem Wert
+     (1001 vs 0xD1C7A7E in §7.4) hätte zur sticky-FGS-Notification + überlagerter
+     normaler Notification geführt. -->
 ```kotlin
 companion object {
     private const val CHANNEL_ID = "dictate_pipeline"
-    private const val NOTIF_ID = 1001  // beliebige stabile Konstante
+    // NOTIF_ID lebt im PipelineNotificationCoordinator (§7.4) — Service referenziert
+    // `PipelineNotificationCoordinator.NOTIF_ID` direkt.
 }
 
 private fun ensureNotificationChannel() {
@@ -4332,29 +4458,30 @@ private fun pendingIntent(action: String): PendingIntent {
 }
 ```
 
-`onStartCommand` reagiert auf die Action-Strings:
+<!-- FIX: Phase-B S-5 (2026-05-13) – §11.1.2 onStartCommand-Snippet auf F-11 (PipelineActionRouter + DictateOrchestrator) umgestellt. Pre-F-11-Snippet rief `stateManager.pauseRecording()` etc. — `PipelineStateManager` existiert nach 2026-05-10 nicht mehr. SoT für onStartCommand-Pfad ist §7.3 (PipelineActionRouter.dispatch). NOTIF_ID-Wert: siehe Konsolidierung weiter unten. -->
+`onStartCommand` reagiert auf die Action-Strings — die Action-Mapping-Logik lebt im
+`PipelineActionRouter` (§7.5), der Service ist hier nur Lifecycle-Owner:
 
 ```kotlin
 override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action != null) {
-        when (intent.action) {
-            ACTION_PAUSE -> stateManager.pauseRecording()
-            ACTION_RESUME -> stateManager.resumeRecording()
-            ACTION_STOP -> stateManager.stopRecording()
-            ACTION_SEND -> stateManager.stopRecordingAndSend()
-            ACTION_CANCEL -> stateManager.cancelPipeline()
-            ACTION_INSERT -> stateManager.confirmFirstPendingInsertion()
-            ACTION_DISCARD -> stateManager.discardFirstPendingInsertion()
-        }
-    } else {
-        // Erster Start ohne Action — initialer FGS-Start.
-        startForegroundCompat(stateManager.state.value)
-    }
+    // 1. Action-Intent vom Notification-Button (falls vorhanden) — pure Mapping auf Action.
+    intent?.let { actionRouter.dispatch(it) }
+    // 2. FGS-Notification: startForeground() läuft synchron BEVOR irgendeine Coroutine —
+    //    siehe §11.1.4 (5-Sekunden-Timeout). buildInitial() ist pure State→Notification-
+    //    Render, kein DB-Hop, < 5 ms.
+    startForegroundCompat(notifCoordinator.buildInitial())
+    // 3. Reaktive Updates der Notification (throttled, §7.4). stopSelf-Hook bei Terminal.
+    notifCoordinator.startReactiveUpdates(::stopSelfWhenTerminal)
     return START_NOT_STICKY
 }
 
-private fun startForegroundCompat(state: DictateUiState) {
-    val notif = buildNotification(state)
+/**
+ * API-34+-Variante mit explizitem `FOREGROUND_SERVICE_TYPE_MICROPHONE` — Pflicht,
+ * sobald `targetSdk >= 34` (`build.gradle:14`, verifiziert per Code-Read 2026-05-13).
+ * Auf < 34 ist der Type-Parameter nicht verfügbar; das System ignoriert den
+ * deklarierten Manifest-Type effektiv (Backward-Compat).
+ */
+private fun startForegroundCompat(notif: Notification) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {  // API 34
         startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
     } else {
@@ -4362,6 +4489,15 @@ private fun startForegroundCompat(state: DictateUiState) {
     }
 }
 ```
+
+> **NOTIF_ID-Konsolidierung (Phase-B S-5):** §7.4 (`PipelineNotificationCoordinator`)
+> definiert `companion object { const val NOTIF_ID = 0xD1C7A7E }` — der Coordinator ist
+> SoT. Die ältere Doppel-Definition in §11.1.2 (`private const val NOTIF_ID = 1001`)
+> ist **gestrichen**, der Service referenziert `PipelineNotificationCoordinator.NOTIF_ID`.
+> Zwei Definitionen unterschiedlicher Werte (`1001` vs `0xD1C7A7E`) hätten zur
+> Race-Bug-Klasse "Service ruft `startForeground(1001, …)`, Coordinator ruft
+> `nm.notify(0xD1C7A7E, …)` → zwei separate Notifications" geführt — eine bleibt
+> als sticky-FGS-Notification, die andere wird als reguläre Notification überlagert.
 
 #### §11.1.3 startForegroundService vs. startService — Versions-Differential
 
@@ -4415,11 +4551,14 @@ Ziel: heutiges System auf eine Single-Owner-Visibility-Basis bringen, OHNE die M
 
 **Block 2 — DictatePipelineService einführen (Service-Klasse + Bound-Binder, KEIN DB-Schema-Change)**
 
-1. **Service-Klasse anlegen** (`core/DictatePipelineService.kt`) — Skelett, `LocalBinder`, `onCreate`/`onStartCommand`/`onBind`/`onDestroy` (siehe §7.3).
-2. **Bound-Connection-Setup im IME** (siehe §11.3.1) — `bindService` in `onCreate`, `unbindService` in `onDestroy`.
-3. **Notification + startForeground** verdrahten (§11.1.2).
-4. **Manifest erweitern** (§11.1.1).
-5. **JobExecutor-Init** wandert vom IME-`onCreate` (Z. 389) in `Service.onCreate` (G7 in §13.5).
+<!-- FIX: Phase-B S-5 (2026-05-13) – Block-2-Sub-Schritte erweitert um (a) NotificationChannel-Setup als eigenen Schritt vor startForeground (b) Bind-Site-Korrektur onCreateInputView statt onCreate (c) Klärung dass Block-2 noch KEINEN DictateOrchestrator / Module hat (das ist Block 1b) — Block 2 verdrahtet das Skelett mit einem Stub-Composition-Root, der Block-1b dann ersetzt. -->
+1. **Service-Klasse anlegen** (`core/DictatePipelineService.kt`) — Skelett, `LocalBinder`, `onCreate`/`onStartCommand`/`onBind`/`onDestroy` (siehe §7.3). In Block 2 ist der Composition-Root noch ein **Stub** — `DictateUiStateStore(DictateUiState.initial())` plus minimaler Forward an die existierenden Controller (PipelineState-Subscribe wird erst in Block 1b vollständig verdrahtet). `audioFileFactory` ist Block 4 — in Block 2 entweder dummy-Field (`lateinit`, wird in Block 4 gewired) oder die Referenz im `ModuleServicesFactory`-Wiring wird als `// TODO Block 4` kommentar-fenced.
+2. **NotificationChannel-Setup als eigene private Methode** (`ensureNotificationChannel()`, §11.1.2) — wird in `onCreate` SYNCHRON als erstes nach `super.onCreate()` gerufen (vor jeglicher DI-Verdrahtung). Auf API < 26 no-op.
+3. **Bound-Connection-Setup im IME** (siehe §11.3.1) — `bindService` in **`onCreateInputView`** (NICHT `onCreate` der IME), `unbindService` in `onDestroy`. Begründung: Latenz-Argument (50-200 ms first-bind in onCreateInputView-Inflate-Window absorbiert).
+4. **Notification + startForeground** verdrahten (§11.1.2 + §7.4). `startForeground` läuft in `onStartCommand` (NICHT `onCreate`!) — Android-Lifecycle-Vertrag (startForegroundService → onCreate → onStartCommand → der erste `startForeground`-Call MUSS in onStartCommand oder onCreate stehen, vor 5-s-Timeout).
+5. **Manifest erweitern** (§11.1.1) — Permissions FOREGROUND_SERVICE, FOREGROUND_SERVICE_MICROPHONE, POST_NOTIFICATIONS plus Service-Eintrag mit `foregroundServiceType="microphone"`. Plus SYSTEM_ALERT_WINDOW (Spec 3 §5.7) — gehört thematisch zu Block 6, aber Manifest-Diff darf gemeinsam in Block 2 landen, weil deklarative Permissions kein Code-Path haben (no-op bis das Overlay-Feature in Block 6 wired ist).
+6. **POST_NOTIFICATIONS Runtime-Permission-Prompt** in Onboarding ergänzen (§11.5.1) — `OnboardingActivity` ist heute schon vorhanden (Manifest Z. 53); `ActivityResultLauncher` mit Permission-Request für `Manifest.permission.POST_NOTIFICATIONS` (API ≥ 33), Begleit-Text "Dictate zeigt eine persistente Benachrichtigung mit Aufnahme-Steuerung." Plus Block-2-Acceptance "Onboarding zeigt Permission-Prompt auf API 33+".
+7. **JobExecutor-Init** wandert vom IME-`onCreate` (Z. 389) in `Service.onCreate` (G7 in §13.5). ⚠ Wird mit dem **alten** `PipelineOrchestrator` (Audio-Pipeline-Runner) gerufen, NICHT mit dem neuen `DictateOrchestrator` — Naming-Konvention §1.x.
 
 **Block 1b — DictateUiState + DictateOrchestrator + 12 aktive Module (im PipelineService-Container)**
 
@@ -4644,6 +4783,63 @@ private final ServiceConnection pipelineConnection = new ServiceConnection() {
 };
 ```
 
+<!-- FIX: Phase-B S-5 (2026-05-13) – Pre-Bind-Action-Queue als expliziter Pfad dokumentiert.
+     §11.3.3 deckt nur den initialen Bind im Same-Process; aber: Notification-Action-Buttons
+     können Actions per `startService(intent.setAction(...))` schicken, BEVOR der LocalBinder
+     im IME verfügbar ist (z.B. User drückt "Pause" in Notification während Service noch im
+     ersten onCreate steckt). Diese Pfad-Klasse braucht eine Klärung. -->
+#### §11.3.2a Pre-Bind-Action-Pfad (Notification-Buttons während Boot)
+
+Notification-Action-Buttons feuern Action-Intents an den **Service** (via
+`PendingIntent.getService` in §7.5 PipelineActionRouter), NICHT an die IME. Das heißt:
+diese Aktionen laufen über `onStartCommand → actionRouter.dispatch(intent)` und
+brauchen weder den LocalBinder noch die `bindService`-Connection. Sie sind also
+**immun** gegen die Bind-Lifecycle-Race.
+
+Aber: Action-Intents die in `onStartCommand` ankommen, bevor `onCreate` Schritt 5
+(`DictateOrchestrator(…)`) durch ist, dispatchen an einen `lateinit`-Orchestrator und
+crashen mit `UninitializedPropertyAccessException`. Das ist auf Same-Process /
+Main-Thread typischerweise unmöglich (Android queued `onStartCommand` strikt nach
+`onCreate`-Completion), aber defensiv:
+
+```kotlin
+override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    if (!::orchestrator.isInitialized) {
+        // Sollte nie passieren — defensiv. Wir ignorieren das Intent; der nächste
+        // User-Klick funktioniert dann normal. Alternativ: queue + replay nach onCreate-
+        // Done. Bewusst nicht implementiert: Same-Process-Lifecycle garantiert
+        // onCreate-vor-onStartCommand; eine Queue wäre Dead-Code.
+        android.util.Log.w(TAG, "onStartCommand before onCreate-complete — dropped: $intent")
+        return START_NOT_STICKY
+    }
+    intent?.let { actionRouter.dispatch(it) }
+    startForegroundCompat(notifCoordinator.buildInitial())
+    notifCoordinator.startReactiveUpdates(::stopSelfWhenTerminal)
+    return START_NOT_STICKY
+}
+```
+
+**IME-Bind-Pfad (LocalBinder-basiert):** Aktionen aus dem IME-View (Record-Button,
+Pause-Button im Keyboard etc.) laufen über `binder.dispatch(action)`. Wenn der IME-View
+in `onCreateInputView` einen Click verarbeitet, BEVOR `onServiceConnected` gefeuert hat,
+ist `pipelineBinder == null` und der Click-Handler MUSS dies abfangen:
+
+```java
+// In dispatchAction-Helper im IME (single point of dispatch):
+private void dispatchAction(Action action) {
+    if (pipelineBinder == null) {
+        // Bind noch nicht etabliert (sehr kurzes Window beim allerersten
+        // onCreateInputView). User-Feedback statt silent-drop.
+        Toast.makeText(this, R.string.dictate_service_not_ready, Toast.LENGTH_SHORT).show();
+        return;
+    }
+    pipelineBinder.dispatch(action);
+}
+```
+
+Pflicht-Aufgabe Block-2: neue String-Resource `dictate_service_not_ready` (DE: "Service
+startet noch — bitte kurz warten.", EN: "Service is starting — please wait a moment.").
+
 #### §11.3.3 Race: IME-onCreate vor Service-onCreate
 
 Da `DictatePipelineService` im selben Process läuft (D1), gibt es keinen echten "Service noch nicht da"-Race. Reihenfolge:
@@ -4657,6 +4853,39 @@ Da `DictatePipelineService` im selben Process läuft (D1), gibt es keinen echten
 **Edge-Case:** zwischen Schritt 4 und 5 kann der User KEINEN Button klicken (Touch-Events laufen auf demselben Main-Looper), also kein UI-Race möglich.
 
 **Tatsächlicher Race:** wenn beim allerersten Start die `recoverFromDb()`-Coroutine noch läuft, sieht der erste `state.collect`-Sub die initiale `_state`-Emission ohne `pendingSessions`. Sobald `recoverFromDb` fertig ist, kommt eine zweite Emission mit den geladenen Sessions. Das ist OK — der Subscriber re-rendert.
+
+<!-- FIX: Phase-B S-5 (2026-05-13) – Multi-Bind-Klärung. Plan dokumentiert nicht, ob mehrere
+     Clients (IME + Settings-Activity + HistoryDetailActivity) parallel binden dürfen. Ohne
+     Klärung wird der Block-2-Implementer entweder eine `BindRefCounter`-Optimierung einbauen
+     (Premature-Optimization-Risiko) oder erlauben, dass ungebremst gebindet wird (jeder Bind
+     erhöht den Service-RefCounter, hindert `stopSelf()` an effektivem Stop). -->
+#### §11.3.4 Multi-Bind-Klärung (Phase-B S-5)
+
+**Erlaubt:** Mehrere Clients dürfen parallel binden. Konkrete Use-Cases:
+
+| Client | Bind-Site | Lifecycle | Zweck |
+|---|---|---|---|
+| `DictateInputMethodService` (IME) | `onCreateInputView` | View-Recreate-Cycle (Rotation, IME-Open/Close) | Action-Dispatch + State-Subscribe für Keyboard-Render |
+| `DictateSettingsActivity` (optional, Phase 2) | `onStart` / `onStop` | Activity-Sichtbarkeit | "Aktive-Sessions-Anzeige" — kein heutiger Bedarf, aber zukünftig denkbar |
+| `HistoryDetailActivity` (optional, Phase 2) | `onStart` / `onStop` | Activity-Sichtbarkeit | Live-Update "Pipeline läuft, Detail-Button greyed" |
+
+**Konsequenzen für Block 2:** keine `BindRefCounter`-Klasse, keine Single-Bind-Restriktion.
+`LocalBinder` ist ein **Singleton** pro Service-Lifetime; Android dispatcht denselben
+IBinder an alle Konsumenten. Jeder Konsument legt seinen eigenen `ServiceConnection` an
+und cleanupt in seinem `onDestroy`/`onStop`.
+
+**`stopSelf()`-Interaktion:** `stopSelf()` cancelt das Service-LifecycleToken; Android hält
+den Service trotzdem am Leben, solange mindestens eine `bindService`-Connection mit
+`BIND_AUTO_CREATE` offen ist. Das heißt: in der Praxis bleibt der Service so lange am
+Leben, wie der IME-View existiert (oder eine Activity mit Bind offen ist). Das ist
+**gewünscht** — `state.isAllTerminal()` triggert nur `stopSelf`, das eigentliche Stoppen
+hängt vom Bind-Counter ab. Wenn der User die IME schließt + keine Activity bindet, geht
+der Service tot. Auto-Restart ist `START_NOT_STICKY` (kein Restart).
+
+**Acceptance** (in §10 ergänzt): `DictatePipelineServiceMultiBindTest.kt` mit zwei
+ServiceConnections — Bind-A in Test-Setup, Bind-B in Test-Body; Assert beide
+`onServiceConnected` empfangen denselben `IBinder`-Instanz; nach Unbind-B bleibt
+Service alive bis Unbind-A.
 
 ### §11.4 DB-Migration
 
@@ -4945,19 +5174,76 @@ class MigrationTo4Test {
 
 #### §11.5.1 POST_NOTIFICATIONS-Runtime-Permission (Android 13+)
 
-```java
-// In DictateInputMethodService.java oder Settings-Activity:
-if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+<!-- FIX: Phase-B S-5 (2026-05-13) – Permission-Prompt-Flow präzisiert: IME-Service kann keinen
+     ActivityResultLauncher halten (kein Activity-Context). Prompt-Site ist OnboardingActivity (für
+     Fresh-Install) UND DictateSettingsActivity (für Update-Users, deren Onboarding bereits durch
+     ist). UI-Hint im Keyboard zeigt subtilen Banner, wenn Permission fehlt — User-Friction-
+     Indicator ohne Pflicht-Dialog. -->
+**Lifecycle der Permission:**
+
+| API | Default-State | Wirkung |
+|---|---|---|
+| < 33 (Tiramisu) | implizit granted (legacy permission) | Notification immer sichtbar |
+| ≥ 33, niemals angefragt | DENIED | Notification unsichtbar, FGS läuft, kein User-Visibility-Signal |
+| ≥ 33, User accepted | GRANTED | Notification sichtbar |
+| ≥ 33, User declined | DENIED + don't-ask-again | wie "DENIED", Re-Prompt nur via App-Settings |
+
+**Prompt-Site 1 — Onboarding (Fresh-Install):**
+
+```kotlin
+// In OnboardingActivity (Kotlin oder Java) — Sicheres ActivityResultLauncher-Pattern.
+private val postNotifLauncher: ActivityResultLauncher<String> =
+    registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) {
+            // Optional: Hinweis-Card "Du kannst die Aufnahme-Benachrichtigung später in
+            // den App-Einstellungen aktivieren." Kein Hard-Block — FGS läuft auch ohne.
+        }
+    }
+
+private fun maybeRequestPostNotifications() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
     if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            == PackageManager.PERMISSION_GRANTED) return
+    postNotifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+}
+```
+
+**Prompt-Site 2 — Settings-Activity (Update-User, der Onboarding nicht erneut durchläuft):**
+
+Im `DictateSettingsActivity.onResume()` einen ein-maligen Check (per
+`SharedPreferences`-Flag `post_notif_prompt_shown`):
+
+```kotlin
+override fun onResume() {
+    super.onResume()
+    val sp = getSharedPreferences("dictate_prefs", MODE_PRIVATE)
+    if (Build.VERSION.SDK_INT >= 33
+        && !sp.getBoolean("post_notif_prompt_shown", false)
+        && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED) {
-        // IME kann keine Permission-Dialoge zeigen — daher in der Settings-Activity nachfragen.
-        // In der IME selber gilt: WENN Permission fehlt, läuft der Service weiterhin (FGS bleibt aktiv),
-        // aber die Notification wird vom System unterdrückt — Service-Start funktioniert dennoch.
+        sp.edit().putBoolean("post_notif_prompt_shown", true).apply()
+        postNotifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 }
 ```
 
-**Begründung:** IME-Services dürfen aus UX-Gründen keine `requestPermissions`-Dialoge zeigen (das System würde den Dialog unter der Tastatur rendern). Stattdessen prompten wir in der Settings-Activity und Onboarding (`OnboardingActivity` heute existiert — `app/src/main/java/net/devemperor/dictate/onboarding/OnboardingActivity.java`-Klasse, im Manifest `:53`).
+**IME-User-Friction-Signal:** Wenn der User trotz Decline noch Dictate nutzt und ein
+Recording startet, läuft FGS, aber Notification ist unsichtbar — User weiß nicht, dass
+das Recording im Hintergrund weiterläuft. Mitigation: ein subtiler Hinweis-Banner im
+Keyboard-View, der bei aktivem Recording UND `!checkSelfPermission(POST_NOTIFICATIONS)`
+einblendet: "Hinweis: Aufnahme-Benachrichtigung deaktiviert — App-Einstellungen öffnen?".
+Klick öffnet `Settings.ACTION_APP_NOTIFICATION_SETTINGS`-Intent. Implementierung: Block 6
+(LayoutCatalog) als eigene `BannerSlot`-Predicate.
+
+**Begründung:** IME-Services dürfen aus UX-Gründen keine `requestPermissions`-Dialoge
+zeigen (das System würde den Dialog unter der Tastatur rendern und der IME hat keinen
+Activity-Context für `ActivityResultLauncher`). Stattdessen prompten wir in zwei
+Activities (`OnboardingActivity` für Fresh-Install, `DictateSettingsActivity` für
+Update-Users); der IME zeigt nur einen passiv-informativen Banner.
+
+**Block-2-Acceptance** (in §10 ergänzt): Onboarding zeigt POST_NOTIFICATIONS-Prompt auf
+API ≥ 33, Decline führt zu sichtbarem Banner im IME-View bei aktivem Recording, Klick
+auf Banner öffnet System-Notification-Settings.
 
 #### §11.5.2 MediaStyle vs. Default — Entscheidung
 

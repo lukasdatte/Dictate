@@ -2225,14 +2225,16 @@ Bei der Verifikation aufgedeckte Punkte, die im Plan ergänzt werden sollten:
 **Gap 2: `setResendEnabled(false)` Cooldown nach Resend-Klick (500ms)** — *Status: RESOLVED (§13.5.c) via §3-`resendCooldown`-Erweiterung + Phase-2-2.0.12-Inline-Doku in §8.5*
 
 - **Heute:** `MainButtonsController.kt:331-333` deaktiviert den Resend-Btn temporär, um Doppelklicks zu verhindern. Trigger: `Service.onResendClicked` → 500ms-Cooldown.
-- **Refactor:** das ist eine **transient State**-Achse (`resendCooldown: Boolean`). Lösung: DictateUiState bekommt einen Boolean `resendCooldown`, der vom Service nach Click auf `true` gesetzt und nach 500ms via `Handler.postDelayed` zurückgesetzt wird. `enabledResolver` für RESEND-Slot liest beide: `{ !state.resendCooldown }`.
-- **Mitigation:** DictateUiState (Spec 1, §3) muss um `resendCooldown` erweitert werden. **Aktion:** Eintrag in §3 von Spec 1 oder im Hauptplan vermerken.
+<!-- FIX: Phase-B S-1 (2026-05-13) – flacher state.resendCooldown → hierarchisch state.resend.resendCooldown -->
+- **Refactor:** das ist eine **transient State**-Achse (`resendCooldown: Boolean`). Lösung: `DictateUiState` enthält das Feld bereits als `state.resend.resendCooldown` (siehe Spec 1 §3, `ResendState`), wird vom `ResendModule`-Reducer nach Click auf `true` gesetzt und nach 500ms via Timer-Effect zurückgesetzt — **kein `Handler.postDelayed` im Service**, sondern ein `Effect.StartResendCooldownTimer(500ms)` aus dem Modul. `enabledResolver` für RESEND-Slot liest beide Achsen: `{ !state.resend.resendCooldown }`.
+- **Mitigation:** Feld ist bereits in Spec 1 §3 (`ResendState.resendCooldown`) verankert. Keine zusätzliche Schema-Erweiterung nötig.
 
 **Gap 3: ContentArea-Achse vs. LayoutCatalog** — *Status: Open (§13.5.a) — Implementations-Hinweis*
 
 - **Heute:** ContentArea (MAIN_BUTTONS / QWERTZ / EMOJI_PICKER) ist **orthogonal** zum LayoutMode. Wenn ContentArea ≠ MAIN_BUTTONS, ist das gesamte `mainButtonsClTyped` GONE — alle Slots werden unsichtbar.
 - **Refactor:** der LayoutCatalog deckt nur den Fall ContentArea = MAIN_BUTTONS ab. Der `ContentAreaController` (extrahiert aus `KeyboardStateManager.applyContentAreaVisibility`) setzt den **Container** auf GONE.
-- **Mitigation:** keine Dopplung — der Catalog rendert Slot-Properties immer, aber wenn der Container GONE ist, ist das visuell egal (kein zusätzlicher Aufwand). **Mögliche Optimierung:** im `ImeViewBackend.render` ein Early-Return wenn `state.contentArea != ContentArea.MAIN_BUTTONS`. Trade-off: Performance-Win vs. Inkonsistenz, wenn ContentArea zurück zu MAIN_BUTTONS wechselt — der Backend müsste dann einen Re-Render forcieren. **Empfehlung:** kein Early-Return, immer rendern (idempotent). Performance ist OK, weil die Slot-Properties auf einer GONE-View kein Layout-Pass triggern.
+<!-- FIX: Phase-B S-1 (2026-05-13) – flacher state.contentArea → hierarchisch state.layout.contentArea (R.5 LayoutState-Container) -->
+- **Mitigation:** keine Dopplung — der Catalog rendert Slot-Properties immer, aber wenn der Container GONE ist, ist das visuell egal (kein zusätzlicher Aufwand). **Mögliche Optimierung:** im `ImeViewBackend.render` ein Early-Return wenn `state.layout.contentArea != ContentArea.MAIN_BUTTONS`. Trade-off: Performance-Win vs. Inkonsistenz, wenn ContentArea zurück zu MAIN_BUTTONS wechselt — der Backend müsste dann einen Re-Render forcieren. **Empfehlung:** kein Early-Return, immer rendern (idempotent). Performance ist OK, weil die Slot-Properties auf einer GONE-View kein Layout-Pass triggern.
 
 **Gap 4: BorderGlow-Animation während Pipeline (Send-Mode)** — *Status: RESOLVED (§13.5.c)*
 

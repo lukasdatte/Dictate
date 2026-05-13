@@ -13,7 +13,8 @@
 Diese Spec beschreibt die **Service-Schicht** des Refactors. Sie umfasst:
 
 - Einen neuen **Foreground Service** `DictatePipelineService`, der Pipeline-Logik und State hält und unabhängig vom IME-Service-Lifecycle lebt (überlebt Tastatur-Wechsel).
-- Den **konsolidierten `PipelineStateManager`** als alleinige State-SSOT für ALLE UI-relevanten State-Achsen.
+<!-- FIX: Phase-B S-1 (2026-05-13) – §1 Scope-Aufzählung auf F-11 (DictateOrchestrator + DictateUiStateStore + 12 Module) umgestellt. -->
+- Den **`DictateOrchestrator` + `DictateUiStateStore` + 12 aktive Module** (F-11 Modular Orchestrator Pattern) als alleinige State-SSOT für ALLE UI-relevanten State-Achsen.
 - Die **Bound-Service-Schnittstelle** (`LocalBinder`), über die der IME-Service mit dem Service kommuniziert.
 - Die **Persistence-Schicht** (Room) mit minimaler Schema-Erweiterung und Checkpoint-Hooks.
 - Den **Lifecycle**: Start, Stop, Notification-Updates, Recovery aus DB nach OOM-Death.
@@ -35,7 +36,7 @@ Out-of-Scope (anderer Spec):
 | D4 | **KEIN WorkManager-Worker** (vom User verworfen) | Foreground-Service deckt 99% der Fälle ab. Bei OOM-Death (selten): User-controlled Resume aus DB. |
 | D5 | **`return START_NOT_STICKY`** in `onStartCommand` | Bei Process-Death KEIN Auto-Restart. User entscheidet. |
 | D6 | **`stopSelf()`** sobald **alle Sessions terminal** (COMPLETED/INSERTED/CANCELLED) | Notification verschwindet automatisch. Kein "Geist-Service". |
-| D7 | **PipelineStateManager als alleinige Mutation-Quelle** für alle UI-State-Achsen | Eliminiert die heutige resend_btn-Race + recordButton-Hybrid. |
+| D7 | **`DictateOrchestrator.dispatch(Action)` als alleiniger Mutations-Eingang** für alle UI-State-Achsen (F-8 Single Dispatch + F-11 Modular Orchestrator) | Eliminiert die heutige resend_btn-Race + recordButton-Hybrid. Kein `_state.update`-Call außerhalb von Modul-`reduce` erlaubt (Audit-Pflicht §13.2). <!-- FIX: Phase-B S-1 (2026-05-13) – pre-F-11 PipelineStateManager → F-8/F-11 Single Dispatch --> |
 | D8 | **DB-Schema-Migration M3→M4: table-recreate in Single-Transaktion** (`inserted_at`-Spalte **plus** `status`-CHECK-Erweiterung um RECORDING/TRANSCRIBING — siehe §6.1) | Rollback-sicher (Room-Migration ist atomar). Vorherige Iteration hatte "rein additiv" angenommen, das ist mit der Enum-Erweiterung nicht mehr möglich (SQLite kann CHECK nicht via `ALTER TABLE` ändern). Die `CREATE … _new` + `INSERT … SELECT`-Strategie folgt MIGRATION_2_3 als etabliertem Pattern. |
 
 ---
@@ -638,7 +639,33 @@ class DictateOrchestrator(
     <!-- FIX: Issue 1.1.7 / R.2 – buildContext mirror-only: kein Hardware-Read, audioFile kommt aus state -->
     private fun buildContext(global: DictateUiState) = ReducerContext(global = global)
 
-    fun shutdown() = prefMirror.detach()
+    <!-- FIX: Phase-B S-1 (2026-05-13) – shutdown() ruft jetzt jedes Modul-`terminate()` (Issue 2.1.12 / D7). Frühere Implementation rief nur prefMirror.detach() — Module-Cleanup wäre ungemacht geblieben. -->
+    /**
+     * Service-Shutdown. Reihenfolge:
+     *  1. PrefMirror detachen (kein neuer SP-Listener-Fire mehr).
+     *  2. Pro Modul `terminate(services)` rufen — Module emittieren ihre finalen
+     *     SideEffects (RecordingManager.release, BluetoothSco.stop, …) synchron.
+     *  3. Service.onDestroy ruft anschließend `serviceScope.cancel()` und cancelt
+     *     restliche in-flight Coroutines (siehe §7.3 onDestroy).
+     *
+     * Module-`terminate`-Calls dürfen blockieren (max. 1–2 s), weil sie unter
+     * `runBlocking`-Timeout des Service.onDestroy laufen sollen — Android-FGS
+     * gibt ~5 s, siehe §11.1.4. Effekte sind hier synchron-Hardware-Releases
+     * (kein Coroutine-Suspend).
+     */
+    fun shutdown() {
+        prefMirror.detach()
+        val services = servicesFactory.get()
+        modules.forEach { module ->
+            try {
+                @Suppress("UNCHECKED_CAST")
+                (module as DictateModule<Any, Action, SideEffect>).terminate(services)
+            } catch (t: Throwable) {
+                android.util.Log.w(TAG, "module ${module.id} terminate failed", t)
+                // Ein Modul-Failure darf andere Module nicht blockieren.
+            }
+        }
+    }
 
     companion object {
         private const val TAG = "DictateOrchestrator"
@@ -1116,24 +1143,26 @@ Der Cleanup ist Teil der breiteren Service-onCreate-Sequenz (siehe §7.3
 für den Voll-Skeleton). Damit der Implementierer nicht raten muss,
 welcher Schritt vor welchem läuft, hier die geordnete Sequenz:
 
+<!-- FIX: Phase-B S-1 (2026-05-13) – Sequence-Tabelle auf DictateOrchestrator + ModuleServicesFactory umgestellt (F-11 Modular-Orchestrator-Pattern; PipelineStateManager existiert nicht mehr) -->
 | # | Schritt | Sync/Async | Anmerkung |
 |---|---|---|---|
 | 1 | `super.onCreate()` | sync | Service-Basis-Setup |
 | 2 | DI-Wiring (Store, Repos, Runner, PrefMirror, Recovery) | sync | §7.3 Composition Root |
 | 3 | `audioFileFactory = CacheDirAudioFileFactory(applicationContext)` | sync | Factory construct |
-| 4 | `services = ModuleServices(audioFileFactory = audioFileFactory, …)` | sync | DI-Container |
-| 5 | `stateManager = PipelineStateManager(…, services = services)` | sync | Composition Root |
+| 4 | `servicesFactory = ModuleServicesFactory { ModuleServices(audioFileFactory = audioFileFactory, …) }` | sync | DI-Container (siehe §4.7) |
+| 5 | `orchestrator = DictateOrchestrator(scope, store, servicesFactory, prefMirror, recovery)` | sync | Composition Root (§4.3) — Konstruktor-`init` ruft `prefMirror.attach(store)` **VOR** `scope.launch { recovery.recover(store) }` (siehe §4.3) |
 | 6 | `notifCoordinator = …`, `actionRouter = …` | sync | §7.4 / §7.5 |
-| 7 | `serviceScope.launch(Dispatchers.IO) { recovery.recoverFromDb() }` | async | §11.6.1 |
+| 6.5 | `LegacyAudioFileMigration.run(applicationContext)` | sync | One-shot idempotent (KG-AFF-2). Läuft VOR Schritt 7/8 |
+| 7 | (`recovery.recover(store)` läuft bereits async via `Orchestrator.init`, Schritt 5) | async | §11.6.1 |
 | 8 | `serviceScope.launch(Dispatchers.IO) { audioFileFactory.cleanupOrphans(referenced) }` | async | siehe oben |
 
 **Reihenfolge-Invarianten:**
 
 - Schritt 3 läuft **vor** Schritt 4, weil `services` die Factory hält.
-- Schritt 7 und Schritt 8 laufen **parallel** im `serviceScope` — beide
-  sind Reads, keiner blockt den anderen. Schritt 8 liest die DB direkt
-  über `findAllAudioFilePaths()`; eine Synchronisation mit Schritt 7
-  wäre teurer als die doppelte Read und nicht nötig.
+- Schritt 4 läuft **vor** Schritt 5, weil der `DictateOrchestrator`-Konstruktor `servicesFactory` als Parameter erwartet.
+- **Schritt 5 garantiert `prefMirror.attach(store)` vor `recovery.recover(store)`** (codiert im `Orchestrator.init`-Block, §4.3 Z. 567–570). Verstoß gegen diese Reihenfolge wäre subtil — Recovery sähe initial leere Pref-Mirror-Achsen (z.B. `state.overlay.position*` als Default-Werte statt persistierten Werten). Die Reihenfolge ist **Teil des Orchestrator-Konstruktor-Vertrags**, nicht extern an die Service-onCreate-Sequenz delegiert — Schritt 5 ist atomar.
+- Schritt 7 (im Orchestrator-`init` gestartet) und Schritt 8 (im Service explizit gelauncht) laufen **parallel** im `serviceScope` — beide sind Reads, keiner blockt den anderen. Schritt 8 liest die DB direkt über `findAllAudioFilePaths()`; eine Synchronisation mit Schritt 7 wäre teurer als die doppelte Read und nicht nötig.
+- **Initial-State-Race (NEU, Phase-B S-1 / F-11):** Subscribers, die VOR Schritt 5 (`Orchestrator(…)`) auf `store.state` attached werden, sehen den `DictateUiState.initial()`-Default — kein Pref-Mirror, keine pendingSessions. Der IME-Service `bindService`-Pfad (§7.2) garantiert, dass der `LocalBinder` erst NACH `onCreate` zurückgegeben wird; damit ist `store.state` zum Zeitpunkt des ersten IME-`collect`-Aufrufs **mindestens** mit Pref-Mirror-Werten gefüllt (Schritt 5 hat `prefMirror.attach` synchron durchgeführt). Recovery-Werte (`pendingSessions`) können nachträglich nachreichen — Subscriber müssen idempotent gegenüber späten `pendingSessions`-Updates sein.
 
 **`onDestroy`-Interaktion:**
 
@@ -1187,11 +1216,12 @@ class DictatePipelineService : Service() {
     private val serviceScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+<!-- FIX: Phase-B S-1 (2026-05-13) – Service-Wiring auf DictateOrchestrator + Modul-Pattern umgestellt (F-11). Pre-F-11-Code-Snippet zeigte PipelineStateManager als monolithischen State-Owner — existiert nicht mehr. -->
     // === NEW: Audio-File-Allocator (§4.11) ===
     private lateinit var audioFileFactory: AudioFileFactory
     // === END NEW ===
 
-    private lateinit var stateManager: PipelineStateManager
+    private lateinit var orchestrator: DictateOrchestrator
     // ... (weitere Felder, siehe §7.3)
 
     override fun onCreate() {
@@ -1199,24 +1229,40 @@ class DictatePipelineService : Service() {
 
         // 1. Foundation + DI (siehe §7.3)
         val database = DictateDatabase.getInstance(this)
-        val store = DictateUiStateStore(initialDictateUiState())
+        val store = DictateUiStateStore(DictateUiState.initial())
+        val sessionRepo: PipelineSessionRepo = RoomPipelineSessionRepo(database.sessionsDao())
+        val runner: PipelineRunner = JobExecutor
+        val prefMirror = PipelinePrefMirror(getSharedPreferences(...))
+        val recovery = PipelineRecovery(sessionRepo)
         // ...
 
         // 2. NEW: AudioFileFactory (§4.11)
         audioFileFactory = CacheDirAudioFileFactory(applicationContext)
 
-        // 3. ModuleServices mit injizierter Factory
-        val services = ModuleServices(
-            // ... andere Services
-            audioFileFactory = audioFileFactory,
-            scope = serviceScope,
-            // ...
-        )
+        // 3. ModuleServicesFactory mit injizierter AudioFileFactory (§4.7).
+        //    Factory-Pattern statt direkter ModuleServices-Konstruktion, weil
+        //    der DictateOrchestrator services lazy per `servicesFactory.get()`
+        //    in `runEffect`-Aufrufen abruft.
+        val servicesFactory = ModuleServicesFactory {
+            ModuleServices(
+                // ... andere Subsystem-Adapter
+                audioFileFactory = audioFileFactory,
+                scope = serviceScope,
+                emitAction = { action -> orchestrator.emitAction(action) },
+                // ...
+            )
+        }
 
-        // 4. Composition Root (§7.3)
-        stateManager = PipelineStateManager(
+        // 4. Composition Root: DictateOrchestrator (§4.3). Konstruktor-`init`
+        //    sorgt für `prefMirror.attach(store)` VOR `recovery.recover(store)`
+        //    (atomar im Orchestrator, nicht extern delegiert).
+        orchestrator = DictateOrchestrator(
             scope = serviceScope,
-            // ... (services übergeben)
+            store = store,
+            servicesFactory = servicesFactory,
+            prefMirror = prefMirror,
+            recovery = recovery,
+            // modules = DictateModuleRegistry.all (Default)
         )
 
         // 5. NEW: Crash-Orphan-Cleanup async (Schritt 8 der Sequenz oben)
@@ -1237,8 +1283,8 @@ class DictatePipelineService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        stateManager.shutdown()
-        serviceScope.cancel()  // cancelt auch den Cleanup-Job, falls noch laufend
+        orchestrator.shutdown()    // detacht PrefMirror, siehe §4.3 shutdown()
+        serviceScope.cancel()      // cancelt auch den Cleanup-Job, falls noch laufend
     }
 }
 ```
@@ -2444,8 +2490,8 @@ enum class SessionStatus {
 | `COMPLETED` | Text inserted in editor | `COMPLETED` (unverändert) | `UPDATE … SET inserted_at=now WHERE id=?` |
 | `FAILED` / `CANCELLED` | (terminal) | — | — |
 
-Status-Writes leben in `PipelineStateManager` (siehe §6.2 + §11.2). `SessionManager`
-exposed dazu zwei neue Methoden neben dem bestehenden `finalizeCompleted/Cancelled/Failed`.
+<!-- FIX: Phase-B S-1 (2026-05-13) – Status-Writes wandern aus dem monolithischen PipelineStateManager in Modul-EffectHandler (RecordingModule + PipelineModule, §15). -->
+Status-Writes leben in den jeweiligen Modul-EffectHandlers (`RecordingModule.runEffect(Effect.PersistStatus)` für RECORDING/RECORDED, `PipelineModule.runEffect(Effect.PersistStatus)` für TRANSCRIBING/COMPLETED/inserted_at; siehe §6.2 + §15). `SessionManager` exposed dazu zwei neue Methoden neben dem bestehenden `finalizeCompleted/Cancelled/Failed`.
 
 **Vorbild-Stil** (siehe `app/src/main/java/net/devemperor/dictate/core/SessionManager.kt:97-111` — die heute existierenden `finalizeCompleted/Cancelled/Failed` sind 1-3-Zeilen-Wrapper über `sessionDao.updateStatus(+updateError)`; kein Try/Catch, keine eigene Transaktion, kein Coroutine-Suspend — die Methoden sind synchron, weil heutige Caller via `dbExecutor` (siehe `DictateInputMethodService.java:248`) auf einen IO-Thread dispatchen):
 
@@ -2453,23 +2499,24 @@ exposed dazu zwei neue Methoden neben dem bestehenden `finalizeCompleted/Cancell
 // SessionManager.kt — Ergänzung NACH Z. 111 (vor `getHistoricalQueuedPromptIds`),
 //                    Anchor: gleicher "Terminal status writes"-Abschnitt:
 
-/** Sets status = RECORDING. Called from PipelineStateManager at Recording-Start checkpoint (§6.2). */
+<!-- FIX: Phase-B S-1 (2026-05-13) – Doc-Comments referenzieren Modul-EffectHandler statt monolithischen PipelineStateManager. -->
+/** Sets status = RECORDING. Called from `RecordingModule.runEffect(Effect.PersistStatus(RECORDING))` at Recording-Start checkpoint (§6.2). */
 fun transitionRecording(sessionId: String) {
     sessionDao.updateStatus(sessionId, SessionStatus.RECORDING.name)
 }
 
-/** Sets status = RECORDED + persists the final audio file path. Called from PipelineStateManager at Recording-Stop (§6.2). */
+/** Sets status = RECORDED + persists the final audio file path. Called from `RecordingModule.runEffect(Effect.PersistRecorded)` at Recording-Stop (§6.2). */
 fun transitionRecorded(sessionId: String, audioFilePath: String) {
     sessionDao.updateStatus(sessionId, SessionStatus.RECORDED.name)
     sessionDao.updateAudioFilePath(sessionId, audioFilePath)
 }
 
-/** Sets status = TRANSCRIBING. Called from PipelineStateManager at Pipeline-Start (§6.2). */
+/** Sets status = TRANSCRIBING. Called from `PipelineModule.runEffect(Effect.PersistStatus(TRANSCRIBING))` at Pipeline-Start (§6.2). */
 fun transitionTranscribing(sessionId: String) {
     sessionDao.updateStatus(sessionId, SessionStatus.TRANSCRIBING.name)
 }
 
-/** Sets `inserted_at` to the given timestamp. Called from PipelineStateManager at Insertion-Done (§6.2). */
+/** Sets `inserted_at` to the given timestamp. Called from `PipelineModule.runEffect(Effect.MarkInserted)` at Insertion-Done (§6.2). */
 fun markInserted(sessionId: String, timestamp: Long = System.currentTimeMillis()) {
     sessionDao.markInserted(sessionId, timestamp)
 }
@@ -2541,7 +2588,7 @@ Kein vergessener Konsument in `rewording/`, `widget/`, `keyboard/`, `settings/`,
 
 **Persistenz-Vertrag (Cache ↔ DB) — siehe KG-SST-5 (RESOLVED):**
 
-> **DB first, dann Cache.** Im Checkpoint-Hook (§6.2) schreibt `PipelineStateManager` zuerst die DB (`SessionDao.updateStatus(TRANSCRIBING)` / etc.), dann updated er den Registry (`ActiveJobRegistry.update(sessionId, newState)`). Bei einem Crash zwischen DB-Write und Cache-Write: DB ist konsistent, Cache enthält ggf. einen veralteten Eintrag — der wird beim nächsten App-Start eh leer initialisiert (Registry ist process-local, kein langfristiger Drift möglich). Die obere Zeile in der "Was ändert sich"-Tabelle ("erst Registry, dann DAO-Call") ist durch KG-SST-5 (RESOLVED 2026-05-11) **umgekehrt** worden — siehe §6.2 Persistenz-Vertrag (R.17 erweitert) und KG-SST-5-Marker unten in §11.7.0.
+> **DB first, dann Cache.** Im Checkpoint-Hook (§6.2) schreibt der jeweilige Modul-EffectHandler (`RecordingModule.runEffect(Effect.PersistStatus)` bzw. `PipelineModule.runEffect(...)`) zuerst die DB (`SessionDao.updateStatus(TRANSCRIBING)` / etc.), dann updated er den Registry (`ActiveJobRegistry.update(sessionId, newState)`). <!-- FIX: Phase-B S-1 (2026-05-13) – PipelineStateManager → Modul-EffectHandler --> Bei einem Crash zwischen DB-Write und Cache-Write: DB ist konsistent, Cache enthält ggf. einen veralteten Eintrag — der wird beim nächsten App-Start eh leer initialisiert (Registry ist process-local, kein langfristiger Drift möglich). Die obere Zeile in der "Was ändert sich"-Tabelle ("erst Registry, dann DAO-Call") ist durch KG-SST-5 (RESOLVED 2026-05-11) **umgekehrt** worden — siehe §6.2 Persistenz-Vertrag (R.17 erweitert) und KG-SST-5-Marker unten in §11.7.0.
 
 **Hinweis für Block-3-Implementer:**
 
@@ -2593,7 +2640,7 @@ switch (status) {
         break;
     // NEW (M4): defensive UI für den OOM-Death-Window-Fall.
     // Sollte unter normalem Lifecycle NIE sichtbar werden, weil
-    // PipelineStateManager.recoverFromDb (§6.3) RECORDING→FAILED und
+    // PipelineRecovery.recover() (§4.6 + §6.3) RECORDING→FAILED und
     // TRANSCRIBING→RECORDED downgraded, BEVOR HistoryActivity die Liste lädt.
     case RECORDING:
         holder.statusIcon.setVisibility(View.VISIBLE);
@@ -2683,11 +2730,12 @@ Außerdem in `SessionEntity.kt` (Zeile 51 ergänzt):
 Und im `SessionDao.kt` (vor Zeile 96 ergänzt):
 
 ```kotlin
-/** Atomic INSERTED-Transition, gerufen von PipelineStateManager.confirmInsertion. */
+<!-- FIX: Phase-B S-1 (2026-05-13) – DAO-Doc-Comments auf F-11-Call-Sites umgestellt. -->
+/** Atomic INSERTED-Transition, gerufen von `PipelineModule.runEffect(Effect.ConfirmInsertion)`. */
 @Query("UPDATE sessions SET inserted_at = :timestamp WHERE id = :id")
 fun markInserted(id: String, timestamp: Long)
 
-/** Pending-Sessions-Query für PipelineStateManager.recoverFromDb. */
+/** Pending-Sessions-Query für `PipelineRecovery.recover()` (§4.6). */
 @Query(
     """
     SELECT * FROM sessions
@@ -3018,28 +3066,37 @@ object Pref {
 }
 ```
 
-**Schreib-Trigger:** `PipelineStateManager.updateOverlayPosition(portrait, x, y)` — vom
-`OverlayBackend` nach Drag-End emittiert (siehe Spec 3 §11.5). Implementierung:
+<!-- FIX: Phase-B S-1 (2026-05-13) – Schreib-Trigger auf Modul-Pattern umgestellt: OverlayAction.UpdatePosition → OverlayModule.reduce + Effect.PersistOverlayPosition. -->
+**Schreib-Trigger:** `Action.OverlayAction.UpdatePosition(portrait, x, y)` — vom `OverlayBackend` nach Drag-End dispatcht (siehe Spec 3 §11.5). Reducer + Effect:
 
 ```kotlin
-fun updateOverlayPosition(portrait: Boolean, x: Float, y: Float) {
-    val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
-    val (xKey, yKey) = if (portrait) {
-        Pref.OverlayPositionPortraitX to Pref.OverlayPositionPortraitY
+// Im OverlayModule.reduce (Spec 1 §15, OverlayModule):
+is Action.OverlayAction.UpdatePosition -> TransitionResult(
+    nextState = if (action.portrait) {
+        state.copy(
+            positionPortraitX = action.x.coerceIn(0f, 1f),
+            positionPortraitY = action.y.coerceIn(0f, 1f),
+        )
     } else {
-        Pref.OverlayPositionLandscapeX to Pref.OverlayPositionLandscapeY
+        state.copy(
+            positionLandscapeX = action.x.coerceIn(0f, 1f),
+            positionLandscapeY = action.y.coerceIn(0f, 1f),
+        )
+    },
+    sideEffects = listOf(Effect.PersistOverlayPosition(action.portrait, action.x, action.y)),
+)
+
+// Im OverlayModule.runEffect:
+is Effect.PersistOverlayPosition -> {
+    val (xKey, yKey) = if (effect.portrait) {
+        Pref.OverlayPositionPortraitX.key to Pref.OverlayPositionPortraitY.key
+    } else {
+        Pref.OverlayPositionLandscapeX.key to Pref.OverlayPositionLandscapeY.key
     }
-    prefs.edit()
-        .putFloat(xKey, x.coerceIn(0f, 1f))
-        .putFloat(yKey, y.coerceIn(0f, 1f))
+    services.sharedPrefs.edit()
+        .putFloat(xKey, effect.x.coerceIn(0f, 1f))
+        .putFloat(yKey, effect.y.coerceIn(0f, 1f))
         .apply()
-    _state.value = _state.value.copy(
-        overlay = if (portrait) {
-            _state.value.overlay.copy(positionPortraitX = x, positionPortraitY = y)
-        } else {
-            _state.value.overlay.copy(positionLandscapeX = x, positionLandscapeY = y)
-        }
-    )
 }
 ```
 
@@ -3054,9 +3111,8 @@ Pref) und respektiert damit die Single-Source-of-Truth-Regel "alles via DictateU
 `recoverFromDb()` selbst (§6.3) mutiert nur noch `pendingSessions` und ist nicht mehr
 am Pref-Read beteiligt.
 
-**SOLID-Konformität:** Die Pref-Mirror-Logik bleibt im `PipelineStateManager` gekapselt
-(Single-Responsibility); `OverlayBackend` kennt nur die Action `UpdateOverlayPosition`
-und die State-Felder, nicht die Pref-Keys (Dependency-Inversion).
+<!-- FIX: Phase-B S-1 (2026-05-13) – SOLID-Block auf F-11 umgestellt (PipelinePrefMirror + OverlayModule statt monolithischer PipelineStateManager). -->
+**SOLID-Konformität:** Die Pref-Mirror-Logik (Read-Trigger) lebt im `PipelinePrefMirror` (Single-Responsibility, §4.5); die Pref-Write-Logik im `OverlayModule.runEffect(Effect.PersistOverlayPosition)` (§15, OverlayModule). `OverlayBackend` kennt nur die Action `Action.OverlayAction.UpdatePosition` und die State-Felder, nicht die Pref-Keys (Dependency-Inversion).
 
 ---
 
@@ -3069,13 +3125,19 @@ und die State-Felder, nicht die Pref-Keys (Dependency-Inversion).
 > `PipelineActionRouter`), damit der Service einzig Process-Lifecycle-Owner
 > ist und alles andere injiziert + testbar ist.
 
-### §7.1 Service-Struktur (F-3 / SRP)
+<!-- FIX: Phase-B S-1 (2026-05-13) – §7.1 Service-Struktur auf F-11-Naming umgestellt (PipelineStateManager → DictateOrchestrator + 12 Module + 4 Hilfsklassen). Pre-F-11-Diagramm zeigte den monolithischen Manager als einzigen Composition-Root-Eintrag. -->
+### §7.1 Service-Struktur (F-3 / SRP, F-11 Modular Orchestrator)
 
 ```
 DictatePipelineService (Process-Lifecycle-Owner)
-   ├── PipelineStateManager           // §4.3, Composition Root für State
-   ├── PipelineNotificationCoordinator // baut Notifications, abonniert Store
-   └── PipelineActionRouter            // PendingIntent → Manager.action
+   ├── DictateOrchestrator               // §4.3, Composition Root + Action-Routing
+   │     ├── DictateUiStateStore        (§4.4)
+   │     ├── PipelinePrefMirror         (§4.5)
+   │     ├── PipelineRecovery           (§4.6)
+   │     ├── ModuleServicesFactory      (§4.7)
+   │     └── DictateModuleRegistry.all  (§4.8) — 12 aktive Module
+   ├── PipelineNotificationCoordinator   // baut Notifications, abonniert Store
+   └── PipelineActionRouter              // PendingIntent → Orchestrator.dispatch(Action)
 ```
 
 **Verantwortlichkeiten:**
@@ -3083,8 +3145,9 @@ DictatePipelineService (Process-Lifecycle-Owner)
 | Klasse | SRP | Side-Effects |
 |---|---|---|
 | `DictatePipelineService` | FGS-Lifecycle (`startForeground`/`stopSelf`), Bind-Connection | ja (FGS-Calls) |
+| `DictateOrchestrator` | Action-Routing + Cross-Module-Cascade-Dispatch | nein (delegiert an Module via `runEffect`) |
 | `PipelineNotificationCoordinator` | State → Notification-Render, throttled | ja (NotificationManager) |
-| `PipelineActionRouter` | PendingIntent-Build + Intent-Decode → Action-Dispatch | nein (pure Mapping) |
+| `PipelineActionRouter` | PendingIntent-Build + Intent-Decode → `orchestrator.dispatch(Action)` | nein (pure Mapping) |
 
 ### §7.2 Start
 
@@ -3096,10 +3159,11 @@ bindService(Intent(this, DictatePipelineService::class.java), connection, BIND_A
 
 ### §7.3 onStartCommand (schlank)
 
+<!-- FIX: Phase-B S-1 (2026-05-13) – §7.3 onCreate-Snippet auf F-11 umgestellt: DictateOrchestrator + ModuleServicesFactory + DictateUiState.initial(); ViewModeFsm-Parameter entfernt (lebt jetzt im ViewModeModule, §15.1). -->
 ```kotlin
 class DictatePipelineService : Service() {
 
-    private lateinit var stateManager: PipelineStateManager
+    private lateinit var orchestrator: DictateOrchestrator
     private lateinit var notifCoordinator: PipelineNotificationCoordinator
     private lateinit var actionRouter: PipelineActionRouter
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -3107,26 +3171,58 @@ class DictatePipelineService : Service() {
     override fun onCreate() {
         super.onCreate()
         // Composition Root — alle Hilfsklassen werden hier konstruiert + verdrahtet.
-        val store = DictateUiStateStore(initialDictateUiState())
+        val database = DictateDatabase.getInstance(this)
+        val store = DictateUiStateStore(DictateUiState.initial())
         val sessionRepo: PipelineSessionRepo = RoomPipelineSessionRepo(database.sessionsDao())
         val runner: PipelineRunner = JobExecutor
-        val prefMirror = PipelinePrefMirror(getSharedPreferences(...))
+        val prefMirror = PipelinePrefMirror(getSharedPreferences("dictate_prefs", MODE_PRIVATE))
         val recovery = PipelineRecovery(sessionRepo)
+        val audioFileFactory: AudioFileFactory = CacheDirAudioFileFactory(applicationContext)
 
-        stateManager = PipelineStateManager(
+        // F-11: ModuleServicesFactory injiziert die Hardware-Adapter pro EffectHandler-Aufruf.
+        // emitAction wird über eine Late-Reference auf orchestrator gehalten (Konstruktor-Zyklus),
+        // weil der Orchestrator selbst die emitAction-Quelle ist.
+        val servicesFactory = ModuleServicesFactory {
+            ModuleServices(
+                recordingHardware = RecordingHardware(audioManager, ...),
+                bluetoothSco = BluetoothScoSubsystem(...),
+                audioFocus = AudioFocusSubsystem(...),
+                // ... weitere Subsystem-Adapter
+                audioFileFactory = audioFileFactory,
+                scope = serviceScope,
+                emitAction = { action -> orchestrator.emitAction(action) },
+            )
+        }
+
+        orchestrator = DictateOrchestrator(
             scope = serviceScope,
-            sessionRepo = sessionRepo,
-            runner = runner,
             store = store,
-            fsm = ViewModeFsm,
+            servicesFactory = servicesFactory,
             prefMirror = prefMirror,
             recovery = recovery,
-            recordingHardware = RecordingHardware(audioManager, ...),
+            // modules = DictateModuleRegistry.all (Default, §4.8)
         )
-        notifCoordinator = PipelineNotificationCoordinator(this, stateManager.state, serviceScope)
-        actionRouter = PipelineActionRouter(stateManager)
+
+        // KG-AFF-2: One-shot Legacy-Audio-Cleanup (§4.11.6.2). Idempotent.
+        LegacyAudioFileMigration.run(applicationContext)
+
+        notifCoordinator = PipelineNotificationCoordinator(this, orchestrator.state, serviceScope)
+        actionRouter = PipelineActionRouter(orchestrator)
 
         runner.initialize(orchestrator)   // G7: JobExecutor-init wandert hierher (vom IME-onCreate)
+
+        // Crash-Orphan-Cleanup async (parallel zur Recovery, beide read-only)
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val referenced = database.sessionsDao()
+                    .findAllAudioFilePaths()
+                    .filterNotNull()
+                    .toSet()
+                audioFileFactory.cleanupOrphans(referenced)
+            } catch (t: Throwable) {
+                Log.w("DictatePipelineSvc", "orphan cleanup failed at boot", t)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -3142,10 +3238,11 @@ class DictatePipelineService : Service() {
         if (state.isAllTerminal()) stopSelf()
     }
 
-    override fun onBind(intent: Intent): IBinder = LocalBinder()
+    override fun onBind(intent: Intent): IBinder = LocalBinder(orchestrator)
     override fun onDestroy() {
         super.onDestroy()
-        stateManager.shutdown()
+        // Module-`terminate()`-Sequenz (Issue 2.1.12 / D7): orchestrator delegiert an alle Module.
+        orchestrator.shutdown()
         serviceScope.cancel()
     }
 }
@@ -3246,7 +3343,8 @@ class PipelineActionRouter(
 }
 ```
 
-**SRP:** pure Mapping zwischen Notification-Action-Strings und `PipelineStateManager`-Methoden. Keine UI-Logik, keine Notification-Build, kein Lifecycle. Tests können einen Mock-`PipelineStateManager` injizieren und prüfen, dass jeder Action-String die richtige Methode trifft.
+<!-- FIX: Phase-B S-1 (2026-05-13) – SRP-Beschreibung auf DictateOrchestrator umgestellt. -->
+**SRP:** pure Mapping zwischen Notification-Action-Strings und `Action`-Sealed-Class-Varianten. Keine UI-Logik, keine Notification-Build, kein Lifecycle. Tests können einen Mock-`DictateOrchestrator` injizieren und prüfen, dass jeder Action-String die richtige `Action`-Variante via `orchestrator.dispatch(...)` trifft.
 
 ### §7.6 Notification-Inhalt
 
@@ -3270,8 +3368,9 @@ Der `DictateInputMethodService` wird durch das Refactor **deutlich schlanker**:
 
 | Bestandteil | Heute (im IME-Service) | Künftig |
 |-------------|------------------------|---------|
-| Recording-Logik | RecordingStateController | wandert in PipelineStateManager |
-| Pipeline-Logik | KeyboardUiController + JobExecutor + PipelineOrchestrator | wandert teilweise (State-Teil); JobExecutor + PipelineOrchestrator bleiben, aber im PipelineService |
+<!-- FIX: Phase-B S-1 (2026-05-13) – Migrations-Tabelle auf F-11 (Modul-Ziele statt monolithischer PipelineStateManager) umgestellt. -->
+| Recording-Logik | RecordingStateController | wandert in `RecordingModule` (§15.2) |
+| Pipeline-Logik | KeyboardUiController + JobExecutor + PipelineOrchestrator | wandert teilweise (State-Teil → `PipelineModule`); JobExecutor + PipelineOrchestrator bleiben, aber im PipelineService gehalten |
 | State-Coroutinen | keine | im PipelineService (serviceScope) |
 | View-Rendering | direkter Code in Service | wandert in KeyboardLayoutManager (Spec 2) |
 | Visibility-Mutations | hybrid (KSM + RecordingUiController + Service) | weg — alles über LayoutManager-Resolver (Spec 2) |
@@ -3317,7 +3416,8 @@ gerendert. Spec 1 §10 Block-2-Acceptance erweitert um diesen Test.
 
 <!-- FIX: Issue 1.0.6 – Hierarchische State-Pfade (F-10) durchpropagiert in §9 Migrations-Tabellen + §13.2 Audit (Mapping siehe Spec 1 §3) -->
 
-### §9.1 RecordingStateController → PipelineStateManager
+<!-- FIX: Phase-B S-1 (2026-05-13) – Section-Titel auf RecordingModule umgestellt (F-11). -->
+### §9.1 RecordingStateController → RecordingModule
 
 **Heute:** `app/src/main/java/net/devemperor/dictate/core/RecordingStateController.kt`
 - Klasse mit `var state: RecordingState` (Z. 106-107) — interne Mutation via `setState(newState)` (Z. 353-357).
@@ -3332,19 +3432,21 @@ gerendert. Spec 1 §10 Block-2-Acceptance erweitert um diesen Test.
 - Callback-Forwarding: `Callback.onStateChanged(old, new)` (Z. 90).
 - Konstruktion + Wiring (Service-Side): `DictateInputMethodService.java:372-376` (`recordingStateController = new RecordingStateController(...)` + `setManagers`); `setCallback` in `:914-958`.
 
-**Künftig:** Wandert komplett in `PipelineStateManager` als interne private Methoden. Die `Callback`-Schnittstelle entfällt — der Service abonniert via `state.collect { ... }` und reagiert auf `oldState.recording` vs. `newState.recording`-Diffs.
+<!-- FIX: Phase-B S-1 (2026-05-13) – Migrations-Tabelle auf Action-/Modul-Pattern umgestellt. RecordingStateController-Methoden werden zu Action.RecordingAction-Varianten, die im RecordingModule.reduce verarbeitet werden. -->
+**Künftig:** Wandert komplett in `RecordingModule` (§15.2). Die `Callback`-Schnittstelle entfällt — Subscriber abonnieren via `orchestrator.state.collect { ... }` und reagieren auf `oldState.recording` vs. `newState.recording`-Diffs.
 
-| Heute (Methode) | Künftig (PipelineStateManager) | Mutiert in `DictateUiState` |
+| Heute (Methode) | Künftig (Action + Modul) | Mutiert in `DictateUiState` |
 |---|---|---|
-| `startRecording(...)` (Z. 128) | `startRecording(target: InsertionTarget)` | `recording: Idle → Preparing/Active` |
-| `stopRecording()` (Z. 145) | `stopRecording()` | `recording: Active → Idle` + Pipeline-Auto-Start |
-| `togglePause()` (Z. 164) | `pauseRecording()` / `resumeRecording()` | `recording: Active ↔ Paused` |
-| `setAudioFocusRuntime(b)` (Z. 201) | `toggleAudioFocus()` (private Pref-Write + Live-Hook) | `audio.audioFocusEnabledPref` |
-| `cancelRecording()` (Z. 217) | `cancelPipeline()` | `recording: → Idle` + Pipeline-Cleanup |
+| `startRecording(...)` (Z. 128) | `Action.RecordingAction.StartRecording(target, audioFile)` → `RecordingModule.reduce` | `recording: Idle → Preparing → Active` |
+| `stopRecording()` (Z. 145) | `Action.RecordingAction.StopRecording` → `RecordingModule.reduce` | `recording: Active → Idle` + Pipeline-Auto-Start (`PipelineAction.Submit` via Cross-Module-Cascade) |
+| `togglePause()` (Z. 164) | `Action.RecordingAction.PauseRecording` / `ResumeRecording` | `recording: Active ↔ Paused` |
+| `setAudioFocusRuntime(b)` (Z. 201) | `Action.AudioAction.ToggleAudioFocus` → `AudioModule.reduce` | `audio.audioFocusEnabledPref` |
+| `cancelRecording()` (Z. 217) | `Action.RecordingAction.CancelRecording` → `RecordingModule.reduce` | `recording: → Idle` + `Effect.DeleteAudioFile` |
 
 **Datentyp `RecordingState`** (`RecordingState.kt:10-18`) bleibt unverändert erhalten — er ist sealed-class, exhaustiv, gut. Wird zum Feld von `DictateUiState` (siehe §3).
 
-### §9.2 KeyboardUiController-State-Teil → PipelineStateManager
+<!-- FIX: Phase-B S-1 (2026-05-13) – Section-Titel auf PipelineModule umgestellt. -->
+### §9.2 KeyboardUiController-State-Teil → PipelineModule
 
 **Heute:** `app/src/main/java/net/devemperor/dictate/core/KeyboardUiController.kt`
 - State-Field `var state: PipelineUiState` (Z. 63).
@@ -3358,17 +3460,19 @@ gerendert. Spec 1 §10 Block-2-Acceptance erweitert um diesen Test.
   - `updateReprocessQueue(queue)` → `:335-340`
   - `updateReprocessLanguage(code)` → `:348-353`
   - Internal-Updater `addRunningStep / completeStep / failStep` → `:364-456` (alle rufen `updateRunningState { ... }` Z. 161-166).
-- View-Mutations innerhalb `updateDictateUiState`: ruft `refreshRecordButtonFromState()` (Z. 150, view-mutation: button text/icon/enabled — Z. 464-509) und `stateManager.refresh()` (Z. 153) — die View-Mutation wandert weg in den LayoutCatalog (Spec 2 §9.5), die State-Mutation in PipelineStateManager.
+- View-Mutations innerhalb `updateDictateUiState`: ruft `refreshRecordButtonFromState()` (Z. 150, view-mutation: button text/icon/enabled — Z. 464-509) und `stateManager.refresh()` (Z. 153) — die View-Mutation wandert weg in den LayoutCatalog (Spec 2 §9.5), die State-Mutation in `PipelineModule.reduce`. <!-- FIX: Phase-B S-1 (2026-05-13) – PipelineStateManager → PipelineModule.reduce -->
 
 **Künftig:**
 - Sealed Class `PipelineUiState` (`PipelineUiState.kt:13-54`) bleibt — Datentyp ist gut.
-- State-Field + Mutator wandern in `PipelineStateManager` als private `_state.update { it.copy(pipeline = newDictateUiState) }`.
-- Public-API-Methoden auf `KeyboardUiController` werden ersetzt durch identisch benannte Methoden auf `PipelineStateManager` (siehe §4-API). Die heutigen Implementations werden inline migriert — kein "Wrapper".
+<!-- FIX: Phase-B S-1 (2026-05-13) – Migrations-Ziel auf PipelineModule.reduce + Action-Dispatch (F-8). -->
+- State-Field + Mutator wandern in `PipelineModule.reduce` als `state.copy(...)` (Reducer); `orchestrator.dispatch(action)` ist der einzige Mutations-Eingang (F-8 Single Dispatch).
+- Public-API-Methoden auf `KeyboardUiController` werden ersetzt durch `Action.PipelineAction.*`-Varianten — Aufrufer dispatchen über `orchestrator.dispatch(Action.PipelineAction.X)`. Die heutigen Implementations werden inline in die Reducer-Arme migriert — kein "Wrapper".
 - `refreshRecordButtonFromState()` (Z. 464-509) wandert in den `RECORD`-Slot-`textResolver` + `enabledResolver` im LayoutCatalog (Spec 2 §9.5).
 - `stepRows`-Verwaltung (Z. 133-135 + `addRunningStep / completeStep / failStep`) bleibt im `KeyboardUiController` (View-side), wird aber durch `state.pipeline`-StateFlow-Subscriber getriggert statt durch direkte Methodenaufrufe vom Service.
 - `AutoEnterConfig`-Field (Z. 67) wandert in `DictateUiState.pipeline` (das `PipelineUiState.Running`-Variant trägt `autoEnterActive` bereits — `AutoEnterConfig` ist eine redundante Schicht und entfällt).
 
-### §9.3 KeyboardStateManager → PipelineStateManager + LayoutCatalog
+<!-- FIX: Phase-B S-1 (2026-05-13) – Section-Titel auf LayoutModule + LayoutCatalog umgestellt. -->
+### §9.3 KeyboardStateManager → LayoutModule + LayoutCatalog
 
 **Heute:** `app/src/main/java/net/devemperor/dictate/core/KeyboardStateManager.kt`
 - Eigene State-Felder: `contentArea: ContentArea` (Z. 100), `isSmallMode: Boolean` (Z. 102) — heute private Setter, mutiert via `setContentArea(area)` (Z. 135-138) und `setSmallMode(enabled)` (Z. 140-146).
@@ -3377,7 +3481,7 @@ gerendert. Spec 1 §10 Block-2-Acceptance erweitert um diesen Test.
 - Lambda-Konstruktor-Parameter: `isRecording`, `isPaused`, `isPipelineRunning`, `isRewordingEnabled`, `isPipelineProgressVisible`, `isReprocessStaging` (Z. 78-97). Diese Lambdas befragen heute `RecordingStateController` und `KeyboardUiController` direkt — werden durch reaktiven `state.collect`-Subscriber ersetzt.
 
 **Künftig:**
-- `contentArea` und `isSmallMode` wandern in `DictateUiState` (siehe §3) — Mutation via `setContentArea(area)` und `toggleSmallMode()` auf dem `PipelineStateManager`.
+- `contentArea` und `isSmallMode` wandern in `DictateUiState.layout` (siehe §3) — Mutation via `Action.LayoutAction.SetContentArea(area)` und `Action.LayoutAction.ToggleSmallMode` → `LayoutModule.reduce`. **Atomarität (KSM-Bug-Fix):** Das frühere `setSmallMode(true)` mutierte zuerst `isSmallMode = true` und DANN `contentArea = MAIN_BUTTONS` (zwei sequenzielle Schritte, siehe `KeyboardStateManager.kt:141-145`). Im Refactor läuft das in einem einzigen `state.copy(layout = layout.copy(smallMode = enabled, contentArea = MAIN_BUTTONS))` — atomar, kein Subscriber sieht den Zwischen-Zustand. <!-- FIX: Phase-B S-1 (2026-05-13) – PipelineStateManager → Action+LayoutModule; Atomarität-Klausel hinzugefügt -->
 - Die Lambda-basierten Anfrage-Patterns entfallen: alle 6 Lambdas lesen heute Felder aus 2 verschiedenen Klassen; künftig sind alle Achsen Member von `DictateUiState`, der Subscriber bekommt sie atomar in einer Emission.
 - `applyVisibility` + Sub-Funktionen wandern komplett in den `LayoutCatalog`-Resolver (Spec 2 §9.3). 4 von 8 Visibility-Mutationen werden Predicate-driven (siehe §13.1); 4 sind ContentArea-Achsen-Mutationen, die in `LayoutCatalog.forKeyboard(state)` einfließen.
 - Die `setLayoutModeController()` / `clearLayoutModeController()`-Brücke (Z. 115-131) entfällt vollständig — `KeyboardLayoutModeController` wird in Spec 2 §9.1 durch MotionLayout ersetzt.
@@ -3484,11 +3588,20 @@ Block 2 (DictatePipelineService) gilt als done, wenn:
 - [ ] Manueller Restart-Button-Klick: PipelineService startet neu, Pipeline läuft mit korrektem State.
 - [ ] **MediaRecorder-release-Pfad (FIX Issue 3.0.11):** Service.onDestroy bei aktivem Recording ruft `orchestrator.dispatch(Action.PipelineAction.CancelPipeline)` → `recordingManager.release()` wird aufgerufen UND der MediaRecorder ist im released-State. Verifiziert via `MediaRecorder.release()`-Mock-Spy in Unit-Test (oder Robolectric); deckt §13.5 G6 Pfad A ab. (Spec 1 hat aktuell keine eigene Test-Strategie-Sektion; Test-Stub wird in Block-2-Implementation als `RecordingManagerReleaseTest.kt` angelegt.)
 
-Block 1 (State-SSOT-Konsolidierung) gilt als done, wenn:
-- [ ] resend_btn-Visibility wird nur an EINER Stelle berechnet (Predicate im PipelineStateManager).
-- [ ] recordButton.text/isEnabled wird nur an EINER Stelle gesetzt (im Vorgriff auf Spec 2 zunächst noch in einem zentralen Resolver innerhalb KeyboardUiController, in Block 5 dann final in LayoutCatalog).
+<!-- FIX: Phase-B S-1 (2026-05-13) – Block-1-Acceptance auf Block-1a/1b-Split (R.7) umgestellt. Vorher referenzierte den nicht-mehr-existierenden monolithischen PipelineStateManager. -->
+Block 1a (Quick-Wins im heutigen Code) gilt als done, wenn:
+- [ ] resend_btn-Visibility wird nur an EINER Stelle berechnet (zentraler `predResendVisible`-Helper, der die 6 verstreuten Mutations-Sites ersetzt — siehe §11.2.2 Block-1a Schritt 5).
+- [ ] recordButton.text/isEnabled wird nur an EINER Stelle gesetzt (zentraler Resolver innerhalb KeyboardUiController, in Block 5 dann final in LayoutCatalog).
 - [ ] Service.onSingleRowModeToggled triggert KSM.refresh() (Quick-Win-Fix).
 - [ ] Service.onAudioFocusToggled triggert KSM.refresh() (Quick-Win-Fix).
+
+Block 1b (DictateUiState + DictateOrchestrator + 12 aktive Module) gilt als done, wenn:
+- [ ] `DictateUiStateStore` ist alleinige State-SSOT — `RecordingStateController.state`, `KeyboardUiController.state`, `KeyboardStateManager.contentArea/isSmallMode` sind eliminiert. Verifiziert via `grep` (siehe §9.6 End-of-Block-Cleanup-Check).
+- [ ] `DictateOrchestrator.dispatch(Action)` ist der einzige öffentliche Mutations-Eingang (F-8 Single Dispatch). Verifiziert via Architektur-Test, der `_state.update`-Calls außerhalb von Modul-`reduce` rejects.
+- [ ] `PipelinePrefMirror.attach(store)` läuft **VOR** `recovery.recover(store)` (codiert im Orchestrator-`init`, §4.3). Verifiziert via `DictateOrchestratorInitOrderTest.kt` mit `FakePipelinePrefMirror` (records attach-Reihenfolge).
+- [ ] **Atomarität `setSmallMode`:** der frühere sequenzielle `KSM.setSmallMode`-Pfad ist in einem einzigen `store.update`-Reducer-Aufruf konsolidiert (`it.copy(layout = it.layout.copy(smallMode = enabled, contentArea = MAIN_BUTTONS))`). Subscriber sehen nie einen Stale-Zwischen-Zustand. Verifiziert in `LayoutModuleAtomicityTest.kt`.
+- [ ] **PersistentList-Idiom:** alle Reducer, die `pendingSessions` mutieren, verwenden `.add` / `.removeAll` / `.removeAt`. Verifiziert via Lint-Check `NoToMutableListOnPersistentList` (oder Code-Review-Checkliste in Block 1b).
+- [ ] **Initial-State-Race-Fence (NEU Phase-B S-1):** ein Subscriber, der unmittelbar nach `bindService` auf `state.collect` attached, sieht **mindestens** die Pref-Mirror-Werte (nicht den `DictateUiState.initial()`-Default). Test: `DictateOrchestratorBootRaceTest.kt` mit `FakeSharedPreferences`, asserts dass die erste `state.value`-Emission Pref-Werte enthält.
 - [ ] Alle existierenden Use-Cases (UC1-UC7 + UC-extra-1 bis UC-extra-10 aus _pending-state-machine-visibility-owners.md §4) funktionieren weiterhin.
 - [ ] **Resend-Cooldown-Visibility-Trennung (FIX Issue 3.0.9):** `predResendVisible` reflektiert NICHT `resendCooldown` — Cooldown betrifft NUR `enabledResolver` (disabled+alpha 0.4f), nicht `visibilityPredicate`. Verifiziert in Block-1-Unit-Test (Permutation `lastAudioExists=true` + `resendCooldown=true` → visibility=VISIBLE, enabled=false).
 - [ ] **Cross-Module-Cascade-Verifikation (FIX Issue 3.0.10) — pro §15.1-Cascade-Eintrag ein Acceptance-Punkt:**
@@ -3511,9 +3624,10 @@ Block 3 (DB-Persistence) gilt als done, wenn:
 - [ ] `recoverFromDb()` lädt stuck Sessions korrekt.
 - [ ] Cleanup-Policy (>7d alte INSERTED Sessions) läuft auf Service-Start.
 <!-- FIX: Issue 2.1.20 / R.16 + 2.1.21 / R.17 + 2.1.11 / R.9 + PENDING-2 – Acceptance-Erweiterungen -->
-- [ ] **R.16a Recovery aus RECORDING:** Process killed während RECORDING → Session ist post-Recovery `status=FAILED`, `lastErrorType=UNKNOWN`, `lastErrorMessage="recording-interrupted-by-process-death"`, Audio-File aufgeräumt (siehe §6.3). **Test:** `PipelineStateManagerTest.kt::recoverFromDb_recordingPromoteToFailed_andCleansAudioFile()` — Asserts: `dao.updateStatus(id, "FAILED")` aufgerufen, `dao.updateError(id, "UNKNOWN", "recording-interrupted-by-process-death")` aufgerufen, `File(audioPath).exists() == false`, `dao.clearAudioFilePath(id)` aufgerufen.
-- [ ] **R.16b Recovery aus TRANSCRIBING (Datei ok):** Process killed während TRANSCRIBING, Audio-File noch da → Session ist post-Recovery `status=RECORDED` (Downgrade) und erscheint in `pendingSessions`. **Kein** Auto-Resume (D4 / OPEN-4). **Test:** `PipelineStateManagerTest.kt::recoverFromDb_transcribingDowngradeToRecorded_whenAudioPresent()` — Asserts: `dao.updateStatus(id, "RECORDED")` aufgerufen, `dao.updateError(id, null, null)` aufgerufen (Stale-Error-Clear, siehe §6.3), Session ist in `state.pendingSessions`, KEIN `state.pipeline = Running(id, …)` (kein Auto-Resume).
-- [ ] **R.16c Recovery aus TRANSCRIBING (Datei weg):** Process killed während TRANSCRIBING, Audio-File ist verschwunden → `status=FAILED` mit `lastErrorMessage="audio file vanished before transcription"`. **Test:** `PipelineStateManagerTest.kt::recoverFromDb_transcribingPromoteToFailed_whenAudioMissing()` — Asserts: `dao.updateStatus(id, "FAILED")` aufgerufen, `dao.updateError(id, "UNKNOWN", "audio file vanished before transcription")` aufgerufen, `dao.clearAudioFilePath(id)` aufgerufen, Session NICHT in `state.pendingSessions`.
+<!-- FIX: Phase-B S-1 (2026-05-13) – Test-Datei-Naming auf PipelineRecoveryTest umgestellt; Recovery-Logik lebt in `PipelineRecovery` (§4.6), nicht im monolithischen PipelineStateManager. -->
+- [ ] **R.16a Recovery aus RECORDING:** Process killed während RECORDING → Session ist post-Recovery `status=FAILED`, `lastErrorType=UNKNOWN`, `lastErrorMessage="recording-interrupted-by-process-death"`, Audio-File aufgeräumt (siehe §6.3). **Test:** `PipelineRecoveryTest.kt::recover_recordingPromoteToFailed_andCleansAudioFile()` — Asserts: `dao.updateStatus(id, "FAILED")` aufgerufen, `dao.updateError(id, "UNKNOWN", "recording-interrupted-by-process-death")` aufgerufen, `File(audioPath).exists() == false`, `dao.clearAudioFilePath(id)` aufgerufen.
+- [ ] **R.16b Recovery aus TRANSCRIBING (Datei ok):** Process killed während TRANSCRIBING, Audio-File noch da → Session ist post-Recovery `status=RECORDED` (Downgrade) und erscheint in `pendingSessions`. **Kein** Auto-Resume (D4 / OPEN-4). **Test:** `PipelineRecoveryTest.kt::recover_transcribingDowngradeToRecorded_whenAudioPresent()` — Asserts: `dao.updateStatus(id, "RECORDED")` aufgerufen, `dao.updateError(id, null, null)` aufgerufen (Stale-Error-Clear, siehe §6.3), Session ist in `store.snapshot.pendingSessions`, KEIN `store.snapshot.pipeline = Running(id, …)` (kein Auto-Resume).
+- [ ] **R.16c Recovery aus TRANSCRIBING (Datei weg):** Process killed während TRANSCRIBING, Audio-File ist verschwunden → `status=FAILED` mit `lastErrorMessage="audio file vanished before transcription"`. **Test:** `PipelineRecoveryTest.kt::recover_transcribingPromoteToFailed_whenAudioMissing()` — Asserts: `dao.updateStatus(id, "FAILED")` aufgerufen, `dao.updateError(id, "UNKNOWN", "audio file vanished before transcription")` aufgerufen, `dao.clearAudioFilePath(id)` aufgerufen, Session NICHT in `store.snapshot.pendingSessions`.
 - [ ] **R.16 Race-Test:** parallel-Recording während Recovery führt nicht zu pendingSessions-Override (Merge-Operation).
 - [ ] **PENDING-2 Migration-CHECK:** MigrationTo4Test verifiziert (a) `INSERT … status='RECORDING'` und `… status='TRANSCRIBING'` werden akzeptiert, (b) ungültiger Wert wirft `SQLiteConstraintException`.
 - [ ] **R.17 Idempotenz:** Replay nach view-recreate führt nicht zu Doppel-Insertion (DB-Idempotenz-Test mit `@Insert(onConflict = REPLACE)`).
@@ -3690,59 +3804,70 @@ Wenn nach `Context.startForegroundService(intent)` nicht binnen 5 s `startForegr
 
 **Mitigation:** `onCreate` des Service ruft `startForegroundCompat()` synchron als allererste Aktion (vor jeglicher Coroutine-Initialisierung). Der Notification-Builder darf KEINE blocking-DB-Calls machen — er liest nur aus `stateManager.state.value`, das im Memory liegt.
 
+<!-- FIX: Phase-B S-1 (2026-05-13) – §11.1.4 Snippet auf DictateOrchestrator umgestellt. Recovery wird vom Orchestrator-Konstruktor selbst async gestartet (§4.3 init); kein separater scope.launch nötig. -->
 ```kotlin
 override fun onCreate() {
     super.onCreate()
-    ensureNotificationChannel()                  // synchron, in-memory
-    stateManager = PipelineStateManager(scope, db, jobExecutor)  // sync Constructor
-    startForegroundCompat(stateManager.state.value)  // synchron, < 50ms
-    scope.launch {                                // ASYNC erst danach
-        stateManager.recoverFromDb()              // DB-IO, darf länger dauern
-        stateManager.state.collect { ... }
-    }
+    ensureNotificationChannel()                              // synchron, in-memory
+    // Composition Root (siehe §7.3 für volles DI-Wiring).
+    // Orchestrator-`init` ruft synchron prefMirror.attach(store) und startet
+    // asynchron recovery.recover(store) — DB-IO blockt FGS-Start nicht.
+    orchestrator = DictateOrchestrator(serviceScope, store, servicesFactory, prefMirror, recovery)
+    startForegroundCompat(orchestrator.state.value)          // synchron, < 50ms
+    // Reaktive Updates der Notification starten — NotificationCoordinator
+    // throttled auf 1 Update/300 ms (§7.4).
+    notifCoordinator.startReactiveUpdates(::stopSelfWhenTerminal)
 }
 ```
 
-### §11.2 PipelineStateManager-Implementierung
+<!-- FIX: Phase-B S-1 (2026-05-13) – §11.2 auf Block-1a/1b-Split (R.7) + F-11-Modular-Orchestrator umgestellt. Pre-F-11-Text rahmte alles als monolithischen PipelineStateManager — überholt seit 2026-05-10. -->
+### §11.2 Block-1a / Block-1b / Block-2 / Block-3 — Implementierung
 
 #### §11.2.1 Konkrete Code-Pointer pro Migrations-Schritt
 
-Siehe §9.1 - §9.5 oben — alle Migrations-Sites haben jetzt `file:line`-Pointer und Tabellen.
+Siehe §9.1 – §9.5 oben — alle Migrations-Sites haben jetzt `file:line`-Pointer und Tabellen.
 
-#### §11.2.2 Migrations-Reihenfolge (Block-1 vor Block-2 vor Block-3)
+#### §11.2.2 Migrations-Reihenfolge (Block-1a → 2 → 1b → 3, siehe Hauptplan §4)
 
-Drei Blöcke aus dem Hauptplan, in der Reihenfolge ihrer Implementation:
+**Block 1a — Quick-Wins im heutigen Code (kein Module-Pattern, kompilier-grün)**
 
-**Block 1 — State-SSOT-Konsolidierung (kein Service, kein DB-Schema-Change)**
+Ziel: heutiges System auf eine Single-Owner-Visibility-Basis bringen, OHNE die Modul-Architektur einzuführen. Vorbedingung für Block 1b (Module-Architektur kann erst im PipelineService-Container leben, also nach Block 2).
 
-Ziel: alle State-Mutationen, die heute auf View-Properties direkt schreiben oder auf 2 verschiedenen Klassen verstreut sind, werden in einer einzigen `DictateUiState`-Klasse + `MutableStateFlow` konsolidiert. Der `PipelineStateManager` lebt zunächst ohne Service — er ist eine schlichte Klasse, vom IME-Service direkt instanziert.
+1. **`predResendVisible`-Helper konsolidieren** (Spec 2 §13.5 Gap 5 + Hauptplan R.7) — neue Top-Level-Funktion, alle 6 verstreuten `resendButton.visibility = …`-Sites lesen sie. Quick-Win, kein State-Refactor.
+2. **`recordButton.text/isEnabled`-Hybrid auflösen** — ein zentraler Resolver in `KeyboardUiController` (noch kein LayoutCatalog), der die 8 verstreuten Sites in §13.4.1 ersetzt.
+3. **Quick-Win-Fixes** (Block-1a Acceptance): `onSingleRowModeToggled` → `KSM.refresh()`-Trigger, `onAudioFocusToggled` → ebenfalls. Heute fehlt `KSM.refresh()` nach `mainButtonsController.refreshAudioFocusIcon` — siehe `DictateInputMethodService.java:2664-2687`.
+
+**Block 2 — DictatePipelineService einführen (Service-Klasse + Bound-Binder, KEIN DB-Schema-Change)**
+
+1. **Service-Klasse anlegen** (`core/DictatePipelineService.kt`) — Skelett, `LocalBinder`, `onCreate`/`onStartCommand`/`onBind`/`onDestroy` (siehe §7.3).
+2. **Bound-Connection-Setup im IME** (siehe §11.3.1) — `bindService` in `onCreate`, `unbindService` in `onDestroy`.
+3. **Notification + startForeground** verdrahten (§11.1.2).
+4. **Manifest erweitern** (§11.1.1).
+5. **JobExecutor-Init** wandert vom IME-`onCreate` (Z. 389) in `Service.onCreate` (G7 in §13.5).
+
+**Block 1b — DictateUiState + DictateOrchestrator + 12 aktive Module (im PipelineService-Container)**
+
+Ziel: alle State-Mutationen, die heute auf 3 Klassen verteilt sind (RecordingStateController / KeyboardUiController / KeyboardStateManager), werden in einer hierarchischen `DictateUiState`-Klasse + `DictateUiStateStore` konsolidiert. Mutationen laufen ausschließlich über `DictateOrchestrator.dispatch(Action)` → Modul-Reducer.
 
 Reihenfolge der Sub-Schritte:
 
-1. **DictateUiState-Datentyp anlegen** (neue Datei `core/DictateUiState.kt`) — pure Datenklasse, kein Verhalten.
-2. **PipelineStateManager-Skelett anlegen** (neue Datei `core/PipelineStateManager.kt`) — `MutableStateFlow<DictateUiState>`, leere Action-Methoden.
-3. **RecordingStateController-Inhalt einkopieren** (Methoden aus `RecordingStateController.kt:128-321`) — Body wandert in PipelineStateManager-Methoden, mutiert `_state.update { it.copy(recording = newRecordingState) }`. Existierende `RecordingStateController.Callback`-Empfänger werden auf `state.collect`-Subscriber umgebaut. ⚠ Achtung: `RecordingManager` und `BluetoothScoManager` haben Callback-Backrefs auf den Controller — die müssen mitgezogen werden (PipelineStateManager wird zum neuen Callback-Empfänger).
-4. **KeyboardUiController-State-Teil migrieren** (`KeyboardUiController.kt:147-353`) — `updateDictateUiState`-Body wandert in PipelineStateManager-Methoden. Public-API-Methoden (`preparePipeline`, `startPipeline`, ...) bekommen Wrapper-Forwarding `→ stateManager.preparePipeline()`. Service-Call-Sites bleiben unverändert in diesem Schritt — kein Big-Bang-Edit.
-5. **resend_btn-Mutationen entfernen** (siehe §13.1 Tabelle): die 6 Mutations-Sites werden durch ein Predicate ersetzt. Da Spec 2 (LayoutCatalog) noch nicht da ist, wird in diesem Block 1 ein temporärer Stand-In im PipelineStateManager geschrieben:
+1. **DictateUiState-Datentyp anlegen** (neue Datei `state/DictateUiState.kt`) — pure Daten-Klasse mit 12 Sub-State-Klassen (`AudioState`, `LayoutState`, …) plus 1 Top-Level-Bool (`lastResultNeedsManualPaste`). Siehe §3.
+2. **DictateModule-Interface + DictateOrchestrator + ModuleServicesFactory anlegen** (§4.2 / §4.3 / §4.7). Skelett mit `Action`-Sealed-Class (leer), keine konkreten Module noch.
+3. **RecordingModule implementieren** (§15.2) — `RecordingStateController.kt:128-321`-Logik wandert in `RecordingModule.reduce + runEffect`. Existierende `RecordingStateController.Callback`-Empfänger werden auf `state.collect`-Subscriber umgebaut. ⚠ Achtung: `RecordingManager` und `BluetoothScoManager` haben Callback-Backrefs auf den Controller — die müssen mitgezogen werden (Module-Effekt-Pfade dispatchen `Action.RecordingAction.MediaRecorderReady` etc. via `services.emitAction`).
+4. **PipelineModule implementieren** — `KeyboardUiController.kt:147-353`-Logik wandert in `PipelineModule.reduce + runEffect`. Public-API-Methoden auf KeyboardUiController werden via `orchestrator.dispatch(Action.PipelineAction.X)` ersetzt.
+5. **resend_btn-Predicate (final)** — der `predResendVisible`-Helper aus Block 1a wird in den `LayoutCatalog.RESEND`-Slot überführt (Spec 2 §3.2 + §13.1). Bis Block 5 läuft der Subscriber transitionsmäßig im IME-Service:
    ```kotlin
-   // Transitional in Block 1 (wird in Block 5 durch LayoutCatalog ersetzt):
-   stateManager.state.collect { state ->
+   // Transitional in Block 1b (wird in Block 5 durch LayoutCatalog ersetzt):
+   orchestrator.state.collect { state ->
        val visible = state.resend.lastAudioExists && state.resend.resendEnabled
            && state.recording is RecordingState.Idle
            && state.pipeline is PipelineUiState.Idle
        resendButton.visibility = if (visible) View.VISIBLE else View.GONE
    }
    ```
-6. **`KeyboardStateManager.contentArea` und `isSmallMode` migrieren** in den `DictateUiState`. `applyVisibility()` bleibt zunächst in `KeyboardStateManager` — wird in Spec 2 gelöscht. Die heutigen Lambda-Konstruktor-Parameter (Z. 78-97) werden auf `state.value`-Reads umgestellt; die `refresh()`-Trigger werden Subscriber-driven.
-7. **Quick-Win-Fixes** (Plan-Acceptance Block-1): `onSingleRowModeToggled` → `stateManager.refresh()`-Trigger, `onAudioFocusToggled` → ebenfalls. Heute fehlt `stateManager.refresh()` nach `mainButtonsController.refreshAudioFocusIcon` — siehe `DictateInputMethodService.java:2664-2687`.
-
-**Block 2 — DictatePipelineService einführen (Service-Klasse + Bound-Binder, KEIN DB-Schema-Change)**
-
-1. **Service-Klasse anlegen** (`core/DictatePipelineService.kt`) — Skelett, `LocalBinder`, `onCreate`/`onStartCommand`/`onBind`/`onDestroy`.
-2. **PipelineStateManager-Konstruktion verschieben** vom `DictateInputMethodService.initLongLivedObjects` (`:329-396`) in `DictatePipelineService.onCreate`. Der IME-Service hält nicht mehr selbst den StateManager — er hält nur noch eine `LocalBinder?`-Referenz.
-3. **Bound-Connection-Setup im IME** (siehe §11.3.1) — `bindService` in `onCreate`, `unbindService` in `onDestroy`.
-4. **Notification + startForeground** verdrahten (§11.1.2).
-5. **Manifest erweitern** (§11.1.1).
+6. **LayoutModule implementieren** — `KeyboardStateManager.contentArea/isSmallMode` wandern in `LayoutState` (Sub-State). `setSmallMode(enabled)` wird zu einem atomaren `reduce`-Aufruf, der `LayoutState.copy(smallMode = enabled, contentArea = MAIN_BUTTONS)` in einer Mutation atomar setzt — eliminiert das heutige sequenzielle 2-Step-Schreiben.
+7. **PrefMirror-Wiring (§4.5):** `PipelinePrefMirror` mirrort die 15 UI-state-relevanten Prefs in die Sub-State-Klassen. Wird im `DictateOrchestrator.init` synchron attached.
+8. **Recovery-Wiring (§4.6):** `PipelineRecovery` lädt `pendingSessions` aus DB in `store`. Wird im `DictateOrchestrator.init` async (`scope.launch`) gestartet — **NACH** `prefMirror.attach`.
 
 **Block 3 — DB-Persistence (Schema-Migration M3→M4)**
 
@@ -3750,16 +3875,17 @@ Reihenfolge der Sub-Schritte:
 2. **MigrationTo4.kt anlegen** mit table-recreate-Strategie + CHECK-Erweiterung (siehe §6.1).
 3. **Schema-Version + addMigrations** in `DictateDatabase.kt` (§6.1).
 4. **`SessionEntity.insertedAt`-Feld** ergänzen (§6.1).
-5. **`SessionDao`-Methoden:** `markInserted` / `findPendingInsertion` / `deleteInsertedOlderThan` / `getSessionsByStatuses` (§6.1 + §6.3).
+5. **`SessionDao`-Methoden:** `markInserted` / `findPendingInsertion` / `deleteInsertedOlderThan` / `getSessionsByStatuses` + `findAllAudioFilePaths` + `markLegacyAudioSessionsFailed` (§6.1 + §6.3 + §4.11).
 6. **`SessionManager`-Methoden:** `transitionRecording` + `transitionTranscribing` neben den bestehenden `finalize*`-Methoden (§6.1).
-7. **Checkpoint-Hooks im PipelineStateManager** (siehe §6.2-Tabelle): pro State-Transition ein DAO-Aufruf in einem `scope.launch(Dispatchers.IO)`.
-8. **`recoverFromDb()`** im `PipelineStateManager.onCreate` — RECORDING→FAILED+cleanup, TRANSCRIBING→RECORDED-Downgrade-oder-FAILED, lädt pending sessions in `state.pendingSessions` (§6.3).
+7. **Checkpoint-Hooks pro Modul** (§6.2-Tabelle): RecordingModule + PipelineModule emittieren DAO-Calls als SideEffects (`Effect.PersistStatus(sessionId, status)` etc.).
+8. **`PipelineRecovery.recover()`** liest pending sessions: RECORDING→FAILED+cleanup, TRANSCRIBING→RECORDED-Downgrade-oder-FAILED, lädt sie in `state.pendingSessions` (§6.3).
 9. **Cleanup-Policy** beim Service-Idle-Stop: `dao.deleteInsertedOlderThan(now - 7d)` einmal vor `stopSelf()`.
 
+<!-- FIX: Phase-B S-1 (2026-05-13) – Test-Klassen auf F-11-Module-Pattern umgestellt (RecordingModuleTest statt PipelineStateManagerTest, separate PipelineRecoveryTest). -->
 #### §11.2.3 Test-Strategie
 
 Existierende Tests (`app/src/test/java/net/devemperor/dictate/core/`):
-- `RecordingStateControllerTest.kt` — pure Kotlin, nutzt `FakeAudioFocusGate.kt`. Block-1-Auswirkung: Tests werden auf `PipelineStateManager` umgebaut. State-Assertions ändern sich von `controller.state == X` zu `manager.state.value.recording == X`.
+- `RecordingStateControllerTest.kt` — pure Kotlin, nutzt `FakeAudioFocusGate.kt`. Block-1b-Auswirkung: Tests werden auf `RecordingModuleTest` umgebaut. State-Assertions ändern sich von `controller.state == X` zu `RecordingModule.reduce(stateBefore, action, ctx).nextState == X` (pure Function, kein Manager-Setup nötig).
 - `JobExecutorTest.kt` — bleibt unangetastet (JobExecutor bleibt erhalten — siehe §8 + Plan-Hauptaussage).
 - `ActiveJobRegistryTest.kt` — unverändert.
 
@@ -3767,18 +3893,24 @@ Neue Tests pro Block:
 
 | Block | Neue Test-Klasse | Inhalt |
 |---|---|---|
-| 1 | `PipelineStateManagerTest.kt` | State-Transitions, audio-focus, single-row-toggle, resend-eligibility, pendingSessions-Updates |
-| 1 | `DictateUiStateTest.kt` | `data class`-Equality, `copy()`-Verhalten, sealed-class-exhaustivität |
-| 2 | `DictatePipelineServiceTest.kt` | Robolectric-Service-Test: `onCreate`-Lifecycle, `onStartCommand`-Action-Routing, FGS-Start innerhalb 5s. |
+| 1b | `DictateOrchestratorTest.kt` | Action-Routing über `moduleByLeafClass`-Lookup, Cascade-Depth-Counter (R.6), Self-Cascade-Regression (`R.RSB-FIX-A`, siehe §10), Init-Order-Test (PrefMirror VOR Recovery), Boot-Race-Fence (Phase-B S-1). |
+| 1b | `RecordingModuleTest.kt` | Pure Reducer-Tests pro State × Action — 4 States × ~7 Actions = ~28 Permutationen. Kein Hardware-Setup (Reducer ist pure). |
+| 1b | `PipelineModuleTest.kt` | Pure Reducer-Tests für PipelineUiState-FSM (Idle/Preparing/Running/ReprocessStaging). |
+| 1b | `LayoutModuleAtomicityTest.kt` | Verifiziert dass `setSmallMode(true)` in EINEM `store.update` `smallMode = true && contentArea = MAIN_BUTTONS` setzt — Subscriber sehen kein Zwischenstadium. |
+| 1b | `DictateUiStateTest.kt` | `data class`-Equality, `copy()`-Verhalten, sealed-class-exhaustivität, `PersistentList.add/removeAll`-Idiom. |
+| 1b | `PipelinePrefMirrorTest.kt` | `attach(store)`-Mirroring von 15 Prefs in Sub-States, `OnSharedPreferenceChangeListener`-Trigger. |
+| 1b | `PipelineRecoveryTest.kt` | `recover(store)`-Logik gegen `FakeSessionRepo`. |
+| 2 | `DictatePipelineServiceTest.kt` | Robolectric-Service-Test: `onCreate`-Lifecycle, `onStartCommand`-Action-Routing, FGS-Start innerhalb 5 s. |
 | 2 | `LocalBinderTest.kt` | Bound-Service-Test: `onServiceConnected` triggert `state.collect`-Subscriber. |
 | 3 | `MigrationTo4Test.kt` | Room-Migration-Test mit `MigrationTestHelper` — (a) `inserted_at`-Spalte existiert nach Migration, alte COMPLETED-Rows haben `inserted_at = created_at`; (b) CHECK-Constraint akzeptiert `RECORDING`/`TRANSCRIBING` als status-Wert; (c) ungültiger status wird abgelehnt (CHECK-Verstoß → `SQLiteConstraintException`); (d) **alle 4 alten Stati round-trippen verlustfrei** (`migrate3To4_preservesAllLegacyStatuses`); (e) **child-Rows aus `processing_steps`/`transcriptions` überleben den table-recreate** (`migrate3To4_preservesChildRows_processingStepsAndTranscriptions`); (f) **Indices werden nach Migration recreated** (`migrate3To4_preservesIndices`). Detail-Code siehe §11.4.2. |
-| 3 | `SessionDaoTest.kt` (erweitert) | `findPendingInsertion`, `markInserted`, `deleteInsertedOlderThan` — alle 3 neuen Queries. |
-| 3 | `PipelineStateManagerTest.kt` (Block-1-Datei, Block-3-Erweiterung) | 3 neue Recovery-Tests (R.16a/b/c — siehe §10 Acceptance): `recoverFromDb_recordingPromoteToFailed_andCleansAudioFile`, `recoverFromDb_transcribingDowngradeToRecorded_whenAudioPresent`, `recoverFromDb_transcribingPromoteToFailed_whenAudioMissing`. Nutzt `FakeSessionDao` (§11.7.3) + temp-Verzeichnis für Audio-File-Operationen. |
+| 3 | `SessionDaoTest.kt` (erweitert) | `findPendingInsertion`, `markInserted`, `deleteInsertedOlderThan`, `findAllAudioFilePaths`, `markLegacyAudioSessionsFailed` — alle neuen Queries. |
+| 3 | `PipelineRecoveryTest.kt` (Block-3-Erweiterung) | 3 neue Recovery-Tests (R.16a/b/c — siehe §10 Acceptance): `recoverFromDb_recordingPromoteToFailed_andCleansAudioFile`, `recoverFromDb_transcribingDowngradeToRecorded_whenAudioPresent`, `recoverFromDb_transcribingPromoteToFailed_whenAudioMissing`. Nutzt `FakeSessionDao` (§11.7.3) + temp-Verzeichnis für Audio-File-Operationen. |
 
 **Test-Doubles:**
-- `FakePipelineService` — implementiert das gleiche Interface wie `DictatePipelineService.LocalBinder`, hält in-memory `MutableStateFlow<DictateUiState>`. Ermöglicht IME-Tests ohne Robolectric-Service.
+- `FakeLocalBinder` — implementiert das gleiche Interface wie `DictatePipelineService.LocalBinder`, hält in-memory `MutableStateFlow<DictateUiState>` + `dispatch`-Recorder. Ermöglicht IME-Tests ohne Robolectric-Service.
 - `FakePipelineRunner` — existiert bereits (`JobExecutorTest`-Pattern). Bleibt unverändert.
-- `FakeAudioFocusGate.kt` (existiert) — bleibt; wird vom PipelineStateManager direkt konsumiert.
+- `FakeAudioFocusGate.kt` (existiert) — bleibt; wird vom RecordingModule indirekt via `services.audioFocus` konsumiert.
+- `FakeModuleServices` — `ModuleServices`-Konkretisierung mit allen Subsystem-Fakes; vom RecordingModule-/PipelineModule-Test verwendet.
 
 ### §11.3 Bound-Service-Setup
 
@@ -4139,13 +4271,15 @@ class MigrationTo4Test {
 }
 ```
 
+<!-- FIX: Phase-B S-1 (2026-05-13) – Test-Datei-Naming auf DictateOrchestrator-/PipelineRecovery-Pattern umgestellt. Recovery-Logik lebt nach F-11 nicht mehr im monolithischen PipelineStateManager, sondern in `PipelineRecovery` (§4.6) plus dem RECORDING/TRANSCRIBING-Branch im PendingSessionsModule/Recovery-Pfad (§6.3). -->
 > [!NOTE]
 > **Zusätzlicher Recovery-Test (eigene Datei, nicht Teil des Migration-Tests):**
-> `PipelineStateManagerTest.kt` (Block 1, siehe §11.2) deckt `recoverFromDb`-Logik ab —
+> `PipelineRecoveryTest.kt` (Block 1, siehe §11.2) deckt `recover()`-Logik ab —
 > RECORDING-Boot → FAILED+cleanup, TRANSCRIBING-Boot mit Audio → RECORDED-Downgrade,
 > TRANSCRIBING-Boot ohne Audio → FAILED. Diese Logik testet die Recovery-Tabelle aus §6.3
 > end-to-end, ist aber JVM-only (Robolectric) — kein Android-Test-Setup nötig, weil
-> SessionDao + DAO-Calls mocked werden.
+> SessionDao + DAO-Calls mocked werden. Test-Setup: `PipelineRecovery(FakeSessionRepo)`,
+> Assertion auf `store.snapshot.pendingSessions` nach `recovery.recover(store)`.
 
 #### §11.4.3 Edge-Cases bei Migration-Failure
 
@@ -4201,15 +4335,16 @@ private fun buildContentIntent(): PendingIntent {
 
 **Asynchron im scope** (NICHT synchron in `onCreate`), weil DB-IO blocken könnte und wir die 5-Sekunden-FGS-Frist nicht riskieren wollen (§11.1.4).
 
+<!-- FIX: Phase-B S-1 (2026-05-13) – §11.6.1-Snippet auf DictateOrchestrator umgestellt. Recovery wird vom Orchestrator-init selbst async gestartet — kein separater scope.launch nötig. -->
 ```kotlin
 override fun onCreate() {
     super.onCreate()
     ensureNotificationChannel()
-    stateManager = PipelineStateManager(scope, db, jobExecutor)
-    startForegroundCompat(stateManager.state.value)   // sync, instant
-    scope.launch(Dispatchers.IO) {
-        stateManager.recoverFromDb()                    // async, kann 100-500ms dauern
-    }
+    // Orchestrator-init startet `scope.launch { recovery.recover(store) }` selbst (§4.3) —
+    // also wird FGS-Start nicht blockiert.
+    orchestrator = DictateOrchestrator(serviceScope, store, servicesFactory, prefMirror, recovery)
+    startForegroundCompat(orchestrator.state.value)   // sync, instant
+    // Recovery läuft bereits async; keine explizite scope.launch hier nötig.
 }
 ```
 
@@ -4452,15 +4587,16 @@ Die Migration in §6.1 ist nicht mehr rein additiv (siehe D8-Update in §2). Kon
 >     - §6.1.1 Konsumenten-Tabelle: Hinweis-Block "Persistenz-Vertrag (Cache ↔ DB)" mit der DB-first-Regel.
 >     - §6.2 Persistenz-Vertrag (R.17) bekommt einen 5. Bulletpoint: "**Reihenfolge DB → Cache:** Im Reducer-Hook für RECORDING/TRANSCRIBING gilt DB-Update vor `ActiveJobRegistry.update`. Bei DAO-Failure wird der Registry-Call übersprungen (kein Drift); bei Process-Crash dazwischen ist DB konsistent, Registry wird beim App-Start eh leer initialisiert."
 
+<!-- FIX: Phase-B S-1 (2026-05-13) – Test-Tabellen auf F-11-Module-Pattern umgestellt. -->
 #### §11.7.1 Bestehende Tests, die brechen
 
 | Test | Block | Bruchgrund | Mitigation |
 |---|---|---|---|
-| `RecordingStateControllerTest.kt` | 1 | Klasse wird gelöscht | Auf `PipelineStateManagerTest` umschreiben, gleiche Assertions auf `manager.state.value.recording` |
-| `MultiCallbackForwardingTest.kt` | 1 | Callback-Pattern verschwindet | Test wird auf `state.collect`-Subscriber umgebaut |
+| `RecordingStateControllerTest.kt` | 1b | Klasse wird gelöscht | Auf `RecordingModuleTest` umschreiben — Reducer-pure-Function-Asserts statt Controller-Field-Asserts. State-Assertions ändern sich von `controller.state == X` zu `RecordingModule.reduce(stateBefore, action, ctx).nextState == X`. |
+| `MultiCallbackForwardingTest.kt` | 1b | Callback-Pattern verschwindet | Test wird auf `orchestrator.state.collect`-Subscriber umgebaut |
 | `JobExecutorTest.kt` | (keiner) | unverändert | — |
 | `ActiveJobRegistryTest.kt` | (keiner) | unverändert | — |
-| `LanguageControllerTest.kt` | (keiner) | unverändert | — |
+| `LanguageControllerTest.kt` | 1b | LanguageController wandert in LanguageModule | Auf `LanguageModuleTest` umschreiben |
 
 #### §11.7.2 Neue Tests, die nötig sind
 
@@ -4470,10 +4606,13 @@ Siehe §11.2.3 — Tabelle pro Block.
 
 | Fake | Datei | Block | Zweck |
 |---|---|---|---|
-| `FakePipelineService` (LocalBinder-Stub) | `app/src/test/java/.../testutil/FakePipelineService.kt` (NEU) | 2 | IME-Tests ohne Robolectric-Service |
+| `FakeLocalBinder` (LocalBinder-Stub) | `app/src/test/java/.../testutil/FakeLocalBinder.kt` (NEU) | 2 | IME-Tests ohne Robolectric-Service |
 | `FakeJobExecutor` | (existiert via `PipelineRunner`-Interface in `JobExecutor.kt:332`) | (keiner) | bereits vorhanden |
-| `FakeAudioFocusGate` | `app/src/test/java/.../core/FakeAudioFocusGate.kt` (existiert) | 1 | bereits vorhanden |
-| `FakeSessionDao` | `app/src/test/java/.../testutil/FakeSessionDao.kt` (NEU) | 3 | PipelineStateManager-Tests ohne Room |
+| `FakeAudioFocusGate` | `app/src/test/java/.../core/FakeAudioFocusGate.kt` (existiert) | 1b | bereits vorhanden |
+| `FakeModuleServices` | `app/src/test/java/.../testutil/FakeModuleServices.kt` (NEU) | 1b | DictateModule-Tests ohne reale Hardware-Adapter |
+| `FakePipelinePrefMirror` | `app/src/test/java/.../testutil/FakePipelinePrefMirror.kt` (NEU) | 1b | DictateOrchestrator-Init-Order-Test (records attach-Reihenfolge) |
+| `FakePipelineSessionRepo` | `app/src/test/java/.../testutil/FakePipelineSessionRepo.kt` (NEU) | 1b | PipelineRecovery-Tests ohne Room |
+| `FakeSessionDao` | `app/src/test/java/.../testutil/FakeSessionDao.kt` (NEU) | 3 | DAO-Tests ohne Room |
 
 ---
 
@@ -4557,8 +4696,9 @@ Quelle: `grep -rn "\.\(visibility\|setVisibility\)" app/src/main/java/net/devemp
 
 | # | file:line | Code | Klasse | Wandert nach? |
 |---|---|---|---|---|
-| 1 | `RecordingStateController.kt:106-107` | `var state: RecordingState = Idle; private set` | `RecordingStateController` | `PipelineStateManager._state` (DictateUiState.recording) — JA |
-| 2 | `RecordingStateController.kt:110` | `private var audioFile: File?` | `RecordingStateController` | bleibt eingekapselt im PipelineStateManager — JA |
+<!-- FIX: Phase-B S-1 (2026-05-13) – Targets auf F-11 (RecordingModule + RecordingState.audioFile, R.2) umgestellt. -->
+| 1 | `RecordingStateController.kt:106-107` | `var state: RecordingState = Idle; private set` | `RecordingStateController` | `DictateUiStateStore._state` → `DictateUiState.recording` (mutiert von `RecordingModule.reduce`) — JA |
+| 2 | `RecordingStateController.kt:110` | `private var audioFile: File?` | `RecordingStateController` | wandert in `RecordingState.Preparing/Active/Paused.audioFile` (Sub-Feld der sealed-class-Varianten, R.2 — Pure-Reducer-Garantie) — JA |
 | 3 | `RecordingStateController.kt:111` | `private var audioFocusEnabled: Boolean` | `RecordingStateController` | `DictateUiState.audio.audioFocusEnabledPref` — JA |
 | 4 | `RecordingStateController.kt:355` | `state = newState` (in `setState`) | `RecordingStateController` | `_state.update { it.copy(recording = newState) }` — JA |
 | 5 | `KeyboardUiController.kt:63-65` | `override var state: PipelineUiState = Idle; private set` | `KeyboardUiController` | `DictateUiState.pipeline` — JA |
@@ -4572,13 +4712,20 @@ Quelle: `grep -rn "\.\(visibility\|setVisibility\)" app/src/main/java/net/devemp
 | 13 | `KeyboardStateManager.kt:141-145` | `isSmallMode = enabled; contentArea = MAIN_BUTTONS` (in `setSmallMode`) | `KeyboardStateManager` | atomare `_state.update { it.copy(layout = it.layout.copy(smallMode = enabled), contentArea = MAIN_BUTTONS) }` — JA, eliminiert das Coupled-Mutation-Problem (heute zwei sequenzielle Schreiben, künftig atomar) |
 | 14 | `KeyboardStateManager.kt:113-117` | `private var layoutModeController: ...` | `KeyboardStateManager` | entfällt komplett (Klasse wird gelöscht in Spec 2) — JA |
 | 15 | `KeyboardUiController.kt:138` | `private var savedRecordButtonTextColors` | `KeyboardUiController` | bleibt View-lokal — Akzeptiert |
-| 16 | `DictateInputMethodService.java:111-122` | div. Service-Felder (`livePrompt`, `pendingLivePromptChain`, `vibrationEnabled`, `autoSwitchKeyboard`, `restoreAutoEnter`, `restoreReprocessStaging`) | Service | `livePrompt` + `pendingLivePromptChain` + `autoSwitchKeyboard` wandern in `DictateUiState.pipeline.Running.livePrompt` etc. (oder bleiben Pipeline-Job-internal). `restoreAutoEnter` / `restoreReprocessStaging` — view-recreate-bridges entfallen, weil State-SSOT übersteht View-Recreate (Service-Lifecycle länger als IME-View). — JA |
+<!-- FIX: Phase-B S-1 (2026-05-13) – Zeile 16 in 16a-16f aufgespalten (pro Service-Feld einen expliziten Migrations-Ziel). Frühere Sammelzeile war zu vage und ließ den restoreAutoEnter/restoreReprocessStaging-Felder offen, ob sie ersatzlos gestrichen oder umgezogen werden. -->
+| 16a | `DictateInputMethodService.java:112` | `private boolean livePrompt` | Service | `DictateUiState.livePrompt.enabled` (Sub-State, §3) — JA |
+| 16b | `DictateInputMethodService.java:113` | `private volatile boolean pendingLivePromptChain` | Service | `DictateUiState.livePrompt.pendingChain` (Sub-State, §3) — JA |
+| 16c | `DictateInputMethodService.java:114` | `private boolean vibrationEnabled` | Service | `DictateUiState.audio.vibrationEnabled` (Pref-Mirror, §3 + §4.5) — JA |
+| 16d | `DictateInputMethodService.java:121` | `private boolean autoSwitchKeyboard` | Service | Bleibt **lokales Service-Field** — repräsentiert einen Pre-IME-Switch-Toggle, der nur im IME-Service-Lifecycle relevant ist. KEIN UI-State, KEIN Cross-Konsument außer dem IME selbst. Akzeptiert als view-lokal. |
+| 16e | `DictateInputMethodService.java:131` | `private Boolean restoreAutoEnter` | Service | **Ersatzlos gestrichen** — view-recreate-bridge entfällt. Der State `PipelineUiState.Running.autoEnterActive` lebt nach Block 1b im PipelineService-StateFlow, der View-Recreate strukturell überlebt (Spec 1 D1). Subscriber im neuen `viewScope` (Spec 1 §8.x) bekommt den Wert beim Re-Attach automatisch via erste `state.collect`-Emission. |
+| 16f | `DictateInputMethodService.java:142` | `private PipelineUiState.ReprocessStaging restoreReprocessStaging` | Service | **Ersatzlos gestrichen** — view-recreate-bridge entfällt aus demselben Grund wie 16e. Der `PipelineUiState.ReprocessStaging(sessionId, transcript)`-State lebt im StateFlow; nach `onCreateInputView` wird er via `state.collect` neu gelesen. **Block-1-Akzeptanz:** `cleanupOldControllers()` darf das Feld nicht mehr capturen (siehe §8.x View-Recreate-Vertrag). |
 | 17 | `ActiveJobRegistry.kt:28-31` | `MutableStateFlow<Map<String, JobState>>` | `ActiveJobRegistry` | bleibt unverändert (Job-Tracking ist orthogonal zu UI-State) — Akzeptiert |
 | 18 | `JobExecutor.kt:36-54` | `activeToken`, `activeThread`, `orchestrator` | `JobExecutor` (object) | bleibt unverändert — Akzeptiert |
 
-**Verifikation:** alle 11 UI-state-relevanten Mutations-Sites (Zeilen 1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 16) wandern in `PipelineStateManager._state.update`. **Die heutigen 3 unabhängigen State-Halter** (RecordingStateController + KeyboardUiController + KeyboardStateManager) **werden zu einem einzigen** PipelineStateManager — single source of truth.
+<!-- FIX: Phase-B S-1 (2026-05-13) – Verifikations-Block auf F-11 umgestellt (Modul-Reducer + DictateUiStateStore statt monolithischer PipelineStateManager); Sites-Liste erweitert für 16a–16f. -->
+**Verifikation:** Alle 16 UI-state-relevanten Mutations-Sites (Zeilen 1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 16a, 16b, 16c) wandern in `DictateUiStateStore` via Modul-`reduce`-Aufrufe (F-11). **Die heutigen 3 unabhängigen State-Halter** (RecordingStateController + KeyboardUiController + KeyboardStateManager) **werden eliminiert** zugunsten einer **single source of truth** (`DictateUiStateStore.state: StateFlow<DictateUiState>`).
 
-Die 7 view-lokalen Felder (Zeilen 2, 7, 8, 14, 15, 17, 18) bleiben begründet view-lokal: View-Display-Detail, Job-Tracking, oder Klasse wird komplett gelöscht.
+Die 7 view-lokalen Felder (Zeilen 2, 7, 8, 14, 15, 17, 18) plus 3 Zeilen 16d/16e/16f (Service-Field-Migration in §13.2.1 oben) bleiben begründet view-lokal oder werden ersatzlos gestrichen: View-Display-Detail, Job-Tracking, Klasse wird komplett gelöscht, oder view-recreate-bridge entfällt.
 
 #### §13.2.2 SP-Reads mit State-Charakter
 
@@ -4596,7 +4743,8 @@ Einige UI-State-Achsen werden heute on-demand aus `SharedPreferences` gelesen st
 | `Pref.OverlayPositionPortraitX/Y` | NEU (OPEN-3) | JA — `DictateUiState.overlay.positionPortraitX/Y` spiegelt. Schreib-Trigger: `updateOverlayPosition(portrait=true, ...)` aus `OverlayBackend` (Spec 3 §11.5). |
 | `Pref.OverlayPositionLandscapeX/Y` | NEU (OPEN-3) | JA — `DictateUiState.overlay.positionLandscapeX/Y` spiegelt. Schreib-Trigger: `updateOverlayPosition(portrait=false, ...)` aus `OverlayBackend` (Spec 3 §11.5). |
 
-**Spiegelung-Pattern:** im `PipelineStateManager.onCreate` werden alle relevanten Prefs gelesen und in `_state.value` initialisiert. Ein `SharedPreferences.OnSharedPreferenceChangeListener` triggert `_state.update`-Calls, sodass Settings-Activity-Writes reaktiv im IME ankommen.
+<!-- FIX: Phase-B S-1 (2026-05-13) – Spiegelung-Pattern-Aussage auf PipelinePrefMirror (§4.5) umgestellt. Pre-F-11-Text behauptete der Manager halte die Pref-Reads — falsch nach F-11: PrefMirror ist eigene Klasse, vom Orchestrator-`init` attached. -->
+**Spiegelung-Pattern:** der `PipelinePrefMirror` (§4.5) liest beim `attach(store)` alle relevanten Prefs und ruft `store.update { initialMirror(it) }`. Ein `SharedPreferences.OnSharedPreferenceChangeListener` triggert weitere `store.update`-Calls (`sync(key)`), sodass Settings-Activity-Writes reaktiv im IME ankommen. **Reihenfolge-Invariant:** `prefMirror.attach(store)` läuft im `DictateOrchestrator.init` synchron VOR `scope.launch { recovery.recover(store) }` — siehe §4.3.
 
 ```kotlin
 // Hinweis: Snippet illustriert das Spiegelungs-Pattern. Die kanonische Implementierung
@@ -4636,16 +4784,18 @@ private val prefListener = OnSharedPreferenceChangeListener { _, key ->
 }
 ```
 
+<!-- FIX: Phase-B S-1 (2026-05-13) – OPEN-3-Mutation auf F-11 (OverlayAction.UpdatePosition + OverlayModule) umgestellt. -->
 #### §13.2.3 Neue State-Mutation (OPEN-3)
 
-| # | Methode | Schreib-Effekt | Trigger-Ort |
+| # | Action / Modul | Schreib-Effekt | Trigger-Ort |
 |---|---|---|---|
-| 1 | `PipelineStateManager.updateOverlayPosition(portrait, x, y)` | `_state.update { copy(overlayPosition{Portrait\|Landscape}{X\|Y} = ...) }` + Pref-Write (atomar via `apply()`) | `OverlayBackend.OnTouchListener#onUp` (Drag-End, Spec 3 §11.5). Nur emittiert wenn Move-Distance > Threshold (8dp). |
+| 1 | `Action.OverlayAction.UpdatePosition(portrait, x, y)` → `OverlayModule.reduce` | `state.copy(overlay = state.overlay.copy(position{Portrait\|Landscape}{X\|Y} = ...))` + `Effect.PersistOverlayPosition`-EffectHandler schreibt `Pref.OverlayPosition*` (atomar via `apply()`) | `OverlayBackend.OnTouchListener#onUp` (Drag-End, Spec 3 §11.5). Nur dispatcht wenn Move-Distance > Threshold (8dp). |
 
 **Verifikation:** Die einzige neue State-Mutation in OPEN-3 läuft durch
-`PipelineStateManager` — kein direkter Pref-Write aus `OverlayBackend`, kein
-direkter View-Mutation auf das Overlay-Window vom Settings-Screen. Damit bleibt
-das State-SSOT-Invariant unverletzt: ALLE Mutations gehen durch den Manager.
+`DictateOrchestrator.dispatch(Action.OverlayAction.UpdatePosition(...))` — kein
+direkter Pref-Write aus `OverlayBackend`, kein direkter View-Mutation auf das
+Overlay-Window vom Settings-Screen. Damit bleibt das State-SSOT-Invariant
+unverletzt: ALLE Mutations gehen durch den Orchestrator + Modul-Reducer (F-8).
 
 ### §13.3 SOLID-Verifikation pro neue Klasse
 
@@ -4781,10 +4931,11 @@ das State-SSOT-Invariant unverletzt: ALLE Mutations gehen durch den Manager.
 | **`isRecordingOrPaused` / `isRecordingOrPaused() \|\| Preparing`-Checks** | `DictateInputMethodService.java:486, :757, :1066, :2228-2230, :2570-2571`, `KeyboardStateManager.kt:184, :196` | 1 Helper auf `DictateUiState`: `state.recording.isActiveOrPending` (extension property) |
 | **`recordButton.text`-Set** | `RecordingUiController.kt:115, :144, :146` (Idle/Active) + `KeyboardUiController.kt:464-509` (Preparing/Running/Staging) | 1 Resolver `LayoutCatalog.RECORD.textResolver(state)` |
 | **`recordButton.isEnabled`-Set** | `RecordingUiController.kt:117, :141, :145, :531`, `KeyboardUiController.kt:467, :472, :480, :495` | 1 Resolver `LayoutCatalog.RECORD.enabledResolver(state)` |
-| **AudioFocus-on-Toggle-Reaktion** | `DictateInputMethodService.java:664-672` (SP-Listener) + `:2664-2687` (User-Toggle) | 1 Method `PipelineStateManager.toggleAudioFocus()` (sowohl SP-Listener als auch User-Click rufen die gleiche Methode) |
-| **`Pref.SmallMode`-Apply** | `DictateInputMethodService.java:1025, :1402, :2632-2634` | 1 SP-Listener im `PipelineStateManager.init` (siehe §13.2.2-Snippet) |
+<!-- FIX: Phase-B S-1 (2026-05-13) – DRY-Tabelle auf F-11 umgestellt: AudioModule/AudioPrefMirror statt PipelineStateManager. -->
+| **AudioFocus-on-Toggle-Reaktion** | `DictateInputMethodService.java:664-672` (SP-Listener) + `:2664-2687` (User-Toggle) | 1 Pfad: `Action.AudioAction.ToggleAudioFocus` → `AudioModule.reduce` (User-Click) **und** `PipelinePrefMirror.sync(Pref.AudioFocus.key)` → `store.update` (SP-Listener) — beide enden in derselben State-Achse `state.audio.audioFocusEnabledPref` |
+| **`Pref.SmallMode`-Apply** | `DictateInputMethodService.java:1025, :1402, :2632-2634` | 1 Branch im `PipelinePrefMirror.sync(Pref.SmallMode.key)` (§4.5) |
 | **`Pref.AudioFocus`-Apply** | `:580, :664, :2685` (3 Sites mit identischem `mainButtonsController.refreshAudioFocusIcon` Boilerplate) | 1 Subscriber: `state.collect { state -> mainButtonsController.refreshAudioFocusIcon(state.audio.audioFocusEnabledPref) }` |
-| **`getLastAudioFileExists()` File-Check** | `DictateInputMethodService.java:611-613, :1343-1344, :1693-1694` | 1 Method `PipelineStateManager.refreshLastAudioExists()`, gerufen bei `onCreateInputView` + nach Recording-Stop. Result als `state.resend.lastAudioExists`. |
+| **`getLastAudioFileExists()` File-Check** | `DictateInputMethodService.java:611-613, :1343-1344, :1693-1694` | 1 Effect `ResendModule.Effect.RefreshLastAudioExists`, gerufen vom RecordingModule beim Übergang Active → Idle (Cross-Module-Cascade, siehe §15 + Coupling-Matrix §15.1.x). Result als `state.resend.lastAudioExists`. |
 
 <!-- FIX: Issue 3.1.13 / R.21 – Cross-Spec-DRY-Tabelle (Symbol/Definition/Konsumenten) -->
 #### §13.4.1b Cross-Spec-DRY-Tabelle (R.21)
@@ -4813,7 +4964,8 @@ val DictateUiState.predRecordingControlsVisible: Boolean
 |---|---|
 | `buildNotification` könnte Subtitle-/Action-Logik dupliziert mit `LayoutCatalog`-Resolvers haben | NICHT akzeptiert. Die `notifSubtitleFor(state)`-Funktion (§11.1.2) ist State-→-String-Mapping; sie nutzt KEINE View-Resolver, schreibt nur Notification-Strings. Klare Trennung Visual-IME-State (LayoutCatalog) vs. Notification-State. Wenn ein Refactor-Reviewer Code-Duplikation entdeckt: gemeinsamen Helper `state.toUserVisibleSummary()` extrahieren. |
 | Service- und IME-Service haben beide ein `scope` (`CoroutineScope`) | Akzeptiert: zwei verschiedene Scopes mit verschiedenen Lifetimes. IME-`viewScope` wird beim View-Recreate gecancelt; Service-`serviceScope` lebt mit dem Service. Naming explizit: `viewScope` vs. `serviceScope` — kein versehentlicher Cross-Use. |
-| Pref-Spiegelung in `DictateUiState` und Pref-Read in einzelnen Action-Methoden gleichzeitig | NICHT akzeptiert. **Regel:** sobald ein Pref in `DictateUiState` gespiegelt ist, lesen Action-Methoden NUR aus `_state.value.X`, nie direkt aus `sp`. Code-Review-Checkliste: `sp.get(Pref.SmallMode)` darf nur im `PipelineStateManager.init` und im `prefListener` vorkommen. |
+<!-- FIX: Phase-B S-1 (2026-05-13) – Code-Review-Checkliste auf PipelinePrefMirror umgestellt. -->
+| Pref-Spiegelung in `DictateUiState` und Pref-Read in einzelnen Modul-Reducern gleichzeitig | NICHT akzeptiert. **Regel:** sobald ein Pref in `DictateUiState` gespiegelt ist, lesen Modul-Reducer NUR aus `ctx.global.X`, nie direkt aus `sp`. Code-Review-Checkliste: `sp.get(Pref.SmallMode)` darf nur im `PipelinePrefMirror.initialMirror`/`sync` vorkommen. |
 
 ### §13.5 Identified Gaps + Mitigations
 

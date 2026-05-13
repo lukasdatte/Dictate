@@ -1093,20 +1093,37 @@ val KEYBOARD_TWO_ROW = LayoutMode(
     rows = listOf(
         // Row 1: action_row-Bereich
         RowDescriptor(slots = listOf(
+            // FIX: Phase-B S-6 (2026-05-13) – actionResolver-Lambdas auf 2-arg (state, services) -> Action?
+            // umgestellt, Folgepfad von S-7 F-1. Konvention: `{ Action.X }` (0-arg) → `{ _, _ -> Action.X }`,
+            // `{ state -> ... }` (1-arg) → `{ state, _ -> ... }`. Methodenreferenzen wie ::resolveRecordAction
+            // bleiben unverändert (Resolver-Signaturen sind selbst 2-arg).
             ButtonSlot(LogicalButtonId.RECORD, FillRemaining,
                 visibilityPredicate = { true },
                 textResolver = ::resolveRecordButtonText,
                 enabledResolver = { state -> state.recording !is RecordingState.Preparing },
                 actionResolver = ::resolveRecordAction),
+            // FIX: Issue 3.0.9 / Spec 2 §13.5 Gap 2 – Resend-Cooldown landet im enabledResolver, NICHT im
+            // visibilityPredicate. Predicate (predResendVisible) bleibt cooldown-frei (load-bearing für Bug §1.1 #3b).
             ButtonSlot(LogicalButtonId.RESEND, WrapContent,
                 visibilityPredicate = ::predResendVisible,
-                actionResolver = { Action.ResendAction.ResendLastAudio }),
+                enabledResolver = { !it.resend.resendCooldown },
+                alphaResolver = { if (it.resend.resendCooldown) 0.4f else 1f },
+                actionResolver = { _, _ -> Action.ResendAction.ResendLastAudio }),
             ButtonSlot(LogicalButtonId.BACKSPACE, WrapContent,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.Backspace }),
+                actionResolver = { _, _ -> Action.KeyboardInputAction.Backspace }),
             ButtonSlot(LogicalButtonId.AUDIO_FOCUS, WrapContent,
                 visibilityPredicate = { false },                       // nur Single-Row
-                actionResolver = { Action.AudioAction.ToggleAudioFocusPref }),
+                actionResolver = { _, _ -> Action.AudioAction.ToggleAudioFocusPref }),
+            // FIX: Phase-B S-6 (2026-05-13) – WIDGET_TOGGLE-Slot in alle KEYBOARD-LayoutModes nachgepflegt
+            // (Spec 3 OPEN-2 / Phase-1-1.0.2). Ohne Slot würde der widget_toggle_btn-View (im buttonViews-Map
+            // registriert, §6) nie aktualisiert; Default-XML-Visibility `gone` bliebe sticky → User-Bug
+            // "Toggle zu WIDGET geht nicht". Position: am Ende der action_row (rechts neben AUDIO_FOCUS-Slot,
+            // der in TWO_ROW GONE ist). Finale Slot-Position bleibt im OPEN-2-Apply (Spec 2 §13.5.b) eventuell
+            // verfeinert; Slot ist hier explizit verankert, damit der Render-Loop ihn nicht silent skipt.
+            ButtonSlot(LogicalButtonId.WIDGET_TOGGLE, WrapContent,
+                visibilityPredicate = { it.viewMode == ViewMode.KEYBOARD },
+                actionResolver = { _, _ -> Action.ViewModeAction.ToggleViewModeWidget }),
         )),
         // Row 2: input_row-Bereich
         RowDescriptor(slots = listOf(
@@ -1115,7 +1132,7 @@ val KEYBOARD_TWO_ROW = LayoutMode(
                 actionResolver = ::resolveTrashAction),
             ButtonSlot(LogicalButtonId.SPACE, FillRemaining,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.SpaceKey })  // FIX: Issue 3.0.5 – flache Action.SpaceKey → hierarchisch,
+                actionResolver = { _, _ -> Action.KeyboardInputAction.SpaceKey }),  // FIX: Issue 3.0.5 – flache Action.SpaceKey → hierarchisch
             ButtonSlot(LogicalButtonId.PAUSE, WrapContent,
                 visibilityPredicate = ::predPauseVisible,
                 enabledResolver = { it.recording.isActiveOrPaused },
@@ -1124,7 +1141,7 @@ val KEYBOARD_TWO_ROW = LayoutMode(
                 actionResolver = ::resolvePauseAction),
             ButtonSlot(LogicalButtonId.ENTER, WrapContent,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.EnterKey }),
+                actionResolver = { _, _ -> Action.KeyboardInputAction.EnterKey }),
         )),
     ),
 )
@@ -1139,7 +1156,9 @@ val KEYBOARD_SINGLE_ROW = LayoutMode(
     id = LayoutModeId.KEYBOARD_SINGLE_ROW,
     backend = BackendType.IME_VIEW,
     rows = listOf(
-        // Eine einzige Row — Reihenfolge entspricht der MotionScene-Chain
+        // Eine einzige Row — Reihenfolge entspricht der MotionScene-Chain.
+        // FIX: Phase-B S-6 (2026-05-13) – actionResolver-Lambdas auf 2-arg (state, services) -> Action?
+        // umgestellt, Folgepfad von S-7 F-1.
         RowDescriptor(slots = listOf(
             ButtonSlot(LogicalButtonId.TRASH, WrapContent,
                 visibilityPredicate = ::predTrashVisible,
@@ -1151,7 +1170,7 @@ val KEYBOARD_SINGLE_ROW = LayoutMode(
                 actionResolver = ::resolveRecordAction),
             ButtonSlot(LogicalButtonId.SPACE, FillRemaining,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.SpaceKey })  // FIX: Issue 3.0.5 – flache Action.SpaceKey → hierarchisch,
+                actionResolver = { _, _ -> Action.KeyboardInputAction.SpaceKey }),  // FIX: Issue 3.0.5 – flache Action.SpaceKey → hierarchisch
             ButtonSlot(LogicalButtonId.PAUSE, WrapContent,
                 visibilityPredicate = ::predPauseVisible,
                 enabledResolver = { it.recording.isActiveOrPaused },
@@ -1160,16 +1179,25 @@ val KEYBOARD_SINGLE_ROW = LayoutMode(
                 actionResolver = ::resolvePauseAction),
             ButtonSlot(LogicalButtonId.BACKSPACE, WrapContent,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.Backspace }),
+                actionResolver = { _, _ -> Action.KeyboardInputAction.Backspace }),
             ButtonSlot(LogicalButtonId.ENTER, WrapContent,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.EnterKey }),
+                actionResolver = { _, _ -> Action.KeyboardInputAction.EnterKey }),
+            // FIX: Issue 3.0.9 / Spec 2 §13.5 Gap 2 – Resend-Cooldown im enabledResolver, NICHT visibilityPredicate.
             ButtonSlot(LogicalButtonId.RESEND, WrapContent,
                 visibilityPredicate = ::predResendVisible,
-                actionResolver = { Action.ResendAction.ResendLastAudio }),
+                enabledResolver = { !it.resend.resendCooldown },
+                alphaResolver = { if (it.resend.resendCooldown) 0.4f else 1f },
+                actionResolver = { _, _ -> Action.ResendAction.ResendLastAudio }),
             ButtonSlot(LogicalButtonId.AUDIO_FOCUS, WrapContent,
                 visibilityPredicate = { true },                        // ← einziger Unterschied zu Two-Row
-                actionResolver = { Action.AudioAction.ToggleAudioFocusPref }),
+                iconResolver = { resolveAudioFocusIcon(it.audio.audioFocusEnabledPref) },  // FIX: F-4 – SSoT-Helper
+                actionResolver = { _, _ -> Action.AudioAction.ToggleAudioFocusPref }),
+            // FIX: Phase-B S-6 (2026-05-13) – WIDGET_TOGGLE-Slot auch in SINGLE_ROW (siehe TWO_ROW §8.1).
+            // Position am Ende der Chain (rechts neben AUDIO_FOCUS).
+            ButtonSlot(LogicalButtonId.WIDGET_TOGGLE, WrapContent,
+                visibilityPredicate = { it.viewMode == ViewMode.KEYBOARD },
+                actionResolver = { _, _ -> Action.ViewModeAction.ToggleViewModeWidget }),
         )),
     ),
 )
@@ -1196,21 +1224,30 @@ val KEYBOARD_TWO_ROW_SEND_MODE = LayoutMode(
     id = LayoutModeId.KEYBOARD_TWO_ROW_SEND_MODE,
     backend = BackendType.IME_VIEW,
     rows = listOf(
+        // FIX: Phase-B S-6 (2026-05-13) – actionResolver-Lambdas auf 2-arg umgestellt (Folgepfad S-7 F-1).
         RowDescriptor(slots = listOf(
             ButtonSlot(LogicalButtonId.RECORD, FillRemaining,
                 visibilityPredicate = { true },
                 textResolver = ::resolveRecordButtonTextPipeline,   // "Sende…" / "2/3 0:08"
                 enabledResolver = { it.pipeline !is PipelineUiState.Preparing },
-                actionResolver = ::resolveRecordActionPipeline),    // ToggleAutoEnter / NoOp
+                actionResolver = ::resolveRecordActionPipeline),    // ToggleAutoEnter / null
             ButtonSlot(LogicalButtonId.RESEND, WrapContent,
                 visibilityPredicate = { false },
-                actionResolver = { null }),    // R.3 / 1.1.4 – nullable Resolver
+                actionResolver = { _, _ -> null }),    // R.3 / 1.1.4 – nullable Resolver
             ButtonSlot(LogicalButtonId.BACKSPACE, WrapContent,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.Backspace }),
+                actionResolver = { _, _ -> Action.KeyboardInputAction.Backspace }),
             ButtonSlot(LogicalButtonId.AUDIO_FOCUS, WrapContent,
                 visibilityPredicate = { false },
-                actionResolver = { Action.AudioAction.ToggleAudioFocusPref }),
+                actionResolver = { _, _ -> Action.AudioAction.ToggleAudioFocusPref }),
+            // FIX: Phase-B S-6 (2026-05-13) – WIDGET_TOGGLE in SEND_MODE wie in §8.1, damit
+            // der View nicht durch Render-Loop-Silent-Skip auf Default-GONE stehen bleibt.
+            // visibilityPredicate `false` während aktiver Pipeline: Sender soll Pipeline nicht
+            // versehentlich durch Mode-Toggle abreißen — User-Decision: WIDGET-Toggle deaktiviert
+            // während Send-Mode (R.13 SSoT — Catalog steuert, nicht ad-hoc-Code).
+            ButtonSlot(LogicalButtonId.WIDGET_TOGGLE, WrapContent,
+                visibilityPredicate = { false },
+                actionResolver = { _, _ -> null }),
         )),
         RowDescriptor(slots = listOf(
             // Hardcoded { false } statt predTrashVisible — siehe Architektur-Notiz oben.
@@ -1220,15 +1257,15 @@ val KEYBOARD_TWO_ROW_SEND_MODE = LayoutMode(
                 actionResolver = ::resolveTrashAction),
             ButtonSlot(LogicalButtonId.SPACE, FillRemaining,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.SpaceKey })  // FIX: Issue 3.0.5 – flache Action.SpaceKey → hierarchisch,
+                actionResolver = { _, _ -> Action.KeyboardInputAction.SpaceKey }),  // FIX: Issue 3.0.5 – flache Action.SpaceKey → hierarchisch
             // Hardcoded { false } statt predPauseVisible — siehe Architektur-Notiz oben.
             // Bug-Eliminator ist der Catalog-Switch, nicht die zentrale Predicate.
             ButtonSlot(LogicalButtonId.PAUSE, WrapContent,
                 visibilityPredicate = { false },                     // GONE im Send-Mode
-                actionResolver = { null }),    // R.3 / 1.1.4 – nullable Resolver
+                actionResolver = { _, _ -> null }),    // R.3 / 1.1.4 – nullable Resolver
             ButtonSlot(LogicalButtonId.ENTER, WrapContent,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.EnterKey }),
+                actionResolver = { _, _ -> Action.KeyboardInputAction.EnterKey }),
         )),
     ),
 )
@@ -1236,6 +1273,7 @@ val KEYBOARD_TWO_ROW_SEND_MODE = LayoutMode(
 val KEYBOARD_SINGLE_ROW_SEND_MODE = LayoutMode(
     id = LayoutModeId.KEYBOARD_SINGLE_ROW_SEND_MODE,
     backend = BackendType.IME_VIEW,
+    // FIX: Phase-B S-6 (2026-05-13) – actionResolver-Lambdas auf 2-arg (Folgepfad S-7 F-1).
     rows = listOf(RowDescriptor(slots = listOf(
         // Hardcoded { false } für TRASH — siehe Architektur-Notiz oben (Bug §1.1 #3).
         ButtonSlot(LogicalButtonId.TRASH, WrapContent,
@@ -1246,18 +1284,23 @@ val KEYBOARD_SINGLE_ROW_SEND_MODE = LayoutMode(
             enabledResolver = { it.pipeline !is PipelineUiState.Preparing },
             actionResolver = ::resolveRecordActionPipeline),
         ButtonSlot(LogicalButtonId.SPACE, FillRemaining,
-            visibilityPredicate = { true }, actionResolver = { Action.KeyboardInputAction.SpaceKey })  // FIX: Issue 3.0.5 – flache Action.SpaceKey → hierarchisch,
+            visibilityPredicate = { true }, actionResolver = { _, _ -> Action.KeyboardInputAction.SpaceKey }),  // FIX: Issue 3.0.5 – flache Action.SpaceKey → hierarchisch
         // Hardcoded { false } für PAUSE — siehe Architektur-Notiz oben (Bug §1.1 #3).
         ButtonSlot(LogicalButtonId.PAUSE, WrapContent,
-            visibilityPredicate = { false }, actionResolver = { null }),    // R.3 / 1.1.4
+            visibilityPredicate = { false }, actionResolver = { _, _ -> null }),    // R.3 / 1.1.4
         ButtonSlot(LogicalButtonId.BACKSPACE, WrapContent,
-            visibilityPredicate = { true }, actionResolver = { Action.KeyboardInputAction.Backspace }),
+            visibilityPredicate = { true }, actionResolver = { _, _ -> Action.KeyboardInputAction.Backspace }),
         ButtonSlot(LogicalButtonId.ENTER, WrapContent,
-            visibilityPredicate = { true }, actionResolver = { Action.KeyboardInputAction.EnterKey }),
+            visibilityPredicate = { true }, actionResolver = { _, _ -> Action.KeyboardInputAction.EnterKey }),
         ButtonSlot(LogicalButtonId.RESEND, WrapContent,
-            visibilityPredicate = { false }, actionResolver = { null }),    // R.3 / 1.1.4
+            visibilityPredicate = { false }, actionResolver = { _, _ -> null }),    // R.3 / 1.1.4
         ButtonSlot(LogicalButtonId.AUDIO_FOCUS, WrapContent,
-            visibilityPredicate = { true }, actionResolver = { Action.AudioAction.ToggleAudioFocusPref }),
+            visibilityPredicate = { true },
+            iconResolver = { resolveAudioFocusIcon(it.audio.audioFocusEnabledPref) },  // FIX: F-4
+            actionResolver = { _, _ -> Action.AudioAction.ToggleAudioFocusPref }),
+        // FIX: Phase-B S-6 (2026-05-13) – WIDGET_TOGGLE-Slot (siehe TWO_ROW_SEND_MODE).
+        ButtonSlot(LogicalButtonId.WIDGET_TOGGLE, WrapContent,
+            visibilityPredicate = { false }, actionResolver = { _, _ -> null }),
     ))),
 )
 ```
@@ -1270,8 +1313,12 @@ Tri-State: pause_btn visible-disabled+alpha-0.4, trash_btn = "Cancel-Staging", r
 val KEYBOARD_REPROCESS_STAGING = LayoutMode(
     id = LayoutModeId.KEYBOARD_REPROCESS_STAGING,
     backend = BackendType.IME_VIEW,
+    // FIX: Phase-B S-6 (2026-05-13) – actionResolver-Lambdas auf 2-arg (Folgepfad S-7 F-1).
     rows = listOf(
         RowDescriptor(slots = listOf(
+            // FIX: Phase-B S-6 (2026-05-13) – SendStaging-Action ist `data class SendStaging(val sessionId: String)`
+            // (Spec 2 §3.3 Z. 205), NICHT object — sessionId muss aus dem aktuellen ReprocessStaging-State
+            // gelesen werden. Vorher als `{ Action.PipelineAction.SendStaging }` (Singleton-Use) Compile-Error.
             ButtonSlot(LogicalButtonId.RECORD, FillRemaining,
                 visibilityPredicate = { true },
                 textResolver = ::resolveRecordButtonTextStaging,    // "Audio 0:23 · Senden"
@@ -1279,32 +1326,46 @@ val KEYBOARD_REPROCESS_STAGING = LayoutMode(
                     val s = state.pipeline as? PipelineUiState.ReprocessStaging
                     s != null && !s.isStarting
                 },
-                actionResolver = { Action.PipelineAction.SendStaging }),  // FIX: Issue 3.0.5 – flache Action.SendStaging → hierarchisch (Mapping aus Phase-1 1.0.5)
+                actionResolver = { state, _ ->
+                    (state.pipeline as? PipelineUiState.ReprocessStaging)
+                        ?.let { Action.PipelineAction.SendStaging(it.sessionId) }
+                }),
             ButtonSlot(LogicalButtonId.RESEND, WrapContent,
                 visibilityPredicate = { false },
-                actionResolver = { null }),    // R.3 / 1.1.4 – nullable Resolver
+                actionResolver = { _, _ -> null }),    // R.3 / 1.1.4 – nullable Resolver
             ButtonSlot(LogicalButtonId.BACKSPACE, WrapContent,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.Backspace }),
+                actionResolver = { _, _ -> Action.KeyboardInputAction.Backspace }),
             ButtonSlot(LogicalButtonId.AUDIO_FOCUS, WrapContent,
                 visibilityPredicate = { false },
-                actionResolver = { Action.AudioAction.ToggleAudioFocusPref }),
+                actionResolver = { _, _ -> Action.AudioAction.ToggleAudioFocusPref }),
+            // FIX: Phase-B S-6 (2026-05-13) – WIDGET_TOGGLE-Slot in REPROCESS_STAGING. Während Staging
+            // bewusst GONE (Workflow-Fokus: Queue + Language-Chip), kein WIDGET-Mode-Wechsel mid-Staging.
+            ButtonSlot(LogicalButtonId.WIDGET_TOGGLE, WrapContent,
+                visibilityPredicate = { false },
+                actionResolver = { _, _ -> null }),
         )),
         RowDescriptor(slots = listOf(
+            // FIX: Phase-B S-6 (2026-05-13) – CancelReprocessStaging-Action ist `data class
+            // CancelReprocessStaging(val sessionId: String)` (Spec 2 §3.3 Z. 206) — sessionId aus
+            // ReprocessStaging-State.
             ButtonSlot(LogicalButtonId.TRASH, WrapContent,
                 visibilityPredicate = { true },
-                actionResolver = { Action.PipelineAction.CancelReprocessStaging }),
+                actionResolver = { state, _ ->
+                    (state.pipeline as? PipelineUiState.ReprocessStaging)
+                        ?.let { Action.PipelineAction.CancelReprocessStaging(it.sessionId) }
+                }),
             ButtonSlot(LogicalButtonId.SPACE, FillRemaining,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.SpaceKey })  // FIX: Issue 3.0.5 – flache Action.SpaceKey → hierarchisch,
+                actionResolver = { _, _ -> Action.KeyboardInputAction.SpaceKey }),  // FIX: Issue 3.0.5 – flache Action.SpaceKey → hierarchisch
             ButtonSlot(LogicalButtonId.PAUSE, WrapContent,
                 visibilityPredicate = { true },
                 enabledResolver = { false },
                 alphaResolver = { 0.4f },
-                actionResolver = { null }),    // R.3 / 1.1.4 – nullable Resolver
+                actionResolver = { _, _ -> null }),    // R.3 / 1.1.4 – nullable Resolver
             ButtonSlot(LogicalButtonId.ENTER, WrapContent,
                 visibilityPredicate = { true },
-                actionResolver = { Action.KeyboardInputAction.EnterKey }),
+                actionResolver = { _, _ -> Action.KeyboardInputAction.EnterKey }),
         )),
     ),
 )
@@ -1420,19 +1481,26 @@ fun resolveRecordAction(
     is RecordingState.Preparing -> null    // Click während Preparing ist No-Op
 }
 
+// FIX: Phase-B S-6 (2026-05-13) – ButtonSlot.actionResolver-Typ (§3.2) ist post-S-7-F-1 jetzt
+// `(DictateUiState, ModuleServices) -> Action?`. Damit Methodenreferenzen wie `::resolveRecordActionPipeline`
+// im LayoutCatalog (§8.1–§8.4) typ-konsistent funktionieren, MÜSSEN diese Resolver ebenfalls die 2-arg-
+// Signatur tragen (Kotlin-Methodenreferenzen werden über die Funktions-Signatur typisiert; eine 1-arg-
+// Funktion bekommt KFunction1, was als `(state, services) -> Action?` zugewiesen Compile-Error gäbe).
+// Konvention: Resolver, die `services` nicht brauchen, ignorieren das Argument (`_`-Underscore). Nur
+// `resolveRecordAction` (Idle-Allokations-Pfad) liest tatsächlich `services.audioFileFactory`.
 /** record_btn-Click-Action während Pipeline (Toggle-Auto-Enter im Running). */
-fun resolveRecordActionPipeline(state: DictateUiState): Action? = when (state.pipeline) {
+fun resolveRecordActionPipeline(state: DictateUiState, services: ModuleServices): Action? = when (state.pipeline) {
     is PipelineUiState.Running -> Action.FeatureToggleAction.ToggleAutoEnter   // Click toggelt AutoEnter
     else -> null
 }
 
-fun resolveTrashAction(state: DictateUiState): Action? = when {
+fun resolveTrashAction(state: DictateUiState, services: ModuleServices): Action? = when {
     state.pipeline is PipelineUiState.ReprocessStaging -> Action.PipelineAction.CancelReprocessStaging(state.pipeline.sessionId)
     state.recording is RecordingState.Idle && state.pipeline is PipelineUiState.Idle -> null
     else -> Action.RecordingAction.CancelRecording
 }
 
-fun resolvePauseAction(state: DictateUiState): Action? = when (state.recording) {
+fun resolvePauseAction(state: DictateUiState, services: ModuleServices): Action? = when (state.recording) {
     is RecordingState.Paused -> Action.RecordingAction.ResumeRecording
     is RecordingState.Active -> Action.RecordingAction.PauseRecording
     else -> null
@@ -1637,7 +1705,7 @@ SRP-Antipattern in der KeyboardLayoutManager-Region.
 | `DictateInputMethodService.java:1345` (`resendButton.setVisibility(View.VISIBLE)` im onStartInputView Idle-Branch) | gelöscht — Predicate übernimmt |
 | `DictateInputMethodService.java:1347` (`resendButton.setVisibility(View.GONE)` im onStartInputView Idle-Branch) | gelöscht — Predicate übernimmt |
 | `DictateInputMethodService.java:1669` (`resendButton.setVisibility(View.GONE)` in `runTranscriptionViaOrchestrator`) | gelöscht — Predicate übernimmt (Pipeline-State wechselt zu Preparing → predResendVisible = false) |
-| `DictateInputMethodService.java:1839` (`resendButton.setVisibility(View.VISIBLE)` in `onShowResend()`) | wird zu State-Update: `pipelineService.markLastAudioExists(true)` → State emittiert → Predicate evaluiert → resend wird sichtbar |
+| `DictateInputMethodService.java:1839` (`resendButton.setVisibility(View.VISIBLE)` in `onShowResend()`) | wird zu Action-Dispatch: `orchestrator.dispatch(Action.ResendAction.MarkLastAudio(exists = true))` → ResendModule.reduce setzt `state.resend.lastAudioExists = true` → State emittiert → Predicate evaluiert → resend wird sichtbar. <!-- FIX: Phase-B S-6 (2026-05-13) – Drift gegen F-8 (LocalBinder hat NUR `state` + `dispatch`, kein `markLastAudioExists`-Forwarder; siehe Spec 1 §5 LocalBinder-API). Action `MarkLastAudio(exists: Boolean)` ist in Spec 2 §3.3 Z. 250 bereits definiert. --> |
 
 ---
 
@@ -1663,6 +1731,12 @@ Block 5 (ImeViewBackend + MotionLayout) gilt als done, wenn:
 - [ ] **R.13 Strict-Mode-Logging während 5c:** `VisibilityWrite from $caller`-Log; Acceptance-Kriterium "keine zwei Subsysteme schreiben gleichzeitig auf einer Visibility-Achse" wird verifiziert.
 - [ ] **R.14 firstRender-Flag bei Re-Inflate:** der erste Render nach `detach()` + `attach()` (Rotation) ruft `jumpToState` (kein 250ms-Slide-In). Robolectric-Test verifiziert die ConstraintSet-Animation = 0ms beim ersten Render-Tick.
 - [ ] **R.11 visibilityMode="ignore" auf allen 9 Buttons:** XML-Lint-Check; jeder der 9 Button-Tags in den 4 MotionScene-XMLs hat das Attribut. Catalog ist alleiniger Visibility-Owner (verifiziert via Test "MotionLayout-Transition setzt nicht versehentlich visibility").
+<!-- FIX: Phase-B S-6 (2026-05-13) – Block-5-Deletion-Acceptance + R.13-Logger-Konkretisierung + WIDGET_TOGGLE-Slot-Render-Verifikation. -->
+- [ ] **Phase-B S-6 — `KeyboardLayoutModeController.kt`-Datei gelöscht:** `find app/src/main/java -name 'KeyboardLayoutModeController.kt'` liefert leeres Ergebnis nach Block-5d-Cleanup. Verifikation per CI-Step oder Plan-Review-Check.
+- [ ] **Phase-B S-6 — Keine verwaisten Caller von gelöschten KLMC/KSM-Methoden:** `grep -rn 'KeyboardLayoutModeController\|setSingleRowMode\|csSingleRow\|csTwoRowAction\|csTwoRowInput\|applyContentAreaVisibility\|applyPromptsVisibility\|applyRecordingControlsVisibility' app/src/main/` liefert NUR Treffer in `docs/` und Test-Dateien (falls Regressions-Suite Spiegel-Symbole nutzt) — kein produktiver Code referenziert die gelöschten Symbole.
+- [ ] **Phase-B S-6 — R.13 Strict-Mode-Logger konkret:** `VisibilityWriteAuditLogger` ist eine eigene Klasse (`core/audit/VisibilityWriteAuditLogger.kt`), die in 5c über `BuildConfig.DEBUG`-Guard aktiv ist und in 5d ersatzlos gelöscht wird. API: `fun logWrite(viewId: Int, caller: String, target: Int)` — `caller` aus `Thread.currentThread().stackTrace[2].className` extrahiert. Akzeptanz: 0 Logs nach Phase-5c-Soak-Test über 60 s (alle 5 LayoutModes durchgewechselt) — kein zweites Subsystem schreibt parallel.
+- [ ] **Phase-B S-6 — `widget_toggle_btn` wird in KEYBOARD_TWO_ROW + KEYBOARD_SINGLE_ROW gerendert** (Predicate `viewMode == KEYBOARD`); in SEND_MODE + REPROCESS_STAGING ist er GONE (`{ false }`). Test: `KEYBOARD_TWO_ROW.flatMap{it.slots}.map{it.logicalId}` enthält `WIDGET_TOGGLE`; analog SINGLE_ROW + SEND_MODE-Varianten + REPROCESS_STAGING. Render-Loop löst `error(...)` aus, wenn ein LayoutMode den Slot nicht definiert (siehe §6 Z. 603 — Silent-Skip-Schutz).
+- [ ] **Phase-B S-6 — ButtonSlot.actionResolver 2-arg-Signatur konsistent:** alle Slot-`actionResolver`-Lambdas in §8.1–§8.4 sind als 2-arg `{ _, _ -> ... }` / `{ state, _ -> ... }` / `{ _, services -> ... }` / Methodenreferenz `::resolveXxx` (Resolver-Funktion selbst 2-arg) implementiert. Kein `{ Action.X }`-0-arg-Lambda und kein `{ state -> ... }`-1-arg-Lambda mehr im Catalog. Verifikation per Build-Smoke (Compile-Time-Garantie aus dem ButtonSlot-Typ).
 
 ---
 
@@ -2276,7 +2350,7 @@ Bei der Verifikation aufgedeckte Punkte, die im Plan ergänzt werden sollten:
 
 #### §13.5.b Cross-Spec Patches Pending
 
-(Phase-1-Apply hat alle bekannten Cross-Spec-Patches eingearbeitet. Aktuell offen: WIDGET_TOGGLE-Slot-Position im KEYBOARD_TWO_ROW/SINGLE_ROW LayoutMode — siehe Spec 3 §13.5 GAP-4 Mitigation; finale Slot-Position wird im Apply zu Spec 2 §3.1/§8.x ergänzt, sobald Spec-3-Layout-Position fixiert ist.)
+(Phase-1-Apply hat alle bekannten Cross-Spec-Patches eingearbeitet. WIDGET_TOGGLE-Slot ist nach Phase-B S-6 (2026-05-13) jetzt in **allen 5 KEYBOARD-LayoutModes** §8.1–§8.4 explizit verankert: visibilityPredicate `{ viewMode == ViewMode.KEYBOARD }` in TWO_ROW + SINGLE_ROW; `{ false }` in SEND_MODE-Varianten + REPROCESS_STAGING — kein Mode-Wechsel mid-Pipeline. Final-Position bleibt im OPEN-2-Apply (Spec 3) evtl. verfeinert, aber der Slot fällt nicht mehr durch das Render-Silent-Skip-Loch.)
 
 #### §13.5.c Resolved (Iter-History)
 

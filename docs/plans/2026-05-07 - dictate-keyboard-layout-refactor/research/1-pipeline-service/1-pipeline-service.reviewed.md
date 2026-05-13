@@ -24,6 +24,33 @@ Out-of-Scope (anderer Spec):
 - View-Rendering, Layout-Wahl, Button-Sichtbarkeits-Resolver — siehe Spec 2 + Spec 3.
 - Window-Lifecycle für Overlay — siehe Spec 3.
 
+<!-- FIX: Phase-B S-4 (2026-05-13) – Naming-Konvention-Block: PipelineOrchestrator (alt, Audio-Pipeline) vs. DictateOrchestrator (neu, State-Action-Routing). -->
+### §1.x Naming-Konvention für "Orchestrator" — Disambiguierung (Phase-B S-4)
+
+Nach dem Refactor existieren **zwei Klassen mit "Orchestrator" im Namen**. Sie haben
+verschiedene Verantwortlichkeiten und leben in verschiedenen Packages. Diese
+Doppel-Existenz ist **bewusst akzeptiert** für Phase 1 (kein Refactor des Audio-
+Pipeline-Pfades).
+
+| Klasse | Package | Verantwortlichkeit | Status |
+|---|---|---|---|
+| `PipelineOrchestrator` | `net.devemperor.dictate.core` | **Audio-Pipeline-Runner** — orchestriert Speech-API-Calls + Reword-Pipeline + Auto-Formatting auf einem dedizierten Executor-Thread. 1383 Zeilen heute. | bleibt unverändert (siehe §8 Migrations-Tabelle); implementiert `PipelineRunner`-Interface (§4.9) |
+| `DictateOrchestrator` | `net.devemperor.dictate.state` | **State-Action-Routing** — Composition Root + Action-Routing + Cross-Module-Cascade-Dispatch. Kennt nur das `DictateModule`-Interface, keine Pipeline-/Audio-Logik. | neu (Block 1b); siehe §4.3 |
+
+**Lese-Konvention im Plan-Body:**
+
+- "Orchestrator" (unqualifiziert) → **immer** `DictateOrchestrator` (neu, State-Routing).
+- "PipelineOrchestrator" → **immer** die alte Klasse (mit oder ohne `core.`-Prefix).
+- Code-Snippets nutzen den vollen `KClass.simpleName` zur Eindeutigkeit; Plan-Doku
+  kann den unqualifizierten "Orchestrator"-Begriff verwenden, wenn der Kontext
+  eindeutig ist (z.B. "der Orchestrator dispatcht Action X" → DictateOrchestrator).
+
+**Phase-2-Backlog (Hauptplan §7.1):** Umbenennung des alten `PipelineOrchestrator`
+auf z.B. `PipelineRunner` oder `PipelineExecutor`, oder Auflösung in den
+`PipelineModule.runEffect`-Pfad (eliminiert den Naming-Konflikt strukturell).
+Phase 1 akzeptiert die Doppel-Existenz, weil die Audio-Pipeline-Logik nicht
+zur State-Refactor-Scope gehört (~10 Konsumenten-Sites, eigener Refactor).
+
 ---
 
 ## §2 Architektur-Entscheidungen (fixiert)
@@ -453,11 +480,20 @@ sealed interface DictateModule<S, A : Action, E : SideEffect> {
     fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> = emptyList()
 
     <!-- FIX: Issue 2.1.2 (User-Decision Option A) – deklarative Pref-Bindings pro Modul -->
+    <!-- FIX: Phase-B S-4 (2026-05-13) – Phase-1/Phase-2-Hinweis: Hook ist in Phase 1 Dead-Code (PrefMirror nutzt hardcoded Liste). -->
     /**
      * Pref-Bindings: deklarative Auflistung der SharedPreferences-Keys, die in den
-     * Sub-State des Moduls gespiegelt werden. Der `PipelinePrefMirror` (§4.5)
-     * verwendet diese Liste, um Initial-Read und OnSharedPreferenceChangeListener
-     * generisch zu bauen. Default leer — Module ohne Pref-Mirror geben nichts zurück.
+     * Sub-State des Moduls gespiegelt werden.
+     *
+     * **Phase 1 (heute):** Default `emptyList()` — Implementierungen lassen den Hook
+     * leer. `PipelinePrefMirror` (§4.5) verwendet ihn in Phase 1 **NICHT** (hardcodierte
+     * Pref-Liste in `initialMirror` + `sync`). Module dürfen `prefBindings()` in
+     * Phase 1 **NICHT** befüllen — das wäre Dead-Code, der die Phase-2-Migration
+     * komplizierter macht (Doppel-Pref-Reads, potenzielle Race-Bugs).
+     *
+     * **Phase 2 (Backlog, siehe Hauptplan §7.1):** `prefBindings()` wird zur einzigen
+     * Pref-Spiegelungs-Quelle. PrefMirror iteriert dann über
+     * `modules.flatMap { it.prefBindings() }` — die hardcodierte Liste verschwindet.
      */
     fun prefBindings(): List<PrefBinding<S, *>> = emptyList()
 
@@ -699,6 +735,7 @@ class DictateOrchestrator(
     private fun buildContext(global: DictateUiState) = ReducerContext(global = global)
 
     <!-- FIX: Phase-B S-1 (2026-05-13) – shutdown() ruft jetzt jedes Modul-`terminate()` (Issue 2.1.12 / D7). Frühere Implementation rief nur prefMirror.detach() — Module-Cleanup wäre ungemacht geblieben. -->
+    <!-- FIX: Phase-B S-4 (2026-05-13) – Aufrufer-Vertrag: shutdown() MUSS vor serviceScope.cancel() laufen. -->
     /**
      * Service-Shutdown. Reihenfolge:
      *  1. PrefMirror detachen (kein neuer SP-Listener-Fire mehr).
@@ -711,6 +748,15 @@ class DictateOrchestrator(
      * `runBlocking`-Timeout des Service.onDestroy laufen sollen — Android-FGS
      * gibt ~5 s, siehe §11.1.4. Effekte sind hier synchron-Hardware-Releases
      * (kein Coroutine-Suspend).
+     *
+     * **Aufrufer-Vertrag (Phase-B S-4):** Aufrufer (typischerweise `Service.onDestroy`)
+     * MUSS `shutdown()` **vor** `serviceScope.cancel()` rufen. Andernfalls laufen
+     * Module-`terminate(services)`-Calls auf einem gecancellten Scope — synchrone
+     * Hardware-Releases funktionieren noch, aber alle async-Cleanup-Schritte
+     * (Notification-cancel, DB-Flush, etc.) werden silent-no-op. Diese Reihenfolge
+     * ist durch `OrchestratorShutdownOrderTest.kt` (Block-2-Acceptance, §10)
+     * verifiziert — der Test assertet via Mock-Module-`terminate` auf
+     * `services.scope.isActive == true` während des Aufrufs.
      */
     fun shutdown() {
         prefMirror.detach()
@@ -736,6 +782,54 @@ class DictateOrchestrator(
 **Cascade-Tiefen-Counter (R.6):** Ein Loop wird in DEBUG via `error()` und in Release via Logger-Error
 abgebrochen — IME crashed niemals. Cap 8 ist konservativ; reale Cascade-Tiefen liegen bei 1–3
 (z.B. RecordingDone → ResendModule.onCrossModuleStateChange → Action.ResendAction.MarkAvailable).
+
+<!-- FIX: Phase-B S-4 (2026-05-13) – Cascade-Order-Vertrag explizit verankert (vorher implizit via modules.flatMap). -->
+**Cascade-Order-Vertrag (Phase-B S-4):** Die Reihenfolge der Cascade-Actions ist
+deterministisch und folgt der Reihenfolge von `DictateModuleRegistry.all` (§4.8 Z. 1017–1033).
+Jeder rekursive `dispatchInternal(cascadeAction, depth+1)` (Step 6) macht einen **frischen**
+`prevGlobal`/`nextGlobal`-Snapshot — Cascade-Actions sehen damit den State **inklusive**
+vorheriger Cascade-Mutationen aus diesem Pass.
+
+> **Konvention:** Cross-Module-Cascades sollen disjunkte State-Achsen mutieren —
+> ein Modul soll NICHT in seine Cascade einplanen, dass ein anderer Cascade-Pass
+> den State VOR ihm mutiert. Wenn Reihenfolge-Abhängigkeit nötig wird, ist das
+> ein Mode-3-Use-Case (Atomic Cross-Axis-Update, Phase-2-Backlog, §14 Open-Q 4).
+>
+> **Code-Review-Pflicht:** Reorder der Modul-Liste in `DictateModuleRegistry.all`
+> ist ein Plan-relevanter Refactor (Phase-B-Wiederholung erforderlich), kein
+> Code-Cleanup. Die Reihenfolge wird via `DictateOrchestratorCascadeOrderTest.kt`
+> (Block-1b-Acceptance) verifiziert.
+
+<!-- FIX: Phase-B S-4 (2026-05-13) – ProGuard-Keep-Regel ist Pflicht für `KClass.sealedSubclasses`-Reflection. -->
+> **⚠ ProGuard/R8-Keep-Regel ist Pflicht (Phase-B S-4):** `collectLeaves` (Z. 587–589)
+> verwendet `KClass.sealedSubclasses` — Reflection auf die Action-Hierarchie.
+> ProGuard-Default-Behavior in Release-Builds strippt diese Hierarchie weg, wenn
+> die Klassen nicht explizit gehalten werden — `sealedSubclasses` returnt dann eine
+> **leere Liste**, `moduleByLeafClass` ist **leer**, jeder Action-Dispatch wird
+> `DispatchOutcome.Unrouted` → silent-drop **aller** Actions im Release-Build.
+> Bug-Klasse identisch zu S-3 F-1/F-2, nur kataklysmischer (alle 14 sealed
+> Action-Subtypen betroffen).
+>
+> **Konkreter ProGuard-Patch** (in `app/proguard-rules.pro` zu ergänzen, Block 1b):
+>
+> ```proguard
+> # Phase-B S-4 — sealed-leaves-Indexing braucht intakte Action-Hierarchie.
+> -keep,allowobfuscation,allowshrinking class net.devemperor.dictate.state.Action
+> -keep,allowobfuscation,allowshrinking class * extends net.devemperor.dictate.state.Action { *; }
+> -keepclassmembers class kotlin.reflect.** { *; }
+> # Hinweis: `allowobfuscation` erlaubt Namens-Verkürzung, der Class-Reference-Pfad
+> # über `KClass` bleibt intakt. Subclasses dürfen geshrunken werden, weil sie via
+> # Modul-Registry referenziert sind — aber die Top-Level-Hierarchie muss bleiben.
+> ```
+>
+> **Acceptance:** Block-1b ergänzt eine `OrchestratorReleaseSmokeTest.kt`
+> (instrumented), die einen Release-Build verifiziert (`./gradlew assembleRelease`
+> + `adb install`). Test dispatcht eine konkrete Action und assertet
+> `DispatchOutcome.Applied` (nicht `Unrouted`).
+>
+> **Cross-Link:** Der Vollständigkeits-Check in `DictateModuleRegistry.init` (§4.8)
+> verwendet ebenfalls `Action::class.sealedSubclasses` — beide Reflection-Sites
+> profitieren von derselben Keep-Regel.
 
 **Sealed-Leaves-Indexing (R.4):** Jede konkrete Action-Class ist genau einem Modul zugeordnet;
 Verstoß ist Init-Time-Error (DI-Container-Pattern, analog Hilt/Dagger).
@@ -843,6 +937,15 @@ Konsument (`DictateInputMethodService.java`) verwendet sie statt direkter Callba
 
 Erweitert um die 9 zusätzlichen UI-State-relevanten Prefs (RewordingEnabled, AutoFormattingEnabled, InstantOutput, Vibration, Theme, AccentColor, OverlayCharacters, OutputSpeed, UseBluetoothMic) und mappt auf die neue Sub-State-Struktur:
 
+<!-- FIX: Phase-B S-4 (2026-05-13) – Phase-1/Phase-2-Hinweis: aktuelle Implementierung ist hardcoded, prefBindings()-API ist Phase-2. -->
+> **Phase 1 vs. Phase 2 (Phase-B S-4):** Die untenstehende `initialMirror`- und
+> `sync`-Implementation ist **Phase 1** — hardcodierte Mappings für 19 Prefs auf
+> die Sub-State-Achsen. Die `DictateModule.prefBindings()`-API (§4.2 Z. 462) wird
+> in Phase 1 **NICHT** konsumiert. Phase 2 (Hauptplan §7.1 Out-of-Scope) ersetzt
+> die Hardcodes durch Iteration über `modules.flatMap { it.prefBindings() }` —
+> dann werden Module ihre Prefs deklarativ deklarieren. Während Phase 1: **KEIN**
+> Modul-Pref-Hook konsumieren, sonst Doppel-Spiegelung mit Race-Risk.
+
 ```kotlin
 class PipelinePrefMirror(
     private val sp: SharedPreferences,
@@ -949,6 +1052,15 @@ class PipelineRecovery(
  * an `module.runEffect(effect, services)` übergeben.
  */
 class ModuleServices(
+    <!-- FIX: Phase-B S-4 (2026-05-13) – RecordingHardwareSubsystem.allocate erwartet (target, useBluetooth, audioFile) — siehe §15.2 Effect.AllocateMediaRecorder. -->
+    /**
+     * Recording-Hardware-Adapter. Erwartete `allocate`-Signatur:
+     * `fun allocate(target: InsertionTarget, useBluetooth: Boolean, audioFile: File)` —
+     * der `audioFile`-Pfad lebt im State (R.2), Hardware-Subsystem erhält ihn als
+     * Effect-Argument (siehe §15.2 `Effect.AllocateMediaRecorder` 3-Arg-Form +
+     * EffectHandler-Use). Konkrete Konstruktion wandert in Block 2/4
+     * (`ModuleServicesFactory` im Service-onCreate, §4.11.5.3).
+     */
     val recordingHardware: RecordingHardwareSubsystem,
     val bluetoothSco: BluetoothScoSubsystem,
     val audioFocus: AudioFocusSubsystem,
@@ -1014,6 +1126,21 @@ class ModuleServicesFactory(private val provider: () -> ModuleServices) {
 import net.devemperor.dictate.state.modules.*
 
 object DictateModuleRegistry {
+    <!-- FIX: Phase-B S-4 (2026-05-13) – Reihenfolge ist deterministisch + Code-Review-relevant (Cascade-Order, §4.3). -->
+    /**
+     * **Reihenfolge: deterministisch + Code-Review-relevant.** Cross-Module-Cascades
+     * (§4.3 Step 5–6) folgen dieser Reihenfolge: jede Cascade-Action wird in
+     * dieser Reihenfolge aus `modules.flatMap { onCrossModuleStateChange(...) }`
+     * extrahiert und rekursiv dispatcht. Jeder rekursive Dispatch sieht einen
+     * **frischen** State-Snapshot — Cascade-Actions sehen damit den State
+     * **inklusive** vorheriger Cascade-Mutationen aus diesem Pass.
+     *
+     * **Reorder ist Plan-relevant:** ein Refactor, der die Reihenfolge ändert
+     * (z.B. alphabetisch sortieren beim Code-Cleanup), verändert observable
+     * Cascade-Semantik. Phase-B-Wiederholung erforderlich; kein reines
+     * Code-Cleanup. Cascade-Order-Vertrag siehe §4.3 (Hinweis-Block unter
+     * dispatchInternal).
+     */
     val all: List<DictateModule<*, *, *>> = listOf(
         RecordingModule,
         PipelineModule,
@@ -1032,7 +1159,24 @@ object DictateModuleRegistry {
         // InterruptionModule (Phase 2 — auskommentiert bis aktiv)
     )
 
-    /** Init-Sanity-Check: alle Module haben eindeutige IDs + actionClasses. */
+    <!-- FIX: Phase-B S-4 (2026-05-13) – Init-Sanity-Check um Vollständigkeits-Check erweitert (S-3 Follow-Up F-7). -->
+    /**
+     * Init-Sanity-Check: drei strukturelle Invarianten.
+     *
+     *  1. **Eindeutige ModuleIds** — kein Doppel-Eintrag in `all`.
+     *  2. **Eindeutige actionClasses (kein Doppel-Routing)** — DI-Container-Pattern.
+     *  3. **Vollständige Routing (kein Fehlend-Routing, Phase-B S-4):** jede
+     *     direkte sealed-Subclass von `Action::class` muss von genau einem Modul
+     *     beansprucht sein (mit Excludelist für Special-Case-Subtypes wie
+     *     `Action.EffectFailure`, das via `originModuleId` geroutet wird).
+     *     Verstoß ist Init-Time-Failure — fängt die S-3-Bug-Klasse "Action
+     *     ohne Modul-Owner → silent-drop" bereits beim App-Start.
+     *
+     * **ProGuard-Abhängigkeit:** Check #3 verwendet `Action::class.sealedSubclasses`
+     * (Reflection). Die ProGuard-Keep-Regel aus §4.3 ist Pflicht — sonst
+     * `sealedSubclasses == emptyList()` → false-positive "alle Subtypen fehlen"
+     * beim ersten Release-Build.
+     */
     init {
         val ids = all.map { it.id }
         require(ids.toSet().size == ids.size) {
@@ -1042,11 +1186,42 @@ object DictateModuleRegistry {
         require(actionClasses.toSet().size == actionClasses.size) {
             "Doppelte actionClass-Zuordnung in Registry"
         }
+
+        // Phase-B S-4: Vollständigkeits-Check via sealed-leaves-Traversal.
+        // Excludelist: Action-Subtypes, die NICHT via actionClass-Lookup geroutet werden.
+        val specialCaseSubtypes: Set<kotlin.reflect.KClass<out Action>> = setOf(
+            Action.EffectFailure::class,    // via originModuleId-Routing (§4.3)
+        )
+        val claimedClasses: Set<kotlin.reflect.KClass<out Action>> = actionClasses.toSet()
+        val allDirectSubtypes: Set<kotlin.reflect.KClass<out Action>> =
+            @Suppress("UNCHECKED_CAST")
+            (Action::class.sealedSubclasses as List<kotlin.reflect.KClass<out Action>>).toSet()
+        val missing = allDirectSubtypes - claimedClasses - specialCaseSubtypes
+        require(missing.isEmpty()) {
+            "Fehlende Modul-Routing für Action-Subtypen: ${missing.map { it.simpleName }}. " +
+                "Jede direkte sealed-Subclass von Action::class muss von einem Modul beansprucht " +
+                "sein (außer Special-Cases wie EffectFailure)."
+        }
     }
 }
 ```
 
-**Compile-Time-Garantie:** `DictateModule` ist `sealed interface`, also kennt der Compiler alle Implementierer. Eine Alternative mit Reflection (`DictateModule::class.sealedSubclasses`) ist möglich (siehe Block 4.8 der Erläuterung); wir wählen die explizite Liste, weil sie debug-freundlicher und R8-/ProGuard-robust ist.
+<!-- FIX: Phase-B S-4 (2026-05-13) – Klärung: zwei verschiedene Reflection-Entscheidungen (Modul-Liste manuell vs. Action-Leaves reflection). -->
+**Manuelle Modul-Liste vs. Reflection-basierte Action-Leaves (Phase-B S-4):**
+
+Der Plan verwendet **zwei verschiedene** Reflection-Entscheidungen:
+
+| Hierarchie | Mechanismus | R8/ProGuard-Risk | Mitigation |
+|---|---|---|---|
+| **Modul-Registry** (`DictateModuleRegistry.all`) | Manuelle Liste (oben) | Kein Risk — Klassen sind als `object`-Singletons in der Liste referenziert, R8 sieht die Refs | n/a |
+| **Action-Leaves-Indexing** (`DictateOrchestrator.collectLeaves` + Vollständigkeits-Check) | Reflection via `KClass.sealedSubclasses` | **JA** — R8-Default strippt sealed-Hierarchie; `sealedSubclasses == emptyList()` → leere Map → silent-drop aller Actions | **ProGuard-Keep-Regel in `app/proguard-rules.pro` ist Pflicht** (siehe §4.3 ProGuard-Block) |
+
+**Compile-Time-Garantie:** `DictateModule` ist `sealed interface`, also kennt der
+Compiler alle Implementierer. Die manuelle Modul-Liste ist debug-freundlich +
+R8-robust. Die Action-Leaves-Map kann NICHT manuell sein (15+ leaf Klassen, jede
+neue Action wäre eine zweite Plan-Stelle zum Updaten — DRY-Verstoß) — Reflection
+ist hier die saubere Lösung, mit ProGuard-Keep-Regel als unverhandelbare
+Voraussetzung.
 
 ### §4.9 Dependency-Interfaces (F-2 / DIP, unverändert)
 
@@ -3819,6 +3994,11 @@ Block 1b (DictateUiState + DictateOrchestrator + 12 aktive Module) gilt als done
 - [ ] **Atomarität `setSmallMode`:** der frühere sequenzielle `KSM.setSmallMode`-Pfad ist in einem einzigen `store.update`-Reducer-Aufruf konsolidiert (`it.copy(layout = it.layout.copy(smallMode = enabled, contentArea = MAIN_BUTTONS))`). Subscriber sehen nie einen Stale-Zwischen-Zustand. Verifiziert in `LayoutModuleAtomicityTest.kt`.
 - [ ] **PersistentList-Idiom:** alle Reducer, die `pendingSessions` mutieren, verwenden `.add` / `.removeAll` / `.removeAt`. Verifiziert via Lint-Check `NoToMutableListOnPersistentList` (oder Code-Review-Checkliste in Block 1b).
 - [ ] **Initial-State-Race-Fence (NEU Phase-B S-1):** ein Subscriber, der unmittelbar nach `bindService` auf `state.collect` attached, sieht **mindestens** die Pref-Mirror-Werte (nicht den `DictateUiState.initial()`-Default). Test: `DictateOrchestratorBootRaceTest.kt` mit `FakeSharedPreferences`, asserts dass die erste `state.value`-Emission Pref-Werte enthält.
+<!-- FIX: Phase-B S-4 (2026-05-13) – 4 neue Acceptance-Klauseln: ProGuard-Robustheit, Vollständigkeits-Check, Cascade-Order, shutdown-Order. -->
+- [ ] **Phase-B S-4 ProGuard-Robustheit:** ein Release-Build (`./gradlew assembleRelease`) installiert sich auf einem API-34-Test-Device; nach Install dispatcht ein instrumented Smoke-Test eine konkrete Action (z.B. `Action.RecordingAction.StartRecording`) und assertet `DispatchOutcome.Applied` (nicht `Unrouted`). Verifiziert, dass die ProGuard-Keep-Regel aus §4.3 (Z. ~590 Hinweis-Block) tatsächlich in `app/proguard-rules.pro` aufgenommen wurde. Test-Datei `OrchestratorReleaseSmokeTest.kt` (`app/src/androidTest/...`).
+- [ ] **Phase-B S-4 Vollständigkeits-Check:** ein gezielter Unit-Test entfernt das `KeyboardInputModule` aus `DictateModuleRegistry.all` (test-only Copy der Liste) und erwartet einen Init-Time-Failure (`IllegalArgumentException` mit "Fehlende Modul-Routing für Action-Subtypen: [KeyboardInputAction]"). Verifiziert dass der Vollständigkeits-Check (§4.8 init) greift. Test-Datei `DictateModuleRegistryTest.kt`.
+- [ ] **Phase-B S-4 Cascade-Order-Determinism:** ein Test mit zwei Mock-Modulen `FakeAModule` und `FakeBModule`, die beide auf denselben Idle→Active-Übergang reagieren und je eine eigene Cascade-Action emittieren. Reihenfolge in `modules`-Liste: A vor B. Test verifiziert dass die zweite Cascade-Action (von B) den State **inklusive** der ersten Cascade-Mutation (von A) sieht. Test-Datei `DictateOrchestratorCascadeOrderTest.kt`.
+- [ ] **Phase-B S-4 shutdown-Order:** ein Test mit `FakeModule`, dessen `terminate(services)`-Implementation auf `services.scope.isActive == true` assertiert. Verifiziert dass `shutdown()` vor `serviceScope.cancel()` läuft. Plus: Spy-basierte Verifikation der Aufruf-Reihenfolge (`terminate` → `cancel`). Test-Datei `OrchestratorShutdownOrderTest.kt` (im Block-2-Acceptance, weil Service-Lifecycle-Test).
 - [ ] Alle existierenden Use-Cases (UC1-UC7 + UC-extra-1 bis UC-extra-10 aus _pending-state-machine-visibility-owners.md §4) funktionieren weiterhin.
 - [ ] **Resend-Cooldown-Visibility-Trennung (FIX Issue 3.0.9):** `predResendVisible` reflektiert NICHT `resendCooldown` — Cooldown betrifft NUR `enabledResolver` (disabled+alpha 0.4f), nicht `visibilityPredicate`. Verifiziert in Block-1-Unit-Test (Permutation `lastAudioExists=true` + `resendCooldown=true` → visibility=VISIBLE, enabled=false).
 - [ ] **Cross-Module-Cascade-Verifikation (FIX Issue 3.0.10) — pro §15.1-Cascade-Eintrag ein Acceptance-Punkt:**
@@ -4601,7 +4781,8 @@ suspend fun recoverFromDb() = withContext(Dispatchers.IO) {
     val orphanedRecorded = db.sessionDao().getByStatus("RECORDED")
         .filter { it.audioFilePath != null && File(it.audioFilePath).exists() }
         .map { it.toPendingSession() }
-    _state.update { it.copy(pendingSessions = pending + orphanedRecorded) }
+    <!-- FIX: Phase-B S-4 (2026-05-13) – store.update statt _state.update (Insider-Syntax, §4.4 private MutableStateFlow). -->
+    store.update { it.copy(pendingSessions = pending + orphanedRecorded) }
 }
 ```
 
@@ -5264,6 +5445,8 @@ val DictateUiState.predRecordingControlsVisible: Boolean
 | Service- und IME-Service haben beide ein `scope` (`CoroutineScope`) | Akzeptiert: zwei verschiedene Scopes mit verschiedenen Lifetimes. IME-`viewScope` wird beim View-Recreate gecancelt; Service-`serviceScope` lebt mit dem Service. Naming explizit: `viewScope` vs. `serviceScope` — kein versehentlicher Cross-Use. |
 <!-- FIX: Phase-B S-1 (2026-05-13) – Code-Review-Checkliste auf PipelinePrefMirror umgestellt. -->
 | Pref-Spiegelung in `DictateUiState` und Pref-Read in einzelnen Modul-Reducern gleichzeitig | NICHT akzeptiert. **Regel:** sobald ein Pref in `DictateUiState` gespiegelt ist, lesen Modul-Reducer NUR aus `ctx.global.X`, nie direkt aus `sp`. Code-Review-Checkliste: `sp.get(Pref.SmallMode)` darf nur im `PipelinePrefMirror.initialMirror`/`sync` vorkommen. |
+<!-- FIX: Phase-B S-4 (2026-05-13) – Phase-1 vs. Phase-2: prefBindings()-Override nur Default emptyList(). -->
+| Modul-Override von `prefBindings()` in Phase 1 | NICHT akzeptiert. **Regel:** In Phase 1 lassen alle Module die Default-`emptyList()`-Implementation; `PipelinePrefMirror` (§4.5) verwendet hardcodierte Liste, kein `modules.flatMap { prefBindings() }`. Code-Review-Checkliste: `override fun prefBindings()` mit non-empty Body ist Phase-2-Code (Hauptplan §7.1 Out-of-Scope) und wird im Block-1b-Audit blockiert. |
 
 ### §13.5 Identified Gaps + Mitigations
 
@@ -5276,7 +5459,7 @@ val DictateUiState.predRecordingControlsVisible: Boolean
 | G1 | `KeyboardUiController.kt:241` mutiert `views.infoCl.visibility = GONE` direkt in `startPipeline` — das ist eine state-getriggerte Mutation, die heute über die Hilfsklasse `InfoBarController.dismiss()` laufen sollte, aber direkt geht. | Mittel | In Block 1: Mutation-Site auf `infoBarController.dismiss()` umstellen — danach hat InfoBarController die alleinige Verantwortung über infoCl. |
 | G2 | `DictateInputMethodService.java:2630-2636` (`onSmallModeToggled`) schreibt direkt in `Pref.SmallMode` UND ruft `stateManager.setSmallMode(newSmallMode)` — zwei Schritte, die in seltenen Fällen out-of-sync sein können. | Niedrig | In Block 1 ist mit dem DictateUiState-Pref-Spiegel-Pattern (§13.2.2) der State automatisch konsistent — der explizite `setSmallMode`-Call wird redundant und entfällt. |
 | G6 | Service-Death während aktivem Recording: `RecordingManager.stop()` wird nicht mehr gerufen → MediaRecorder bleibt im Native-Heap. | Mittel | Zwei Pfade explizit getrennt: **(A) Service.onDestroy normal (testbar)** — der Service ruft `orchestrator.dispatch(Action.PipelineAction.CancelPipeline)` → der `PipelineModule`-Reducer/EffectHandler emittiert `Effect.ReleaseRecording` → `recordingManager.release()`. Der `release()`-Pfad wird via Mock-Spy im Block-2-Unit-Test verifiziert (siehe §10 Block-2-Acceptance). **(B) Process-Kill (nicht testbar)** — Android-System-Cleanup räumt MediaRecorder und Native-Heap selbst ab. Akzeptiert. |
-| G7 | `JobExecutor.initialize(orchestrator)` wird heute im IME-`onCreate` (Z. 389) gerufen — mit dem Service-Refactor muss das in den Service-onCreate. Wenn der IME-Service ohne den Pipeline-Service hochfährt (theoretisch nicht möglich, aber defensiv), ist `JobExecutor` un-initialisiert. | Niedrig | `bindService` hält den Service-Lifecycle ans IME — es gibt keine Lifecycle-Sequenz, in der IME ohne Pipeline-Service läuft, sobald die Bind-Connection steht. Falls aus Robustheits-Gründen nötig: defensiv-`null`-Check in JobExecutor + lazy-init beim ersten Job-Start. |
+| G7 | `JobExecutor.initialize(orchestrator)` wird heute im IME-`onCreate` (Z. 389) gerufen — mit dem Service-Refactor muss das in den Service-onCreate. Wenn der IME-Service ohne den Pipeline-Service hochfährt (theoretisch nicht möglich, aber defensiv), ist `JobExecutor` un-initialisiert. Beachte: das `JobExecutor.initialize(orchestrator)` (Z. 56-58 verifiziert via Code-Read) erwartet den **alten `PipelineOrchestrator`** (Audio-Pipeline-Runner), NICHT den neuen `DictateOrchestrator` — siehe §1.x Naming-Konvention (Phase-B S-4). | Niedrig | `bindService` hält den Service-Lifecycle ans IME — es gibt keine Lifecycle-Sequenz, in der IME ohne Pipeline-Service läuft, sobald die Bind-Connection steht. Falls aus Robustheits-Gründen nötig: defensiv-`null`-Check in JobExecutor + lazy-init beim ersten Job-Start. |
 
 #### §13.5.b Cross-Spec Patches Pending
 
@@ -5453,7 +5636,8 @@ object RecordingModule : DictateModule<
     override fun initialState(): RecordingState = RecordingState.Idle
 
     sealed interface Effect : SideEffect {
-        data class AllocateMediaRecorder(val target: InsertionTarget, val useBluetooth: Boolean) : Effect
+        <!-- FIX: Phase-B S-4 (2026-05-13) – AllocateMediaRecorder trägt audioFile als 3. Arg (R.2-konform, konsistent mit Reducer-Use Z. ~5500 + EffectHandler-Use Z. ~5577). -->
+        data class AllocateMediaRecorder(val target: InsertionTarget, val useBluetooth: Boolean, val audioFile: File) : Effect
         object ReleaseMediaRecorder : Effect
         object PauseMediaRecorder : Effect
         object ResumeMediaRecorder : Effect
@@ -5561,8 +5745,19 @@ object RecordingModule : DictateModule<
     von außen (Caller, z.B. PipelineRunner oder LocalBinder.startSession) — der Reducer ist 100 %
     pure, State-Tests brauchen keinen `ModuleServicesFactory`-Stub mehr.
 
+    <!-- FIX: Phase-B S-4 (2026-05-13) – Effect.AllocateMediaRecorder trägt audioFile als 3. Konstruktor-Argument. -->
+    **Konsistenz der drei AllocateMediaRecorder-Sites (Phase-B S-4):**
+    1. **Definition** (Effect-sealed-interface oben): `AllocateMediaRecorder(target, useBluetooth, audioFile)` — 3 Felder.
+    2. **Reducer-Use** (Idle→Preparing-Branch): `Effect.AllocateMediaRecorder(action.target, ctx.global.audio.useBluetoothMic, action.audioFile)` — 3 Args.
+    3. **EffectHandler-Use** (`runEffect`-Body): `services.recordingHardware.allocate(effect.target, effect.useBluetooth, effect.audioFile)` — 3 Args.
+
+    Die drei Sites müssen synchron bleiben. Vor Phase-B S-4 hatte die Definition 2 Felder
+    + Reducer-Use 3 Args + EffectHandler-Use 2 Args — eine drei-fache Inkonsistenz, die
+    beim ersten `./gradlew assembleDebug` als Compile-Error aufgefallen wäre.
+
     override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {
-        is Effect.AllocateMediaRecorder -> services.recordingHardware.allocate(effect.target, effect.useBluetooth)
+        <!-- FIX: Phase-B S-4 (2026-05-13) – allocate ruft mit 3 Args (target, useBluetooth, audioFile); R.2-konform. -->
+        is Effect.AllocateMediaRecorder -> services.recordingHardware.allocate(effect.target, effect.useBluetooth, effect.audioFile)
         Effect.ReleaseMediaRecorder    -> services.recordingHardware.release()
         Effect.PauseMediaRecorder      -> services.recordingHardware.pause()
         Effect.ResumeMediaRecorder     -> services.recordingHardware.resume()
@@ -5846,19 +6041,26 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
         Effect.StopBluetoothSco  -> services.bluetoothSco.stop()
     }
 
+    <!-- FIX: Phase-B S-4 (2026-05-13) – Observer-Pure-Function-Vertrag explizit + Dead-Code-Block entfernt. -->
     /**
      * Cross-Module-Observer: AudioModule reagiert auf Recording-State-Änderungen.
+     *
+     * **Pure-Function-Vertrag (§15.5 Mode 2):** Dieser Hook darf **AUSSCHLIESSLICH** Actions
+     * emittieren — KEINE Direct-Hardware-Calls (`services.X.Y()`) im Body. Hardware-
+     * Side-Effects laufen ausschließlich in `runEffect()`. Cross-Module-Wirkungen,
+     * die einen Hardware-Call brauchen, werden als Action emittiert (Cascade); der
+     * Empfänger-Modul-Reducer setzt sie in seinen eigenen Effect um.
+     *
+     * **AudioFocus-Request beim Recording-Start (Phase-B S-4):** Der vorher hier
+     * gezeigte `if (Idle → Preparing) { ... }`-Block war Dead-Code (leerer Body).
+     * AudioFocus-Request läuft als Effect direkt im RecordingModule beim
+     * Preparing-Übergang (Effect.AllocateMediaRecorder kapselt das im
+     * RecordingHardwareSubsystem.allocate-Pfad — kein Cross-Module-Cascade nötig).
+     * Würde AudioModule den Request hier triggern, wäre AudioFocus-Lifecycle in
+     * zwei Modulen verteilt — SRP-Verstoß.
      */
     override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> {
         val cascade = mutableListOf<Action>()
-
-        // Recording → Preparing → AudioFocus + ggf. Bluetooth anfragen via Effect-Re-Dispatch
-        // (eleganter als direkte Hardware-Calls hier — alles läuft durch Reducer)
-        if (prev.recording is RecordingState.Idle && next.recording is RecordingState.Preparing) {
-            // Effects werden im Recording-Modul ausgelöst, aber Audio-Effects passieren
-            // durch direktes runEffect — alternativer Pfad: via emitAction(Action.X) eine
-            // spezifische Audio-Action einleiten, die hier wieder reduziert wird.
-        }
 
         // AudioFocus-Loss während Recording → automatisch pausieren
         if (next.recording is RecordingState.Active &&

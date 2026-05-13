@@ -2422,7 +2422,8 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         db.execSQL("DROP TABLE sessions")
         db.execSQL("ALTER TABLE sessions_new RENAME TO sessions")
 
-        // 4. Indices wiederherstellen (identisch zu MIGRATION_2_3).
+        // 4. Indices wiederherstellen (identisch zu MIGRATION_2_3 — keine
+        //    Index-Erweiterung für `inserted_at`, siehe Begründung unten).
         db.execSQL("CREATE INDEX IF NOT EXISTS index_sessions_parent_session_id ON sessions (parent_session_id)")
         db.execSQL("CREATE INDEX IF NOT EXISTS index_sessions_type ON sessions (type)")
         db.execSQL("CREATE INDEX IF NOT EXISTS index_sessions_created_at ON sessions (created_at)")
@@ -2431,6 +2432,11 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 ```
+
+<!-- FIX: Phase-B S-2 (2026-05-13) – inserted_at-Index-Begründung dokumentieren. -->
+> **Warum kein `index_sessions_inserted_at`?** Die neue `inserted_at`-Spalte wird von zwei Queries gelesen: `findPendingInsertion()` (WHERE `inserted_at IS NULL`) und `deleteInsertedOlderThan(cutoff)` (WHERE `inserted_at < :cutoff`). Beide laufen nicht auf dem Hot-Path (Recovery beim Service-Boot bzw. Cleanup beim Service-Idle-Stop, je 1× pro Service-Lifecycle) und die `sessions`-Tabelle ist im erwarteten Use-Case klein (typisch <1k Rows, Power-User <10k). Ein zusätzlicher Index würde Insert/Update-Cost erhöhen ohne signifikanten Read-Gewinn bei dieser Größenordnung. Falls Telemetrie später zeigt, dass `findPendingInsertion()` zur Boot-Bremse wird, ist der Index als post-hoc-Migration (M4→M5) ergänzbar.
+>
+> SessionEntity.kt-Annotation bleibt entsprechend bei 5 Indices (`parent_session_id`, `type`, `created_at`, `origin`, `status`) — kein `Index("inserted_at")` ergänzen.
 
 **Erweiterung von `SessionStatus.kt`** (`app/src/main/java/net/devemperor/dictate/database/entity/SessionStatus.kt`):
 
@@ -2625,8 +2631,8 @@ Die heutige `SessionStatus`-Enum hat 4 Werte (`RECORDED, COMPLETED, FAILED, CANC
 | File | Position | Sprache | Heute-Verhalten | M4-Update |
 |---|---|---|---|---|
 | `core/ResendStatusDispatcher.kt:57-71` | `when (status)` | Kotlin (exhaustive) | 4 Branches, kein Else | + `RECORDING` → `NoOp` (sollte UI-wise nie sichtbar werden — defensive), + `TRANSCRIBING` → `NoOp` (User soll Pipeline nicht doppelt starten — Single-Job-Lock greift sowieso, aber wir wollen Klick auf Resend-Button während laufender Pipeline ignorieren) |
-| `history/HistoryAdapter.java:130-159` | `switch (status)` | Java (kein Exhaustiveness-Check) | 4 `case`-Branches, kein `default` | + `case RECORDING:` → Spinner + Label "Wird aufgenommen" (kommt nur im OOM-Death-Fenster vor — vor `recoverFromDb` läuft); + `case TRANSCRIBING:` → Spinner + Label "Wird transkribiert" (gleiches Fenster). Beide branches **können** strenggenommen nie sichtbar werden (Recovery promoted), aber defensiv pflegen. |
-| `history/HistoryDetailActivity.java:287-299` | `SessionStatus.valueOf(...) + boolean canReprocess = (status IN {RECORDED, FAILED, CANCELLED, COMPLETED})` | Java | 4 Status werden geprüft, neue Stati landen im "kann nicht reprocessen"-Default-Pfad | RECORDING/TRANSCRIBING explizit ausschließen — Reprocess während aktiver Pipeline darf nicht angeboten werden. Zeile `canReprocess = status != RECORDING && status != TRANSCRIBING && (existing)`. |
+| `history/HistoryAdapter.java:130-159` | `try { SessionStatus.valueOf(...) } catch (IllegalArgumentException) { RECORDED }` + `switch (status)` | Java (kein Exhaustiveness-Check); **existierender try/catch-Wrapper Z. 131–135 fängt unbekannte Strings als `RECORDED`-Fallback** (Downgrade-/Restore-Verträglichkeit) — der `switch` sieht damit immer einen gültigen Enum-Wert, und der `default:`-Branch ist heute **unerreichbar** | + `case RECORDING:` → Spinner + Label "Wird aufgenommen" (kommt nur im OOM-Death-Fenster vor — vor `recoverFromDb` läuft); + `case TRANSCRIBING:` → Spinner + Label "Wird transkribiert" (gleiches Fenster). Beide branches **können** strenggenommen nie sichtbar werden (Recovery promoted), aber defensiv pflegen. <!-- FIX: Phase-B S-2 (2026-05-13) – Wrapper-Doppel-Sicherung dokumentiert: try/catch fängt unbekannte Strings, default-case fängt "neue Enum-Werte ohne switch-Update". Beide Schichten bleiben — siehe Begründung unter dem Snippet. --> |
+| `history/HistoryDetailActivity.java:287-299` | `try { SessionStatus.valueOf(...) } catch (IllegalArgumentException) { RECORDED }` + Whitelist `canReprocess = (status IN {RECORDED, FAILED, CANCELLED, COMPLETED})` | Java | 4 Status werden in einer **Whitelist** geprüft — neue Stati (RECORDING, TRANSCRIBING) landen automatisch im `canReprocess = false`-Pfad **ohne** Code-Änderung. Try/catch-Wrapper Z. 288–292 fängt zusätzlich unbekannte Status-Strings als `RECORDED`-Fallback. | **Keine Code-Änderung nötig** — die Whitelist-Logik ist bereits defensiv gegen neue Status-Werte. Hinzufügen von `status != RECORDING && status != TRANSCRIBING` wäre **redundant** und Code-Lärm. <!-- FIX: Phase-B S-2 (2026-05-13) – frühere Anweisung "explizit ausschließen" war redundant gegenüber der bestehenden Whitelist-Logik. --> |
 | `history/HistoryDetailActivity.java:590` | Konstantenliste `SessionStatus.RECORDED` (Resume-Button) | Java | Hard-coded auf `RECORDED` | unverändert (Resume-Button nur für `RECORDED`-Sessions). |
 | `ai/AIProviderException.kt` (`ErrorType.UNKNOWN`-Mapping) | n/a | n/a | n/a | unverändert — kein direkter `SessionStatus`-Touchpoint. |
 
@@ -2680,6 +2686,18 @@ switch (status) {
 > die Android-Lint-Regel `EnumSwitch` als Error (heute nur Warning), damit ein
 > vergessener `case` schon beim Build sichtbar wird — nicht erst zur Laufzeit.
 > Siehe KG-SST-4-Marker unten in §11.7.0 für den Gradle-Snippet.
+
+<!-- FIX: Phase-B S-2 (2026-05-13) – Doppel-Sicherung try/catch + default: explizit dokumentiert. -->
+> **Doppel-Sicherung try/catch + `default:` — keine Redundanz, sondern zwei Failure-Modes:**
+>
+> Der bestehende `try { SessionStatus.valueOf(session.getStatus()) } catch (IllegalArgumentException e) { status = SessionStatus.RECORDED; }`-Wrapper (HistoryAdapter Z. 131–135, **bleibt erhalten**) und der neue `default:`-Branch im `switch` adressieren **disjunkte** Failure-Modes:
+>
+> | Failure-Mode | Auslöser | Gefangen durch |
+> |---|---|---|
+> | **DB-String unbekannt** (z.B. Downgrade: v4-App hat RECORDING/TRANSCRIBING geschrieben, dann auf v3-App zurück, die diese Enum-Werte nicht kennt) | `SessionStatus.valueOf("RECORDING")` wirft `IllegalArgumentException` | **try/catch-Wrapper** → fallback zu `RECORDED` (Pending-Badge, kein UI-Bruch) |
+> | **Enum erweitert, switch nicht** (z.B. v5 fügt `PROCESSING_REWORDING` hinzu, jemand vergisst den `case`) | `SessionStatus.valueOf("PROCESSING_REWORDING")` returnt gültigen Enum-Wert, aber kein `case` matched | **`default:`-Branch** → `Log.wtf` + `GONE` (kein UI-Crash, Crashlytics-Signal) |
+>
+> Beide Schichten sind unabhängig: der try/catch fängt String→Enum-Boundary-Fehler, der default: fängt Enum→switch-Drift. Den try/catch zu entfernen würde die Downgrade-Verträglichkeit brechen (User-DB mit RECORDING-Zeile crasht beim ersten History-Scroll auf älterer App). Den default: wegzulassen würde silent-empty-Badges bei zukünftigen Enum-Erweiterungen erzeugen.
 
 **Konkreter Patch — `ResendStatusDispatcher.kt:57-71`:**
 
@@ -2797,6 +2815,21 @@ oder `INSERTED` (das wird via `inserted_at IS NOT NULL` markiert):
   `JobExecutor.kt:96/:164` (`register/unregister`) bleiben unverändert — sie
   sind Lock-Producer (Single-Job-Lock), nicht Status-Producer.
 
+<!-- FIX: Phase-B S-2 (2026-05-13) – Verzahnung JobExecutor.register vs. Effect.PersistStatus(TRANSCRIBING) — die DB-first-Regel gilt für DEN Reducer-Hook, nicht für JobExecutor.register. -->
+> **Wichtige Verzahnung: `JobExecutor.register` vs. `Effect.PersistStatus(TRANSCRIBING)`** — die `DB-first`-Regel betrifft **ausschließlich** den State-Status-Write-Pfad (Reducer-Hook → `Effect.PersistStatus` → `SessionDao.updateStatus(TRANSCRIBING)` → `ActiveJobRegistry.update`). Sie betrifft **nicht** den parallelen `JobExecutor.start(...)`-Pfad, der `ActiveJobRegistry.register(...)` **vor** dem Pipeline-Run aufruft (Lock-Claim, Single-Job-Constraint). Konkrete Sequenz beim Pipeline-Start (User dispatched `Action.PipelineAction.Submit`):
+>
+> 1. `PipelineModule.reduce` → State von `Idle → Running(...)` (immutable copy, neuer Snapshot in `_state`).
+> 2. `PipelineModule.runEffect(Effect.PersistStatus(sessionId, TRANSCRIBING))` (asynchron, im services.scope):
+>    - **(a)** `sessionDao.updateStatus(sessionId, "TRANSCRIBING")` — DB-Write (Status-Producer)
+>    - **(b)** `ActiveJobRegistry.update(sessionId, JobState.Running(...))` — Cache-Update (Status-Producer)
+> 3. `PipelineModule.runEffect(Effect.StartPipeline(jobRequest))` → `jobExecutor.start(jobRequest)`:
+>    - **(c)** `ActiveJobRegistry.register(sessionId, initial)` — Lock-Claim (Producer-Site `JobExecutor.kt:96`, **nicht** Status-Producer)
+>    - **(d)** Pipeline-Run startet auf Executor-Thread.
+>
+> Reihenfolge: 1 → 2(a) → 2(b) → 3(c) → 3(d). Wenn 2(a) fehlschlägt, wird 2(b) übersprungen, 3 wird nicht gestartet → Pipeline läuft nicht, `PersistenceError`-Action wird dispatched (siehe Failure-Channel oben). Wenn 3(c) fehlschlägt (parallel-Job bereits aktiv): `JobExecutor.start` returnt `false`, Pipeline läuft nicht — der State ist aber bereits `Running` (Race-Condition durch State-First-Reihenfolge, R.17 — Reducer mutiert State zuerst). Mitigation: `JobExecutor.start`-Failure-Pfad dispatcht `Action.PipelineAction.RejectedJobAlreadyActive(sessionId)`, der den State zurück auf `Idle` rollt. Dieser Pfad ist in Block 4 (RecordingModule) zu implementieren — Block 3 bringt nur den DB-Write-Pfad (2a).
+>
+> Implementer-Anker: **NICHT** `JobExecutor.start` so umschreiben, dass es zuerst `SessionDao.updateStatus(TRANSCRIBING)` schreibt — das würde die DB-Write-Verantwortung aus dem Modul-Reducer-Hook in den JobExecutor mappen und den SRP der `JobExecutor`-Klasse brechen (Lock-Producer wird Status-Producer). Stattdessen: Status-Write **bleibt im Modul-Effect** (Schritt 2a oben).
+
 ### §6.3 Recovery-Read
 
 Beim Service-`onCreate` (z.B. nach OOM-Death):
@@ -2818,6 +2851,16 @@ Beim Service-`onCreate` (z.B. nach OOM-Death):
 | `FAILED`, `CANCELLED` | n/a | Skip | — |
 
 > **Reihenfolge File-Op vs. DB-Op (Begründung):** Bei RECORDING→FAILED promoten wir **erst** den DB-Status (terminal), **dann** löschen wir die Audio-Datei opportunistic. Hintergrund: wenn der File-Delete fehlschlägt (Permission-Race, OS-Storage-Wipe, File-Lock durch anderen Prozess), bleibt die Session trotzdem als FAILED in der DB — die Datei wird beim nächsten Service-Idle-Stop via Cleanup-Policy (`deleteInsertedOlderThan` greift hier nicht, weil FAILED kein `inserted_at` setzt; siehe `KG-SST-2` unten) ODER beim nächsten OOM-Death-Recovery erneut probiert (`clearAudioFilePath` ist idempotent). Die umgekehrte Reihenfolge (Delete vor Status-Promote) würde bei Crash-Mid-Recovery einen Geist hinterlassen: Datei weg, Status noch RECORDING → nächster Boot trifft `audioFilePath != null && !File.exists()` und behandelt es als "vanished". Funktional korrekt, aber redundant.
+
+<!-- FIX: Phase-B S-2 (2026-05-13) – Lücke: RECORDING-Sessions haben in der DB-Row typischerweise `audio_file_path = NULL` (Path wird erst beim Recording-Stop via `transitionRecorded` geschrieben). Das partial-written File lebt physisch in `cacheDir/audio.m4a` (heute) bzw. `filesDir/recordings/{sessionId}.m4a` (nach Block 4 AudioFileFactory). Die `clearAudioFilePath`-Logik im RECORDING-Recovery-Pfad ist daher nur defensive — der File-Leak wird nicht von diesem Pfad behoben. -->
+> **RECORDING-Recovery: das partial-written Audio-File auf Disk** — eine RECORDING-DB-Row hat in der Regel `audio_file_path = NULL`, weil `transitionRecorded(sessionId, audioFilePath)` (siehe §6.1 Vorbild-Snippet `SessionManager.transitionRecorded`) den Pfad erst beim **Recording-Stop** in die Row schreibt. Wenn der Prozess während RECORDING stirbt, lebt das partial-written File trotzdem physisch in `cacheDir/audio.m4a` (heute) bzw. `filesDir/recordings/{sessionId}.m4a` (nach Block 4 AudioFileFactory, siehe §4.11).
+>
+> Der File-Delete im RECORDING-Recovery-Pfad oben (`row.audioFilePath?.let { File(it) }?.takeIf { exists() }?.delete()`) ist daher **defensive für den Sonderfall**, dass der File-Path doch schon in der Row stand (z.B. nach Block 4: AudioFileFactory schreibt den Path beim Allocate, nicht erst beim Stop). Für den Phase-1-Code (Block 3 vor Block 4) wird das partial-written File durch zwei orthogonale Cleanup-Pfade entsorgt:
+>
+> 1. **`AudioFileFactory.cleanupOrphans(referenced)`** (siehe §7.3-Snippet Z. 3215–3225, läuft im Service-`onCreate` parallel zur Recovery): scant `filesDir/recordings/*` und löscht Files, die in **keiner** sessions-Row referenziert sind. Ein RECORDING-Session mit `audio_file_path = NULL` hinterlässt also einen Pfad, der nicht referenziert ist → wird gelöscht.
+> 2. **`cacheDir`-OS-Cleanup** für das Legacy-Layout (`cacheDir/audio.m4a`): Android entsorgt cacheDir-Files opportunistic bei niedrigem Storage. Nach Block 4 ist `cacheDir` nicht mehr das Recording-Ziel.
+>
+> Akzeptiert: Block-3-Implementation läuft mit dem heutigen `cacheDir`-Layout — der Orphan-Cleanup-Pfad #1 wird in Block 4 mit der `AudioFileFactory` aktiv. Bis dahin reicht der OS-Cleanup.
 
 > **Atomicity:** Die `updateStatus + updateError + clearAudioFilePath`-Sequenz pro Row läuft **nicht** in einer Transaktion (analog zu `SessionManager.finalizeFailed`, das ebenfalls 2 sequenzielle DAO-Calls ohne `runInTransaction` macht — siehe `SessionManager.kt:108-111`). Begründung: zwischen den 3 Statements ist ein Stale-State zwar denkbar (z.B. nur status=FAILED gesetzt, last_error_* noch leer), aber von keinem Konsument problematisch — HistoryAdapter zeigt FAILED unabhängig vom `last_error_*`-Feld an. Eine `runInTransaction`-Klammer wäre overkill und würde den IO-Thread länger blockieren.
 
@@ -3035,6 +3078,18 @@ prüft, dass nur FAILED/CANCELLED-Rows mit `audio_file_path != NULL && created_a
 zurückkommen. RECORDED + COMPLETED-Rows werden NICHT zurückgegeben (auch nicht ältere).
 Integration-Test im Service-Layer: simulierte FAILED-Session mit File auf Disk → nach
 Service-Idle-Stop ist die Datei weg und `audio_file_path IS NULL`.
+
+<!-- FIX: Phase-B S-2 (2026-05-13) – DB-Row-Lifecycle für FAILED/CANCELLED explizit dokumentieren (Cleanup räumt nur Audio-Files, NICHT DB-Rows). -->
+> **DB-Row-Lifecycle für FAILED/CANCELLED — bewusst kein Auto-Cleanup:**
+>
+> `cleanupOrphanedTerminalAudio` räumt **nur die Audio-Files** auf Disk weg und setzt `audio_file_path = NULL` in der DB-Row. Die DB-Row selbst **bleibt persistent** — FAILED/CANCELLED-Sessions sammeln sich also im History-View an, bis der User sie manuell via `HistoryDetailActivity → Delete` entfernt.
+>
+> Begründung:
+> - **User-Wert:** Fehlerstatus in der History bleibt sichtbar → User kann später nachvollziehen ("warum hat Pipeline letzte Woche nicht funktioniert?"). Auto-Delete würde diese Information stillschweigend verschlucken.
+> - **DB-Größe:** Pro FAILED-Row ~500 Byte (id + type + status + error-Felder). Bei 100 FAILED-Sessions/Jahr = 50 KB — irrelevant.
+> - **`deleteInsertedOlderThan` (COMPLETED + inserted)** ist ein anderer Pfad: er räumt **erfolgreich abgeschlossene + eingefügte** Sessions nach 7d, weil deren Information nach Insertion redundant ist. Dieser Pfad gilt **nicht** für FAILED/CANCELLED, weil deren Information eben **nicht** redundant ist (Pipeline schlug fehl, kein Insertion-Event).
+>
+> Falls sich in der Praxis zeigt, dass FAILED-Sessions DB-Bloat erzeugen (z.B. >10k Rows bei häufigen Quota-Fehlern), kann ein zusätzlicher Cleanup-Pfad in einer späteren Phase ergänzt werden (`deleteFailedOlderThan(cutoff)` mit z.B. 30d-Frist). Phase 1: bewusst nicht implementieren.
 
 ### §6.4 SharedPreferences-Erweiterung — Overlay-Position (OPEN-3)
 
@@ -3633,6 +3688,11 @@ Block 3 (DB-Persistence) gilt als done, wenn:
 - [ ] **R.17 Idempotenz:** Replay nach view-recreate führt nicht zu Doppel-Insertion (DB-Idempotenz-Test mit `@Insert(onConflict = REPLACE)`).
 - [ ] **R.17 PersistenceError-Pfad:** DB-Crash mid-Save führt zu `pendingSessions`-failed-Marker, nicht zu State/DB-Inkonsistenz.
 - [ ] **R.9 View-Recreate-Vertrag (Robolectric):** Rotation während aktiver Pipeline — nach `onFinishInputView` + `onCreateInputView` ist der Subscriber neu attached und der Pipeline-State ist korrekt gerendert.
+<!-- FIX: Phase-B S-2 (2026-05-13) – S-2-spezifische Acceptance-Punkte ergänzt. -->
+- [ ] **Phase-B S-2 androidTest-Smoke:** `AndroidTestSetupSmokeTest.smoke()` läuft grün via `./gradlew connectedDebugAndroidTest` VOR `MigrationTo4Test`-Implementation (verifiziert dass `androidTest/`-Verzeichnis + `room-testing`-Dependency korrekt verdrahtet sind, siehe §11.7.0a).
+- [ ] **Phase-B S-2 Doppel-Sicherung HistoryAdapter:** Der bestehende `try { SessionStatus.valueOf(...) } catch (IllegalArgumentException e) { RECORDED }`-Wrapper in `HistoryAdapter.java:131-135` **bleibt erhalten** (Downgrade-Verträglichkeit) und der neue `default:`-Branch im `switch` (KG-SST-4) wird **zusätzlich** ergänzt. Unit-Test in HistoryAdapter-Robolectric-Coverage: bei `session.status = "UNBEKANNT"` zeigt der Adapter Pending-Badge (RECORDED-Fallback durch try/catch), bei einer fiktiven 7. Enum-Variante ohne `case` triggert der `default:`-Branch `Log.wtf` + `GONE`. Disjunkte Failure-Modes (§6.1.3 Doppel-Sicherung-Block).
+- [ ] **Phase-B S-2 Cleanup-Reihenfolge im Service-Idle-Stop:** im `stopSelf`-Pfad läuft `dao.deleteInsertedOlderThan(cutoff)` VOR `cleanupOrphanedTerminalAudio()` VOR `stopSelf()`. Test: `DictatePipelineServiceCleanupOrderTest.kt` mit Mock-DAO + Mock-Filesystem verifiziert die Call-Reihenfolge.
+- [ ] **Phase-B S-2 SessionStatus-KDoc-Update:** `database/entity/SessionStatus.kt:6` KDoc reflektiert die neue Doppel-Truth-Realität — die alte Aussage "Runtime state (TRANSCRIBING, PROCESSING) is NOT stored here — it lives in ActiveJobRegistry" ist nach M4 falsch und muss auf "RECORDING/TRANSCRIBING leben jetzt in DB + Registry; Registry bleibt Performance-Cache + Single-Job-Lock (siehe Plan §6.1.1 + KG-SST-5)" umformuliert sein. Verifiziert via Code-Review-Checkliste.
 
 ---
 
@@ -3871,15 +3931,33 @@ Reihenfolge der Sub-Schritte:
 
 **Block 3 — DB-Persistence (Schema-Migration M3→M4)**
 
-1. **`SessionStatus.kt` erweitern** um `RECORDING` + `TRANSCRIBING` (siehe §6.1).
+<!-- FIX: Phase-B S-2 (2026-05-13) – Block-3-Sub-Schritte umstrukturiert: androidTest-Setup als eigener Schritt 0 (substantieller Test-Infrastruktur-Aufbau, wurde vorher als Implementation-Detail von Schritt 2 versteckt). -->
+
+0. **androidTest-Infrastruktur anlegen (NEU, eigener Schritt — siehe §11.7.0a unten):**
+   - Verzeichnis `app/src/androidTest/java/net/devemperor/dictate/database/migration/` neu anlegen (existiert heute nicht — verifiziert per `ls app/src/`).
+   - `gradle/libs.versions.toml` erweitern um `room-testing = { module = "androidx.room:room-testing", version.ref = "room" }` und `androidx-test-runner = { group = "androidx.test", name = "runner", version = "1.5.2" }`, `androidx-test-rules = { group = "androidx.test", name = "rules", version = "1.5.0" }`.
+   - `app/build.gradle:74-75` erweitern (in Z. 74-75, NACH `androidTestImplementation libs.espresso.core`):
+     ```gradle
+     androidTestImplementation libs.room.testing
+     androidTestImplementation libs.androidx.test.runner
+     androidTestImplementation libs.androidx.test.rules
+     ```
+   - Test-Runner `androidx.test.runner.AndroidJUnitRunner` ist bereits in `defaultConfig.testInstrumentationRunner` (Z. 18) konfiguriert — keine Änderung nötig.
+   - Verifikation: leerer Smoke-Test (`Trivial androidTest with @Test fun smoke() = assertTrue(true)`) muss vor MigrationTo4.kt-Implementation grün laufen, um zu beweisen dass das Verzeichnis-Setup funktioniert.
+1. **`SessionStatus.kt` erweitern** um `RECORDING` + `TRANSCRIBING` (siehe §6.1). KDoc auf `SessionStatus.kt:6` ("Runtime state … lives in ActiveJobRegistry") an die neue Doppel-Truth-Realität anpassen ("RECORDING/TRANSCRIBING leben jetzt DB + Registry; Registry bleibt Performance-Cache + Single-Job-Lock", siehe KG-SST-1 + KG-SST-5).
 2. **MigrationTo4.kt anlegen** mit table-recreate-Strategie + CHECK-Erweiterung (siehe §6.1).
-3. **Schema-Version + addMigrations** in `DictateDatabase.kt` (§6.1).
-4. **`SessionEntity.insertedAt`-Feld** ergänzen (§6.1).
-5. **`SessionDao`-Methoden:** `markInserted` / `findPendingInsertion` / `deleteInsertedOlderThan` / `getSessionsByStatuses` + `findAllAudioFilePaths` + `markLegacyAudioSessionsFailed` (§6.1 + §6.3 + §4.11).
-6. **`SessionManager`-Methoden:** `transitionRecording` + `transitionTranscribing` neben den bestehenden `finalize*`-Methoden (§6.1).
-7. **Checkpoint-Hooks pro Modul** (§6.2-Tabelle): RecordingModule + PipelineModule emittieren DAO-Calls als SideEffects (`Effect.PersistStatus(sessionId, status)` etc.).
+3. **Schema-Version + addMigrations** in `DictateDatabase.kt` (§6.1). Generiert beim ksp-Build automatisch `app/schemas/.../DictateDatabase/4.json` — diese Datei MUSS Teil des Commit sein (Code-Review-Anker für Schema-Diff).
+4. **`SessionEntity.insertedAt`-Feld** ergänzen (§6.1). KEIN zusätzlicher `Index("inserted_at")` (siehe Begründung unter §6.1).
+5. **`SessionDao`-Methoden:** `markInserted` / `findPendingInsertion` / `deleteInsertedOlderThan` / `getSessionsByStatuses` + `findAllAudioFilePaths` + `markLegacyAudioSessionsFailed` (§6.1 + §6.3 + §4.11) + `findOrphanedTerminalAudio` + `clearAudioFilePathBulk` (§6.3.1 KG-SST-2).
+6. **`SessionManager`-Methoden:** `transitionRecording` + `transitionRecorded` + `transitionTranscribing` + `markInserted` neben den bestehenden `finalize*`-Methoden (§6.1).
+7. **Checkpoint-Hooks pro Modul** (§6.2-Tabelle): RecordingModule + PipelineModule emittieren DAO-Calls als SideEffects (`Effect.PersistStatus(sessionId, status)` etc.). **Reihenfolge: DB-Schreib VOR `ActiveJobRegistry.update`** (KG-SST-5, siehe §6.2 Persistenz-Vertrag R.17).
 8. **`PipelineRecovery.recover()`** liest pending sessions: RECORDING→FAILED+cleanup, TRANSCRIBING→RECORDED-Downgrade-oder-FAILED, lädt sie in `state.pendingSessions` (§6.3).
-9. **Cleanup-Policy** beim Service-Idle-Stop: `dao.deleteInsertedOlderThan(now - 7d)` einmal vor `stopSelf()`.
+9. **Cleanup-Policy** beim Service-Idle-Stop: `dao.deleteInsertedOlderThan(now - 7d)` UND `cleanupOrphanedTerminalAudio()` (§6.3.1 KG-SST-2) einmal vor `stopSelf()`. Reihenfolge: `deleteInsertedOlderThan` → `cleanupOrphanedTerminalAudio` → `stopSelf`.
+10. **`HistoryAdapter.java`-`switch` erweitern** um `case RECORDING:` + `case TRANSCRIBING:` + `default: Log.wtf + GONE` (§6.1.3). Der bestehende try/catch-Wrapper Z. 131-135 bleibt erhalten (Downgrade-Verträglichkeit, siehe Doppel-Sicherung-Erläuterung in §6.1.3).
+11. **`ResendStatusDispatcher.kt`-`when` erweitern** um `RECORDING, TRANSCRIBING → ResendAction.NoOp` (§6.1.3). Kotlin-`when` ist exhaustive — Build-Fehler ohne diese Branches.
+12. **`HistoryDetailActivity.java:287-299`** — KEINE Code-Änderung (existierende Whitelist `RECORDED || FAILED || CANCELLED || COMPLETED` schließt RECORDING/TRANSCRIBING automatisch aus, siehe §6.1.3 Konsumenten-Tabelle).
+13. **Lint-Setup** (KG-SST-4): `app/build.gradle` um `lint { error += "EnumSwitch"; abortOnError true }`-Block ergänzen. Vorher `./gradlew lint` laufen lassen, Baseline-Findings reviewen.
+14. **`strings.xml`** ergänzen: `dictate_status_recording`, `dictate_status_transcribing` (§6.1.3 Patch).
 
 <!-- FIX: Phase-B S-1 (2026-05-13) – Test-Klassen auf F-11-Module-Pattern umgestellt (RecordingModuleTest statt PipelineStateManagerTest, separate PipelineRecoveryTest). -->
 #### §11.2.3 Test-Strategie
@@ -4396,6 +4474,64 @@ Die Migration in §6.1 ist nicht mehr rein additiv (siehe D8-Update in §2). Kon
 | Index-Verlust durch DROP | Gering | Migration recreated alle Indices explizit (siehe MigrationTo4.kt-Step 4); Migration-Test `migrate3To4_preservesIndices` prüft `PRAGMA index_list(sessions)`. |
 | Schema-Validator-Mismatch (Room Compile-Time-Check) | Mittel — `audio_duration_seconds` muss ohne SQL-DEFAULT bleiben (siehe MigrationTo3-Kommentar Z. 38-42) | Migration-Snippet folgt der MIGRATION_2_3-Konvention; `exportSchema = true` (siehe DictateDatabase.kt:39) erzeugt Schema-JSON für Validierung im CI; `runMigrationsAndValidate(..., validateDroppedTables = true, ...)` im Test wirft bei Mismatch. |
 | Multi-Step-Migration v1→v4 bei Restore aus altem Backup | Gering — App-Backup (Android Auto-Backup / ADB-Restore) enthält die Room-DB-Datei; bei Restore läuft Room durch `MIGRATION_1_2 → MIGRATION_2_3 → MIGRATION_3_4` sequenziell (Room-Standardverhalten, kein Sonderpfad nötig) | **Automatisierter Test (KG-SST-3 RESOLVED 2026-05-11):** `MigrationTo4Test.migrate1To4_chain_preservesData()` (siehe §11.4.2) — inserted eine v1-RECORDING-Row, validiert nach voller Chain dass die Row erhalten ist und Status korrekt inferiert wird. Zusätzlich Manual-Smoke-Test im §11.7.4-Runbook ("App-Installation aus Pre-v3-Backup wiederherstellen, `adb shell sqlite3`-Probe"). |
+<!-- FIX: Phase-B S-2 (2026-05-13) – Downgrade-Strategie explizit dokumentieren. -->
+| **DB-Downgrade v4 → v3 (Release-Update fehlgeschlagen, User installiert ältere App-Version aus Backup/APK)** | Sehr gering — Anwender installieren in der Regel nicht aktiv ältere Versionen | Heutiges `Room.databaseBuilder` hat KEIN `fallbackToDestructiveMigrationOnDowngrade` (verifiziert `DictateDatabase.kt:67-103`). Ergebnis: ältere App-Version crasht beim ersten DB-Zugriff mit `IllegalStateException` ("A migration from 4 to 3 was required but not found"). **User-Daten bleiben intakt** in der DB-Datei. Recovery-Pfad: User installiert v4-App erneut → Schema bleibt v4, alles funktioniert wieder. **Bewusste Entscheidung:** kein Downgrade-Pfad implementieren — Wiederinstallation der aktuellen Version ist der einfachere User-Pfad als Daten-Migration zurück auf v3. Pre-existing RECORDING/TRANSCRIBING-Rows aus der v4-Periode würden in der v3-App über den HistoryAdapter try/catch-Wrapper (§6.1.3) als RECORDED-Fallback erscheinen — kein UI-Crash. |
+
+<!-- FIX: Phase-B S-2 (2026-05-13) – §11.7.0a neu: androidTest-Setup als eigene Sub-Sektion. -->
+#### §11.7.0a androidTest-Setup (NEU für Block 3 — siehe Inventur Surprise-Finding #4)
+
+Block 3 ist der erste Block in diesem Repo, der **Instrumented-Tests** einführt. Das Setup ist substanziell genug, um als eigener Sub-Schritt im Block-3-Plan zu stehen (siehe §11.2.2 Block 3 Schritt 0). Diese Sektion definiert die konkrete Setup-Reihenfolge + Verifikations-Smoke-Test.
+
+**Heutiger Zustand (verifiziert 2026-05-13):**
+- `app/src/androidTest/` existiert **nicht**.
+- `app/build.gradle:18` deklariert `testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"` — bereits konfiguriert.
+- `app/build.gradle:74-75` deklariert `androidTestImplementation libs.ext.junit` + `libs.espresso.core` — Runner + Espresso sind da, aber **keine `room-testing`-Dependency**, keine `androidx.test.runner` (separat von `ext.junit`), keine `androidx.test.rules`.
+- `gradle/libs.versions.toml`: `room = "2.6.1"`, `espressoCore = "3.7.0"`, `junitVersion`-Eintrag vorhanden (für `ext-junit`). **`room-testing`, `androidx.test.runner`, `androidx.test.rules` fehlen** als Version-Catalog-Einträge.
+
+**Setup-Reihenfolge (vor MigrationTo4.kt-Implementation):**
+
+1. **Version-Catalog erweitern** — `gradle/libs.versions.toml`:
+   ```toml
+   [versions]
+   # ... bestehend ...
+   androidxTestRunner = "1.5.2"
+   androidxTestRules = "1.5.0"
+
+   [libraries]
+   # ... bestehend ...
+   # Room-Migration-Test-Helper (siehe MigrationTo4Test in §11.4.2)
+   room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
+   # Instrumented-Test-Runner + Test-Rules (für @get:Rule MigrationTestHelper)
+   androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
+   androidx-test-rules = { group = "androidx.test", name = "rules", version.ref = "androidxTestRules" }
+   ```
+2. **build.gradle erweitern** — `app/build.gradle:74-75`, NACH `androidTestImplementation libs.espresso.core`:
+   ```gradle
+   androidTestImplementation libs.room.testing
+   androidTestImplementation libs.androidx.test.runner
+   androidTestImplementation libs.androidx.test.rules
+   ```
+3. **Verzeichnis anlegen** — `mkdir -p app/src/androidTest/java/net/devemperor/dictate/database/migration` (manuell oder via Android-Studio "New > Module > androidTest source set").
+4. **Smoke-Test vor MigrationTo4 anlegen** — `app/src/androidTest/java/net/devemperor/dictate/database/migration/AndroidTestSetupSmokeTest.kt`:
+   ```kotlin
+   package net.devemperor.dictate.database.migration
+
+   import androidx.test.ext.junit.runners.AndroidJUnit4
+   import org.junit.Assert.assertTrue
+   import org.junit.Test
+   import org.junit.runner.RunWith
+
+   @RunWith(AndroidJUnit4::class)
+   class AndroidTestSetupSmokeTest {
+       @Test fun smoke() { assertTrue(true) }
+   }
+   ```
+   Verifikation: `./gradlew connectedDebugAndroidTest` muss grün sein (oder via Android-Studio gegen ein verbundenes Device/Emulator). Wenn dieser Smoke-Test scheitert, ist das Setup kaputt — keinen Code in MigrationTo4.kt schreiben, bevor er grün ist.
+5. **Erst dann** MigrationTo4.kt + MigrationTo4Test.kt implementieren (siehe §6.1 + §11.4.2).
+
+**CI-Integration:** Aktuell läuft `connectedDebugAndroidTest` nicht in CI (kein Emulator-Setup). Block 3 ergänzt das **nicht** — Instrumented-Tests laufen lokal vor Merge (Dev-Pflicht in PR-Checklist). Wenn später ein Emulator-CI-Setup kommt (separater Plan), reaktiviert sich der Migration-Test automatisch.
+
+**Aufwand:** ~30 Min Setup (Catalog + build.gradle) + ~10 Min Smoke-Test + Local-Run gegen Emulator. **Plus** ~1-2 h für die 6 MigrationTo4Test-Tests (siehe §11.4.2). Gesamtaufwand Block 3 androidTest-Anteil: ~3 h.
 
 <!-- KNOWLEDGE-GAP: KG-SST-2 – Cleanup-Policy für FAILED-Sessions mit ungenutztem Audio-File [RESOLVED 2026-05-11] -->
 > **✅ Knowledge-Gap (KG-SST-2): Cleanup-Policy für FAILED-Sessions mit ungenutztem Audio-File — RESOLVED 2026-05-11**

@@ -322,6 +322,16 @@ interface OverlayWindow {
     fun detach(view: View)
 }
 
+<!-- FIX: Phase-B S-8 (2026-05-13) – Wrapper-interne Exception-Hygiene für ALLE drei WindowManager-Calls.
+     Vorher: attach() fing BadTokenException NICHT (Catch lebte stattdessen im OverlayBackend.inflateAndAttach
+     — SRP-Verstoß: Lifecycle-Idempotenz ist Aufgabe des Wrappers, nicht des Backends);
+     update() fing IllegalArgumentException NICHT (Race-Pfad: System detached View bei Permission-Revoke
+     zur Laufzeit, attached-Bit ist noch true, der nächste applyPosition()-Call führt zu updateViewLayout
+     auf einer nicht-mehr-attached View → IllegalArgumentException). Beide Pfade jetzt im Wrapper:
+     - attach() catched BadTokenException + setzt attached=false (Permission revoked vor addView).
+     - update() catched IllegalArgumentException + setzt attached=false (View bereits OS-seitig detached).
+     Damit ist OverlayWindow vollständig SRP-konform für Window-Lifecycle-Idempotenz; das Backend
+     muss keinen WindowManager-Exception-Typen mehr kennen (DIP). -->
 class AndroidOverlayWindow(
     private val windowManager: WindowManager,
 ) : OverlayWindow {
@@ -329,11 +339,28 @@ class AndroidOverlayWindow(
     override fun isAttached() = attached
     override fun attach(view: View, params: WindowManager.LayoutParams) {
         if (attached) return
-        windowManager.addView(view, params)
-        attached = true
+        try {
+            windowManager.addView(view, params)
+            attached = true
+        } catch (e: WindowManager.BadTokenException) {
+            // Permission wurde revoked, bevor addView lief. attached bleibt false; Caller (Backend)
+            // sieht über isAttached() == false, dass der Attach nicht erfolgreich war.
+            android.util.Log.w("AndroidOverlayWindow", "addView failed — permission revoked at runtime?", e)
+            attached = false
+        }
     }
     override fun update(view: View, params: WindowManager.LayoutParams) {
-        if (attached) windowManager.updateViewLayout(view, params)
+        if (!attached) return
+        try {
+            windowManager.updateViewLayout(view, params)
+        } catch (e: IllegalArgumentException) {
+            // Race: System detached die View OS-seitig (z.B. Permission-Revoke), bevor unser
+            // Wrapper das Bit gedreht hat. Idempotent: attached=false, beim nächsten render()
+            // wird das Backend einen sauberen re-attach versuchen, der dann am Permission-Gate
+            // korrekt abbiegt.
+            android.util.Log.w("AndroidOverlayWindow", "updateViewLayout on detached view — was OS-detached?", e)
+            attached = false
+        }
     }
     override fun detach(view: View) {
         if (!attached) return
@@ -346,6 +373,14 @@ class AndroidOverlayWindow(
 ```
 
 Dadurch kann ein `FakeOverlayWindow` in Tests einfach den Status mitschneiden, ohne reale `WindowManager`-Calls zu emulieren.
+
+**Lifecycle-Idempotenz-Vertrag (Phase-B S-8):** Der Wrapper ist die alleinige SRP-Heimat für
+WindowManager-Exception-Behandlung. Alle drei Methoden (`attach`/`update`/`detach`) sind
+**idempotent gegen OS-seitige Detach-Race** — wenn Android die View hinter unserem Rücken
+entfernt (Permission-Revoke zur Laufzeit, Window-Token-Invalidation), drehen wir
+`attached = false` und der nächste `render()`-Call läuft sauber neu in den
+Permission-Gate-Check. Das Backend muss **keinen** WindowManager-spezifischen Exception-Typ
+kennen — DIP-konform.
 
 ### §4.2 OverlayBackend (überarbeitet)
 
@@ -460,6 +495,10 @@ class OverlayBackend(
         val params = currentParams ?: return
 
         // Drag-Hoheit: während aktivem Drag NIEMALS einen externen Position-Set überschreiben.
+        // FIX: Phase-B S-8 (2026-05-13) – Null-Behandlung explizit dokumentiert:
+        // `dragHandler == null` (zwischen detach() und nächstem inflateAndAttach()) → `?.isDragging()`
+        // ist null → `== true` ist false → kein early-return. Das ist korrekt: ohne aktiven
+        // Drag-Handler existiert keine Drag-Hoheit, die zu schützen wäre. Position-Set läuft normal.
         if (dragHandler?.isDragging() == true) return
 
         val isPortrait = ctx.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
@@ -491,38 +530,43 @@ class OverlayBackend(
             LogicalButtonId.OVERLAY_CLOSE to view.findViewById(R.id.overlay_close_btn),
         )
         val params = layoutParamsFactory.create()
-        try {
-            overlayWindow.attach(view, params)
-            overlayView = view
-            currentParams = params
-            // <!-- FIX: Issue 3.1.10 / R.10 – wireStaticOverlayHandlers einmal pro inflate -->
-            wireStaticOverlayHandlers()
-            // Drag-Handling: OnTouchListener auf Root-View. Move > Threshold → Drag-Modus,
-            // Tap < Threshold → Click an Button durchreichen. Drag-End emittiert
-            // Action.OverlayAction.UpdateOverlayPosition mit normalisierten 0..1-Koordinaten.
-            // FIX: Issue 3.0.5 – flache Action.UpdateOverlayPosition → Action.OverlayAction.UpdateOverlayPosition (Phase-1-Mapping)
-            dragHandler = dragHandlerFactory.create(
-                view = view,
-                window = overlayWindow,
-                paramsHolder = { currentParams },
-                positionMapper = positionMapper,
-                onPositionPersist = { normX, normY ->
-                    val portrait = ctx.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
-                    onAction?.invoke(Action.OverlayAction.UpdateOverlayPosition(portrait, normX, normY))
-                },
-            ).also { it.attach() }
-            // (F-6 / GAP-7): Erste applyPosition läuft direkt im render() — aber view.width
-            // und view.height sind dann oft noch 0, weil der Layout-Pass noch nicht durchgelaufen
-            // ist. `view.post {}` schiebt den Re-Apply ans Ende der Message-Queue, also nach dem
-            // ersten Layout-Pass. So wird die Window-Position mit den dann korrekten View-
-            // Dimensionen gesetzt; das einmalige "Top-End-Default-Frame" verschwindet.
-            view.post {
-                stateRef?.let { applyPosition(it) }
-            }
-        } catch (e: WindowManager.BadTokenException) {
-            // Permission wurde zur Laufzeit revoked. Keep-going-Pfad: Logge, mache nichts weiter.
-            Log.w(TAG, "Overlay attach failed — permission revoked at runtime?", e)
+        // FIX: Phase-B S-8 (2026-05-13) – BadTokenException-Catch wandert in den Wrapper (§4.1).
+        // Backend prüft das Resultat über overlayWindow.isAttached() und bricht ab, wenn der
+        // Wrapper-Attach gescheitert ist. SRP: Backend kennt keinen WindowManager-Exception-Typ mehr.
+        overlayWindow.attach(view, params)
+        if (!overlayWindow.isAttached()) {
+            // Wrapper hat BadTokenException gefangen — Permission ist zur Laufzeit revoked worden.
+            // Keep-going-Pfad: kein Crash, kein State-Touch. Beim nächsten render() läuft der
+            // Permission-Gate-Check oben in render() (state.overlay.hasPermission == false sobald
+            // OverlayPermissionObserver.refresh() den Wechsel sieht) in den Fallback-Pfad.
             buttonViews = emptyMap()
+            return
+        }
+        overlayView = view
+        currentParams = params
+        // <!-- FIX: Issue 3.1.10 / R.10 – wireStaticOverlayHandlers einmal pro inflate -->
+        wireStaticOverlayHandlers()
+        // Drag-Handling: OnTouchListener auf Root-View. Move > Threshold → Drag-Modus,
+        // Tap < Threshold → Click an Button durchreichen. Drag-End emittiert
+        // Action.OverlayAction.UpdateOverlayPosition mit normalisierten 0..1-Koordinaten.
+        // FIX: Issue 3.0.5 – flache Action.UpdateOverlayPosition → Action.OverlayAction.UpdateOverlayPosition (Phase-1-Mapping)
+        dragHandler = dragHandlerFactory.create(
+            view = view,
+            window = overlayWindow,
+            paramsHolder = { currentParams },
+            positionMapper = positionMapper,
+            onPositionPersist = { normX, normY ->
+                val portrait = ctx.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+                onAction?.invoke(Action.OverlayAction.UpdateOverlayPosition(portrait, normX, normY))
+            },
+        ).also { it.attach() }
+        // (F-6 / GAP-7): Erste applyPosition läuft direkt im render() — aber view.width
+        // und view.height sind dann oft noch 0, weil der Layout-Pass noch nicht durchgelaufen
+        // ist. `view.post {}` schiebt den Re-Apply ans Ende der Message-Queue, also nach dem
+        // ersten Layout-Pass. So wird die Window-Position mit den dann korrekten View-
+        // Dimensionen gesetzt; das einmalige "Top-End-Default-Frame" verschwindet.
+        view.post {
+            stateRef?.let { applyPosition(it) }
         }
     }
 
@@ -1007,6 +1051,19 @@ Broadcast. Statt zu pollen, nutzen wir die Lifecycle-Punkte, an denen der User a
 zurückkommen *kann* (`onCreateInputView`, `onStartInputView`). Das ist ausreichend — eine
 Permission-Änderung außerhalb dieser Punkte ist für die User-UX irrelevant.
 
+<!-- FIX: Phase-B S-8 (2026-05-13) – Boot-Default-Race-Window dokumentiert. -->
+**Boot-Default-Race-Window (akzeptiert):** `OverlayState.hasPermission` ist im
+`DictateUiState.initial()` per default `false` (Spec 1 §3 Z. 183). Zwischen Service-Start
+und dem ersten `OverlayPermissionObserver.init()`-Dispatch (vom IME-onCreate) sieht jeder
+State-Subscriber `hasPermission = false` — falls in diesem Fenster ein `render(state, mode)`
+mit `state.viewMode in (WIDGET, HOVER)` triggert, fällt der Code in den Fallback-Pfad
+(`teardownOverlay()`). In der Praxis ist das harmlos, weil:
+- HOVER-Auto-Trigger setzt `state.recording.isActiveOrPaused` voraus — Recording startet
+  immer aus dem IME-View, der vorher `init()` durchgelaufen ist.
+- WIDGET-Toggle wird vom User explizit angeklickt — auch nur möglich, wenn der IME-View
+  bereits sichtbar war.
+Das Boot-Race-Window ist also strukturell nicht erreichbar. Polling wäre Anti-Pattern.
+
 <!-- FIX: Issue 1.0.6 – Hierarchische State-Pfade (F-10) durchpropagiert in §3.1/§5/§7 (Mapping siehe Spec 1 §3) -->
 
 ### §5.1 Permission-Gate (zentrale Logik, getrennt vom Render — SRP)
@@ -1307,7 +1364,19 @@ when (action) {
 
 <!-- FIX: Issue 3.0.3 – Pre-F-11-Header („im PipelineStateManager") auf ViewModeModule (Spec 1 §15) umgestellt. ViewMode-FSM-Eigentum (Doppel-Eigentum-Risiko) ist als Architektur-Decision 3.1.2 PENDING. -->
 
-> **SSoT-Note:** Die ViewMode-FSM ist im **ViewModeModule** (Spec 1 §15) kanonisch implementiert; dieser Abschnitt zeigt die Transition-Logik aus Sicht von Spec 3 als Referenz für den Implementierer. Action-Quelle: IME-Service dispatcht `Action.ViewModeAction.OnImeViewShown / OnImeViewHidden`; das Modul re-evaluiert `computeViewMode`.
+> **SSoT-Note:** Die ViewMode-FSM ist im **ViewModeModule** (Spec 1 §15.1 Module-Inventar-Zeile #4) kanonisch verankert; dieser Abschnitt zeigt die Transition-Logik aus Sicht von Spec 3 als Referenz für den Implementierer. Action-Quelle: IME-Service dispatcht `Action.ViewModeAction.OnImeViewShown / OnImeViewHidden`; das Modul re-evaluiert `computeViewMode`.
+>
+> <!-- FIX: Phase-B S-8 (2026-05-13) – SSoT-Pfad-Klarstellung. -->
+> **Implementations-Heimat-Klarstellung:** Spec 1 §15 enthält die kanonischen Modul-Implementationen
+> für RecordingModule (§15.2), AudioModule (§15.3) und KeyboardInputModule (§15.6) als
+> Beispiele. Die übrigen Module — inklusive ViewModeModule — folgen demselben Modul-Pattern
+> (`DictateModule<State, Action, Effect>`-Interface, `reduce`/`runEffect`/`onCrossModuleStateChange`),
+> sind aber nicht vollständig als Code-Blöcke in Spec 1 abgedruckt. Für ViewModeModule liefert
+> dieser Abschnitt (Spec 3 §7.1) den `computeViewMode`-Truth-Table + die `reduce`-Skelette in
+> §6.1 (ToggleViewModeWidget), §7.3 T1+T2 (Toggle), T3+T4 (OnImeViewHidden), T5+T6 (OnImeViewShown),
+> T7 (OnPipelineDone). Diese Snippets sind der konkrete Implementations-Anchor für den Block-6-
+> Implementer; Spec 1 §15.1 verankert den Modul-Eintrag im Inventar + die Cross-Module-Coupling-
+> Matrix-Zeilen. Es gibt **keinen** zweiten Source-of-Truth.
 
 ```kotlin
 // ViewModeModule.reduce / Cross-Module-Trigger (Spec 1 §15.1):
@@ -1538,6 +1607,46 @@ override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
 
 **Persistenz-Hinweis:** `state.overlay.userPrefersWidget` muss in **memory** überleben (StateFlow im Service, der den Tastatur-Wechsel überlebt — Spec 1 D1). Es muss **nicht** persistent in DB/Prefs landen, weil eine neue Pipeline-Session den Widget-Wunsch ohnehin neu setzt. Diskussion siehe §11.9.
 
+<!-- FIX: Phase-B S-8 (2026-05-13) – T7 (Geist-Widget-Bug-Strukturschutz) explizit als Übergang verankert.
+     Hintergrund: Phase-A Subsystem-Inventur (Z. 588–591) listet T7 als kritischen Mode-Transition-Test,
+     aber §7.3 zeigte nur T1–T6. Lücke: Reader sieht die Geist-Widget-Bug-Auflösung nur indirekt
+     über §15.1 Coupling-Matrix (`Pipeline × ViewMode = R(state.pipeline) C(ViewModeAction.OnPipelineDone)`)
+     + §10 Acceptance Block 1. Ohne expliziten T7-Block ist die Cascade-Sequenz nicht aus der FSM-Sektion
+     selbst ableitbar — der "Geist-Widget"-Begriff (Widget bleibt sichtbar obwohl Pipeline fertig + IME
+     hidden) wird in §10 zwar geprüft, aber die FSM-Sicht ist unvollständig. -->
+#### T7: HOVER → KEYBOARD via Pipeline-Done-Cascade (Geist-Widget-Bug-Strukturschutz)
+
+**Auslöser:** PipelineModule emittiert `PipelineUiState.Done` (Transkription erfolgreich eingefügt oder gescheitert → Final-State). Die Cross-Module-Cascade ist in §15.1 Coupling-Matrix verankert: `Pipeline × ViewMode = R(state.pipeline) C(ViewModeAction.OnPipelineDone)`.
+
+```kotlin
+// PipelineModule.onCrossModuleStateChange (Spec 1 §15.x — Pipeline → ViewMode-Cascade):
+override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> =
+    if (prev.pipeline !is PipelineUiState.Done && next.pipeline is PipelineUiState.Done)
+        listOf(Action.ViewModeAction.OnPipelineDone)
+    else emptyList()
+
+// ViewModeModule.reduce (Spec 1 §15 / Spec 3 §7.1 SSoT-Note):
+when (action) {
+    Action.ViewModeAction.OnPipelineDone -> {
+        // Pipeline ist fertig. Wenn wir in HOVER sind, ist die Auto-Trigger-Bedingung
+        // (pipelineActive=true) jetzt false → re-compute viewMode.
+        val newViewMode = computeViewMode(
+            imeViewVisible = state.imeViewVisible,        // (extern getrackt — siehe §7.1)
+            userToggledWidget = state.overlay.userPrefersWidget,
+            pipelineActive = false,                        // post-Done
+        )
+        if (newViewMode != state.viewMode) state.copy(viewMode = newViewMode) else state
+    }
+    // ...
+}
+```
+
+**Konkret:** in HOVER (visible=false, pipelineActive=true, ggf. userPrefersWidget=false → war HOVER über T3-Pfad) feuert PipelineDone. `computeViewMode(visible=false, userToggledWidget=false, pipelineActive=false)` → `KEYBOARD`. KeyboardLayoutManager schaltet auf `imeViewBackend`, das aber nicht sichtbar ist (IME-View ist nicht gemounted) — das Overlay wird abgerissen, aber kein neues sichtbares UI taucht auf. Korrekt: der User hat den IME geschlossen, die Pipeline ist fertig, kein UI-Bedarf mehr.
+
+**Geist-Widget-Bug-Strukturschutz:** Ohne T7-Cascade würde das Overlay-Window **weiter sichtbar bleiben** ("Geist-Widget"), obwohl die Pipeline ihren Auto-Trigger-Grund verloren hat. T7 ist die strukturelle Eliminierung dieses Bugs — die FSM bleibt nach dem Pipeline-Done deterministisch auf `KEYBOARD` (kein-UI-State), nicht in einem Geist-HOVER hängen. Akzeptanz-Test ist in §10 (Hauptdok Acceptance Block 1) verankert + zusätzlich als Cross-Module-Cascade-Test in Spec 1 §10 (`pipeline_done_in_hover_cascades_to_keyboard`).
+
+**Variante T7-WIDGET:** wenn `userPrefersWidget = true` (Vorzustand WIDGET → HOVER via T4), feuert PipelineDone identisch, aber `computeViewMode(visible=false, userToggledWidget=true, pipelineActive=false)` → `KEYBOARD` (nicht WIDGET — siehe §7.1 `computeViewMode`-Truth-Table: `!visible && !pipelineActive → KEYBOARD`, unabhängig von userPrefersWidget). Das ist konsistent: Widget braucht eine sichtbare IME oder eine aktive Pipeline; ohne beides ist KEYBOARD (= kein sichtbares UI) der korrekte Idle-State.
+
 ---
 
 ## §8 Touch-Routing
@@ -1584,6 +1693,8 @@ Block 6 (OverlayBackend) gilt als done, wenn:
 - [ ] Trash-Button funktioniert in beiden Modi (cancelRecording).
 - [ ] Tastatur-Wechsel zur Gboard mit aktivem WIDGET: Overlay verschwindet (IME-Service stirbt), aber PipelineService läuft weiter, Recording weiter aufgenommen.
 - [ ] Permission verweigert: Widget-Toggle disabled, HOVER-Auto-Trigger fällt auf Notification-Only zurück.
+<!-- FIX: Phase-B S-8 (2026-05-13) – T7 Geist-Widget-Strukturschutz als eigene Acceptance-Klausel. -->
+- [ ] **T7 Geist-Widget-Bug-Strukturschutz:** In HOVER (IME hidden + Pipeline aktiv) wird `PipelineUiState.Done` erreicht (Transkription erfolgreich oder Final-Failure). Erwartung: Cross-Module-Cascade `PipelineDone → ViewModeAction.OnPipelineDone` (Spec 1 §15.1 Pipeline × ViewMode-Zeile) löst `viewMode = KEYBOARD` aus; OverlayBackend wird detached; **kein Geist-Widget** bleibt sichtbar nach Pipeline-Done. Test-Pflicht via Robolectric `pipelineDoneInHover_transitionsToKeyboard_overlayDetached`.
 
 <!-- FIX: Issue PENDING-3 / Spec-3 Reducer Simplified – Suppress-Bit-Lifecycle-Acceptance -->
 **Suppress-Bit-Lifecycle (PENDING-3):**
@@ -1907,11 +2018,13 @@ Modul-Reducer/EffectHandler, Spec 1 §4.3 + §15). Stattdessen via
 
 | Szenario | Verhalten |
 |----------|-----------|
-| `windowManager.addView` wirft `BadTokenException` (Permission revoked zur Laufzeit) | Catch in `inflateAndAttach()`, log, `buttonViews = emptyMap()`, kein Crash. Beim nächsten `render()` versucht es das Backend erneut — wenn Permission noch fehlt, schiebt der `permissions.hasOverlayPermission()`-Check oben in `render()` den Code in den Fallback-Pfad. |
+<!-- FIX: Phase-B S-8 (2026-05-13) – Tabelle aktualisiert: alle drei WindowManager-Race-Pfade jetzt im Wrapper. -->
+| `windowManager.addView` wirft `BadTokenException` (Permission revoked zur Laufzeit) | Catch im `AndroidOverlayWindow.attach()` (§4.1, Phase-B S-8), log, `attached = false`, kein Crash. Backend prüft über `overlayWindow.isAttached() == false` und behandelt das wie einen normalen Attach-Failure. Beim nächsten `render()` schiebt der `state.overlay.hasPermission`-Check oben in `render()` den Code in den Fallback-Pfad. |
+| `windowManager.updateViewLayout` wirft `IllegalArgumentException` (View war OS-seitig schon detached, z.B. nach Permission-Revoke zur Laufzeit) | Catch im `AndroidOverlayWindow.update()` (§4.1, Phase-B S-8), log, `attached = false`. Beim nächsten `render()` versucht das Backend einen sauberen re-attach, der bei fehlender Permission über den Gate-Check früh aussteigt. |
 | `windowManager.removeView` wirft `IllegalArgumentException` (View war nicht attached) | Catch im `AndroidOverlayWindow.detach()` — idempotent. |
 | `OverlayBackend.detach()` während `inflateAndAttach()` läuft | Theoretisch race: `addView` läuft im Main-Thread, `detach` läuft im Main-Thread — kein echtes Race. Aber: wenn `attach`/`detach` über StateFlow-Emits getriggert werden, können sie schnell hintereinander kommen. Idempotenz ist die Lösung: `attached`-Bit im Wrapper, `if (attached) return` im `attach`. |
 | PipelineService `onDestroy()` während Overlay attached | KeyboardLayoutManager.detachBackend() wird vom IME-Service vorher gerufen → `OverlayBackend.detach()` → `removeView`. Wenn nicht (z.B. Crash): das System räumt das Window beim Process-Death automatisch auf. |
-| Permission wird in System-Settings revoked, während Overlay sichtbar | Android sendet KEIN Broadcast. Beim nächsten `render()`-Call (StateFlow-Emit) merken wir nichts — `addView` ist vor langer Zeit gelaufen, `Settings.canDrawOverlays()` würde `false` zurückgeben, aber wir prüfen das nur am Anfang von `render()`. Edge-Case ist akzeptabel, weil sehr selten. |
+| Permission wird in System-Settings revoked, während Overlay sichtbar | Android sendet KEIN Broadcast. Beim nächsten `render()`-Call (StateFlow-Emit) merken wir nichts auf State-Ebene, weil `OverlayPermissionObserver.refresh()` erst an einem IME-Lifecycle-Trigger (`onStartInputView`/`onCreateInputView`) läuft. Aber: wenn der User in dieser Zwischenzeit ein `applyPosition` triggert (Drag-Event, State-Change), würde der OS-seitige Detach über `updateViewLayout`-`IllegalArgumentException` im Wrapper sauber gefangen — keine Crash-Lücke (Phase-B S-8 F-1). Edge-Case ist akzeptabel, weil sehr selten + nicht-blockierend. |
 
 ### §11.7 Multi-Window-Mode
 
@@ -2202,13 +2315,17 @@ interface RenderBackend {
 
 **Antwort: JA, und seit F-7 sogar wörtlich derselbe Code.** Vergleich nach F-7-Konsolidierung:
 
+<!-- FIX: Phase-B S-8 (2026-05-13) – Click-Listener-Spalte aktualisiert. Vorher zeigte die Tabelle
+     einen "pro Render"-Listener im Overlay (Pre-Issue-3.1.10), aber §4.2-Code zeigt seit Issue 3.1.10
+     `wireStaticOverlayHandlers` einmal-pro-inflate mit `stateRef`/`modeRef`-Feldern — identisch zum
+     IME-Pattern. Tabelle war veraltete Doppel-Truth gegen §4.2; jetzt konsistent. -->
 | Pattern | ImeViewBackend (Spec 2) | OverlayBackend (Spec 3) | Quelle |
 |---------|--------------------------|--------------------------|--------|
 | Slot-Iteration | `mode.rows.flatMap { it.slots }.forEach { ... }` | identisch | beide Render-Methoden |
 | Visibility/Enabled/Alpha/Icon/Text | **`applySlotToView(slot, view, state, ctx)`** | **`applySlotToView(slot, view, state, ctx)`** | **Top-Level-Helper in Spec 2 §5.1 (F-7)** |
-| Click | static in `wireStaticHandlers` (state-snapshot via `stateRef`/`modeRef` Field) | `view.setOnClickListener { onAction?.invoke(slot.actionResolver(state)) }` (pro Render) | backend-spezifisch begründet (Drag-Routing-Konflikt im Overlay) |
+| Click | static in `wireStaticHandlers` (state-snapshot via `stateRef`/`modeRef` Field) | **identisch** — static in `wireStaticOverlayHandlers` (state-snapshot via `stateRef`/`modeRef` Field, Issue 3.1.10 / Phase-B S-8) | Spec 2 §6 + Spec 3 §4.2 — beide Backends laufen jetzt mit dem gleichen einmaligen-Listener-Pattern; Drag-Routing-Konflikt im Overlay wird über den Touch-Listener auf dem Root-View gelöst (Click-Listener feuern nur, wenn der Drag-Handler unter dem 8dp-Threshold bleibt), nicht über variable Click-Listener-Hooks |
 
-**Konsistenz-Beweis:** Mit F-7 ist das Property-Setter-Pattern identisch — eine Definition, zwei Aufrufer. GAP-1 (`.foreground` vs `.icon`-Inkonsistenz) ist damit obsolet, weil beide Backends durch denselben Helper laufen, der konsistent `.icon` verwendet.
+**Konsistenz-Beweis:** Mit F-7 ist das Property-Setter-Pattern identisch — eine Definition, zwei Aufrufer. GAP-1 (`.foreground` vs `.icon`-Inkonsistenz) ist damit obsolet, weil beide Backends durch denselben Helper laufen, der konsistent `.icon` verwendet. Mit Issue 3.1.10 (Spec 2-Pattern auf Overlay übertragen) ist auch das Click-Listener-Setup identisch — keine Pattern-Drift zwischen den Backends.
 
 #### Werden dieselben `Action`-Typen genutzt?
 
@@ -2556,6 +2673,8 @@ fun overlayPermissionOnboarding_denyThenStillAccessible() {
 | T4 | WIDGET → HOVER | Im WIDGET die App wechseln, sodass IME-View hidden wird | Overlay-Layout bleibt sichtbar, aber Send disabled (Mode-Switch zu HOVER) |
 | T5 | HOVER → KEYBOARD | Eingabefeld in App tappen (IME wird wieder geöffnet) | HOVER-Overlay verschwindet, IME-View kommt mit normaler Tastatur |
 | T6 | HOVER → WIDGET | (Vorzustand: WIDGET → HOVER via T4). Eingabefeld tappen | HOVER-Overlay verschwindet, IME-View kommt im KEYBOARD-Modus, Widget-Toggle ist hervorgehoben (oder: Overlay bleibt + IME erscheint, je nach Implementierung von §7.3 T6) |
+<!-- FIX: Phase-B S-8 (2026-05-13) – T7 Manual-Test-Eintrag. -->
+| T7 | HOVER → KEYBOARD via PipelineDone | Recording starten → Tastatur schließen (Back) → HOVER erscheint → Pipeline-Done abwarten | HOVER-Overlay verschwindet automatisch (kein "Geist-Widget"), kein sichtbares UI bleibt aktiv |
 
 ### §14.4 Sandbox/Device-Tests für WindowManager-Setup
 

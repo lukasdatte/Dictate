@@ -715,12 +715,25 @@ class DictateOrchestrator(
 
         // 5. Cross-Module-Observation: andere Module reagieren auf den State-Change
         // Cascade-Snapshot eingefroren: alle Observer sehen denselben (prev, next), kein Race.
-        // FIX: KG-RSB-2 (2026-05-11) – Self-Filter `it.id != module.id` entfernt.
-        // Begründung: Ein Modul muss seine *eigene* State-Transition cross-cascaden dürfen
-        // (z.B. RecordingModule: Idle→Preparing → OverlayAction.ResetSuppressBit, §15.2).
-        // Endlos-Cascade-Schutz übernimmt der MAX_CASCADE_DEPTH-Counter (R.6) — der
-        // frühere Self-Filter war redundante Belt-and-Suspenders-Sicherheit, die einen
-        // Production-Bug (HOVER-Auto-Reopen blockiert) verursacht hätte.
+        //
+        // ╔═══════════════════════════════════════════════════════════════════════════╗
+        // ║ ⚠ DO NOT RE-ADD SELF-FILTER (KG-RSB-2, 2026-05-11)                        ║
+        // ║                                                                           ║
+        // ║ Es gab hier einen `modules.filter { it.id != module.id }`-Aufruf.         ║
+        // ║ Er ist BEWUSST entfernt — Self-Cascade ist Pflicht (siehe §15.2           ║
+        // ║ RecordingModule: Idle→Preparing → OverlayAction.ResetSuppressBit).        ║
+        // ║                                                                           ║
+        // ║ Wenn ein zukünftiger Maintainer ihn als "looks like infinite-loop guard"  ║
+        // ║ wieder einfügt:                                                           ║
+        // ║   → der Regression-Test                                                   ║
+        // ║     `DictateOrchestratorTest.recordingModule_idleToPreparing_emits...`    ║
+        // ║     (§10 R.RSB-FIX-A) schlägt rot fehl,                                   ║
+        // ║   → das HOVER-Overlay reopent sich nach dem ersten User-Close nicht mehr  ║
+        // ║     in derselben Session (Production-Bug-Klasse KG-RSB-2).                ║
+        // ║                                                                           ║
+        // ║ Endlos-Cascade-Schutz: MAX_CASCADE_DEPTH (R.6, Cap 8), siehe oben.        ║
+        // ║ Der frühere Self-Filter war redundante Belt-and-Suspenders-Sicherheit.    ║
+        // ╚═══════════════════════════════════════════════════════════════════════════╝
         val nextGlobal = store.snapshot
         val cascadeActions = modules
             .flatMap { it.onCrossModuleStateChange(prevGlobal, nextGlobal) }
@@ -6670,6 +6683,31 @@ sich mit Cascade + `predResendVisible`-Konsolidierungs-Helper (siehe R.7 Block-1
 **Mode 3 (Atomic Cross-Axis-Update) ist explizit Out-of-Scope für Phase 1** — siehe §14 Open
 Questions: erst bei konkretem Bedarf in Phase 2 nachrüsten (kein Halb-Pattern, keine spekulative
 Architektur).
+
+<!-- FIX: Phase-B S-9 (2026-05-13) – Anti-Beispiel-Block + Self-Read-Konvention Cross-Link.
+     Hintergrund: Phase-A Surprise-Finding #3 fand in Spec 3 §7.3 T1+T2 eine versehentliche
+     Mode-3-Mutation (ViewModeModule mutiert viewMode + layout.smallMode + overlay.userPrefersWidget
+     in einem Reducer-Block); §6.1 hatte die korrekte Mode-2-Form. Doppel-Truth-Quelle.
+     S-9 hat §7.3 auf §6.1-konsistente Form gebracht. Diese Anti-Beispiel-Tabelle macht die
+     Disambiguation explizit, damit ein zukünftiger Maintainer die Modi nicht durcheinander wirft. -->
+**Anti-Beispiel-Tabelle — wann KEINE Cascade (vs. Mode 1/2 vs. Mode-3-Backlog):**
+
+| Pattern | Beispiel | Modus | Rationale |
+|---|---|---|---|
+| Modul mutiert **nur seine eigene Sub-State-Achse** + emittiert Effects auf eigene Hardware | RecordingModule.reduce setzt `recording = Preparing` + Effect `AllocateMediaRecorder` | **Mode 1** | SRP — Achse + Effects gehören zur eigenen Verantwortung |
+| Modul mutiert seine Achse + andere Module sollen darauf reagieren (Folge-Mutation auf ANDERE Achse) | ViewModeModule setzt `viewMode = KEYBOARD`; LayoutModule reagiert via `onCrossModuleStateChange` → `LayoutAction.SetSmallMode(true)` | **Mode 2** | Cross-Module-Cascade — jedes Modul bleibt SRP-konform; Folge-Mutation wandert in das **Owner-Modul der Ziel-Achse** |
+| Modul mutiert seine eigene Achse + EINE ANDERE Achse in einem Reducer-Schritt | `ViewModeModule.reduce` setzt `viewMode + layout.smallMode + overlay.userPrefersWidget` gleichzeitig (atomar) | **Mode 3 (Phase-2-Backlog, NICHT verwenden)** | SRP-Bruch — ViewModeModule schreibt in fremde Achsen; Test/Refactor-Schwierigkeit; Plan §15.5 + §14 Open-Q 4 |
+| Modul liest seine eigene Achse (`prev.x` vs `next.x`) als Trigger für eine Cascade auf eine andere Achse | RecordingModule.onCrossModuleStateChange liest `prev.recording is Idle && next.recording is Preparing` → cascadiert `OverlayAction.ResetSuppressBit` | **Mode 2 (Self-Read)** | Self-Read ist KEIN Cross-Module-Coupling im Sinne der Matrix — wird NICHT in §15.1.x-Diagonale eingetragen (KG-RSB-3 Konvention), nur die Cross-Module-`C(...)`-Konsequenz |
+
+**Code-Review-Pflicht:** wenn ein PR einen Reducer enthält, der GLEICHZEITIG zwei verschiedene
+Sub-State-Achsen mutiert (`state.copy(x = …, y = …)` mit `x` und `y` in verschiedenen Owner-Modulen),
+ist das ein Mode-3-Verstoß. Auflösung: das mutiert nur die EIGENE Achse; die fremde Achse wandert
+in einen `onCrossModuleStateChange`-Hook des Owner-Moduls.
+
+**Cross-Link zur Coupling-Matrix (§15.1.x):** Jede neue Mode-2-Cascade braucht einen `C(Action.X.Y)`-
+Eintrag in der korrekten Zeile der Matrix. Self-Reads (Mode 2 mit eigener Achse als Trigger) folgen
+der KG-RSB-3-Konvention — keine Eintragung in der Diagonale, nur die `C(...)`-Konsequenz in der
+Cross-Module-Zelle.
 
 <!-- FIX: Phase-B S-3 (2026-05-13) – KeyboardInputModule kanonisch spezifiziert (vorher fehlte das Modul). -->
 ### §15.6 KeyboardInputModule (Effect-only — `Unit`-State)

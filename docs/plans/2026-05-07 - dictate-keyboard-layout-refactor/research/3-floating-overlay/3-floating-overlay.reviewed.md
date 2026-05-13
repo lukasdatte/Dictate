@@ -888,10 +888,18 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             sideEffects = emptyList(),
         )
         <!-- FIX: Issue PENDING-3 / Spec-3 Reducer Simplified – OverlayAction.ResetSuppressBit -->
+        <!-- FIX: Phase-B S-9 (2026-05-13) – Subscriber-Hinweis ergänzt (StateFlow distinct-Vertrag). -->
         // Idempotent: TransitionResult auch wenn bereits false. Reducer-null würde
         // DispatchOutcome.Rejected("reducer-null") triggern — semantisch falsch für eine
         // Session-Start-Markierung. `state.copy` mit unverändertem Wert ist no-op-billig
         // (Kotlin data class) und liefert ein sauberes `Applied`.
+        //
+        // **StateFlow-Subscriber-Verhalten (Phase-B S-9):** `MutableStateFlow.update`
+        // (Spec 1 §4.4) vergleicht den neuen Wert via `equals` mit dem alten und unterdrückt
+        // die Emission bei strukturell gleicher data class — der OverlayState-Subscriber
+        // bekommt also KEINE Re-Render-Welle, wenn das Bit bereits `false` war. Idempotenter
+        // Reset ist damit auch für State-Subscribers harmlos (kein Re-Render-Overhead, keine
+        // doppelte Telemetrie).
         Action.OverlayAction.ResetSuppressBit -> TransitionResult(
             nextState = state.copy(suppressAutoOverlayUntilNextSession = false),
             sideEffects = emptyList(),
@@ -1356,6 +1364,15 @@ private fun switchBackend(target: ViewMode) {
 
 **Auslöser:** Klick auf einen `widget_toggle_btn` im IME-View (neuer Slot in Spec 2 oder im Settings-Bar).
 
+<!-- FIX: Phase-B S-9 (2026-05-13) – T1/T2-Snippets auf SRP-konforme Cross-Module-Cascade umgestellt.
+     Hintergrund (Phase-A Surprise-Finding #3): vorher mutierte ViewModeModule.reduce GLEICHZEITIG
+     `viewMode + overlay.onboardingPending` (T1) bzw. `viewMode + layout.smallMode + overlay.userPrefersWidget`
+     (T2) — Cross-Axis-Mutation (Mode 3 / Atomic Cross-Axis-Update), die laut Spec 1 §15.5 explizit
+     Phase-2-Backlog ist. §6.1 dieses Specs zeigt schon die korrekte Mode-2-Form (Cascade via
+     onCrossModuleStateChange in LayoutModule + OverlayModule); §7.3 war eine inkonsistente
+     Doppel-Truth-Quelle (zwei Snippets, zwei verschiedene Reducer-Formen für dieselbe Action).
+     Auflösung: §7.3 T1+T2 auf §6.1-konsistente Cascade-Form umgestellt. ViewModeModule mutiert
+     NUR `viewMode`; Layout/Overlay-Folge-Mutationen sind Mode-2-Cascades. -->
 ```kotlin
 // Im ButtonSlot des Widget-Toggle (Spec 2 ergänzt):
 ButtonSlot(LogicalButtonId.WIDGET_TOGGLE, WrapContent,
@@ -1364,36 +1381,52 @@ ButtonSlot(LogicalButtonId.WIDGET_TOGGLE, WrapContent,
                                   || state.pipeline !is PipelineUiState.Idle },
     actionResolver = { Action.ViewModeAction.ToggleViewModeWidget })
 
-// ViewModeModule.reduce (Spec 1 §15) — Action-Routing über DictateOrchestrator.dispatch:
-// FIX: Issue 3.0.3 + 3.0.4 – „PipelineStateManager.onAction" auf modulare Reducer + hierarchische Sub-State-Pfade umgestellt
+// ViewModeModule.reduce (Spec 1 §15) — mutiert NUR `viewMode` (SRP-konform, Issue 1.1.2 Option A+B):
 when (action) {
     Action.ViewModeAction.ToggleViewModeWidget -> {
-        // 1. Permission-Gate prüfen (§5.4)
-        if (!permissions.hasOverlayPermission()) {
-            state.copy(overlay = state.overlay.copy(onboardingPending = true))
+        // 1. Permission-Gate prüfen (§5.4) — onboardingPending wird über OverlayModule.reduce
+        //    gesetzt, nicht hier; ViewModeModule liest nur den Permission-Status aus
+        //    `state.overlay.hasPermission` (Cross-Module-Read, Coupling-Matrix §15.1.x).
+        if (!state.overlay.hasPermission) {
+            // Permission fehlt → kein viewMode-Wechsel; Onboarding-Trigger lebt im Resolver/Effect-Pfad,
+            // siehe §5.3 (UI ruft `Action.OverlayAction.MarkOverlayOnboardingShown` separat).
+            null  // null = "Action im aktuellen State nicht relevant" (siehe Spec 1 §4.2 reduce-Vertrag)
         } else {
-            // 2. State-Mutation: viewMode + Persistenz-Bit (über Sub-State `overlay`)
-            state.copy(
-                viewMode = ViewMode.WIDGET,
-                overlay = state.overlay.copy(userPrefersWidget = true),  // §11.9 Persistenz
+            // 2. State-Mutation: NUR viewMode. `overlay.userPrefersWidget`-Cascade lebt in
+            //    OverlayModule.onCrossModuleStateChange (siehe Cascade-Block unten).
+            TransitionResult(
+                nextState = state.copy(viewMode = ViewMode.WIDGET),
+                sideEffects = emptyList(),
             )
         }
     }
     // ...
 }
 
+// OverlayModule.onCrossModuleStateChange — beobachtet KEYBOARD → WIDGET und setzt userPrefersWidget:
+override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> =
+    if (prev.viewMode == ViewMode.KEYBOARD && next.viewMode == ViewMode.WIDGET)
+        listOf(Action.OverlayAction.SetUserPrefersWidget(true))   // §11.9 Persistenz
+    else emptyList()
+
 // KeyboardLayoutManager.onStateChanged() reagiert reaktiv auf state.viewMode:
 //   → switchBackend(WIDGET)  → imeViewBackend.detach() + overlayBackend.attach()
 //   → render(state, OVERLAY_5BUTTON)
 ```
 
-**Reihenfolge:** Action → State-Mutation → StateFlow-Emit → KeyboardLayoutManager.onStateChanged → switchBackend → render. Es gibt **keinen** direkten Backend-Call vom Click-Handler — alles über die State-Pipe.
+**Reihenfolge:** Action → ViewModeModule.reduce (mutiert nur viewMode) → State-Emit Pass 1 →
+Cross-Module-Observers (OverlayModule cascadiert `SetUserPrefersWidget(true)`) → recursive dispatch
+(depth+1) → OverlayModule.reduce mutiert `overlay.userPrefersWidget` → State-Emit Pass 2 →
+KeyboardLayoutManager.onStateChanged → switchBackend → render. Es gibt **keinen** direkten
+Backend-Call vom Click-Handler — alles über die State-Pipe.
 
 #### T2: WIDGET → KEYBOARD (User klickt Schließen-Button im Widget — mit SmallMode)
 
+<!-- FIX: Phase-B S-9 (2026-05-13) – siehe T1-FIX-Block oben (gleicher Refactor: Cross-Axis-Mutation auf
+     Mode-2-Cascade umgestellt; LayoutModule + OverlayModule reagieren via onCrossModuleStateChange).
+     Cross-Reference: §6.1 zeigt die identische Cascade-Form bereits; §7.3 ist jetzt konsistent. -->
 ```kotlin
-<!-- FIX: Issue 1.1.4 + 2.1.7 / R.3 – nullable Resolver statt Action.NoOp -->
-// Im OVERLAY_CLOSE-Slot:
+// Im OVERLAY_CLOSE-Slot (Issue 1.1.4 + 2.1.7 / R.3 – nullable Resolver statt Action.NoOp):
 actionResolver = { state ->
     when (state.viewMode) {
         ViewMode.WIDGET -> Action.ViewModeAction.ToggleViewModeWidget
@@ -1402,24 +1435,36 @@ actionResolver = { state ->
     }
 }
 
-// ViewModeModule.reduce (Spec 1 §15) — Action-Routing über DictateOrchestrator.dispatch:
-// FIX: Issue 3.0.3 + 3.0.4 – „PipelineStateManager.onAction" auf modulare Reducer umgestellt; flache state.smallMode/userPrefersWidget auf hierarchisch
+// ViewModeModule.reduce — mutiert NUR `viewMode` (SRP-konform, Issue 1.1.2 Option A+B):
 when (action) {
     Action.ViewModeAction.ToggleViewModeWidget -> {
         when (state.viewMode) {
-            ViewMode.WIDGET -> state.copy(
-                viewMode = ViewMode.KEYBOARD,
-                layout = state.layout.copy(smallMode = true),  // "Tastatur klein" wie vom User gewünscht
-                overlay = state.overlay.copy(userPrefersWidget = false),  // §11.9 Persistenz reset
+            ViewMode.WIDGET -> TransitionResult(
+                nextState = state.copy(viewMode = ViewMode.KEYBOARD),
+                sideEffects = emptyList(),
             )
-            ViewMode.KEYBOARD -> { /* KEYBOARD → WIDGET — siehe T1 */ state }
-            else -> state
+            ViewMode.KEYBOARD -> { /* KEYBOARD → WIDGET — siehe T1 */ null }
+            else -> null
         }
     }
 }
+
+// LayoutModule.onCrossModuleStateChange — beobachtet WIDGET → KEYBOARD und aktiviert SmallMode:
+override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> =
+    if (prev.viewMode == ViewMode.WIDGET && next.viewMode == ViewMode.KEYBOARD)
+        listOf(Action.LayoutAction.SetSmallMode(true))   // "Tastatur klein" wie vom User gewünscht
+    else emptyList()
+
+// OverlayModule.onCrossModuleStateChange — reset userPrefersWidget bei WIDGET → KEYBOARD:
+override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> =
+    if (prev.viewMode == ViewMode.WIDGET && next.viewMode == ViewMode.KEYBOARD)
+        listOf(Action.OverlayAction.SetUserPrefersWidget(false))   // §11.9 Persistenz reset
+    else emptyList()
 ```
 
-**Wichtig:** `userPrefersWidget = false` reset, damit beim nächsten View-Hidden-Event NICHT wieder WIDGET, sondern HOVER greift (über §7.1-Logik).
+**Wichtig:** `userPrefersWidget = false` reset, damit beim nächsten View-Hidden-Event NICHT wieder WIDGET, sondern HOVER greift (über §7.1-Logik). Beide Cascades (LayoutModule + OverlayModule) laufen rekursiv via `dispatchInternal(depth+1)`; Cascade-Depth-Counter (Spec 1 §4.3 R.6, Cap 8) schützt vor Endlos-Loops.
+
+**Spec-3-internal SSoT:** §6.1 und §7.3 sind jetzt konsistent — beide zeigen dieselbe Cascade-Form (ViewModeModule mutiert nur `viewMode`; Layout/Overlay-Folge-Mutationen sind Mode-2-Cascades). Vor Phase-B S-9 widersprachen sich §6.1 und §7.3 — §7.3 zeigte eine Cross-Axis-Mutation, die laut Spec 1 §15.5 explizit Phase-2-Backlog ist.
 
 #### T3: KEYBOARD → HOVER (View hidden + Pipeline aktiv, war KEYBOARD)
 

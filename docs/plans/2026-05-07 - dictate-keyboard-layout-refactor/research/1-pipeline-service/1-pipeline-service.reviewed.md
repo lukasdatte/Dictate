@@ -416,6 +416,27 @@ sealed interface DictateModule<S, A : Action, E : SideEffect> {
      */
     fun reduce(state: S, action: A, ctx: ReducerContext): TransitionResult<S, E>?
 
+    <!-- FIX: Phase-B S-3 (2026-05-13) – EffectFailure-Reducer als eigener Hook (Spec 2 §3.3). -->
+    /**
+     * Failure-Reducer für `Action.EffectFailure`. Wird vom Orchestrator gerufen, wenn
+     * ein `runEffect(...)` dieses Moduls geworfen hat (Spec 1 §4.3 Z. 617). Default
+     * gibt `null` zurück — `DispatchOutcome.Rejected("reducer-null")` ist semantisch
+     * korrekt ("kein Failure-Pfad definiert"). Module mit Recovery-Bedarf
+     * überschreiben den Hook und führen einen State-Rollback durch (z.B.
+     * `Preparing → Idle` mit gesetztem `lastErrorMessage`).
+     *
+     * **Warum nicht als zusätzlicher Branch in `reduce(...)`?** Weil `reduce`'s
+     * Action-Parameter den Modul-spezifischen Typ `A` (z.B. `Action.RecordingAction`)
+     * hat — `Action.EffectFailure` ist ein direkter `Action`-Subtyp, KEINE
+     * `RecordingAction`. Ein gemeinsamer Hook wäre type-unsicher. `reduceFailure`
+     * trennt die beiden Pfade sauber (ISP-konform).
+     */
+    fun reduceFailure(
+        state: S,
+        failure: Action.EffectFailure,
+        ctx: ReducerContext,
+    ): TransitionResult<S, E>? = null
+
     // ─── EffectHandler (Hardware/IO-Ausführung) ───
     /**
      * Führt einen SideEffect aus. Hängt typischerweise an Subsystem-Klassen,
@@ -481,6 +502,8 @@ sealed interface ModuleId {
     data object FeatureToggle : ModuleId
     data object Theming : ModuleId
     data object PendingSessions : ModuleId
+    <!-- FIX: Phase-B S-3 (2026-05-13) – KeyboardInputModule braucht eigene ID (§15.6). -->
+    data object KeyboardInput : ModuleId
     data object Interruption : ModuleId
 }
 
@@ -580,6 +603,16 @@ class DictateOrchestrator(
     fun dispatch(action: Action): DispatchOutcome = dispatchInternal(action, depth = 0)
 
     <!-- FIX: Issue 1.1.7 / R.6 – Cascade Loop-Guard via depth-counter (Cap 8); DEBUG-error / Release-Log -->
+    <!-- FIX: Phase-B S-3 (2026-05-13) – moduleById-Lookup für EffectFailure-Origin-Routing. -->
+    /**
+     * Sekundärer Lookup: ModuleId → Modul. Wird ausschließlich für `Action.EffectFailure`
+     * benutzt, weil dieser Failure-Channel an die [Action.EffectFailure.originModuleId]
+     * gebunden ist (nicht an die Action-Klasse — alle Module produzieren denselben
+     * Action-Typ als Failure, aber jedes Modul reagiert auf seinen eigenen).
+     */
+    private val moduleById: Map<ModuleId, DictateModule<*, *, *>> =
+        modules.associateBy { it.id }
+
     private fun dispatchInternal(action: Action, depth: Int): DispatchOutcome {
         if (depth >= MAX_CASCADE_DEPTH) {
             val msg = "Cascade loop detected at depth=$depth, action=$action"
@@ -588,9 +621,19 @@ class DictateOrchestrator(
             return DispatchOutcome.Rejected(action, "cascade-loop")
         }
 
-        // 1. Modul für diese Action finden (type-safe via KClass-Lookup; sealed-leaves)
-        val module = moduleByLeafClass[action::class]
-            ?: return DispatchOutcome.Unrouted(action)
+        <!-- FIX: Phase-B S-3 (2026-05-13) – EffectFailure-Origin-Routing (Spec 2 §3.3). -->
+        // 1a. EffectFailure-Special-Case: an das ORIGIN-Modul routen, nicht via KClass-Lookup.
+        //     Module ohne EffectFailure-Reducer-Arm returnen null → Rejected("reducer-null"),
+        //     semantisch korrekt ("kein Failure-Pfad definiert"). KEIN Unrouted, weil das
+        //     Modul existiert — nur die Failure-Behandlung fehlt explizit.
+        val module: DictateModule<*, *, *> = if (action is Action.EffectFailure) {
+            moduleById[action.originModuleId]
+                ?: return DispatchOutcome.Unrouted(action)
+        } else {
+            // 1b. Reguläres KClass-Lookup für alle anderen Actions (type-safe via sealed-leaves).
+            moduleByLeafClass[action::class]
+                ?: return DispatchOutcome.Unrouted(action)
+        }
 
         @Suppress("UNCHECKED_CAST")
         val typedModule = module as DictateModule<Any, Action, SideEffect>
@@ -599,9 +642,15 @@ class DictateOrchestrator(
         val subState = typedModule.read(prevGlobal)
         val ctx = buildContext(prevGlobal)
 
-        // 2. Reducer-Aufruf (F1+F2 pure function); null = "Action im aktuellen State nicht relevant"
-        val result = typedModule.reduce(subState, action, ctx)
-            ?: return DispatchOutcome.Rejected(action, "reducer-null")
+        <!-- FIX: Phase-B S-3 (2026-05-13) – EffectFailure-Pfad ruft reduceFailure (DictateModule §4.2). -->
+        // 2. Reducer-Aufruf (F1+F2 pure function); null = "Action im aktuellen State nicht relevant".
+        //    EffectFailure-Sonderpfad: ruft reduceFailure(...) statt reduce(...) — Module-API
+        //    trennt Normal- vs. Failure-Reducer (siehe §4.2 reduceFailure-KDoc).
+        val result = if (action is Action.EffectFailure) {
+            typedModule.reduceFailure(subState, action, ctx)
+        } else {
+            typedModule.reduce(subState, action, ctx)
+        } ?: return DispatchOutcome.Rejected(action, "reducer-null")
 
         // 3. State-Update atomar
         store.update { typedModule.write(it, result.nextState) }
@@ -612,9 +661,19 @@ class DictateOrchestrator(
             try {
                 typedModule.runEffect(effect, services)
             } catch (t: Throwable) {
-                android.util.Log.e(TAG, "Effect failure: $effect", t)
+                android.util.Log.e(TAG, "Effect failure in ${typedModule.id}: $effect", t)
+                <!-- FIX: Phase-B S-3 (2026-05-13) – EffectFailure trägt originModuleId für Origin-Routing (Spec 2 §3.3). -->
                 // Re-dispatch typed failure — keep cascade depth, do not crash IME.
-                dispatchInternal(Action.EffectFailure(effect = effect.toString(), reason = t.message ?: t.javaClass.simpleName), depth + 1)
+                // originModuleId zeigt dem Orchestrator zurück auf das emittierende Modul,
+                // damit dessen Reducer den passenden Sub-State-Rollback vornehmen kann.
+                dispatchInternal(
+                    Action.EffectFailure(
+                        originModuleId = typedModule.id,
+                        effect = effect.toString(),
+                        reason = t.message ?: t.javaClass.simpleName,
+                    ),
+                    depth + 1,
+                )
             }
         }
 
@@ -708,7 +767,77 @@ class DictateUiStateStore(initial: DictateUiState = DictateUiState.initial()) {
 **SRP:** reine Daten-Verwaltung. Keine Pref-Reads, keine Action-Methoden, keine Side-Effects.
 
 <!-- FIX: Issue 1.0.4 – Java-Brücken-Notiz analog ActiveJobRegistryObserver -->
-**Java-Brücke:** Für die Java-Site `DictateInputMethodService.java` ist analog zu `core/ActiveJobRegistryObserver.kt` eine Brücken-Klasse `DictateUiStateObserver` vorgesehen, die den `state.collect`-Lifecycle (`repeatOnLifecycle` + `fun interface Listener`) für Java-Konsumenten abwickelt. Konkrete Implementierung: Block 2 (IME-Service-Integration).
+<!-- FIX: Phase-B S-3 (2026-05-13) – Java-Brücke vollständig spezifiziert (vorher nur "vorgesehen für Block 2"). -->
+**Java-Brücke `DictateUiStateObserver`** — analog zu `core/ActiveJobRegistryObserver.kt`,
+wird zur Block-2-Acceptance-Vorbedingung. Vorlage 1:1 portiert:
+
+```kotlin
+// File: app/src/main/java/net/devemperor/dictate/state/DictateUiStateObserver.kt
+package net.devemperor.dictate.state
+
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+
+/**
+ * Java-friendly bridge to [DictateUiStateStore]'s reactive [StateFlow].
+ *
+ * Pattern-identisch zu [net.devemperor.dictate.core.ActiveJobRegistryObserver]
+ * (Vorlage). Bindet den `state.collect`-Lifecycle an einen [LifecycleOwner] via
+ * [repeatOnLifecycle] — der Callback feuert nur, solange der Owner mindestens
+ * STARTED ist. Java-Konsumenten erhalten den aktuellen [DictateUiState]-Snapshot
+ * synchron auf dem Main-Thread bei jeder State-Emission.
+ *
+ * **Threading-Vertrag:** Callback läuft auf dem Main-Thread (FGS-`serviceScope` ist
+ * `Dispatchers.Main.immediate`). Java-Sites dürfen direkt View-Mutationen machen.
+ *
+ * **Lifecycle-Vertrag:** Der Job wird beim STOP des Owners gecancelled (über
+ * `repeatOnLifecycle`); beim erneuten START wird ein neuer Job gestartet und
+ * der aktuelle State-Wert wird sofort einmal an den Listener gegeben (StateFlow-
+ * Replay-Semantik).
+ *
+ * Beispiel (Java):
+ * ```
+ * DictateUiStateObserver.observe(this, pipeline.getState(), state -> {
+ *     // state ist der aktuelle DictateUiState-Snapshot
+ *     updateMyJavaUi(state);
+ * });
+ * ```
+ *
+ * **Konsumenten (Block 2 + spätere):**
+ * - `DictateInputMethodService.java` (Block 2): Subscribes für Pipeline/Recording-
+ *   State, ersetzt heutige Callbacks (`recordingStateController.setCallback(...)` etc.).
+ * - `HistoryAdapter.java` (Block 3): Subscribes für `pendingSessions`-Liste, ersetzt
+ *   heutiges `ActiveJobRegistryObserver` (oder co-existiert temporär).
+ * - `HistoryDetailActivity.java` (Block 3): Subscribes für `pipeline`-Achse, falls
+ *   die Detail-View State-Updates braucht (heute polled sie in `onResume`).
+ */
+object DictateUiStateObserver {
+
+    @JvmStatic
+    fun observe(
+        owner: LifecycleOwner,
+        state: StateFlow<DictateUiState>,
+        listener: Listener,
+    ): Job = owner.lifecycleScope.launch {
+        owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            state.collect { snapshot -> listener.onStateChanged(snapshot) }
+        }
+    }
+
+    /** Functional-interface-compatible listener so Java lambdas work. */
+    fun interface Listener {
+        fun onStateChanged(snapshot: DictateUiState)
+    }
+}
+```
+
+**Block-2-Acceptance** (in §10 ergänzt): Die Brücke ist angelegt; mindestens ein Java-
+Konsument (`DictateInputMethodService.java`) verwendet sie statt direkter Callbacks.
 
 ### §4.5 PipelinePrefMirror (Pref-Sync, F-10 angepasst auf Sub-State-Struktur)
 
@@ -830,6 +959,14 @@ class ModuleServices(
     val sessionRepo: PipelineSessionRepo,
     val notificationCoordinator: PipelineNotificationCoordinator,
     val inputConnectionProvider: () -> android.view.inputmethod.InputConnection?,
+    <!-- FIX: Phase-B S-3 (2026-05-13) – clipboard für KeyboardInputModule (§15.6). -->
+    /**
+     * System-Clipboard für `Action.KeyboardInputAction.CopyToClipboard`. Im Service-
+     * onCreate via `getSystemService(CLIPBOARD_SERVICE) as ClipboardManager` gesetzt.
+     * Nullable, weil Android das `ClipboardManager` theoretisch verweigern kann (z.B.
+     * Headless-Test-Umgebungen) — Effect-Handler behandelt null als no-op.
+     */
+    val clipboard: android.content.ClipboardManager?,
     val sharedPrefs: android.content.SharedPreferences,
     val toastSink: ToastSink,
     /**
@@ -890,6 +1027,8 @@ object DictateModuleRegistry {
         FeatureToggleModule,
         ThemingModule,
         PendingSessionsModule,
+        <!-- FIX: Phase-B S-3 (2026-05-13) – KeyboardInputModule in Registry (§15.6). -->
+        KeyboardInputModule,
         // InterruptionModule (Phase 2 — auskommentiert bis aktiv)
     )
 
@@ -2699,7 +2838,26 @@ switch (status) {
 >
 > Beide Schichten sind unabhängig: der try/catch fängt String→Enum-Boundary-Fehler, der default: fängt Enum→switch-Drift. Den try/catch zu entfernen würde die Downgrade-Verträglichkeit brechen (User-DB mit RECORDING-Zeile crasht beim ersten History-Scroll auf älterer App). Den default: wegzulassen würde silent-empty-Badges bei zukünftigen Enum-Erweiterungen erzeugen.
 
-**Konkreter Patch — `ResendStatusDispatcher.kt:57-71`:**
+<!-- FIX: Phase-B S-3 (2026-05-13) – Naming-Kollisions-Warnung: zwei `ResendAction` koexistieren. -->
+> **Naming-Kollision (bewusst akzeptiert, dokumentiert):** Es gibt zwei unabhängige
+> Sealed-Klassen mit dem Namen `ResendAction` im Projekt:
+> 1. `net.devemperor.dictate.core.ResendAction` (heutiger Code, `ResendStatusDispatcher.kt`):
+>    interner Entscheidungstyp des Status-Dispatchers — Varianten `Insert(output, sessionId)`,
+>    `Resume(sessionId)`, `NoOp`. **Bleibt erhalten** als Implementation-Detail des
+>    Dispatchers; keine Refactor-Touchpoints.
+> 2. `net.devemperor.dictate.state.Action.ResendAction` (neuer Code, Spec 2 §3.3):
+>    Orchestrator-Action — Varianten `ResendLastAudio`, `ResendLastAudioLong`,
+>    `ResendCooldownExpired`, `MarkLastAudio(exists)`. **Kein** `NoOp` (R.3 nullable
+>    Resolver-Idiom).
+>
+> Die beiden Typen leben in **unterschiedlichen Packages** (`core` vs. `state`); der
+> Kotlin-Compiler weist Cross-Use als Type-Mismatch ab. Bei der Block-3-Implementation
+> ist der `ResendStatusDispatcher`-Patch unten **explizit** auf die `core.ResendAction`-
+> Variante bezogen — kein Action-Forwarding nach `Action.ResendAction.*`. Eine künftige
+> Refactor-Iteration könnte den Dispatcher in einen `ResendModule.runEffect`-Pfad
+> integrieren (dann fiele `core.ResendAction` weg) — aktuell Out-of-Scope.
+
+**Konkreter Patch — `ResendStatusDispatcher.kt:57-71`** (referenziert `core.ResendAction`, nicht `Action.ResendAction`):
 
 ```kotlin
 return when (status) {
@@ -3495,7 +3653,7 @@ gerendert. Spec 1 §10 Block-2-Acceptance erweitert um diesen Test.
 | `startRecording(...)` (Z. 128) | `Action.RecordingAction.StartRecording(target, audioFile)` → `RecordingModule.reduce` | `recording: Idle → Preparing → Active` |
 | `stopRecording()` (Z. 145) | `Action.RecordingAction.StopRecording` → `RecordingModule.reduce` | `recording: Active → Idle` + Pipeline-Auto-Start (`PipelineAction.Submit` via Cross-Module-Cascade) |
 | `togglePause()` (Z. 164) | `Action.RecordingAction.PauseRecording` / `ResumeRecording` | `recording: Active ↔ Paused` |
-| `setAudioFocusRuntime(b)` (Z. 201) | `Action.AudioAction.ToggleAudioFocus` → `AudioModule.reduce` | `audio.audioFocusEnabledPref` |
+| `setAudioFocusRuntime(b)` (Z. 201) | `Action.AudioAction.ToggleAudioFocusPref` → `AudioModule.reduce` <!-- FIX: Phase-B S-3 (2026-05-13) – Naming-Drift behoben: Spec 2 §3.3 SoT-Name ist `ToggleAudioFocusPref` mit `Pref`-Suffix (war hier `ToggleAudioFocus`). --> | `audio.audioFocusEnabledPref` |
 | `cancelRecording()` (Z. 217) | `Action.RecordingAction.CancelRecording` → `RecordingModule.reduce` | `recording: → Idle` + `Effect.DeleteAudioFile` |
 
 **Datentyp `RecordingState`** (`RecordingState.kt:10-18`) bleibt unverändert erhalten — er ist sealed-class, exhaustiv, gut. Wird zum Feld von `DictateUiState` (siehe §3).
@@ -3642,6 +3800,10 @@ Block 2 (DictatePipelineService) gilt als done, wenn:
 - [ ] Force-Stop der App: beim nächsten Tastatur-Open wird Restart-Button mit pending-Session gezeigt.
 - [ ] Manueller Restart-Button-Klick: PipelineService startet neu, Pipeline läuft mit korrektem State.
 - [ ] **MediaRecorder-release-Pfad (FIX Issue 3.0.11):** Service.onDestroy bei aktivem Recording ruft `orchestrator.dispatch(Action.PipelineAction.CancelPipeline)` → `recordingManager.release()` wird aufgerufen UND der MediaRecorder ist im released-State. Verifiziert via `MediaRecorder.release()`-Mock-Spy in Unit-Test (oder Robolectric); deckt §13.5 G6 Pfad A ab. (Spec 1 hat aktuell keine eigene Test-Strategie-Sektion; Test-Stub wird in Block-2-Implementation als `RecordingManagerReleaseTest.kt` angelegt.)
+<!-- FIX: Phase-B S-3 (2026-05-13) – Java-Brücke + KeyboardInputModule-Acceptance ergänzt. -->
+- [ ] **Phase-B S-3 Java-Brücke `DictateUiStateObserver`:** Datei `state/DictateUiStateObserver.kt` ist angelegt (analog zu `core/ActiveJobRegistryObserver.kt`); mindestens ein Java-Konsument (`DictateInputMethodService.java`) konsumiert den `DictateUiState` darüber statt über direkte Callbacks. Verifiziert via Robolectric-Test `DictateUiStateObserverTest.kt` (Lifecycle-Bind funktioniert; STOP cancellt, START repliziert State).
+- [ ] **Phase-B S-3 KeyboardInputModule (§15.6):** Backspace-, Enter- und Space-Button-Klicks lösen die korrekten InputConnection-Operationen aus. Manuell verifiziert (Tastatur öffnen, Buttons drücken, Output prüfen) UND via Reducer-Unit-Test `KeyboardInputModuleTest.kt` (jede Action erzeugt den passenden Effect). Verifiziert zusätzlich, dass `orchestrator.dispatch(Action.KeyboardInputAction.Backspace)` **nicht** `DispatchOutcome.Unrouted` zurückgibt — d.h. das Modul ist in `DictateModuleRegistry.all` (§4.8).
+- [ ] **Phase-B S-3 EffectFailure-Origin-Routing (§4.3 Z. 617):** Ein Effect, der wirft (z.B. `RecordingModule.Effect.AllocateMediaRecorder` mit fehlender Permission), löst eine `Action.EffectFailure(originModuleId = ModuleId.Recording, …)` aus; das emittierende Modul (RecordingModule) hat einen expliziten `EffectFailure`-Reducer-Arm, der einen State-Rollback macht (z.B. `Preparing → Idle`). Verifiziert via `DictateOrchestratorTest.kt::effectFailure_routedBackToOriginModule()` mit einem Fake-Modul, das im `runEffect` wirft.
 
 <!-- FIX: Phase-B S-1 (2026-05-13) – Block-1-Acceptance auf Block-1a/1b-Split (R.7) umgestellt. Vorher referenzierte den nicht-mehr-existierenden monolithischen PipelineStateManager. -->
 Block 1a (Quick-Wins im heutigen Code) gilt als done, wenn:
@@ -5068,7 +5230,7 @@ unverletzt: ALLE Mutations gehen durch den Orchestrator + Modul-Reducer (F-8).
 | **`recordButton.text`-Set** | `RecordingUiController.kt:115, :144, :146` (Idle/Active) + `KeyboardUiController.kt:464-509` (Preparing/Running/Staging) | 1 Resolver `LayoutCatalog.RECORD.textResolver(state)` |
 | **`recordButton.isEnabled`-Set** | `RecordingUiController.kt:117, :141, :145, :531`, `KeyboardUiController.kt:467, :472, :480, :495` | 1 Resolver `LayoutCatalog.RECORD.enabledResolver(state)` |
 <!-- FIX: Phase-B S-1 (2026-05-13) – DRY-Tabelle auf F-11 umgestellt: AudioModule/AudioPrefMirror statt PipelineStateManager. -->
-| **AudioFocus-on-Toggle-Reaktion** | `DictateInputMethodService.java:664-672` (SP-Listener) + `:2664-2687` (User-Toggle) | 1 Pfad: `Action.AudioAction.ToggleAudioFocus` → `AudioModule.reduce` (User-Click) **und** `PipelinePrefMirror.sync(Pref.AudioFocus.key)` → `store.update` (SP-Listener) — beide enden in derselben State-Achse `state.audio.audioFocusEnabledPref` |
+| **AudioFocus-on-Toggle-Reaktion** | `DictateInputMethodService.java:664-672` (SP-Listener) + `:2664-2687` (User-Toggle) | 1 Pfad: `Action.AudioAction.ToggleAudioFocusPref` → `AudioModule.reduce` (User-Click) **und** `PipelinePrefMirror.sync(Pref.AudioFocus.key)` → `store.update` (SP-Listener) — beide enden in derselben State-Achse `state.audio.audioFocusEnabledPref` <!-- FIX: Phase-B S-3 (2026-05-13) – Naming-Drift behoben (Spec 2 §3.3 SoT). --> |
 | **`Pref.SmallMode`-Apply** | `DictateInputMethodService.java:1025, :1402, :2632-2634` | 1 Branch im `PipelinePrefMirror.sync(Pref.SmallMode.key)` (§4.5) |
 | **`Pref.AudioFocus`-Apply** | `:580, :664, :2685` (3 Sites mit identischem `mainButtonsController.refreshAudioFocusIcon` Boilerplate) | 1 Subscriber: `state.collect { state -> mainButtonsController.refreshAudioFocusIcon(state.audio.audioFocusEnabledPref) }` |
 | **`getLastAudioFileExists()` File-Check** | `DictateInputMethodService.java:611-613, :1343-1344, :1693-1694` | 1 Effect `ResendModule.Effect.RefreshLastAudioExists`, gerufen vom RecordingModule beim Übergang Active → Idle (Cross-Module-Cascade, siehe §15 + Coupling-Matrix §15.1.x). Result als `state.resend.lastAudioExists`. |
@@ -5189,7 +5351,12 @@ Die 13 Module (12 aktive + 1 Phase-2) sind in `app/src/main/java/net/devemperor/
 | 10 | FeatureToggleModule | features | trivial | nein |
 | 11 | ThemingModule | theming | trivial | nein |
 | 12 | PendingSessionsModule | pendingSessions | DB-Subscriber (kein Reducer) | nein |
-| 13 | InterruptionModule (Phase 2) | interruption | mittel | ja (Anruf → Recording.Cancel) |
+<!-- FIX: Phase-B S-3 (2026-05-13) – KeyboardInputModule als #13 verankert.
+     Vorher fehlte das Modul; KeyboardInputAction.Backspace/EnterKey/SpaceKey/CopyToClipboard
+     hätte der Orchestrator als `Unrouted` abgewiesen — Button-Klicks wären tot gewesen.
+     §15.6 enthält die kanonische Implementierung. -->
+| 13 | KeyboardInputModule | n/a (Unit-State, reiner Effect-Producer) | trivial | nein |
+| 14 | InterruptionModule (Phase 2) | interruption | mittel | ja (Anruf → Recording.Cancel) |
 
 <!-- FIX: Issue 3.1.12 / R.20 – Cross-Module-Coupling-Matrix als Doku-Erweiterung -->
 #### §15.1.x Cross-Module-Coupling-Matrix
@@ -5737,7 +5904,100 @@ sich mit Cascade + `predResendVisible`-Konsolidierungs-Helper (siehe R.7 Block-1
 Questions: erst bei konkretem Bedarf in Phase 2 nachrüsten (kein Halb-Pattern, keine spekulative
 Architektur).
 
-### §15.6 SOLID-Verifikation des Modul-Patterns
+<!-- FIX: Phase-B S-3 (2026-05-13) – KeyboardInputModule kanonisch spezifiziert (vorher fehlte das Modul). -->
+### §15.6 KeyboardInputModule (Effect-only — `Unit`-State)
+
+```kotlin
+// File: app/src/main/java/net/devemperor/dictate/state/modules/KeyboardInputModule.kt
+package net.devemperor.dictate.state.modules
+
+import net.devemperor.dictate.state.*
+import kotlin.reflect.KClass
+
+/**
+ * KeyboardInputModule — leitet IME-Direkteingaben (Backspace, Enter, Space, Clipboard-
+ * Copy) als SideEffects an die `InputConnection` weiter. Eigentümert KEINEN Sub-State
+ * (Unit), weil die Operationen außerhalb des `DictateUiState` wirken (System-Clipboard
+ * + System-InputConnection-Buffer).
+ *
+ * **Warum trotzdem ein Modul?** Konsistenz mit dem F-8-Single-Dispatch-Vertrag: jede
+ * Action MUSS über `DictateOrchestrator.dispatch(...)` laufen, sonst gibt es zwei
+ * Dispatch-Pfade (LocalBinder.dispatch vs. direkter IME-Service-Call) und Resolver/Tests
+ * können nicht mehr verlässlich annehmen, dass `dispatch` die einzige Mutation-Quelle ist.
+ * Mit Unit-State + Effect-Pipeline läuft die Action regulär durch das Sealed-Leaves-
+ * Indexing und der IME-Service braucht keine Action-Hooks außerhalb des Modul-Patterns.
+ *
+ * **Reducer:** trivial — jede Action wird in genau einen passenden SideEffect übersetzt.
+ * `state` bleibt `Unit`; `TransitionResult` propagiert nur die `sideEffects`-Liste.
+ */
+object KeyboardInputModule : DictateModule<Unit, Action.KeyboardInputAction, KeyboardInputModule.Effect> {
+    override val id = ModuleId.KeyboardInput
+    override val actionClass: KClass<Action.KeyboardInputAction> = Action.KeyboardInputAction::class
+
+    override fun read(global: DictateUiState) = Unit
+    override fun write(global: DictateUiState, sub: Unit) = global
+    override fun initialState() = Unit
+
+    sealed interface Effect : SideEffect {
+        object SendBackspace : Effect
+        object SendEnter : Effect
+        object SendSpace : Effect
+        data class CopyToClipboard(val text: String) : Effect
+    }
+
+    override fun reduce(state: Unit, action: Action.KeyboardInputAction, ctx: ReducerContext) = when (action) {
+        Action.KeyboardInputAction.Backspace ->
+            TransitionResult(Unit, listOf(Effect.SendBackspace))
+        Action.KeyboardInputAction.EnterKey ->
+            TransitionResult(Unit, listOf(Effect.SendEnter))
+        Action.KeyboardInputAction.SpaceKey ->
+            TransitionResult(Unit, listOf(Effect.SendSpace))
+        is Action.KeyboardInputAction.CopyToClipboard ->
+            TransitionResult(Unit, listOf(Effect.CopyToClipboard(action.text)))
+    }
+
+    override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {
+        Effect.SendBackspace -> {
+            val ic = services.inputConnectionProvider() ?: return@runEffect
+            ic.deleteSurroundingText(1, 0)
+            Unit
+        }
+        Effect.SendEnter -> {
+            val ic = services.inputConnectionProvider() ?: return@runEffect
+            ic.commitText("\n", 1)
+            Unit
+        }
+        Effect.SendSpace -> {
+            val ic = services.inputConnectionProvider() ?: return@runEffect
+            ic.commitText(" ", 1)
+            Unit
+        }
+        is Effect.CopyToClipboard -> {
+            services.clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("dictate", effect.text))
+            Unit
+        }
+    }
+}
+```
+
+**`services.clipboard`-Erweiterung:** `ModuleServices` (§4.7) bekommt ein optionales
+`val clipboard: android.content.ClipboardManager?` — gesetzt im Service-onCreate aus
+`getSystemService(CLIPBOARD_SERVICE)`. Der Backspace/Enter/Space-Pfad braucht
+`services.inputConnectionProvider`, das bereits existiert.
+
+**Failure-Modus:** Wenn die `InputConnection` zur Effect-Ausführung null ist (Editor
+hat fokus verloren), wird der Effect zur No-Op — bewusst kein `EffectFailure`, weil
+"keine Input-Connection" der Standard-Zustand ist (z.B. wenn der User während Aufnahme
+zur Home-Screen wechselt). Dieses Verhalten ist konsistent mit dem heutigen
+`DictateInputMethodService`-Code, der ebenfalls `getCurrentInputConnection() == null`
+als no-op behandelt.
+
+**Kein Cross-Module-Observer:** KeyboardInput hat keine State-Achse, also gibt es nichts
+zu beobachten. Andere Module beobachten KeyboardInput auch nicht (es gibt keinen
+sinnvollen Trigger "Backspace wurde gedrückt"). Die Coupling-Matrix-Zeile/Spalte
+KeyboardInput bleibt leer.
+
+### §15.7 SOLID-Verifikation des Modul-Patterns
 
 | Prinzip | Erfüllung |
 |---|---|

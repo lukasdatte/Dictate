@@ -133,8 +133,34 @@ sealed class Action {
     // (Action.NoOp entfernt — actionResolver hat Typ (DictateUiState) -> Action?)
 
     <!-- FIX: Issue 2.1.3 (User-Decision Option D) – EffectFailure als typisierter Failure-Channel -->
-    /** Geworfen vom Orchestrator bei Effect-Exception; Module reagieren via onCrossModuleStateChange. */
-    data class EffectFailure(val effect: String, val reason: String) : Action()
+    <!-- FIX: Phase-B S-3 (2026-05-13) – EffectFailure-Routing präzisiert (siehe Spec 1 §4.3 Effect-Failure-Pfad).
+         Vorher war EffectFailure eine Top-Level-Action ohne moduleByLeafClass-Routing — der dispatchInternal-
+         Loop hätte sie als DispatchOutcome.Unrouted abgewiesen, Module hätten den State-Snapshot davor
+         nie gesehen (kein prev/next-Cascade ohne erfolgreichen Reducer-Lauf). Failure-Channel war effektiv tot.
+         Konvention jetzt: Routing über die ORIGIN-Modul-ID (Modul, dessen Effect failed hat). Damit erbt
+         EffectFailure das Routing des emittierenden Moduls; das Modul reagiert in seinem eigenen Reducer-
+         Arm `is Action.EffectFailure -> …` und kann den State-Rollback / Failure-Marker setzen. Andere
+         Module beobachten den State-Change anschließend regulär via onCrossModuleStateChange. -->
+    /**
+     * Failure-Channel — vom Orchestrator emittiert, wenn ein Modul-`runEffect`-Aufruf wirft.
+     *
+     * **Routing-Konvention (Spec 1 §4.3 Z. 617):** EffectFailure trägt die [originModuleId]
+     * des emittierenden Moduls; der Orchestrator routet sie **zurück an genau dieses Modul**
+     * (NICHT über `moduleByLeafClass`-KClass-Lookup, sondern über die ID). Begründung: nur
+     * das Owner-Modul des Effects weiß, welcher Sub-State-Rollback / Failure-Marker
+     * korrekt ist. Module ohne expliziten `EffectFailure`-Reducer-Arm geben `null` aus
+     * `reduce()` zurück — `DispatchOutcome.Rejected("reducer-null")` ist semantisch
+     * korrekt ("Modul hat keine Failure-Behandlung für diesen Effect"), kein Bug.
+     *
+     * Cross-Module-Beobachtung läuft danach wie bei jeder anderen erfolgreich-reduzierten
+     * Action über `onCrossModuleStateChange` — z.B. kann PipelineModule auf
+     * `RecordingModule`-EffectFailure mit einem `PipelineAction.PipelineFailed` reagieren.
+     */
+    data class EffectFailure(
+        val originModuleId: ModuleId,
+        val effect: String,
+        val reason: String,
+    ) : Action()
 
     // ─── Recording-Achse (RecordingModule) ───
     sealed class RecordingAction : Action() {
@@ -288,7 +314,19 @@ sealed class Action {
     <!-- FIX: Issue 1.1.5 / R.5 – ContentArea-SetAction lebt unverändert in LayoutAction (LayoutState ist Container) -->
     // (LayoutAction.SetContentArea — siehe oben — schreibt jetzt in `state.layout.contentArea` über LayoutModule.)
 
-    // ─── Tastatur-Eingaben (kein eigenes Modul — direkt im IME-Service ausgeführt) ───
+    <!-- FIX: Phase-B S-3 (2026-05-13) – KeyboardInputAction-Kommentar präzisiert.
+         Vorher: "kein eigenes Modul — direkt im IME-Service ausgeführt" — das war
+         architektonisch inkonsistent: die Actions werden von Slot-Resolvern
+         (Spec 2 §3.2 + §6) an `orchestrator.dispatch(...)` geschickt, aber kein
+         Modul beanspruchte `actionClass = Action.KeyboardInputAction::class`.
+         Folge: `moduleByLeafClass`-Lookup gäbe `null` → `DispatchOutcome.Unrouted`
+         → Backspace/Enter/Space-Buttons wären im neuen System TOT (keine
+         InputConnection-Operation wird ausgelöst). Korrektur: `KeyboardInputModule`
+         als eigenes Modul mit `Unit`-State + SideEffects, das die InputConnection-
+         Operation in `runEffect` macht (Spec 1 §15.6). Damit bleibt die F-8-
+         Single-Dispatch-Garantie intakt und der reguläre Sealed-Leaves-Indexing-
+         Pfad bleibt OCP-konform. -->
+    // ─── Tastatur-Eingaben (KeyboardInputModule — Spec 1 §15.6) ───
     sealed class KeyboardInputAction : Action() {
         object Backspace : KeyboardInputAction()
         object EnterKey : KeyboardInputAction()
@@ -1849,7 +1887,8 @@ class RecordingAnimationController(
 **Wichtig:** `RecordingAnimationController` ist **stateless** außer dem `lastRecordingState`-Cache (Performance-Guard). Er ist Composition-Member von `ImeViewBackend` (siehe §6).
 
 <!-- FIX: Issue 2.0.2 – PipelineStateManager → AudioModule/RecordingModule + LocalBinder-Spec-1-§5-Querverweis -->
-**Amplitude/Timer-Hooks:** kommen direkt vom AudioModule / RecordingModule (Spec 1 §15) — nicht über `DictateUiState`-Emission, weil das pro-Tick zu neuen State-Allocations führen würde. Stattdessen: eigener `StateFlow<AmplitudeTick>` oder simple Callback-Methode am LocalBinder (siehe Spec 1 §5 für die LocalBinder-API: `state` + `dispatch` + Lifecycle-Hooks).
+<!-- FIX: Phase-B S-3 (2026-05-13) – "Callback-Methode am LocalBinder" widersprach F-8 (LocalBinder hat NUR state + dispatch). Side-Channel jetzt explizit als zweiter StateFlow am LocalBinder vorgesehen. -->
+**Amplitude/Timer-Hooks:** kommen direkt vom AudioModule / RecordingModule (Spec 1 §15) — nicht über `DictateUiState`-Emission, weil das pro-Tick zu neuen State-Allocations führen würde. Stattdessen: ein zusätzlicher `StateFlow<AmplitudeTick>` am LocalBinder (analog zu `state: StateFlow<DictateUiState>`, NICHT als Callback-Methode — F-8 verbietet typed Forwarder am LocalBinder). Konkrete API in Spec 1 §5 zu ergänzen, falls die Amplitude-Achse im Refactor-Scope landet; ansonsten bleibt sie bis Phase 2 außerhalb des State-Stores (Side-Channel über `services.amplitudeStream`).
 
 ### §11.6 Click-Listener-Lifecycle: Memory-Leak-Analyse
 
@@ -1857,7 +1896,7 @@ class RecordingAnimationController(
 
 **Risiko 1:** In schnellen Tick-Intervallen sammeln sich kurzzeitig Lambdas an (Allocation-Pressure). Bei einem 100ms-Tick und 9 Buttons sind das 90 Lambdas/Sekunde, die GC-pflichtig werden — moderate Allocation-Cost, aber auf Low-End-Geräten messbar.
 
-**Risiko 2:** Wenn ein `state`-Snapshot in einem Lambda gefangen wird, das vom System verzögert ausgeführt wird (z.B. Touch-Event in der Frame-Queue), zeigt der Click die `actionResolver` von einem **veralteten** State an. Bei Pipeline-Tick-Race: Click auf record_btn könnte `Action.NoOp` (alter Pipeline.Running-State) statt `Action.RecordingAction.StartRecording(target = InsertionTarget.MainInputConnection)` (neuer Idle-State) emittieren.
+**Risiko 2:** Wenn ein `state`-Snapshot in einem Lambda gefangen wird, das vom System verzögert ausgeführt wird (z.B. Touch-Event in der Frame-Queue), zeigt der Click die `actionResolver` von einem **veralteten** State an. Bei Pipeline-Tick-Race: Click auf record_btn könnte `null` (alter Pipeline.Running-State, R.3: No-Op-Resolver) statt `Action.RecordingAction.StartRecording(target = InsertionTarget.MainInputConnection)` (neuer Idle-State) emittieren — oder umgekehrt, eine Recording-Cancel-Action statt einer Pipeline-Cancel-Action. <!-- FIX: Phase-B S-3 (2026-05-13) – Action.NoOp existiert post-R.3 nicht mehr; Resolver returnt Action? (`null` = "kein Click-Effekt im aktuellen State"). -->
 
 **Empfehlung (L8):** Click-Listener nur einmal pro Backend-Attach setzen, lesen aktuellen State zur Click-Zeit aus einer Backend-Field (`stateRef`).
 
@@ -1867,7 +1906,12 @@ view.setOnClickListener {
     onVibrate()
     val s = stateRef ?: return@setOnClickListener     // aktueller State
     val slot = currentSlot(id) ?: return@setOnClickListener
-    onAction?.invoke(slot.actionResolver(s))           // Action zur Click-Zeit
+    // FIX: Phase-B S-3 (2026-05-13) – nullable Resolver-Idiom (R.3): null = "Click ist No-Op
+    // im aktuellen State" → kein dispatch. Vorher `onAction?.invoke(slot.actionResolver(s))`
+    // hätte bei null-Resolver einen NPE produziert (oder bei `onAction?.invoke(null!!)` einen
+    // Kotlin-Type-Error, weil onAction: (Action) -> Unit nicht-nullable ist). Konsistent
+    // mit §6 wireStaticHandlers und Spec 3 §4.2.
+    slot.actionResolver(s)?.let { onAction?.invoke(it) }
 }
 ```
 

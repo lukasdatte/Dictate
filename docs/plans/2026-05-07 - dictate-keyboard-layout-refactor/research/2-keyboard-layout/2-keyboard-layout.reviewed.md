@@ -79,6 +79,14 @@ sealed class WidthPolicy {
 }
 
 <!-- FIX: Issue 1.1.4 + 2.1.7 / R.3 – actionResolver returnt Action? = null statt Action.NoOp -->
+<!-- FIX: Phase-B S-7 (2026-05-13) – actionResolver auf 2-arg `(state, services) -> Action?` erweitert.
+     Hintergrund: `resolveRecordAction` (§8.5) braucht `services.audioFileFactory.allocate()` als Pre-
+     Dispatch-Allocation (R.2, Spec 1 §4.11). Mit dem alten 1-arg-Signatur war die Referenz
+     `actionResolver = ::resolveRecordAction` ein Compile-Error (Typ-Mismatch). Alle anderen Resolver
+     ignorieren das 2. Argument einfach — `{ Action.X }` ist nach Erweiterung `{ _, _ -> Action.X }`
+     bzw. `{ state, _ -> ... }` (Kotlin trailing-lambda-Konvention). Services lebt im Backend (siehe
+     §3.4 ImeViewBackend-Konstruktor + Spec 3 §4.2 OverlayBackend-Konstruktor); der Click-Listener
+     in `wireStaticHandlers` ruft `slot.actionResolver(state, services)?.let { onAction?.invoke(it) }`. -->
 data class ButtonSlot(
     val logicalId: LogicalButtonId,
     val widthPolicy: WidthPolicy,
@@ -87,8 +95,13 @@ data class ButtonSlot(
     val textResolver: (DictateUiState) -> CharSequence? = { null },
     val enabledResolver: (DictateUiState) -> Boolean = { true },
     val alphaResolver: (DictateUiState) -> Float = { 1f },
-    /** null bedeutet: Click ist im aktuellen State unbedeutend (kein dispatch, kein Log-Spam). */
-    val actionResolver: (DictateUiState) -> Action?,
+    /**
+     * Mappt (State, Services) → Action. `services` liefert nur den Pre-Dispatch-Allokator
+     * für AudioFileFactory (R.2, Spec 1 §4.11) — Resolver dürfen KEINE anderen `services`-
+     * Felder lesen (Pure-Function-Garantie: keine Hardware/IO-Reads außer File-Allocate).
+     * `null` bedeutet: Click ist im aktuellen State unbedeutend (kein dispatch, kein Log-Spam).
+     */
+    val actionResolver: (DictateUiState, ModuleServices) -> Action?,
 )
 
 data class RowDescriptor(
@@ -500,10 +513,18 @@ fun applySlotToView(
 
 ## §6 ImeViewBackend (KEYBOARD-Modus)
 
+<!-- FIX: Phase-B S-7 (2026-05-13) – Backend-Konstruktor um `services: ModuleServices` erweitert.
+     Hintergrund: Resolver-Signatur `(state, services) -> Action?` (§3.2) braucht eine `services`-Quelle
+     im Backend, um `services.audioFileFactory.allocate()` Pre-Dispatch aufzurufen (R.2, Spec 1 §4.11).
+     `services` lebt im DictatePipelineService (§7.3 Spec 1 Composition Root) und wird durch
+     `KeyboardLayoutManager.attach(backend)` an den Backend gereicht; das Backend ruft `services` nur
+     in `wireStaticHandlers` (Click-Listener), nicht im Render-Loop — Pure-Function-Garantie bleibt
+     erhalten. Verifiziert in `ImeViewBackendActionResolverTest.kt` (Click → resolveRecordAction → audioFile in Action). -->
 ```kotlin
 class ImeViewBackend(
     private val rootView: View,                          // MotionLayout-Root
     private val ctx: Context,
+    private val services: ModuleServices,                // Phase-B S-7: für Pre-Dispatch-Allocation (audioFileFactory)
     private val inputConnectionProvider: () -> InputConnection?,
     private val keyPressAnimator: KeyPressAnimator,
     private val recordingAnimationController: RecordingAnimationController,
@@ -594,13 +615,15 @@ class ImeViewBackend(
      * (siehe L8 / §11.6).
      */
 <!-- FIX: Issue 1.1.4 + 2.1.7 / R.3 – Click-Listener nutzt nullable Resolver-Result statt Action.NoOp -->
+<!-- FIX: Phase-B S-7 (2026-05-13) – Click-Listener ruft 2-arg-Resolver (state, services); services-Reference
+     kommt vom Backend-Konstruktor (`ImeViewBackend(scope, services, onAction, …)`). -->
     private fun wireStaticHandlers() {
         buttonViews.forEach { (id, view) ->
             view.setOnClickListener {
                 onVibrate()
                 val s = stateRef ?: return@setOnClickListener
                 val slot = currentSlot(id) ?: return@setOnClickListener
-                slot.actionResolver(s)?.let { onAction?.invoke(it) }
+                slot.actionResolver(s, services)?.let { onAction?.invoke(it) }
             }
             keyPressAnimator.applyPressAnimation(view)
         }
@@ -1911,7 +1934,8 @@ view.setOnClickListener {
     // hätte bei null-Resolver einen NPE produziert (oder bei `onAction?.invoke(null!!)` einen
     // Kotlin-Type-Error, weil onAction: (Action) -> Unit nicht-nullable ist). Konsistent
     // mit §6 wireStaticHandlers und Spec 3 §4.2.
-    slot.actionResolver(s)?.let { onAction?.invoke(it) }
+    // FIX: Phase-B S-7 (2026-05-13) – 2-arg Resolver (state, services) für Pre-Dispatch-Allocation (R.2).
+    slot.actionResolver(s, services)?.let { onAction?.invoke(it) }
 }
 ```
 

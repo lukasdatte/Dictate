@@ -66,7 +66,14 @@ object OVERLAY_5BUTTON : LayoutMode(
                 enabledResolver = { state -> state.viewMode == ViewMode.WIDGET },
                 alphaResolver = { state -> if (state.viewMode == ViewMode.WIDGET) 1f else 0.4f },
                 iconResolver = { R.drawable.ic_baseline_mic_24 },
-                actionResolver = { Action.RecordingAction.StartRecording(target = InsertionTarget.MainInputConnection) }),
+                // FIX: Phase-B S-7 (2026-05-13) – Pre-Dispatch-Allocation (R.2 / Spec 1 §4.11).
+                // Vorher: `StartRecording(target = …)` ohne `audioFile` → Compile-Error (data class
+                // `StartRecording(target, audioFile)` verlangt beide Felder). Jetzt: Resolver-Signatur
+                // `(state, services) -> Action?` (Spec 2 §3.2 post-S-7); IOException aus allocate() wird
+                // in Toast-Sink-Pfad übersetzt + null returnt (kein dispatch, kein Reducer-State-Wechsel).
+                // Konsistent mit Spec 2 §8.5 `resolveRecordAction`. Service-Heimat: WidgetOverlayBackend-
+                // Konstruktor (§4.2 Spec 3 post-S-7).
+                actionResolver = ::resolveOverlayRecordAction),
             ButtonSlot(LogicalButtonId.OVERLAY_SEND, FillRemaining,
                 visibilityPredicate = { true },
                 enabledResolver = { state -> state.viewMode == ViewMode.WIDGET
@@ -112,6 +119,57 @@ object OVERLAY_5BUTTON : LayoutMode(
 ```
 
 **Schlüsselbeobachtung:** ein einziger `LayoutMode` deckt beide ViewMode-Varianten ab. Die Differenzen leben in den Resolvern, die `state.viewMode` lesen und sich entsprechend verhalten — insbesondere disablen Record + Send in HOVER, weil keine InputConnection als Ziel existiert (OPEN-2).
+
+<!-- FIX: Phase-B S-7 (2026-05-13) – OVERLAY_RECORD-Resolver mit Pre-Dispatch-Allocation. -->
+**`resolveOverlayRecordAction` (Pre-Dispatch-Allocation, Spec 1 §4.11.4):**
+
+Analog zu Spec 2 §8.5 `resolveRecordAction` braucht der Widget-Record-Button eine `audioFile`-
+Allokation BEVOR die `StartRecording`-Action dispatched wird (R.2-Pure-Reducer-Garantie). Im
+Widget-Pfad ist `state.recording is Idle` (das ist die Visibility-Bedingung); nur dort wird
+allociert. Bei `IOException` (Storage voll) gibt der Resolver `null` zurück + zeigt einen
+Toast — kein dispatch, kein Reducer-State-Wechsel.
+
+```kotlin
+/**
+ * OVERLAY_RECORD-Click in WIDGET — Pre-Dispatch-Allocation (R.2 / Spec 1 §4.11).
+ *
+ * IOException-Handling (Spec 1 §4.11.10 / F1): `services.audioFileFactory.allocate()` kann
+ * werfen, wenn `mkdirs()` auf `cacheDir/audio/` failt (Storage voll, FS-Permission). Resolver
+ * fängt **lokal**, zeigt einen Toast über `services.toastSink` und gibt `null` zurück; der
+ * Caller (Click-Handler) sieht eine No-Op. Reducer sieht den Failure NIE.
+ *
+ * In HOVER ist Visibility-Predicate `state.viewMode == WIDGET` false → Click ist disabled
+ * (keine Event-Auslösung möglich). Resolver-Fallback `null` für sicheres Verhalten, falls
+ * trotzdem ein Click ankommt (z.B. Race zwischen ViewMode-Toggle und Touch).
+ */
+fun resolveOverlayRecordAction(
+    state: DictateUiState,
+    services: ModuleServices,
+): Action? = when {
+    state.viewMode != ViewMode.WIDGET -> null    // HOVER ist disabled, defensive
+    state.recording !is RecordingState.Idle -> null
+    else -> {
+        val file = try {
+            services.audioFileFactory.allocate()
+        } catch (e: java.io.IOException) {
+            services.toastSink.show(R.string.dictate_storage_full)    // selbe String-Resource wie Spec 2 §8.5
+            android.util.Log.w("OverlayResolver", "audioFileFactory.allocate failed", e)
+            return null
+        }
+        Action.RecordingAction.StartRecording(
+            target = InsertionTarget.MainInputConnection,
+            audioFile = file,
+        )
+    }
+}
+```
+
+**Migrations-Punkt für andere 1-arg-Resolver in §3.1:** Die Slot-Definitionen oben verwenden
+1-arg-Lambdas (`{ state -> ... }` bzw. `{ Action.X }`). Nach S-7 ist der Resolver-Typ
+`(DictateUiState, ModuleServices) -> Action?` — Kotlin verlangt dann 2-arg-Lambdas. Alle nicht-
+record Slots ignorieren das zweite Argument: `{ Action.X }` → `{ _, _ -> Action.X }`,
+`{ state -> ... }` → `{ state, _ -> ... }`. Block-6-Implementer (Spec 3) muss die
+Slot-Definitionen mechanisch erweitern; Compile-Fehler beim ersten Build zeigt die Stelle.
 
 ### §3.2 Konkretes Overlay-XML-Layout
 
@@ -296,9 +354,16 @@ Dadurch kann ein `FakeOverlayWindow` in Tests einfach den Status mitschneiden, o
 injiziert (DIP). Damit bleibt SRP gewahrt: Backend macht Render, DragHandler macht
 Touch-Routing, PositionMapper macht 0..1 ↔ Pixel-Konversion.
 
+<!-- FIX: Phase-B S-7 (2026-05-13) – OverlayBackend-Konstruktor um `services: ModuleServices` erweitert.
+     Hintergrund: Resolver-Signatur post-S-7 ist `(state, services) -> Action?` (Spec 2 §3.2);
+     OVERLAY_RECORD-Resolver (`resolveOverlayRecordAction`, §3.1 post-S-7) braucht
+     `services.audioFileFactory.allocate()` als Pre-Dispatch-Allocation (R.2, Spec 1 §4.11).
+     Click-Listener-Loop (im Slot-Loop-Snippet weiter unten) ruft `slot.actionResolver(state, services)`.
+     Konsistent mit `ImeViewBackend` (Spec 2 §6 post-S-7). -->
 ```kotlin
 class OverlayBackend(
     private val ctx: Context,
+    private val services: ModuleServices,                // Phase-B S-7: für Pre-Dispatch-Allocation (audioFileFactory)
     private val overlayWindow: OverlayWindow,
     private val permissions: OverlayPermissionGate,  // §5.1
     private val layoutParamsFactory: OverlayLayoutParamsFactory = DefaultOverlayLayoutParamsFactory(ctx),
@@ -371,7 +436,8 @@ class OverlayBackend(
             view.setOnClickListener {
                 val s = stateRef ?: return@setOnClickListener
                 val slot = currentSlot(id) ?: return@setOnClickListener
-                slot.actionResolver(s)?.let { onAction?.invoke(it) }
+                // FIX: Phase-B S-7 (2026-05-13) – 2-arg Resolver (state, services) für Pre-Dispatch-Allocation.
+                slot.actionResolver(s, services)?.let { onAction?.invoke(it) }
             }
         }
     }
@@ -2007,7 +2073,8 @@ KEIN zweiter Button-View, KEIN Backend-spezifischer Click-Listener-Block. ✓
 **Beweis** (§4.2 `applySlots()`):
 ```kotlin
 <!-- FIX: Issue 1.1.4 / R.3 – Click-Listener nutzt nullable-Resolver-Idiom -->
-view.setOnClickListener { slot.actionResolver(state)?.let { onAction?.invoke(it) } }
+<!-- FIX: Phase-B S-7 (2026-05-13) – 2-arg Resolver (state, services). -->
+view.setOnClickListener { slot.actionResolver(state, services)?.let { onAction?.invoke(it) } }
 ```
 Eine Zeile, identisch für alle 5 Slots (Record, Send, Pause, Trash, Close). Keine Sonderfälle. ✓ — gleiches Pattern wie im `ImeViewBackend` (Spec 2 §6).
 

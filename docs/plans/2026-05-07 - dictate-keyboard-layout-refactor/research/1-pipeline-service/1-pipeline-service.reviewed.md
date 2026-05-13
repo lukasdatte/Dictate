@@ -1652,11 +1652,17 @@ Konkrete Migrations-Schritte:
 
 Die Factory wählt **`context.cacheDir`** (nicht `filesDir`). Damit gilt:
 
-| Szenario | Verhalten | Recovery-Verhalten |
-|---|---|---|
-| App-Crash + Restart, Cache überlebt | File existiert, Session-Row hat Pfad | `recoverFromDb` lädt sie als RECORDED-Session normal in `pendingSessions` (§11.6.2 Z. 2183) |
-| OS löscht `cacheDir` (Storage-Druck) | File weg, Session-Row hat Pfad | `recoverFromDb` filtert in Ghost-Sessions → `lastErrorType=UNKNOWN, lastErrorMessage="audio file vanished"`, status FAILED (§11.6.2 Z. 2192-2197) |
-| User triggert "Cache leeren" in Preferences | File weg, Session-Row hat Pfad | identisch zum OS-Wipe-Pfad — Ghost-Session |
+<!-- FIX: Phase-B S-7 (2026-05-13) – Recovery-Coupling-Tabelle um v4-Status RECORDING und
+     TRANSCRIBING erweitert (S-2-DB-Schema-Migration bringt diese neuen Stati). Vorher nur RECORDED
+     dokumentiert — Lücke gegen Spec-1-§11.6.2 + Acceptance R.16a/b/c. -->
+| Szenario | Status (v4) | Verhalten | Recovery-Verhalten |
+|---|---|---|---|
+| App-Crash + Restart, Cache überlebt | RECORDED | File existiert, Session-Row hat Pfad | `recoverFromDb` lädt sie als RECORDED-Session normal in `pendingSessions` (§11.6.2 Z. 2183) |
+| OS löscht `cacheDir` (Storage-Druck) | RECORDED | File weg, Session-Row hat Pfad | `recoverFromDb` filtert in Ghost-Sessions → `lastErrorType=UNKNOWN, lastErrorMessage="audio file vanished"`, status FAILED (§11.6.2 Z. 2192-2197) |
+| User triggert "Cache leeren" in Preferences | RECORDED | File weg, Session-Row hat Pfad | identisch zum OS-Wipe-Pfad — Ghost-Session |
+| Crash mid-Recording (Prozess-Kill) | RECORDING | DB-Row hat typischerweise `audio_file_path = NULL` (Path wird erst beim Stop geschrieben, siehe §6.3 RECORDING-Recovery-Block) | Recovery promoted → FAILED + `lastErrorMessage="recording-interrupted-by-process-death"`; partial-written File im `cacheDir/audio/` wird vom `cleanupOrphans`-Boot-Hook (NICHT vom Recovery-Pfad) eingesammelt. Konsistent mit S-2 F-2 + Acceptance R.16a |
+| Crash mid-Transcription (Prozess-Kill), File überlebt | TRANSCRIBING | File existiert, Session-Row hat Pfad | Recovery downgraded → RECORDED + stale-error-clear; Session landet in `pendingSessions` (kein Auto-Resume, D4/OPEN-4). Acceptance R.16b |
+| Crash mid-Transcription, File durch OS-Wipe weg | TRANSCRIBING | File weg, Session-Row hat Pfad | Recovery promoted → FAILED + `lastErrorMessage="audio file vanished before transcription"`. Acceptance R.16c |
 
 **Akzeptiertes Trade-off:** `cacheDir` ist der korrekte Heimat-Ort für
 **transiente** Recording-Dateien (Pre-Persistence). Sobald die Pipeline
@@ -1872,6 +1878,19 @@ File-Schema auf `cacheDir/audio/rec_{ts}_{uuid8}.m4a`.
 >   }
 >   ```
 >
+>   <!-- FIX: Phase-B S-7 (2026-05-13) – DAO-Query idempotent gegen Re-Marking + Daten-Erhalt. -->
+>   **Idempotenz-Klausel auf DAO-Ebene (Phase-B S-7):** Das `markLegacyAudioSessionsFailed`-
+>   Update setzt unkonditional `status = FAILED` + `last_error_message`. Ohne `WHERE`-Filter
+>   würden bereits FAILED-Sessions ihre **originale** `last_error_message` verlieren (z.B.
+>   "transcription_timeout", "openai_rate_limit") — die historische Fehler-Information
+>   ginge verloren. Außerdem: falls eine `COMPLETED`-Session zufällig denselben legacy
+>   path hat (extrem unwahrscheinlich, aber theoretisch denkbar bei einem User, der per
+>   adb manuell DB-Rows manipuliert), würde sie auf FAILED **gedowngraded** + Daten gehen
+>   verloren. **Fix:** Query um `AND status NOT IN ('FAILED', 'CANCELLED', 'COMPLETED')`
+>   filtern. Nur Sessions in `RECORDING`/`RECORDED`/`TRANSCRIBING` (die nach Phase 1
+>   v4-Schema die einzigen sinnvollen "incomplete pre-refactor"-Stati sind) werden
+>   gemarkiert.
+>
 >   Erforderlicher DAO-Zusatz (Block 3 Schema-Block, neben `findAllAudioFilePaths`):
 >
 >   ```kotlin
@@ -1881,6 +1900,7 @@ File-Schema auf `cacheDir/audio/rec_{ts}_{uuid8}.m4a`.
 >           last_error_type = 'UNKNOWN',
 >           last_error_message = :reason
 >       WHERE audio_file_path = :legacyPath
+>         AND status NOT IN ('FAILED', 'CANCELLED', 'COMPLETED')
 >   """)
 >   fun markLegacyAudioSessionsFailed(
 >       legacyPath: String,
@@ -1888,6 +1908,14 @@ File-Schema auf `cacheDir/audio/rec_{ts}_{uuid8}.m4a`.
 >       failedStatus: SessionStatus,
 >   ): Int
 >   ```
+>
+>   **Idempotenz beim zweiten Lauf (z.B. nach Pref-Wipe):** der Pref-Flag-Check oben ist
+>   die Primär-Idempotenz. Falls der Flag verloren geht (App-Daten-Wipe, User-Downgrade-
+>   Upgrade-Zyklus), läuft die Migration nochmal — die `WHERE status NOT IN (...)`-Klausel
+>   stellt sicher, dass schon migrierte FAILED-Rows nicht erneut überschrieben werden.
+>   Sessions, die zwischen den beiden Migrations-Läufen entstanden sind, können den
+>   legacy-Path nicht referenzieren (`AudioFileFactory.allocate` schreibt UUID-Pfade
+>   in `cacheDir/audio/`), also kein False-Positive.
 >
 >   **Aufruf-Site:** `DictatePipelineService.onCreate`, vor Schritt 7/8
 >   (Recovery + Orphan-Cleanup), sync — die Migration ist O(1)
@@ -1897,6 +1925,23 @@ File-Schema auf `cacheDir/audio/rec_{ts}_{uuid8}.m4a`.
 >   // After Step 6 (notifCoordinator/actionRouter wiring), before Step 7:
 >   LegacyAudioFileMigration.run(applicationContext)  // one-shot, idempotent
 >   ```
+>
+>   <!-- FIX: Phase-B S-7 (2026-05-13) – sync-vs-async + FGS-5s-Frist explizit dokumentiert. -->
+>   **Threading + FGS-5s-Frist (Phase-B S-7):** Der `run()`-Aufruf läuft **synchron** auf dem
+>   Main-Thread (Service.onCreate ist Main-Thread). Drei Operationen:
+>
+>   1. `PreferenceManager.getDefaultSharedPreferences(context)`-Read — disk-blocking, aber
+>      typischerweise <5 ms (SharedPreferences sind beim Boot bereits gelesen).
+>   2. `File(cacheDir, "audio.m4a")`-Existence-Check + `delete()` — disk-blocking, <10 ms.
+>   3. `dao.markLegacyAudioSessionsFailed(...)` — SQL-UPDATE auf indexed Spalte (`audio_file_path`),
+>      typischerweise <20 ms bei <1k Sessions; bei >10k Sessions evtl. 100 ms.
+>
+>   Summe: typischerweise <50 ms, worst-case ~200 ms. Die 5-Sekunden-FGS-Frist (§11.1.4) wird
+>   nicht angeknabbert. **Trotzdem:** falls Telemetrie zeigt, dass die DAO-Update auf bestimmten
+>   Devices >500 ms dauert, kann der Migration-Aufruf in einen `serviceScope.launch(Dispatchers.IO)`-
+>   Block gewrappt werden — Idempotenz (Pref-Flag + DAO-WHERE-Filter) macht den Lauf-zu-spät-Fall
+>   safe (ein paralleler `LegacyAudioFileMigration`-Lauf im nächsten Service-Boot wäre no-op).
+>   Phase 1: sync, Phase 2 evaluieren falls Telemetrie ein Problem zeigt.
 > - **Einarbeitung:** Migrations-Klasse oben (§4.11.6.2) + neuer DAO-Query
 >   (Block 3 Schema, Spec 1 §6.x) + Aufruf-Site in §4.11.5.1 Schritt 6.5
 >   (zwischen 6 und 7). Akzeptiertes-Verhalten-Liste (3 Punkte oberhalb)
@@ -2026,6 +2071,50 @@ werden (ergänzender Punkt für den Implementierer).
 >   `deleteRecursively()` wäre kürzer, aber die Datei ist Java —
 >   handgeschriebene Walks bleiben in derselben Sprache (kein
 >   Kotlin-Interop-Overhead, kein neuer Modul-Import).
+>
+>   <!-- FIX: Phase-B S-7 (2026-05-13) – Race-Schutz: "Cache leeren" während aktiver Recording. -->
+>   **Race-Schutz: aktive Recording während "Cache leeren" (Phase-B S-7):**
+>
+>   Wenn der User in Preferences "Cache leeren" klickt, während eine Recording läuft (MediaRecorder
+>   hat `cacheDir/audio/rec_*.m4a` offen für Schreiben), führt der unbedingte `entry.delete()`-Aufruf
+>   auf der offenen Datei zu einem `unlink()` auf Linux/Android-FS — der File-Descriptor bleibt
+>   offen, MediaRecorder schreibt weiter in den unlinkten Inode, aber **bei Recording-Stop ist die
+>   Datei weg** (kein dirent-Eintrag mehr). Pipeline-Stage sieht eine fehlende Audio-Datei →
+>   Ghost-Session, FAILED. User merkt "meine Aufnahme ist verloren" — schwer zu debuggen, weil der
+>   Click-Path "Settings → Cache leeren" und das Recording typischerweise temporär entkoppelt sind.
+>
+>   **Mitigation:** Defensive Vorbedingung in PreferencesFragment's `OnPreferenceClickListener`:
+>
+>   ```java
+>   cachePreference.setOnPreferenceClickListener(preference -> {
+>       // Phase-B S-7: Race-Schutz gegen offene MediaRecorder-FDs.
+>       // RecordingState liest via DictateUiStateObserver (Spec 1 §4.4 — Java-Brücke aus S-3 F-6).
+>       boolean recordingActive = isRecordingActive();    // Helper, siehe unten
+>       if (recordingActive) {
+>           Toast.makeText(requireContext(),
+>               R.string.dictate_cache_clear_blocked_recording, Toast.LENGTH_LONG).show();
+>           return true;
+>       }
+>       // ... bestehender MaterialAlertDialogBuilder ...
+>   });
+>
+>   private boolean isRecordingActive() {
+>       // Snapshot-Read aus dem letzten DictateUiStateObserver-Event.
+>       // Settings-Screen läuft typischerweise NICHT während Recording (User wechselt aus IME-
+>       // Service in Settings-Activity), aber Edge-Case: Activity bleibt offen, User wechselt
+>       // zurück, startet Recording, wechselt wieder zu Settings → recordingActive == true.
+>       return lastObservedState != null && lastObservedState.recording.isActiveOrPausedOrPreparing();
+>   }
+>   ```
+>
+>   Neue String-Resource: `dictate_cache_clear_blocked_recording = "Aufnahme läuft — Cache kann
+>   nicht gelöscht werden. Stoppe zuerst die Aufnahme."`
+>
+>   **Akzeptierter Edge-Case:** wenn der User mitten im 1-2-Sekunden-Fenster zwischen Recording-
+>   Stop und State-Update klickt, kann der Race-Schutz versagen — aber das ist akzeptiert, weil
+>   der Recording-Stop-Pfad das Audio-File **vor** der Cache-Wipe-Click-Resolution bereits
+>   abkopiert hat (`persistFromCache` läuft synchron im Stop-Effect, §4.11.6.1) — der Wipe
+>   räumt also nur den schon-redundanten Cache-Eintrag.
 > - **Einarbeitung:** Java-Patch oben (§4.11.6.3) ersetzt die alte
 >   "Cache leeren"-Logik in Block 4. Die Aussage in §4.11.8 ("Cache leeren
 >   räumt das Subdir mit ab") gilt nach diesem Patch **wieder**.
@@ -3406,6 +3495,41 @@ suspend fun cleanupOrphanedTerminalAudio() = withContext(Dispatchers.IO) {
 **Cutoff:** Selber Wert wie `deleteInsertedOlderThan` — `now − 7d − 1h`
 (`Pref.SessionCleanupGracePeriodMs`).
 
+<!-- FIX: Phase-B S-7 (2026-05-13) – Concurrency-Vertrag explizit + Trigger-Slot präzise definiert. -->
+**Concurrency-Vertrag (Phase-B S-7):**
+
+- **Trigger-Slot:** Genau zwischen dem letzten `Effect`-`runEffect`-Tick und `stopSelf()`. Konkret
+  im `stopSelfWhenTerminal(state)`-Callback (§7.3 Z. 3625) — der Service collected `state` und
+  ruft den Callback bei jedem Update; wenn `state.isAllTerminal()`, läuft `cleanupOrphanedTerminalAudio()`
+  in einer `serviceScope.launch(Dispatchers.IO)`-Coroutine und IM `await`-Block davor wird `stopSelf()`
+  aufgerufen. **Wichtig:** `stopSelf()` blocks NICHT bis der Cleanup-Job durchläuft — Android wird
+  den Service im Zweifel beenden, während die Cleanup-Coroutine noch IO macht. Das ist akzeptiert:
+  `cleanupOrphanedTerminalAudio` ist best-effort, ein abgebrochener Lauf wird beim nächsten
+  Service-Boot durch `cleanupOrphans`-Boot-Hook (anderer Pfad! §4.11.5.1 Schritt 8) erneut versucht
+  — siehe Idempotenz-Vertrag von `findOrphanedTerminalAudio`.
+- **Concurrent allocate während Cleanup:** Sehr unwahrscheinlich — `state.isAllTerminal()` ist
+  Voraussetzung für den Trigger; das bedeutet `state.recording is Idle && state.pipeline is Idle`.
+  Wenn der User *mid-cleanup* eine neue Aufnahme startet, läuft `audioFileFactory.allocate()` in
+  einen anderen Pfad (`cacheDir/audio/`, nicht `filesDir/recordings/` — wo `cleanupOrphanedTerminalAudio`
+  arbeitet). Kein direkter Konflikt. Aber: die Concurrent-`state.collect`-Cascade verhindert
+  `stopSelf()` (Idle→Preparing-Transition macht `isAllTerminal() = false`), also würde der Cleanup-
+  Job evtl. mitten in der DB-Read abbrechen, wenn der Service-Scope wegen einer neuen Recording
+  reaktiv bleibt. **Verhalten:** `cleanupOrphanedTerminalAudio` läuft zu Ende (kein Cancel), aber
+  `stopSelf()` wird nicht gerufen (`isAllTerminal()` ist false). Beim nächsten echten Idle-Stop
+  versucht der Cleanup es erneut — idempotent.
+- **Double-Delete-Race:** Wenn parallel zur `cleanupOrphanedTerminalAudio`-Iteration ein User
+  via `HistoryDetailActivity` "Audio löschen" für eine FAILED-Session ruft (`RecordingRepository.
+  deleteBySessionId`), könnte derselbe Pfad zweimal gelöscht werden. `File.delete()` ist auf
+  bereits gelöschtem File ein no-op (`false`-Return); `clearAudioFilePathBulk(ids)` ist
+  idempotent (`UPDATE … WHERE id IN (...)`). Akzeptiert: kein Lock nötig.
+
+**Dispatcher-Disziplin (Layer-Trennung):**
+
+- `findOrphanedTerminalAudio(cutoff)` läuft via Room auf einem internen Executor (kein Mainthread).
+- `File.delete()` läuft im `withContext(Dispatchers.IO)`-Block (siehe Snippet oben).
+- `clearAudioFilePathBulk(ids)` läuft via Room — `withContext(Dispatchers.IO)` ist redundant aber
+  schadet nicht.
+
 **Test-Case (Block 3):** `SessionDaoTest.findOrphanedTerminalAudio_filtersByStatusAndCutoff`
 prüft, dass nur FAILED/CANCELLED-Rows mit `audio_file_path != NULL && created_at < cutoff`
 zurückkommen. RECORDED + COMPLETED-Rows werden NICHT zurückgegeben (auch nicht ältere).
@@ -4036,6 +4160,56 @@ Block 3 (DB-Persistence) gilt als done, wenn:
 - [ ] **Phase-B S-2 Cleanup-Reihenfolge im Service-Idle-Stop:** im `stopSelf`-Pfad läuft `dao.deleteInsertedOlderThan(cutoff)` VOR `cleanupOrphanedTerminalAudio()` VOR `stopSelf()`. Test: `DictatePipelineServiceCleanupOrderTest.kt` mit Mock-DAO + Mock-Filesystem verifiziert die Call-Reihenfolge.
 - [ ] **Phase-B S-2 SessionStatus-KDoc-Update:** `database/entity/SessionStatus.kt:6` KDoc reflektiert die neue Doppel-Truth-Realität — die alte Aussage "Runtime state (TRANSCRIBING, PROCESSING) is NOT stored here — it lives in ActiveJobRegistry" ist nach M4 falsch und muss auf "RECORDING/TRANSCRIBING leben jetzt in DB + Registry; Registry bleibt Performance-Cache + Single-Job-Lock (siehe Plan §6.1.1 + KG-SST-5)" umformuliert sein. Verifiziert via Code-Review-Checkliste.
 
+<!-- FIX: Phase-B S-7 (2026-05-13) – Block 4 (AudioFileFactory) Acceptance neu eingeführt. Vorher
+     war Block 4 acceptance über §4.11 KG-AFF-Marker verstreut; jetzt explizite Bullet-Liste. -->
+Block 4 (AudioFileFactory + Pre-Dispatch-Allocation + Legacy-Migration) gilt als done, wenn:
+- [ ] **AudioFileFactory + Default-Impl angelegt:** `core/AudioFileFactory.kt` (Interface) +
+  `core/CacheDirAudioFileFactory.kt` (Default-Impl) mit Lazy-Init via `cacheDirProvider: () -> File`
+  (§4.11.3 + KG-AFF-5). `allocate()` erzeugt `cacheDir/audio/rec_{ts}_{uuid8}.m4a`-Pfade;
+  `cleanupOrphans(referencedPaths)` filtert mit 60s-Cutoff (KG-AFF-4).
+- [ ] **`CacheDirAudioFileFactoryTest` grün:** 8+ Unit-Tests (alle in §4.11.9), inkl. KG-AFF-4
+  Cutoff-Test (`cleanupOrphans skips files younger than CUTOFF_GRACE_MS`) und KG-AFF-5
+  Null-Check-Test (`cacheDirProvider = { null }` wirft `IllegalArgumentException`).
+- [ ] **Pre-Dispatch-Allocation in Resolvers (R.2):** Spec 2 §8.5 `resolveRecordAction` und
+  Spec 3 §3.1 `resolveOverlayRecordAction` rufen `services.audioFileFactory.allocate()` mit
+  IOException-Toast-Fallback. `Action.RecordingAction.StartRecording` trägt `audioFile`-Argument.
+  Verifiziert via `ResolverPreDispatchAllocateTest.kt` (handgeschriebener `FakeAudioFileFactory`).
+- [ ] **`Effect.AllocateMediaRecorder` 3-arg:** Definition + Reducer-Use + EffectHandler-Use sind
+  konsistent (S-4 F-3, bereits eingearbeitet); Block 4 verifiziert via `RecordingModuleTest` und
+  `assembleDebug`-Smoke (keine Compile-Errors).
+- [ ] **String-Resource `dictate_storage_full`** in `values/strings.xml` (EN) und
+  `values-de/strings.xml` (DE) angelegt. Verifiziert via `grep -rn "dictate_storage_full" app/src/main/res/`.
+- [ ] **Sofort-Delete nach Persist (KG-AFF-1):** `PipelineOrchestrator.persistNewSession`
+  ruft `audioFile.delete()` nach erfolgreichem `persistFromCache` (siehe Code-Snippet §4.11.6.1).
+  Verifiziert via `PipelineOrchestratorPersistTest.kt` (Mock-RecordingRepository + temp-File).
+- [ ] **`LegacyAudioFileMigration` (KG-AFF-2):** Klasse angelegt, Pref-Flag-idempotent, im
+  Service-`onCreate` Schritt 6.5 aufgerufen. DAO-Query hat
+  `WHERE status NOT IN ('FAILED', 'CANCELLED', 'COMPLETED')`-Klausel (Phase-B S-7 F-3 Idempotenz).
+  Verifiziert via `LegacyAudioFileMigrationTest.kt`: (a) erster Lauf markiert RECORDING/RECORDED/
+  TRANSCRIBING-Sessions mit legacy-Path als FAILED + `audio_file_path_legacy_purged`-Reason; (b)
+  bereits-FAILED Sessions mit anderer `last_error_message` werden NICHT überschrieben; (c)
+  zweiter Lauf nach Pref-Flag-Set ist no-op; (d) Legacy-File wird gelöscht falls vorhanden.
+- [ ] **Recursive Cache-Clear (KG-AFF-3):** `PreferencesFragment.clearCacheRecursively` +
+  Cache-Size-/File-Count-Helper sind recursive. Race-Schutz gegen aktive Recording (Phase-B S-7
+  F-10): Click ist disabled + Toast bei `state.recording !is Idle`. Verifiziert via
+  `PreferencesFragmentRecursiveClearTest.kt` (Robolectric).
+- [ ] **Boot-Cleanup-Hook:** `audioFileFactory.cleanupOrphans(referencedPaths)` läuft einmalig
+  im `serviceScope.launch(Dispatchers.IO)` im `Service.onCreate` (§4.11.5.1 Schritt 8). DB-Read
+  via `findAllAudioFilePaths()`; Fail-Catch loggt WARN, blockt nicht den Boot. Verifiziert via
+  `DictatePipelineServiceBootOrphanCleanupTest.kt`.
+- [ ] **Recovery-Coupling für v4-Stati (Phase-B S-7 F-5):** Recovery-Pfad behandelt
+  RECORDED/RECORDING/TRANSCRIBING-Stati korrekt gegenüber File-Existenz (siehe §4.11.6
+  Recovery-Coupling-Tabelle post-S-7). Erweiterung der existierenden R.16a/b/c-Tests
+  (Block 3-Acceptance) — kein neuer Test, nur Verifikation dass die Tabelle vollständig ist.
+- [ ] **`RecordingModule.reduceFailure` für AllocateMediaRecorder (Phase-B S-7 F-7):** State-
+  Rollback `Preparing → Idle` + `Effect.ReleaseMediaRecorder` + `Effect.DeleteAudioFile`. Test:
+  `RecordingModuleFailureTest::allocateFailure_rollsBackToIdle()` mit `FakeServices` und
+  `AllocateMediaRecorder`-Effect-Wurf.
+- [ ] **Service-Field-Entfernen:** `DictateInputMethodService.audioFile`-Field Z. 208 + Z. 1612
+  Allokations-Zeile sind gelöscht (Verifikation per `grep -rn "audioFile" app/src/main/java/`).
+  `recordingStateController.startRecording(audioFile, ...)`-Aufruf wandert in
+  `RecordingModule.runEffect(Effect.AllocateMediaRecorder)`.
+
 ---
 
 ## §11 Research-TODOs für Agent — Detail-Antworten
@@ -4300,6 +4474,66 @@ Reihenfolge der Sub-Schritte:
 12. **`HistoryDetailActivity.java:287-299`** — KEINE Code-Änderung (existierende Whitelist `RECORDED || FAILED || CANCELLED || COMPLETED` schließt RECORDING/TRANSCRIBING automatisch aus, siehe §6.1.3 Konsumenten-Tabelle).
 13. **Lint-Setup** (KG-SST-4): `app/build.gradle` um `lint { error += "EnumSwitch"; abortOnError true }`-Block ergänzen. Vorher `./gradlew lint` laufen lassen, Baseline-Findings reviewen.
 14. **`strings.xml`** ergänzen: `dictate_status_recording`, `dictate_status_transcribing` (§6.1.3 Patch).
+
+<!-- FIX: Phase-B S-7 (2026-05-13) – Block 4 (AudioFileFactory + Pre-Dispatch-Allocation) explizit als
+     eigene Sub-Schritt-Sequenz dokumentiert. §4.11 hat die kanonische Spec; hier die
+     Implementer-Reihenfolge der Sub-Schritte, damit Block 4 nicht implizit über die §4.11-Markers
+     verstreut sein muss. -->
+**Block 4 — AudioFileFactory + Pre-Dispatch-Allocation + Legacy-Migration (siehe §4.11)**
+
+Ziel: Allokation der Audio-Cache-Files entkoppeln vom MediaRecorder-Setup (Pure-Reducer-Vertrag R.2,
+Multi-Job-Kollisions-Freiheit R.8); Legacy-`cacheDir/audio.m4a`-Bereinigung; rekursive "Cache leeren"-
+Logik in PreferencesFragment.
+
+Reihenfolge der Sub-Schritte:
+
+1. **`AudioFileFactory`-Interface + `CacheDirAudioFileFactory` anlegen** (`core/AudioFileFactory.kt`,
+   `core/CacheDirAudioFileFactory.kt`) — Code-Snippets siehe §4.11.2 + §4.11.3. KG-AFF-4-Cutoff-Filter
+   + KG-AFF-5-`requireNotNull` im Lazy-Init direkt mit-implementiert.
+2. **`ModuleServices.audioFileFactory`-Field** im `ModuleServices` (§4.7) + im `ModuleServicesFactory`-
+   Wiring in `DictatePipelineService.onCreate` (§4.11.5.3 Code-Diff). Phase-B S-7 Reminder:
+   `services` wird zusätzlich an `ImeViewBackend`/`OverlayBackend` durchgereicht (Spec 2 §6 / Spec 3
+   §4.2 post-S-7) — beide Backends brauchen `services.audioFileFactory` für Pre-Dispatch-Allocate.
+3. **`resolveRecordAction`-Resolver erweitern** (Spec 2 §8.5) — 2-arg-Signatur `(state, services) ->
+   Action?`, ruft `services.audioFileFactory.allocate()`; bei `IOException` → `services.toastSink.show
+   (R.string.dictate_storage_full)` → `null`. Analog `resolveOverlayRecordAction` (Spec 3 §3.1
+   post-S-7).
+4. **`ButtonSlot.actionResolver`-Typ erweitern** (Spec 2 §3.2) auf `(DictateUiState, ModuleServices)
+   -> Action?`. Alle existierenden `{ Action.X }` und `{ state -> Action.X }`-Lambdas in
+   `LayoutCatalog`-Slots (Spec 2 §8.1-§8.4 + Spec 3 §3.1) mechanisch erweitern: `{ Action.X }` →
+   `{ _, _ -> Action.X }`, `{ state -> Action.X }` → `{ state, _ -> Action.X }`. Compile-Fehler
+   beim ersten `./gradlew assembleDebug` zeigt jede Stelle.
+5. **`wireStaticHandlers` (Spec 2 §6) + `wireStaticOverlayHandlers` (Spec 3 §4.2)** rufen
+   `slot.actionResolver(state, services)` statt der 1-arg-Variante (Phase-B S-7).
+6. **`StartRecording`-Action 2-arg-Konstruktor sicherstellen** (Spec 2 §3.3): `data class
+   StartRecording(target: InsertionTarget, audioFile: File)`. Beim Spec-2-Read prüfen, dass keine
+   1-arg-Callsite zurückbleibt (Spec 3 §3.1 hatte einen — gefixt in Phase-B S-7).
+7. **String-Resource `dictate_storage_full`** in `app/src/main/res/values/strings.xml` ergänzen
+   (z.B. `"Cache full — recording cannot start."`) und in `values-de/strings.xml` mit Deutsch-
+   Übersetzung (`"Cache voll — Aufnahme kann nicht starten."`). **Pflicht-Aufgabe — fehlt
+   heute, blockiert sonst den Block-4-Build.**
+8. **`Effect.AllocateMediaRecorder`-Signatur 3-arg** (Spec 1 §15.2): `data class AllocateMediaRecorder
+   (target, useBluetooth, audioFile)` — siehe S-4 F-3 Fix (bereits eingearbeitet); Block 4 nur
+   verifizieren.
+9. **`PipelineOrchestrator.persistNewSession`-Patch** (`core/PipelineOrchestrator.kt:854-857`):
+   Sofort-Delete des Cache-Files nach erfolgreichem `persistFromCache` (KG-AFF-1, Code-Snippet
+   §4.11.6.1).
+10. **`LegacyAudioFileMigration` anlegen** (`migration/LegacyAudioFileMigration.kt`) mit dem Code
+    aus §4.11.6.2 (KG-AFF-2). Aufruf in `DictatePipelineService.onCreate` Schritt 6.5 (§4.11.5.1
+    Sequence-Tabelle). Phase-B S-7 Reminder: DAO-Query hat jetzt
+    `WHERE audio_file_path = :legacyPath AND status NOT IN ('FAILED', 'CANCELLED', 'COMPLETED')` —
+    schützt bestehende Failure-Information vor Überschreibung.
+11. **Boot-Cleanup im Service-`onCreate`** — `audioFileFactory.cleanupOrphans(referenced)` via
+    `serviceScope.launch(Dispatchers.IO)` mit `findAllAudioFilePaths()`-DB-Read (§4.11.5.3 Schritt 5
+    + §7.3 Z. 3603-3613).
+12. **`PreferencesFragment.java:272-296`-Refactor** — `clearCacheRecursively`-Helper + Cache-Size-/
+    File-Count-Helpers (Recursive-Versionen) (§4.11.6.3 KG-AFF-3). Hinweis-Block einfügen:
+    "wenn `state.recording !is RecordingState.Idle` → 'Cache leeren' deaktiviert + Toast 'Recording
+    aktiv'". (Phase-B S-7: Race-Schutz vor offenem MediaRecorder-FD, siehe Finding F-10.)
+13. **DictateInputMethodService.java-Felder + Sites entfernen** — `audioFile`-Field Z. 208 sowie
+    Allokations-Zeile Z. 1612 (§4.11.5.4 Migrations-Schritte 1-4).
+14. **Tests verdrahten** — `CacheDirAudioFileFactoryTest`, `RecordingModuleAudioFileFactoryWiringTest`,
+    optional `AudioFileFactoryRobolectricTest` (§4.11.9 Test-Strategie + Skelette).
 
 <!-- FIX: Phase-B S-1 (2026-05-13) – Test-Klassen auf F-11-Module-Pattern umgestellt (RecordingModuleTest statt PipelineStateManagerTest, separate PipelineRecoveryTest). -->
 #### §11.2.3 Test-Strategie
@@ -4774,11 +5008,14 @@ Bei `recoverFromDb` werden alle `final_output_text != NULL AND inserted_at IS NU
 
 **Edge-Case:** `recoverFromDb` lädt auch RECORDED-Sessions (Audio aufgenommen, aber keine Pipeline mehr gelaufen — Crash mitten im Recording-Stop). Dafür gilt:
 
+<!-- FIX: Phase-B S-7 (2026-05-13) – `getByStatus(String)` existiert im DAO nicht; korrekter Name ist
+     `getSessionsByStatuses(List<String>)` (Plural, mit Liste). Drift gegen §6.3 Z. 3203/3268 +
+     DAO-Definition Z. 3298 (S-2-Scope) — bereinigt. -->
 ```kotlin
 suspend fun recoverFromDb() = withContext(Dispatchers.IO) {
     val pending = db.sessionDao().findPendingInsertion()
         .map { it.toPendingSession() }
-    val orphanedRecorded = db.sessionDao().getByStatus("RECORDED")
+    val orphanedRecorded = db.sessionDao().getSessionsByStatuses(listOf("RECORDED"))
         .filter { it.audioFilePath != null && File(it.audioFilePath).exists() }
         .map { it.toPendingSession() }
     <!-- FIX: Phase-B S-4 (2026-05-13) – store.update statt _state.update (Insider-Syntax, §4.4 private MutableStateFlow). -->
@@ -4789,9 +5026,9 @@ suspend fun recoverFromDb() = withContext(Dispatchers.IO) {
 Sessions mit `audio_file_path != null` aber Datei existiert nicht (Cache-Cleanup nach App-Update, OS-Storage-Druck-Wipe, oder User-"Cache leeren" — siehe §4.11.6) werden gefiltert + DB-cleanup als opportunistic side-effect:
 
 ```kotlin
-val ghostSessions = db.sessionDao().getByStatus("RECORDED")
+val ghostSessions = db.sessionDao().getSessionsByStatuses(listOf("RECORDED"))
     .filter { it.audioFilePath != null && !File(it.audioFilePath).exists() }
-ghostSessions.forEach { 
+ghostSessions.forEach {
     db.sessionDao().updateStatus(it.id, SessionStatus.FAILED.name)
     db.sessionDao().updateError(it.id, "UNKNOWN", "audio file vanished")
 }
@@ -5773,6 +6010,48 @@ object RecordingModule : DictateModule<
         Effect.PauseBorderGlow         -> services.borderGlow.pause()
         Effect.ResumeBorderGlow        -> services.borderGlow.resume()
         Effect.StopBorderGlow          -> services.borderGlow.stop()
+    }
+
+    <!-- FIX: Phase-B S-7 (2026-05-13) – reduceFailure für AllocateMediaRecorder-Failures.
+         Hintergrund: S-3 F-1 hat `reduceFailure` als optionalen Hook eingeführt; S-3-Offene-Fragen
+         für S-4 forderte einen expliziten Failure-Arm in RecordingModule (siehe S-3-Report).
+         S-4 hat das nicht eingearbeitet. S-7 schließt die Lücke, weil der Pre-Dispatch-Resolver
+         zwar `IOException` aus `allocate()` fängt, ABER: was passiert, wenn `MediaRecorder.prepare()`
+         im Effect-Handler wirft (z.B. wegen externer Cache-Wipe zwischen `allocate()` und runEffect,
+         oder MIC-Permission währenddessen entzogen)? Ohne reduceFailure-Arm würde `Action.EffectFailure
+         (originModuleId = ModuleId.Recording, ...)` an `RecordingModule.reduceFailure` geroutet,
+         der Default ist `null` → `Rejected("reducer-null")` → State hängt im `Preparing`-Zustand
+         für immer. Mit dem unten implementierten Arm: State-Rollback `Preparing → Idle`, das
+         angeforderte Audio-File wird als orphan vom nächsten `cleanupOrphans`-Lauf eingesammelt
+         (kein expliziter Delete-Effect nötig, weil MediaRecorder.prepare die Datei nie erzeugt hat
+         bzw. nur ein 0-Byte-File hinterlässt — beides vom cleanup-Pfad erfasst). -->
+    override fun reduceFailure(
+        state: RecordingState,
+        failure: Action.EffectFailure,
+        ctx: ReducerContext,
+    ): TransitionResult<RecordingState, Effect>? = when {
+        // Failure beim Allocate-Effect (Hardware-IO failed, externer Cache-Wipe, MIC-Permission
+        // entzogen mid-prepare): State zurück auf Idle. Das angeforderte audioFile war noch nicht
+        // im MediaRecorder geschrieben (`MediaRecorder.prepare()` wirft VOR dem ersten Frame) —
+        // im worst case bleibt ein 0-Byte-File im cacheDir/audio/, das cleanupOrphans entsorgt.
+        failure.effect == "AllocateMediaRecorder" && state is RecordingState.Preparing ->
+            TransitionResult(
+                nextState = RecordingState.Idle,
+                sideEffects = listOf(
+                    Effect.ReleaseMediaRecorder,    // idempotent, no-op falls allocate gar nicht durchkam
+                    Effect.DeleteAudioFile(state.audioFile),    // best-effort, fängt 0-Byte-Files
+                ),
+            )
+        // Failure beim Stop-Effect (MediaRecorder.stop wirft): State auf Idle, kein File-Delete
+        // (Audio ist ggf. valid persistiert worden vor dem Stop-Throw).
+        failure.effect == "StopMediaRecorder" && (state is RecordingState.Active || state is RecordingState.Paused) ->
+            TransitionResult(
+                nextState = RecordingState.Idle,
+                sideEffects = listOf(Effect.ReleaseMediaRecorder, Effect.StopTimer, Effect.StopBorderGlow),
+            )
+        // Andere Failures: Default-Verhalten (Rejected). Künftige Effects können explizit ergänzt
+        // werden, wenn ein neuer Failure-Pfad nötig ist.
+        else -> null
     }
 
     <!-- FIX: Issue PENDING-3 / Spec-3 Reducer Simplified – OverlayAction.ResetSuppressBit -->

@@ -1,0 +1,286 @@
+package net.devemperor.dictate.state
+
+import kotlinx.collections.immutable.persistentListOf
+import net.devemperor.dictate.core.ContentArea
+import net.devemperor.dictate.database.entity.SessionStatus
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+
+/**
+ * Pure type-level tests for [DictateUiState] and its sub-state types.
+ *
+ * No reducer logic, no orchestrator — just `data class` invariants:
+ * equality, copy semantics, sub-state copy isolation, PersistentList
+ * mutation idiom, and structural defaults.
+ */
+class DictateUiStateTest {
+
+    // ────────────────────────────────────────────────────────────────
+    // Initial state
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `initial state has Idle recording and Idle pipeline and KEYBOARD viewMode`() {
+        val s = DictateUiState.initial()
+
+        assertSame(RecordingState.Idle, s.recording)
+        assertSame(PipelineUiState.Idle, s.pipeline)
+        assertEquals(ViewMode.KEYBOARD, s.viewMode)
+    }
+
+    @Test
+    fun `initial state has empty pendingSessions and Phase-2 interruption null`() {
+        val s = DictateUiState.initial()
+
+        assertTrue(s.pendingSessions.isEmpty())
+        assertNull(s.interruption)
+        assertFalse(s.lastResultNeedsManualPaste)
+    }
+
+    @Test
+    fun `initial sub-states use their data-class defaults`() {
+        val s = DictateUiState.initial()
+
+        assertEquals(LayoutState(), s.layout)
+        assertEquals(OverlayState(), s.overlay)
+        assertEquals(AudioState(), s.audio)
+        assertEquals(ResendState(), s.resend)
+        assertEquals(LivePromptState(), s.livePrompt)
+        assertEquals(FeatureToggles(), s.features)
+        assertEquals(ThemingState(), s.theming)
+    }
+
+    @Test
+    fun `initial language is system`() {
+        assertEquals("system", DictateUiState.initial().language.effective)
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // data-class equality + copy
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `two initial states are equal`() {
+        assertEquals(DictateUiState.initial(), DictateUiState.initial())
+    }
+
+    @Test
+    fun `copy produces a new instance with the requested mutation`() {
+        val a = DictateUiState.initial()
+        val b = a.copy(viewMode = ViewMode.WIDGET)
+
+        assertNotEquals(a, b)
+        assertEquals(ViewMode.KEYBOARD, a.viewMode)    // a unchanged
+        assertEquals(ViewMode.WIDGET, b.viewMode)
+    }
+
+    @Test
+    fun `copy preserves untouched sub-states by reference`() {
+        // Structural sharing — the layout sub-state is the same instance
+        // because copy(viewMode = …) only swaps the viewMode field.
+        val a = DictateUiState.initial()
+        val b = a.copy(viewMode = ViewMode.WIDGET)
+
+        assertSame(a.layout, b.layout)
+        assertSame(a.overlay, b.overlay)
+        assertSame(a.audio, b.audio)
+    }
+
+    @Test
+    fun `sub-state copy is structural — outer state is unchanged`() {
+        val a = DictateUiState.initial()
+        val newLayout = a.layout.copy(smallMode = true)
+        val b = a.copy(layout = newLayout)
+
+        assertFalse(a.layout.smallMode)              // outer a unchanged
+        assertTrue(b.layout.smallMode)
+        assertNotSame(a.layout, b.layout)            // sub-state replaced
+        assertSame(a.overlay, b.overlay)             // other axes unchanged
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // RecordingState sealed hierarchy
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `RecordingState Idle is a singleton`() {
+        // data object → reference-equal across reads
+        assertSame(RecordingState.Idle, RecordingState.Idle)
+    }
+
+    @Test
+    fun `RecordingState Preparing carries useBluetooth + audioFile`() {
+        val f = File("/cache/audio.m4a")
+        val p = RecordingState.Preparing(useBluetooth = true, audioFile = f)
+
+        assertTrue(p.useBluetooth)
+        assertEquals(f, p.audioFile)
+        // Equality by content (data class)
+        assertEquals(p, RecordingState.Preparing(true, f))
+    }
+
+    @Test
+    fun `RecordingState Active and Paused are distinct types with same payload shape`() {
+        val f = File("/cache/audio.m4a")
+        val active = RecordingState.Active(useBluetooth = false, audioFile = f)
+        val paused = RecordingState.Paused(useBluetooth = false, audioFile = f)
+
+        assertNotEquals(active as RecordingState, paused as RecordingState)
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // PipelineUiState sealed hierarchy
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `PipelineUiState Idle is a singleton`() {
+        assertSame(PipelineUiState.Idle, PipelineUiState.Idle)
+    }
+
+    @Test
+    fun `PipelineUiState Running carries sessionId + target + autoEnter`() {
+        val r = PipelineUiState.Running(
+            sessionId = "abc",
+            target = InsertionTarget.INPUT_CONNECTION,
+            autoEnterActive = true,
+        )
+
+        assertEquals("abc", r.sessionId)
+        assertEquals(InsertionTarget.INPUT_CONNECTION, r.target)
+        assertTrue(r.autoEnterActive)
+    }
+
+    @Test
+    fun `PipelineUiState Running autoEnterActive defaults to false`() {
+        val r = PipelineUiState.Running(
+            sessionId = "abc",
+            target = InsertionTarget.INPUT_CONNECTION,
+        )
+
+        assertFalse(r.autoEnterActive)
+    }
+
+    @Test
+    fun `PipelineUiState ReprocessStaging carries sessionId + transcript`() {
+        val rs = PipelineUiState.ReprocessStaging(sessionId = "xyz", transcript = "hello")
+
+        assertEquals("xyz", rs.sessionId)
+        assertEquals("hello", rs.transcript)
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // PersistentList idiom
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `pendingSessions PersistentList add preserves structural sharing`() {
+        val base = DictateUiState.initial()
+        val session = PendingSession(
+            sessionId = "s1",
+            status = SessionStatus.RECORDED,
+            transcribedText = null,
+            createdAt = 1L,
+        )
+        val next = base.copy(pendingSessions = base.pendingSessions.add(session))
+
+        assertEquals(0, base.pendingSessions.size)    // original unchanged
+        assertEquals(1, next.pendingSessions.size)
+        assertEquals(session, next.pendingSessions.first())
+    }
+
+    @Test
+    fun `pendingSessions removeAll by predicate keeps non-matching entries`() {
+        val s1 = PendingSession("s1", SessionStatus.RECORDED, null, 1L)
+        val s2 = PendingSession("s2", SessionStatus.COMPLETED, "text", 2L)
+        val base = DictateUiState.initial().copy(pendingSessions = persistentListOf(s1, s2))
+
+        val filtered = base.copy(
+            pendingSessions = base.pendingSessions.removeAll { it.sessionId == "s1" }
+        )
+
+        assertEquals(1, filtered.pendingSessions.size)
+        assertEquals("s2", filtered.pendingSessions.first().sessionId)
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // Sub-state defaults
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `LayoutState defaults to MAIN_BUTTONS and animations enabled`() {
+        val l = LayoutState()
+
+        assertEquals(ContentArea.MAIN_BUTTONS, l.contentArea)
+        assertFalse(l.singleRowMode)
+        assertFalse(l.smallMode)
+        assertTrue(l.animationsEnabled)
+    }
+
+    @Test
+    fun `OverlayState defaults are right-aligned + 10pct top + no permission`() {
+        val o = OverlayState()
+
+        assertEquals(1.0f, o.positionPortraitX, 0.0f)
+        assertEquals(0.1f, o.positionPortraitY, 0.0f)
+        assertFalse(o.hasPermission)
+        assertFalse(o.userPrefersWidget)
+        assertFalse(o.suppressAutoOverlayUntilNextSession)
+    }
+
+    @Test
+    fun `AudioState defaults — focus enabled, granted false, BTSco disconnected`() {
+        val a = AudioState()
+
+        assertTrue(a.audioFocusEnabledPref)
+        assertFalse(a.audioFocusGranted)
+        assertEquals(ScoPhase.Disconnected, a.bluetoothSco.phase)
+        assertNull(a.bluetoothSco.failureReason)
+        assertFalse(a.useBluetoothMic)
+        assertTrue(a.vibrationEnabled)
+    }
+
+    @Test
+    fun `ResendState defaults — no audio, disabled, no cooldown`() {
+        val r = ResendState()
+
+        assertFalse(r.lastAudioExists)
+        assertFalse(r.resendEnabled)
+        assertFalse(r.resendCooldown)
+    }
+
+    @Test
+    fun `FeatureToggles defaults — rewording + instant on, autoFormat + autoEnter off`() {
+        val f = FeatureToggles()
+
+        assertTrue(f.rewordingEnabled)
+        assertFalse(f.autoFormattingEnabled)
+        assertTrue(f.instantOutputEnabled)
+        assertFalse(f.autoEnterEnabled)
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // Top-level flag
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `lastResultNeedsManualPaste defaults to false`() {
+        assertFalse(DictateUiState.initial().lastResultNeedsManualPaste)
+    }
+
+    @Test
+    fun `lastResultNeedsManualPaste can be set via copy without touching other axes`() {
+        val a = DictateUiState.initial()
+        val b = a.copy(lastResultNeedsManualPaste = true)
+
+        assertTrue(b.lastResultNeedsManualPaste)
+        assertSame(a.recording, b.recording)
+        assertSame(a.pipeline, b.pipeline)
+    }
+}

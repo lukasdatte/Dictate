@@ -211,6 +211,7 @@ Render-Backends iterieren die Slots, evaluieren die Resolver gegen den aktuellen
 
 | # | Block | Spec | Kurz-Beschreibung | Komplexität |
 |---|-------|------|---------------------|-------------|
+| **0** | **Architektur-Doku + ADR** | §4.0 (dieses Dokument) | ADR `docs/decisions/NNNN-modular-orchestrator-architecture.md` + Architektur-Doku `docs/architecture/state-architecture/` anlegen. Verankert das Modular-Orchestrator-Pattern (Composition Root + 13 Module + Single-Dispatch + Pure-Reducer-Invariante + Cross-Module-Cascade) projektweit. Pflicht-Lese-Quelle für alle folgenden Blöcke. **Bindender Vertrag, nicht Beschreibung.** | klein |
 | **1a** | **Quick-Wins im heutigen Code** | [Spec 1: Pipeline-Service](research/1-pipeline-service/1-pipeline-service.md) §11.2.2 + Spec 2 §13.5 Gap 5 | `predResendVisible`-Helper konsolidieren; alle 6 resend_btn-Mutationen auf Helper umstellen; `recordButton.text/isEnabled`-Hybrid auflösen — **im heutigen Code, ohne Modul-Architektur, kompilier-grün** | klein-mittel |
 | 2 | **DictatePipelineService-Skelett** | [Spec 1: Pipeline-Service](research/1-pipeline-service/1-pipeline-service.md) | Service-Skelett, FGS, ServiceScope, LocalBinder, persistente Notification | mittel |
 | **1b** | **DictateUiState + DictateOrchestrator + 13 Module** | [Spec 1: Pipeline-Service](research/1-pipeline-service/1-pipeline-service.md) §3 + §4 + §15 | Hierarchischer DictateUiState, DictateOrchestrator, alle 13 Module (Recording, Pipeline, Audio, ViewMode, Overlay, Resend, LivePrompt, Language, Layout, FeatureToggle, Theming, PendingSessions, Interruption-Phase-2), Action-Sealed-Hierarchie — **im PipelineService-Container** | groß |
@@ -219,9 +220,885 @@ Render-Backends iterieren die Slots, evaluieren die Resolver gegen den aktuellen
 | 5 | **LayoutCatalog + ImeViewBackend** | [Spec 2: Keyboard-Layout](research/2-keyboard-layout/2-keyboard-layout.md) | KeyboardLayoutManager, LayoutCatalog, MotionScene, VISIBILITY_MODE_IGNORE, RecordingAnimationController, ContentAreaController + PromptVisibilityController + OverlayResetHandler (R.10) | groß |
 | 6 | **OverlayBackend (WIDGET + HOVER)** | [Spec 3: Floating-Overlay](research/3-floating-overlay/3-floating-overlay.md) | Overlay-XML, WindowManager-Integration, Permission-Observer, Schließen-Button-Differential, Mode-Transitionen, Drag-Lifecycle (R.18, R.19) | mittel-groß |
 
-**Reihenfolge:** **1a** → 2 → **1b** → 3 → 4 → 5 → 6. Block 1a (Quick-Wins im heutigen Code) **muss** vor allem anderen kommen — er bringt das heutige System auf eine Single-Owner-Visibility-Basis, ohne die Modul-Architektur einzuführen. Block 1b (DictateUiState + Module-Aufbau) kommt **nach** Block 2, weil er den PipelineService-Container braucht; das ist semantisch ehrlicher als die alte "Block 1 hängt von Block 2 ab"-Garantie.
+**Reihenfolge:** **0** → **1a** → 2 → **1b** → 3 → 4 → 5 → 6. Block 0 ist die schriftliche Verankerung der Architektur als bindender Vertrag — ADR + Architektur-Doku werden VOR der Code-Migration angelegt, damit alle folgenden Blöcke einen verbindlichen Lese-Anker haben (und Block-1b-Implementer nicht aus dem Bauch entscheiden, was "Pure-Reducer" oder "Cross-Module-Cascade" bedeutet). Block 1a (Quick-Wins im heutigen Code) bleibt nach Block 0, weil 1a die Architektur noch nicht braucht — aber der ADR-Kontext hilft, falls in 1a eine Architektur-Frage hochkommt. Block 1b (DictateUiState + Module-Aufbau) kommt **nach** Block 2, weil er den PipelineService-Container braucht.
 
 **Risiko (neu):** Block 1a Quick-Wins ↔ Block 1b Module-Aufbau ohne Split würde Race-Condition bei Visibility-Mutationen während der Migration erzeugen. Der Split eliminiert das strukturell.
+
+### 4.0 Block 0 — Architektur-Doku + ADR (Pflicht-Lese-Anker)
+
+Block 0 produziert zwei Artefakte, die VOR allen Code-Blöcken existieren müssen:
+
+#### 4.0.1 ADRs (5 Stück) in `docs/decisions/`
+
+**Zweck:** Bindender Architektur-Vertrag, **aufgeteilt in fünf eigenständige ADRs**, damit
+spätere Phase-2-Erweiterungen einzelne Entscheidungen via Superseding ändern können, ohne
+die Gesamtarchitektur in Frage zu stellen (z.B. Mode 3 zulassen, vierter ViewMode,
+WorkManager-Adoption).
+
+##### 4.0.1.0 ADR-Übersicht
+
+| # | ADR-Slug | Subsystem | Decision-Kernsatz (geht in §2 "Decision") |
+|---|---|---|---|
+| 1 | `state-modular-orchestrator-pattern` | `state` | "Wir adoptieren das `DictateOrchestrator + 13 DictateModule`-Pattern mit Single-Dispatch, Pure-Reducer-Invariante und Lens-basierter Sub-State-Abkapselung. Mutation läuft ausschließlich über `dispatch(action: Action)` (Main-Thread-confined). Jede Sub-State-Achse hat genau einen Modul-Owner; Module kommunizieren nur über globalen State + Action-Pipe, niemals direkt." |
+| 2 | `state-cross-module-cascade` | `state` | "Cross-Module-Effekte laufen über **Mode 1** (eigene SideEffect aus dem Reducer) oder **Mode 2** (Action-Cascade via `onCrossModuleStateChange(prev, next): List<Action>`). **Mode 3** (Atomic Cross-Axis-Update im Reducer) ist verboten. Self-Cascade ist erlaubt (KG-RSB-2-Fix). `MAX_CASCADE_DEPTH = 8` ist der einzige Endlos-Schutz. `EffectFailure` wird über `originModuleId` an das emittierende Modul geroutet, nicht über KClass-Lookup." |
+| 3 | `service-foreground-pipeline-architecture` | `service` | "Pipeline-State lebt in einem dedizierten `DictatePipelineService` (Foreground Service, type=microphone) im selben App-Prozess wie der IME-Service. Kommunikation via LocalBinder + StateFlow (kein IPC). **Kein WorkManager** — bei OOM-Death erfolgt Recovery via DB-Replay + manueller User-Resume. Persistente Notification ist Pflicht (FGS) und dient gleichzeitig als Status-UI." |
+| 4 | `ui-layout-catalog-motionlayout` | `ui-rendering` | "UI-Rendering ist deklarativ: `LayoutCatalog` (Predicates + Resolver pro `ButtonSlot`) + MotionScene-XML statt programmatisches Re-Parenting. `RenderBackend`-Interface mit Multi-Backend-Pattern (`ImeViewBackend` + `ContentAreaController` + `OverlayBackend` parallel). Click-Listener einmal beim `attach()` verdrahtet, lesen Backend-Felder `stateRef`/`modeRef`. `motion:visibilityMode=\"ignore\"` ist Pflicht auf allen state-getriebenen Buttons." |
+| 5 | `ui-triangle-fsm-keyboard-widget-hover` | `ui-mode` | "ViewMode ist eine deterministisch berechnete Funktion `computeViewMode(imeViewVisible, userPrefersWidget, pipelineActive) → ViewMode` mit drei Werten KEYBOARD/WIDGET/HOVER und sieben Übergängen T1–T7. WIDGET ist User-getriggert (Permission-gated), HOVER ist automatisch bei `!imeViewVisible && pipelineActive`. `userPrefersWidget` ist transient (in-memory). T7 (HOVER→KEYBOARD bei Pipeline-Done) ist struktureller Schutz gegen den 'Geist-Widget'-Bug." |
+
+**Subsystem-Header pro ADR:** ADR-1+2 = `Subsystem: state`. ADR-3 = `Subsystem: service`.
+ADR-4 = `Subsystem: ui-rendering`. ADR-5 = `Subsystem: ui-mode`. Alle fünf gleichzeitig
+mit `Scope: Project-Wide`-Hinweis im Header, weil sie auch andere Subsysteme binden.
+
+##### 4.0.1.0.1 Mapping: Plan-Body-Sub-Sektion → ADR
+
+Die hart definierten Regeln aus §4.0.1.1–§4.0.1.7 + §4.0.5 + §4.0.6 verteilen sich
+auf die fünf ADRs wie folgt — beim Schreiben der ADRs werden die genannten Sektionen
+1:1 übernommen (oder per Cross-Reference verlinkt).
+
+| Plan-Body-Sektion | ADR-1 | ADR-2 | ADR-3 | ADR-4 | ADR-5 |
+|---|:---:|:---:|:---:|:---:|:---:|
+| §4.0.1.1 Reducer-Regeln | **§3** | — | — | — | — |
+| §4.0.1.2 Action-Regeln | **§4** | (§4) | — | — | — |
+| §4.0.1.3 Effect-Regeln | **§5** | (§5) | — | — | — |
+| §4.0.1.4 Cross-Module-Regeln | (Ref) | **§3** | — | — | — |
+| §4.0.1.5 Verbotene Patterns | (a,b,c,e,h,i,m,n) | (f,g) | — | (d,j,k,l) | — |
+| §4.0.1.6 Wer hält State (Diagramm) | **§6** | — | — | — | — |
+| §4.0.1.7 Wer hält UI-Wiring | — | — | — | **§3** | — |
+| §4.0.5 Modul-Isolation (Lens, Diagramm, Kanäle, Registry) | **§7** | (Ref) | — | — | — |
+| §4.0.6.1 Walkthrough Button | **§Cons. Pos.** | — | — | (§Cons. Pos.) | — |
+| §4.0.6.2 Walkthrough Sub-Tastatur | — | — | — | **§Cons. Pos.** | — |
+| §4.0.6.3 Walkthrough Modul | **§Cons. Pos.** | (§Cons. Pos.) | — | — | — |
+| Hauptplan §3.1 Triangle-FSM-Diagramm | — | — | — | — | **§3** |
+| Spec 3 §7.1 computeViewMode-Truth-Table | — | — | — | — | **§4** |
+| Spec 3 §7.3 T1–T7 Übergänge | — | — | — | — | **§5** |
+| Spec 1 §7 Foreground-Service-Lifecycle | — | — | **§3** | — | — |
+| Spec 1 §11.1 FGS-Details (5s-Timeout, Permission, Bind) | — | — | **§4** | — | — |
+| Spec 2 §3–§8 LayoutCatalog + RenderBackend | — | — | — | **§4** | — |
+| Spec 2 §7 MotionScene-XML | — | — | — | **§5** | — |
+
+Zeichen-Konvention: **fett** = Haupt-Heimat der Regel (1:1-Übernahme). `(Ref)` =
+Cross-Reference per `@see ADR-X §Y`. `(§N)` = Sub-Sektions-Erwähnung, nicht 1:1.
+
+##### 4.0.1.0.2 Querverweis-Graph zwischen den ADRs
+
+```
+ADR-1 (Modular-Orchestrator)
+  ├── ist Voraussetzung für ─► ADR-2 (Cross-Module-Cascade)
+  ├── lebt im Container von ─► ADR-3 (Foreground-Service)
+  └── wird konsumiert von   ─► ADR-4 (LayoutCatalog)
+
+ADR-2 (Cross-Module-Cascade)
+  ├── erweitert             ─► ADR-1
+  └── relevant für T7-Pfad  ─► ADR-5
+
+ADR-3 (Foreground-Service)
+  ├── hostet                ─► ADR-1 (Composition Root)
+  └── motiviert             ─► ADR-5 (HOVER-Modus möglich, weil FGS überlebt)
+
+ADR-4 (LayoutCatalog + MotionLayout)
+  ├── konsumiert            ─► ADR-1 (Sub-State über RenderBackend)
+  └── implementiert         ─► ADR-5 (Triangle-FSM via computeLayoutMode)
+
+ADR-5 (Triangle-FSM)
+  ├── implementiert in      ─► ADR-1 (ViewModeModule)
+  ├── benötigt              ─► ADR-3 (FGS für HOVER-Persistenz)
+  └── wird gerendert von    ─► ADR-4 (RenderBackend-Switching)
+```
+
+Jede ADR §References trägt die anderen vier ADRs als Cross-Reference (bidirektional).
+
+##### 4.0.1.0.3 ADR-Standard-Struktur (verbindlich pro ADR, 14 Sektionen)
+
+Alle fünf ADRs folgen derselben Sektions-Struktur (gemäß `knowledge-adr-format` skill):
+
+| § | Sektion | Inhalt |
+|---|---|---|
+| 1 | **Kontext** | Symptom/Auslöser aus diesem Plan + Bezug zu §1.1 Bug-Klassen / §2.1 Architektur-Zielen |
+| 2 | **Decision (Status: Proposed → Accepted)** | Der Decision-Kernsatz aus §4.0.1.0 (1:1) |
+| 3..7 | **Hart definierte Regeln** | je ADR-spezifisch (siehe Mapping-Tabelle §4.0.1.0.1) |
+| 8 | **Consequences (Positiv)** | konkret aus §2.1+2.3 + Walkthrough-Verweise |
+| 9 | **Consequences (Negativ + Failure Modes)** | bekannte Risiken aus Plan §6 + Phase-A-Inventur Top-3 |
+| 10 | **Subsystem-Header** | `Subsystem: <state/service/ui-rendering/ui-mode>` + optionaler `Scope: Project-Wide`-Hinweis |
+| 11 | **References** | Plan-Datei · Specs 1+2+3 § · Phase-A-Inventur · Phase-B/C-Reports · die anderen 4 ADRs · `~/.claude/skills/knowledge-adr-format` |
+| 12 | **Decision History** | Initial-Entry `2026-MM-DD — Created (Proposed)` |
+
+**Skill + Template:** Beim Schreiben jeder ADR **MUSS** das `knowledge-adr-format`-Skill
+und `~/.claude/templates/adr.md` geladen werden (mandatory load aus
+`~/.claude/snippets/docs/docs.md`).
+
+**Lifecycle pro ADR:** Status `Proposed` während Block 0; nach Plan-Approval `Accepted`.
+Body danach append-only — Reversal nur via neuer ADR, die diese supersedet.
+
+**Phase-2-Erwartungen** (potenzielle Superseding-Kandidaten):
+
+- ADR-2 könnte superseded werden, wenn ein Use-Case Mode 3 (Atomic Cross-Axis) zwingend
+  macht (Plan §7.1 Out-of-Scope).
+- ADR-3 könnte superseded werden, wenn STANDALONE_OVERLAY-Service kommt (Plan §7.1
+  Out-of-Scope) oder WorkManager nötig wird.
+- ADR-5 könnte superseded werden, wenn ein vierter ViewMode (z.B. PIP-Modus) oder ein
+  anderes Schließen-Verhalten ein Phase-2-Wunsch wird.
+- ADR-1 + ADR-4 sind die stabilsten — Superseding hier würde einen größeren Architektur-
+  Pivot bedeuten.
+
+##### 4.0.1.1 Was macht ein Reducer (ADR §3)
+
+**Positiv-Definition (was er DARF und SOLL):**
+
+- Pure Function-Signatur: `(state: S, action: A, ctx: ReducerContext) → TransitionResult<S, E>?`
+- Deterministisch — gleiche Inputs ergeben gleiche Outputs
+- Liest Cross-Module-State NUR über `ctx.global: DictateUiState` (Read-only-View)
+- Mutiert AUSSCHLIESSLICH den eigenen Sub-State `S` (Single-Owner-per-Sub-State-Invariante)
+- Emittiert Side-Effects als Liste in `TransitionResult.sideEffects` (Plan, nicht Ausführung)
+- Return `null` = "Action in diesem State unbedeutend" — der Orchestrator gibt
+  `DispatchOutcome.Rejected("reducer-null")` zurück, KEIN Bug
+- `when`-Block ist expression-form über sealed Actions (Compiler erzwingt Exhaustivity)
+- Verfügbarer Read-Kontext: `ctx.global` (kompletter UiState-Snapshot) + `ctx.now`
+  (monoton, für Timer-Vergleiche)
+
+**Negativ-Definition (was er NICHT darf):**
+
+- Hardware/IO/FS-Lesen (kein `audioFile.exists()`, kein `MediaRecorder.prepare()`)
+- Threading (Coroutinen, Threads, Locks)
+- Andere Sub-States schreiben (kein `state.copy(audio = ...)` aus
+  `RecordingModule.reduce`)
+- Direkten Store-Zugriff (`_state.value = …`)
+- Synchron `dispatch(...)` aufrufen
+- System-Time-Reads (außer `ctx.now`)
+- `else`-Branch in `when` über sealed Action (außer dokumentierter OEM-extensible Effect)
+- Logging mit Side-Effect (`Log.d` ist OK; `Toast.makeText` aus Reducer ist verboten)
+
+##### 4.0.1.2 Was machen Actions (ADR §4)
+
+**Was sie SIND:**
+
+- Reine Daten-Container (`data class` / `data object`)
+- Sealed-Class-Hierarchie mit einer inneren sealed pro Modul (`Action.RecordingAction`,
+  `Action.OverlayAction`, …)
+- Tragen alle Inputs, die der Reducer braucht (z.B. `audioFile: File` als
+  Pre-Dispatch-Allocation aus dem Resolver)
+- Einziger Eingang in die State-Mutation: `orchestrator.dispatch(action)`
+- Plus eine Top-Level `Action.EffectFailure(originModuleId, effect, reason)` als
+  Failure-Channel mit `originModuleId`-Routing (NICHT KClass-Routing)
+
+**Was sie NICHT sind:**
+
+- Träger von Logik (keine Methoden außer Daten-Properties)
+- Träger von Hardware-Referenzen (kein `MediaRecorder`-Instance darin)
+- Direkt ausführbar — Actions werden geplant, nicht "gerufen"
+- Parallel-Definition zu LocalBinder-Forwarder-Methoden (F-8: Doppel-API verboten)
+
+**Wie sie ausgelöst werden (fünf Quellen):**
+
+1. **UI-Click:** `slot.actionResolver(state, services) → Action?` → `onAction(action)` →
+   `binder.dispatch(action)`. Nullable-Resolver-Return ist stiller No-Op
+   (`?.let { onAction(it) }`), kein Log-Spam.
+2. **Android-Lifecycle:** z.B. `onFinishInputView` →
+   `service.dispatch(Action.ViewModeAction.OnImeViewHidden)`.
+3. **Cross-Module-Cascade:** ein anderes Modul returnt eine Action aus
+   `onCrossModuleStateChange(prev, next)`, die der Orchestrator rekursiv dispatcht
+   (depth+1).
+4. **Effect-Completion:** `services.emitAction(action)` aus dem `runEffect`-Coroutine
+   (immer asynchron, Main-Thread re-post über `Main.dispatcher.launch`).
+5. **Effect-Failure (automatisch):** Orchestrator emittiert
+   `Action.EffectFailure(originModuleId, effect.toString(), reason)`, wenn ein
+   Effect wirft. Geroutet zurück an Origin-Modul über `reduceFailure`-Hook.
+
+##### 4.0.1.3 Was sind Side-Effects (ADR §5)
+
+**Was sie SIND:**
+
+- Pro Modul ein eigenes `sealed interface Effect : SideEffect`
+  (z.B. `RecordingModule.Effect.AllocateMediaRecorder(target, useBluetooth, audioFile)`)
+- Asynchrone Hardware/IO-Aktionen
+- Vom Reducer als **Plan** in `TransitionResult.sideEffects` emittiert, nicht ausgeführt
+- Vom Orchestrator nach State-Emit in `services.scope.launch { module.runEffect(effect, services) }` ausgeführt
+- Hardware-Schnittstelle ist exklusiv `runEffect` — kein anderer Code-Pfad darf
+  `services.recordingHardware.*` etc. rufen
+
+**Was sie NICHT dürfen:**
+
+- Synchron `dispatch(...)` aufrufen (würde Frozen-Cascade-Snapshot verletzen)
+- State direkt schreiben (`_state.value = …`)
+- Mehrfach für dasselbe Reducer-Output ausgeführt werden (idempotent oder Reducer-Filter)
+- Außerhalb des `services.scope` gestartet werden (würde beim
+  `serviceScope.cancel()` leaken)
+
+**Wie sie auf Throws reagieren:**
+
+```kotlin
+services.scope.launch {
+    runCatching { module.runEffect(effect, services) }
+        .onFailure { e ->
+            services.emitAction(Action.EffectFailure(
+                originModuleId = module.id,
+                effect = effect.toString(),
+                reason = e.message ?: "unknown"
+            ))
+        }
+}
+```
+
+- `EffectFailure` wird **zurück** an Origin-Modul geroutet (NICHT KClass-Lookup) →
+  `reduceFailure(state, failure, ctx)` Hook
+- Default-Hook returnt `null` = "kein Failure-Pfad definiert"
+  (`DispatchOutcome.Rejected("reducer-null")` ist semantisch korrekt)
+- `effect.toString()` für `object`-Effects ergibt den Simple-Name; für `data class`-Effects
+  enthält er die Args-Repräsentation — Module mit `data class`-Effects MÜSSEN
+  `failure.effect.startsWith("AllocateMediaRecorder(")` verwenden (siehe Spec 1 §15.2)
+
+##### 4.0.1.4 Was Cross-Module macht (ADR §6)
+
+**Erlaubt:**
+
+- **Mode 1 (eigene SideEffect):** Modul A reagiert auf eigene State-Transition mit
+  einem Effect, der Hardware in einem anderen Subsystem anstößt. Keine State-Mutation
+  in fremder Achse.
+- **Mode 2 (Action-Cascade):** Modul B hört in
+  `onCrossModuleStateChange(prev, next): List<Action>` auf eine State-Transition
+  im globalen State und returnt Actions, die der Orchestrator rekursiv dispatcht
+  (depth+1).
+- **Self-Cascade:** Modul B darf seine eigene State-Transition cross-cascaden
+  (Self-Filter `it.id != module.id` in `dispatchInternal` Step 5 ist **gestrichen**,
+  KG-RSB-2-Fix 2026-05-11).
+- **Frozen-Snapshot:** `prevGlobal` + `nextGlobal` werden vor der Cascade gesnapshottet
+  — Observer sehen einen konsistenten Vor-/Nach-Vergleich, auch wenn die rekursive
+  Dispatch-Sequenz den State weiter mutiert.
+
+**Verboten:**
+
+- **Mode 3 (Atomic Cross-Axis-Update):** ein Reducer mutiert mehrere Sub-State-Achsen
+  gleichzeitig. Phase-2-Backlog ohne expliziten Use-Case.
+- Synchroner Re-Dispatch aus `onCrossModuleStateChange` (immer über die rekursive
+  `dispatchInternal`-Schleife, nicht durch Code-Duplikation).
+- Kreuz-Mutation auf fremder Achse via `state.copy(otherAxis = …)` — gehört in eine
+  Action des Owner-Moduls.
+
+**Endlos-Schutz:** `MAX_CASCADE_DEPTH = 8` — DEBUG-`error()`, Release-Log-`error`.
+Einziger Schutz nach KG-RSB-2-Fix.
+
+##### 4.0.1.5 Hart verbotene Patterns (ADR §7)
+
+| # | Verbotenes Pattern | Begründung |
+|---|---|---|
+| (a) | Direkter `_state.value = …` außerhalb des Stores | bricht Single-Dispatch-Ownership (F-8) |
+| (b) | Hardware/IO im Reducer | bricht Pure-Reducer-Invariante (F1+F2), Test wird non-deterministisch |
+| (c) | `else`-Branch in `reduce`-`when` über sealed Actions | verliert Exhaustivity-Garantie, neue Action-Variante wird silent geschluckt |
+| (d) | Re-Parenting beim Layout-Switch (ConstraintSet-Rewriting) | reaktiviert Bug §1.1 #1+#2 (asymmetrisches Re-Parenting). MotionLayout ist verbindlich |
+| (e) | `toMutableList()`-Round-Trip auf `PersistentList` | zerstört structural-sharing, Performance-Regression |
+| (f) | Self-Filter (`it.id != module.id`) in `dispatchInternal` Step 5 | KG-RSB-2-Reaktivierung, HOVER-Auto-Reopen kaputt |
+| (g) | Cross-Axis-Mutation im Reducer (Mode 3) | Phase-2-Backlog, kein Use-Case |
+| (h) | Synchroner Re-Dispatch aus EffectHandler | bricht Frozen-Cascade-Snapshot; nur via `services.emitAction(...)` async |
+| (i) | Action-Forwarder-Methoden im LocalBinder parallel zur Action-Hierarchie | F-8: Doppel-Definition verboten |
+| (j) | `pred*Visible`-Predicate enthält Cooldown-Logic | reaktiviert Bug §1.1 #3b; Cooldown gehört in `enabledResolver` |
+| (k) | View-Visibility-getriebene Buttons ohne `motion:visibilityMode="ignore"` im MotionScene-XML | MotionScene + LayoutCatalog kollidieren, sichtbarer Sprung |
+| (l) | Click-Listener pro Render-Tick neu verdrahten | Memory-Leak (Lambda pro Button pro Tick) |
+| (m) | `actionResolver`-Return `Action.NoOp` (statt `null`) | `Action.NoOp` ist gestrichen (R.3), Click-Filter ist `?.let`-Aussortierung |
+| (n) | Direkter Modul-zu-Modul-Aufruf (`recordingModule.foo()` aus OverlayModule) | bricht Modul-Entkopplung; Inter-Modul-Kommunikation NUR über globalen State + Action-Pipe |
+
+##### 4.0.1.6 Wer hält State (ADR §8)
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  DictateUiStateStore                                          │
+│                                                              │
+│    private val _state = MutableStateFlow(initial)            │
+│    val state: StateFlow<DictateUiState> = _state.asStateFlow()│
+│                                                              │
+│    fun update(reducer: (DictateUiState) -> DictateUiState)   │
+└──────────────────────────────────────────────────────────────┘
+       ▲                                            │
+       │ EINZIGE Mutations-                         │ Read-only via collect{}
+       │ Schnittstelle                              │
+       ▼                                            ▼
+┌──────────────────────────┐         ┌─────────────────────────────┐
+│  DictateOrchestrator     │         │  Subscriber                 │
+│  .dispatch(action)       │         │  - KeyboardLayoutManager    │
+│                          │         │  - PipelineNotificationCoord│
+│  Main-Thread-confined    │         │  - PrefMirror               │
+└──────────────────────────┘         │  - DB-Subscriber            │
+                                     └─────────────────────────────┘
+```
+
+**Drei Hauptregeln:**
+
+1. **State ist read-only nach außen** — nur via `state.collect { ... }`.
+2. **Mutation einzig über `dispatch(action: Action)`** — die Hand-Mutation
+   `_state.value = ...` ist privat im Store. Verstoß ist Code-Review-Verletzung, kein
+   Compile-Check.
+3. **`dispatch()` ist Main-Thread-confined**
+   (`require(Looper.myLooper() == Looper.getMainLooper())`).
+
+##### 4.0.1.7 Wer hält UI-Wiring (ADR §10)
+
+- `RenderBackend`-Interface ist die einzige UI-Mutator-Schnittstelle.
+- Pro Render-Surface ein Backend: `ImeViewBackend` (KEYBOARD), `OverlayBackend`
+  (WIDGET + HOVER), `ContentAreaController` (Container-Visibility, zweites Backend
+  parallel zu ImeView, R.10).
+- Click-Listener werden EINMAL beim `attach()` in `wireStaticHandlers()` verdrahtet.
+- Lambdas referenzieren `stateRef`/`modeRef`-Felder, NICHT die `render`-Argumente —
+  damit lebt genau ein Lambda pro Button für die gesamte Backend-Lebenszeit (L8).
+- Resolver-Result ist `Action?`. `null` ist stiller No-Op (kein Log-Spam).
+- Visibility/Enabled NICHT im Click-Listener prüfen — `visibilityPredicate` +
+  `enabledResolver` managen das im Render-Loop.
+
+#### 4.0.2 Architektur-Doku: `docs/architecture/state-architecture/`
+
+**Zweck:** Ausführliche, lehrbuchartige Erläuterung mit ASCII-Diagrammen, Code-Schnipseln,
+Walkthroughs für neue Module/Buttons/Backends. Komplementär zur ADR — die ADR ist
+**Vertrag (knapp + bindend)**, die Architektur-Doku ist **Lehrmaterial (lang + erklärend)**.
+
+**Mindest-Inhalt (verbindliche Topics):**
+
+| Datei | Inhalt |
+|---|---|
+| `state-architecture/README.md` | Architektur-Übersicht: Triangle-FSM (3-Modus, 7 Übergänge, computeViewMode-Truth-Table) · Service-Schicht-Diagramm (FGS + IME, LocalBinder) · Modular Orchestrator (Composition Root + Module-Inventar) · Lese-Reihenfolge der Sub-Files · Pointer auf die ADR als bindenden Vertrag |
+| `state-architecture/state-and-actions.md` | `DictateUiState` (immutable, 13 Sub-State-Achsen + 1 Top-Level-Flag) · PersistentList-Idiom (add/remove, KEIN `toMutableList()`-Round-Trip) · Sub-State-Klassen-Liste mit Felder + Owner-Modul · Action-Hierarchie (Sealed-Hierarchie mit inneren sealed pro Modul) · `dispatch`-Loop in 5 Steps (Cascade-Limit → Routing → Reducer → State-Write → Effects async → Cross-Module-Cascade) · `DispatchOutcome.{Applied, Rejected, Unrouted}`-Trichotomie · ReducerContext (global + now) |
+| `state-architecture/modules.md` | `DictateModule<S, A, E>`-Interface komplett (`id`, `actionClass`, `read`/`write`/`initialState`, `reduce`, `reduceFailure`, `runEffect`, `onCrossModuleStateChange`, `prefBindings`, `terminate`) · `ModuleId`-Aufzählung (14 IDs) · Lens-Pattern-Mechanik · `DictateModuleRegistry.all` + Init-Sanity-Check (Doppel-Routing-Detektion) · `ModuleServices`-DI-Container · `PrefBinding<S, T>` (Phase 2) · Modul-Inventar-Übersicht mit Sub-State-Typ + Verantwortlichkeit |
+| `state-architecture/effects-and-failures.md` | `SideEffect`-Sealed pro Modul (Beispiel: `RecordingModule.Effect.{AllocateMediaRecorder, ReleaseMediaRecorder, StartTimer, …}`) · `runEffect(effect, services)` im `services.scope` · `services.emitAction` (Main-Thread-Re-Post) · `EffectFailure`-Routing über `originModuleId` (NICHT KClass-Lookup) · `effect.toString()`-Konvention für `object` vs `data class` · `reduceFailure(state, failure, ctx)`-Hook · Default-Return `null` = "kein Failure-Pfad" · Failure-Recovery-Patterns (State-Rollback, Error-Marker, ToastSink) |
+| `state-architecture/cross-module-cascade.md` | Mode 1 (eigene SideEffect) vs Mode 2 (Action-Cascade) vs Mode 3 (verboten) · `onCrossModuleStateChange(prev, next): List<Action>`-Konvention · frozen-snapshot (`prevGlobal` + `nextGlobal` werden vor Cascade gefangen) · Self-Cascade-Erlaubnis (KG-RSB-2-Fix mit Vor-/Nach-Code-Diff) · `MAX_CASCADE_DEPTH=8` (DEBUG-error, Release-Log-error) · Coupling-Matrix-Notation `R(state.x.y) C(Action.Y.Z)` mit Self-Read-Konvention (KG-RSB-3) · Beispiel-Cascade-Sequenz (ResetSuppressBit) |
+| `state-architecture/rendering.md` | `RenderBackend`-Interface (`attach`, `detach`, `render`) · Multi-Backend-Pattern (ImeViewBackend + ContentAreaController + OverlayBackend parallel, R.10) · `LayoutCatalog`-Konzept (Predicates + Resolver pro `ButtonSlot`) · `LayoutMode` mit `sceneStateId` (R.12) · `LogicalButtonId`-Enum-Liste · MotionScene + `motion:visibilityMode="ignore"`-Verbindlichkeit (R.11) · `firstRender`-Flag (R.14) · geteilter `SlotRenderer.applySlotToView`-Helper (F-7) · `computeLayoutMode(state)`-Truth-Table |
+| `state-architecture/wiring-ui.md` | Click-Listener-Wiring komplett: `wireStaticHandlers()` einmal beim `attach`, NIE pro Render-Tick (L8) · `stateRef` + `modeRef`-Felder als single source für Lambda-Reads · Nullable-Resolver-Idiom (`slot.actionResolver(s, services)?.let { onAction(it) }`) · Special-Touch-Handler (CursorSwipe, Backspace-Swipe, Enter-Overlay — state-frei) · Long-Click pro Button · Memory-Leak-Strukturschutz mit Code-Vergleich (per-Tick-Wiring vs Once-Wiring) · Daten-Fluss-Diagramm Click→Reducer→State-Emit→Render |
+| `state-architecture/triangle-fsm.md` | Drei ViewModes (KEYBOARD/WIDGET/HOVER) · `computeViewMode(imeViewVisible, userPrefersWidget, pipelineActive)`-Truth-Table · 7 Übergänge T1–T7 mit Bedingungen + Cascade-Sequenz · `userPrefersWidget`-Persistenz (transient, in-memory) · Geist-Widget-Bug-Strukturschutz (T7) · Permission-Gate vor T1 |
+| `state-architecture/adding-a-module.md` | §4.0.6.3 (Walkthrough Modul) — kompletter Schritt-Plan: Sub-State definieren · Action-Subklasse anlegen · Modul-Singleton implementieren (alle 9 Hooks) · `ModuleId`-Eintrag · `DictateModuleRegistry.all`-Eintrag · ggf. System-Subscription · Coupling-Matrix-Update · Tests · Inline-Anker setzen |
+| `state-architecture/adding-a-button.md` | §4.0.6.1 (Walkthrough Button) — kompletter Schritt-Plan: `LogicalButtonId`-Eintrag · XML-View-ID · Backend-`buttonViews`-Mapping · ggf. neue Action-Variante · ggf. Reducer-Erweiterung im Owner-Modul · `ButtonSlot` im LayoutCatalog · Tests |
+| `state-architecture/adding-a-sub-keyboard.md` | §4.0.6.2 (Walkthrough Sub-Tastatur) — zwei Varianten: (A) neue ContentArea (Container-Visibility) · (B) neue Render-Surface (eigener Backend mit `BackendType`-Erweiterung + LayoutMode + ggf. WindowManager) |
+| `state-architecture/forbidden-patterns.md` | Negativ-Beispiele mit Code-Snippets: alle 14 Punkte aus ADR §7 (§4.0.1.5) je mit (a) verbotenem Code-Snippet (b) warum es bricht (c) korrekter Alternative |
+
+**Skill:** `knowledge-doc-format` + `~/.claude/templates/universal.md` (mandatory load aus
+`~/.claude/snippets/docs/docs.md`). Doc-Genre: **Architecture (Subsystem)** — §2-Heading
+ist "Properties this Architecture Guarantees".
+
+**Sprache:** Englisch (Konvention aus `~/.claude/snippets/docs/language-conventions.md` —
+Architektur-Doku ist Produkt-Dokumentation).
+
+**Inline-Anker-Konvention:** Code, das die ADR-Regeln implementiert, trägt
+`@see docs/decisions/NNNN-modular-orchestrator-architecture.md §X` als Kommentar
+(siehe `knowledge-doc-format` skill §"Inline anchors"). Mindestens an folgenden Stellen:
+
+- `DictateModule`-Interface-Datei → ADR §3+4+5
+- `DictateOrchestrator.dispatchInternal` → ADR §6+§7(f)
+- `DictateUiStateStore` → ADR §8
+- `RenderBackend`-Interface → ADR §10
+- `wireStaticHandlers`-Funktion → ADR §10 + §7(l)
+
+#### 4.0.3 Block-0-Acceptance
+
+- [ ] **Fünf ADRs** existieren unter `docs/decisions/`, jeweils Status `Accepted`,
+      mit allen 12 ADR-Sektionen aus §4.0.1.0.3, korrektem Subsystem-Header (state /
+      service / ui-rendering / ui-mode), Decision-History-Initial-Entry:
+  - [ ] `NNNN-state-modular-orchestrator-pattern.md`
+  - [ ] `NNNN-state-cross-module-cascade.md`
+  - [ ] `NNNN-service-foreground-pipeline-architecture.md`
+  - [ ] `NNNN-ui-layout-catalog-motionlayout.md`
+  - [ ] `NNNN-ui-triangle-fsm-keyboard-widget-hover.md`
+- [ ] Inter-ADR-Querverweise gemäß §4.0.1.0.2 (alle fünf ADRs verweisen aufeinander
+      in §References, bidirektional).
+- [ ] `docs/decisions/README.md` (ADR-Index) existiert mit allen fünf Einträgen.
+- [ ] `docs/architecture/state-architecture/README.md` + alle 12 Sub-Files (§4.0.2 Tabelle)
+      existieren, alle mit "Properties this Architecture Guarantees"-Sektion (UDOC-Skeleton).
+- [ ] Bidirektionale Plan-↔-ADR-Referenz: Hauptplan §8.1 "Referenzen" verlinkt alle fünf
+      ADRs, jede ADR §References verlinkt den Plan.
+- [ ] Bidirektionale Spec-↔-Architektur-Doku-Referenz: Spec 1/2/3 §12 "Referenzen" verlinken
+      die relevanten ADRs + Architektur-Doku-Dateien (Spec 1 → ADR-1+2+3 · Spec 2 → ADR-1+4 ·
+      Spec 3 → ADR-3+4+5).
+- [ ] Sanity-Check: ein nicht im Plan-Review beteiligter Reader kann ADRs + Architektur-Doku
+      lesen und das Modular-Orchestrator-Pattern + Triangle-FSM + FGS-Architektur reproduzieren
+      (ohne in die Specs zu schauen).
+
+#### 4.0.4 Bindender-Vertrag-Charakter
+
+Nach Block-0-Abschluss gilt:
+
+- Block 1a..6 dürfen die in ADR §3..§7 hart definierten Regeln **nicht** brechen.
+- Beim Implementieren werden ADR + Architektur-Doku zitiert (Inline-Anker per `@see docs/decisions/NNNN-modular-orchestrator-architecture.md §3` etc., gemäß `knowledge-doc-format` skill §"Inline anchors").
+- Ein Implementer, der eine Architektur-Regel anders machen will, muss Block 0 re-öffnen (ADR-Body editieren ist nur `Proposed` möglich; nach `Accepted` ist Reversal nur via neuer Superseding-ADR).
+
+#### 4.0.5 Modul-Isolation — wie mehrere Module nebeneinander laufen
+
+(Diese Sektion ist die SoT für die Architektur-Doku `state-architecture/modules.md` +
+`cross-module-cascade.md`. Code-Implementation siehe Spec 1 §4.2 + §15.)
+
+##### 4.0.5.1 Lens-Pattern (read/write)
+
+Jedes Modul kennt **seinen eigenen Sub-State-Typ `S`** (z.B. `RecordingState`,
+`OverlayState`). Aus dem globalen `DictateUiState` wird der Sub-State über zwei
+Lens-Methoden ausgeschnitten:
+
+```kotlin
+interface DictateModule<S, A : Action, E : SideEffect> {
+    fun read(global: DictateUiState): S                  // ⊂ "raus"-Lens
+    fun write(global: DictateUiState, sub: S): DictateUiState  // ⊂ "rein"-Lens
+    fun initialState(): S
+    // ...
+}
+
+// RecordingModule:
+object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, RecordingModule.Effect> {
+    override fun read(global: DictateUiState) = global.recording
+    override fun write(global: DictateUiState, sub: RecordingState) = global.copy(recording = sub)
+    override fun initialState() = RecordingState.Idle
+    // ...
+}
+```
+
+**Konsequenz:** der Reducer arbeitet auf `S` (z.B. `RecordingState`) und kennt das
+Top-Level-`DictateUiState` **NUR** durch den `ReducerContext.global` für **Reads**.
+Er kann sein eigenes `S` ändern, aber **niemals** `global.audio` oder `global.layout`
+schreiben.
+
+##### 4.0.5.2 Drei Module nebeneinander (ASCII-Diagramm)
+
+```
+                    ┌──────────────────────────────────────────────┐
+                    │            DictateUiState (global)           │
+                    │                                              │
+                    │   recording   pipeline   layout   overlay    │
+                    │      ▲           ▲          ▲        ▲       │
+                    │      │           │          │        │       │
+                    └──────┼───────────┼──────────┼────────┼───────┘
+                           │           │          │        │
+              read/write   │           │          │        │
+              eigene Achse │           │          │        │
+                           │           │          │        │
+                   ┌───────┴────┐ ┌────┴────┐ ┌───┴────┐ ┌─┴──────┐
+                   │ Recording  │ │Pipeline │ │ Layout │ │Overlay │
+                   │  Module    │ │ Module  │ │ Module │ │ Module │
+                   │            │ │         │ │        │ │        │
+                   │ Sub-State: │ │   ...   │ │   ...  │ │   ...  │
+                   │ RecordingState                                │
+                   │ Actions:                                      │
+                   │ RecordingAction.{Start,Stop,Pause,...}        │
+                   │ Effects:                                      │
+                   │ Effect.{AllocateMediaRecorder,StartTimer,...} │
+                   │                                               │
+                   │ ─── Read ──► ctx.global.audio.useBluetoothMic │
+                   │              ctx.global.layout.singleRowMode  │
+                   │              (Read-only, in eigener           │
+                   │               Reducer-Logik konsumiert)       │
+                   │                                               │
+                   │ ─── Write ─► nur state.copy(... eigenes ...)  │
+                   │              NIEMALS state.copy(audio=...)    │
+                   │                                               │
+                   │ ─── Cascade ► returnt List<Action> aus        │
+                   │               onCrossModuleStateChange,       │
+                   │               die der Orchestrator dispatcht  │
+                   └───────────────────────────────────────────────┘
+```
+
+##### 4.0.5.3 Drei Kommunikations-Kanäle zwischen Modulen
+
+| Kanal | Mechanismus | Wann |
+|---|---|---|
+| **Read** (Polling beim Reduce) | `ctx.global.<otherAxis>` im Reducer | Synchron, jedes Mal beim eigenen Dispatch |
+| **Cascade** (Mode 2) | `onCrossModuleStateChange(prev, next): List<Action>` | Nach jeder erfolgreichen State-Mutation iteriert der Orchestrator ALLE Module |
+| **Effect-emit** (Mode 1 → fremde Action) | `services.emitAction(Action.OtherModule.Foo)` aus `runEffect` | Asynchron, frischer Cascade-Snapshot |
+
+**Wichtig (verbotene Pattern (n)):** Modul A kennt Modul B **nicht direkt** — kein
+`recordingModule.overlayModule.foo()`. Alle Inter-Modul-Kommunikation läuft durch den
+**globalen State** + die **Action-Pipe**. Module sind dadurch **untereinander
+entkoppelt** und einzeln testbar.
+
+##### 4.0.5.4 Innerer Sub-State vs. globaler State — Abkapselung
+
+| Eigenschaft | Innerer Sub-State `S` | Globaler State `DictateUiState` |
+|---|---|---|
+| Wer schreibt? | NUR der Owner-Reducer | NUR der Store über `module.write(global, newSub)` |
+| Wer liest? | Owner-Modul: über `read(global)` · Andere Module: über `ctx.global.<axis>` | Subscriber über `state.collect{}` · andere Module über `ctx.global` |
+| Typ | Modul-spezifisch (`RecordingState`, `OverlayState`, ...) | Top-Level `data class DictateUiState` |
+| Immutability | Sealed/`data class`, `copy()`-basiert | `data class` mit allen Sub-States als Properties |
+| Identität | Hat keine außerhalb des Moduls — andere Module sehen nur den Snapshot via `ctx.global.recording` | Global einzigartig, monoton durch StateFlow emittiert |
+
+**Abkapselung erfolgt struktural:**
+
+1. **Compile-Time-Type-Safety:** Reducer signiert auf `S`, nicht auf `DictateUiState`.
+   Versuch, `state.audio = ...` direkt zu schreiben, ist ein Compile-Error.
+2. **Lens-Vertrag:** `write(global, newSub)` wird vom Orchestrator gerufen, NICHT vom
+   Reducer. Reducer returnt nur das neue `S`.
+3. **`ctx.global` ist `val`** — Reducer hat Read-only-Zugriff auf den globalen State,
+   kein Mutator.
+4. **`ModuleServices`-Container** ist read-only von außen; Hardware wird über
+   Interfaces (`RecordingHardware`, `AudioFileFactory` etc.) angesprochen, nicht
+   über Instanzen-Felder anderer Module.
+
+##### 4.0.5.5 Verdrahtung: `DictateModuleRegistry.all`
+
+Es gibt **eine** zentrale Liste aller Module:
+
+```kotlin
+object DictateModuleRegistry {
+    val all: List<DictateModule<*, *, *>> = listOf(
+        RecordingModule, PipelineModule, AudioModule, ViewModeModule, OverlayModule,
+        ResendModule, LivePromptModule, LanguageModule, LayoutModule,
+        FeatureToggleModule, ThemingModule, PendingSessionsModule, KeyboardInputModule,
+        // InterruptionModule (Phase 2)
+    )
+
+    init {
+        // Sanity-Check: keine doppelte Action-Klasse, keine doppelte ModuleId
+        val byActionClass = all.groupBy { it.actionClass }
+        require(byActionClass.values.all { it.size == 1 }) {
+            "Doppel-Routing: ${byActionClass.filter { it.value.size > 1 }}"
+        }
+    }
+}
+```
+
+Diese Liste wird vom `DictateOrchestrator` einmal beim Service-`onCreate` eingelesen.
+Daraus baut der Orchestrator:
+
+```kotlin
+private val moduleByLeafClass: Map<KClass<*>, DictateModule<*, *, *>> =
+    DictateModuleRegistry.all.flatMap { module ->
+        module.actionClass.sealedSubclasses.map { it to module }
+    }.toMap()
+```
+
+Der `KClass`-Lookup ist Init-Time-konstant. Doppel-Routing einer Action zu zwei Modulen
+ist **Init-Time-Error**, kein Runtime-Bug. ProGuard-Keep-Regel für `sealedSubclasses`
+ist Pflicht (sonst strippped R8 die Reflection).
+
+#### 4.0.6 Walkthroughs — wie neue Komponenten hinzugefügt werden
+
+(Diese Sektion ist die SoT für die Architektur-Doku-Dateien `adding-a-button.md`,
+`adding-a-sub-keyboard.md`, `adding-a-module.md`.)
+
+##### 4.0.6.1 Neuer Button (Beispiel: `INSERT_COMMA`)
+
+Ziel: ein neuer Button im KEYBOARD_TWO_ROW-Modus, der ein Komma in den InputConnection
+einfügt.
+
+**Schritt 1 — neuer `LogicalButtonId`-Eintrag (Spec 2 §3.1):**
+
+```kotlin
+enum class LogicalButtonId {
+    RECORD, RESEND, BACKSPACE, AUDIO_FOCUS, WIDGET_TOGGLE, TRASH, SPACE, PAUSE, ENTER,
+    OVERLAY_RECORD, OVERLAY_SEND, OVERLAY_PAUSE, OVERLAY_TRASH, OVERLAY_CLOSE,
+    INSERT_COMMA,   // ← NEU
+}
+```
+
+**Schritt 2 — XML-View-ID:**
+
+```xml
+<!-- res/layout/activity_dictate_keyboard_view.xml -->
+<ImageButton android:id="@+id/insert_comma_btn"
+             android:visibilityMode="ignore"
+             ... />
+```
+
+**Schritt 3 — Button-View-Mapping im Backend (Spec 2 §6 `ImeViewBackend.buttonViews`):**
+
+```kotlin
+private val buttonViews: Map<LogicalButtonId, View> = mapOf(
+    // ... bestehende
+    LogicalButtonId.INSERT_COMMA to rootView.findViewById(R.id.insert_comma_btn),
+)
+```
+
+**Schritt 4 — Action-Variante (`KeyboardInputAction` ist bereits da):**
+
+```kotlin
+sealed class KeyboardInputAction : Action() {
+    data object Backspace : KeyboardInputAction()
+    data object Enter : KeyboardInputAction()
+    data object Space : KeyboardInputAction()
+    data object InsertComma : KeyboardInputAction()      // ← NEU
+}
+```
+
+**Schritt 5 — Reducer-Erweiterung in `KeyboardInputModule` (§15.6, Unit-State):**
+
+```kotlin
+override fun reduce(state: Unit, action: Action.KeyboardInputAction, ctx: ReducerContext)
+    : TransitionResult<Unit, Effect>? = when (action) {
+    Action.KeyboardInputAction.Backspace   -> TransitionResult(Unit, listOf(Effect.SendBackspace))
+    Action.KeyboardInputAction.Enter       -> TransitionResult(Unit, listOf(Effect.SendEnter))
+    Action.KeyboardInputAction.Space       -> TransitionResult(Unit, listOf(Effect.SendSpace))
+    Action.KeyboardInputAction.InsertComma -> TransitionResult(Unit, listOf(Effect.SendText(",")))
+}
+
+sealed interface Effect : SideEffect {
+    object SendBackspace : Effect
+    object SendEnter : Effect
+    object SendSpace : Effect
+    data class SendText(val text: String) : Effect   // ← NEU, generisch
+}
+
+override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {
+    Effect.SendBackspace  -> services.inputConnection().sendKeyEvent(KEYCODE_DEL)
+    Effect.SendEnter      -> services.inputConnection().sendKeyEvent(KEYCODE_ENTER)
+    Effect.SendSpace      -> services.inputConnection().commitText(" ", 1)
+    is Effect.SendText    -> services.inputConnection().commitText(effect.text, 1).let { Unit }
+}
+```
+
+**Schritt 6 — `ButtonSlot` im LayoutCatalog (Spec 2 §8.1):**
+
+```kotlin
+val KEYBOARD_TWO_ROW = LayoutMode(
+    id = LayoutModeId.KEYBOARD_TWO_ROW,
+    backend = BackendType.IME_VIEW,
+    sceneStateId = R.id.scene_two_row,
+    rows = listOf(
+        RowDescriptor(slots = listOf(
+            // ... bestehende Slots
+            ButtonSlot(
+                logicalId = LogicalButtonId.INSERT_COMMA,
+                widthPolicy = WidthPolicy.WrapContent,
+                visibilityPredicate = { it.viewMode == ViewMode.KEYBOARD },
+                iconResolver = { R.drawable.ic_comma },
+                enabledResolver = { true },
+                actionResolver = { _, _ -> Action.KeyboardInputAction.InsertComma },
+            ),
+        ))
+    ),
+)
+```
+
+**Schritt 7 — Tests (JVM, Reducer pure):**
+
+```kotlin
+@Test
+fun insertCommaAction_emitsSendTextEffect() {
+    val result = KeyboardInputModule.reduce(
+        state = Unit,
+        action = Action.KeyboardInputAction.InsertComma,
+        ctx = ReducerContext(DictateUiState.initial())
+    )
+    assertNotNull(result)
+    assertEquals(listOf(KeyboardInputModule.Effect.SendText(",")), result!!.sideEffects)
+}
+```
+
+**Was NICHT zu tun ist:**
+- Keine MotionScene-XML-Änderung (Button im selben Layout-Modus, nur neuer Slot)
+- Kein Cross-Module-Observer (Button hat keine Cross-Achse-Wirkung)
+- Keine DB-Migration
+- Keine Modul-Datei neu anlegen
+
+**Komplexität:** ~20 LoC verteilt über 4-5 Dateien.
+
+##### 4.0.6.2 Neue Sub-Tastatur — zwei Varianten
+
+###### Variante A — neue ContentArea (z.B. Numerik-Pad neben QWERTZ/Emoji)
+
+Wenn die "Sub-Tastatur" eine **andere Sicht im selben Render-Backend** ist:
+
+**Schritt 1 — `ContentArea`-Enum erweitern:**
+
+```kotlin
+enum class ContentArea { MAIN_BUTTONS, QWERTZ, EMOJI_PICKER, NUMERIC_PAD }   // ← NEU
+```
+
+**Schritt 2 — XML-Container hinzufügen + IDs:**
+
+```xml
+<FrameLayout android:id="@+id/numeric_pad_container" ... >
+    <!-- Numerik-Buttons -->
+</FrameLayout>
+```
+
+**Schritt 3 — `ContentAreaController` (R.10, Spec 2 §4.1) erweitern:**
+
+```kotlin
+class ContentAreaController(views: KeyboardViews) : RenderBackend {
+    override fun render(state: DictateUiState, mode: LayoutMode) {
+        views.mainButtonsCl.visibility       = if (state.layout.contentArea == ContentArea.MAIN_BUTTONS) VISIBLE else GONE
+        views.qwertzContainer.visibility     = if (state.layout.contentArea == ContentArea.QWERTZ) VISIBLE else GONE
+        views.emojiPickerContainer.visibility = if (state.layout.contentArea == ContentArea.EMOJI_PICKER) VISIBLE else GONE
+        views.numericPadContainer.visibility = if (state.layout.contentArea == ContentArea.NUMERIC_PAD) VISIBLE else GONE  // ← NEU
+    }
+}
+```
+
+**Schritt 4 — Trigger-Button-Slot:**
+
+```kotlin
+ButtonSlot(
+    logicalId = LogicalButtonId.NUMERIC_TOGGLE,
+    actionResolver = { _, _ -> Action.LayoutAction.SetContentArea(ContentArea.NUMERIC_PAD) },
+    // ...
+)
+```
+
+**Komplexität:** mittel.
+
+###### Variante B — neue Render-Surface (z.B. eigenes Window via WindowManager)
+
+Wenn die "Sub-Tastatur" ein **eigenes Window** ist (so wie WIDGET/HOVER heute über
+`OverlayBackend`):
+
+**Schritt 1 — neuer `RenderBackend` (Spec 2 §5):**
+
+```kotlin
+class NotificationPanelBackend(
+    private val ctx: Context,
+    private val services: ModuleServices,
+    private val window: OverlayWindow,
+    // ...
+) : RenderBackend {
+    override fun attach(onAction: (Action) -> Unit) { /* wireStaticHandlers etc. */ }
+    override fun detach() { /* */ }
+    override fun render(state: DictateUiState, mode: LayoutMode) { /* applySlotToView pro Button */ }
+}
+```
+
+**Schritt 2 — neuer `BackendType`-Enum-Wert:**
+
+```kotlin
+enum class BackendType { IME_VIEW, OVERLAY_WINDOW, NOTIFICATION_PANEL }
+```
+
+**Schritt 3 — neuer `LayoutMode` im LayoutCatalog + ggf. neuer ViewMode-Wert in
+Triangle-FSM.**
+
+**Schritt 4 — Backend-Switching im `KeyboardLayoutManager`** (Multi-Backend-Liste,
+R.10, erlaubt parallele Backends).
+
+**Komplexität:** groß. Neue WindowManager-Window-Konfiguration, ggf. eigene
+Permission-Logik, neue Touch-Routing-Strategie.
+
+##### 4.0.6.3 Neues Modul (Beispiel: `BatterySaverModule`)
+
+Ziel: ein Modul, das den Battery-Saver-Status beobachtet und die Pipeline pausiert,
+wenn Battery-Saver aktiv ist.
+
+**Schritt 1 — Sub-State definieren:**
+
+```kotlin
+// In DictateUiState.kt
+data class BatterySaverState(val isActive: Boolean = false)
+
+data class DictateUiState(
+    // ... bestehende
+    val batterySaver: BatterySaverState = BatterySaverState(),
+)
+```
+
+**Schritt 2 — Actions definieren:**
+
+```kotlin
+sealed class BatterySaverAction : Action() {
+    data class SetActive(val active: Boolean) : BatterySaverAction()
+}
+```
+
+**Schritt 3 — Modul implementieren:**
+
+```kotlin
+// app/src/main/java/net/devemperor/dictate/state/modules/BatterySaverModule.kt
+object BatterySaverModule : DictateModule<BatterySaverState, Action.BatterySaverAction, BatterySaverModule.Effect> {
+    override val id = ModuleId.BatterySaver
+    override val actionClass = Action.BatterySaverAction::class
+
+    override fun read(global: DictateUiState) = global.batterySaver
+    override fun write(global: DictateUiState, sub: BatterySaverState) = global.copy(batterySaver = sub)
+    override fun initialState() = BatterySaverState()
+
+    sealed interface Effect : SideEffect
+
+    override fun reduce(state: BatterySaverState, action: Action.BatterySaverAction, ctx: ReducerContext)
+        : TransitionResult<BatterySaverState, Effect>? = when (action) {
+        is Action.BatterySaverAction.SetActive ->
+            if (action.active != state.isActive)
+                TransitionResult(state.copy(isActive = action.active), emptyList())
+            else null
+    }
+
+    override fun runEffect(effect: Effect, services: ModuleServices) = Unit
+
+    // Cross-Module-Cascade: bei Battery-Saver-On → Recording pausieren
+    override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> =
+        if (!prev.batterySaver.isActive && next.batterySaver.isActive
+            && next.recording is RecordingState.Active)
+            listOf(Action.RecordingAction.PauseRecording)
+        else emptyList()
+}
+```
+
+**Schritt 4 — `ModuleId`-Eintrag:**
+
+```kotlin
+sealed interface ModuleId {
+    // ... bestehende
+    data object BatterySaver : ModuleId
+}
+```
+
+**Schritt 5 — Registry-Eintrag:**
+
+```kotlin
+object DictateModuleRegistry {
+    val all = listOf(
+        // ... bestehende
+        BatterySaverModule,
+    )
+}
+```
+
+**Schritt 6 — System-Subscription** für Battery-Saver-Status: ein externer Observer
+(im `DictatePipelineService.onCreate`) hört auf `BatteryManager.ACTION_POWER_SAVE_MODE_CHANGED`
+und ruft `binder.dispatch(Action.BatterySaverAction.SetActive(isOn))`.
+
+**Schritt 7 — Coupling-Matrix-Update (Spec 1 §15.1.x):**
+
+```
+BatterySaver × Recording = C(RecordingAction.PauseRecording)
+```
+
+**Schritt 8 — Tests:**
+
+```kotlin
+@Test
+fun batterySaver_activeWhileRecording_cascadesToPause() {
+    val cascadeActions = BatterySaverModule.onCrossModuleStateChange(
+        prev = DictateUiState.initial().copy(
+            batterySaver = BatterySaverState(isActive = false),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x.m4a")),
+        ),
+        next = DictateUiState.initial().copy(
+            batterySaver = BatterySaverState(isActive = true),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x.m4a")),
+        ),
+    )
+    assertEquals(listOf(Action.RecordingAction.PauseRecording), cascadeActions)
+}
+```
+
+**Was NICHT zu tun ist:**
+- Keine UI-Änderung (Modul beeinflusst Verhalten, nicht Rendering)
+- Keine Spec-Datei neu schreiben
+- Keine DB-Migration
+
+**Komplexität:** mittel. 1 neue Datei (~80 LoC), 4 Edits in bestehenden Dateien,
+1 Test-Datei.
+
+##### 4.0.6.4 Allgemeines Walkthrough-Pattern
+
+```
+1. WO LEBT DAS NEUE FEATURE?
+   ├── neuer Button im bestehenden Modus    → §4.0.6.1 (~20 LoC)
+   ├── neue Render-Surface / Sub-Tastatur   → §4.0.6.2 (~mittel-groß)
+   └── neue Verhaltens-Achse                → §4.0.6.3 (~80 LoC + Tests)
+
+2. WAS BERÜHRT ES?
+   State?         → Sub-State erweitern oder neuen anlegen
+   Actions?       → neue Action-Variante in passender innerer sealed
+   Effects?       → neue Effect-Variante in passender Effect-Sealed
+   UI?            → ButtonSlot + ggf. View-ID
+   Cross-Module?  → onCrossModuleStateChange-Hook im neuen Modul (oder Owner-Modul)
+
+3. WAS MUSS GETESTET WERDEN?
+   Reducer-Test       (JVM, pure, kein Android)
+   Cascade-Test       (Cross-Module-Observer auf Vor-/Nach-Snapshot)
+   Resolver-Test      (Click → Action über ButtonSlot)
+   UI-Smoke-Test      (Espresso, optional)
+
+4. WO WERDEN INLINE-ANKER GESETZT?
+   Modul-Datei: @see docs/decisions/NNNN-modular-orchestrator-architecture.md
+   ButtonSlot:  @see docs/architecture/state-architecture/adding-a-button.md
+   Coupling-Matrix-Update: in Spec 1 §15.1.x
+```
 
 ---
 
@@ -373,9 +1250,92 @@ Lücken existieren); diese Übersichts-Tabelle erlaubt Schnell-Routing.
 - Phase-2-Recherche-Outputs (oben in §1.3 verlinkt) — Quelle für SSOT-Verletzungen, Lifecycle-Garantien, MotionLayout-Empfehlungen, Persistence-Stand.
 - Sofort-Fix vom 2026-05-07: `KeyboardLayoutModeController.kt:60-74,183-191` (originalParents-Map). Wird durch MotionLayout-Refactor (Block 5) obsolet, kann dort entfernt werden.
 
+### 8.1 Block-0-Artefakte (Pflicht-Lese-Anker, werden in Block 0 angelegt)
+
+**Fünf ADRs** unter `docs/decisions/` (Subsystem-Aufteilung siehe §4.0.1.0):
+
+1. `NNNN-state-modular-orchestrator-pattern.md` — `Subsystem: state` —
+   Composition Root + 13 DictateModule + Single-Dispatch + Pure-Reducer + Lens-Pattern.
+2. `NNNN-state-cross-module-cascade.md` — `Subsystem: state` —
+   Mode 1+2 erlaubt, Mode 3 verboten, Self-Cascade-Erlaubnis, MAX_CASCADE_DEPTH=8,
+   EffectFailure-Routing über originModuleId.
+3. `NNNN-service-foreground-pipeline-architecture.md` — `Subsystem: service` —
+   DictatePipelineService als FGS, LocalBinder + StateFlow (kein IPC), kein WorkManager,
+   persistente Notification.
+4. `NNNN-ui-layout-catalog-motionlayout.md` — `Subsystem: ui-rendering` —
+   LayoutCatalog (Predicates + Resolver) + MotionScene-XML, RenderBackend-Multi-Backend,
+   Click-Listener-Once-Wiring.
+5. `NNNN-ui-triangle-fsm-keyboard-widget-hover.md` — `Subsystem: ui-mode` —
+   3-Modus-Triangle KEYBOARD/WIDGET/HOVER + computeViewMode-Truth-Table + 7 Übergänge T1–T7.
+
+Jede ADR hat alle 12 Sektionen aus §4.0.1.0.3. Cross-Reference-Graph: §4.0.1.0.2.
+
+**ADR-Index** `docs/decisions/README.md` — wird in Block 0 erstmals angelegt (existierte
+zuvor nicht); listet alle fünf neuen ADRs.
+
+**Architektur-Doku** `docs/architecture/state-architecture/` mit 12 Sub-Files
+(siehe §4.0.2 dieses Plans). Ausführliches Lehrmaterial mit ASCII-Diagrammen,
+Code-Schnipseln, Walkthroughs. Auch Code-Inline-Anker zeigen hierhin
+(`@see docs/architecture/state-architecture/...`).
+
+**Bidirektionale Referenz-Pflicht:**
+- Jede der fünf ADRs §References verlinkt diesen Plan + die anderen vier ADRs.
+- Dieser Plan-Block §4.0 + §8.1 verlinken alle fünf ADRs.
+- Specs 1/2/3 §12 verlinken die je relevanten ADRs (Spec 1 → ADR-1+2+3 · Spec 2 →
+  ADR-1+4 · Spec 3 → ADR-3+4+5) sowie die Architektur-Doku-Dateien.
+
 ---
 
 ## 9. Iteration-Log
+
+### 2026-05-14 — Block 0 (Architektur-Doku + 5 ADRs) als bindender Vor-Code-Anker verankert
+
+- **Trigger:** User-Anforderung "ADR + Architektur-Doku als Block in den Plan einarbeiten,
+  ADR jetzt noch nicht formulieren, aber Regeln festlegen, was rein muss." Follow-up-
+  User-Entscheidung: **fünf ADRs** statt einer (Triangle-FSM als eigene 5. ADR), damit
+  Phase-2-Erweiterungen einzelne Entscheidungen via Superseding ändern können.
+- **Eingearbeitet:**
+  - Neuer **Block 0** ganz oben in §4-Block-Tabelle (vor 1a). Reihenfolge **0** → **1a**
+    → 2 → **1b** → 3 → 4 → 5 → 6.
+  - **§4.0.1** — Fünf-ADR-Definition. §4.0.1.0 listet alle fünf ADRs mit Decision-Kernsätzen
+    und Subsystem-Headern. §4.0.1.0.1 mappt Plan-Body-Sub-Sektionen → ADR (welche Regel
+    landet in welcher ADR). §4.0.1.0.2 visualisiert den Inter-ADR-Querverweis-Graph.
+    §4.0.1.0.3 fixiert die 12-Sektionen-Standard-Struktur pro ADR + Phase-2-Superseding-
+    Erwartungen. Sub-Sektionen §4.0.1.1..§4.0.1.7 enthalten die hart definierten Regeln
+    für Reducer / Actions / Effects / Cross-Module + verbotene Patterns + Wer-hält-State
+    + Wer-hält-UI-Wiring — vollständig im Plan-Body, NICHT ausgelagert. Das ist die SoT,
+    gegen die die ADRs in Block 0 dann nur noch ausformuliert werden.
+  - **§4.0.2** — Architektur-Doku-Definition mit 12 Sub-File-Topics in
+    `docs/architecture/state-architecture/`. Pro Datei konkreter Mindest-Inhalt
+    ausformuliert (nicht nur Stichworte).
+  - **§4.0.3** — Block-0-Acceptance-Kriterien (6 Bullets, bidirektionale Referenzen,
+    Sanity-Check durch externen Reader).
+  - **§4.0.4** — Bindender-Vertrag-Charakter: Code-Blöcke 1a..6 dürfen ADR-Regeln nicht
+    brechen; Reversal nur via Superseding-ADR.
+  - **§4.0.5** — Modul-Isolation: Lens-Pattern (`read`/`write`), ASCII-Diagramm,
+    3 Kommunikations-Kanäle (Read/Cascade/Effect-emit), innerer-vs-globaler State,
+    `DictateModuleRegistry.all`-Verdrahtung. Verboten: direkter Modul-zu-Modul-Aufruf
+    (neuer Verbots-Punkt (n) in §4.0.1.5).
+  - **§4.0.6** — Walkthroughs für 3 Hinzufüge-Szenarien: neuer Button (§4.0.6.1, ~20
+    LoC, am Beispiel INSERT_COMMA), neue Sub-Tastatur (§4.0.6.2, Variante A
+    ContentArea + Variante B eigenes Window), neues Modul (§4.0.6.3, am Beispiel
+    BatterySaverModule) + Allgemein-Pattern (§4.0.6.4).
+  - **§8.1** Block-0-Artefakte-Liste in Referenzen ergänzt (ADR-Pfad, ADR-Index,
+    Architektur-Doku-Pfad, bidirektionale-Referenz-Pflicht).
+- **Rationale:** Die Architektur-Iterations-Pässe F-1..F-11 + die 14 Phase-B/C-Reviews
+  haben harte Konventionen herausgearbeitet (Pure-Reducer, Single-Dispatch,
+  Mode-1+2-Cross-Module, Self-Cascade-Erlaubnis nach KG-RSB-2, MAX_CASCADE_DEPTH=8,
+  Lens-Pattern, RenderBackend-Multi-Backend, Click-Listener-Once-Wiring …) — ohne
+  formalen ADR-Anker würde ein zukünftiger Implementer aus dem Bauch entscheiden,
+  was z.B. "Pure-Reducer" bedeutet, und potenziell verbotene Patterns (b/h/n)
+  einführen. Block 0 macht die Architektur zum bindenden Vertrag, nicht zur Empfehlung.
+- **Implikation für Block-1b-Implementer:** Block 1b muss ADR-Inline-Anker setzen
+  (mindestens an `DictateModule`-Interface, `DictateOrchestrator.dispatchInternal`,
+  `DictateUiStateStore`, `RenderBackend`, `wireStaticHandlers`). Code-Review-Pflicht.
+- **Implikation für Plan-Lifecycle:** Beim Plan-Archive-Pass (Phase 5 implement-long-plan)
+  bleiben die Block-0-Artefakte (ADR + Architektur-Doku) NICHT im Plan-Archiv-Ordner,
+  sondern in ihren projektweiten Heimaten (`docs/decisions/` + `docs/architecture/`).
+  Das Plan-Archive-Verzeichnis verlinkt sie nur referenzierend (per-Plan-README).
 
 ### 2026-05-07 — Initial-Entwurf
 Vorgängerversion vom Phase-2-Agent direkt geschrieben (ohne User-Phase-1-Klärung). Architektur damals: 6 Decision-Questions (D1-D6), MotionLayout vs. flat ConstraintLayout offen, alles im IME-Service-Prozess.

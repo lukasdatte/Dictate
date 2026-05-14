@@ -296,7 +296,7 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 
 | Block | Name | Chunks | Score | LOC | Test-Agents | Status |
 |-------|------|--------|------:|----:|------------:|--------|
-| B0 | Architecture-Foundation (ADRs + state-architecture docs) | C0 (1) | 3600 | 2800 (docs) | 1 | ⏳ pending |
+| B0 | Architecture-Foundation (ADRs + state-architecture docs) | C0 (1) | 3600 | 2800 (docs) | 1 | ✅ (commits 1ca3bcc → 3e5a8dd, 14 fixes 1 wave) |
 | B1 | Pre-Architecture and Service-Skeleton | C1+C2 (2) | 1250 | 650 | 1 | ⏳ pending |
 | B2 | Modular-Orchestrator-Implementation | C3+C4+C5+C6+C7 (5) | 4350 | 3100 | 3 | ⏳ pending |
 | B3 | Migration-Persistence-AudioFactory | C8+C9+C10+C11 (4) | 3150 | 1900 | 2 | ⏳ pending |
@@ -307,7 +307,7 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 
 | Chunk-ID | Title | Plan-Block | Score | Bracket | Status |
 |----------|-------|-----------|------:|---------|--------|
-| C0-block0-arch-docs | Block 0: ADRs + state-architecture docs | Block 0 | 3600 | XL (D12-atomic Foundation-Pack) | ✅ (commit 1ca3bcc, 18 files; Block-Validate pending) |
+| C0-block0-arch-docs | Block 0: ADRs + state-architecture docs | Block 0 | 3600 | XL (D12-atomic Foundation-Pack) | ✅ (commit 1ca3bcc + wave 3e5a8dd, 18 docs + 4 back-refs + 14 audit-fixes) |
 | C1-block1a-quick-wins | Block 1a: Quick-Wins in today's code | Block 1a | 400 | S/M | ⏳ |
 | C2-block2-pipeline-service-skeleton | Block 2: DictatePipelineService skeleton + FGS | Block 2 | 850 | M | ⏳ |
 | C3-state-core | Block 1b/1: DictateUiState + Store + DictateModule + Action | Block 1b | 850 | M | ⏳ |
@@ -333,6 +333,7 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 
 | Wave-ID | Caller | Iter | Findings (🟢/🟡/❌) | Outcome | Wave-commit |
 |---------|--------|------|---------------------|---------|-------------|
+| B0-VAL-W1 | Block-Validate B0 (AUDIT-PLAN-AND-API + AUDIT-CONVENTION; AUDIT-LOGIC + AUDIT-TEST n/a for docs-only) | 1 | 11/0/5 (consolidator deduplicated 14 audit-findings into 11 unique + 5 ❌ eliminated; implementer tracked as F-1..F-14 in block-report) | ✓ converged (self-check verified, no Wave-2 needed) | 3e5a8dd |
 
 ## Postponed Issues
 
@@ -358,6 +359,7 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 
 | Block | Block-Start-Commit | Block-End-Commit | Status |
 |-------|--------------------|--------------------|--------|
+| B0 | 0df6557 | 3e5a8dd | ✅ |
 
 ---
 
@@ -378,4 +380,6 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 | 2026-05-14 | Phase 2 | Briefing-only emitted to user (6 block-boxes, doc-plan, test-strategy, E2E-runbook overview, phase status list). No `AskUserQuestion` per "ohne Walkthrough" mode. Defaults: validation+tests closeouts active, Phase-4.6 `full`. | ✅ |
 | 2026-05-14 | Phase 2.5 | Git-state pre-check: working tree clean after orchestrator setup-commit e4edf6e. Verified via `git status --porcelain` (empty). | ✅ |
 | 2026-05-14 | Phase 2.6 | Plan-Consistency-Check status `warnings`. F6 [new]: broken reverse-links in 3 specs (`../../keyboard-layout-refactor.md` doesn't exist; should be `../dictate-keyboard-layout-refactor.reviewed.md`) — deferred to Phase 4.6c. F7 [new]: plan-→-spec links point at skeleton `.md` not `.reviewed.md` (both exist, no broken-link error) — deferred to Phase 4.6c. F1-F5 (Phase 1a flagged): verified — block-numbering drift is mitigated in chunks.json via disambiguation, OVERLAY_5BUTTON cross-spec is consistent post-C-5, acceptance-criteria distribution conforms to D21 modular-plan-pattern. No blocking issues — Phase 3 starts. | ✅ |
+| 2026-05-14 | Phase 3.1 B0-C0 | B0-C0-IMPL agent wrote 18 docs (5 ADRs + ADR-index + 12 architecture-doc files) + 4 back-references (plan §8.1 + Spec 1/2/3 §12) in one pass with 3-step adapted workflow. 0 critical/important issues. 2 D22-inline deviations documented. Commit 1ca3bcc. | ✅ |
+| 2026-05-14 | Phase 3.2 B0 | Block-Validate: 2-topic audit (AUDIT-PLAN-AND-API + AUDIT-CONVENTION; LOGIC + TEST n/a for docs-only) found 0 Crit + 6 Imp + 14 NTH = 20 raw findings. VAL-SANITY consolidator deduplicated to 11 🟢 + 0 🟡 + 5 ❌. B0-VAL-REPAIR Wave 1 fixed all 11 (tracked as F-1..F-14 in block-report) with self-check ✅. Wave-commit 3e5a8dd. Block-Validate converged in 1 wave (soft-cap 3 not approached). | ✅ |
 | 2026-05-14 | Phase 1b | E2E-Test-Strategy-Agent (fresh-spawn, no SendMessage available — per skill the Phase-1b prompt is identical for resume vs fresh) wrote `./reports/e2e-runbook.md` with 24 manual TCs (TC-PRE + TC-B0-DOCS + TC-1..TC-23) covering 10 risk-points: FGS-lifecycle, IME-lifecycle, audio-capture, Room v3→v4 migration, Triangle-FSM T1-T7, MotionLayout transitions, Cross-Module-Cascade, Visibility-Predicate, Overlay-Permission flow, Orphan-FAILED-audio-cleanup. Knowledge-gap flagged: no `test-knowledge-android`/`-mobile`/`-ime` skill exists — runbook hand-rolled per TC with self-contained adb steps. 7 user-questions emitted (Q1-Q3 blocking, Q4-Q7 configuration). Pre-Flight extended with 9 E2E-specific items (device, adb-connection-USB, apk-installed, ime-enabled+selected, mic-permission, target-app, network+api-key, personal-device-consent). E2E NOT skipped — refactor has significant behaviour-impact. | ✅ |

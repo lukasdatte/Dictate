@@ -28,6 +28,7 @@ import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
@@ -111,23 +112,13 @@ public class DictateInputMethodService extends InputMethodService
     private boolean livePrompt = false;
     private volatile boolean pendingLivePromptChain = false; // true when transcription result should be chained into live prompt
     private boolean vibrationEnabled = true;
-    private boolean audioFocusEnabled = true;
+    // Block 3b: the audio-focus flag is no longer cached as a service field.
+    // The single persistent source of truth is Pref.AudioFocus; the per-session
+    // controller field in RecordingStateController owns runtime state.
     // Language state moved into LanguageController (Phase 2 Quality-Gate W-7).
     // Read effective language via languageController.getEffectiveLanguage();
     // mutate via languageController.setLanguage(code).
     private boolean autoSwitchKeyboard = false;
-
-    /**
-     * True during the short synchronous window between {@link #uiController}'s
-     * {@code preparePipeline()} and {@code startPipeline(...)} calls in
-     * {@link #runTranscriptionViaOrchestrator()}. Under the current architecture this window
-     * is a main-thread microwindow (no async work between prepare and start), so a rotation
-     * in this window is practically impossible and the flag will never be observed true by
-     * {@link #restoreUiState()}. The flag is retained as a defensive preparation for a
-     * future refactor that makes the upload phase genuinely asynchronous — see the refactor
-     * plan §R-6 discussion.
-     */
-    private volatile boolean isPreparing = false;
 
     /**
      * Transient bridge that lets {@link #restoreUiState()} after view recreation recover the
@@ -188,6 +179,24 @@ public class DictateInputMethodService extends InputMethodService
     private SharedPreferences.OnSharedPreferenceChangeListener inputLanguagesListener;
 
     /**
+     * Block 2 (Quality-Gate K5): bidirectional sync between the Settings
+     * Switch-Preference and the Edit-Bar/Single-Row audio-focus toggle. When
+     * the user flips the value in Settings while the keyboard is cached, this
+     * listener re-applies it to both the icon and the running RecordingState.
+     *
+     * <p>Registered alongside {@link #inputLanguagesListener} in
+     * {@link #onCreateInputView()}; deregistered in
+     * {@link #cleanupOldControllers()} (view-recreate) and {@link #onDestroy()}
+     * (process tear-down) — same lifecycle pattern.</p>
+     *
+     * <p>Invariant: the listener fires on every SP write, including the
+     * service-internal write inside {@link #onAudioFocusToggled()}. The
+     * resulting refresh is idempotent (same value, same icon, same field) so
+     * the doubled fire is benign.</p>
+     */
+    private SharedPreferences.OnSharedPreferenceChangeListener audioFocusListener;
+
+    /**
      * Service-side pipeline observer. Held as a field so it can be detached
      * via {@link KeyboardUiController#removeCallback(PipelineUiCallback)} on
      * view recreate. Phase 1 cross-phase refactor (Quality-Gate K-2): the
@@ -209,6 +218,10 @@ public class DictateInputMethodService extends InputMethodService
     private KeyboardStateManager stateManager;
     private InfoBarController infoBarController;
     private MainButtonsController mainButtonsController;
+    // Block 1 / Chunk 3: owns the two-row vs. single-row layout switch on the
+    // main button area. Constructed in onCreateInputView() once all the
+    // action_row / input_row child views are resolved.
+    private KeyboardLayoutModeController layoutModeController;
 
     // Recording controllers (extracted from God-Class)
     private RecordingStateController recordingStateController;
@@ -221,7 +234,18 @@ public class DictateInputMethodService extends InputMethodService
 
     // define views
     private ConstraintLayout dictateKeyboardView;
-    private View mainButtonsCl;
+    // Block 1 / Chunk 3: parent of the action_row + input_row (XML id
+    // `main_buttons_cl`). Typed as `ViewGroup` because it serves as the
+    // [TransitionManager] scene root in the [KeyboardLayoutModeController];
+    // every `View.visibility =` call site works through inheritance.
+    // Consolidated from a former dual `View mainButtonsCl` /
+    // `ViewGroup mainButtonsClGroup` pair (2026-05-06) — two fields for the
+    // same XML id were a maintenance trap.
+    private ViewGroup mainButtonsClGroup;
+    // Block 1 / Chunk 3: the two row containers re-parented by the layout
+    // controller. Same `findViewById` pattern as their siblings.
+    private ConstraintLayout actionRow;
+    private ConstraintLayout inputRow;
     private MaterialButton editSettingsButton;
     private ConstraintLayout editButtonsKeyboardLl;
     private MaterialButton recordButton;
@@ -266,6 +290,10 @@ public class DictateInputMethodService extends InputMethodService
 
     // History button
     private MaterialButton editHistoryButton;
+
+    // Block 2: audio-focus toggle buttons (Edit-Bar + Single-Row variant).
+    private MaterialButton editAudioFocusButton;
+    private MaterialButton audioFocusButton;
 
     // Keep screen awake while recording
     private boolean keepScreenAwakeApplied = false;
@@ -339,8 +367,10 @@ public class DictateInputMethodService extends InputMethodService
                 .build();
 
         // 5. Recording (setter-injection breaks circular dependency)
+        // Block 0g: AudioManager + AudioFocusRequest are wrapped in a RealAudioFocusGate
+        // so the controller can be unit-tested against a counter-based fake.
         recordingStateController = new RecordingStateController(
-            am, audioFocusRequest, new AmplitudeProcessor(), mainHandler);
+            new RealAudioFocusGate(am, audioFocusRequest), new AmplitudeProcessor(), mainHandler);
         recordingManager = new RecordingManager(recordingStateController);
         bluetoothScoManager = new BluetoothScoManager(this, am, recordingStateController);
         recordingStateController.setManagers(recordingManager, bluetoothScoManager);
@@ -389,7 +419,12 @@ public class DictateInputMethodService extends InputMethodService
             return insets;  // fix for overlapping with navigation bar on Android 15+
         });
 
-        mainButtonsCl = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
+        mainButtonsClGroup = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
+        // Block 1 / Chunk 3: the two row containers consumed by
+        // KeyboardLayoutModeController for re-parenting + ConstraintSet
+        // capture.
+        actionRow = dictateKeyboardView.findViewById(R.id.action_row);
+        inputRow = dictateKeyboardView.findViewById(R.id.input_row);
         editSettingsButton = dictateKeyboardView.findViewById(R.id.edit_settings_btn);
         editButtonsKeyboardLl = dictateKeyboardView.findViewById(R.id.edit_buttons_keyboard_ll);
         recordPulseLayout = dictateKeyboardView.findViewById(R.id.record_pulse_layout);
@@ -472,16 +507,28 @@ public class DictateInputMethodService extends InputMethodService
         // History button
         editHistoryButton = dictateKeyboardView.findViewById(R.id.edit_history_btn);
 
+        // Block 2: audio-focus toggle buttons (Edit-Bar + Single-Row variant).
+        editAudioFocusButton = dictateKeyboardView.findViewById(R.id.edit_audio_focus_btn);
+        audioFocusButton = dictateKeyboardView.findViewById(R.id.audio_focus_btn);
+
         View pipelineProgressLl = dictateKeyboardView.findViewById(R.id.pipeline_progress_ll);
 
         // KeyboardStateManager (deterministic visibility calculator)
         // Note: recordingStateController and uiController are initialized after stateManager,
         // but lambdas are evaluated lazily, so this is safe
+        // Block 1 / Chunk 3: layout-mode wiring (Plan-Z. 437-438).
+        // mainButtonsClGroup is the parent of action_row + input_row and
+        // doubles as the ContentArea visibility target.
+        KeyboardViews keyboardViews = new KeyboardViews(
+            mainButtonsClGroup, editButtonsKeyboardLl, promptsCl, emojiPickerCl,
+            qwertzContainer, overlayCharactersLl, pauseButton, trashButton,
+            promptRecordingControlsLl, promptTrashBtn,
+            promptsRv, pipelineProgressLl,
+            actionRow, inputRow,
+            recordPulseLayout, spaceButton, backspaceButton,
+            enterButton, resendButton, audioFocusButton);
         stateManager = new KeyboardStateManager(
-            new KeyboardViews(mainButtonsCl, editButtonsKeyboardLl, promptsCl, emojiPickerCl,
-                qwertzContainer, overlayCharactersLl, pauseButton, trashButton,
-                promptRecordingControlsLl, promptTrashBtn,
-                promptsRv, pipelineProgressLl),
+            keyboardViews,
             () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Active,
             () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Paused,
             () -> pipelineOrchestrator.isRunning(),
@@ -517,7 +564,8 @@ public class DictateInputMethodService extends InputMethodService
                 editPasteButton, editEmojiButton, editNumbersButton, editKeyboardButton,
                 editHistoryButton, emojiPickerCloseButton, emojiPickerView,
                 overlayCharactersLl, pipelineCancelBtn, infoYesButton, infoNoButton,
-                recordPulseLayout
+                recordPulseLayout,
+                editAudioFocusButton, audioFocusButton
             ),
             sp, stateManager, this,
             () -> getCurrentInputConnection(),
@@ -525,6 +573,20 @@ public class DictateInputMethodService extends InputMethodService
         );
         mainButtonsController.registerAllListeners();
         mainButtonsController.initializeKeyPressAnimations();
+        // Block 2 (Quality-Gate K-Block-2): paint the audio-focus icon from the
+        // persisted Pref value once the freshly inflated buttons exist. Without
+        // this, both buttons would show the XML default (volume_off ≙ "enabled")
+        // even when the user disabled AudioFocus across a previous session.
+        mainButtonsController.refreshAudioFocusIcon(DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE));
+
+        // Block 1 / Chunk 3: layout-mode controller. Constructed AFTER the
+        // KeyboardViews DTO is built and AFTER MainButtonsController has
+        // attached its listeners — the controller's init {} captures the
+        // freshly inflated default ConstraintSets and applies the persisted
+        // SingleRowMode without animation. Subsequent setSmallMode /
+        // applyVisibility cycles re-route through KeyboardStateManager.
+        layoutModeController = new KeyboardLayoutModeController(keyboardViews, sp);
+        stateManager.setLayoutModeController(layoutModeController);
 
         // Prompt trash control: delegate to same action as main trash
         promptTrashBtn.setOnClickListener(v -> {
@@ -594,6 +656,21 @@ public class DictateInputMethodService extends InputMethodService
             }
         };
         sp.registerOnSharedPreferenceChangeListener(inputLanguagesListener);
+
+        // Block 2 (Quality-Gate K5): mirror Settings-screen toggles into the
+        // Edit-Bar / Single-Row buttons + the running RecordingStateController.
+        audioFocusListener = (changedPrefs, key) -> {
+            if (Pref.AudioFocus.INSTANCE.getKey().equals(key)) {
+                boolean newValue = DictatePrefsKt.get(changedPrefs, Pref.AudioFocus.INSTANCE);
+                if (mainButtonsController != null) {
+                    mainButtonsController.refreshAudioFocusIcon(newValue);
+                }
+                if (recordingStateController != null) {
+                    recordingStateController.setAudioFocusRuntime(newValue);
+                }
+            }
+        };
+        sp.registerOnSharedPreferenceChangeListener(audioFocusListener);
 
         // Pipeline UI callbacks: QWERTZ button updates from pipeline state.
         // Phase 1 cross-phase refactor: Service now uses addCallback() rather than the
@@ -693,7 +770,6 @@ public class DictateInputMethodService extends InputMethodService
         // State (C): Idle -> full cleanup
         pipelineOrchestrator.cancel();
         pendingLivePromptChain = false;
-        isPreparing = false;
         // Note: PipelineConfig is owned by uiController; stopPipeline() nulls it below.
 
         bluetoothScoManager.unregisterReceiver();
@@ -734,6 +810,13 @@ public class DictateInputMethodService extends InputMethodService
         if (inputLanguagesListener != null && sp != null) {
             sp.unregisterOnSharedPreferenceChangeListener(inputLanguagesListener);
             inputLanguagesListener = null;
+        }
+        // Block 2: idempotent with cleanupOldControllers — when the IME is
+        // torn down without a preceding view-recreate the listener still needs
+        // to be detached.
+        if (audioFocusListener != null && sp != null) {
+            sp.unregisterOnSharedPreferenceChangeListener(audioFocusListener);
+            audioFocusListener = null;
         }
         super.onDestroy();
     }
@@ -792,6 +875,23 @@ public class DictateInputMethodService extends InputMethodService
         if (inputLanguagesListener != null) {
             sp.unregisterOnSharedPreferenceChangeListener(inputLanguagesListener);
             inputLanguagesListener = null;
+        }
+        // Block 2: drop the audio-focus prefs listener bound to the soon-to-be
+        // discarded MainButtonsController; the fresh controller in the upcoming
+        // onCreateInputView re-registers a new listener.
+        if (audioFocusListener != null) {
+            sp.unregisterOnSharedPreferenceChangeListener(audioFocusListener);
+            audioFocusListener = null;
+        }
+        // Block 1 / Chunk 3: drop the previous layout-mode controller — it
+        // holds direct references to the old action_row / input_row views
+        // which become invalid after the imminent re-inflate. Also clear
+        // the StateManager's reference so a stray applyVisibility() in the
+        // gap between cleanup and re-wiring cannot reach into the stale
+        // controller (defensive — same null-out, two consumers).
+        layoutModeController = null;
+        if (stateManager != null) {
+            stateManager.clearLayoutModeController();
         }
         // Remove old InvalidationTracker observer (will be re-added in setupPromptsAdapter)
         if (promptsInvalidationObserver != null && dictateDb != null) {
@@ -895,11 +995,6 @@ public class DictateInputMethodService extends InputMethodService
                 staging.getEditableQueue(),
                 staging.getSelectedLanguage()
             );
-        } else if (isPreparing) {
-            // Defensive: under the current synchronous Preparing window this branch is
-            // practically unreachable (see isPreparing field docs). Kept as prep for a
-            // future async-upload phase so the Sending... indicator can survive rotation.
-            uiController.preparePipeline();
         } else if (pipelineOrchestrator.isRunning()) {
             int total = pipelineOrchestrator.getTotalSteps();
             int completedSoFar = pipelineOrchestrator.getCompletedSteps();
@@ -1256,8 +1351,8 @@ public class DictateInputMethodService extends InputMethodService
             recordButton.setText(getDictateButtonText());
         }
 
-        // check if user enabled audio focus
-        audioFocusEnabled = DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE);
+        // Block 3b: audio-focus is read on-demand from the pref by the
+        // controller's startRecording() path — no service-side caching.
 
         // fill all overlay characters
         int accentColor = DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
@@ -1518,8 +1613,10 @@ public class DictateInputMethodService extends InputMethodService
         DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, audioFile.getName()).apply();
 
         boolean useBt = DictatePrefsKt.get(sp, Pref.UseBluetoothMic.INSTANCE);
-        audioFocusEnabled = DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE);
-        recordingStateController.startRecording(audioFile, useBt, audioFocusEnabled);
+        // Block 3b: read Pref.AudioFocus on-demand and pass it through; the
+        // controller is the single per-session owner of this state once started.
+        recordingStateController.startRecording(
+                audioFile, useBt, DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE));
     }
 
     private void stopRecording() {
@@ -1567,7 +1664,6 @@ public class DictateInputMethodService extends InputMethodService
      */
     private void runTranscriptionViaOrchestrator() {
         // Preparing state: button disabled, shows "Sending..." (state-driven via PipelineUiState.Preparing)
-        isPreparing = true;
         try {
             uiController.preparePipeline();
             resendButton.setVisibility(View.GONE);
@@ -1634,9 +1730,8 @@ public class DictateInputMethodService extends InputMethodService
             }
         } finally {
             // JobExecutor.start is non-blocking (submits onto its own executor),
-            // so clearing the flag here is correct: from this point on the
-            // pipeline is owned by JobExecutor and observed via the registry.
-            isPreparing = false;
+            // so from this point on the pipeline is owned by JobExecutor and
+            // observed via the registry — no extra state field needed.
         }
     }
 
@@ -1775,10 +1870,6 @@ public class DictateInputMethodService extends InputMethodService
         // If a live prompt chain is pending, skip the UI/session reset —
         // runStandalonePromptViaOrchestrator will start a new pipeline that calls onPipelineFinished when done.
         if (pendingLivePromptChain) return;
-
-        // isPreparing is cleared synchronously in runTranscriptionViaOrchestrator's finally
-        // block; this is a safety net in case a future async Preparing phase forgets.
-        isPreparing = false;
 
         // Clear the transient current-session tracking (DB is source of truth
         // for "last keyboard session" — see SessionTracker.getLastKeyboardSession).
@@ -2512,7 +2603,6 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         pendingLivePromptChain = false;
-        isPreparing = false;
 
         uiController.stopPipeline();
         uiController.restoreRecordButtonIdle(
@@ -2546,31 +2636,54 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     @Override
-    public void onLanguageCycled() {
-        // Phase 2 §2.8: rotate through the curated list (label-sorted by
-        // the InputLanguagesPlugin contract). The setLanguage call routes
-        // through the LanguageController; in idle mode that triggers a
-        // permanent write + pos resync, in ReprocessStaging it would set
-        // a transient override (cycle is wired only to the long-press on
-        // the main record button, which is itself disabled during staging).
-        if (languageController == null) return;
-        // Validator-Fix: early-return during ReprocessStaging. setLanguage
-        // routes as a transient override there and does NOT mutate
-        // Pref.InputLanguagePos, so a second cycle click would jump to the
-        // SAME follow-up language — UX-feindlich. In ReprocessStaging the
-        // user must pick the override language explicitly via the chip
-        // popup; cycling has no consistent meaning.
-        if (uiController != null
-                && uiController.getState() instanceof PipelineUiState.ReprocessStaging) {
-            return;
+    public void onSingleRowModeToggled() {
+        // Block 1 / Chunk 3 (Plan-Z. 235-241). Order:
+        //   1. flip + persist the pref
+        //   2. let the controller swap ConstraintSets + re-parent (animated
+        //      iff Pref.Animations is true)
+        //   3. play the editNumbersButton bounce as visual feedback
+        //
+        // SmallMode-Vorrang (Plan-Z. 222-229): when SmallMode is on the
+        // entire main_buttons_cl is GONE, so step 2 is invisible; the pref
+        // still persists and takes effect as soon as SmallMode is toggled
+        // off. Same for QWERTZ ContentArea — applyVisibility() will
+        // re-call refresh() on the controller when MAIN_BUTTONS becomes
+        // active again.
+        boolean current = DictatePrefsKt.get(sp, Pref.SingleRowMode.INSTANCE);
+        boolean next = !current;
+        DictatePrefsKt.put(sp.edit(), Pref.SingleRowMode.INSTANCE, next).apply();
+        if (layoutModeController != null) {
+            layoutModeController.setSingleRowMode(next, /* animate */ true);
         }
-        List<String> curated = languageController.getCuratedLanguages();
-        if (curated.isEmpty()) return;
-        int pos = DictatePrefsKt.get(sp, Pref.InputLanguagePos.INSTANCE);
-        int next = (pos + 1) % curated.size();
-        languageController.setLanguage(curated.get(next));
-        // The record-button label is refreshed via the LanguageController
-        // callback wired in onCreateInputView — no manual setText here.
+        if (mainButtonsController != null) {
+            mainButtonsController.animateEditNumbersBounce();
+        }
+    }
+
+    @Override
+    public void onAudioFocusToggled() {
+        // Block 2 (Quality-Gate W "Race Window"): the order
+        //   1. SP-write   2. live-hook   3. icon refresh
+        // matters. Other components reading Pref.AudioFocus on a trigger (the
+        // SP listener registered above, the next startRecording() pass) must
+        // see the new value already; the icon only follows after the runtime
+        // state has been adjusted so a torn frame cannot show stale state.
+        boolean newValue = !DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE);
+
+        // 1. Persist FIRST.
+        DictatePrefsKt.put(sp.edit(), Pref.AudioFocus.INSTANCE, newValue).apply();
+
+        // 2. Live-Hook on a running recording (no-op in Idle, only mutates
+        //    AudioManager when state is Active — see RecordingStateController
+        //    .setAudioFocusRuntime KDoc). Also covers Block 3c.
+        if (recordingStateController != null) {
+            recordingStateController.setAudioFocusRuntime(newValue);
+        }
+
+        // 3. UI refresh — both buttons synced via refreshAudioFocusIcon.
+        if (mainButtonsController != null) {
+            mainButtonsController.refreshAudioFocusIcon(newValue);
+        }
     }
 
     @Override

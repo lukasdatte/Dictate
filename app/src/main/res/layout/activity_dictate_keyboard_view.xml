@@ -83,6 +83,25 @@
                 app:layout_constraintStart_toEndOf="@+id/resend_btn"
                 app:layout_constraintTop_toTopOf="parent" />
 
+            <!-- Block 2: audio-focus toggle (Single-Row variant). Permanently
+                 hosted in the action_row regardless of the active layout mode;
+                 visibility is gated by SingleRowMode (see Block 1, Chunk 3).
+                 Initial constraints overlap backspace_btn while gone — Chunk 3's
+                 KeyboardLayoutModeController will re-parent the row's children
+                 into a single-row chain when SingleRowMode is enabled. -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/audio_focus_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:foreground="@drawable/ic_baseline_volume_off_24"
+                android:foregroundGravity="center"
+                android:minWidth="56dp"
+                android:visibility="gone"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                tools:visibility="gone" />
+
         </androidx.constraintlayout.widget.ConstraintLayout>
 
         <!-- Row 2: Input buttons (trash, space, pause, enter) -->
@@ -329,8 +348,23 @@
             android:foreground="@drawable/ic_baseline_history_24"
             android:foregroundGravity="center"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_settings_btn"
+            app:layout_constraintEnd_toStartOf="@+id/edit_audio_focus_btn"
             app:layout_constraintStart_toEndOf="@+id/edit_keyboard_btn"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <!-- Block 2: audio-focus toggle (Edit-Bar variant). Always visible,
+             foreground icon + contentDescription are flipped at runtime via
+             MainButtonsController.refreshAudioFocusIcon(enabled). -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/edit_audio_focus_btn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginHorizontal="4dp"
+            android:foreground="@drawable/ic_baseline_volume_off_24"
+            android:foregroundGravity="center"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/edit_settings_btn"
+            app:layout_constraintStart_toEndOf="@+id/edit_history_btn"
             app:layout_constraintTop_toTopOf="parent" />
 
         <com.google.android.material.button.MaterialButton
@@ -343,7 +377,7 @@
             android:foregroundGravity="center"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toEndOf="@+id/edit_history_btn"
+            app:layout_constraintStart_toEndOf="@+id/edit_audio_focus_btn"
             app:layout_constraintTop_toTopOf="parent" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>

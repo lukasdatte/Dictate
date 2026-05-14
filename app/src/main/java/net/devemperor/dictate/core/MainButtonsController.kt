@@ -63,13 +63,30 @@ class MainButtonsController(
         fun onHistoryClicked()
         fun onPipelineCancelClicked()
         fun onSmallModeToggled()
-        fun onLanguageCycled()
+        // Block 0c: replaces the now-redundant onLanguageCycled long-press
+        // (the language pill in the prompts row covers cycling explicitly).
+        // Wired to the editNumbersButton long-press in Chunk 3 (Block 1).
+        fun onSingleRowModeToggled()
+        // Block 0c: emitted by the audio-focus toggle button (Edit-Bar +
+        // Single-Row variant). Wired to the actual button in Chunk 2 (Block 2).
+        fun onAudioFocusToggled()
         fun onEditAction(actionId: Int)
     }
 
     private val recordClickListener = View.OnClickListener {
         callback.onVibrate()
         callback.onRecordClicked()
+    }
+
+    /**
+     * Block 2: shared click listener for both audio-focus buttons (Edit-Bar +
+     * Single-Row variant). Both buttons forward the same callback so the user
+     * sees identical behaviour from either entry point — the visible icon
+     * synchronisation is handled by [refreshAudioFocusIcon].
+     */
+    private val audioFocusClickListener = View.OnClickListener {
+        callback.onVibrate()
+        callback.onAudioFocusToggled()
     }
 
     fun registerAllListeners() {
@@ -87,15 +104,24 @@ class MainButtonsController(
             callback.onSmallModeToggled()
         }
 
+        // Block 1 / Chunk 3: long-press toggles SingleRowMode. The previous
+        // `onLanguageCycled` long-press was removed in Chunk 1 — language
+        // cycling lives on the dedicated language pill. Returning `true`
+        // suppresses the click that would otherwise follow the long-press
+        // (the SmallMode toggle is on the short click).
         views.editNumbersButton.setOnLongClickListener {
             callback.onVibrate()
-            callback.onLanguageCycled()
+            callback.onSingleRowModeToggled()
             true
         }
 
         views.editSettingsButton.setOnClickListener { callback.onSettingsClicked() }
         views.editHistoryButton.setOnClickListener { callback.onHistoryClicked() }
         views.pipelineCancelBtn.setOnClickListener { callback.onPipelineCancelClicked() }
+
+        // Block 2: Edit-Bar audio-focus button. Wired via shared listener with
+        // the Single-Row variant in registerMainButtonListeners().
+        views.editAudioFocusButton.setOnClickListener(audioFocusClickListener)
 
         views.editKeyboardButton.setOnClickListener {
             callback.onVibrate()
@@ -211,6 +237,10 @@ class MainButtonsController(
             callback.onPauseClicked()
         }
 
+        // Block 2: Single-Row audio-focus button — same listener as the
+        // Edit-Bar variant. Visibility is gated by SingleRowMode (Block 1).
+        views.audioFocusButton.setOnClickListener(audioFocusClickListener)
+
         // Enter button: click, long-press (show overlay), touch (overlay character selection)
         views.enterButton.setOnClickListener {
             callback.onVibrate()
@@ -271,13 +301,17 @@ class MainButtonsController(
     // ── Key Press Animations ──
 
     fun initializeKeyPressAnimations() {
-        val animatedViews = arrayOf(
+        val animatedViews = listOf(
             views.editSettingsButton, views.recordButton, views.resendButton, views.trashButton,
             views.pauseButton, views.emojiPickerCloseButton,
             views.editUndoButton, views.editRedoButton, views.editCutButton, views.editCopyButton,
             views.editPasteButton, views.editEmojiButton, views.editNumbersButton,
             views.editKeyboardButton, views.editHistoryButton,
-            views.infoYesButton, views.infoNoButton
+            views.infoYesButton, views.infoNoButton,
+            // Block 2: audio-focus buttons are tap-down-animated like every
+            // other press surface. Both buttons exist in the layout now
+            // (Chunk 2 wired the IDs).
+            views.editAudioFocusButton, views.audioFocusButton
         )
         for (view in animatedViews) {
             keyPressAnimator.applyPressAnimation(view)
@@ -311,6 +345,47 @@ class MainButtonsController(
         views.recordButton.text = text
     }
 
+    /**
+     * Block 2: synchronise both audio-focus buttons' icon + contentDescription.
+     *
+     * Called from three sites in the service:
+     *  - On user toggle ([Callback.onAudioFocusToggled]) — after the SP-write.
+     *  - On external SP change (Settings → SwitchPreference) — via the
+     *    `audioFocusListener` registered in [DictateInputMethodService.onCreateInputView].
+     *  - Once after view-recreate ([registerAllListeners] tail / Service
+     *    [DictateInputMethodService.setupKeyboard]) so the freshly inflated
+     *    buttons reflect the persisted [Pref.AudioFocus] value.
+     *
+     * Icons are state-flipped on purpose — `volume_off` is shown when
+     * AudioFocus is ENABLED (because pressing the button would un-mute, i.e.
+     * disable the focus grab); `volume_up` is shown when AudioFocus is
+     * DISABLED (the button would re-enable auto-pause).
+     *
+     * Quality-Gate Nice-to-have B2-8: contentDescriptions are state phrases,
+     * not action phrases — TalkBack announces "Audio-Fokus aktiv …" instead
+     * of "Audio-Fokus deaktivieren", which matches the toggle semantics.
+     */
+    fun refreshAudioFocusIcon(enabled: Boolean) {
+        val context = views.editAudioFocusButton.context
+        val iconRes = if (enabled) {
+            R.drawable.ic_baseline_volume_off_24
+        } else {
+            R.drawable.ic_baseline_volume_up_24
+        }
+        val descriptionRes = if (enabled) {
+            R.string.dictate_audio_focus_state_on
+        } else {
+            R.string.dictate_audio_focus_state_off
+        }
+        val description = context.getString(descriptionRes)
+        val drawable = androidx.core.content.ContextCompat.getDrawable(context, iconRes)
+
+        views.editAudioFocusButton.foreground = drawable
+        views.editAudioFocusButton.contentDescription = description
+        views.audioFocusButton.foreground = drawable?.constantState?.newDrawable()
+        views.audioFocusButton.contentDescription = description
+    }
+
     fun applyTheme(accentColor: Int) {
         val accentMedium = DictateUtils.darkenColor(accentColor, 0.18f)
         val accentDark = DictateUtils.darkenColor(accentColor, 0.35f)
@@ -333,6 +408,11 @@ class MainButtonsController(
         applyButtonColor(views.editNumbersButton, accentMedium)
         applyButtonColor(views.editHistoryButton, accentMedium)
         applyButtonColor(views.emojiPickerCloseButton, accentColor)
+        // Block 2: theme the audio-focus buttons in the same accentMedium tier
+        // as pause/trash. Both buttons are non-null since Chunk 2 added the
+        // XML IDs.
+        applyButtonColor(views.editAudioFocusButton, accentMedium)
+        applyButtonColor(views.audioFocusButton, accentMedium)
     }
 
     private fun applyButtonColor(button: MaterialButton, color: Int) {
@@ -356,6 +436,46 @@ class MainButtonsController(
         }
     }
 
+    /**
+     * Visual feedback for the SingleRowMode long-press toggle (Plan-Z. 214-218).
+     *
+     * Quality-Gate K6: a naive 180° rotation would clash with
+     * [animateSmallModeToggle] — both animations would fight over the same
+     * `rotation` axis and the resulting end state would depend on the toggle
+     * order. Instead the long-press uses a horizontal `translationX` bounce
+     * (±8dp, ~200ms total, end state `translationX = 0f`) so the click and
+     * long-press animations stay orthogonal.
+     *
+     * When [Pref.Animations] is disabled the call is a no-op — the layout
+     * change itself is the user-visible feedback.
+     */
+    fun animateEditNumbersBounce() {
+        if (!sp.get(Pref.Animations)) return
+        val density = views.editNumbersButton.resources.displayMetrics.density
+        val offset = 8f * density // 8dp in pixels
+        val btn = views.editNumbersButton
+        // Cancel any in-flight animation so back-to-back long-presses do not
+        // accumulate translationX drift.
+        btn.animate().cancel()
+        btn.translationX = 0f
+        btn.animate()
+            .translationX(offset)
+            .setDuration(70)
+            .withEndAction {
+                btn.animate()
+                    .translationX(-offset)
+                    .setDuration(70)
+                    .withEndAction {
+                        btn.animate()
+                            .translationX(0f)
+                            .setDuration(60)
+                            .start()
+                    }
+                    .start()
+            }
+            .start()
+    }
+
     // ── Overlay Characters Update (called from onStartInputView) ──
 
     fun updateOverlayCharacters(characters: String, accentColor: Int) {
@@ -373,7 +493,15 @@ class MainButtonsController(
     }
 }
 
-/** All button views managed by [MainButtonsController]. */
+/**
+ * All button views managed by [MainButtonsController].
+ *
+ * Chunk 2 (Block 2) introduced the two audio-focus buttons in the layout —
+ * `edit_audio_focus_btn` (always visible in the edit bar) and
+ * `audio_focus_btn` (in the action_row, gone until SingleRowMode is enabled
+ * by Chunk 3 / Block 1). Both fields are non-null; the service wires the
+ * concrete views in [DictateInputMethodService.onCreateInputView].
+ */
 data class MainButtonViews(
     val recordButton: MaterialButton,
     val resendButton: MaterialButton,
@@ -398,5 +526,7 @@ data class MainButtonViews(
     val pipelineCancelBtn: MaterialButton,
     val infoYesButton: Button,
     val infoNoButton: Button,
-    val recordPulseLayout: PulseLayout
+    val recordPulseLayout: PulseLayout,
+    val editAudioFocusButton: MaterialButton,
+    val audioFocusButton: MaterialButton
 )

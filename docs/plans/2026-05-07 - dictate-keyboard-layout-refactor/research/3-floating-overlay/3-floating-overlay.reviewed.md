@@ -45,11 +45,23 @@ Out-of-Scope (anderer Spec):
 ### §3.1 LayoutMode-Datenstruktur
 
 <!-- FIX: Issue 1.0.5 – Action-Hierarchie (F-8/F-11) durchpropagiert in §3.1/§6/§7.3 (Mapping siehe Spec 2 §3.3) -->
+<!-- FIX: Phase-C C-5 (2026-05-14) – Cross-Spec-Korrektur (C-4 F-5): `OVERLAY_5BUTTON` als Member von
+     `LayoutCatalog` deklariert (statt top-level `object`). Hintergrund: Spec 2 §4 + §8.6 sowie Spec 3 §11/§14
+     (mehrere Stellen) referenzieren `LayoutCatalog.OVERLAY_5BUTTON` als qualifizierten Catalog-Member;
+     C-4 hat in Spec 2 §8.6 den Property-Skelett-Anker (`// val OVERLAY_5BUTTON: LayoutMode = ...`) gesetzt
+     und die Inhalts-SoT in dieser §3.1 belassen. Auflösung: das Singleton-`object` ist jetzt als
+     `object OVERLAY_5BUTTON : LayoutMode(...)` INNERHALB des `LayoutCatalog`-Objects deklariert. Damit
+     ist `LayoutCatalog.OVERLAY_5BUTTON` ein gültiger qualifizierter Member-Zugriff (Kotlin nested object).
+     Spec 2 §8.6 Property-Skelett verweist hierher als Inhalts-SoT. -->
 
 ```kotlin
-object OVERLAY_5BUTTON : LayoutMode(
-    id = LayoutModeId.OVERLAY_5BUTTON,
-    backend = BackendType.OVERLAY_WINDOW,
+// Im LayoutCatalog-Object eingebettet (Spec 2 §8.6 ist der SoT-Strukturplatz; Inhalt ist hier).
+object LayoutCatalog {
+    // ... (KEYBOARD-Modes + forKeyboard(state) — siehe Spec 2 §8.6)
+
+    object OVERLAY_5BUTTON : LayoutMode(
+        id = LayoutModeId.OVERLAY_5BUTTON,
+        backend = BackendType.OVERLAY_WINDOW,
     rows = listOf(
         // Reihe 1: Record + Senden + Pause
         RowDescriptor(slots = listOf(
@@ -115,7 +127,8 @@ object OVERLAY_5BUTTON : LayoutMode(
                 }),
         )),
     ),
-)
+    )    // schließt `object OVERLAY_5BUTTON : LayoutMode(...)`
+}        // schließt `object LayoutCatalog`
 ```
 
 **Schlüsselbeobachtung:** ein einziger `LayoutMode` deckt beide ViewMode-Varianten ab. Die Differenzen leben in den Resolvern, die `state.viewMode` lesen und sich entsprechend verhalten — insbesondere disablen Record + Send in HOVER, weil keine InputConnection als Ziel existiert (OPEN-2).
@@ -472,6 +485,12 @@ class OverlayBackend(
                 val s = stateRef ?: return@setOnClickListener
                 val slot = currentSlot(id) ?: return@setOnClickListener
                 // FIX: Phase-B S-7 (2026-05-13) – 2-arg Resolver (state, services) für Pre-Dispatch-Allocation.
+                // FIX: Phase-C C-5 (2026-05-14) – Cross-Spec-DRY-Verifikation (C-3 F-7): das
+                //      `?.let { onAction?.invoke(it) }`-Pattern ist identisch zu Spec 2 §6
+                //      `ImeViewBackend.wireStaticHandlers`. Resolver-`null` wird strukturell aussortiert
+                //      (kein `DispatchOutcome.Unrouted`/`Rejected`-Log-Pfad für unsinnige Clicks);
+                //      Resolver ist erste Validierungs-Schicht, Reducer ist zweite. Cross-Ref auf
+                //      Spec 2 §3.2 ButtonSlot.actionResolver-KDoc (post-C-3).
                 slot.actionResolver(s, services)?.let { onAction?.invoke(it) }
             }
         }
@@ -892,6 +911,27 @@ listet den Eintrag im Modul-Inventar und verweist hierher. Spec 3 §7.1 (Triangl
 **Doku** zur Logik, die Spec 1 §15.X-ViewModeModule kanonisch implementiert (Issue 3.1.2
 Option A: Code = Spec 1 ViewModeModule, Doku = Spec 3 §7.1).
 
+<!-- FIX: Phase-C C-5 (2026-05-14) – EffectFailure-Konvention bewusste Design-Entscheidung dokumentiert. -->
+> **EffectFailure-Konvention (Design-Entscheidung):** OverlayModule überschreibt den
+> `reduceFailure(state, failure, ctx)`-Hook **bewusst nicht** (Default-Impl in Spec 1 §4.2 ist `null` →
+> EffectFailure wird als `DispatchOutcome.Applied`-ohne-State-Change verbucht, Origin-Log wird
+> geschrieben). Begründung:
+> - Alle Overlay-Effects (`PersistOverlayPosition`, `MarkOnboardingShown`,
+>   `MarkOnboardingPermanentlyDismissed`, `DeleteAudioFile`, `NotifyOverlayPermissionRequired`,
+>   `OpenOverlayPermissionSettings`) sind **idempotente Pref-Writes** oder reine UI-Side-Effects.
+> - Ein Pref-Write-Failure (z.B. `SharedPreferences.apply()` failt unter Storage-Druck) hat
+>   **keine** Rollback-Semantik im OverlayState — der State ist bereits korrekt, nur der
+>   persistente Mirror hinkt hinterher. Der nächste `prefMirror.sync`-Cycle (Spec 1 §4.5)
+>   räumt das auf.
+> - `DeleteAudioFile`-Failure ist harmlos (Audio-File bleibt im Cache; Cache-Cleanup räumt
+>   später auf).
+> - `OpenOverlayPermissionSettings`-Failure (Intent failt) wäre theoretisch zu spüren, aber der
+>   User würde es bemerken (Settings-Page öffnet nicht) und manuell ins System-Settings gehen.
+>
+> Damit ist `reduceFailure` für OverlayModule strukturell unnötig. Falls C-State / Phase-D einen
+> False-Positive-Finding "OverlayModule fehlt reduceFailure" wirft, ist die Auflösung dieser
+> Block. Cross-Ref auf Spec 2 §3.3 EffectFailure-KDoc (C-3 F-4/F-5/F-6).
+
 ```kotlin
 // File: app/src/main/java/net/devemperor/dictate/state/modules/OverlayModule.kt
 object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, OverlayModule.Effect> {
@@ -978,11 +1018,23 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
         val cascade = mutableListOf<Action>()
 
         // Issue 3.1.7: HOVER → KEYBOARD via CloseOverlay-Cascade — Suppress-Bit setzen
-        // + ggf. Audio-File-Cleanup für CANCELLED-Sessions.
+        // + Recording/Pipeline-Cancel-Cascade (C-3 F-1 Disambiguation: Recording-Hardware vor
+        //   Pipeline-State, analog Spec 1 §7.3 onDestroy-Pre-Cancel-Block).
+        // FIX: Phase-C C-5 (2026-05-14) – Cancel-Cascade hier verankert; §6.2 ist Doku-Heimat
+        //      (zeigt die HOVER-CloseOverlay-Pfad-Variante).
         if (prev.viewMode == ViewMode.HOVER && next.viewMode == ViewMode.KEYBOARD) {
             cascade.add(Action.OverlayAction.SuppressAutoOverlayUntilNextSession)
-            // Audio-File-Cleanup-Vertrag: wenn die HOVER-Session noch kein finales Result hat,
-            // lebt sie als CANCELLED in der DB → audioFile darf weg (siehe RecordingModule).
+            // C-3-Disambiguation: aktives Recording priorisiert (synchron `Effect.ReleaseMediaRecorder`
+            // + `Effect.DeleteAudioFile`); sonst laufende Pipeline (PipelineModule-Reducer setzt
+            // `pipeline = Idle` + DB-Status-Effect). Audio-File-Cleanup wandert über
+            // RecordingModule.Effect.DeleteAudioFile (CANCELLED-Session-Pfad).
+            when {
+                next.recording.isActiveOrPaused || next.recording is RecordingState.Preparing ->
+                    cascade.add(Action.RecordingAction.CancelRecording)
+                next.pipeline !is PipelineUiState.Idle ->
+                    cascade.add(Action.PipelineAction.CancelPipeline)
+                // else: idle — kein Cancel nötig.
+            }
         }
 
         <!-- FIX: Issue PENDING-3 / Spec-3 Reducer Simplified – OverlayAction.ResetSuppressBit -->
@@ -1052,8 +1104,9 @@ zurückkommen *kann* (`onCreateInputView`, `onStartInputView`). Das ist ausreich
 Permission-Änderung außerhalb dieser Punkte ist für die User-UX irrelevant.
 
 <!-- FIX: Phase-B S-8 (2026-05-13) – Boot-Default-Race-Window dokumentiert. -->
+<!-- FIX: Phase-C C-5 (2026-05-14) – Z.-Ref auf Section-Anchor umgestellt (C-1 F-5 Pattern). -->
 **Boot-Default-Race-Window (akzeptiert):** `OverlayState.hasPermission` ist im
-`DictateUiState.initial()` per default `false` (Spec 1 §3 Z. 183). Zwischen Service-Start
+`DictateUiState.initial()` per default `false` (Spec 1 §3 `data class OverlayState`, Feld `hasPermission`). Zwischen Service-Start
 und dem ersten `OverlayPermissionObserver.init()`-Dispatch (vom IME-onCreate) sieht jeder
 State-Subscriber `hasPermission = false` — falls in diesem Fenster ein `render(state, mode)`
 mit `state.viewMode in (WIDGET, HOVER)` triggert, fällt der Code in den Fallback-Pfad
@@ -1209,43 +1262,71 @@ private fun bindPermissionInfoBar(state: DictateUiState) {
 ### §5.4 Erste-Mal-Logik vs. Wieder-Verweigert-Logik
 
 <!-- FIX: Issue 3.0.3 + 3.0.4 + 3.0.5 – Pre-F-11-„PipelineStateManager.toggleViewMode/dismissOverlayOnboarding/markOverlayOnboardingShown"-Methoden gibt es nicht mehr. Logik liegt im OverlayModule.reduce + ViewModeModule.reduce (Spec 1 §15); flache state-Pfade auf hierarchisch umgestellt. -->
+<!-- FIX: Phase-C C-5 (2026-05-14) – Mode-3-Verstoß + Pure-Reducer-Violation behoben:
+     (a) Mode-3-Verstoß: der "Permission-da"-Pfad mutierte gleichzeitig `viewMode + overlay.onboardingPending`
+         in einem Reducer-Schritt — Cross-Axis-Mutation (Spec 1 §15.5 Anti-Beispiel-Tabelle Zeile 3, explizit
+         Phase-2-Backlog). Auflösung: nach §7.3-T1-Pattern (post-S-9) — ViewModeModule.reduce mutiert NUR
+         `viewMode`; `overlay.onboardingPending` wird über OverlayModule.onCrossModuleStateChange als
+         Cascade aufgeräumt (Mode 2). Der Dismiss-Reset bleibt in OverlayModule.reduce-Arm.
+     (b) Pure-Reducer-Violation: `permissions.markPermanentlyDenied()` + `permissions.markOnboardingShown()`
+         wurden synchron im Reducer aufgerufen — Verstoß gegen R.2 (Spec 1 §4.2 reduce-Vertrag: pure,
+         keine Side-Effects). Auflösung: Side-Effects über `Effect.MarkOnboardingPermanentlyDismissed`
+         + `Effect.MarkOnboardingShown` emittieren (siehe §4.8 OverlayModule.Effect-Liste), runEffect
+         schreibt die Prefs.
+     (c) Reducer-Modul-Trennung: Snippet zeigte gemischte OverlayModule + ViewModeModule Reducer-Arme
+         im selben when-Block — irreführend. Auflösung: getrennte when-Blöcke pro Modul mit klarer
+         Sub-State-Signatur. -->
 
-Pseudo-Code-Flow als **Reducer-Logik** (in `OverlayModule.reduce` + `ViewModeModule.reduce`, Spec 1 §15):
+Pseudo-Code-Flow als **Reducer-Logik** (getrennt nach `OverlayModule.reduce` + `ViewModeModule.reduce`, Spec 1 §15):
 
 ```kotlin
-// OverlayModule.reduce / ViewModeModule.reduce — Action-Routing über DictateOrchestrator.dispatch:
+// ViewModeModule.reduce — Signatur: (state: ViewMode, action: Action.ViewModeAction, ctx: ReducerContext): TransitionResult<ViewMode, _>?
 when (action) {
     Action.ViewModeAction.ToggleViewModeWidget -> {
-        if (!permissions.hasOverlayPermission()) {
-            if (permissions.shouldShowOnboarding()) {
-                // Erst-Versuch: zeige InfoBar, KEIN ViewMode-Wechsel.
-                state.copy(overlay = state.overlay.copy(onboardingPending = true))
-            } else {
-                // Permanent abgelehnt: stiller Notification-Fallback (Notification ist da).
-                // Keine InfoBar, kein ViewMode-Wechsel — User muss in Settings selbst aktivieren.
-                state
-            }
+        if (!ctx.global.overlay.hasPermission) {
+            // Permission fehlt → kein viewMode-Wechsel. Onboarding-Trigger wird vom Resolver/UI-Pfad
+            // separat ausgelöst (Action.OverlayAction.MarkOverlayOnboardingShown / DismissOverlayOnboarding,
+            // siehe OverlayModule.reduce unten). null = "Action im aktuellen State nicht relevant".
+            null
         } else {
-            // Permission da: normaler Wechsel.
-            state.copy(
-                viewMode = ViewMode.WIDGET,
-                overlay = state.overlay.copy(onboardingPending = false),
-            )
+            // Permission da: normaler ViewMode-Wechsel. `onboardingPending`-Cleanup lebt in
+            // OverlayModule.onCrossModuleStateChange (Cascade, Mode 2 — siehe §7.3 T1 + §4.8).
+            TransitionResult(nextState = ViewMode.WIDGET, sideEffects = emptyList())
         }
-    }
-    Action.OverlayAction.DismissOverlayOnboarding -> {
-        permissions.markPermanentlyDenied()  // EffectHandler-Pfad: side effect via runEffect
-        state.copy(overlay = state.overlay.copy(onboardingPending = false))
-    }
-    Action.OverlayAction.MarkOverlayOnboardingShown -> {
-        permissions.markOnboardingShown()    // EffectHandler-Pfad
-        state.copy(overlay = state.overlay.copy(onboardingPending = false))
-        // viewMode wird NICHT verändert — der User kommt aus den Settings zurück und muss
-        // den Widget-Toggle erneut betätigen, dann ist Permission da und §7.1-Pfad greift.
     }
     // ...
 }
+
+// OverlayModule.reduce — Signatur: (state: OverlayState, action: Action.OverlayAction, ctx: ReducerContext): TransitionResult<OverlayState, Effect>?
+when (action) {
+    Action.OverlayAction.DismissOverlayOnboarding -> TransitionResult(
+        nextState = state.copy(onboardingPending = false),
+        sideEffects = listOf(Effect.MarkOnboardingPermanentlyDismissed),  // Effect → runEffect schreibt Pref
+    )
+    Action.OverlayAction.MarkOverlayOnboardingShown -> TransitionResult(
+        nextState = state.copy(onboardingPending = false),
+        sideEffects = listOf(Effect.MarkOnboardingShown),                  // Effect → runEffect schreibt Pref
+        // viewMode wird NICHT verändert — der User kommt aus den Settings zurück und muss
+        // den Widget-Toggle erneut betätigen, dann ist Permission da und §7.1-Pfad greift.
+    )
+    // ... (weitere Arme siehe §4.8 OverlayModule)
+}
+
+// OverlayModule.onCrossModuleStateChange — Mode-2-Cascade für Onboarding-Auto-Cleanup:
+override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> =
+    if (prev.viewMode != ViewMode.WIDGET && next.viewMode == ViewMode.WIDGET && next.overlay.onboardingPending)
+        listOf(Action.OverlayAction.MarkOverlayOnboardingShown)   // räumt onboardingPending nach erfolgreichem Widget-Switch
+    else emptyList()
 ```
+
+> **Onboarding-Trigger (Auslöser-Pfad):** `state.overlay.onboardingPending = true` wird **nicht** im
+> `ViewModeModule.reduce`-Permission-Fehlt-Pfad gesetzt (siehe oben — Mode-3-Verstoß), sondern im
+> UI-Resolver-Pfad: `ImeViewBackend.bindPermissionInfoBar` (§5.3) ruft den Settings-Intent direkt + dispatcht
+> `Action.OverlayAction.MarkOverlayOnboardingShown`. Der `onboardingPending = true`-Setter ist Teil eines
+> dedizierten Reducer-Arms in OverlayModule (Auslöser TBD: entweder ein neuer
+> `Action.OverlayAction.RequestOverlayPermission`-Arm — siehe §4.8 — der `onboardingPending = true` setzt +
+> `Effect.OpenOverlayPermissionSettings` emittiert, oder ein expliziter `ShowOnboarding`-Reducer-Arm).
+> Implementer-Hinweis: das ist Spec-3-internal-Design-Choice für Block 6.
 
 ### §5.5 Activity-Result-Handling — wie kommt die Antwort zurück?
 
@@ -1290,11 +1371,14 @@ ViewModeModule.reduce-Logik (Spec 1 §15.1; Action-Routing via `DictateOrchestra
 
 <!-- FIX: Issue 1.1.2 (User-Decision Option A+B kombiniert) – ViewModeModule mutiert nur viewMode; -->
 <!-- Layout/Overlay-Folge-Mutationen kommen über Cross-Module-Observer-Cascade (LayoutModule + OverlayModule). -->
+<!-- FIX: Phase-C C-5 (2026-05-14) – `when (state.viewMode)` → `when (state)`: `state` ist die
+     ViewMode-Enum-Sub-State direkt (siehe Reducer-Signatur in §7.1). -->
 ```kotlin
 // ViewModeModule.reduce — mutiert NUR `viewMode` (SRP):
+// Signatur: reduce(state: ViewMode, action: Action.ViewModeAction, ctx: ReducerContext): TransitionResult<ViewMode, _>?
 when (action) {
     Action.ViewModeAction.ToggleViewModeWidget -> {
-        when (state.viewMode) {
+        when (state) {
             ViewMode.WIDGET -> TransitionResult(
                 nextState = ViewMode.KEYBOARD,
                 sideEffects = emptyList(),
@@ -1337,22 +1421,60 @@ Action.ViewModeAction.CloseOverlay
 
 CloseOverlay-Logik (im jeweiligen Modul, Spec 1 §15 + ViewModeModule-Cross-Module-Cascade):
 
+<!-- FIX: Phase-C C-5 (2026-05-14) – Action-Disambiguation aus C-3 F-1 angewandt + Reducer-Signatur:
+     (a) `Action.PipelineAction.CancelPipeline` (Pre-C-3-Form) → C-3-Disambiguation:
+         RecordingModule hält die Recording-Hardware-Release-Effects, PipelineModule hält die Pipeline-State-Achse.
+         Bei aktivem Recording in HOVER ist `Action.RecordingAction.CancelRecording` korrekt (synchroner
+         `Effect.ReleaseMediaRecorder` + `Effect.DeleteAudioFile`); bei `state.pipeline !is Idle` ohne
+         aktives Recording ist `Action.PipelineAction.CancelPipeline` korrekt. Komplementäres Pattern
+         analog zu Spec 1 §7.3 onDestroy-Pre-Cancel-Block (C-3 F-1).
+     (b) Reducer-Signatur (analog T3): `state` ist ViewMode-Enum, nicht DictateUiState. `nextState = ViewMode.KEYBOARD`.
+     (c) Cross-Module-Cascade-Heimat: die Pipeline/Recording-Cancel-Cascade lebt NICHT im
+         ViewModeModule.reduce-Arm (Pure-Reducer-Vertrag), sondern in OverlayModule.onCrossModuleStateChange
+         als Mode-2-Cascade (HOVER → KEYBOARD + active recording → CancelRecording; HOVER → KEYBOARD +
+         pipeline !is Idle → CancelPipeline). Implementer-Hinweis: §4.8 ergänzt um diese
+         Cascade-Klausel — siehe Cascade-Block unten. -->
 ```kotlin
-// ViewModeModule.reduce:
+// ViewModeModule.reduce — Signatur: (state: ViewMode, action: Action.ViewModeAction, ctx: ReducerContext): TransitionResult<ViewMode, _>?
 when (action) {
     Action.ViewModeAction.CloseOverlay -> {
-        // Cross-Module-Cascade: Pipeline-Cancel + ViewMode-Wechsel zu KEYBOARD
-        // Cascade-Action `Action.PipelineAction.CancelPipeline` wird vom
-        // Modular Orchestrator separat dispatched (siehe Spec 1 §4.3 + §15 onCrossModuleStateChange).
-        state.copy(viewMode = ViewMode.KEYBOARD)
-        // → Overlay wird abgerissen, KEINE neue UI angezeigt (User ist außerhalb von Eingabefeldern)
-        // User muss explizit Tastatur öffnen + schließen, damit das Auto-Trigger-System wieder greift
+        // ViewMode-Wechsel auf KEYBOARD (SRP-konform). Recording-/Pipeline-Cancel-Cascade lebt
+        // in OverlayModule.onCrossModuleStateChange (HOVER → KEYBOARD-Boundary) als Mode-2-Cascade
+        // — siehe §4.8 + Cascade-Block unten. ViewModeModule selbst kennt weder Recording- noch
+        // Pipeline-Hardware (SRP).
+        TransitionResult(nextState = ViewMode.KEYBOARD, sideEffects = emptyList())
+        // → Overlay wird abgerissen, KEINE neue UI angezeigt (User ist außerhalb von Eingabefeldern).
+        // User muss explizit Tastatur öffnen + schließen, damit das Auto-Trigger-System wieder greift.
     }
     // ...
 }
+
+// OverlayModule.onCrossModuleStateChange — Cancel-Cascade für CloseOverlay-in-HOVER (C-3-Disambiguation):
+override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> {
+    val cascade = mutableListOf<Action>()
+    if (prev.viewMode == ViewMode.HOVER && next.viewMode == ViewMode.KEYBOARD) {
+        cascade.add(Action.OverlayAction.SuppressAutoOverlayUntilNextSession)  // §4.8 Bestandsregel
+        // C-3-Disambiguation: RecordingModule hält Recording-Hardware-Release; PipelineModule die Pipeline-Achse.
+        // Priorität: aktives Recording → CancelRecording (synchron Effect.ReleaseMediaRecorder + DeleteAudioFile);
+        //             sonst pipeline !is Idle → CancelPipeline (PipelineModule-Reducer cleared den State).
+        when {
+            next.recording.isActiveOrPaused || next.recording is RecordingState.Preparing ->
+                cascade.add(Action.RecordingAction.CancelRecording)
+            next.pipeline !is PipelineUiState.Idle ->
+                cascade.add(Action.PipelineAction.CancelPipeline)
+            // else: kein aktives Recording, keine laufende Pipeline → nichts zu cancellen.
+        }
+    }
+    return cascade
+}
 ```
 
-> **Hinweis zur Architektur-Auflösung:** Audio-File-Cleanup + DB-`cancelled`-Status hängen am `PipelineModule.reduce(CancelPipeline)`-Pfad bzw. am gekoppelten `PipelineSessionRepo.cancelSession`-Call (Spec 1 §6.4). Die finale Cascade-Vertrags-Auflösung (closeOverlay-Cascade + Suppress-Bit) ist als Architektur-Decision **3.1.7** in `plan-review/validated-findings-batch2.md` PENDING.
+> **Hinweis zur Architektur-Auflösung:** Audio-File-Cleanup + DB-`cancelled`-Status hängen am
+> `RecordingModule.reduce(CancelRecording)`-Pfad (Effect.DeleteAudioFile) bzw. am
+> `PipelineModule.reduce(CancelPipeline)`-Pfad (DB-Status-Effect). Die C-3-Disambiguation (Recording vor
+> Pipeline) ist symmetrisch zur Spec-1-§7.3-onDestroy-Pre-Cancel-Logik. Die Architektur-Decision **3.1.7**
+> (in `plan-review/validated-findings-batch2.md` Pre-C-3 PENDING) ist mit C-3 F-1 + dieser C-5-Ergänzung
+> aufgelöst.
 
 → Resultat: Overlay verschwindet komplett. Pipeline ist abgebrochen. Erst wenn User wieder ein Eingabefeld öffnet, läuft alles normal an.
 
@@ -1378,18 +1500,26 @@ when (action) {
 > Implementer; Spec 1 §15.1 verankert den Modul-Eintrag im Inventar + die Cross-Module-Coupling-
 > Matrix-Zeilen. Es gibt **keinen** zweiten Source-of-Truth.
 
+<!-- FIX: Phase-C C-5 (2026-05-14) – Reducer-Signatur-Korrektur: ViewModeModule.reduce operiert auf der
+     ViewMode-Enum-Sub-State (siehe Spec 1 §15.1 Modul-Inventar-Zeile #4 "viewMode (enum)" + §3 `viewMode:
+     ViewMode`-Sub-State-Feld). Daher ist `state: ViewMode` (das Enum-Sub-State), nicht `DictateUiState`.
+     Cross-Module-Reads laufen über `ctx.global` (siehe Spec 1 §15.2 RecordingModule-Pattern: `ctx.global.audio.useBluetoothMic`).
+     Vorherige Form `state.copy(viewMode = newViewMode)` war Compile-Error (Enum hat kein copy()) und
+     verletzte zusätzlich F-11-Modul-Reducer-Sub-State-Vertrag. Auflösung: `nextState = newViewMode` als
+     TransitionResult — konsistent mit §6.1 (`nextState = ViewMode.KEYBOARD`-Form, post-S-9). -->
 ```kotlin
 // ViewModeModule.reduce / Cross-Module-Trigger (Spec 1 §15.1):
+// Signatur: reduce(state: ViewMode, action: Action.ViewModeAction, ctx: ReducerContext): TransitionResult<ViewMode, Effect>?
 when (action) {
     Action.ViewModeAction.OnImeViewShown, Action.ViewModeAction.OnImeViewHidden -> {
         val visible = action is Action.ViewModeAction.OnImeViewShown
         val newViewMode = computeViewMode(
             imeViewVisible = visible,
-            userToggledWidget = state.overlay.userPrefersWidget,
-            pipelineActive = state.pipeline !is PipelineUiState.Idle
-                              || state.recording.isActiveOrPaused,
+            userToggledWidget = ctx.global.overlay.userPrefersWidget,
+            pipelineActive = ctx.global.pipeline !is PipelineUiState.Idle
+                              || ctx.global.recording.isActiveOrPaused,
         )
-        if (newViewMode != state.viewMode) state.copy(viewMode = newViewMode) else state
+        if (newViewMode != state) TransitionResult(nextState = newViewMode, sideEffects = emptyList()) else null
     }
     // ...
 }
@@ -1450,13 +1580,18 @@ ButtonSlot(LogicalButtonId.WIDGET_TOGGLE, WrapContent,
                                   || state.pipeline !is PipelineUiState.Idle },
     actionResolver = { Action.ViewModeAction.ToggleViewModeWidget })
 
+<!-- FIX: Phase-C C-5 (2026-05-14) – Reducer-Signatur-Korrektur (analog §7.1): `state` ist die
+     ViewMode-Enum-Sub-State. Cross-Module-Reads (overlay.hasPermission) gehen über `ctx.global`.
+     `state.copy(viewMode = ViewMode.WIDGET)` war Compile-Error (Enum hat kein copy()); Auflösung:
+     `nextState = ViewMode.WIDGET`. Konsistent mit §6.1 post-S-9. -->
 // ViewModeModule.reduce (Spec 1 §15) — mutiert NUR `viewMode` (SRP-konform, Issue 1.1.2 Option A+B):
+// Signatur: reduce(state: ViewMode, action: Action.ViewModeAction, ctx: ReducerContext): TransitionResult<ViewMode, Effect>?
 when (action) {
     Action.ViewModeAction.ToggleViewModeWidget -> {
         // 1. Permission-Gate prüfen (§5.4) — onboardingPending wird über OverlayModule.reduce
         //    gesetzt, nicht hier; ViewModeModule liest nur den Permission-Status aus
-        //    `state.overlay.hasPermission` (Cross-Module-Read, Coupling-Matrix §15.1.x).
-        if (!state.overlay.hasPermission) {
+        //    `ctx.global.overlay.hasPermission` (Cross-Module-Read, Coupling-Matrix §15.1.x).
+        if (!ctx.global.overlay.hasPermission) {
             // Permission fehlt → kein viewMode-Wechsel; Onboarding-Trigger lebt im Resolver/Effect-Pfad,
             // siehe §5.3 (UI ruft `Action.OverlayAction.MarkOverlayOnboardingShown` separat).
             null  // null = "Action im aktuellen State nicht relevant" (siehe Spec 1 §4.2 reduce-Vertrag)
@@ -1464,7 +1599,7 @@ when (action) {
             // 2. State-Mutation: NUR viewMode. `overlay.userPrefersWidget`-Cascade lebt in
             //    OverlayModule.onCrossModuleStateChange (siehe Cascade-Block unten).
             TransitionResult(
-                nextState = state.copy(viewMode = ViewMode.WIDGET),
+                nextState = ViewMode.WIDGET,
                 sideEffects = emptyList(),
             )
         }
@@ -1504,12 +1639,16 @@ actionResolver = { state ->
     }
 }
 
+<!-- FIX: Phase-C C-5 (2026-05-14) – Reducer-Signatur-Korrektur: `state` ist die ViewMode-Enum-Sub-State;
+     `when (state)` direkt statt `when (state.viewMode)`; `nextState = ViewMode.KEYBOARD` statt
+     `state.copy(viewMode = ...)`. Konsistent mit §6.1 + §7.1 post-S-9-Form. -->
 // ViewModeModule.reduce — mutiert NUR `viewMode` (SRP-konform, Issue 1.1.2 Option A+B):
+// Signatur: reduce(state: ViewMode, action: Action.ViewModeAction, ctx: ReducerContext): TransitionResult<ViewMode, Effect>?
 when (action) {
     Action.ViewModeAction.ToggleViewModeWidget -> {
-        when (state.viewMode) {
+        when (state) {
             ViewMode.WIDGET -> TransitionResult(
-                nextState = state.copy(viewMode = ViewMode.KEYBOARD),
+                nextState = ViewMode.KEYBOARD,
                 sideEffects = emptyList(),
             )
             ViewMode.KEYBOARD -> { /* KEYBOARD → WIDGET — siehe T1 */ null }
@@ -1549,15 +1688,18 @@ override fun onFinishInputView(finishingInput: Boolean) {
     pipeline?.dispatch(Action.ViewModeAction.OnImeViewHidden)
 }
 
+<!-- FIX: Phase-C C-5 (2026-05-14) – Reducer-Signatur-Korrektur: Cross-Module-Reads (overlay.userPrefersWidget,
+     pipeline, recording) gehen über `ctx.global`; `state` ist die ViewMode-Enum-Sub-State.
+     `nextState = newViewMode` statt `state.copy(viewMode = ...)`. -->
 // ViewModeModule.reduce (siehe §7.1):
 when (action) {
     Action.ViewModeAction.OnImeViewHidden -> {
         val newViewMode = computeViewMode(
             imeViewVisible = false,
-            userToggledWidget = state.overlay.userPrefersWidget,
-            pipelineActive = state.pipeline !is PipelineUiState.Idle || state.recording.isActiveOrPaused,
+            userToggledWidget = ctx.global.overlay.userPrefersWidget,
+            pipelineActive = ctx.global.pipeline !is PipelineUiState.Idle || ctx.global.recording.isActiveOrPaused,
         )
-        if (newViewMode != state.viewMode) state.copy(viewMode = newViewMode) else state
+        if (newViewMode != state) TransitionResult(nextState = newViewMode, sideEffects = emptyList()) else null
     }
     // ...
 }
@@ -1625,17 +1767,26 @@ override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState
         listOf(Action.ViewModeAction.OnPipelineDone)
     else emptyList()
 
+<!-- FIX: Phase-C C-5 (2026-05-14) – Reducer-Signatur-Korrektur (analog T3/§7.1) + fiktives Feld
+     `state.imeViewVisible` aufgelöst. Vorher: das Snippet referenzierte `state.imeViewVisible` als
+     gäbe es ein boolesches IME-Visibility-Feld im State — existiert nicht (Spec 1 §3 hat KEIN solches
+     Feld). Auflösung: IME-Visibility ist aus dem aktuellen ViewMode ableitbar: HOVER ⇒ IME hidden
+     (per Definition); KEYBOARD und WIDGET ⇒ IME visible. Damit `imeViewVisible = state != ViewMode.HOVER`.
+     Plus: `state` ist die ViewMode-Enum-Sub-State; Cross-Module-Reads laufen über `ctx.global`. -->
 // ViewModeModule.reduce (Spec 1 §15 / Spec 3 §7.1 SSoT-Note):
 when (action) {
     Action.ViewModeAction.OnPipelineDone -> {
         // Pipeline ist fertig. Wenn wir in HOVER sind, ist die Auto-Trigger-Bedingung
         // (pipelineActive=true) jetzt false → re-compute viewMode.
+        // IME-Visibility wird vom aktuellen ViewMode abgeleitet: HOVER = IME hidden (per Definition,
+        // siehe T3/T4-Pfad); KEYBOARD/WIDGET = IME visible. Damit eliminieren wir die Notwendigkeit
+        // eines separaten `imeViewVisible`-State-Felds (würde nur Synchronisations-Drift einführen).
         val newViewMode = computeViewMode(
-            imeViewVisible = state.imeViewVisible,        // (extern getrackt — siehe §7.1)
-            userToggledWidget = state.overlay.userPrefersWidget,
+            imeViewVisible = state != ViewMode.HOVER,
+            userToggledWidget = ctx.global.overlay.userPrefersWidget,
             pipelineActive = false,                        // post-Done
         )
-        if (newViewMode != state.viewMode) state.copy(viewMode = newViewMode) else state
+        if (newViewMode != state) TransitionResult(nextState = newViewMode, sideEffects = emptyList()) else null
     }
     // ...
 }
@@ -1703,8 +1854,9 @@ Block 6 (OverlayBackend) gilt als done, wenn:
   Beim aktiven Recording dispatcht der User `ViewModeAction.CloseOverlay` im HOVER-
   Modus. Das `suppressAutoOverlayUntilNextSession`-Bit wird auf `true` gesetzt (Spec 3
   §4.8 OverlayModule.onCrossModuleStateChange HOVER → KEYBOARD-Cascade). Solange das
-  Bit `true` ist, suppressed `OverlayBackend.render` jeden Auto-Reopen (§4.2 Zeile
-  341). Wenn der User danach via `RecordingAction.StartRecording` eine **neue**
+  <!-- FIX: Phase-C C-5 (2026-05-14) – Z.-Ref auf Section-Anchor umgestellt (Anchor-Form, C-1 F-5 Pattern). -->
+  Bit `true` ist, suppressed `OverlayBackend.render` jeden Auto-Reopen (siehe §4.2
+  `render`-Methode Suppress-Bit-Gate, direkt nach dem Permission-Gate). Wenn der User danach via `RecordingAction.StartRecording` eine **neue**
   Session startet, wird das Bit über die Cascade `Idle → Preparing →
   OverlayAction.ResetSuppressBit` (Spec 1 §15.2) auf `false` zurückgesetzt.
   Erwartung: HOVER-Overlay erscheint bei View-Hidden während der neuen Session
@@ -2289,13 +2441,23 @@ KEINE Zweit-Implementierung in DragHandler oder Backend. Wenn die Formel sich ä
 
 #### Permissions-Logik
 
-**Behauptung:** Permission-Check existiert nur an EINER Stelle.
+**Behauptung:** Permission-Status existiert als **eine** State-Achse und wird vom **einen** Observer synchron gehalten.
 
-**Beweis:** `OverlayPermissionGate.hasOverlayPermission()` ist die einzige Quelle. Aufgerufen in:
-- `ViewModeModule.reduce(Action.ViewModeAction.ToggleViewModeWidget)` (vor State-Mutation, Spec 1 §15)
-- `OverlayBackend.render()` (defensiv, vor Window-Attach)
+<!-- FIX: Phase-C C-5 (2026-05-14) – Post-Issue-3.1.3-Form: Permission ist State-Achse, nicht Live-Read.
+     Vor Issue 3.1.3 wurde `OverlayPermissionGate.hasOverlayPermission()` (= `Settings.canDrawOverlays()`)
+     bei jedem Render frisch gelesen; post-3.1.3 lebt der Status in `state.overlay.hasPermission`, vom
+     `OverlayPermissionObserver` (§5.0) synchron gehalten. Damit ist der Reducer pure (R.2). -->
+**Beweis:**
+- `state.overlay.hasPermission` ist die SoT-State-Achse (Spec 1 §3 OverlayState; Issue 3.1.3 Option A).
+- `OverlayPermissionObserver.refresh()` (§5.0) ist die **einzige** Live-Quelle für `Settings.canDrawOverlays()` —
+  gerufen aus IME-`onCreateInputView` / `onStartInputView` (Lifecycle-Trigger, kein Polling).
+- Konsumenten lesen ausschließlich `state.overlay.hasPermission`:
+  - `ViewModeModule.reduce(Action.ViewModeAction.ToggleViewModeWidget)` via `ctx.global.overlay.hasPermission` (§7.3 T1).
+  - `OverlayBackend.render()` via `state.overlay.hasPermission` (§4.2, defensives Gate).
+  - `OverlayPermissionGate.hasOverlayPermission()` (§5.1) wrappt `Settings.canDrawOverlays()` für nicht-Reducer-
+    Konsumenten (z.B. Onboarding-Trigger im IME-View-Pfad) — ist aber **nicht** der Reducer-Live-Read-Pfad.
 
-Beide rufen denselben Gate. Kein duplizierter `Settings.canDrawOverlays()`-Aufruf. ✓ <!-- FIX: Issue 3.0.3 – Pre-F-11-„PipelineStateManager.toggleViewMode" auf modular umgestellt -->
+Kein duplizierter `Settings.canDrawOverlays()`-Aufruf im Reducer-Pfad (R.2 Pure-Reducer-Garantie). ✓ <!-- FIX: Issue 3.0.3 – Pre-F-11-„PipelineStateManager.toggleViewMode" auf modular umgestellt -->
 
 ### §13.4 Cross-Spec-Konsistenz
 

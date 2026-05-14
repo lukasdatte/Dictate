@@ -2262,6 +2262,18 @@ private fun buildEnterOverlayHandler(): View.OnTouchListener =
 - MotionScene XML: https://developer.android.com/reference/androidx/constraintlayout/motion/widget/MotionScene
 - VISIBILITY_MODE_IGNORE: https://stackoverflow.com/questions/57889399/motionlayout-ignore-visibility
 
+### ADRs (Block-0-Artefakte, bidirektional)
+
+- [ADR-0001 — state-modular-orchestrator-pattern](../../../../decisions/0001-state-modular-orchestrator-pattern.md) — bindet §3.3 (Action-Sealed-Hierarchie), §4.1 (KeyboardLayoutManager ↔ LayoutModule-Vertrag), §5 (RenderBackend liest StateFlow, schreibt nie).
+- [ADR-0004 — ui-layout-catalog-motionlayout](../../../../decisions/0004-ui-layout-catalog-motionlayout.md) — bindet §3 (Datenmodell ButtonSlot/RowDescriptor/LayoutMode), §4–§4.1 (KeyboardLayoutManager + Multi-Backend), §5–§5.1 (RenderBackend + SlotRenderer F-7), §6 (ImeViewBackend), §7 (MotionScene XML + VISIBILITY_MODE_IGNORE), §8 (LayoutCatalog), §11.6 (Click-Listener-Lifecycle L8).
+
+### Architektur-Doku (Block-0-Artefakte, lehrend-erklärend)
+
+- [`docs/architecture/state-architecture/rendering.md`](../../../../architecture/state-architecture/rendering.md) — RenderBackend-Pattern, LayoutCatalog, MotionScene-Konvention.
+- [`docs/architecture/state-architecture/wiring-ui.md`](../../../../architecture/state-architecture/wiring-ui.md) — Click-Listener-Once-Wiring + special-touch handlers.
+- [`docs/architecture/state-architecture/adding-a-button.md`](../../../../architecture/state-architecture/adding-a-button.md) — Walkthrough für neue Buttons.
+- [`docs/architecture/state-architecture/adding-a-sub-keyboard.md`](../../../../architecture/state-architecture/adding-a-sub-keyboard.md) — Walkthrough für neue Sub-Tastaturen.
+
 ---
 
 ## §13 Vollständigkeits-Verifikation

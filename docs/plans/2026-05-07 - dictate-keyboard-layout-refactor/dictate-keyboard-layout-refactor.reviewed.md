@@ -1269,30 +1269,30 @@ Lücken existieren); diese Übersichts-Tabelle erlaubt Schnell-Routing.
 - Phase-2-Recherche-Outputs (oben in §1.3 verlinkt) — Quelle für SSOT-Verletzungen, Lifecycle-Garantien, MotionLayout-Empfehlungen, Persistence-Stand.
 - Sofort-Fix vom 2026-05-07: `KeyboardLayoutModeController.kt:60-74,183-191` (originalParents-Map). Wird durch MotionLayout-Refactor (Block 5) obsolet, kann dort entfernt werden.
 
-### 8.1 Block-0-Artefakte (Pflicht-Lese-Anker, werden in Block 0 angelegt)
+### 8.1 Block-0-Artefakte (Pflicht-Lese-Anker, in Block 0 angelegt)
 
 **Fünf ADRs** unter `docs/decisions/` (Subsystem-Aufteilung siehe §4.0.1.0):
 
-1. `NNNN-state-modular-orchestrator-pattern.md` — `Subsystem: state` —
+1. [ADR-0001 — state-modular-orchestrator-pattern](../../decisions/0001-state-modular-orchestrator-pattern.md) — `Subsystem: state` —
    Composition Root + 13 DictateModule + Single-Dispatch + Pure-Reducer + Lens-Pattern.
-2. `NNNN-state-cross-module-cascade.md` — `Subsystem: state` —
+2. [ADR-0002 — state-cross-module-cascade](../../decisions/0002-state-cross-module-cascade.md) — `Subsystem: state` —
    Mode 1+2 erlaubt, Mode 3 verboten, Self-Cascade-Erlaubnis, MAX_CASCADE_DEPTH=8,
    EffectFailure-Routing über originModuleId.
-3. `NNNN-service-foreground-pipeline-architecture.md` — `Subsystem: service` —
+3. [ADR-0003 — service-foreground-pipeline-architecture](../../decisions/0003-service-foreground-pipeline-architecture.md) — `Subsystem: service` —
    DictatePipelineService als FGS, LocalBinder + StateFlow (kein IPC), kein WorkManager,
    persistente Notification.
-4. `NNNN-ui-layout-catalog-motionlayout.md` — `Subsystem: ui-rendering` —
+4. [ADR-0004 — ui-layout-catalog-motionlayout](../../decisions/0004-ui-layout-catalog-motionlayout.md) — `Subsystem: ui-rendering` —
    LayoutCatalog (Predicates + Resolver) + MotionScene-XML, RenderBackend-Multi-Backend,
    Click-Listener-Once-Wiring.
-5. `NNNN-ui-triangle-fsm-keyboard-widget-hover.md` — `Subsystem: ui-mode` —
+5. [ADR-0005 — ui-triangle-fsm-keyboard-widget-hover](../../decisions/0005-ui-triangle-fsm-keyboard-widget-hover.md) — `Subsystem: ui-mode` —
    3-Modus-Triangle KEYBOARD/WIDGET/HOVER + computeViewMode-Truth-Table + 7 Übergänge T1–T7.
 
 Jede ADR hat alle 12 Sektionen aus §4.0.1.0.3. Cross-Reference-Graph: §4.0.1.0.2.
 
-**ADR-Index** `docs/decisions/README.md` — wird in Block 0 erstmals angelegt (existierte
-zuvor nicht); listet alle fünf neuen ADRs.
+**ADR-Index** [`docs/decisions/README.md`](../../decisions/README.md) — erstmals in Block 0 angelegt;
+listet alle fünf ADRs.
 
-**Architektur-Doku** `docs/architecture/state-architecture/` mit 12 Sub-Files
+**Architektur-Doku** [`docs/architecture/state-architecture/`](../../architecture/state-architecture/README.md) mit 12 Sub-Files
 (siehe §4.0.2 dieses Plans). Ausführliches Lehrmaterial mit ASCII-Diagrammen,
 Code-Schnipseln, Walkthroughs. Auch Code-Inline-Anker zeigen hierhin
 (`@see docs/architecture/state-architecture/...`).
@@ -1300,8 +1300,8 @@ Code-Schnipseln, Walkthroughs. Auch Code-Inline-Anker zeigen hierhin
 **Bidirektionale Referenz-Pflicht:**
 - Jede der fünf ADRs §References verlinkt diesen Plan + die anderen vier ADRs.
 - Dieser Plan-Block §4.0 + §8.1 verlinken alle fünf ADRs.
-- Specs 1/2/3 §12 verlinken die je relevanten ADRs (Spec 1 → ADR-1+2+3 · Spec 2 →
-  ADR-1+4 · Spec 3 → ADR-3+4+5) sowie die Architektur-Doku-Dateien.
+- Specs 1/2/3 §12 verlinken die je relevanten ADRs (Spec 1 → ADR-0001+0002+0003 · Spec 2 →
+  ADR-0001+0004 · Spec 3 → ADR-0003+0004+0005) sowie die Architektur-Doku-Dateien.
 
 ---
 

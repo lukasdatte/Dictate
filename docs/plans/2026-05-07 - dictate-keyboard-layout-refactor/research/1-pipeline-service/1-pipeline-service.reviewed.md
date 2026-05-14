@@ -5790,6 +5790,16 @@ Siehe §11.2.3 — Tabelle pro Block.
 - FGS-Types ab Android 14: https://developer.android.com/about/versions/14/changes/fgs-types-required
 - POST_NOTIFICATIONS Runtime-Permission: https://developer.android.com/develop/ui/views/notifications/notification-permission
 
+### ADRs (Block-0-Artefakte, bidirektional)
+
+- [ADR-0001 — state-modular-orchestrator-pattern](../../../../decisions/0001-state-modular-orchestrator-pattern.md) — bindet §3 (DictateUiState), §4 (DictateOrchestrator + Module-Interface), §15 (Modul-Inventar).
+- [ADR-0002 — state-cross-module-cascade](../../../../decisions/0002-state-cross-module-cascade.md) — bindet §4.3 (`dispatchInternal` Step 5 + self-cascade), §15.5 (Cross-Module-Effect-Modi), §15.1.x (Coupling-Matrix + KG-RSB-3 Konvention).
+- [ADR-0003 — service-foreground-pipeline-architecture](../../../../decisions/0003-service-foreground-pipeline-architecture.md) — bindet §7 (Foreground-Service-Lifecycle), §11.1 (FGS-Details), §11.3 (Bound-Service-Setup), §11.6 (OOM-Death-Recovery).
+
+### Architektur-Doku (Block-0-Artefakte, lehrend-erklärend)
+
+- [`docs/architecture/state-architecture/`](../../../../architecture/state-architecture/README.md) — Index + 11 Sub-Files (state-and-actions, modules, effects-and-failures, cross-module-cascade, rendering, wiring-ui, triangle-fsm, adding-a-button, adding-a-module, adding-a-sub-keyboard, forbidden-patterns).
+
 ---
 
 ## §13 Vollständigkeits-Verifikation

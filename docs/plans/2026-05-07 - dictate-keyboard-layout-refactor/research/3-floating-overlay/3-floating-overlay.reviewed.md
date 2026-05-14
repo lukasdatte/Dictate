@@ -2255,6 +2255,17 @@ Dieses Subsystem ist **komplett neu** — keine bestehenden Klassen werden migri
 - Floating Windows Tutorial-Reihe (Localazy): https://medium.com/localazy/5-floating-windows-on-android-moving-window-103f8dff37c5
 - DraggableView-Library (Inspiration für §11.5): https://github.com/hyuwah/DraggableView
 
+### ADRs (Block-0-Artefakte, bidirektional)
+
+- [ADR-0003 — service-foreground-pipeline-architecture](../../../../decisions/0003-service-foreground-pipeline-architecture.md) — strukturelle Voraussetzung für HOVER (FGS überlebt IME-Service-Tod); bindet §11.6 (Window-Lifecycle), §4.x (OverlayBackend hängt am DictatePipelineService).
+- [ADR-0004 — ui-layout-catalog-motionlayout](../../../../decisions/0004-ui-layout-catalog-motionlayout.md) — bindet §3.1 (OVERLAY_5BUTTON-LayoutMode), §4 (OverlayBackend implements RenderBackend), shared `applySlotToView`-Helper.
+- [ADR-0005 — ui-triangle-fsm-keyboard-widget-hover](../../../../decisions/0005-ui-triangle-fsm-keyboard-widget-hover.md) — bindet §6 (Schließen-Button-Differential), §7.1 (computeViewMode-Truth-Table), §7.3 (T1–T7 Übergänge), §11.9 (userPrefersWidget-Transience).
+
+### Architektur-Doku (Block-0-Artefakte, lehrend-erklärend)
+
+- [`docs/architecture/state-architecture/triangle-fsm.md`](../../../../architecture/state-architecture/triangle-fsm.md) — KEYBOARD/WIDGET/HOVER, T1–T7, Geist-Widget-Strukturschutz.
+- [`docs/architecture/state-architecture/rendering.md`](../../../../architecture/state-architecture/rendering.md) — OverlayBackend als RenderBackend-Implementation.
+
 ---
 
 ## §13 Vollständigkeits-Verifikation

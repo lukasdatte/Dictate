@@ -6,6 +6,46 @@
 
 ---
 
+<!-- EXECUTION-PLAN -->
+## Execution Plan
+
+**Erstellt:** 2026-05-05 18:50
+**Geplante Chunks:** 3 (Standard-Modus, 502 Plan-Zeilen)
+
+### Strategie
+
+Die Plan-Reihenfolge (Block 0 → 3a → 3b → 3c → 2 → 1) ist aus *Risiko-Sicht* korrekt geordnet, aber als Chunk-Aufteilung zu fein. Drei fachliche Chunks kapseln zusammenhängende Test-Surfaces und Producer-Consumer-Paare, ohne die Plan-interne Reihenfolge zu verletzen. Schichtweise Aufteilung (Domain/UI/Tests separat) wäre falsch, weil ein IME keine REST-Layer-Architektur hat — fachliche Features sind die natürlichen Sustainability-Grenzen.
+
+### Geplante Chunks
+
+| # | Chunk | Plan-Abschnitte | Warum diese Gruppierung? |
+|---|-------|-----------------|--------------------------|
+| 1 | Foundation: Strukturelle Vorbereitung + State-Cleanup | Block 0a-0g, Block 3a, Block 3b | Alle Änderungen sind "Skeleton + tote Felder weg" — keine user-facing Funktionalität, keine Test-Risiko-Erhöhung über die bestehenden 170+ Tests hinaus. 3a/3b operieren auf demselben Service wie 0c (Callback-Interface umstellen), Mergeschmerz wird minimiert. |
+| 2 | Audio-Focus-Toggle + Live-Hook | Block 2, Block 3c | 3c ist die Producer-Seite der `setAudioFocusRuntime`-API; Block 2 ist deren einziger Consumer. Sie zusammen zu landen heißt: Tests gegen `FakeAudioFocusGate` werden gemeinsam mit ihrer ersten produktiven Aufruf-Stelle geschrieben — kein "im Vacuum"-Test. `audio_focus_btn` wird bereits hier angelegt (initial `gone`), damit Chunk 3 ihn nur sichtbar schalten muss (V-3-Klarstellung). |
+| 3 | Single-Row-Modus | Block 1 | Größte und am stärksten isolierbare UI-Änderung (Re-Parenting + ConstraintSet-Switching + Animation + Lifecycle). Eigener Chunk mit eigenem Test-Surface (`KeyboardLayoutModeController`). Manuelle Geräte-Verifikation am Ende gebündelt → spart Geräte-Roundtrips. Baut auf `audio_focus_btn` aus Chunk 2 (Modus-Matrix referenziert ihn). |
+
+### Abhängigkeiten
+
+```
+Chunk 1 (Foundation)
+     │
+     ├──> Chunk 2 (Audio-Toggle + Live-Hook)
+     │         │
+     │         ▼
+     └──> Chunk 3 (Single-Row-Modus)
+```
+
+Strikt sequentiell — keine Parallelisierung sinnvoll.
+
+### Risiken
+
+- **Chunk 1 → 2:** `KeyboardViews`-DTO-Änderungen aus 0a brechen die Service-Konstruktion. Block-0 muss als Atom landen, sonst dazwischen kein Build.
+- **Chunk 2 → 3:** Der `audio_focus_btn` aus Chunk 2 muss in `action_row` existieren, sonst kann Chunk 3 ihn nicht referenzieren.
+- **Branch-Naming:** Branch heißt noch `feature/language-chip-curation` — thematisch passt das nicht mehr. Wenn lokal noch nicht gepusht: optional umbenennen am Ende.
+
+---
+<!-- /EXECUTION-PLAN -->
+
 ## Context
 
 Der Sprach-Pill-Refactor (`language-chip-curation`) ist implementiert und ins Archiv verschoben. Auf dem Gerät steht jetzt eine kompakte 2-Letter-Pill in der Prompts-Leiste, optisch in die normalen Pills integriert. Damit ist die Long-Press-Funktion auf `edit_numbers_btn` (bisher: Sprache cyclen) **funktional redundant** und kann freigegeben werden.
@@ -500,3 +540,17 @@ adb -s <DEVICE> install -r app/build/outputs/apk/debug/app-debug.apk
 6. **Block 1 (Single-Row-Modus)** zuletzt — größte Layout-Änderung, baut auf den Audio-Toggle-Button-Existenz auf.
 
 **Sprachliche Klarstellung** (Quality-Gate V-3): "Single-Row reused den Audio-Button" heißt: derselbe `audio_focus_btn` der bereits in `action_row` eingehängt ist, schaltet im Single-Row-Modus von `gone` auf `visible` — kein Re-Parenting, kein zweites Anlegen. Das passt zur Two-Views-Architektur (Edit-Bar + Single-Row sind zwei separate Views).
+
+---
+
+## Plan-Korrekturen (Post-Implementation)
+
+**2026-05-06 — Plan-Z. 185 (Re-Parenting-Liste):**
+
+- Plan behauptete: "`trash_btn`, `pause_btn`, `audio_focus_btn` sind bereits in `action_row`".
+- XML-Realität (`activity_dictate_keyboard_view.xml`): nur `audio_focus_btn` ist in `action_row` (Z. 93). `trash_btn` (Z. 117) und `pause_btn` (Z. 143) sind beide in `input_row`.
+- Folge im ersten Implementierungs-Pass: `csSingleRow` referenzierte beide IDs in der Chain, aber `rehome()` bewegte sie nicht — die Constraint-Connects gegen IDs ohne Children im `action_row`-Scope wurden stillschweigend ignoriert, und die Buttons blieben unsichtbar im GONE-`input_row`. Nur 6 von 8 Single-Row-Buttons waren sichtbar.
+- Korrekte Re-Parenting-Liste für Single-Row: `record_pulse_layout`, `space_btn`, `backspace_btn`, `enter_btn`, `resend_btn`, **`trash_btn`**, **`pause_btn`** (alle aus `input_row` in `action_row`).
+- Beim Rückwechsel: alle 7 zurück nach `input_row`.
+- Nur `audio_focus_btn` bleibt permanent in `action_row` und schaltet ausschließlich seine Visibility (wie ursprünglich geplant).
+- Korrektur erfolgte im Fix-Pass nach Chunk-3-Validation; Implementiert in `KeyboardLayoutModeController.rehome()`.

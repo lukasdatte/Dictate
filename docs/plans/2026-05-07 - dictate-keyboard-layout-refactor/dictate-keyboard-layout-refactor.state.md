@@ -36,8 +36,8 @@
 - Validation+Tests Closeouts: ✓ (default; user invoked "ohne Walkthrough" — auto-accept skill-recommended defaults)
 - Modular Plan Pattern: ✓ (three large specs in research/, see Spec Inventory below)
 
-**Phase-2 Briefing emitted:** pending
-**Pre-Phase-3 Git-State Check:** pending
+**Phase-2 Briefing emitted:** 2026-05-14 (briefing-only — user invoked "ohne Walkthrough", no `AskUserQuestion` pause)
+**Pre-Phase-3 Git-State Check:** clean (verified 2026-05-14 after commit e4edf6e)
 
 ---
 
@@ -241,7 +241,23 @@ No `test-knowledge-android`, `test-knowledge-mobile`, or `test-knowledge-ime` sk
 
 ### Plan-Consistency-Check
 
-**Pre-Phase-2.6 findings (Phase 1a — orchestrator should escalate to Phase 2.6 for verification):**
+```yaml
+status: warnings                          # not `fail` — all internal links resolve to existing files; only quality-skew + 1 broken reverse-link in specs
+checked_at: 2026-05-14
+broken_links: 1                           # spec reverse-link to parent plan
+quality_warnings: 5                       # Phase 1a findings preserved below
+spec_existence: all_present
+external_unreachable: 0
+proceed_decision: yes                     # user-mode `ohne Walkthrough` accepts warnings — broken reverse-links don't block code-implementation
+```
+
+**Phase 2.6 mechanical findings (orchestrator-run 2026-05-14):**
+
+**F6 [NEW — broken reverse-link in specs]**: All three spec files have a header `**Hauptplan:** [→ keyboard-layout-refactor.md](../../keyboard-layout-refactor.md)` pointing at a non-existent file at the repo root. The actual plan is `../dictate-keyboard-layout-refactor.reviewed.md` (same directory, not parent). Mechanical fix is trivial (3 specs × 1 line each) but is deferred to Phase 4.6c inline-anchor work (the broken reverse-link is a doc-anchor, not implementation-blocking). Block 0 docs being written by the implementer-agent will use correct paths from the start.
+
+**F7 [NEW — plan-to-spec links point at skeleton (.md) not reviewed (.reviewed.md)]**: Plan §4 building-blocks reference specs as `research/N-spec/N-spec.md` (skeleton versions; still exist). SoT is `.reviewed.md`. Links resolve (no broken-link error), but readers may consult an outdated skeleton. Phase 4.6c inline-anchor work re-points these. Implementer-agents reading the spec via `plan-reader` CLI on `.reviewed.md` (which is what the chunks.json `source_file` field points at) bypass the plan-→-spec link entirely — they go via chunks.json.
+
+**Pre-Phase-2.6 findings (Phase 1a — verified in Phase 2.6):**
 
 1. **Plan/Spec block-numbering drift**: Plan §4 table at lines 212-221 numbers blocks as 0 / 1a / 2 / 1b / 3 (Subsystem-Adapter-Migration) / 4 (RecordingHardwareSubsystem) / 5 / 6. Spec 1 §11.2.2 uses different numbering: Block-1a / Block-2 / Block-1b / Block-3 (= DB-Persistence) / Block-4 (= AudioFileFactory). The plan-§4-Block-3 "Subsystem-Adapter-Migration" is implicitly part of spec-1-Block-1b's Module-Migration (LanguageController → LanguageModule), and the plan-§4 has NO dedicated DB-Persistence block. Disambiguation in chunks.json: plan-C8 = subsystem-migration per plan §4, plan-C9 + plan-C10 = DB-persistence per spec1 §6 + §11.4. Phase 2.6 should align the two numbering conventions either by amending plan §4 to add a "Block 3.5 DB-Persistence" entry, or by amending spec 1 §11.2.2 to use plan numbering.
 
@@ -357,4 +373,9 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 |-----------|-------|--------|---------|
 | 2026-05-14 | Phase 0 | State-file created in worktree feature/dictate-keyboard-layout-refactor; reports/ directory created; plan-file Block-0 changes committed (2679312) | ✅ |
 | 2026-05-14 | Phase 1a | Plan-Analysis-Agent created chunks.json files for plan + all 3 specs; 19 chunks across 6 skill-blocks; all 4 chunks.json validated via plan-reader. Modular-plan-pattern (D21) confirmed active. NO Auto-Refactor (H3→H2 promotion) performed on spec 1 §4/§11 — chunks reference targeted ###-sub-sections instead. Plan-Consistency-Check findings documented (5 items, primarily plan/spec block-numbering drift for Block 3). | ✅ |
+| 2026-05-14 | Phase 1b | E2E-Test-Strategy agent (fresh-spawn; SendMessage not available in this env) produced 460-line runbook (24 TCs all manual, 17 prerequisites), populated `### End-to-End-Test-Plan` + extended Pre-Flight by 9 items. Knowledge-gap flagged: no test-knowledge-android/mobile/ime skill. 3 blocking + 4 non-blocking user-questions for Phase-4.5 — defaulted per "ohne Walkthrough" mode; user can override before Phase 4.5 starts. | ✅ |
+| 2026-05-14 | Phase 1.5 | Execution-plan injected into plan-file (lines 8-23, `<!-- EXECUTION-PLAN -->` fences). Skill-block summary, test approach, E2E-question handling, worktree path, state-file pointer. | ✅ |
+| 2026-05-14 | Phase 2 | Briefing-only emitted to user (6 block-boxes, doc-plan, test-strategy, E2E-runbook overview, phase status list). No `AskUserQuestion` per "ohne Walkthrough" mode. Defaults: validation+tests closeouts active, Phase-4.6 `full`. | ✅ |
+| 2026-05-14 | Phase 2.5 | Git-state pre-check: working tree clean after orchestrator setup-commit e4edf6e. Verified via `git status --porcelain` (empty). | ✅ |
+| 2026-05-14 | Phase 2.6 | Plan-Consistency-Check status `warnings`. F6 [new]: broken reverse-links in 3 specs (`../../keyboard-layout-refactor.md` doesn't exist; should be `../dictate-keyboard-layout-refactor.reviewed.md`) — deferred to Phase 4.6c. F7 [new]: plan-→-spec links point at skeleton `.md` not `.reviewed.md` (both exist, no broken-link error) — deferred to Phase 4.6c. F1-F5 (Phase 1a flagged): verified — block-numbering drift is mitigated in chunks.json via disambiguation, OVERLAY_5BUTTON cross-spec is consistent post-C-5, acceptance-criteria distribution conforms to D21 modular-plan-pattern. No blocking issues — Phase 3 starts. | ✅ |
 | 2026-05-14 | Phase 1b | E2E-Test-Strategy-Agent (fresh-spawn, no SendMessage available — per skill the Phase-1b prompt is identical for resume vs fresh) wrote `./reports/e2e-runbook.md` with 24 manual TCs (TC-PRE + TC-B0-DOCS + TC-1..TC-23) covering 10 risk-points: FGS-lifecycle, IME-lifecycle, audio-capture, Room v3→v4 migration, Triangle-FSM T1-T7, MotionLayout transitions, Cross-Module-Cascade, Visibility-Predicate, Overlay-Permission flow, Orphan-FAILED-audio-cleanup. Knowledge-gap flagged: no `test-knowledge-android`/`-mobile`/`-ime` skill exists — runbook hand-rolled per TC with self-contained adb steps. 7 user-questions emitted (Q1-Q3 blocking, Q4-Q7 configuration). Pre-Flight extended with 9 E2E-specific items (device, adb-connection-USB, apk-installed, ime-enabled+selected, mic-permission, target-app, network+api-key, personal-device-consent). E2E NOT skipped — refactor has significant behaviour-impact. | ✅ |

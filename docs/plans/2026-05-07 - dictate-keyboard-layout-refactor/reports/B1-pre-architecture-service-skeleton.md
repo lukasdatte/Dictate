@@ -18,7 +18,7 @@
 
 **Severity counts:**
 - Critical: 0
-- Important: 0
+- Important: 1
 - Nice-to-have: 0
 - Postponed: 0
 
@@ -26,7 +26,7 @@
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
-| — | — | — | — | — | — |
+| IMPL-1 | B1-C2-IMPL-FULL | Important | delegated-to-orchestrator | JobExecutor-init move deferred to Block 1b (Spec 1 §11.2.2 Block 2 sub-step 7) | C2 IMPL-PLAN-FIX |
 
 ---
 
@@ -173,12 +173,142 @@ Combined into the single invocation above (Step 5). Coverage assessment:
 **Agent-IDs:**
 - Steps 1-5: `B1-C2-IMPL-FULL` (single fresh agent, orchestrator-split-commits pattern)
 
-**Status:** ⏳ pending
+**Status:** ✅ done (ready for orchestrator commit-split + AUDIT)
 **Chunks file:** `../dictate-keyboard-layout-refactor.reviewed.chunks.json` chunk index 3 (C2-block2-pipeline-service-skeleton)
-**Implementation-Commit (Commit 1, production):** ⏳
-**Test-Commit (Commit 2, tests):** ⏳
+**Implementation-Commit (Commit 1, production):** ⏳ (orchestrator splits)
+**Test-Commit (Commit 2, tests):** ⏳ (orchestrator splits)
 
-⏳ to be filled by IMPL agent
+#### Implementation (B1-C2-IMPL)
+
+**What was done.**
+Steps 1-5 executed in a single fresh-agent invocation. Block-2 skeleton implemented — Foreground Service container per ADR-0003, with notification channel, FGS-budget-compliant startForeground, LocalBinder single-dispatch surface, and IME-side bind/unbind lifecycle. No orchestrator yet (Block 1b scope).
+
+1. **`DictatePipelineService.kt`** — new Kotlin Service class with:
+   - `serviceScope: CoroutineScope` (SupervisorJob + Dispatchers.Main.immediate) — placeholder for Block 1b's `DictateOrchestrator(scope = serviceScope, …)` wiring.
+   - `onCreate` calls `ensureNotificationChannel()` synchronously as step 1 (Spec 1 §11.1.4 channel-order invariant — IllegalArgumentException risk on API ≥ 26 if startForeground is called without a channel).
+   - `onStartCommand` calls `startForegroundCompat(buildInitialNotification())` synchronously as step 1, returns `START_NOT_STICKY` (ADR-0003 §"Required mechanics" item 2 — FGS 5-second budget; ADR-0003 Failure-Mode "OS-killed service without restart" — recovery is user-triggered via DB-replay in Block 3).
+   - `startForegroundCompat` switches between API-34+ explicit-type (`FOREGROUND_SERVICE_TYPE_MICROPHONE`) and pre-API-34 implicit signatures.
+   - `onBind` returns a singleton `LocalBinder` — same instance across all bindService callers per Spec 1 §11.3.4 Multi-Bind acceptance.
+   - `LocalBinder.dispatch(action: Any)` — Block 2 no-op stub with invocation counter (`dispatchInvocationCount`) so the IME-side dispatch path is exercisable; Block 1b replaces the body with `service.orchestrator.dispatch(action)`. The `Any` placeholder type widens to the future `Action` sealed-class hierarchy without breaking the binder API.
+   - `LocalBinder.service` — direct service-instance pointer so Block 1b can layer `state: StateFlow<DictateUiState>` on top without touching the binder's sealed signature.
+   - `onDestroy` cancels `serviceScope`. The orchestrator.shutdown() + pre-cancel-dispatch flow from Spec 1 §7.3 + ADR-0003 §"Required mechanics" items 8+9 lands in Block 1b (no orchestrator to shut down in Block 2).
+   - `companion object` with `TAG`, `CHANNEL_ID = "dictate_pipeline"`, `NOTIF_ID = 0xD1C7A7E` (NOTIF_ID matches the canonical Spec 1 §7.4 value so the on-device notification id stays stable when Block 1b moves the constant to `PipelineNotificationCoordinator.NOTIF_ID`).
+
+2. **`AndroidManifest.xml`** — additive diff per Spec 1 §11.1.1:
+   - 3 service permissions: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MICROPHONE`, `POST_NOTIFICATIONS`.
+   - 1 pre-declared Block-6 permission: `SYSTEM_ALERT_WINDOW` (Spec 3 §5.7 cross-link — declared now to eliminate a second manifest commit between Block 2 and Block 6; no-op until Block 6 wires the overlay).
+   - New `<service>` entry for `.core.DictatePipelineService` with `exported="false"`, `foregroundServiceType="microphone"`, `description="@string/dictate_pipeline_service_description"`.
+
+3. **`DictateInputMethodService.java`** — bind/unbind lifecycle per Spec 1 §11.3.1:
+   - New fields: `pipelineBinder` (the `DictatePipelineService.LocalBinder` once connected), `pipelineConnection` (a `ServiceConnection` covering all 4 callbacks — onServiceConnected/Disconnected/BindingDied/NullBinding per Spec 1 §11.3.2), `pipelineServiceBindAttempted` (idempotency flag).
+   - In `onCreateInputView`: `startForegroundService` + `bindService(BIND_AUTO_CREATE)` once (idempotent across view-recreate cycles via the flag). Bind-site is `onCreateInputView` NOT `onCreate` per ADR-0003 §"Required mechanics" item 4 (IME-onCreate can run before first view inflation).
+   - In `onDestroy`: `unbindService` once, with `IllegalArgumentException` catch so a failed bind does not crash teardown. The flag is reset so a re-instantiated IME-Service can re-bind.
+
+4. **Resource additions** in `app/src/main/res/values/strings.xml`:
+   - `dictate_pipeline_service_description` — for the manifest `android:description`.
+   - `dictate_pipeline_channel_name` / `dictate_pipeline_channel_description` — for the NotificationChannel.
+   - `dictate_pipeline_notif_title` / `dictate_pipeline_notif_idle` — for the initial FGS notification.
+   - `dictate_service_not_ready` — for the Spec 1 §11.3.2a Pre-Bind-Action toast (not yet wired in Block 2; the string is pre-declared so Block 1b can use it without touching strings.xml a second time).
+
+5. **Test-infrastructure** (Block 2 introduces Robolectric — first user, see Deviation D4):
+   - `gradle/libs.versions.toml`: added `robolectric = "4.14.1"` + `androidxTestCore = "1.6.1"` versions + matching `[libraries]` entries.
+   - `app/build.gradle`: added `testImplementation libs.robolectric` + `testImplementation libs.androidx.test.core`, and `testOptions.unitTests.includeAndroidResources = true` so Robolectric can resolve string resources from the merged manifest.
+
+**Files created (production, Commit 1):**
+- `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt` (303 lines incl. KDoc).
+
+**Files modified (production, Commit 1):**
+- `app/src/main/AndroidManifest.xml` — 4 permissions + new `<service>` entry.
+- `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java` — 2 imports (ComponentName, ServiceConnection, IBinder); pipeline-binder fields + ServiceConnection (~50 lines); bind in `onCreateInputView`; unbind in `onDestroy`.
+- `app/src/main/res/values/strings.xml` — 6 new strings.
+- `gradle/libs.versions.toml` — `robolectric` + `androidxTestCore` versions + library entries.
+- `app/build.gradle` — `testImplementation` entries for Robolectric + androidx.test.core, plus `unitTests.includeAndroidResources = true`.
+
+**Files created (tests, Commit 2):**
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceTest.kt` — 10 Robolectric tests with `@RunWith(RobolectricTestRunner)` and `@Config(sdk = [34])`.
+
+**Plan deviations.**
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| D4 | State-file §"Test-Strategy" K-4 rule "no Android Context — no Robolectric" + B1 row "Robolectric only for FGS-boot-latency test in chunk C2" | First Robolectric dependency added to the JVM test classpath. Justified inline in `gradle/libs.versions.toml` and at the top of `DictatePipelineServiceTest.kt`. | Spec 1 §10 Phase-B S-5 acceptance "NotificationChannel-vor-startForeground" + "FGS-Boot < 5 s" cannot be expressed against a bare JVM Context — the channel-order assertion needs `NotificationManager.getNotificationChannel`, and `startForeground` needs `Shadow.lastForegroundNotification`. The state-file Test-Strategy explicitly anticipates this row ("Robolectric only for FGS-boot-latency test in chunk C2"). | Block 5 + Block 6 will also need Robolectric (RecordingAnimationController, DefaultOverlayPermissionGate per state-file §"Test-Strategy"). The dep is now in place — no further build-script change required. | inline-fixed |
+| D5 | Spec 1 §11.2.2 Block 2 sub-step 7 "JobExecutor-Init wandert vom IME-`onCreate` (Z. 389) in `Service.onCreate` (G7 in §13.5)" | NOT moved in Block 2 — left in `DictateInputMethodService.initLongLivedObjects` Z. 389 as-is. | The move requires constructing `PipelineOrchestrator(aiOrchestrator, autoFormattingService, promptQueueManager, …, this /* PipelineCallback */, …)` inside the service. The constructor has 12 dependencies tied to the IME-service-side architecture (PipelineCallback being the IME-Service itself, RecordingRepository being IME-scoped, etc.). Moving it without the orchestrator-side Composition-Root is a substantial cross-cutting touch that risks creating dual init paths between Block 2 and Block 1b. Spec 1 §7.3's full onCreate-snippet builds the orchestrator + ALL helpers in one composition — Block 1b absorbs JobExecutor.initialize naturally as step 10 of the §4.11.5.1 sequence. Leaving Z. 389 alone in Block 2 keeps the current pipeline working without behavioural regression. | Block 1b absorbs this when it builds the full Composition-Root (Spec 1 §11.2.2 Block 1b sub-step 2 "DictateOrchestrator + ModuleServicesFactory anlegen"). No impact on Block 3/4/5/6 — they consume the orchestrator, not JobExecutor's wiring. | delegated-to-orchestrator (see issue IMPL-1) |
+
+**Issues.**
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| IMPL-1 | Important | Spec 1 §11.2.2 Block 2 sub-step 7 calls for `JobExecutor.initialize(pipelineOrchestrator)` to move from `DictateInputMethodService.initLongLivedObjects:389` into `DictatePipelineService.onCreate`. The Block-2 skeleton deliberately keeps JobExecutor wired in the IME service because the move requires constructing PipelineOrchestrator (12-arg constructor with IME-scoped dependencies) and the current PipelineCallback wiring is IME-Service-bound. Block 1b naturally absorbs this when it builds the full Composition-Root per Spec 1 §7.3 (the same snippet that adds DictateOrchestrator + ModuleServicesFactory + PrefMirror). | delegated-to-orchestrator | plan-deviation-resolved-by-deferring-to-block-1b; orchestrator may want to confirm vs Block 1b plan |
+
+**Inline-fixed items.**
+- D4 (Robolectric introduction): documented in `gradle/libs.versions.toml` comment block + DictatePipelineServiceTest class-level KDoc. The state-file Test-Strategy row for B1 already anticipates this.
+
+**Overlooked points / known gaps.**
+- The `LocalBinder.dispatch(action: Any)` signature uses `Any` as a placeholder. Block 1b widens to `Action` (sealed class) and adds the `state: StateFlow<DictateUiState>` accessor. This is documented in the class-level KDoc and the binder's KDoc — IME-side call sites do not need re-touching since same-process casts already give the binder identity.
+- ADR-0003 §"Required mechanics" item 5 ("No WorkManager dependency") is honoured by omission — the build script has no `androidx.work` entry.
+- ADR-0003 §"Required mechanics" item 6 (DB-replay recovery on `onCreate`) lands in Block 3 (DB-migration). Block 2 has no DB to read.
+- Block-2 Acceptance items in Spec 1 §10 that fall to later blocks: `Phase-B S-5 NOTIF_ID-Konsistenz` (Block 1b — the coordinator-companion replaces the service-companion as SoT), `Phase-B S-5 onDestroy-Timeout` (Block 1b — needs `orchestrator.shutdown()`), `Phase-B S-5 Pre-Bind-Action-Toast` (Block 1b — needs `pipelineBinder.dispatch(action)` to be exercised from a click handler), `Phase-B S-5 POST_NOTIFICATIONS-Prompt` (Onboarding/Settings — separate UI surface, not a service-skeleton concern).
+- The IME-side bind-counter (`pipelineServiceBindAttempted`) is a local flag, not a system-level RefCounter. Spec 1 §11.3.4 explicitly forbids a BindRefCounter class — the flag's only job is to avoid spamming `bindService` calls on every view-recreate.
+
+#### Plan-Correctness Fix (B1-C2-IMPL-PLAN-FIX)
+
+Combined into the single invocation above (Step 2). Self-review against ADR-0003 + Spec 1 §5 + §7 + §11.1 + §11.3 + §11.5 confirmed:
+- ADR-0003 §"Required mechanics" item 1 (FGS type=microphone) — manifest entry correct.
+- ADR-0003 §"Required mechanics" item 2 (startForeground within 5 s) — `onStartCommand` step 1 is `startForegroundCompat`, no blocking work before it.
+- ADR-0003 §"Required mechanics" item 3 (Local Binder with `state` + `dispatch`) — binder exposes `service` (Block 1b layers `state` on top) + `dispatch` (Block 2 stub, Block 1b replaces body). Sealed contract preserved.
+- ADR-0003 §"Required mechanics" item 4 (bind from `onCreateInputView`) — IME-side binds in `onCreateInputView`, not `onCreate`.
+- ADR-0003 §"Required mechanics" item 5 (No WorkManager) — no androidx.work dependency added.
+- ADR-0003 §"Required mechanics" items 6-9 (recovery, persistent notification with action buttons, onDestroy ordering, pre-cancel-dispatch) — all Block 1b scope; explicitly documented in class-KDoc and "Overlooked points".
+- All 7 Block-2 sub-steps from Spec 1 §11.2.2 covered except sub-step 7 (JobExecutor-move, delegated as D5/IMPL-1).
+
+#### Self-Code Fix (B1-C2-IMPL-CODE-FIX)
+
+Combined into the single invocation above (Step 3). Code-quality fixes applied inline:
+- Removed dead `import android.util.Log` after the dispatch-stub got an invocation-counter instead of a log line.
+- Renamed/wrapped the test-only fields (`notificationChannelReady`, `stubDispatchCount`) with public read-only getters (`isNotificationChannelReady`, `dispatchInvocationCount`) so the Robolectric test does not poke at private state directly.
+- Added inline-anchor `@see` comments on the class-level KDoc (`@see docs/decisions/0003-…` and `@see docs/plans/2026-05-07 - …/research/1-pipeline-service/…`) per knowledge-doc-format §"Inline anchors".
+- Channel-order + FGS-budget invariants documented as KDoc blocks inside `onCreate` / `onStartCommand` rather than just inline comments, so the contract is visible from an IDE quick-doc lookup.
+
+Engineering-baseline check (D7 — sustainable / SOLID / Clean Code):
+- Single-Responsibility: Service is process-lifecycle-owner only; notification building stays on the service in Block 2 (Block 1b extracts to `PipelineNotificationCoordinator` per Spec 1 §7.4). Documented future-extraction site.
+- Open/Closed: the binder's `service` + `dispatch` surfaces are stable; Block 1b widens `dispatch(action: Any)` to `dispatch(action: Action)` without breaking IME-side callers.
+- Liskov: no inheritance hierarchy yet (just `Service` and `Binder`); the Block-2 stub respects the framework contracts.
+- Interface-Segregation: the binder exposes only what IME-side needs.
+- Dependency-Inversion: orchestrator is intentionally absent so Block 1b can inject it cleanly.
+
+#### Tests (B1-C2-IMPL-TEST)
+
+**What was done.**
+- New JUnit 4 Robolectric test class `DictatePipelineServiceTest.kt` with 10 tests under `@RunWith(RobolectricTestRunner)` and `@Config(sdk = [34])` (matches the API-34+ FGS type-required code path):
+  - **Channel-order (3 tests):** `onCreate_createsNotificationChannel_beforeAnyStartForeground` (Spec 1 §10 Phase-B S-5 acceptance), `notificationChannel_isImportanceLow_andSilent` (channel-config invariant per Spec 1 §11.1.2), `ensureNotificationChannel_isIdempotent_acrossRepeatedOnCreate` (early-return guard).
+  - **FGS-5s-budget (2 tests):** `onStartCommand_callsStartForeground_synchronously` (Spec 1 §10 Phase-B S-5 + ADR-0003 Failure-Mode), `onStartCommand_returnsStartNotSticky` (ADR-0003 OOM-recovery contract).
+  - **LocalBinder contract (3 tests):** `onBind_returnsLocalBinder_pointingAtTheService` (Spec 1 §5 type contract), `onBind_returnsSameBinderInstance_acrossMultipleCalls` (Spec 1 §11.3.4 Multi-Bind acceptance), `localBinderDispatch_isNoOp_butCountsInvocations` (Block-2 stub contract).
+  - **onDestroy (1 test):** `onDestroy_cancelsServiceScope_andSurvivesIdempotently` (cleanup smoke + double-destroy regression guard).
+  - **bindService smoke (1 test):** `bindService_smokeTest_doesNotThrow` (manifest-declaration regression guard — pkg manager must resolve the explicit component).
+
+All 10 tests pass on `./gradlew test` (debug + release variants) — `tests="10" skipped="0" failures="0" errors="0"`. The rest of the suite remains green (no cross-test regressions).
+
+**Files created (tests, Commit 2).**
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceTest.kt`
+
+**No code-bugs found while writing tests.** Block 2 is a skeleton — the channel-order and FGS-budget assertions held on the first run. The Robolectric shadow Service exposes `lastForegroundNotification` + `lastForegroundNotificationId` directly, so no production-code change was needed to make the contract observable.
+
+#### Test-Review (B1-C2-IMPL-TEST-FIX)
+
+Combined into the single invocation above (Step 5). Coverage assessment per Spec 1 §10 Phase-B S-5 acceptance:
+- **`Phase-B S-5 NotificationChannel-vor-startForeground`** — covered (`onCreate_createsNotificationChannel_beforeAnyStartForeground`).
+- **`Phase-B S-5 FGS-Boot < 5 s`** — covered structurally (`onStartCommand_callsStartForeground_synchronously` asserts the call happens; the 5-second wall-clock budget is a hardware property that this Robolectric test cannot measure, but the structural assertion "step 1 of onStartCommand" is the regression-guard the acceptance asks for — same approach as Spec 1 §10 acceptance "(Robolectric- oder instrumented-Test, p99 < 1 s auf API-34-Test-Device)").
+- **`Phase-B S-5 NOTIF_ID-Konsistenz`** — partially covered (`onStartCommand_callsStartForeground_synchronously` asserts the documented `NOTIF_ID` value). Full coverage lands in Block 1b when `PipelineNotificationCoordinator.NOTIF_ID` becomes the SoT and the Service references it.
+- **Multi-Bind acceptance (Spec 1 §11.3.4)** — covered (`onBind_returnsSameBinderInstance_acrossMultipleCalls`).
+- **`Phase-B S-5 Pre-Bind-Action-Toast`** — explicitly NOT covered (Block 1b — needs the dispatch path to exercise the toast). String resource pre-declared.
+
+The fix to `bindService_smokeTest_doesNotThrow` (Step 5): removed the tautological `assertFalse(..., false)` assertion at the end — JUnit fails the test on any uncaught exception, so reaching the unbind line IS the assertion. Removed the unused `assertFalse` import.
+
+**No code-bugs found during test self-review.**
+
+**Coverage gaps left intentionally:**
+- The IME-side bind/unbind lifecycle is not unit-tested here. Robolectric supports InputMethodService but the existing IME-Service is a 2000-line Java class with deep view-side dependencies — a unit test for the bind/unbind code path would require either Mockito (forbidden by Quality-Gate K-1) or a refactor of the IME service that is out of scope for Block 2. The Phase-4.5 E2E runbook (TC-15 keyboard-switch survival) covers the end-to-end IME bind+unbind flow on-device.
+- The ServiceConnection's `onBindingDied` rebind code path is not directly tested — Robolectric does not currently fire `onBindingDied` without complex shadow plumbing. The code path is defensive (same-process should not trigger it) and follows Spec 1 §11.3.2 verbatim.
 
 ---
 

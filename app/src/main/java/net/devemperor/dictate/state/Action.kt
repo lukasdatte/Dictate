@@ -197,6 +197,15 @@ sealed class Action {
 
         /** Permission-loss + other cross-module cascades drive this directly. */
         data class SetViewMode(val mode: ViewMode) : ViewModeAction()
+
+        /**
+         * Cross-module cascade target — emitted by PipelineModule's observer
+         * when the pipeline settles to [PipelineUiState.Idle] from any
+         * non-Idle state. ViewModeModule re-runs `computeViewMode` with
+         * `pipelineActive=false` and (in HOVER) falls back to KEYBOARD —
+         * the T7 "Geist-Widget" structural protection (Spec 3 §7.3 T7).
+         */
+        data object OnPipelineDone : ViewModeAction()
     }
 
     // ════════════════════════════════════════════════════════════════

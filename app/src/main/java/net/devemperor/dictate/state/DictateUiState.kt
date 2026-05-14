@@ -144,6 +144,26 @@ sealed interface RecordingState {
 }
 
 /**
+ * `true` when recording is either [RecordingState.Active] or
+ * [RecordingState.Paused].
+ *
+ * Centralised here because three modules + several `ButtonSlot` predicates
+ * spell this same check out in Spec 1 §15.2, Spec 3 §3.1, Spec 3 §4.8, and
+ * `ViewModeModule.computeViewMode`. Inlining it loses DRY (and re-introduces
+ * the L-3 finding from Phase-B validation: "`predTrashVisible` /
+ * `predPauseVisible` are literally identical strings"). Keep one
+ * canonical predicate next to the FSM definition.
+ *
+ * **Why not include [RecordingState.Preparing]?** Preparing is a
+ * pre-active transient (`MediaRecorder.prepare()` is in flight). Pipeline-
+ * active and view-mode checks treat it separately via `is Preparing`
+ * branches; conflating it into this predicate would over-trigger HOVER
+ * and pause-cascades.
+ */
+val RecordingState.isActiveOrPaused: Boolean
+    get() = this is RecordingState.Active || this is RecordingState.Paused
+
+/**
  * Pipeline progress FSM. Owned by `PipelineModule`.
  *
  * Each non-idle state carries the `sessionId` (UUID string per R.15)

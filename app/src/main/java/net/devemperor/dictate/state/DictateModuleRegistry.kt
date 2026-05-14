@@ -57,17 +57,35 @@ open class DictateModuleRegistry(
     }
 
     /**
-     * Production singleton. Populated by Chunks C5 + C6 once the
-     * concrete modules exist; Chunk C4 ships the empty list so the
-     * orchestrator builds with `assembleDebug` green.
+     * Production singleton. Populated incrementally as C5 + C6 land:
      *
-     * Tests do **not** use this companion — they construct an
-     * ad-hoc registry via `DictateModuleRegistry(listOf(FakeXxxModule))`.
+     * - **C5** adds the 5 core modules: `RecordingModule`, `PipelineModule`,
+     *   `AudioModule`, `ViewModeModule`, `OverlayModule`.
+     * - **C6** adds the 8 auxiliary modules: `ResendModule`, `LivePromptModule`,
+     *   `LanguageModule`, `LayoutModule`, `FeatureToggleModule`, `ThemingModule`,
+     *   `PendingSessionsModule`, `KeyboardInputModule` (+ Phase-2 `InterruptionModule`).
+     *
+     * Order in this list is the **cascade-emission order** (ADR-0002 §"Cascade
+     * order"). The core modules go first because they sit on the hot path
+     * (recording start → pipeline-trigger → view-mode switch) and the
+     * cascade-flow shape is easier to reason about when the "owner" of a
+     * given transition cascades before observers.
+     *
+     * Tests do **not** use this companion — they construct an ad-hoc
+     * registry via `DictateModuleRegistry(listOf(FakeXxxModule))`.
      */
-    companion object Default : DictateModuleRegistry(emptyList()) {
-        // C5/C6 will replace `emptyList()` with the production-module list.
-        // Order of that list is part of the cascade-order contract.
-    }
+    companion object Default : DictateModuleRegistry(
+        listOf(
+            RecordingModule,
+            PipelineModule,
+            AudioModule,
+            ViewModeModule,
+            OverlayModule,
+            // C6 will append: ResendModule, LivePromptModule, LanguageModule,
+            // LayoutModule, FeatureToggleModule, ThemingModule,
+            // PendingSessionsModule, KeyboardInputModule, InterruptionModule.
+        ),
+    )
 }
 
 /**

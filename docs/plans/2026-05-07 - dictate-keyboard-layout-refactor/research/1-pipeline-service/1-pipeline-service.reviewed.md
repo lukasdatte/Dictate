@@ -1496,7 +1496,7 @@ welcher Schritt vor welchem läuft, hier die geordnete Sequenz:
 | 6.5 | `LegacyAudioFileMigration.run(applicationContext)` | sync | One-shot idempotent (KG-AFF-2). Läuft VOR Schritt 7/8 |
 | 7 | (`recovery.recover(store)` läuft bereits async via `Orchestrator.init`, Schritt 5) | async | §11.6.1 |
 | 8 | `serviceScope.launch(Dispatchers.IO) { audioFileFactory.cleanupOrphans(referenced) }` | async | siehe oben |
-| 9 | `startForeground(NOTIF_ID, notifCoordinator.buildInitial())` — gerufen aus `onStartCommand`, NICHT aus `onCreate` | sync | **MUSS vor 5 s nach `startForegroundService`-Call** (§11.1.4). `buildInitial()` ist pure State→Notification-Render, in-memory, < 5 ms. Schritt 9 lebt im `onStartCommand`-Pfad, weil Android `onCreate` ohne `onStartCommand` nicht via `startForegroundService` durchläuft. |
+| 9 | `startForeground(PipelineNotificationCoordinator.NOTIF_ID, notifCoordinator.buildInitial())` — gerufen aus `onStartCommand`, NICHT aus `onCreate` <!-- FIX: Phase-C C-2 (2026-05-14) – NOTIF_ID-Qualifier (SoT-Konsolidierung). --> | sync | **MUSS vor 5 s nach `startForegroundService`-Call** (§11.1.4). `buildInitial()` ist pure State→Notification-Render, in-memory, < 5 ms. Schritt 9 lebt im `onStartCommand`-Pfad, weil Android `onCreate` ohne `onStartCommand` nicht via `startForegroundService` durchläuft. |
 | 10 | `JobExecutor.initialize(pipelineOrchestrator)` | sync | G7 §13.5.a. ⚠ Erwartet den **alten** `PipelineOrchestrator` (Audio-Pipeline-Runner, Spec 1 §1.x Naming-Konvention), NICHT den neuen `DictateOrchestrator`. Position nach Recovery-Async-Start ist OK (JobExecutor wird erst von User-Action / pendingSessions-Resume gerufen, also nach Recovery-Completion). |
 
 **Reihenfolge-Invarianten:**
@@ -1510,11 +1510,16 @@ welcher Schritt vor welchem läuft, hier die geordnete Sequenz:
 
 **`onDestroy`-Interaktion:**
 
+<!-- FIX: Phase-C C-2 (2026-05-14) – stale `stateManager` (Pre-F-11-Drift) → `orchestrator`.
+     §4.3 `shutdown()` ist die kanonische Cleanup-API; `stateManager` existiert seit
+     Phase-B S-1 nicht mehr. Der Voll-Snippet für `onDestroy` (mit `runBlocking`-Timeout-
+     Wrapper, §11.1.4-Grenze) lebt in §7.3 — hier nur die §4.11-Skelett-Variante, die
+     zeigt, dass der Cleanup-Job vom `serviceScope.cancel()` automatisch abgebrochen wird. -->
 ```kotlin
 override fun onDestroy() {
     super.onDestroy()
-    stateManager.shutdown()
-    serviceScope.cancel()    // ← cancelt laufenden cleanupOrphans-Job
+    orchestrator.shutdown()    // detacht PrefMirror + ruft jedes Modul-`terminate(services)` (§4.3)
+    serviceScope.cancel()      // ← cancelt laufenden cleanupOrphans-Job
 }
 ```
 
@@ -3250,28 +3255,43 @@ oder `INSERTED` (das wird via `inserted_at IS NOT NULL` markiert):
 | Error | `UPDATE sessions SET status='FAILED', last_error_type=?, last_error_message=? WHERE id=?` | `finalizeFailed(id, type, msg)` |
 
 <!-- FIX: Issue 2.1.21 / R.17 – Idempotenz-/Reihenfolge-/Failure-Vertrag explizit -->
+<!-- FIX: Phase-C C-2 (2026-05-14) – Doppel-Reihenfolge-Klausel "State-First" vs. "DB → Cache"
+     explizit disambiguiert: zwei verschiedene "Caches" auf zwei verschiedenen Layern. Beide
+     Klauseln koexistieren konfliktfrei, aber der Lese-Anchor ohne Header war verwirrend. -->
 **Persistenz-Vertrag (R.17):**
+
+> **Zwei Reihenfolge-Klauseln, zwei Layer — kein Widerspruch:**
+> - **State-First (Bulletpoint 2)** bezieht sich auf das Verhältnis `DictateUiState` (in-process
+>   SSoT, immutable) vs. `SessionEntity` (DB). Reducer mutiert zuerst State, dann emittiert er
+>   einen `Effect.Persist*`, der die DB schreibt.
+> - **DB-first (Bulletpoint 5)** bezieht sich auf das Verhältnis `SessionEntity` (DB) vs.
+>   `ActiveJobRegistry` (in-process Performance-Cache + Single-Job-Lock, separater Container von
+>   `DictateUiState`). Innerhalb des `Effect.Persist*`-Handlers wird zuerst die DB geschrieben,
+>   dann die `ActiveJobRegistry` aktualisiert.
+>
+> Die Gesamt-Reihenfolge ist also: **State → DB → ActiveJobRegistry**. Diese Klärung ist in §6.1.1
+> Konsumenten-Tabelle und in der Pipeline-Start-Sequenz unten weiter ausgeführt.
 
 - **Idempotenz:** Alle DB-Writes gehen über `@Insert(onConflict = REPLACE)` bzw. idempotente
   `UPDATE … WHERE id = ?`-Statements. Replay nach View-Recreate oder Cascade-Loop ist sicher
   (kein Doppel-Insert, kein Doppel-Status-Switch).
-- **Reihenfolge State-First:** Reducer mutiert `DictateUiState` zuerst (Quelle der Wahrheit);
-  der `Effect.Persist*` schreibt die DB asynchron. Ein DB-Failure macht den State NICHT
-  inkonsistent — der State ist bereits persistiert via StateFlow, die DB ist Mirror.
+- **Reihenfolge State-First (State ↔ DB):** Reducer mutiert `DictateUiState` zuerst (Quelle der
+  Wahrheit); der `Effect.Persist*` schreibt die DB asynchron. Ein DB-Failure macht den State
+  NICHT inkonsistent — der State ist bereits persistiert via StateFlow, die DB ist Mirror.
 - **Failure-Channel:** Wirft eine DB-Operation, fängt der Orchestrator (Issue 2.1.3 Option D)
   und re-dispatcht `Action.PipelineAction.PersistenceError(sessionId, reason)`. Der
   PipelineModule-Reducer markiert die Session in `pendingSessions` als `status=FAILED` und
   setzt eine Notification (Backoff-frei, kein Retry-Storm).
 - **Cleanup-Cutoff:** `now − 7d − 1h` (Safety-Buffer für inflight-Operations); zentral in
   `Pref.SessionCleanupGracePeriodMs`.
-- **Reihenfolge DB → Cache (KG-SST-5, RESOLVED 2026-05-11):** Im Reducer-Hook für
-  RECORDING/TRANSCRIBING gilt: `SessionDao.updateStatus(...)` (DB) wird **vor**
-  `ActiveJobRegistry.update(...)` (Cache) aufgerufen. Bei DAO-Failure wird der
-  Registry-Call übersprungen (kein Drift, Pipeline-Reducer fängt es als
-  `Action.PipelineAction.PersistenceError`, siehe Failure-Channel oben). Bei
-  Process-Crash zwischen DB-Write und Cache-Write: DB ist konsistent, Registry
-  wird beim App-Start eh leer initialisiert (`ActiveJobRegistry` ist process-local
-  Kotlin `object`, kein langfristiger Drift möglich). Producer-Sites
+- **Reihenfolge DB → Cache (DB ↔ ActiveJobRegistry, KG-SST-5, RESOLVED 2026-05-11):** Im
+  Reducer-Hook für RECORDING/TRANSCRIBING gilt **innerhalb** des `Effect.Persist*`-Handlers:
+  `SessionDao.updateStatus(...)` (DB) wird **vor** `ActiveJobRegistry.update(...)`
+  (Performance-Cache) aufgerufen. Bei DAO-Failure wird der Registry-Call übersprungen
+  (kein Drift, Pipeline-Reducer fängt es als `Action.PipelineAction.PersistenceError`,
+  siehe Failure-Channel oben). Bei Process-Crash zwischen DB-Write und Cache-Write: DB
+  ist konsistent, Registry wird beim App-Start eh leer initialisiert (`ActiveJobRegistry`
+  ist process-local Kotlin `object`, kein langfristiger Drift möglich). Producer-Sites
   `JobExecutor.kt:96/:164` (`register/unregister`) bleiben unverändert — sie
   sind Lock-Producer (Single-Job-Lock), nicht Status-Producer.
 
@@ -3391,8 +3411,15 @@ suspend fun recoverFromDb() = withContext(Dispatchers.IO) {
     // 3. Nachladen — nach den Promotes ist der gewünschte Pending-Set:
     //    a) RECORDED mit existierender Datei  → resumable
     //    b) COMPLETED mit final_output_text != NULL UND inserted_at IS NULL → pending insertion
+    //
+    // FIX: Phase-C C-2 (2026-05-14) – `getSessionsByStatuses(List<String>)` erwartet `.name`-
+    // Strings (siehe DAO-Signatur weiter unten, §6.3 + §11.6.2). Frühere Variante übergab
+    // `SessionStatus`-Enum-Werte direkt → Kotlin-Type-Mismatch (Compile-Error). Konsistent
+    // zum Top-Block oben in derselben Funktion (Z. 3331-3336), der bereits `.name` nutzt.
     val recoveredCandidates =
-        db.sessionDao().getSessionsByStatuses(listOf(SessionStatus.RECORDED, SessionStatus.COMPLETED))
+        db.sessionDao().getSessionsByStatuses(
+            listOf(SessionStatus.RECORDED.name, SessionStatus.COMPLETED.name)
+        )
 
     val resumable = recoveredCandidates
         .filter { it.statusEnum == SessionStatus.RECORDED }
@@ -3819,7 +3846,10 @@ class DictatePipelineService : Service() {
         // 1. Action-Intents verarbeiten (von Notification-Buttons)
         intent?.let { actionRouter.dispatch(it) }
         // 2. Initiale FGS-Notification + reaktive Updates starten
-        startForeground(NOTIF_ID, notifCoordinator.buildInitial())
+        // FIX: Phase-C C-2 (2026-05-14) – `NOTIF_ID` qualifiziert via `PipelineNotificationCoordinator.NOTIF_ID`
+        // (Coordinator-companion ist SoT, kein lokales `const val NOTIF_ID` im Service-Companion —
+        // siehe §10 Acceptance "Phase-B S-5 NOTIF_ID-Konsistenz" + §11.1.2 NOTIF_ID-Konsolidierung).
+        startForeground(PipelineNotificationCoordinator.NOTIF_ID, notifCoordinator.buildInitial())
         notifCoordinator.startReactiveUpdates(::stopSelfWhenTerminal)
         return START_NOT_STICKY
     }
@@ -3835,8 +3865,36 @@ class DictatePipelineService : Service() {
     // aber kein Snippet zeigte das tatsächlich). Service.onDestroy hat selbst ein OS-seitiges
     // Timeout-Fenster (auf API ≥ 8: 20 s, faktisch idR < 5 s vor SIGKILL); ein einzelnes Modul
     // mit fehlerhaftem `terminate`-Effect darf den Service nicht hängen lassen.
+    //
+    // FIX: Phase-C C-2 (2026-05-14) – MediaRecorder-Release-Pfad: §10 Acceptance (Block-2,
+    // "MediaRecorder-release-Pfad") und §13.5 G6 verlangen, dass Service.onDestroy bei aktivem
+    // Recording *zuerst* eine Cancel-Action dispatcht (damit der Reducer State→Idle setzt und
+    // `Effect.ReleaseMediaRecorder` aus dem normalen FSM-Pfad emittiert wird), *bevor*
+    // `orchestrator.shutdown()` das Cleanup über `module.terminate(services)` finalisiert.
+    // Die untenstehende `shutdown()`-Variante allein ist NICHT ausreichend, weil
+    // `DictateModule.terminate()` einen Default-Body `Unit` hat (§4.2) und RecordingModule
+    // (§15.2) heute KEIN `terminate`-Override mit Hardware-Release definiert hat — der
+    // MediaRecorder leakt also im Native-Heap, wenn der User die IME schließt während
+    // Recording aktiv ist. Disambiguierung Pipeline- vs. Recording-Cancel ist Cross-Spec-
+    // Klärung (siehe C-3 Action-Hierarchie); §10 + §13.5 referenzieren historisch
+    // `Action.PipelineAction.CancelPipeline`, semantisch korrekter wäre eine Branch-Action,
+    // die im jeweiligen Modul greift. Pre-Cancel-Dispatch unten als TODO-Marker verankert,
+    // Implementer-Pflicht: vor Block-2-Acceptance-Test entscheiden + dispatchen.
     override fun onDestroy() {
         super.onDestroy()
+        // 0. Pre-Cancel-Dispatch (Phase-C C-2 / §10 + §13.5 G6 Pfad A):
+        //    bei aktivem Recording / aktiver Pipeline eine Cancel-Action dispatchen, damit
+        //    der Reducer State→Idle setzt + Hardware-Release-Effect emittiert. Konkrete
+        //    Action-Variante hängt vom State ab (siehe Implementer-Pflicht im Marker oben):
+        //
+        //    val snap = orchestrator.state.value
+        //    when {
+        //        snap.recording !is RecordingState.Idle ->
+        //            orchestrator.dispatch(Action.RecordingAction.CancelRecording)
+        //        snap.pipeline !is PipelineUiState.Idle ->
+        //            orchestrator.dispatch(Action.PipelineAction.CancelPipeline)
+        //    }
+        //
         // 1. Module-Cleanup mit Timeout: `shutdown()` ruft jedes Modul-`terminate(services)`.
         //    `services.scope` ist noch lebendig (Aufrufer-Vertrag §4.3), aber wir umschließen
         //    den Aufruf zusätzlich mit `runBlocking`-Timeout, damit ein blockierendes Modul
@@ -4392,10 +4450,13 @@ Diese Permission ist auf API < 23 install-time-granted, auf API ≥ 23 special-p
 (no-op bis das Overlay-Feature in Block 6 verdrahtet ist) — das eliminiert einen zweiten
 Manifest-Commit + macht Phase-1 / Phase-2-Trennung weniger spröde.
 
-**Block-2-Manifest-Diff (final, alle drei Permission-Gruppen kombiniert):**
+<!-- FIX: Phase-C C-2 (2026-05-14) – Caption "drei Permission-Gruppen" → "vier Permission-Einträge,
+     drei Service-Permissions + eine Overlay-Permission". Vorher Off-by-One-Counter durch
+     SYSTEM_ALERT_WINDOW-Ergänzung. -->
+**Block-2-Manifest-Diff (final, vier Permission-Einträge — drei Service-Permissions + die vorab deklarierte Overlay-Permission):**
 
 ```xml
-<!-- Block 2 (Service-Permissions) -->
+<!-- Block 2 (Service-Permissions, drei Einträge) -->
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -4518,11 +4579,14 @@ override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
  * Auf < 34 ist der Type-Parameter nicht verfügbar; das System ignoriert den
  * deklarierten Manifest-Type effektiv (Backward-Compat).
  */
+// FIX: Phase-C C-2 (2026-05-14) – NOTIF_ID-Reference qualifiziert via Coordinator-companion
+// (SoT-Konsolidierung, §11.1.2 NOTIF_ID-Konsolidierung-Block + §10 Acceptance).
 private fun startForegroundCompat(notif: Notification) {
+    val notifId = PipelineNotificationCoordinator.NOTIF_ID
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {  // API 34
-        startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        startForeground(notifId, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
     } else {
-        startForeground(NOTIF_ID, notif)
+        startForeground(notifId, notif)
     }
 }
 ```
@@ -4551,7 +4615,9 @@ private fun startForegroundCompat(notif: Notification) {
 
 Wenn nach `Context.startForegroundService(intent)` nicht binnen 5 s `startForeground(id, notification)` gerufen wird, wirft das System `ForegroundServiceDidNotStartInTimeException` (API 26+) und beendet den Service mit ANR-ähnlichem Verhalten.
 
-**Mitigation:** `onCreate` des Service ruft `startForegroundCompat()` synchron als allererste Aktion (vor jeglicher Coroutine-Initialisierung). Der Notification-Builder darf KEINE blocking-DB-Calls machen — er liest nur aus `stateManager.state.value`, das im Memory liegt.
+<!-- FIX: Phase-C C-2 (2026-05-14) – stale `stateManager.state.value` → `orchestrator.state.value`
+     (Pre-F-11-Drift; SoT für die State-Quelle ist §4.3 DictateOrchestrator.state). -->
+**Mitigation:** `onStartCommand` des Service ruft `startForegroundCompat()` synchron als allererste Aktion nach dem Action-Router-Forward. Der Notification-Builder (`PipelineNotificationCoordinator.buildInitial()`) darf KEINE blocking-DB-Calls machen — er liest nur aus `orchestrator.state.value`, das im Memory liegt.
 
 <!-- FIX: Phase-B S-1 (2026-05-13) – §11.1.4 Snippet auf DictateOrchestrator umgestellt. Recovery wird vom Orchestrator-Konstruktor selbst async gestartet (§4.3 init); kein separater scope.launch nötig. -->
 ```kotlin
@@ -4736,7 +4802,7 @@ Neue Tests pro Block:
 | 1b | `PipelineModuleTest.kt` | Pure Reducer-Tests für PipelineUiState-FSM (Idle/Preparing/Running/ReprocessStaging). |
 | 1b | `LayoutModuleAtomicityTest.kt` | Verifiziert dass `setSmallMode(true)` in EINEM `store.update` `smallMode = true && contentArea = MAIN_BUTTONS` setzt — Subscriber sehen kein Zwischenstadium. |
 | 1b | `DictateUiStateTest.kt` | `data class`-Equality, `copy()`-Verhalten, sealed-class-exhaustivität, `PersistentList.add/removeAll`-Idiom. |
-| 1b | `PipelinePrefMirrorTest.kt` | `attach(store)`-Mirroring von 15 Prefs in Sub-States, `OnSharedPreferenceChangeListener`-Trigger. |
+| 1b | `PipelinePrefMirrorTest.kt` | `attach(store)`-Mirroring von 19 Prefs (§4.5 `initialMirror`-Block: 3 layout + 3 audio + 1 resend + 4 features + 4 theming + 4 overlay) in Sub-States, `OnSharedPreferenceChangeListener`-Trigger. <!-- FIX: Phase-C C-2 (2026-05-14) – 15 → 19 Prefs (Konsistenz mit §11.2.2 Schritt 7 post-Phase-C C-1). --> |
 | 1b | `PipelineRecoveryTest.kt` | `recover(store)`-Logik gegen `FakeSessionRepo`. |
 | 2 | `DictatePipelineServiceTest.kt` | Robolectric-Service-Test: `onCreate`-Lifecycle, `onStartCommand`-Action-Routing, FGS-Start innerhalb 5 s. |
 | 2 | `LocalBinderTest.kt` | Bound-Service-Test: `onServiceConnected` triggert `state.collect`-Subscriber. |
@@ -5342,8 +5408,14 @@ Bei `recoverFromDb` werden alle `final_output_text != NULL AND inserted_at IS NU
 <!-- FIX: Phase-B S-7 (2026-05-13) – `getByStatus(String)` existiert im DAO nicht; korrekter Name ist
      `getSessionsByStatuses(List<String>)` (Plural, mit Liste). Drift gegen §6.3 Z. 3203/3268 +
      DAO-Definition Z. 3298 (S-2-Scope) — bereinigt. -->
+<!-- FIX: Phase-C C-2 (2026-05-14) – Snippet ist **vereinfachte Pre-S-2-Variante** OHNE
+     RECORDING/TRANSCRIBING-Branches. Die kanonische M4-Recovery-Logik (mit allen 6 v4-Stati,
+     Promote/Downgrade-Pfade, Stale-Error-Clear, MERGE-Statt-Override) lebt in §6.3 — der
+     unten gezeigte Mini-Snippet illustriert nur den RECORDED-Sub-Pfad als Beispiel und ist
+     KEIN vollständiges `recoverFromDb`. Implementer-Anker: SoT ist §6.3. -->
 ```kotlin
-suspend fun recoverFromDb() = withContext(Dispatchers.IO) {
+// Auszug — vollständige Recovery-Logik siehe §6.3 (RECORDING/TRANSCRIBING/RECORDED/COMPLETED).
+suspend fun recoverFromDb_recordedSubPath() = withContext(Dispatchers.IO) {
     val pending = db.sessionDao().findPendingInsertion()
         .map { it.toPendingSession() }
     val orphanedRecorded = db.sessionDao().getSessionsByStatuses(listOf("RECORDED"))

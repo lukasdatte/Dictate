@@ -48,9 +48,15 @@ android {
 
     testOptions {
         // Return default values instead of throwing for unmocked Android APIs
-        // (e.g. android.util.Log). Keeps unit tests light — Robolectric is
-        // overkill for the pure-logic tests we currently have.
+        // (e.g. android.util.Log). Keeps the pure-logic JVM tests light —
+        // Robolectric is opt-in per Quality-Gate K-4 (no Android Context
+        // unless explicitly justified). Tests under `@RunWith(RobolectricTestRunner)`
+        // are unaffected by this flag — they get a real shadow runtime.
         unitTests.returnDefaultValues = true
+        // Required for Robolectric: it consumes AAR-bundled resources for
+        // tests that need a real Context (channel-order / FGS-budget tests
+        // in Block 1 chunk C2 — Spec 1 §10 Phase-B S-5 acceptance).
+        unitTests.includeAndroidResources = true
     }
 }
 
@@ -71,6 +77,15 @@ dependencies {
     // unit-test classpath instead of stubs (cf. ElevenLabsKeytermsParserTest
     // line 133-135). Required by VersionedPrefs/Serializer roundtrip tests.
     testImplementation 'org.json:json:20240303'
+    // Robolectric — explicit K-4 exception. Block 1 chunk C2 introduces the
+    // first user (DictatePipelineServiceTest, FGS lifecycle). Future K-4
+    // opt-outs (Spec 2 §11.5 RecordingAnimationController, Spec 3 §14.1
+    // DefaultOverlayPermissionGate) reuse the same dep.
+    testImplementation libs.robolectric
+    // androidx.test:core provides ApplicationProvider — pairs with
+    // Robolectric so JVM unit tests can resolve the shadow application
+    // context.
+    testImplementation libs.androidx.test.core
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core
 

@@ -3,8 +3,10 @@ package net.devemperor.dictate.core;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Dialog;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -16,6 +18,7 @@ import android.media.AudioManager;
 import android.media.MediaMetadataRetriever;
 import android.os.Build;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
@@ -310,6 +313,57 @@ public class DictateInputMethodService extends InputMethodService
     private SessionTracker sessionTracker;
     private RecordingRepository recordingRepository;
 
+    // ===== Block 2 — DictatePipelineService bind state =====
+    //
+    // The pipeline service is bound in onCreateInputView() so it is alive
+    // while the user has a keyboard (Spec 1 §11.3.1 — latency argument:
+    // 50-200 ms first-bind absorbed by the inflate-blocking window of
+    // onCreateInputView; binding from IME.onCreate() would risk starting
+    // the FGS too early per ADR-0003 §"Required mechanics" item 4).
+    //
+    // Block 2 only exercises the bind/unbind lifecycle — no
+    // state-collect, no dispatching. Block 1b layers on the StateFlow
+    // subscription and routes UI events through pipelineBinder.dispatch.
+    private DictatePipelineService.LocalBinder pipelineBinder;
+    private final ServiceConnection pipelineConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            // Same-process cast; LocalBinder is a real object, not a proxy.
+            pipelineBinder = (DictatePipelineService.LocalBinder) service;
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            // Process-crash. In our same-process setup this should never
+            // fire — defensive: null the binder so following dispatches
+            // hit the not-ready guard rather than a stale instance.
+            pipelineBinder = null;
+        }
+
+        @Override
+        public void onBindingDied(ComponentName name) {
+            // Permanent breakage of the binding — re-bind. Should not
+            // happen in same-process, but follows Spec 1 §11.3.2.
+            try {
+                unbindService(this);
+            } catch (IllegalArgumentException ignored) {
+                // already unbound; no-op
+            }
+            pipelineBinder = null;
+            Intent intent = new Intent(DictateInputMethodService.this, DictatePipelineService.class);
+            bindService(intent, this, Context.BIND_AUTO_CREATE);
+        }
+
+        @Override
+        public void onNullBinding(ComponentName name) {
+            // DictatePipelineService.onBind always returns the singleton
+            // LocalBinder. A null here would mean a regression in the
+            // service implementation.
+            Log.e("DictateIME", "Unexpected null binding for DictatePipelineService");
+        }
+    };
+    private boolean pipelineServiceBindAttempted = false;
+
     // ===== PromptQueueManager.PromptQueueCallback =====
 
     @Override
@@ -400,6 +454,18 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public View onCreateInputView() {
         Context context = new ContextThemeWrapper(this, R.style.Theme_Dictate);
+
+        // ── 0. Start + bind the pipeline service (Block 2, Spec 1 §11.3.1) ──
+        // Idempotent across view-recreate (rotation, theme-switch): the second
+        // bindService is a no-op once a connection exists. startForegroundService
+        // is also idempotent — Android coalesces start calls. We skip on
+        // re-entry to avoid spamming Logcat with redundant onCreate logs.
+        if (!pipelineServiceBindAttempted) {
+            pipelineServiceBindAttempted = true;
+            Intent pipelineIntent = new Intent(this, DictatePipelineService.class);
+            ContextCompat.startForegroundService(this, pipelineIntent);
+            bindService(pipelineIntent, pipelineConnection, Context.BIND_AUTO_CREATE);
+        }
 
         // ── 1. Clean up old controllers (on view recreation, not first call) ──
         cleanupOldControllers();
@@ -835,6 +901,22 @@ public class DictateInputMethodService extends InputMethodService
         if (audioFocusListener != null && sp != null) {
             sp.unregisterOnSharedPreferenceChangeListener(audioFocusListener);
             audioFocusListener = null;
+        }
+
+        // Block 2 — Spec 1 §11.3.1: unbind the pipeline service so the
+        // bind-counter drops. The service itself decides whether to
+        // stopSelf via state.isAllTerminal (Block 1b); IME-side only
+        // releases its connection. Safe to call even if onServiceConnected
+        // never fired — bindService was issued in onCreateInputView and
+        // the connection object owns its own state.
+        if (pipelineServiceBindAttempted) {
+            try {
+                unbindService(pipelineConnection);
+            } catch (IllegalArgumentException ignored) {
+                // connection was not registered (e.g. bind failed); no-op
+            }
+            pipelineBinder = null;
+            pipelineServiceBindAttempted = false;
         }
         super.onDestroy();
     }

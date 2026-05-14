@@ -8,6 +8,25 @@
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
+    <!--
+        Block 2 (DictatePipelineService — see Spec 1 §11.1.1):
+          FOREGROUND_SERVICE           mandatory for any FGS on API ≥ 28
+          FOREGROUND_SERVICE_MICROPHONE mandatory on API ≥ 34 because
+                                        foregroundServiceType="microphone"
+          POST_NOTIFICATIONS           mandatory on API ≥ 33 for the
+                                        persistent FGS notification (runtime
+                                        prompt lives in OnboardingActivity —
+                                        Block 2 §11.5.1)
+
+        Block 6 (Floating Overlay — Spec 3 §5.7) — declared here in Block 2
+        so the manifest is touched only once across blocks; no-op until
+        Block 6 wires the overlay window.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <queries>
         <intent>
             <action android:name="android.view.InputMethod" />
@@ -38,6 +57,18 @@
                 android:name="android.view.im"
                 android:resource="@xml/method" />
         </service>
+
+        <!--
+            Block 2: DictatePipelineService (Foreground Service, ADR-0003).
+            Hosts the pipeline orchestrator (added in Block 1b) and survives
+            keyboard switches. exported=false because all clients are
+            in-process via LocalBinder (Spec 1 §5).
+        -->
+        <service
+            android:name=".core.DictatePipelineService"
+            android:exported="false"
+            android:foregroundServiceType="microphone"
+            android:description="@string/dictate_pipeline_service_description" />
 
         <activity
             android:name=".settings.DictateSettingsActivity"

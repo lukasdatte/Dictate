@@ -387,5 +387,18 @@
         <item quantity="other">%d comments ignored</item>
     </plurals>
 
+    <!--
+        Block 2 (DictatePipelineService): notification channel + content
+        + service description + IME bind-race fallback. See Spec 1 §11.1
+        §11.5 §11.3.2a. Block 1b's PipelineNotificationCoordinator will
+        replace the idle subtitle with state-driven copy.
+    -->
+    <string name="dictate_pipeline_service_description">Background service for the Dictate transcription pipeline.</string>
+    <string name="dictate_pipeline_channel_name">Dictate pipeline</string>
+    <string name="dictate_pipeline_channel_description">Persistent notification while Dictate is recording or processing audio in the background.</string>
+    <string name="dictate_pipeline_notif_title">Dictate</string>
+    <string name="dictate_pipeline_notif_idle">Ready</string>
+    <string name="dictate_service_not_ready">Service is starting — please wait a moment.</string>
+
     <string name="dictate_changelog_30">v3.2.0\n\nThis update brings some major improvements and new features! 🚀\n\n- Separate API keys: You can now save separate API keys for each provider (OpenAI, Groq, Custom), making switching between them seamless. 🔑\n\n- Improved Bluetooth support: Connecting to Bluetooth headsets is now faster and more reliable. 🎧\n\n- Auto Enter: Added an option to automatically press Enter/Send after transcription. ⚡\n\n- New Models: Added support for OpenAI o1, o4-mini, and GPT-5.2, including updated pricing info. 🤖\n\n- Various bug fixes and improvements. ✨\n\nI wish you a blessed New Year 2026! 🎆\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
 </resources>

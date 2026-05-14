@@ -36,7 +36,11 @@ Out-of-Scope (anderer Spec):
 | L3 | **`VISIBILITY_MODE_IGNORE`** für state-getriebene Buttons (`resend_btn`, `pause_btn`, `trash_btn`, `audio_focus_btn`) | MotionScene managt Position, LayoutManager managt Visibility — kollisionsfrei (Phase-2-Empfehlung). |
 | L4 | **Eine View-Instanz pro Backend** (Buttons im IME-View und im Overlay-Window sind getrennte Views) | Android-Hard-Constraint: ein View kann nur in EINEM Window leben. |
 | L5 | **LogicalButtonId-Mapping** pro Backend | Manager kennt logische IDs, Backend übersetzt zu konkreten View-Instanzen. |
-| L6 | **Subscription-Pattern**: KeyboardLayoutManager collected `pipelineService.state` | Reaktiv, automatischer Re-Render bei jeder State-Änderung. |
+<!-- FIX: Phase-C C-4 (2026-05-14) – `pipelineService.state` → `pipeline.state` (Naming-Drift F-11 / G2 fortgesetzt).
+     Spec 1 §5 LocalBinder API (post-F-8) ist über das Feld `pipeline: LocalBinder?` im IME-Service exponiert
+     (Spec 1 §5 IME-Side-Snippet: `pipeline!!.state.collect`). Spec 2 §11.8 nutzt zwar noch
+     `pipelineService.state.collect` (Pre-F-11), aber das wird in derselben Iteration mit-homogenisiert. -->
+| L6 | **Subscription-Pattern**: KeyboardLayoutManager collected `pipeline.state` (LocalBinder, Spec 1 §5) | Reaktiv, automatischer Re-Render bei jeder State-Änderung. |
 | L7 | **PulseLayout-Wrapper bleibt im record_pulse_layout** | record_pulse_layout ist direktes Child des MotionLayout-Roots, record_btn ist Child von record_pulse_layout. PulseLayout wird in MotionScene mit-positioniert. |
 | L8 | **Click-Listener nur einmal pro Backend-Attach setzen, lesen Slot zur Click-Zeit** | Memory-Leak-frei (kein neues Lambda pro Tick), aber dynamische Action-Resolution durch State-Snapshot. Begründung in §11.6. |
 | L9 | **Special-Touch-Handler werden im `attach()`-Callback einmal verdrahtet** und bleiben über alle Renders bestehen | CursorSwipeTouchHandler, BackspaceSwipeHandler, EnterOverlayHandler sind state-frei und brauchen kein Re-Wiring per Render. |
@@ -409,6 +413,18 @@ sealed class Action {
 
 ## §4 KeyboardLayoutManager — API
 
+<!-- FIX: Phase-C C-4 (2026-05-14) – Code-Snippet zeigt nur Single-Backend-Skelett (`activeBackend: RenderBackend?`),
+     aber §4.1 ContentAreaController-Block (R.10 / Issue 2.1.15 Option B) verlangt explizit "eine Liste aktiver
+     Backends statt eines einzigen activeBackend-Felds". Doppel-Truth-Quelle in derselben Section.
+     Auflösung: §4 ist das Skelett (Pädagogik — Single-Backend-Pfad), §4.1 ist der Production-Vertrag
+     (Multi-Backend für `ImeViewBackend` + `ContentAreaController` parallel). Block-5b-Implementer-Anker:
+     §4.1 ist SoT, das §4-Snippet ist die "klassische Single-Backend-Variante" als Lese-Anker.
+     Cross-Reference-Header ergänzt, damit Implementer nicht beide als gleichwertig liest. -->
+> **Implementer-Anker:** Das folgende Snippet zeigt das **Single-Backend-Skelett** zur Erklärung der
+> Manager-API. **Die produktive Variante** (mit `ContentAreaController` als zweitem `RenderBackend`,
+> R.10 / Issue 2.1.15 Option B) lebt in §4.1 und hält **eine Liste** aktiver Backends. SoT für
+> Block-5b-Implementation ist §4.1.
+
 ```kotlin
 class KeyboardLayoutManager(
     private val scope: CoroutineScope,
@@ -435,6 +451,14 @@ class KeyboardLayoutManager(
         render(state, mode)
     }
 
+    // FIX: Phase-C C-4 (2026-05-14) – Cross-Spec-Referenz-Drift entdeckt: `LayoutCatalog.OVERLAY_5BUTTON`
+    // wird in Spec 2 (hier + §8.6 implizit) und Spec 3 (§11/§14 mehrfach) als qualifizierter Member
+    // referenziert, aber Spec 3 §3.1 deklariert `OVERLAY_5BUTTON` als **top-level `object OVERLAY_5BUTTON
+    // : LayoutMode(...)`** außerhalb von `LayoutCatalog`. Compile-Error in der jetzigen Form.
+    // Auflösung: Spec 3 §3.1 verschiebt die Deklaration in `LayoutCatalog`-Object (Block-6-Implementer-
+    // Aufgabe, Spec 3-internal — C-5 Floating-Overlay-Audit erbt diese Cross-Spec-Korrektur-Pflicht).
+    // SoT der `LayoutCatalog`-Struktur: Spec 2 §8.6 — `LayoutCatalog` ist ein `object`, `OVERLAY_5BUTTON`
+    // wird dort als Property ergänzt (analog `forKeyboard(state)`).
     private fun computeLayoutMode(state: DictateUiState): LayoutMode = when (state.viewMode) {
         ViewMode.KEYBOARD -> LayoutCatalog.forKeyboard(state)
         ViewMode.WIDGET, ViewMode.HOVER -> LayoutCatalog.OVERLAY_5BUTTON
@@ -460,6 +484,17 @@ class KeyboardLayoutManager(
 **Vertrag:** Mutationen an `state.layout` gehen **immer** durch `Action.LayoutAction.*` →
 `LayoutModule.reduce` (in Spec 1 §15.1). Der `KeyboardLayoutManager` ruft niemals direkt
 `store.update`. Damit bleibt die Single-Source-of-Truth-Regel intakt.
+
+<!-- FIX: Phase-C C-4 (2026-05-14) – Atomar-Vertrag-Cross-Link ergänzt (Offene Frage aus C-1 für C-4
+     gemäß `phase-c1-state-module-coherence.md` Sektion "Für C-3 (Layout/View-Rendering)"). -->
+> **Atomar-Vertrag `LayoutAction.ToggleSmallMode` (Spec 1 §11.2.2 Schritt 6 + Block-1b-Acceptance):**
+> Das frühere `KeyboardStateManager.setSmallMode(true)` mutierte sequenziell zuerst `isSmallMode = true`
+> und DANN `contentArea = MAIN_BUTTONS` (zwei sequenzielle Schritte, KSM.kt:141-145). Der LayoutModule-
+> Reducer (Spec 1 §15.1, §11.2.2 Schritt 6) konsolidiert beide Mutationen in **einem** `state.copy`-
+> Aufruf auf der **einen** `LayoutState`-Achse: `state.copy(layout = layout.copy(smallMode = enabled,
+> contentArea = MAIN_BUTTONS))`. Das ist KEIN Mode-3-Verstoß (Spec 1 §15.5) — beide Felder leben in
+> derselben Sub-State-Klasse `LayoutState`, die LayoutModule alleine eigentümert. Verifiziert via
+> `LayoutModuleAtomicityTest.kt` (Spec 1 §11 Block-1b-Acceptance).
 
 **ContentAreaController als zweites RenderBackend (R.10 + 2.1.15 Option B):** Container-
 Visibility (`mainButtonsCl` / `qwertz_container` / `emojiPicker_container`) wird nicht in
@@ -1580,9 +1615,19 @@ fun resolveAudioFocusIcon(enabled: Boolean): Int =
 ### §8.6 LayoutCatalog.forKeyboard(state)
 
 <!-- FIX: Issue 1.0.6 – Hierarchische State-Pfade (F-10) durchpropagiert in §6/§8.5/§8.6 (Mapping siehe Spec 1 §3) -->
+<!-- FIX: Phase-C C-4 (2026-05-14) – `OVERLAY_5BUTTON` als Catalog-Property dokumentiert (SSoT-Verankerung).
+     Cross-Spec-Konsistenz: Spec 2 §4 + Spec 3 §11/§14 referenzieren `LayoutCatalog.OVERLAY_5BUTTON`
+     als qualifizierten Member; Spec 3 §3.1 deklariert die `LayoutMode`-Instanz selbst (Inhalts-SoT
+     für Slots + Rows). Die Cross-Spec-Ergänzung ist in Spec 3 §3.1 fällig: das `object OVERLAY_5BUTTON
+     : LayoutMode(...)` wird in den `LayoutCatalog`-Body eingebettet (analog `forKeyboard(state)` hier).
+     Bis Spec 3 das gefixt hat, ist der `LayoutCatalog.OVERLAY_5BUTTON`-Ref ein Compile-Error.
+     C-5-Cross-Reference (Floating-Overlay-Audit). -->
 
 ```kotlin
 object LayoutCatalog {
+    /** Spec 3 §3.1 — OVERLAY_5BUTTON LayoutMode-Definition wird hier per Block-6 (Spec 3) eingebettet. */
+    // val OVERLAY_5BUTTON: LayoutMode = ...    // SoT: Spec 3 §3.1; C-5 ergänzt den Property-Body hier.
+
     fun forKeyboard(state: DictateUiState): LayoutMode {
         val isStaging      = state.pipeline is PipelineUiState.ReprocessStaging
         val isPipelineLive = state.pipeline is PipelineUiState.Preparing
@@ -1761,7 +1806,9 @@ SRP-Antipattern in der KeyboardLayoutManager-Region.
 ## §10 Acceptance-Kriterien
 
 Block 4 (KeyboardLayoutManager + LayoutCatalog) gilt als done, wenn:
-- [ ] Manager subscribt erfolgreich an `pipelineService.state`.
+<!-- FIX: Phase-C C-4 (2026-05-14) – `pipelineService.state` → `pipeline.state` (LocalBinder, Spec 1 §5;
+     F-11/G2-Naming-Drift homogenisiert mit §2 L6 + §11.8). -->
+- [ ] Manager subscribt erfolgreich an `pipeline.state` (LocalBinder, Spec 1 §5).
 - [ ] Bei jeder State-Änderung wird die korrekte LayoutMode-Instanz aus dem Catalog gewählt.
 - [ ] Alle Slots in allen LayoutModes haben Predicates, die mit dem heutigen Verhalten übereinstimmen (gegen Use-Case-Liste UC1-UC7 + UC-extra-1 bis UC-extra-10 verifiziert).
 
@@ -2156,7 +2203,9 @@ private fun buildEnterOverlayHandler(): View.OnTouchListener =
    │     └── RecordingAnimationController extrahieren
    │
    ├─► [Block 5c] Service-Wiring: KeyboardLayoutManager + ImeViewBackend instanziieren,
-   │     `pipelineService.state.collect { manager.onStateChanged(it) }`.
+   │     `pipeline.state.collect { manager.onStateChanged(it) }`  // <!-- FIX: Phase-C C-4 (2026-05-14) –
+   │                                                              //      F-11/G2 `pipelineService` → `pipeline`
+   │                                                              //      (LocalBinder, Spec 1 §5). -->.
    │     **KSM-Methoden** (`applyRecordingControlsVisibility`, `applyContentAreaVisibility`,
    │     `applyPromptsVisibility`) bekommen **leere Bodies** (no-op). KSM.refresh ruft sie
    │     weiter auf, ohne dass etwas passiert; Manager (R.10-Owner-Klassen) übernimmt die
@@ -2252,7 +2301,7 @@ Alle heutigen `\.visibility =` und `setVisibility(...)`-Calls aus dem `core/`/`k
 | **25** | **`resendButton` (onStartInputView V)** | **DictateInputMethodService.java:1345** | **ENTFERNT** — Predicate übernimmt |
 | **26** | **`resendButton` (onStartInputView G)** | **DictateInputMethodService.java:1347** | **ENTFERNT** — Predicate übernimmt |
 | **27** | **`resendButton` (Pipeline-Start)** | **DictateInputMethodService.java:1669** | **ENTFERNT** — Predicate übernimmt (Pipeline=Preparing → predResendVisible=false) |
-| **28** | **`resendButton` (onShowResend)** | **DictateInputMethodService.java:1839** | **ENTFERNT** — wird zu `pipelineService.markLastAudioExists(true)` State-Update |
+| **28** | **`resendButton` (onShowResend)** | **DictateInputMethodService.java:1839** | **ENTFERNT** — wird zu `pipeline.dispatch(Action.ResendAction.MarkLastAudio(exists = true))` (LocalBinder F-8: nur `state` + `dispatch`, kein typed Forwarder; siehe §9.6 + Spec 1 §5). <!-- FIX: Phase-C C-4 (2026-05-14) – stale `pipelineService.markLastAudioExists(true)`-Phantom-API durch konkrete Action-Dispatch-Form ersetzt (F-8 LocalBinder-API ist NUR `state` + `dispatch(action): DispatchOutcome`; F-11-Naming `pipelineService` → `pipeline`). §9.6-Zeile dokumentierte die korrekte Form bereits — Zeile 28 hier blieb auf Pre-F-8/F-11-Form stehen und widersprach §9.6 internal. --> |
 
 **Verifikation:** alle 27 in `_pending-state-machine-visibility-owners.md` §1 gelisteten Mutationen sind explizit adressiert. Die 5+ problematischen `resend_btn`-Mutationen (#23-#28) sind alle ENTFERNT zugunsten **eines** Predicates `predResendVisible` (siehe §8.5).
 
@@ -2462,13 +2511,26 @@ Aktueller Test-Bestand (annahme-basiert; konkrete Test-Inventur durchzuführen i
 **Unit-Tests (LayoutCatalog):**
 - Pro LayoutMode (5 Stück) × pro Slot (8 Stück): Predicate-Verifikation gegen tabulierte DictateUiState-Permutationen.
 - Beispiel-Test:
+<!-- FIX: Phase-C C-4 (2026-05-14) – Test-Snippet auf hierarchische Sub-State-Pfade + korrekte Konstruktor-
+     Signaturen umgestellt (vier Compile-Bugs gefixt):
+     (a) `RecordingState.Active(false)` → `RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile())`
+         (Spec 1 §3 `data class Active(val useBluetooth, val audioFile)` — zwei Pflicht-Args).
+     (b) `PipelineUiState.Preparing` → `PipelineUiState.Preparing(sessionId = "test")`
+         (Spec 1 §3 `data class Preparing(val sessionId: String)`).
+     (c) `base.copy(lastAudioExists = false)` → `base.copy(resend = base.resend.copy(lastAudioExists = false))`
+         (R.3 Sub-State-Container — `lastAudioExists` lebt in `ResendState`, nicht im Top-Level — AI-1-Pattern
+         aus Phase-A Architecture-Scout).
+     (d) Analog für `resendEnabled` (`state.resend.resendEnabled`).
+     Ohne diese Korrektur wäre der Beispiel-Test ein Compile-Error gewesen — Test-Schreiber hätten den Bug
+     erst beim ersten `./gradlew test` bemerkt und wäre als Pre-F-11-Test-Vorlage in andere Tests kopiert. -->
 ```kotlin
 @Test fun `predResendVisible is true only in Idle with lastAudio and resendEnabled`() {
-    val base = stateBuilder().build()
-    assertFalse(predResendVisible(base.copy(recording = RecordingState.Active(false))))
-    assertFalse(predResendVisible(base.copy(pipeline = PipelineUiState.Preparing)))
-    assertFalse(predResendVisible(base.copy(lastAudioExists = false)))
-    assertFalse(predResendVisible(base.copy(resendEnabled = false)))
+    val base = stateBuilder().build()    // base.recording = Idle, base.pipeline = Idle,
+                                         // base.resend.lastAudioExists = true, resendEnabled = true
+    assertFalse(predResendVisible(base.copy(recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile()))))
+    assertFalse(predResendVisible(base.copy(pipeline = PipelineUiState.Preparing(sessionId = "test"))))
+    assertFalse(predResendVisible(base.copy(resend = base.resend.copy(lastAudioExists = false))))
+    assertFalse(predResendVisible(base.copy(resend = base.resend.copy(resendEnabled = false))))
     assertTrue(predResendVisible(base))
 }
 ```

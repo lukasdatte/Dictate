@@ -21,7 +21,7 @@ Single overview of every issue in this block — populated as the block progress
 **Severity counts:**
 - Critical: 0
 - Important: 0
-- Nice-to-have: 0
+- Nice-to-have: 2
 - Postponed: 0
 
 **By status:**
@@ -29,6 +29,8 @@ Single overview of every issue in this block — populated as the block progress
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
 | IMPL-1 (B1 carry-over) | B1-C2-IMPL-FULL | Important | open (delegated-to-orchestrator) | Spec 1 §11.2.2 Block-2 sub-step 7: JobExecutor-Init move from IME `onCreate` to Service `onCreate` (requires full PipelineOrchestrator from C4) | C7 scope (unblocked by C4) |
+| IMPL-2 | B2-C5-IMPL-FULL | Nice-to-have | open | `OverlayModule.Effect.DeleteAudioFile` is defined but never emitted (cancel-cascade routes file-delete through RecordingModule). | C5-modules-core |
+| IMPL-3 | B2-C5-IMPL-FULL | Nice-to-have | open | `PipelineModule.runEffect` uses `services.scope.launch` for the suspend `sessionRepo.markInserted/markFailed` DB call (per `ModuleServices.scope` KDoc — acceptable fire-and-forget pattern). | C5-modules-core |
 
 ---
 
@@ -455,10 +457,194 @@ Issue-Index status note: IMPL-1 → "C7 scope (unblocked by C4)".
 
 **Agent-IDs:** Steps 1-5 (combined): `B2-C5-IMPL-FULL`
 
-**Status:** ⏳ pending (depends on C4)
+**Status:** ✅ complete
 **Chunks file:** `../dictate-keyboard-layout-refactor.reviewed.chunks.json` chunk index 6 (C5-modules-core)
 
-⏳
+#### Implementation (B2-C5-IMPL)
+
+**What was done:** Implemented the five core `DictateModule`s. Each
+module is a Kotlin `object` singleton in the parent package
+`net.devemperor.dictate.state` (sealed-interface constraint), living
+in the `modules/` sub-directory for file-tree grouping.
+
+**Files created:**
+
+- `app/src/main/java/net/devemperor/dictate/state/modules/RecordingModule.kt`
+  — RecordingState FSM (Idle / Preparing / Active / Paused), 16
+    sealed-Effect variants, reduceFailure with the `data class`
+    `startsWith`-prefix-match + `object` exact-equality match per
+    Spec 2 §3.3, ResetSuppressBit cascade on Idle→Preparing boundary.
+- `app/src/main/java/net/devemperor/dictate/state/modules/PipelineModule.kt`
+  — PipelineUiState FSM, lifecycle + ReprocessStaging sub-FSM,
+    PipelineDone-cascade emits OnPipelineDone + MarkLastAudio +
+    (conditional) LivePrompt.ChainNext.
+- `app/src/main/java/net/devemperor/dictate/state/modules/AudioModule.kt`
+  — AudioState reducer + AudioFocus-loss → PauseRecording cascade.
+    The dead-code Idle→Preparing-block from a prior plan iteration
+    was deliberately omitted (Spec 1 §15.3 Phase-B S-4 fix).
+- `app/src/main/java/net/devemperor/dictate/state/modules/ViewModeModule.kt`
+  — Triangle-FSM (ADR-0005). `computeViewMode` truth-table exposed
+    as a public function for tests + walkthroughs. Reducer operates
+    on the `ViewMode` enum directly (`state: ViewMode`, NOT
+    `DictateUiState`). T7 cascade-target reducer arm (`OnPipelineDone`)
+    derives `imeViewVisible` from current ViewMode (HOVER ⇒ hidden;
+    otherwise visible) — no separate IME-visibility state field.
+- `app/src/main/java/net/devemperor/dictate/state/modules/OverlayModule.kt`
+  — OverlayState reducer + 4 cross-module cascades (T1 KEYBOARD→WIDGET
+    sets userPrefersWidget; T2 WIDGET→KEYBOARD resets;
+    HOVER→KEYBOARD emits SuppressBit + Cancel-cascade with C-3
+    Recording-priority disambiguation; permission-loss → SetViewMode).
+    `reduceFailure` deliberately NOT overridden (Spec 3 §4.8 design
+    decision — all overlay effects are idempotent pref-writes).
+
+**Files modified:**
+
+- `app/src/main/java/net/devemperor/dictate/state/DictateUiState.kt`
+  — Added the `RecordingState.isActiveOrPaused` extension property
+    (referenced extensively in cross-module observers + spec snippets,
+    centralised here per L-3 DRY finding from Phase-B validation).
+- `app/src/main/java/net/devemperor/dictate/state/Action.kt` — Added
+  `Action.ViewModeAction.OnPipelineDone` (cascade-target for the T7
+  Geist-Widget structural protection; Spec 3 §7.3 T7).
+- `app/src/main/java/net/devemperor/dictate/state/DictateModuleRegistry.kt`
+  — Populated `Default.all` with the 5 core modules (C6 will append the
+  other 8). Cascade-order is fixed at this list-position.
+- `app/src/test/java/net/devemperor/dictate/state/DictateModuleRegistryTest.kt`
+  — Updated the singleton-empty assertion (was "C4 baseline empty";
+  now "5 core modules from C5"). The new test pins the cascade-order
+  contract.
+
+**Plan deviations:**
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Modules live in package `net.devemperor.dictate.state` (not `.modules`) | Spec 1 §15 (paths show `state.modules`) | The directory IS `modules/` but package is the parent | Kotlin `sealed interface DictateModule` rule — implementations must be in the same package | None (existing tests import from `net.devemperor.dictate.state`, modules are co-resolvable) | inline-fixed |
+| `RecordingModule.Effect.StartTimer` is a `data object` (no `initialElapsedMs` arg) | Spec 1 §15.2 sketches `StartTimer(initialElapsedMs: Long)` | Effect carries no arg; `RecordingTimerSubsystem.start()` (C4) has no params | `RecordingTimerSubsystem` is the source of truth for the timer API; Pause/Resume carry elapsed-state inside the subsystem | None | inline-fixed |
+| `RecordingModule.Effect.{Pause/Resume}BorderGlow` map to subsystem `stop()`/`start()` | Spec 1 §15.2 sketches `BorderGlow.pause/resume` methods | `BorderGlowSubsystem` (C4) only has `start()` + `stop()` | The effect-name is the user-visible semantic; the mapping at the subsystem boundary is an implementation detail | None | inline-fixed |
+| `DictateModuleRegistry.Default.all` populated with 5 modules in C5 (not waiting for C7) | Chunk-prompt: "Wiring — those are C7" | "Wiring" is service-binder + IME hookup; registry construction is module-side | None — C7 still owns the service-side wiring. The 5-module registry compiles + tests pass | C6 appends 8 more modules; cascade-order is documented in the companion KDoc | inline-fixed |
+| `PipelineModule` does NOT cascade `RecordingAction.StopRecording` on its own state transitions | Coupling-matrix row `Pipeline → Recording = R(state.pipeline) C(RecordingAction.StopRecording)` | The matrix predicts a reverse cascade; the actual "Send" flow goes Recording→Pipeline (user-click dispatches StopRecordingAndSend, RecordingModule cascades to TriggerPipeline) | The matrix entry is forward-compat for a future flow; Phase 1 only exercises the Recording→Pipeline direction | None for Phase 1 | flagged-for-validate |
+| `PipelineModule.PipelineDone` reducer arm collapses directly to `PipelineUiState.Idle` (no explicit `Done` state) | Spec 3 §7.3 T7 mentions `prev.pipeline !is Done && next.pipeline is Done` | `PipelineUiState` (C3) only has `Idle/Preparing/Running/ReprocessStaging` — no `Done` | Cascade trigger uses the equivalent boundary `prev != Idle && next is Idle` | The T7 cascade still fires correctly; verified by `PipelineModuleTest.cross-module Running to Idle cascades OnPipelineDone` | inline-fixed |
+| `OverlayModule.Effect.OpenOverlayPermissionSettings` is a no-op in `runEffect` (logs the limit) | Spec 3 §4.8 `services.activityLauncher.openOverlayPermissionSettings()` | `ActivityLauncher` subsystem lands in B5 (OverlayBackend block); not in C4's `ModuleServices` | UI side currently triggers the Settings-intent directly in response to `RequestOverlayPermission` (Spec 3 §5.3 Phase-1 placeholder) | B5 wires the real activityLauncher; the Effect becomes active there | inline-fixed |
+
+**Issues:**
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| IMPL-2 | Nice-to-have | `OverlayModule.Effect.DeleteAudioFile` is defined but never emitted by the reducer (the cancel-cascade routes audio-file delete through RecordingModule.Effect.DeleteAudioFile). | open | Kept on the Effect surface for symmetry with Spec 3 §4.8 listing; could be removed if C6/C7 confirm no other call site. |
+| IMPL-3 | Nice-to-have | `PipelineModule.runEffect` for `MarkSessionInserted` / `MarkSessionFailed` uses `services.scope.launch { … }` for the suspend DB call. The orchestrator's `runEffect` body is documented as synchronous; long-running work launches into `scope`. The `launch` here is a fire-and-forget DB write. | open | Per `ModuleServices.scope` KDoc + Spec 1 §4.7 — acceptable pattern. |
+
+**Test-infrastructure implemented:** none new; the existing
+`fakeModuleServices(...)` factory from C4 is sufficient for reducer +
+cascade tests (modules don't need real subsystems for reducer
+verification).
+
+**Overlooked / known gaps:**
+
+- The `ActivityLauncher`-subsystem is missing from `ModuleServices`
+  (lands in B5). `OverlayModule.Effect.OpenOverlayPermissionSettings`
+  is currently a no-op; the UI side handles the Settings-intent in
+  Phase 1. Documented as a plan-deviation above.
+
+#### Plan-Correctness Fix (B2-C5-IMPL-PLAN-FIX)
+
+Re-read Spec 1 §15.2/§15.3, Spec 3 §4.8 + §6 + §7 against each module:
+
+- `RecordingModule` matches §15.2 1:1 except the documented timer /
+  border-glow Effect-API adjustments (carrying through the C4 contract,
+  inline-fixed).
+- `PipelineModule` covers the C3-defined `PipelineUiState` arms (no
+  `Done` state; cascade triggers on `prev != Idle && next is Idle`).
+- `AudioModule` matches §15.3 1:1; the dead-code Phase-B S-4 block was
+  not transcribed.
+- `ViewModeModule` matches Spec 3 §6/§7 1:1 including the T7
+  `OnPipelineDone` reducer-arm with derived `imeViewVisible`. Added
+  `OnPipelineDone` to `Action.ViewModeAction` (was missing in C3).
+- `OverlayModule` matches Spec 3 §4.8 with the T1/T2 cascade entries
+  reading from §7.3 / §6.1, plus the HOVER→KEYBOARD CancelRecording-
+  priority disambiguation. No `reduceFailure` override (design
+  decision per spec).
+
+No larger plan-deviations needed delegation. The seven listed
+deviations are small + locally decidable.
+
+#### Self-Code Fix (B2-C5-IMPL-CODE-FIX)
+
+Code-quality review against knowledge-doc-format + Spec 1/2/3:
+
+- KDoc on every public `object` references the relevant Spec section
+  via `@see` anchors (Spec 1 §15.x / Spec 3 §4.8 / §7.x / §6.x / ADR-
+  0001/0002/0005).
+- Reducer-`when` blocks are expression-form over the sealed Action
+  hierarchy — Kotlin compiler enforces exhaustivity (forbidden pattern
+  (c) "else over sealed").
+- No hardware/IO/threading in `reduce()` — all effects flow through
+  `TransitionResult.sideEffects` to `runEffect`.
+- No cross-axis writes (Mode 3) — every reducer writes only its own
+  sub-state via the lens.
+- `RecordingModule.reduceFailure` uses `startsWith("Name(")` for
+  `data class`-effects (`AllocateMediaRecorder`) and exact-equality
+  for `object`-effects (`StopMediaRecorder`) per Spec 2 §3.3.
+- `OverlayModule` cross-module cascade-arms separated into 4
+  independent `if` blocks (T1, T2, HOVER-close, permission-loss) for
+  readability + grep-ability.
+- `ViewModeModule.computeViewMode` is `fun` (public) so tests +
+  walkthroughs can call it directly; the truth-table is documented as
+  a KDoc table.
+
+#### Tests (B2-C5-IMPL-TEST)
+
+Wrote five pure-JVM test classes (K-1 + K-4 compliant):
+
+| File | Tests | Coverage focus |
+|------|-------|----------------|
+| `RecordingModuleTest.kt` | 24 | All 4 FSM states × valid actions; reduceFailure (Allocate-prefix-match + Stop-exact-match + unknown-effect-null); cross-module cascade (Idle→Preparing emits ResetSuppressBit; other boundaries DON'T cascade); lens round-trip + initial-state + id |
+| `PipelineModuleTest.kt` | 23 | TriggerPipeline / StartPipeline / StepStarted / PipelineDone / PipelineFailed / CancelPipeline (incl. mismatched sessionId rejection); ReprocessStaging entry / send / cancel; cross-module cascade (Running→Idle emits OnPipelineDone + MarkLastAudio; livePrompt-pending triggers ChainNext); lens |
+| `AudioModuleTest.kt` | 12 | OnAudioFocusGrantChanged (incl. idempotent); OnBluetoothScoStateChanged (incl. idempotent); ToggleAudioFocusPref; cross-module cascade (AudioFocus-loss × Active/Paused/Preparing/Idle recording — Active+Paused cascade, Preparing+Idle don't); no auto-resume on focus regain |
+| `ViewModeModuleTest.kt` | 25 | All seven transitions T1–T7 (one named test each); computeViewMode truth-table edge cases; T1 permission-gate; T7 with userPrefersWidget=true falls to KEYBOARD; no-op cases (toggle in HOVER, idempotent SetViewMode, IME-Show when already KEYBOARD); ViewModeModule emits NO cascade |
+| `OverlayModuleTest.kt` | 26 | All reducer arms (position portrait/landscape, onboarding shown/dismissed, suppress set/reset, userPrefersWidget set, permission-change idempotent, request-permission emits OpenSettings); 4 cross-module cascade scenarios (T1, T2, HOVER→KEYBOARD × {Recording-Active / Pipeline-only / nothing}, permission-loss × {non-KEYBOARD / KEYBOARD-already}); reduceFailure-NOT-overridden design check; lens |
+
+**Code-bugs found while writing tests:** none — the reducers held up
+against every coverage scenario.
+
+**Test results:**
+
+```
+> Task :app:testDebugUnitTest
+BUILD SUCCESSFUL — 414 tests, 0 failures (debug + release both green)
+```
+
+Test breakdown: 304 pre-existing tests (B0/B1/C3/C4) + 110 new C5 tests.
+
+#### Test-Review (B2-C5-IMPL-TEST-FIX)
+
+- All Plan-AC for C5 covered:
+  - **RecordingModule**: every FSM state × every action arm + failure
+    paths + cascade boundary + self-cascade verification.
+  - **PipelineModule**: lifecycle entry / progress / terminal /
+    cancel / reprocess sub-FSM + 4 cascade paths.
+  - **AudioModule**: focus-grant transitions + SCO state-changes +
+    pref-toggle + cascade × 4 recording states.
+  - **ViewModeModule**: T1–T7 each pinned by a named test;
+    permission-gate; truth-table edge cases.
+  - **OverlayModule**: every Action sub-class + 4 cascade scenarios
+    + the explicit reduceFailure-NOT-overridden design check.
+- Edge cases pinned: stale sessionId rejection in PipelineModule;
+  Preparing recording does NOT trigger AudioFocus-loss pause cascade
+  (per `isActiveOrPaused` semantics); ViewMode T7 with `userPrefersWidget=true`
+  still falls to KEYBOARD (Spec 3 §7.3 T7 truth-table); Overlay
+  HOVER→KEYBOARD Cancel-cascade C-3 priority (Recording > Pipeline).
+- The `OverlayModuleTest.reduceFailure is NOT overridden` test pins
+  the Spec 3 §4.8 design decision so a future "missing reduceFailure"
+  false-positive finding has a documented rebuttal.
+
+**Code-bugs found during test self-review:** none.
+
+#### Build verification
+
+```
+./gradlew assembleDebug  → BUILD SUCCESSFUL
+./gradlew test           → BUILD SUCCESSFUL (414 tests, 0 failures; debug + release variants)
+```
 
 ---
 

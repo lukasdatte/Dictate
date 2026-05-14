@@ -32,11 +32,22 @@ class DictateModuleRegistryTest {
     }
 
     @Test
-    fun `production singleton has empty all (C4 baseline)`() {
-        // C4 ships the empty list; C5/C6 populate it with the 13 production
-        // modules. This test pins the C4 baseline so a future "I forgot to
-        // wire a module" mistake is caught at the registry boundary.
-        assertEquals(emptyList<DictateModule<*, *, *>>(), DictateModuleRegistry.Default.all)
+    fun `production singleton contains the 5 core modules from C5`() {
+        // C5 populates `Default.all` with the 5 core modules
+        // (Recording / Pipeline / Audio / ViewMode / Overlay). C6 will
+        // append the 8 auxiliary modules; this assertion grows then.
+        //
+        // Order is a binding contract (cascade order, ADR-0002) — the
+        // list literal in `DictateModuleRegistry.Default` is the single
+        // source of truth.
+        val expected: List<DictateModule<*, *, *>> = listOf(
+            RecordingModule,
+            PipelineModule,
+            AudioModule,
+            ViewModeModule,
+            OverlayModule,
+        )
+        assertEquals(expected, DictateModuleRegistry.Default.all)
     }
 
     @Test

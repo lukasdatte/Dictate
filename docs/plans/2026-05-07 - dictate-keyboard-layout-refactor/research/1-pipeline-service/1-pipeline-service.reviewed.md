@@ -13,8 +13,9 @@
 Diese Spec beschreibt die **Service-Schicht** des Refactors. Sie umfasst:
 
 - Einen neuen **Foreground Service** `DictatePipelineService`, der Pipeline-Logik und State hält und unabhängig vom IME-Service-Lifecycle lebt (überlebt Tastatur-Wechsel).
-<!-- FIX: Phase-B S-1 (2026-05-13) – §1 Scope-Aufzählung auf F-11 (DictateOrchestrator + DictateUiStateStore + 12 Module) umgestellt. -->
-- Den **`DictateOrchestrator` + `DictateUiStateStore` + 12 aktive Module** (F-11 Modular Orchestrator Pattern) als alleinige State-SSOT für ALLE UI-relevanten State-Achsen.
+<!-- FIX: Phase-B S-1 (2026-05-13) – §1 Scope-Aufzählung auf F-11 (DictateOrchestrator + DictateUiStateStore + Module) umgestellt. -->
+<!-- FIX: Phase-C C-1 (2026-05-14) – Modul-Zähler aktualisiert auf 13 aktiv (12 ursprünglich + KeyboardInputModule aus Phase-B S-3). -->
+- Den **`DictateOrchestrator` + `DictateUiStateStore` + 13 aktive Module** (F-11 Modular Orchestrator Pattern) als alleinige State-SSOT für ALLE UI-relevanten State-Achsen.
 - Die **Bound-Service-Schnittstelle** (`LocalBinder`), über die der IME-Service mit dem Service kommuniziert.
 - Die **Persistence-Schicht** (Room) mit minimaler Schema-Erweiterung und Checkpoint-Hooks.
 - Den **Lifecycle**: Start, Stop, Notification-Updates, Recovery aus DB nach OOM-Death.
@@ -368,7 +369,8 @@ DictateOrchestrator (Composition Root + zentrale Steuerung, kennt nur DictateMod
    ├── PipelineRecovery           suspend recover(): lädt Pending-Sessions aus Repo in Store
    ├── ModuleServices             Container für injizierte Hardware-Subsysteme
    │
-   │   ─── 13 Module (jeweils 1 Datei mit State + Action + Reducer + SideEffect + EffectHandler) ───
+   │   ─── 14 Module (jeweils 1 Datei mit State + Action + Reducer + SideEffect + EffectHandler) ───
+   │   ─── (13 aktiv in Phase 1 + 1 Phase-2-Stub) ───
    ├── RecordingModule            (Recording-Lifecycle, MediaRecorder-Trigger)
    ├── PipelineModule             (Pipeline-Verarbeitung, Job-Submission, ReprocessStaging)
    ├── AudioModule                (AudioFocus + BluetoothSco + Vibration)
@@ -381,6 +383,9 @@ DictateOrchestrator (Composition Root + zentrale Steuerung, kennt nur DictateMod
    ├── FeatureToggleModule        (rewording, autoFormatting, instantOutput, autoEnter, vibration)
    ├── ThemingModule              (theme, accentColor, overlayCharacters, outputSpeed)
    ├── PendingSessionsModule      (DB-Subscriber-Pattern für Pending-Sessions-Liste)
+   <!-- FIX: Phase-C C-1 (2026-05-14) – KeyboardInputModule nachgetragen (Phase-B S-3 hat das Modul
+        in §15.6 + DictateModuleRegistry §4.8 verankert, aber im §4.1-Tree gefehlt). -->
+   ├── KeyboardInputModule        (IME-Direkteingaben Backspace/Enter/Space/CopyToClipboard — Unit-State, §15.6)
    └── InterruptionModule         (Phase 2 — Anrufe, Headset-Plug, Screen-Off)
 ```
 
@@ -401,7 +406,10 @@ DictateOrchestrator (Composition Root + zentrale Steuerung, kennt nur DictateMod
 
 ### §4.2 DictateModule-Interface (F-11 / Plugin-Kontrakt)
 
-Das `DictateModule`-Interface ist der Plugin-Kontrakt. Jedes der 13 Module (siehe §15) implementiert dieses Interface und kapselt seine fachliche Domäne vollständig: eigener Sub-State, eigene Actions, eigener Reducer, eigene SideEffects, eigener EffectHandler, optionaler Cross-Module-Observer.
+<!-- FIX: Phase-C C-1 (2026-05-14) – Modul-Zähler aktualisiert (13 aktiv in Phase 1, KeyboardInputModule
+     ergänzt durch Phase-B S-3 §15.6). Plus-1 Phase-2-Stub bleibt unerwähnt, weil das Interface
+     hier den Phase-1-Vertrag beschreibt. -->
+Das `DictateModule`-Interface ist der Plugin-Kontrakt. Jedes der 13 aktiven Module (siehe §15) implementiert dieses Interface und kapselt seine fachliche Domäne vollständig: eigener Sub-State, eigene Actions, eigener Reducer, eigene SideEffects, eigener EffectHandler, optionaler Cross-Module-Observer.
 
 ```kotlin
 // File: app/src/main/java/net/devemperor/dictate/state/DictateModule.kt
@@ -446,7 +454,8 @@ sealed interface DictateModule<S, A : Action, E : SideEffect> {
     <!-- FIX: Phase-B S-3 (2026-05-13) – EffectFailure-Reducer als eigener Hook (Spec 2 §3.3). -->
     /**
      * Failure-Reducer für `Action.EffectFailure`. Wird vom Orchestrator gerufen, wenn
-     * ein `runEffect(...)` dieses Moduls geworfen hat (Spec 1 §4.3 Z. 617). Default
+     * ein `runEffect(...)` dieses Moduls geworfen hat (Spec 1 §4.3, EffectFailure-Pfad
+     * `dispatchInternal` Step 1a + 2). <!-- FIX: Phase-C C-1 (2026-05-14) – stale Z. 617 → Section-Anchor (Line-Drift nach S-3/S-4-Apply). --> Default
      * gibt `null` zurück — `DispatchOutcome.Rejected("reducer-null")` ist semantisch
      * korrekt ("kein Failure-Pfad definiert"). Module mit Recovery-Bedarf
      * überschreiben den Hook und führen einen State-Rollback durch (z.B.
@@ -798,7 +807,8 @@ abgebrochen — IME crashed niemals. Cap 8 ist konservativ; reale Cascade-Tiefen
 
 <!-- FIX: Phase-B S-4 (2026-05-13) – Cascade-Order-Vertrag explizit verankert (vorher implizit via modules.flatMap). -->
 **Cascade-Order-Vertrag (Phase-B S-4):** Die Reihenfolge der Cascade-Actions ist
-deterministisch und folgt der Reihenfolge von `DictateModuleRegistry.all` (§4.8 Z. 1017–1033).
+<!-- FIX: Phase-C C-1 (2026-05-14) – stale Z. 1017-1033 → Section-Anchor (Line-Drift nach S-3/S-4-Apply). -->
+deterministisch und folgt der Reihenfolge von `DictateModuleRegistry.all` (§4.8 `modules`-Liste).
 Jeder rekursive `dispatchInternal(cascadeAction, depth+1)` (Step 6) macht einen **frischen**
 `prevGlobal`/`nextGlobal`-Snapshot — Cascade-Actions sehen damit den State **inklusive**
 vorheriger Cascade-Mutationen aus diesem Pass.
@@ -814,7 +824,8 @@ vorheriger Cascade-Mutationen aus diesem Pass.
 > (Block-1b-Acceptance) verifiziert.
 
 <!-- FIX: Phase-B S-4 (2026-05-13) – ProGuard-Keep-Regel ist Pflicht für `KClass.sealedSubclasses`-Reflection. -->
-> **⚠ ProGuard/R8-Keep-Regel ist Pflicht (Phase-B S-4):** `collectLeaves` (Z. 587–589)
+<!-- FIX: Phase-C C-1 (2026-05-14) – stale Z. 587-589 → Method-Name (Line-Drift nach S-3/S-4-Apply). -->
+> **⚠ ProGuard/R8-Keep-Regel ist Pflicht (Phase-B S-4):** `collectLeaves` (siehe `DictateOrchestrator`-Body)
 > verwendet `KClass.sealedSubclasses` — Reflection auf die Action-Hierarchie.
 > ProGuard-Default-Behavior in Release-Builds strippt diese Hierarchie weg, wenn
 > die Klassen nicht explizit gehalten werden — `sealedSubclasses` returnt dann eine
@@ -953,7 +964,8 @@ Erweitert um die 9 zusätzlichen UI-State-relevanten Prefs (RewordingEnabled, Au
 <!-- FIX: Phase-B S-4 (2026-05-13) – Phase-1/Phase-2-Hinweis: aktuelle Implementierung ist hardcoded, prefBindings()-API ist Phase-2. -->
 > **Phase 1 vs. Phase 2 (Phase-B S-4):** Die untenstehende `initialMirror`- und
 > `sync`-Implementation ist **Phase 1** — hardcodierte Mappings für 19 Prefs auf
-> die Sub-State-Achsen. Die `DictateModule.prefBindings()`-API (§4.2 Z. 462) wird
+<!-- FIX: Phase-C C-1 (2026-05-14) – stale Z. 462 → Section-Anchor (Line-Drift). -->
+> die Sub-State-Achsen. Die `DictateModule.prefBindings()`-API (§4.2 `prefBindings()`-Hook) wird
 > in Phase 1 **NICHT** konsumiert. Phase 2 (Hauptplan §7.1 Out-of-Scope) ersetzt
 > die Hardcodes durch Iteration über `modules.flatMap { it.prefBindings() }` —
 > dann werden Module ihre Prefs deklarativ deklarieren. Während Phase 1: **KEIN**
@@ -1491,7 +1503,8 @@ welcher Schritt vor welchem läuft, hier die geordnete Sequenz:
 
 - Schritt 3 läuft **vor** Schritt 4, weil `services` die Factory hält.
 - Schritt 4 läuft **vor** Schritt 5, weil der `DictateOrchestrator`-Konstruktor `servicesFactory` als Parameter erwartet.
-- **Schritt 5 garantiert `prefMirror.attach(store)` vor `recovery.recover(store)`** (codiert im `Orchestrator.init`-Block, §4.3 Z. 567–570). Verstoß gegen diese Reihenfolge wäre subtil — Recovery sähe initial leere Pref-Mirror-Achsen (z.B. `state.overlay.position*` als Default-Werte statt persistierten Werten). Die Reihenfolge ist **Teil des Orchestrator-Konstruktor-Vertrags**, nicht extern an die Service-onCreate-Sequenz delegiert — Schritt 5 ist atomar.
+<!-- FIX: Phase-C C-1 (2026-05-14) – stale Z. 567-570 → Section-Anchor (Line-Drift). -->
+- **Schritt 5 garantiert `prefMirror.attach(store)` vor `recovery.recover(store)`** (codiert im `Orchestrator.init`-Block, §4.3 `DictateOrchestrator`-Konstruktor). Verstoß gegen diese Reihenfolge wäre subtil — Recovery sähe initial leere Pref-Mirror-Achsen (z.B. `state.overlay.position*` als Default-Werte statt persistierten Werten). Die Reihenfolge ist **Teil des Orchestrator-Konstruktor-Vertrags**, nicht extern an die Service-onCreate-Sequenz delegiert — Schritt 5 ist atomar.
 - Schritt 7 (im Orchestrator-`init` gestartet) und Schritt 8 (im Service explizit gelauncht) laufen **parallel** im `serviceScope` — beide sind Reads, keiner blockt den anderen. Schritt 8 liest die DB direkt über `findAllAudioFilePaths()`; eine Synchronisation mit Schritt 7 wäre teurer als die doppelte Read und nicht nötig.
 - **Initial-State-Race (NEU, Phase-B S-1 / F-11):** Subscribers, die VOR Schritt 5 (`Orchestrator(…)`) auf `store.state` attached werden, sehen den `DictateUiState.initial()`-Default — kein Pref-Mirror, keine pendingSessions. Der IME-Service `bindService`-Pfad (§7.2) garantiert, dass der `LocalBinder` erst NACH `onCreate` zurückgegeben wird; damit ist `store.state` zum Zeitpunkt des ersten IME-`collect`-Aufrufs **mindestens** mit Pref-Mirror-Werten gefüllt (Schritt 5 hat `prefMirror.attach` synchron durchgeführt). Recovery-Werte (`pendingSessions`) können nachträglich nachreichen — Subscriber müssen idempotent gegenüber späten `pendingSessions`-Updates sein.
 
@@ -2627,13 +2640,21 @@ class DictatePipelineService : Service() {
         /** Read-only State-Stream (collectable). */
         val state: StateFlow<DictateUiState> get() = orchestrator.state
 
+        <!-- FIX: Phase-C C-1 (2026-05-14) – Return-Type DispatchOutcome dokumentiert (war implizit
+             durch `= orchestrator.dispatch(action)` inferiert). IME-Konsumenten dürfen den Outcome
+             ignorieren — Rejected/Unrouted sind in Phase 1 telemetry-only. -->
         /**
          * Single Dispatch — der einzige öffentliche Eingang für Mutationen.
          * Auch Lifecycle-Events (View-Shown/Hidden) laufen über diesen Pfad
          * via `Action.ViewModeAction.OnImeViewShown / OnImeViewHidden` —
          * keine typed Forwarder-Methoden (F-8).
+         *
+         * **Return:** `DispatchOutcome` (siehe §4.3). IME-Konsumenten dürfen
+         * den Wert ignorieren (`fun dispatch(...) = orchestrator.dispatch(...)`
+         * inferiert ihn nur weiter). `Rejected`/`Unrouted` sind Phase-1-Telemetry-
+         * Signale und brechen die UI nicht — der Orchestrator loggt sie bereits.
          */
-        fun dispatch(action: Action) = orchestrator.dispatch(action)
+        fun dispatch(action: Action): DispatchOutcome = orchestrator.dispatch(action)
     }
 
     private val binder = LocalBinder()
@@ -3664,7 +3685,7 @@ DictatePipelineService (Process-Lifecycle-Owner)
    │     ├── PipelinePrefMirror         (§4.5)
    │     ├── PipelineRecovery           (§4.6)
    │     ├── ModuleServicesFactory      (§4.7)
-   │     └── DictateModuleRegistry.all  (§4.8) — 12 aktive Module
+   │     └── DictateModuleRegistry.all  (§4.8) — 13 aktive Module (+ KeyboardInputModule §15.6)
    ├── PipelineNotificationCoordinator   // baut Notifications, abonniert Store
    └── PipelineActionRouter              // PendingIntent → Orchestrator.dispatch(Action)
 ```
@@ -4209,7 +4230,8 @@ Block 2 (DictatePipelineService) gilt als done, wenn:
 <!-- FIX: Phase-B S-3 (2026-05-13) – Java-Brücke + KeyboardInputModule-Acceptance ergänzt. -->
 - [ ] **Phase-B S-3 Java-Brücke `DictateUiStateObserver`:** Datei `state/DictateUiStateObserver.kt` ist angelegt (analog zu `core/ActiveJobRegistryObserver.kt`); mindestens ein Java-Konsument (`DictateInputMethodService.java`) konsumiert den `DictateUiState` darüber statt über direkte Callbacks. Verifiziert via Robolectric-Test `DictateUiStateObserverTest.kt` (Lifecycle-Bind funktioniert; STOP cancellt, START repliziert State).
 - [ ] **Phase-B S-3 KeyboardInputModule (§15.6):** Backspace-, Enter- und Space-Button-Klicks lösen die korrekten InputConnection-Operationen aus. Manuell verifiziert (Tastatur öffnen, Buttons drücken, Output prüfen) UND via Reducer-Unit-Test `KeyboardInputModuleTest.kt` (jede Action erzeugt den passenden Effect). Verifiziert zusätzlich, dass `orchestrator.dispatch(Action.KeyboardInputAction.Backspace)` **nicht** `DispatchOutcome.Unrouted` zurückgibt — d.h. das Modul ist in `DictateModuleRegistry.all` (§4.8).
-- [ ] **Phase-B S-3 EffectFailure-Origin-Routing (§4.3 Z. 617):** Ein Effect, der wirft (z.B. `RecordingModule.Effect.AllocateMediaRecorder` mit fehlender Permission), löst eine `Action.EffectFailure(originModuleId = ModuleId.Recording, …)` aus; das emittierende Modul (RecordingModule) hat einen expliziten `EffectFailure`-Reducer-Arm, der einen State-Rollback macht (z.B. `Preparing → Idle`). Verifiziert via `DictateOrchestratorTest.kt::effectFailure_routedBackToOriginModule()` mit einem Fake-Modul, das im `runEffect` wirft.
+<!-- FIX: Phase-C C-1 (2026-05-14) – stale Z. 617 → Section-Anchor (Line-Drift). -->
+- [ ] **Phase-B S-3 EffectFailure-Origin-Routing (§4.3 `dispatchInternal` Step 1a + 2):** Ein Effect, der wirft (z.B. `RecordingModule.Effect.AllocateMediaRecorder` mit fehlender Permission), löst eine `Action.EffectFailure(originModuleId = ModuleId.Recording, …)` aus; das emittierende Modul (RecordingModule) hat einen expliziten `EffectFailure`-Reducer-Arm, der einen State-Rollback macht (z.B. `Preparing → Idle`). Verifiziert via `DictateOrchestratorTest.kt::effectFailure_routedBackToOriginModule()` mit einem Fake-Modul, das im `runEffect` wirft.
 
 <!-- FIX: Phase-B S-1 (2026-05-13) – Block-1-Acceptance auf Block-1a/1b-Split (R.7) umgestellt. Vorher referenzierte den nicht-mehr-existierenden monolithischen PipelineStateManager. -->
 Block 1a (Quick-Wins im heutigen Code) gilt als done, wenn:
@@ -4218,7 +4240,8 @@ Block 1a (Quick-Wins im heutigen Code) gilt als done, wenn:
 - [ ] Service.onSingleRowModeToggled triggert KSM.refresh() (Quick-Win-Fix).
 - [ ] Service.onAudioFocusToggled triggert KSM.refresh() (Quick-Win-Fix).
 
-Block 1b (DictateUiState + DictateOrchestrator + 12 aktive Module) gilt als done, wenn:
+<!-- FIX: Phase-C C-1 (2026-05-14) – Modul-Zähler 12 → 13 aktiv (KeyboardInputModule §15.6). -->
+Block 1b (DictateUiState + DictateOrchestrator + 13 aktive Module) gilt als done, wenn:
 - [ ] `DictateUiStateStore` ist alleinige State-SSOT — `RecordingStateController.state`, `KeyboardUiController.state`, `KeyboardStateManager.contentArea/isSmallMode` sind eliminiert. Verifiziert via `grep` (siehe §9.6 End-of-Block-Cleanup-Check).
 - [ ] `DictateOrchestrator.dispatch(Action)` ist der einzige öffentliche Mutations-Eingang (F-8 Single Dispatch). Verifiziert via Architektur-Test, der `_state.update`-Calls außerhalb von Modul-`reduce` rejects.
 - [ ] `PipelinePrefMirror.attach(store)` läuft **VOR** `recovery.recover(store)` (codiert im Orchestrator-`init`, §4.3). Verifiziert via `DictateOrchestratorInitOrderTest.kt` mit `FakePipelinePrefMirror` (records attach-Reihenfolge).
@@ -4226,7 +4249,8 @@ Block 1b (DictateUiState + DictateOrchestrator + 12 aktive Module) gilt als done
 - [ ] **PersistentList-Idiom:** alle Reducer, die `pendingSessions` mutieren, verwenden `.add` / `.removeAll` / `.removeAt`. Verifiziert via Lint-Check `NoToMutableListOnPersistentList` (oder Code-Review-Checkliste in Block 1b).
 - [ ] **Initial-State-Race-Fence (NEU Phase-B S-1):** ein Subscriber, der unmittelbar nach `bindService` auf `state.collect` attached, sieht **mindestens** die Pref-Mirror-Werte (nicht den `DictateUiState.initial()`-Default). Test: `DictateOrchestratorBootRaceTest.kt` mit `FakeSharedPreferences`, asserts dass die erste `state.value`-Emission Pref-Werte enthält.
 <!-- FIX: Phase-B S-4 (2026-05-13) – 4 neue Acceptance-Klauseln: ProGuard-Robustheit, Vollständigkeits-Check, Cascade-Order, shutdown-Order. -->
-- [ ] **Phase-B S-4 ProGuard-Robustheit:** ein Release-Build (`./gradlew assembleRelease`) installiert sich auf einem API-34-Test-Device; nach Install dispatcht ein instrumented Smoke-Test eine konkrete Action (z.B. `Action.RecordingAction.StartRecording`) und assertet `DispatchOutcome.Applied` (nicht `Unrouted`). Verifiziert, dass die ProGuard-Keep-Regel aus §4.3 (Z. ~590 Hinweis-Block) tatsächlich in `app/proguard-rules.pro` aufgenommen wurde. Test-Datei `OrchestratorReleaseSmokeTest.kt` (`app/src/androidTest/...`).
+<!-- FIX: Phase-C C-1 (2026-05-14) – stale Z. ~590 → Section-Anchor (Line-Drift). -->
+- [ ] **Phase-B S-4 ProGuard-Robustheit:** ein Release-Build (`./gradlew assembleRelease`) installiert sich auf einem API-34-Test-Device; nach Install dispatcht ein instrumented Smoke-Test eine konkrete Action (z.B. `Action.RecordingAction.StartRecording`) und assertet `DispatchOutcome.Applied` (nicht `Unrouted`). Verifiziert, dass die ProGuard-Keep-Regel aus §4.3 (ProGuard-Hinweis-Block direkt unter `DictateOrchestrator`-Snippet) tatsächlich in `app/proguard-rules.pro` aufgenommen wurde. Test-Datei `OrchestratorReleaseSmokeTest.kt` (`app/src/androidTest/...`).
 - [ ] **Phase-B S-4 Vollständigkeits-Check:** ein gezielter Unit-Test entfernt das `KeyboardInputModule` aus `DictateModuleRegistry.all` (test-only Copy der Liste) und erwartet einen Init-Time-Failure (`IllegalArgumentException` mit "Fehlende Modul-Routing für Action-Subtypen: [KeyboardInputAction]"). Verifiziert dass der Vollständigkeits-Check (§4.8 init) greift. Test-Datei `DictateModuleRegistryTest.kt`.
 - [ ] **Phase-B S-4 Cascade-Order-Determinism:** ein Test mit zwei Mock-Modulen `FakeAModule` und `FakeBModule`, die beide auf denselben Idle→Active-Übergang reagieren und je eine eigene Cascade-Action emittieren. Reihenfolge in `modules`-Liste: A vor B. Test verifiziert dass die zweite Cascade-Action (von B) den State **inklusive** der ersten Cascade-Mutation (von A) sieht. Test-Datei `DictateOrchestratorCascadeOrderTest.kt`.
 - [ ] **Phase-B S-4 shutdown-Order:** ein Test mit `FakeModule`, dessen `terminate(services)`-Implementation auf `services.scope.isActive == true` assertiert. Verifiziert dass `shutdown()` vor `serviceScope.cancel()` läuft. Plus: Spy-basierte Verifikation der Aufruf-Reihenfolge (`terminate` → `cancel`). Test-Datei `OrchestratorShutdownOrderTest.kt` (im Block-2-Acceptance, weil Service-Lifecycle-Test).
@@ -4573,13 +4597,18 @@ Ziel: heutiges System auf eine Single-Owner-Visibility-Basis bringen, OHNE die M
 6. **POST_NOTIFICATIONS Runtime-Permission-Prompt** in Onboarding ergänzen (§11.5.1) — `OnboardingActivity` ist heute schon vorhanden (Manifest Z. 53); `ActivityResultLauncher` mit Permission-Request für `Manifest.permission.POST_NOTIFICATIONS` (API ≥ 33), Begleit-Text "Dictate zeigt eine persistente Benachrichtigung mit Aufnahme-Steuerung." Plus Block-2-Acceptance "Onboarding zeigt Permission-Prompt auf API 33+".
 7. **JobExecutor-Init** wandert vom IME-`onCreate` (Z. 389) in `Service.onCreate` (G7 in §13.5). ⚠ Wird mit dem **alten** `PipelineOrchestrator` (Audio-Pipeline-Runner) gerufen, NICHT mit dem neuen `DictateOrchestrator` — Naming-Konvention §1.x.
 
-**Block 1b — DictateUiState + DictateOrchestrator + 12 aktive Module (im PipelineService-Container)**
+<!-- FIX: Phase-C C-1 (2026-05-14) – Modul-Zähler 12 → 13 aktiv (KeyboardInputModule §15.6 ist Phase-1-Pflicht). -->
+**Block 1b — DictateUiState + DictateOrchestrator + 13 aktive Module (im PipelineService-Container)**
 
 Ziel: alle State-Mutationen, die heute auf 3 Klassen verteilt sind (RecordingStateController / KeyboardUiController / KeyboardStateManager), werden in einer hierarchischen `DictateUiState`-Klasse + `DictateUiStateStore` konsolidiert. Mutationen laufen ausschließlich über `DictateOrchestrator.dispatch(Action)` → Modul-Reducer.
 
 Reihenfolge der Sub-Schritte:
 
-1. **DictateUiState-Datentyp anlegen** (neue Datei `state/DictateUiState.kt`) — pure Daten-Klasse mit 12 Sub-State-Klassen (`AudioState`, `LayoutState`, …) plus 1 Top-Level-Bool (`lastResultNeedsManualPaste`). Siehe §3.
+<!-- FIX: Phase-C C-1 (2026-05-14) – Sub-State-Felder-Zähler präzisiert. §3-Tabelle Z. 289 spricht
+     von "13 State-Achsen (= Sub-State-Felder)". Davon sind 12 als eigene Sub-State-Klassen
+     modelliert (RecordingState/PipelineUiState sealed, der Rest data class); das 13. Feld
+     `pendingSessions` ist ein direktes PersistentList-Feld ohne Wrapper. Plus `lastResultNeedsManualPaste`. -->
+1. **DictateUiState-Datentyp anlegen** (neue Datei `state/DictateUiState.kt`) — pure Daten-Klasse mit 12 Sub-State-Typen (`RecordingState` sealed, `PipelineUiState` sealed, `AudioState`/`LayoutState`/… data classes) + `pendingSessions: PersistentList<PendingSession>` als 13. Achse + 1 Top-Level-Bool (`lastResultNeedsManualPaste`). Siehe §3-Tabelle.
 2. **DictateModule-Interface + DictateOrchestrator + ModuleServicesFactory anlegen** (§4.2 / §4.3 / §4.7). Skelett mit `Action`-Sealed-Class (leer), keine konkreten Module noch.
 3. **RecordingModule implementieren** (§15.2) — `RecordingStateController.kt:128-321`-Logik wandert in `RecordingModule.reduce + runEffect`. Existierende `RecordingStateController.Callback`-Empfänger werden auf `state.collect`-Subscriber umgebaut. ⚠ Achtung: `RecordingManager` und `BluetoothScoManager` haben Callback-Backrefs auf den Controller — die müssen mitgezogen werden (Module-Effekt-Pfade dispatchen `Action.RecordingAction.MediaRecorderReady` etc. via `services.emitAction`).
 4. **PipelineModule implementieren** — `KeyboardUiController.kt:147-353`-Logik wandert in `PipelineModule.reduce + runEffect`. Public-API-Methoden auf KeyboardUiController werden via `orchestrator.dispatch(Action.PipelineAction.X)` ersetzt.
@@ -4594,7 +4623,10 @@ Reihenfolge der Sub-Schritte:
    }
    ```
 6. **LayoutModule implementieren** — `KeyboardStateManager.contentArea/isSmallMode` wandern in `LayoutState` (Sub-State). `setSmallMode(enabled)` wird zu einem atomaren `reduce`-Aufruf, der `LayoutState.copy(smallMode = enabled, contentArea = MAIN_BUTTONS)` in einer Mutation atomar setzt — eliminiert das heutige sequenzielle 2-Step-Schreiben.
-7. **PrefMirror-Wiring (§4.5):** `PipelinePrefMirror` mirrort die 15 UI-state-relevanten Prefs in die Sub-State-Klassen. Wird im `DictateOrchestrator.init` synchron attached.
+<!-- FIX: Phase-C C-1 (2026-05-14) – Pref-Zähler 15 → 19 (zählt §4.5 initialMirror-Block exakt:
+     layout 3 + audio 3 + resend 1 + features 4 + theming 4 + overlay 4 = 19, konsistent mit
+     Phase-B S-4 Hinweis "Phase 1 — hardcodierte Mappings für 19 Prefs"). -->
+7. **PrefMirror-Wiring (§4.5):** `PipelinePrefMirror` mirrort die 19 UI-state-relevanten Prefs in die Sub-State-Klassen. Wird im `DictateOrchestrator.init` synchron attached.
 8. **Recovery-Wiring (§4.6):** `PipelineRecovery` lädt `pendingSessions` aus DB in `store`. Wird im `DictateOrchestrator.init` async (`scope.launch`) gestartet — **NACH** `prefMirror.attach`.
 
 **Block 3 — DB-Persistence (Schema-Migration M3→M4)**
@@ -5818,13 +5850,15 @@ unverletzt: ALLE Mutations gehen durch den Orchestrator + Modul-Reducer (F-8).
 > grundlegend überarbeitet. Frühere Audits prüften den `PipelineStateManager`
 > als Composition Root mit typed Action-Methoden. Mit dem Modular-Orchestrator-
 > Pattern (F-11) ist die zentrale Klasse jetzt der `DictateOrchestrator`, der
-> nur das `DictateModule`-Interface kennt; Action-Logik wandert in 13 Module
-> (siehe §15). Audit ist entsprechend pro Schicht strukturiert.
+<!-- FIX: Phase-C C-1 (2026-05-14) – Modul-Zähler aktualisiert auf 13 aktiv (12 ursprünglich + KeyboardInputModule §15.6). -->
+> nur das `DictateModule`-Interface kennt; Action-Logik wandert in 13 aktive Module
+> (plus 1 Phase-2-Stub, siehe §15). Audit ist entsprechend pro Schicht strukturiert.
 >
 > **Scope-Aufteilung (FIX Issue 3.0.6):** §13.3 audited die **Schicht-Klassen** —
 > Service (Lifecycle), Orchestrator (Routing), Helpers (Notification, ActionRouter,
 > Pref-Mirror, Recovery, Store) sowie das `DictateModule`-Interface selbst.
-> **§15 ist die kanonische Audit-Stelle für die 13 Modul-Implementierungen** —
+<!-- FIX: Phase-C C-1 (2026-05-14) – Modul-Zähler 13 → 13 aktive (siehe §15.1 Tabelle: 13 aktive + 1 Phase-2). -->
+> **§15 ist die kanonische Audit-Stelle für die 13 aktiven Modul-Implementierungen (+ 1 Phase-2-Stub)** —
 > dort lebt die fachliche SRP/OCP-Begründung pro Modul. §13.3.13 hier zeigt nur
 > das Pattern am `RecordingModule`-Beispiel.
 
@@ -5910,11 +5944,17 @@ unverletzt: ALLE Mutations gehen durch den Orchestrator + Modul-Reducer (F-8).
 
 #### §13.3.12 DictateModule-Interface (F-11, Plugin-Kontrakt)
 
-- **SRP** — Definiert den Plugin-Kontrakt. Selbst keine Logik; nur ein Interface mit fünf Pflicht-Methoden + einer optionalen Cross-Module-Hook-Methode.
+<!-- FIX: Phase-C C-1 (2026-05-14) – Method-Zähler aktualisiert: nach Phase-B S-3 (reduceFailure)
+     + Issue 2.1.2 (prefBindings) + Issue 2.1.12 (terminate) hat das Interface jetzt 7 Pflicht-
+     Methoden (id, actionClass, read, write, initialState, reduce, runEffect) + 4 optionale Hooks
+     mit Default-Body (reduceFailure, onCrossModuleStateChange, prefBindings, terminate). Pre-S-3
+     waren es "5 Pflicht + 1 optional" — gilt nach den Phase-B-Erweiterungen nicht mehr. -->
+- **SRP** — Definiert den Plugin-Kontrakt. Selbst keine Logik; nur ein Interface mit 7 Pflicht-Methoden + 4 optionalen Hooks (Default-Implementierungen).
 - **OCP** — `sealed interface` mit `object`-Implementierungen pro Modul. Compile-Zeit-Hierarchie, exhaustive `when` möglich.
 - **LSP** — Alle Module implementieren denselben Kontrakt mit eigenen Type-Parametern; polymorph austauschbar.
-- **ISP** — Minimal: 5 Methoden + 1 optionale. Keine Methode, die ein Modul nicht braucht.
-- **DIP** — Reines Interface. Konkretisierungen sind die 13 Module in §15.
+- **ISP** — Minimal: 7 Pflicht-Methoden (id, actionClass, read, write, initialState, reduce, runEffect) + 4 optionale Default-Hooks (reduceFailure, onCrossModuleStateChange, prefBindings, terminate). Keine Methode, die ein Modul nicht braucht.
+<!-- FIX: Phase-C C-1 (2026-05-14) – 13 → 13 aktiv + 1 Phase-2 (KeyboardInputModule wurde in Phase-B S-3 als 13. aktives Modul ergänzt). -->
+- **DIP** — Reines Interface. Konkretisierungen sind die 13 aktiven Module in §15 (plus 1 Phase-2-Stub `InterruptionModule`).
 
 #### §13.3.13 Modul-Implementierungen (F-11, am Beispiel RecordingModule)
 
@@ -6045,7 +6085,12 @@ Bewusst offen gelassen, weil über bibliotheksspezifisches Wissen hinausgehend, 
 
 ## §15 Modul-Inventar (F-11)
 
-Die 13 Module (12 aktive + 1 Phase-2) sind in `app/src/main/java/net/devemperor/dictate/state/modules/` gruppiert. Pro Modul eine eigene Datei mit:
+<!-- FIX: Phase-C C-1 (2026-05-14) – Modul-Zähler aktualisiert auf 14 (13 aktiv + 1 Phase-2-Stub).
+     Phase-B S-3 hat KeyboardInputModule (§15.6) als 13. aktives Modul nachgereicht.
+     Off-by-One-Klarstellung gegen §3: KeyboardInputModule hat KEINE eigene State-Achse
+     (Unit-State, §15.6) — daher 14 Module, aber nur 13 Sub-State-Felder im DictateUiState
+     (§3-Tabelle zeigt 13 Achsen + Top-Level-Bool). Beide Zahlen sind korrekt für ihr Schema. -->
+Die 14 Module (13 aktive + 1 Phase-2-Stub) sind in `app/src/main/java/net/devemperor/dictate/state/modules/` gruppiert. Pro Modul eine eigene Datei mit:
 - **State-Sub-Klasse** (vom Modul verwaltet, im DictateUiState als Sub-Feld)
 - **Module-Effect-Sub-Sealed-Interface** (Effect-Varianten dieses Moduls)
 - **Reducer** (F1+F2 pure function)
@@ -6116,6 +6161,15 @@ verworfen — zusätzlicher Notations-Lärm ohne Informationsgewinn.
 | **Theming**          | | | | | | | | | | | — | | |
 | **PendingSessions**  | | R(state.pendingSessions) | | | | | | | | | | — | |
 | **Interruption**     | R(state.interruption.callIncoming) C(RecordingAction.CancelRecording) | | | | | | | | | | | | — |
+
+<!-- FIX: Phase-C C-1 (2026-05-14) – KeyboardInputModule (§15.6) ist in der Matrix bewusst absent
+     (Unit-State, keine eigene Achse, kein Observer auf anderen Modulen, kein anderes Modul
+     beobachtet "Backspace-Klick"). Klarstellung als Caption, damit ein Reviewer nicht "fehlende
+     Zeile/Spalte"-Findings produziert. -->
+**Matrix-Caption:** Die Matrix listet ausschließlich Module mit eigener State-Achse (13 Zeilen/Spalten
+oben + Diagonale). **KeyboardInputModule (§15.6) erscheint bewusst NICHT** in der Matrix — Unit-
+State, kein Observer-Hook, kein Inbound-Coupling (siehe §15.6 letzter Absatz). Die F-8-Single-
+Dispatch-Garantie genügt; eine 14×14-Matrix mit einer leeren Zeile + leeren Spalte wäre Noise.
 
 **SRP-Konsequenz (verlinkt §13.3.13):** Jedes Modul hat **nur** Lese-Coupling auf Achsen, die in
 dieser Matrix dokumentiert sind. Ein neuer Lese-Hook ohne Matrix-Eintrag ist ein Code-Review-
@@ -6276,21 +6330,12 @@ object RecordingModule : DictateModule<
         }
     }
 
-    **audioFile-Vertrag (R.2):** `audioFile` lebt im RecordingState (Pure-Function-Garantie); der
-    Hardware-Read entfällt. Der Allocator-Effect (`AllocateMediaRecorder`) bekommt das File-Objekt
-    von außen (Caller, z.B. PipelineRunner oder LocalBinder.startSession) — der Reducer ist 100 %
-    pure, State-Tests brauchen keinen `ModuleServicesFactory`-Stub mehr.
-
-    <!-- FIX: Phase-B S-4 (2026-05-13) – Effect.AllocateMediaRecorder trägt audioFile als 3. Konstruktor-Argument. -->
-    **Konsistenz der drei AllocateMediaRecorder-Sites (Phase-B S-4):**
-    1. **Definition** (Effect-sealed-interface oben): `AllocateMediaRecorder(target, useBluetooth, audioFile)` — 3 Felder.
-    2. **Reducer-Use** (Idle→Preparing-Branch): `Effect.AllocateMediaRecorder(action.target, ctx.global.audio.useBluetoothMic, action.audioFile)` — 3 Args.
-    3. **EffectHandler-Use** (`runEffect`-Body): `services.recordingHardware.allocate(effect.target, effect.useBluetooth, effect.audioFile)` — 3 Args.
-
-    Die drei Sites müssen synchron bleiben. Vor Phase-B S-4 hatte die Definition 2 Felder
-    + Reducer-Use 3 Args + EffectHandler-Use 2 Args — eine drei-fache Inkonsistenz, die
-    beim ersten `./gradlew assembleDebug` als Compile-Error aufgefallen wäre.
-
+    <!-- FIX: Phase-C C-1 (2026-05-14) – Markdown-Block "audioFile-Vertrag" + "Konsistenz der drei
+         AllocateMediaRecorder-Sites" aus der Mitte des Kotlin-Code-Blocks ausgelagert (siehe
+         direkt unterhalb des schließenden ``` von §15.2). Phase-B S-4 hatte den Erklärungstext
+         hier eingefügt, ohne den Code-Fence zu schließen — Markdown rendert die `**`/`1.`-Marker
+         dann als Literal im Kotlin-Listing. Erklärungstext gehört zwischen Reducer und runEffect
+         logisch, aber nicht *in* die Kotlin-Quelle. -->
     override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {
         <!-- FIX: Phase-B S-4 (2026-05-13) – allocate ruft mit 3 Args (target, useBluetooth, audioFile); R.2-konform. -->
         is Effect.AllocateMediaRecorder -> services.recordingHardware.allocate(effect.target, effect.useBluetooth, effect.audioFile)
@@ -6392,6 +6437,25 @@ object RecordingModule : DictateModule<
     // ankommen — RecordingModule selbst hat oben nur den Session-Start-Cascade.
 }
 ```
+
+<!-- FIX: Phase-C C-1 (2026-05-14) – Erklärungstext "audioFile-Vertrag" + "AllocateMediaRecorder-Sites"
+     hierher verschoben (war in §15.2 mitten im Kotlin-Code-Block, Markdown rendert dort als
+     Literal). Inhalt unverändert; gehört semantisch zwischen Reducer-Block und runEffect, was
+     hier nun in Prosa abgebildet ist. -->
+**audioFile-Vertrag (R.2):** `audioFile` lebt im RecordingState (Pure-Function-Garantie); der
+Hardware-Read entfällt. Der Allocator-Effect (`AllocateMediaRecorder`) bekommt das File-Objekt
+von außen (Caller, z.B. PipelineRunner oder LocalBinder.startSession) — der Reducer ist 100 %
+pure, State-Tests brauchen keinen `ModuleServicesFactory`-Stub mehr.
+
+**Konsistenz der drei AllocateMediaRecorder-Sites (Phase-B S-4):**
+
+1. **Definition** (Effect-sealed-interface oben): `AllocateMediaRecorder(target, useBluetooth, audioFile)` — 3 Felder.
+2. **Reducer-Use** (Idle→Preparing-Branch): `Effect.AllocateMediaRecorder(action.target, ctx.global.audio.useBluetoothMic, action.audioFile)` — 3 Args.
+3. **EffectHandler-Use** (`runEffect`-Body): `services.recordingHardware.allocate(effect.target, effect.useBluetooth, effect.audioFile)` — 3 Args.
+
+Die drei Sites müssen synchron bleiben. Vor Phase-B S-4 hatte die Definition 2 Felder
++ Reducer-Use 3 Args + EffectHandler-Use 2 Args — eine drei-fache Inkonsistenz, die
+beim ersten `./gradlew assembleDebug` als Compile-Error aufgefallen wäre.
 
 <!-- FIX: Issue PENDING-3 / Spec-3 Reducer Simplified – Cascade-Reihenfolge bei StartRecording -->
 **Cascade-Reihenfolge bei `StartRecording` (Spec 1 §4.3 `dispatchInternal`-Pipeline):**
@@ -6809,6 +6873,7 @@ KeyboardInput bleibt leer.
 | **SRP** | Jedes Modul hat genau eine fachliche Domäne. Reducer + EffectHandler sind kohärent. |
 | **OCP** | Neues Modul = neue Datei + 4 kleine Erweiterungen, kein zentraler Code wird angefasst. Mode 1+2 erhalten OCP; Mode 3 wäre OCP-Bruch gegen den Orchestrator — daher Phase-2 (siehe §15.5 + §14 Open Questions). <!-- FIX: Issue 2.0.3 + 1.1.3 – Mode-3-OCP-Konsistenz-Hinweis --> |
 | **LSP** | Alle Module sind `DictateModule<S, A, E>` und können polymorph behandelt werden |
-| **ISP** | `DictateModule`-Interface ist minimal (5 Pflicht-Methoden + 1 optional) |
+<!-- FIX: Phase-C C-1 (2026-05-14) – Methodenzähler aktualisiert (7+4 nach Phase-B S-3 reduceFailure + Issue 2.1.2 prefBindings + Issue 2.1.12 terminate). -->
+| **ISP** | `DictateModule`-Interface ist minimal (7 Pflicht-Methoden + 4 optionale Default-Hooks) |
 | **DIP** | Orchestrator hängt am `DictateModule`-Interface, nicht an Konkretisierungen. EffectHandler hängt am Subsystem-Interface (über `services`) |
 | **DRY** | Action-Liste lebt nur in der `Action`-sealed-class. Pref-Liste nur im PrefMirror. SideEffect pro Modul gekapselt. |

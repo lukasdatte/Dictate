@@ -1,0 +1,74 @@
+{
+  "source": "/home/lukas/WebStorm/Dictate/worktrees/feature/dictate-keyboard-layout-refactor/docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md",
+  "note": "Spec 3 (2858 lines, Floating-Overlay = plan-Block-6). H2-level chunking. Maps to 3 plan-chunks (C16-C18). Largest H2 sections: §4 OverlayBackend (9749 tokens — includes §4.6 OverlayDragHandler + §4.7 OverlayPositionMapper + §4.8 OverlayModule), §7 Mode-Transitionen (4986 tokens with T1-T7), §13 Vollständigkeits-Verifikation (4542 tokens), §11 Research-Antworten (5171 tokens — §11.5 Drag-Funktionalität dominant). §4 distributes across C16 (backend core §4.1-§4.5) and C18 (drag §4.6+§4.7 + OverlayModule §4.8); §11 splits similarly.",
+  "sections": [
+    { "heading": "§1 Kontext und Scope", "estimatedTokens": 234 },
+    { "heading": "§2 Architektur-Entscheidungen (fixiert)", "estimatedTokens": 407 },
+    { "heading": "§3 Layout-Mode-Definition (gemeinsam für WIDGET und HOVER)", "estimatedTokens": 3453 },
+    { "heading": "§4 OverlayBackend — API + Implementierung", "estimatedTokens": 9749 },
+    { "heading": "§5 Permission-Onboarding-Flow", "estimatedTokens": 3902 },
+    { "heading": "§6 Schließen-Button-Differentialverhalten", "estimatedTokens": 1704 },
+    { "heading": "§7 Mode-Transitionen", "estimatedTokens": 4986 },
+    { "heading": "§8 Touch-Routing", "estimatedTokens": 311 },
+    { "heading": "§9 Notification-Fallback (Permission-frei)", "estimatedTokens": 148 },
+    { "heading": "§10 Acceptance-Kriterien", "estimatedTokens": 2043 },
+    { "heading": "§11 Research-Antworten (Detail-Research)", "estimatedTokens": 5171 },
+    { "heading": "§12 Referenzen", "estimatedTokens": 359 },
+    { "heading": "§13 Vollständigkeits-Verifikation", "estimatedTokens": 4542 },
+    { "heading": "§14 Test-Strategie", "estimatedTokens": 3676 }
+  ],
+  "chunks": [
+    {
+      "id": "spec3-C16-overlay-backend-and-window",
+      "title": "Maps to plan-C16-block6-overlay-backend-and-window — Spec 3 §1 + §2 + §3 + §4 + §12 + §13 + §14 + targeted §11.1/§11.2/§11.4",
+      "description": "Owns: §1 Kontext, §2 Architektur-Entscheidungen, §3 Layout-Mode-Definition (OVERLAY_5BUTTON shared für WIDGET + HOVER + Schließen-Button-Action-Differenzierung — both visibility-predicates + actionResolvers), §4 OverlayBackend (FULL — but primary focus for C16 on §4.1 Backend-Klasse mit gekapseltem Window-Manager-Wrapper DIP, §4.2 OverlayBackend überarbeitet, §4.3 LayoutParamsFactory vollständige WindowManager-Konfiguration, §4.4 Flag-Tabelle, §4.5 Format; §4.6 OverlayDragHandler + §4.7 OverlayPositionMapper + §4.8 OverlayModule covered in C18), §12 Referenzen, §13 Vollständigkeits-Verifikation (SSOT-Konformität, SOLID, DRY für Layout-Mode-Sharing), §14 Test-Strategie (OverlayBackend Unit-Tests, FakeOverlayWindow). Reads targeted: §11.1 SYSTEM_ALERT_WINDOW im IME-Kontext, §11.2 TYPE_APPLICATION_OVERLAY-Best-Practices, §11.4 Touch-Routing-Details (Backend-level setup).",
+      "main": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§3 Layout-Mode-Definition (gemeinsam für WIDGET und HOVER)",
+        "§4 OverlayBackend — API + Implementierung",
+        "§12 Referenzen",
+        "§13 Vollständigkeits-Verifikation",
+        "§14 Test-Strategie"
+      ],
+      "context": [
+        "§11 Research-Antworten (Detail-Research)"
+      ],
+      "targeted_sub_sections": ["§4.1", "§4.2", "§4.3", "§4.4", "§4.5", "§11.1", "§11.2", "§11.4"]
+    },
+    {
+      "id": "spec3-C17-permission-onboarding",
+      "title": "Maps to plan-C17-block6-permission-onboarding — Spec 3 §5 + §9 + targeted §11.3",
+      "description": "Owns: §5 Permission-Onboarding-Flow (§5.0 OverlayPermissionObserver, §5.1 Permission-Gate zentrale Logik SRP-getrennt, §5.2 Settings-Intent Permission-Request, §5.3 Onboarding-UI im IME-View, §5.4 Erste-Mal vs Wieder-Verweigert-Logik, §5.5 Activity-Result-Handling, §5.6 Fallback bei Verweigerung, §5.7 Manifest-Eintrag — already in Block-2 manifest-diff), §9 Notification-Fallback (Permission-frei — kein Code, Verweis auf Notification-Subsystem). Reads targeted: §11.3 Onboarding-UX.",
+      "main": [
+        "§5 Permission-Onboarding-Flow",
+        "§9 Notification-Fallback (Permission-frei)"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§11 Research-Antworten (Detail-Research)"
+      ],
+      "targeted_sub_sections": ["§11.3"]
+    },
+    {
+      "id": "spec3-C18-mode-transitions-and-drag",
+      "title": "Maps to plan-C18-block6-mode-transitions-and-drag — Spec 3 §6 + §7 + §8 + §10 + §11 + targeted §4.6/§4.7/§4.8/§11.5-§11.9",
+      "description": "Owns: §6 Schließen-Button-Differentialverhalten (§6.1 In WIDGET-Modus, §6.2 In HOVER-Modus), §7 Mode-Transitionen (§7.1 Triangle-FSM-Logik kanonisch im ViewModeModule, §7.2 KeyboardLayoutManager-Reaktion auf ViewMode-Wechsel, §7.3 Code-Skizzen pro Übergang T1-T7 — T7 ist Geist-Widget-Bug Strukturschutz), §8 Touch-Routing (FLAG_NOT_TOUCH_MODAL), §10 Acceptance-Kriterien (Block-6 acceptance bullets), §11 Research-Antworten (FULL — primary focus for C18 on §11.5 Drag-Funktionalität OPEN-3 — vollständig mit §11.5.1-§11.5.8 OnTouchListener/Click-vs-Drag/Position-Berechnung/Normalisierung/De-Normalisierung/Orientation-Change/Snap-to-Edge/Listener-Anbringung, §11.6 Window-Lifecycle-Edge-Cases, §11.7 Multi-Window-Mode, §11.9 WIDGET im Idle OPEN-2). Reads targeted from §4: §4.6 OverlayDragHandler OPEN-3, §4.7 OverlayPositionMapper OPEN-3, §4.8 OverlayModule kanonische Spec (Reducer + Cross-Module-Observer + EffectHandler).",
+      "main": [
+        "§6 Schließen-Button-Differentialverhalten",
+        "§7 Mode-Transitionen",
+        "§8 Touch-Routing",
+        "§10 Acceptance-Kriterien",
+        "§11 Research-Antworten (Detail-Research)"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§3 Layout-Mode-Definition (gemeinsam für WIDGET und HOVER)",
+        "§4 OverlayBackend — API + Implementierung"
+      ],
+      "targeted_sub_sections": ["§4.6", "§4.7", "§4.8", "§11.5", "§11.6", "§11.7", "§11.9"]
+    }
+  ]
+}

@@ -1,0 +1,185 @@
+{
+  "source": "/home/lukas/WebStorm/Dictate/worktrees/feature/dictate-keyboard-layout-refactor/docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md",
+  "note": "Spec 1 (6984 lines, Pipeline-Service). H2-level chunking. Several H2 sections (§4 = 30k tokens, §11 = 23k, §15 = 12k, §6 = 17k) contain multiple ###-sub-sections that map to different plan-chunks. We chose NOT to do H3->H2 promotion (preserves the spec's internal cross-references); instead each chunk's `description` + `targeted_sub_sections` field points the implementer at specific ###-level sub-sections via plan-author guidance. The plan-reader CLI gives the entire H2 section when read — the implementer narrows to the relevant ###-sub-sections during work. This is acceptable because (a) the implementer has 12-15k token budget per chunk for targeted reads and (b) each sub-section is internally cohesive.",
+  "sections": [
+    { "heading": "§1 Kontext und Scope", "estimatedTokens": 820 },
+    { "heading": "§2 Architektur-Entscheidungen (fixiert)", "estimatedTokens": 494 },
+    { "heading": "§3 Datenmodell: `DictateUiState`", "estimatedTokens": 3265 },
+    { "heading": "§4 DictateOrchestrator + Modular Plugin-Pattern", "estimatedTokens": 30871 },
+    { "heading": "§5 Local-Binder API (F-8: Single Dispatch)", "estimatedTokens": 943 },
+    { "heading": "§6 Persistence-Erweiterung", "estimatedTokens": 17580 },
+    { "heading": "§7 Lifecycle: Foreground Service", "estimatedTokens": 4971 },
+    { "heading": "§8 IME-Service-Integration", "estimatedTokens": 744 },
+    { "heading": "§9 Migration vorhandener Klassen", "estimatedTokens": 3480 },
+    { "heading": "§10 Acceptance-Kriterien", "estimatedTokens": 6716 },
+    { "heading": "§11 Research-TODOs für Agent — Detail-Antworten", "estimatedTokens": 23699 },
+    { "heading": "§12 Referenzen", "estimatedTokens": 842 },
+    { "heading": "§13 Vollständigkeits-Verifikation", "estimatedTokens": 9700 },
+    { "heading": "§14 Open Questions", "estimatedTokens": 804 },
+    { "heading": "§15 Modul-Inventar (F-11)", "estimatedTokens": 12715 }
+  ],
+  "chunks": [
+    {
+      "id": "spec1-C1-quick-wins",
+      "title": "Maps to plan-C1-block1a-quick-wins — Spec 1 quick-wins targeted sub-sections",
+      "description": "Reads targeted sub-sections (no `main` owner — context-only reads): §9.4 (5 verstreute resend_btn-Mutationen — code pointers), §9.5 (recordButton.text/isEnabled-Hybrid), §11.2.2 Block-1a Schritte 1-3, §11.2.3 (Test-Strategie partial).",
+      "main": [],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§9 Migration vorhandener Klassen",
+        "§11 Research-TODOs für Agent — Detail-Antworten"
+      ],
+      "targeted_sub_sections": ["§9.4", "§9.5", "§11.2.2 Block-1a", "§11.2.3"]
+    },
+    {
+      "id": "spec1-C2-service-skeleton",
+      "title": "Maps to plan-C2-block2-pipeline-service-skeleton — Spec 1 §7 + §8 + targeted §11.1/§11.3/§11.5",
+      "description": "Owns: §7 Lifecycle FGS (Service-Struktur, Start, onStartCommand, Notification-Coordinator, ActionRouter, Notification-Inhalt, Stop), §8 IME-Service-Integration (View-Recreate-Vertrag). Reads targeted from §11: §11.1 (AndroidManifest-Diff, Notification.Builder, startForegroundService 5s-Timeout), §11.2.2 Block-2 (7 Sub-Schritte), §11.3 (Bound-Service-Setup, ServiceConnection-Edge-Cases, Multi-Bind), §11.5 (Notification-UX, POST_NOTIFICATIONS, MediaStyle).",
+      "main": [
+        "§7 Lifecycle: Foreground Service",
+        "§8 IME-Service-Integration"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§5 Local-Binder API (F-8: Single Dispatch)",
+        "§11 Research-TODOs für Agent — Detail-Antworten"
+      ],
+      "targeted_sub_sections": ["§11.1", "§11.2.2 Block-2", "§11.3", "§11.5"]
+    },
+    {
+      "id": "spec1-C3-state-core",
+      "title": "Maps to plan-C3-state-core — Spec 1 §1 + §2 + §3 + §12 + targeted §4.2/§4.4",
+      "description": "Owns: §1 Kontext, §2 Architektur-Entscheidungen, §3 Datenmodell (DictateUiState — 12 Sub-State-Typen + PersistentList + 1 Top-Level-Bool, Achsen-Übersicht, Vergleich zum heutigen State), §12 Referenzen. Reads targeted: §4.2 (DictateModule-Interface F-11 Plugin-Kontrakt), §4.4 (DictateUiStateStore SSoT-Container, MutableStateFlow + update).",
+      "main": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§3 Datenmodell: `DictateUiState`",
+        "§12 Referenzen"
+      ],
+      "context": [
+        "§4 DictateOrchestrator + Modular Plugin-Pattern"
+      ],
+      "targeted_sub_sections": ["§4.2", "§4.4"]
+    },
+    {
+      "id": "spec1-C4-orchestrator-and-registry",
+      "title": "Maps to plan-C4-orchestrator-and-registry — Spec 1 §4 + §5 (orchestrator + module-registry + services)",
+      "description": "Owns: §4 (FULL — primary focus on §4.1 Architektur-Übersicht, §4.3 DictateOrchestrator dispatchInternal 5 steps, §4.7 ModuleServices, §4.8 DictateModuleRegistry, §4.9 Dependency-Interfaces F-2 DIP, §4.10 Kontrakt-Initialization-Order; §4.2 + §4.4 already covered in C3, §4.5 + §4.6 in C7, §4.11 in C11), §5 Local-Binder API F-8 Single Dispatch.",
+      "main": [
+        "§4 DictateOrchestrator + Modular Plugin-Pattern",
+        "§5 Local-Binder API (F-8: Single Dispatch)"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§3 Datenmodell: `DictateUiState`"
+      ],
+      "targeted_sub_sections": ["§4.1", "§4.3", "§4.7", "§4.8", "§4.9", "§4.10"]
+    },
+    {
+      "id": "spec1-C5-modules-core",
+      "title": "Maps to plan-C5-modules-core — Spec 1 §15 + §13 (core modules + SOLID-Verifikation)",
+      "description": "Owns: §15 Modul-Inventar F-11 (primary focus §15.1 Übersicht + §15.1.x Coupling-Matrix, §15.2 RecordingModule full implementation, §15.3 AudioModule mit Cross-Module-Observer, §15.5 Cross-Module-Effect-Modi + Anti-Beispiel-Tabelle, §15.7 SOLID-Verifikation; §15.6 KeyboardInputModule covered in C6), §13 Vollständigkeits-Verifikation (Visibility-Mutation-Audit, State-Mutation-Audit, SOLID-Verifikation per neue Klasse).",
+      "main": [
+        "§13 Vollständigkeits-Verifikation",
+        "§15 Modul-Inventar (F-11)"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§3 Datenmodell: `DictateUiState`",
+        "§4 DictateOrchestrator + Modular Plugin-Pattern"
+      ],
+      "targeted_sub_sections": ["§15.1", "§15.1.x", "§15.2", "§15.3", "§15.5", "§15.7", "§13.1", "§13.2", "§13.3"]
+    },
+    {
+      "id": "spec1-C6-modules-auxiliary",
+      "title": "Maps to plan-C6-modules-auxiliary — Spec 1 targeted §15.6 + §15.1 (rows for aux modules)",
+      "description": "Reads targeted: §15.6 KeyboardInputModule (Effect-only Unit-State — Backspace/Enter/Space/InsertText), §15.1 rows for ResendModule, LivePromptModule, LanguageModule, LayoutModule, FeatureToggleModule, ThemingModule, PendingSessionsModule.",
+      "main": [],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§3 Datenmodell: `DictateUiState`",
+        "§4 DictateOrchestrator + Modular Plugin-Pattern",
+        "§15 Modul-Inventar (F-11)"
+      ],
+      "targeted_sub_sections": ["§15.6", "§15.1 (rows: Resend, LivePrompt, Language, Layout, FeatureToggle, Theming, PendingSessions)"]
+    },
+    {
+      "id": "spec1-C7-prefmirror-recovery-wiring",
+      "title": "Maps to plan-C7-prefmirror-recovery-wiring — Spec 1 §10 + targeted §4.5/§4.6/§11.2.2-Block-1b",
+      "description": "Owns: §10 Acceptance-Kriterien (Block-1b acceptance bullets + Phase-B/C cross-block acceptance — final read for verifier-handoff). Reads targeted: §4.5 PipelinePrefMirror (19 Prefs in initialMirror — layout 3, audio 3, resend 1, features 4, theming 4, overlay 4), §4.6 PipelineRecovery (DB-Replay), §11.2.2 Block-1b Sub-Schritte 5-8 (PrefMirror-Wiring + Recovery-Wiring + transitional resend-visibility-Subscriber).",
+      "main": [
+        "§10 Acceptance-Kriterien"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§3 Datenmodell: `DictateUiState`",
+        "§4 DictateOrchestrator + Modular Plugin-Pattern",
+        "§11 Research-TODOs für Agent — Detail-Antworten"
+      ],
+      "targeted_sub_sections": ["§4.5", "§4.6", "§11.2.2 Block-1b Steps 5-8"]
+    },
+    {
+      "id": "spec1-C8-subsystem-adapter-migration",
+      "title": "Maps to plan-C8-block3-subsystem-adapter-migration — Spec 1 §9 + §14 + targeted §4.7/§4.9",
+      "description": "Owns: §9 Migration vorhandener Klassen (RecordingStateController → RecordingModule, KeyboardUiController-state → PipelineModule, KeyboardStateManager → LayoutModule + LayoutCatalog, resend_btn-Mutationen, recordButton-Hybrid, Lösch-/Adapter-/Erhalt-Tabelle in §9.6), §14 Open Questions (residual non-blocking). Reads targeted: §4.7 ModuleServices Hardware-Adapter interfaces (RecordingHardware, BluetoothScoSubsystem, AudioFocusGate), §4.9 Dependency-Interfaces F-2/DIP.",
+      "main": [
+        "§9 Migration vorhandener Klassen",
+        "§14 Open Questions"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§4 DictateOrchestrator + Modular Plugin-Pattern"
+      ],
+      "targeted_sub_sections": ["§4.7", "§4.9", "§9.1", "§9.2", "§9.3", "§9.4", "§9.5", "§9.6"]
+    },
+    {
+      "id": "spec1-C9-db-persistence-schema-m4",
+      "title": "Maps to plan-C9-block3-db-persistence-schema-m4 — Spec 1 §6 + targeted §11.4/§11.7.0a",
+      "description": "Owns: §6 Persistence-Erweiterung (Schema-Migration M3→M4 with table-recreate + CHECK-constraint, ActiveJobRegistry-Strategie post-M4, Konsumenten-Update-Audit, Checkpoint-Hooks R.17 with DB-first ordering disambiguation; §6.3 + §6.4 covered in C10). Reads targeted: §11.4 (DB-Migration MigrationTo4.kt + MigrationTo4Test.kt), §11.7.0a (androidTest-Infrastruktur — Schritt 0 vor MigrationTo4: Version-Catalog, build.gradle, Smoke-Test).",
+      "main": [
+        "§6 Persistence-Erweiterung"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§11 Research-TODOs für Agent — Detail-Antworten"
+      ],
+      "targeted_sub_sections": ["§6.1", "§6.1.1", "§6.1.2", "§6.1.3", "§6.2", "§11.4", "§11.7.0a"]
+    },
+    {
+      "id": "spec1-C10-db-persistence-recovery",
+      "title": "Maps to plan-C10-block3-db-persistence-recovery — Spec 1 targeted §6.3/§6.4/§11.6",
+      "description": "Reads targeted: §6.3 Recovery-Read (full 6-Stati-Recovery-Logic — RECORDING→FAILED+cleanup, TRANSCRIBING→RECORDED-downgrade-oder-FAILED), §6.3.1 Orphan-FAILED-Audio-Cleanup (KG-SST-2 RESOLVED), §6.4 SharedPreferences-Erweiterung Overlay-Position (OPEN-3), §11.6 OOM-Death-Recovery-Strategie.",
+      "main": [],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§6 Persistence-Erweiterung",
+        "§11 Research-TODOs für Agent — Detail-Antworten"
+      ],
+      "targeted_sub_sections": ["§6.3", "§6.3.1", "§6.4", "§11.6"]
+    },
+    {
+      "id": "spec1-C11-audio-file-factory",
+      "title": "Maps to plan-C11-block4-audio-file-factory — Spec 1 §11 + targeted §4.11",
+      "description": "Owns: §11 Research-TODOs für Agent — Detail-Antworten (FULL — primary focus for C11 on §11.2.2 Block-4 = 14 Sub-Schritte; §11.1 + §11.2.2-Block-2 + §11.3 + §11.5 belong to C2 read-context; §11.4 + §11.7.0a belong to C9 read-context; §11.6 belongs to C10 read-context; §11.7.1-§11.7.3 are general test-strategy). Reads targeted: §4.11 AudioFileFactory canonical spec — all 12 sub-sections §4.11.1-§4.11.12.",
+      "main": [
+        "§11 Research-TODOs für Agent — Detail-Antworten"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§3 Datenmodell: `DictateUiState`",
+        "§4 DictateOrchestrator + Modular Plugin-Pattern"
+      ],
+      "targeted_sub_sections": ["§4.11 (all 12 sub-sections)", "§11.2.2 Block-4 (14 Sub-Schritte)"]
+    }
+  ]
+}

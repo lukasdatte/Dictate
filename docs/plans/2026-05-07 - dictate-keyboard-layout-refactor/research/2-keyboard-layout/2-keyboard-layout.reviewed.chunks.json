@@ -1,0 +1,89 @@
+{
+  "source": "/home/lukas/WebStorm/Dictate/worktrees/feature/dictate-keyboard-layout-refactor/docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md",
+  "note": "Spec 2 (2602 lines, Keyboard-Layout = plan-Block-5). H2-level chunking. Maps to 4 plan-chunks (C12-C15). Largest H2 sections: §8 LayoutCatalog (7835 tokens, full catalog definitions), §7 MotionScene-XML (4762 tokens), §13 Vollständigkeits-Verifikation (5727 tokens), §11 Research-TODOs (5427 tokens), §3 Datenmodell (5366 tokens). §11 has sub-sections that distribute across chunks (XML in §11.1, BorderGlow in §11.5, Touch-Handler in §11.7, Migration-Reihenfolge in §11.8). Owner choices follow primary-implementation cohesion.",
+  "sections": [
+    { "heading": "§1 Kontext und Scope", "estimatedTokens": 339 },
+    { "heading": "§2 Architektur-Entscheidungen (fixiert)", "estimatedTokens": 570 },
+    { "heading": "§3 Datenmodell", "estimatedTokens": 5366 },
+    { "heading": "§4 KeyboardLayoutManager — API", "estimatedTokens": 1620 },
+    { "heading": "§5 RenderBackend-Interface", "estimatedTokens": 76 },
+    { "heading": "§5.1 Geteilter Slot-Apply-Helper (F-7 / DRY)", "estimatedTokens": 642 },
+    { "heading": "§6 ImeViewBackend (KEYBOARD-Modus)", "estimatedTokens": 2112 },
+    { "heading": "§7 MotionScene-XML — vollständig", "estimatedTokens": 4762 },
+    { "heading": "§8 LayoutCatalog: vollständige Definitionen", "estimatedTokens": 7835 },
+    { "heading": "§9 Migration vorhandener Klassen — Code-Pointer pro Aussage", "estimatedTokens": 3050 },
+    { "heading": "§10 Acceptance-Kriterien", "estimatedTokens": 1295 },
+    { "heading": "§11 Research-TODOs für Agent — konkrete Antworten", "estimatedTokens": 5427 },
+    { "heading": "§12 Referenzen", "estimatedTokens": 469 },
+    { "heading": "§13 Vollständigkeits-Verifikation", "estimatedTokens": 5727 },
+    { "heading": "§14 Test-Strategie", "estimatedTokens": 1753 }
+  ],
+  "chunks": [
+    {
+      "id": "spec2-C12-layout-catalog-and-render-backend",
+      "title": "Maps to plan-C12-block5-layout-catalog-and-render-backend — Spec 2 §3 + §4 + §5 + §5.1 + §8 + §13",
+      "description": "Owns: §3 Datenmodell (LogicalButtonId, ButtonSlot, RowDescriptor, LayoutMode, Action sealed-class hierarchical structure F-8+F-11), §4 KeyboardLayoutManager API + Beziehung zu LayoutModule, §5 RenderBackend-Interface (3 methods: attach, detach, render), §5.1 Geteilter Slot-Apply-Helper (F-7 / DRY), §8 LayoutCatalog vollständige Definitionen (KEYBOARD_TWO_ROW, KEYBOARD_SINGLE_ROW, KEYBOARD_TWO_ROW_SEND_MODE, KEYBOARD_SINGLE_ROW_SEND_MODE, KEYBOARD_REPROCESS_STAGING, OVERLAY_5BUTTON, zentrale Predicate/Resolver-Helfer in §8.5, forKeyboard in §8.6, Verifikation gegen Visibility-Matrix §8.7, Edge-Cases §8.8), §13 Vollständigkeits-Verifikation (DRY-Verifikation + SOLID per neue Klasse).",
+      "main": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§3 Datenmodell",
+        "§4 KeyboardLayoutManager — API",
+        "§5 RenderBackend-Interface",
+        "§5.1 Geteilter Slot-Apply-Helper (F-7 / DRY)",
+        "§8 LayoutCatalog: vollständige Definitionen",
+        "§13 Vollständigkeits-Verifikation"
+      ],
+      "context": [
+        "§14 Test-Strategie"
+      ],
+      "targeted_sub_sections": []
+    },
+    {
+      "id": "spec2-C13-motionscene-xml",
+      "title": "Maps to plan-C13-block5-motionscene-xml — Spec 2 §7 + targeted §11.1/§11.4",
+      "description": "Owns: §7 MotionScene-XML — vollständig (§7.1 Datei res/xml/motion_scene_keyboard.xml, §7.2 Refactored activity_dictate_keyboard_view.xml main_buttons_cl-Bereich, §7.3 VISIBILITY_MODE_IGNORE Finalisierung). Reads targeted: §11.1 MotionLayout-Migration konkretes XML-Refactor-Diff, §11.4 Inflation-Cost-Messung (Spike Pass/Fail-Kriterium <50ms onCreateInputView auf Pixel 4a).",
+      "main": [
+        "§7 MotionScene-XML — vollständig"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§11 Research-TODOs für Agent — konkrete Antworten",
+        "§14 Test-Strategie"
+      ],
+      "targeted_sub_sections": ["§11.1", "§11.4"]
+    },
+    {
+      "id": "spec2-C14-ime-view-backend",
+      "title": "Maps to plan-C14-block5-ime-view-backend — Spec 2 §6 + §11 + §14 + targeted §11.3/§11.5/§11.6/§11.7",
+      "description": "Owns: §6 ImeViewBackend KEYBOARD-Modus (wireStaticHandlers, buttonViews-map, render-loop, ContentAreaController + PromptVisibilityController + OverlayResetHandler R.10), §11 Research-TODOs (full — primary focus for THIS chunk: §11.3 PulseLayout-Spike, §11.5 BorderGlow-Animation-Migration RecordingAnimationController, §11.6 Click-Listener-Lifecycle Memory-Leak-Analyse, §11.7 Special-Touch-Handler — CursorSwipe/BackspaceSwipe/EnterOverlay; §11.1 + §11.4 belong to C13, §11.2 + §11.8 belong to C12+C15), §14 Test-Strategie (heute Layout-Tests, neue Tests, Spike-Validierungen).",
+      "main": [
+        "§6 ImeViewBackend (KEYBOARD-Modus)",
+        "§11 Research-TODOs für Agent — konkrete Antworten",
+        "§14 Test-Strategie"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§3 Datenmodell"
+      ],
+      "targeted_sub_sections": ["§11.3", "§11.5", "§11.6", "§11.7"]
+    },
+    {
+      "id": "spec2-C15-service-wiring-and-cleanup",
+      "title": "Maps to plan-C15-block5-service-wiring-and-cleanup — Spec 2 §9 + §10 + §12 + targeted §11.2/§11.8",
+      "description": "Owns: §9 Migration vorhandener Klassen — Code-Pointer pro Datei (§9.1 KeyboardLayoutModeController → entfällt, §9.2 MainButtonsController → ImeViewBackend, §9.3 KeyboardStateManager → drei Owner-Klassen R.10, §9.4 RecordingUiController → KeyboardUiController-Anteile + LayoutCatalog, §9.5 KeyboardUiController.refreshRecordButtonFromState → record_btn-Resolver, §9.6 die 4 problematischen resend-Mutationen), §10 Acceptance-Kriterien (Block-5 acceptance), §12 Referenzen. Reads targeted: §11.2 LayoutCatalog Predicate-Verifikation, §11.8 Migration-Reihenfolge (5a XML || 5b Backend → 5c Wiring with empty-body-KSM + Strict-Mode-Logging → 5d Cleanup destructive — only if 5c works!).",
+      "main": [
+        "§9 Migration vorhandener Klassen — Code-Pointer pro Aussage",
+        "§10 Acceptance-Kriterien",
+        "§12 Referenzen"
+      ],
+      "context": [
+        "§1 Kontext und Scope",
+        "§2 Architektur-Entscheidungen (fixiert)",
+        "§11 Research-TODOs für Agent — konkrete Antworten"
+      ],
+      "targeted_sub_sections": ["§11.2", "§11.8"]
+    }
+  ]
+}

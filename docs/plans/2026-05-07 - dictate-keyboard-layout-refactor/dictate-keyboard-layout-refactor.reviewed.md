@@ -2,9 +2,28 @@
 
 **Status:** Skeleton — Architektur in Iteration mit User abgeschlossen, Detail-Specs in Arbeit
 **Erstellt:** 2026-05-07 — Skeleton fertiggestellt: 2026-05-08
-**Branch:** `feature/language-chip-curation` (kein eigener Worktree, vom User entschieden)
-**Plan-Skill:** `feature-planning` → `implement-long-plan`
+**Branch:** `feature/dictate-keyboard-layout-refactor` (Worktree, Phase-0-skill-mandated)
+**Plan-Skill:** `feature-planning` → `implement-long-plan-v2` (active 2026-05-14)
 **Komplexität:** Groß (Service-Schicht + UI-Refactor + neuer Window-Typ)
+
+<!-- EXECUTION-PLAN -->
+**Implement-Long-Plan-v2 execution strategy (Phase 1a + 1b — 2026-05-14):**
+
+- **Chunking:** Plan-Reader-Mode (plan 1699 lines + 3 specs 6984/2601/2857 lines, modular-plan-pattern D21 active). 4 chunks.json files (1 plan-level, 3 spec-level), all validated. 19 chunks total, aggregate Implementation-Score ~16,200, ~11,200 LOC est.
+- **Block grouping (6 blocks):**
+  - **B0** — Architecture-Foundation (C0): 5 ADRs + state-architecture docs as binding pre-code anchor. Docs-only, no code. XL D12-atomic Foundation-Pack.
+  - **B1** — Pre-Architecture + Service-Skeleton (C1, C2): Block-1a quick-wins + DictatePipelineService skeleton with FGS.
+  - **B2** — Modular-Orchestrator (C3 → C4 → C5 → C6 → C7): state-types → orchestrator+registry → core modules → aux modules → wiring. Heaviest block (4350 score).
+  - **B3** — Migration-Persistence-AudioFactory (C8 → C9 → C10 → C11): subsystem-adapter migration → DB schema M3→M4 → recovery+cleanup → AudioFileFactory. Introduces androidTest infrastructure (C9 Step 0).
+  - **B4** — Keyboard-Layout-Catalog (C12 → C13 → C14 → C15): LayoutCatalog → MotionScene XML → ImeViewBackend → service wiring + cleanup.
+  - **B5** — Floating-Overlay (C16 → C17 → C18): OverlayBackend + window → permission flow → mode-transitions T1-T7 + drag.
+- **Test approach:** JVM unit tests with handwritten fakes (K-1, no Mockito/MockK) + no Android Context (K-4, no Robolectric) per Quality-Gate decision. First-time androidTest introduction in B3 (Room migration). Espresso UI-Tests 1-10 in B4. 5-step chunk workflow with 2 commits per chunk (production + tests).
+- **Block-validation:** Multi-agent audit per block (PLAN-AND-API / CONVENTION / LOGIC / TEST) + consolidator + repair-sub-phase (iter cap 3). Test-agent count per block: 1-3 (state-file `Test-Agents` column).
+- **E2E (Phase 4.5):** 24 manual TCs (Android-IME E2E is device-attached, no headless runner). Knowledge-skill gap flagged (`test-knowledge-android` / `test-knowledge-mobile` / `test-knowledge-ime` missing) — runbook hand-rolled.
+- **User mode:** "ohne Walkthrough" — orchestrator runs Phase 0 → 5 autonomously without pause-questions. Phase-2 user-approval is briefing-only (informational). Phase-4.5 3 blocking-user-questions defaulted in state-file; user can override before Phase 4.5 starts.
+- **Worktree:** `/home/lukas/WebStorm/Dictate/worktrees/feature/dictate-keyboard-layout-refactor` (branch `feature/dictate-keyboard-layout-refactor`).
+- **State-file:** `./dictate-keyboard-layout-refactor.state.md` (alongside this plan).
+<!-- /EXECUTION-PLAN -->
 
 ---
 

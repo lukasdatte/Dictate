@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: How DictateUiState is shaped, how Actions flow into it via single-dispatch, and what the reducer contract looks like.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0001
@@ -317,11 +317,11 @@ pattern (b)). If a reducer needs a hardware fact, it lives in the
 state (e.g. `state.audio.audioFocusGranted` is updated via an
 `AudioModule.runEffect`-emitted action).
 
-## N. Information Gaps
+## 8. Information Gaps
 
 (no gaps known at this time — the model is fully specified in Spec 1 §3)
 
-## N+1. Change History
+## 9. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -332,7 +332,7 @@ state (e.g. `state.audio.audioFocusGranted` is updated via an
   content is sourced from Spec 1 §3 + §4.3 + §15 and is intended
   to stay in sync with both.
 
-## N+2. References
+## 10. References
 
 - [ADR-0001 — state-modular-orchestrator-pattern](../../decisions/0001-state-modular-orchestrator-pattern.md)
 - [Spec 1 §3 — `DictateUiState`](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md)

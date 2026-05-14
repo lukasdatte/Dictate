@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: How SideEffects are emitted, run, and how their failures are routed back to the origin module.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0001, ADR-0002
@@ -119,9 +119,9 @@ that uses `when` over the type produces a compile error.
 
 ```kotlin
 result.sideEffects.forEach { effect ->
-    try {
+    runCatching {
         typedModule.runEffect(effect, services)
-    } catch (t: Throwable) {
+    }.onFailure { t ->
         Log.e(TAG, "Effect failure in ${typedModule.id}: $effect", t)
         // Re-dispatch typed failure — keep cascade depth, do not crash IME.
         dispatchInternal(
@@ -136,9 +136,13 @@ result.sideEffects.forEach { effect ->
 }
 ```
 
+Semantically equivalent to `try { … } catch (t: Throwable) { … }`;
+the `runCatching { … }.onFailure { … }` idiom matches plan §4.0.1.3
+and avoids the boilerplate of catching `Throwable` directly.
+
 Three things to note:
 
-1. **`try { … } catch (t: Throwable)`** — any throw is converted to
+1. **`runCatching { … }.onFailure`** — any throw is converted to
    an EffectFailure action. The IME never crashes from a runEffect.
 2. **`depth + 1`** — the failure dispatch goes through the cascade
    depth counter. Pathological failure-loops are still capped at
@@ -357,11 +361,11 @@ service-destroy sequence.
 > no-ops async cleanup.
 > See ADR-0003 §"Required mechanics" item 8.
 
-## N. Information Gaps
+## 11. Information Gaps
 
 (no gaps known at this time — the effect lifecycle is fully specified in Spec 1 §4.2 + §4.3 + §15.2)
 
-## N+1. Change History
+## 12. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -369,7 +373,7 @@ service-destroy sequence.
 - **Reasoning:** Captures the runEffect lifecycle + EffectFailure
   routing from Spec 1 §4.3 + §15.2 + ADR-0002 in tutorial form.
 
-## N+2. References
+## 13. References
 
 - [ADR-0001 — state-modular-orchestrator-pattern](../../decisions/0001-state-modular-orchestrator-pattern.md)
 - [ADR-0002 — state-cross-module-cascade](../../decisions/0002-state-cross-module-cascade.md)

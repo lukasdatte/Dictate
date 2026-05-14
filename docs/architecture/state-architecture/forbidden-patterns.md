@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: The 14 hard-forbidden patterns (a–n) with example, rationale, and correct alternative — derived from plan §4.0.1.5 and the failure-mode sections of ADRs 0001/0002/0004/0005.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0001, ADR-0002, ADR-0004, ADR-0005
@@ -592,11 +592,11 @@ Owner ADR: ADR-0001 §"Failure Modes" (entry 8).
 | (m) `actionResolver` returns NoOp | R.3 / log-spam | ADR-0001 |
 | (n) Direct module-to-module call | encapsulation breach | ADR-0001 |
 
-## N. Information Gaps
+## 5. Information Gaps
 
 (no gaps known at this time — the 14 patterns are the closed list per plan §4.0.1.5)
 
-## N+1. Change History
+## 6. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -606,7 +606,7 @@ Owner ADR: ADR-0001 §"Failure Modes" (entry 8).
   scannable catalogue. Each entry names the bug it would
   reactivate.
 
-## N+2. References
+## 7. References
 
 - [Parent plan §4.0.1.5](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md)
 - [ADR-0001 — state-modular-orchestrator-pattern](../../decisions/0001-state-modular-orchestrator-pattern.md)

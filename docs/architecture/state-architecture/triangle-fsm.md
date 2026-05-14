@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: The KEYBOARD / WIDGET / HOVER FSM — three modes, seven transitions, the computeViewMode function, transience of userPrefersWidget, and the T7 Geist-Widget structural guard.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0005
@@ -71,7 +71,7 @@ difference is the Send button's `enabled` state.
                    │  (full keyboard, normal)     │
                    │                              │
                    │  - Two-Row / Single-Row      │
-                   │  - Send-Mode-Varianten       │
+                   │  - Send-mode variants        │
                    │  - ReprocessStaging          │
                    │  - InputConnection LIVE      │
                    └──────────────────────────────┘
@@ -449,11 +449,11 @@ emitted, `OnPipelineDone` cascade recomputes `viewMode → KEYBOARD`
 `OverlayBackend.detach()`. The user no longer sees the
 purposeless overlay.
 
-## N. Information Gaps
+## 12. Information Gaps
 
 (no gaps known at this time — Spec 3 §7 + ADR-0005 cover the FSM exhaustively)
 
-## N+1. Change History
+## 13. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -462,7 +462,7 @@ purposeless overlay.
   + Phase-B S-8 (T7 addition) + Phase-B S-9 (Mode-2 cascade
   rewriting) in tutorial form.
 
-## N+2. References
+## 14. References
 
 - [ADR-0005 — ui-triangle-fsm-keyboard-widget-hover](../../decisions/0005-ui-triangle-fsm-keyboard-widget-hover.md)
 - [Spec 3 §7.1 — computeViewMode](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md)

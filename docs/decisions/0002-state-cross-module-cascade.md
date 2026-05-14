@@ -1,6 +1,6 @@
 # ADR-0002: State — Cross-Module Cascade
 
-**Status:** Proposed
+**Status:** Accepted
 **Subsystem:** state
 **Scope:** Project-Wide
 **Date:** 2026-05-14
@@ -247,38 +247,58 @@ markers.
 
 **Failure Modes:**
 
-- **Re-introducing the self-filter** (forbidden pattern (f)
-  in ADR-0001 §"Forbidden Patterns"). Future maintainer
-  reading the cascade code might re-add `modules.filter { it.id
-  != module.id }` as a "looks like an infinite-loop guard". The
-  result: HOVER-Overlay no longer reopens after the first
-  user-close in the session — the exact KG-RSB-2 bug. Mitigation:
-  the ⚠-banner comment in `DictateOrchestrator.dispatchInternal`
-  Step 5 + the regression test
+> Full descriptions, examples, alternatives, and rationale for each
+> forbidden pattern live in the catalogue:
+> [state-architecture/forbidden-patterns.md §3 — The 14 forbidden patterns](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+> The entries below are the ADR-0002 condensed summaries (problem +
+> symptom + ADR-local mitigation cross-reference).
+
+- **(f) Re-introducing the self-filter in `dispatchInternal` Step 5** —
+  A future maintainer might re-add `modules.filter { it.id != module.id }`
+  as a "looks-like-an-infinite-loop guard". Symptom: HOVER-Overlay no
+  longer reopens after the first user-close in the session (KG-RSB-2
+  bug). Mitigation: the ⚠-banner comment in
+  `DictateOrchestrator.dispatchInternal` Step 5 + the regression test
   `DictateOrchestratorTest.recordingModule_idleToPreparing_emits…`
-  (Spec 1 §10 R.RSB-FIX-A).
-- **Cross-axis mutation in the reducer** (forbidden pattern (g)).
-  A reducer writes `state.copy(viewMode = …, layout = …)`. The
-  compiler does not stop this; only code review does. The
-  Phase-B S-9 finding (Spec 3 §7.3) showed how subtle the
-  duplicate-truth-quelle gets — two snippets in the same spec
-  used different modes. Mitigation: the anti-pattern table in
-  Spec 1 §15.5 + the architecture-doc page
-  `cross-module-cascade.md` explicitly cataloguing the four
-  forms (Mode 1 / Mode 2 / Mode 3 forbidden / Mode 2 with
-  self-read).
+  (Spec 1 §10 R.RSB-FIX-A). → see
+  [forbidden-patterns.md §3 (f)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(g) Cross-axis mutation in the reducer (Mode 3)** — A reducer
+  writes `state.copy(viewMode = …, layout = …)`. Symptom: silent
+  duplicate-source-of-truth, two snippets in the same spec using
+  different cascade modes (Phase-B S-9 finding). Mitigation: the
+  anti-pattern table in Spec 1 §15.5 + the architecture-doc page
+  `cross-module-cascade.md` cataloguing the four forms (Mode 1 /
+  Mode 2 / Mode 3 forbidden / Mode 2 with self-read). → see
+  [forbidden-patterns.md §3 (g)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(j) `pred*Visible` predicate contains cooldown logic** —
+  Predicate-based view-visibility silently couples render-tick to
+  cooldown timers. Symptom: buttons flicker as cooldown expires.
+  Mitigation: cooldown belongs in `state`; `visibilityPredicate` is
+  pure `(state) → Boolean`. → see
+  [forbidden-patterns.md §3 (j)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(k) State-driven button missing `motion:visibilityMode="ignore"`** —
+  MotionLayout re-asserts XML-default visibility on every transition
+  end. Symptom: state-driven invisible buttons reappear after each
+  transition. Mitigation: MotionScene XML lint rule (Block 5). → see
+  [forbidden-patterns.md §3 (k)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(l) Click-Listener wired per render-tick** — Each render rewires
+  click-listeners; old lambdas leak. Symptom: memory growth + double
+  dispatch on rapid taps. Mitigation: `attach()` wires once;
+  lambdas capture `stateRef`/`modeRef`. → see
+  [forbidden-patterns.md §3 (l)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
 - **Cascade ordering drift.** Reordering
   `DictateModuleRegistry.all` silently changes the cascade-effect
   sequence. Mitigation: `DictateOrchestratorCascadeOrderTest.kt`
-  asserts a known ordering and Block-1b documents the order as
-  part of acceptance.
+  asserts a known ordering; Block-1b documents the order as part of
+  acceptance. (ADR-local — not one of the 14 forbidden patterns.)
 - **`Action.EffectFailure` swallowing.** A module without an
   override returns `null` from `reduceFailure`; the resulting
   `DispatchOutcome.Rejected("reducer-null")` is silent (logged at
   debug only). A bug in the affected module's failure path won't
   surface until a manual test triggers the error. Acceptable
   because each module documents in Spec 1 §15.x whether it
-  needs a failure path.
+  needs a failure path. (ADR-local — not one of the 14 forbidden
+  patterns.)
 
 ## References
 
@@ -286,6 +306,8 @@ markers.
 - **Related Spec:** [Spec 1 — Pipeline-Service](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md) §4.2 (reduceFailure), §4.3 (dispatchInternal Step 5), §15.1.x (Coupling-Matrix), §15.2 (RecordingModule example), §15.5 (Cross-Module-Effect-Modi)
 - **Related ADRs:**
   - **ADR-0001 — state-modular-orchestrator-pattern.** This ADR extends ADR-0001 by adding the cross-module-cascade rules on top of the single-dispatch + per-module-reducer foundation. ADR-0001 is a hard prerequisite — the mechanics defined here only make sense once one accepts the modular ownership model.
+  - **[ADR-0003 — Service & Foreground-Pipeline Architecture](0003-service-foreground-pipeline-architecture.md)** — FGS that hosts the orchestrator running these cascades.
+  - **[ADR-0004 — UI LayoutCatalog + MotionLayout](0004-ui-layout-catalog-motionlayout.md)** — rendering layer that observes cascade-driven state transitions.
   - **ADR-0005 — ui-triangle-fsm-keyboard-widget-hover.** The T7 transition (HOVER → KEYBOARD on PipelineDone) is implemented as a Mode-2 cascade: `PipelineModule.onCrossModuleStateChange` cascades `Action.ViewModeAction.OnPipelineDone`. This ADR defines the cascade machinery; ADR-0005 names the specific cascade in question.
 - **Architecture docs:**
   - [state-architecture/cross-module-cascade.md](../architecture/state-architecture/cross-module-cascade.md)
@@ -293,7 +315,46 @@ markers.
   - [state-architecture/forbidden-patterns.md](../architecture/state-architecture/forbidden-patterns.md)
 - **Skill:** `~/.claude/skills/knowledge-adr-format/SKILL.md`
 
+## Supersede Triggers (Forward-Looking Notes)
+
+This ADR is the most-likely candidate for a partial supersede
+when a Phase-2 use case requires Mode 3. The shape of that
+supersede would be:
+
+- Add a Mode-3 rule that names the specific use case (e.g.
+  "InterruptionModule may atomically reset `recording + audio +
+  pipeline` on incoming call"). Mode 3 stays forbidden by
+  default; only the named use case is allowed.
+- The supersede creates an ADR (e.g. ADR-NNNN-state-mode-3-call-interruption)
+  with `Status: Supersedes ADR-0002` (or rather: "extends
+  ADR-0002 §Mode 3 with a named exception"). The cross-link
+  is bidirectional.
+
+A full supersede of this ADR would mean a different cascade
+mechanism altogether — e.g. moving to a flow-combine-based reactive
+graph. Not anticipated for Phase 2.
+
 ## Decision History
+
+### 2026-05-14 — Accepted
+
+**Trigger:** Block-0 audit-consolidation pass (B0-VAL-SANITY) — plan §4.0 binding-pre-code-contract closeout.
+
+**Before:** Status: Proposed (per §4.0.1.0.3 lifecycle clause "Proposed during Block 0").
+
+**After:** Status: Accepted (body now append-only per knowledge-adr-format §"Lifecycle and editing rules").
+
+**Reasoning:** Block-0 acceptance criteria from plan §4.0.3 met; B0-AUDIT-PLAN-AND-API + B0-AUDIT-CONVENTION pass; ADR binds downstream Blocks 1b…6 per plan §4.0.4 "Bindender-Vertrag-Charakter".
+
+### 2026-05-14 — Block-0 doc-set audit cleanup (B0-VAL-REPAIR)
+
+**Trigger:** Validated findings F-10, F-11 from `reports/validated-findings-B0.md` (forbidden-patterns SSoT + Phase-2-Superseding misplacement); F-1 (inter-ADR cross-reference graph completion).
+
+**Before:** Failure-Modes §"(f) self-filter" + §"(g) Mode-3" were prose paragraphs paralleling `forbidden-patterns.md §3 (f) + (g)`. The "Phase-2 Superseding Expectations" block lived inside `## Decision History` (F-11). References → Related ADRs listed only ADR-0001 + ADR-0005 (F-1 graph: ADR-0003 + ADR-0004 missing).
+
+**After:** Failure-Modes condensed to problem + symptom + cross-reference per pattern; patterns (j, k, l) added (per F-10 routing for this ADR). Phase-2-Superseding moved to new top-level section `## Supersede Triggers (Forward-Looking Notes)` between `## References` and `## Decision History`. Related-ADRs list completed with ADR-0003 + ADR-0004 (bidirectional graph).
+
+**Reasoning:** SSoT-rule for the forbidden-patterns catalogue (knowledge-doc-format §"Anti-redundancy"). Forward-looking content does not belong inside an append-only audit log (knowledge-adr-format §"Lifecycle and editing rules"). Plan §4.0.1.0.2 demands every ADR cross-references the other four (universal graph, not direct-edge subset).
 
 ### 2026-05-14 — Initial proposal
 
@@ -320,22 +381,3 @@ coordination. The self-cascade-allowance is non-negotiable
 (KG-RSB-2 production bug). The depth-cap-only loop guard is
 sufficient because real cascades are 1–3 levels deep and any
 deeper case is a Mode-3 disguise.
-
-### Phase-2 Superseding Expectations
-
-This ADR is the most-likely candidate for a partial supersede
-when a Phase-2 use case requires Mode 3. The shape of that
-supersede would be:
-
-- Add a Mode-3 rule that names the specific use case (e.g.
-  "InterruptionModule may atomically reset `recording + audio +
-  pipeline` on incoming call"). Mode 3 stays forbidden by
-  default; only the named use case is allowed.
-- The supersede creates an ADR (e.g. ADR-NNNN-state-mode-3-call-interruption)
-  with `Status: Supersedes ADR-0002` (or rather: "extends
-  ADR-0002 §Mode 3 with a named exception"). The cross-link
-  is bidirectional.
-
-A full supersede of this ADR would mean a different cascade
-mechanism altogether — e.g. moving to a flow-combine-based reactive
-graph. Not anticipated for Phase 2.

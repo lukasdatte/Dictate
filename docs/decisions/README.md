@@ -66,11 +66,11 @@ editing rules".
 
 | ID | Title | Subsystem / Scope | Status | Date |
 |---|---|---|---|---|
-| [0001](0001-state-modular-orchestrator-pattern.md) | State — Modular Orchestrator Pattern | state · *Project-Wide* | Proposed | 2026-05-14 |
-| [0002](0002-state-cross-module-cascade.md) | State — Cross-Module Cascade | state · *Project-Wide* | Proposed | 2026-05-14 |
-| [0003](0003-service-foreground-pipeline-architecture.md) | Service — Foreground Pipeline Architecture | service · *Project-Wide* | Proposed | 2026-05-14 |
-| [0004](0004-ui-layout-catalog-motionlayout.md) | UI — LayoutCatalog + MotionLayout | ui-rendering · *Project-Wide* | Proposed | 2026-05-14 |
-| [0005](0005-ui-triangle-fsm-keyboard-widget-hover.md) | UI — Triangle-FSM (KEYBOARD / WIDGET / HOVER) | ui-mode · *Project-Wide* | Proposed | 2026-05-14 |
+| [0001](0001-state-modular-orchestrator-pattern.md) | State — Modular Orchestrator Pattern | state · *Project-Wide* | Accepted | 2026-05-14 |
+| [0002](0002-state-cross-module-cascade.md) | State — Cross-Module Cascade | state · *Project-Wide* | Accepted | 2026-05-14 |
+| [0003](0003-service-foreground-pipeline-architecture.md) | Service — Foreground Pipeline Architecture | service · *Project-Wide* | Accepted | 2026-05-14 |
+| [0004](0004-ui-layout-catalog-motionlayout.md) | UI — LayoutCatalog + MotionLayout | ui-rendering · *Project-Wide* | Accepted | 2026-05-14 |
+| [0005](0005-ui-triangle-fsm-keyboard-widget-hover.md) | UI — Triangle-FSM (KEYBOARD / WIDGET / HOVER) | ui-mode · *Project-Wide* | Accepted | 2026-05-14 |
 
 ## Relationship graph
 

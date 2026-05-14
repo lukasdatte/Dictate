@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: Click-listener wiring, stateRef/modeRef discipline, nullable resolver idiom, special touch handlers, and the memory-leak structural protection.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0001, ADR-0004
@@ -277,7 +277,7 @@ private val buttonViews: Map<LogicalButtonId, View> = mapOf(
 
 `wireStaticHandlers` iterates the map; `render` does the same for
 applying slot properties. A missing entry is a hard `error(...)`
-at render time (Spec 2 §6, Issue 3.0.12 "Silent-Skip-Schutz").
+at render time (Spec 2 §6, Issue 3.0.12 "silent-skip protection").
 
 ## 9. `detach()` semantics
 
@@ -351,11 +351,11 @@ The Block-5 acceptance test (Spec 2 §10) includes an Espresso
 assertion that `setOnClickListener` is called exactly once per
 attach.
 
-## N. Information Gaps
+## 11. Information Gaps
 
 (no gaps known at this time — Spec 2 §6 + §11.6 + §11.7 cover the wiring layer)
 
-## N+1. Change History
+## 12. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -364,7 +364,7 @@ attach.
   discipline from Spec 2 §6 + §11.6 + §11.7 + ADR-0001 §"UI-Wiring
   boundary" + ADR-0004 in tutorial form.
 
-## N+2. References
+## 13. References
 
 - [ADR-0001 — state-modular-orchestrator-pattern](../../decisions/0001-state-modular-orchestrator-pattern.md) §"UI-Wiring boundary"
 - [ADR-0004 — ui-layout-catalog-motionlayout](../../decisions/0004-ui-layout-catalog-motionlayout.md) §"Required mechanics" items 7, 9

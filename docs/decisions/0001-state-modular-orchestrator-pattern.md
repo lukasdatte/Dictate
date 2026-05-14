@@ -1,6 +1,6 @@
 # ADR-0001: State — Modular Orchestrator Pattern
 
-**Status:** Proposed
+**Status:** Accepted
 **Subsystem:** state
 **Scope:** Project-Wide
 **Date:** 2026-05-14
@@ -34,7 +34,7 @@ parent plan and Spec 1:
   anti-pattern that motivated the refactor. The eventual landing point
   is the modular `DictateOrchestrator` + per-axis `DictateModule`
   decomposition.
-- Spec 1 §13.3 + §15.7 — SOLID-Verifikation per module showing the
+- Spec 1 §13.3 + §15.7 — SOLID verification per module showing the
   pattern preserves SRP/OCP/LSP/ISP/DIP/DRY.
 - Excel-EKL module-augmentation pattern (TypeScript) — proven prior art for
   per-axis plugin modules with type-safe action routing; adapted here
@@ -171,26 +171,35 @@ the rendering surface). The constraint from this ADR's side:
 
 ### Module inventory (13 active + 1 Phase-2 stub)
 
-Spec 1 §15.1 (Module-Inventar) is the canonical list:
+The binding axis-ownership contract: **13 active modules + 1 Phase-2 stub**, each owning exactly one state axis.
 
-1. `RecordingModule` — recording lifecycle (Idle / Preparing / Active / Paused)
-2. `PipelineModule` — pipeline FSM (Idle / Preparing / Running / ReprocessStaging)
-3. `AudioModule` — AudioFocus + BluetoothSco + vibration
-4. `ViewModeModule` — Triangle-FSM (KEYBOARD / WIDGET / HOVER) — see ADR-0005
-5. `OverlayModule` — position persistence + permission + suppress-bit + onboarding
-6. `ResendModule` — last-audio-exists + cooldown
-7. `LivePromptModule` — chain buffer + pipeline chaining
-8. `LanguageModule` — effective language + reprocess override
-9. `LayoutModule` — contentArea + 3 layout flags (Pref-mirror)
-10. `FeatureToggleModule` — 5 product-toggles (Pref-mirror)
-11. `ThemingModule` — theme + accentColor + overlayCharacters + outputSpeed
-12. `PendingSessionsModule` — DB-subscriber for restart-list
-13. `KeyboardInputModule` — IME direct-input (Backspace / Enter / Space / Clipboard) — `Unit`-state
-14. `InterruptionModule` — Phase 2 stub (call-incoming / headset-plug / screen-off)
+| # | ModuleId | Axis it owns |
+|---|----------|--------------|
+| 1 | `RecordingModule` | recording lifecycle |
+| 2 | `PipelineModule` | pipeline FSM |
+| 3 | `AudioModule` | audio (focus / SCO / vibration) |
+| 4 | `ViewModeModule` | viewMode (Triangle-FSM — see ADR-0005) |
+| 5 | `OverlayModule` | overlay (position + permission + suppress + onboarding) |
+| 6 | `ResendModule` | resend (last-audio + cooldown) |
+| 7 | `LivePromptModule` | livePrompt (chain buffer + chaining) |
+| 8 | `LanguageModule` | language (effective + reprocess override) |
+| 9 | `LayoutModule` | layout (contentArea + Pref-mirror flags) |
+| 10 | `FeatureToggleModule` | features (5 product-toggles) |
+| 11 | `ThemingModule` | theming (theme + accent + overlay chars + speed) |
+| 12 | `PendingSessionsModule` | pendingSessions (DB-subscriber) |
+| 13 | `KeyboardInputModule` | n/a — `Unit`-state, effect-only (IME direct-input) |
+| 14 | `InterruptionModule` | interruption (Phase 2 stub — call/headset/screen-off) |
 
 Each module lives in `app/src/main/java/net/devemperor/dictate/state/modules/`
 as one file containing State + Action + Reducer + SideEffect + EffectHandler
 + optional Cross-Module-Observer.
+
+> Full per-module descriptions, observer flags, and the
+> Cross-Module-Coupling-Matrix live in the teaching doc:
+> see [state-architecture/modules.md §7.1 — Module inventory](../architecture/state-architecture/modules.md#71-module-inventar-13-active--1-phase-2-stub).
+> (The ADR holds the binding axis-count + per-module axis-name
+> contract; the architecture-doc holds the SoT inventory + matrix.)
+> Spec 1 §15.1 (Modul-Inventar) is the upstream source of both.
 
 ## Alternatives Considered
 
@@ -258,33 +267,56 @@ as one file containing State + Action + Reducer + SideEffect + EffectHandler
 
 **Failure Modes:**
 
-- **Direct `_state.value = …` outside the store** (forbidden pattern
-  (a)) silently breaks single-dispatch ownership. There is no
-  compile-time guard — only code review. Mitigation: the store's
-  `update()` is the only public mutator API; `_state` is `private`.
-- **Hardware/IO read in the reducer** (forbidden pattern (b)) makes
-  tests non-deterministic and reintroduces the original race-condition
-  class. Spec 1 §15.2 RecordingModule shows the discipline: hardware
-  goes into `runEffect(effect, services)`, never into `reduce()`.
-- **`else`-branch in `reduce`-`when` over sealed Actions** (forbidden
-  pattern (c)) silently swallows new action variants on every
-  compile-clean rebuild. The expression-form `when` convention
-  (Spec 1 §4.2) forces exhaustivity.
-- **`toMutableList()`-round-trip on `PersistentList`** (forbidden
-  pattern (e)) destroys structural sharing → measurable performance
-  regression. Spec 1 §3 "PersistentList-Mutations-Idiom" carries the
-  diff.
-- **Direct module-to-module call** (forbidden pattern (n)) breaks
-  the encapsulation. The compiler can't prevent it — a `RecordingModule`
-  reference held in `OverlayModule.runEffect` would type-check. Code
-  review is the only guard.
-- **`actionResolver` returning `Action.NoOp`** (forbidden pattern (m))
-  reintroduces the unreachable-routing log-spam that the
-  `Action?`-resolver eliminated. `null` is the canonical no-op.
+> Full descriptions, examples, alternatives, and rationale for each
+> forbidden pattern live in the catalogue:
+> [state-architecture/forbidden-patterns.md §3 — The 14 forbidden patterns](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+> The entries below are the ADR-0001 condensed summaries (problem +
+> symptom + ADR-local mitigation cross-reference). Spec 1 §15.2 +
+> forbidden-patterns.md §3 are the upstream SoTs.
+
+- **(a) Direct `_state.value = …` outside the store** — Silently
+  breaks single-dispatch ownership; no compile-time guard. Mitigation:
+  the store's `update()` is the only public mutator API; `_state` is
+  `private`. → see
+  [forbidden-patterns.md §3 (a)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(b) Hardware/IO read in the reducer** — Makes tests
+  non-deterministic and reintroduces the original race-condition
+  class. Mitigation: hardware goes into `runEffect(effect, services)`,
+  never into `reduce()` (Spec 1 §15.2 RecordingModule). → see
+  [forbidden-patterns.md §3 (b)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(c) `else`-branch in `reduce`-`when` over sealed Actions** —
+  Silently swallows new action variants on every compile-clean
+  rebuild. Mitigation: expression-form `when` convention (Spec 1
+  §4.2) forces exhaustivity. → see
+  [forbidden-patterns.md §3 (c)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(e) `toMutableList()`-round-trip on `PersistentList`** —
+  Destroys structural sharing → measurable performance regression.
+  Mitigation: Spec 1 §3 "PersistentList-Mutations-Idiom" carries the
+  diff convention. → see
+  [forbidden-patterns.md §3 (e)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(h) Synchronous re-dispatch from an EffectHandler** —
+  Re-entrant dispatch breaks the single-dispatch invariant. Mitigation:
+  EffectHandlers post via `serviceScope.launch { orchestrator.dispatch(…) }`.
+  → see
+  [forbidden-patterns.md §3 (h)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(i) LocalBinder forwarder methods parallel to the Action hierarchy** —
+  Bypass action routing, hide effect failures. Mitigation: the
+  binder exposes `dispatch(action)` only; no per-action accessors.
+  → see
+  [forbidden-patterns.md §3 (i)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(m) `actionResolver` returning `Action.NoOp`** — Reintroduces
+  the unreachable-routing log-spam that the `Action?`-resolver
+  eliminated. Mitigation: `null` is the canonical no-op. → see
+  [forbidden-patterns.md §3 (m)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(n) Direct module-to-module call** — Breaks encapsulation; the
+  compiler can't prevent it. Mitigation: code review + module-isolation
+  pattern (modules only see `ModuleServices`, never each other). → see
+  [forbidden-patterns.md §3 (n)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
 - **ProGuard strips `Action` hierarchy in release.** All dispatches
   become `Unrouted` — the entire IME is silently broken. Mitigation:
   the keep rule in `app/proguard-rules.pro` + the release smoke
-  test `OrchestratorReleaseSmokeTest.kt` (Block 1b).
+  test `OrchestratorReleaseSmokeTest.kt` (Block 1b). (This is an
+  ADR-local mitigation, not one of the 14 forbidden patterns.)
 
 ## References
 
@@ -294,6 +326,7 @@ as one file containing State + Action + Reducer + SideEffect + EffectHandler
   - **ADR-0002 — state-cross-module-cascade.** Defines the cross-module-effect modes (Mode 1, Mode 2; Mode 3 forbidden), self-cascade rule, `MAX_CASCADE_DEPTH`, and `EffectFailure`-routing — all of which sit on top of the single-dispatch + per-module-reducer foundation in this ADR.
   - **ADR-0003 — service-foreground-pipeline-architecture.** Hosts the orchestrator + module registry in a process-resident `DictatePipelineService` (Foreground Service). This ADR is layout-neutral but assumes a container that survives keyboard-switch.
   - **ADR-0004 — ui-layout-catalog-motionlayout.** Consumes the orchestrator's `StateFlow<DictateUiState>` via `RenderBackend.render(state, mode)`. The single-dispatch + null-resolver-no-op convention in this ADR §10 binds rendering surfaces.
+  - **[ADR-0005 — UI Triangle-FSM (Keyboard/Widget/Hover)](0005-ui-triangle-fsm-keyboard-widget-hover.md)** — view-mode FSM that drives this orchestrator's view-mode-derived state.
 - **Architecture docs:**
   - [state-architecture/state-and-actions.md](../architecture/state-architecture/state-and-actions.md)
   - [state-architecture/modules.md](../architecture/state-architecture/modules.md)
@@ -302,7 +335,46 @@ as one file containing State + Action + Reducer + SideEffect + EffectHandler
   - [state-architecture/adding-a-button.md](../architecture/state-architecture/adding-a-button.md)
 - **Skill:** `~/.claude/skills/knowledge-adr-format/SKILL.md`
 
+## Supersede Triggers (Forward-Looking Notes)
+
+This ADR is one of the more stable of the five. Substantial
+superseding would mean a different state-mutation paradigm
+altogether (e.g. adopting an MVI library, or moving to a pure
+EventSourcing model). Smaller revisions are expected to land as
+append-only Decision-History entries:
+
+- If `prefBindings()` becomes the single Pref-mirror source (plan
+  §7.1 Phase-2 backlog), this ADR gets an addition under
+  "Required mechanics" rather than a supersede.
+- If the Phase-2 `InterruptionModule` stub becomes a full module
+  with hardware integration, the inventory in this ADR gets a
+  Decision-History entry.
+- A supersede happens only if the pattern itself is replaced —
+  e.g. moving from `sealed interface DictateModule` to a different
+  plugin shape, or eliminating the orchestrator in favour of
+  individual `StateFlow`s per module.
+
 ## Decision History
+
+### 2026-05-14 — Accepted
+
+**Trigger:** Block-0 audit-consolidation pass (B0-VAL-SANITY) — plan §4.0 binding-pre-code-contract closeout.
+
+**Before:** Status: Proposed (per §4.0.1.0.3 lifecycle clause "Proposed during Block 0").
+
+**After:** Status: Accepted (body now append-only per knowledge-adr-format §"Lifecycle and editing rules").
+
+**Reasoning:** Block-0 acceptance criteria from plan §4.0.3 met; B0-AUDIT-PLAN-AND-API + B0-AUDIT-CONVENTION pass; ADR binds downstream Blocks 1b…6 per plan §4.0.4 "Bindender-Vertrag-Charakter".
+
+### 2026-05-14 — Block-0 doc-set audit cleanup (B0-VAL-REPAIR)
+
+**Trigger:** Validated findings F-9, F-10, F-11 from `reports/validated-findings-B0.md` (SSoT duplication + Phase-2-Superseding misplacement).
+
+**Before:** The 13-module-inventory (F-9) was duplicated verbatim between this ADR §"Module inventory" and `modules.md §7.1`. The 14 forbidden-patterns Failure-Modes (F-10) were re-described paragraph-length inside §"Failure Modes" parallel to `forbidden-patterns.md §3`. The "Phase-2 Superseding Expectations" block lived inside `## Decision History` (F-11), conflicting with knowledge-adr-format §"Lifecycle and editing rules" (append-only after Accepted).
+
+**After:** Module-inventory abridged to id + axis-name table + pointer to `modules.md §7.1` (the architecture-doc is now SoT). Forbidden-patterns Failure-Modes condensed to problem + symptom + cross-reference to `forbidden-patterns.md §3` per pattern. Phase-2-Superseding moved to a new top-level section `## Supersede Triggers (Forward-Looking Notes)` between `## References` and `## Decision History`.
+
+**Reasoning:** SSoT-rule (knowledge-doc-format §"Anti-redundancy") demands one canonical home per topic — architecture-doc holds the long form, ADR holds the binding contract + pointer. Phase-2-Superseding is forward-looking content; the post-Accepted append-only invariant on Decision History blocks future revisions of those predictions.
 
 ### 2026-05-14 — Initial proposal
 
@@ -327,22 +399,3 @@ responsibilities and would have grown linearly with new state axes.
 The chosen pattern keeps the orchestrator at ~200 lines and pushes
 domain logic into self-contained modules that can be added without
 modifying the orchestrator (OCP).
-
-### Phase-2 Superseding Expectations
-
-This ADR is one of the more stable of the five. Substantial
-superseding would mean a different state-mutation paradigm
-altogether (e.g. adopting an MVI library, or moving to a pure
-EventSourcing model). Smaller revisions are expected to land as
-append-only notes:
-
-- If `prefBindings()` becomes the single Pref-mirror source (plan
-  §7.1 Phase-2 backlog), this ADR gets an addition under
-  "Required mechanics" rather than a supersede.
-- If the Phase-2 `InterruptionModule` stub becomes a full module
-  with hardware integration, the inventory in this ADR gets a
-  Decision-History entry.
-- A supersede happens only if the pattern itself is replaced —
-  e.g. moving from `sealed interface DictateModule` to a different
-  plugin shape, or eliminating the orchestrator in favour of
-  individual `StateFlow`s per module.

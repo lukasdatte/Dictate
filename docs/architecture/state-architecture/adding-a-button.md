@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: Walkthrough — how to add a new button (INSERT_COMMA example) — 7 steps.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0001, ADR-0004
@@ -104,7 +104,7 @@ private val buttonViews: Map<LogicalButtonId, View> = mapOf(
 ```
 
 A missing entry would cause a hard `error(...)` at render time
-(Spec 2 §6 "Silent-Skip-Schutz"). The catalog wouldn't be the
+(Spec 2 §6 "silent-skip protection"). The catalog wouldn't be the
 problem; the missing view-map entry would.
 
 ### Step 4 — Add the Action variant
@@ -267,11 +267,11 @@ fun insertCommaSlot_clickInKeyboardMode_returnsInsertCommaAction() {
 See [`forbidden-patterns.md`](forbidden-patterns.md) for the full
 catalogue.
 
-## N. Information Gaps
+## 7. Information Gaps
 
 (no gaps known at this time — the walkthrough is end-to-end runnable from the plan §4.0.6.1)
 
-## N+1. Change History
+## 8. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -281,7 +281,7 @@ catalogue.
   but adds zero state and zero cross-module-cascade — the smallest
   possible button addition.
 
-## N+2. References
+## 9. References
 
 - [Parent plan §4.0.6.1](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md)
 - [ADR-0001 — state-modular-orchestrator-pattern](../../decisions/0001-state-modular-orchestrator-pattern.md)

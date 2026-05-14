@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: Walkthrough — how to add a new module (BatterySaverModule example) — 8 steps from sub-state to test.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0001, ADR-0002
@@ -358,11 +358,11 @@ Before submitting the PR:
 - [ ] Inline anchor in the module file:
       `@see docs/decisions/0001-state-modular-orchestrator-pattern.md`
 
-## N. Information Gaps
+## 8. Information Gaps
 
 (no gaps known at this time — the walkthrough is end-to-end runnable from the plan §4.0.6.3)
 
-## N+1. Change History
+## 9. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -372,7 +372,7 @@ Before submitting the PR:
   with one cascade and zero new effects — small enough to learn
   from, large enough to exercise the pattern.
 
-## N+2. References
+## 10. References
 
 - [Parent plan §4.0.6.3](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md)
 - [ADR-0001 — state-modular-orchestrator-pattern](../../decisions/0001-state-modular-orchestrator-pattern.md)

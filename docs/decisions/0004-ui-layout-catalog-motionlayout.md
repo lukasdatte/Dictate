@@ -1,6 +1,6 @@
 # ADR-0004: UI — LayoutCatalog + MotionLayout
 
-**Status:** Proposed
+**Status:** Accepted
 **Subsystem:** ui-rendering
 **Scope:** Project-Wide
 **Date:** 2026-05-14
@@ -156,42 +156,19 @@ applies to every implementation of `RenderBackend`. Out of scope:
 
 ### Backend stack
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  LAYER 1 — KeyboardLayoutManager                          (top)     │
-│  Type:   class                                                      │
-│  File:   app/src/main/java/net/devemperor/dictate/                  │
-│            keyboard/KeyboardLayoutManager.kt                        │
-│  Form:   onStateChanged(state) → activeBackends.forEach { render }  │
-└─────────────────────────────────────────────────────────────────────┘
-                                ↓ dispatches state to every backend
-┌─────────────────────────────────────────────────────────────────────┐
-│  LAYER 2 — RenderBackend (interface)                                │
-│  Type:   interface RenderBackend                                    │
-│  File:   app/src/main/java/net/devemperor/dictate/                  │
-│            keyboard/render/RenderBackend.kt                         │
-│  Form:   attach(onAction) / detach() / render(state, mode)          │
-└─────────────────────────────────────────────────────────────────────┘
-              ↓                ↓                       ↓
-┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────────┐
-│ ImeViewBackend      │  │ ContentAreaController│ │ OverlayBackend          │
-│ (KEYBOARD)          │  │ (Container vis.)     │ │ (WIDGET + HOVER)        │
-│                     │  │                      │ │                         │
-│ Iterates LayoutMode │  │ Iterates contentArea │ │ Iterates OVERLAY_5BTN   │
-│ slots; uses         │  │ enum, sets visibility│ │ slots via shared        │
-│ MotionLayout.       │  │ on three containers. │ │ applySlotToView.        │
-│ jumpToState /       │  │                      │ │                         │
-│ transitionToState.  │  │                      │ │                         │
-└─────────────────────┘  └─────────────────────┘  └─────────────────────────┘
-                                ↓
-                       ┌─────────────────────────────────────┐
-                       │  Shared helper                       │
-                       │  SlotRenderer.applySlotToView        │
-                       │  (top-level function, F-7 / DRY)     │
-                       │  visibility + enabled + icon + text  │
-                       │  + alpha — single Slot→View mapper.  │
-                       └─────────────────────────────────────┘
-```
+Three rendering backends sit below `KeyboardLayoutManager`:
+- **ImeViewBackend** — applies MotionLayout transitions to the IME keyboard view (KEYBOARD mode); resolves `LayoutMode` slots.
+- **ContentAreaController** — iterates the `contentArea` enum and sets visibility on the three container views.
+- **OverlayBackend** — drives the floating overlay window (WIDGET + HOVER) on a `TYPE_APPLICATION_OVERLAY` surface.
+
+All three share `SlotRenderer.applySlotToView` as the single
+`Slot → View` mapper (visibility + enabled + icon + text + alpha;
+top-level helper, F-7 / DRY).
+
+> Full ASCII stack-diagram + rationale lives in the teaching doc:
+> see [state-architecture/rendering.md §3 "The stack"](../architecture/state-architecture/rendering.md#3-the-stack)
+> for the canonical diagram (the ADR holds the binding contract; the
+> architecture-doc holds the SoT diagram).
 
 ### LogicalButtonId catalogue (Spec 2 §3.1)
 
@@ -301,33 +278,49 @@ a new button is the §"adding-a-button" walkthrough (`docs/architecture/state-ar
 
 **Failure Modes:**
 
-- **Re-parenting in a slot's `actionResolver`** (forbidden
-  pattern (d)). A developer tempted to "fix" a layout edge case
-  by `view.parent.removeView(view); container.addView(view)`
-  reintroduces the original bug class. Code-review only; no
-  compile-time guard. Mitigation:
-  `docs/architecture/state-architecture/forbidden-patterns.md`
-  entry (d) with the bug history.
-- **Missing `motion:visibilityMode="ignore"`** on a state-driven
-  button (forbidden pattern (k)). MotionScene then animates
-  the button's visibility from VISIBLE → GONE during a transition,
-  overlaying the per-slot `visibilityPredicate`. Visual jump
-  on transition. Mitigation: the `applySlotToView` documentation
-  + a Block-5 acceptance manual test (Spec 2 §10).
-- **`pred*Visible` containing cooldown logic** (forbidden pattern
-  (j)). The `resend_btn` visibility predicate must NOT depend on
-  `state.resend.resendCooldown` (that's an `enabledResolver`
-  concern). Mixing the two reintroduces plan §1.1 bug #3b. Spec
-  2 §8.5 + `forbidden-patterns.md` entry (j).
-- **Click-Listener per render** (forbidden pattern (l)). Lambda
-  leaks. Spec 2 §11.6 documents the memory math. Mitigation:
-  `wireStaticHandlers()` is the only listener-attachment site;
-  Block-5 acceptance includes an Espresso assertion that
-  `setOnClickListener` runs once per `attach()`.
-- **`actionResolver` returning `Action.NoOp`** (forbidden pattern
-  (m)). Falls through to `dispatch(NoOp)` and logs
-  `Unrouted`. The `Action.NoOp` symbol does not exist in the
-  refactor (R.3); compile-error guards us.
+> Full descriptions, examples, alternatives, and rationale for each
+> forbidden pattern live in the catalogue:
+> [state-architecture/forbidden-patterns.md §3 — The 14 forbidden patterns](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+> The entries below are the ADR-0004 condensed summaries (problem +
+> symptom + ADR-local mitigation cross-reference).
+
+- **(d) Re-parenting in a slot's `actionResolver`** — A developer
+  tempted to "fix" a layout edge case by
+  `view.parent.removeView(view); container.addView(view)` reintroduces
+  the original bug class. Symptom: layout-mode-switch visual glitches +
+  the "originalParents"-Map regression. Mitigation: code review +
+  `forbidden-patterns.md §3 (d)` entry with the bug history. → see
+  [forbidden-patterns.md §3 (d)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(f) Self-filter in cross-module-cascade** — Routed primarily via
+  ADR-0002 (cascade contract); ADR-0004's rendering layer must not
+  re-introduce a self-filter when consuming `RenderBackend.render`
+  outcomes. → see
+  [forbidden-patterns.md §3 (f)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns)
+  and ADR-0002 §Failure Modes.
+- **(j) `pred*Visible` containing cooldown logic** — The `resend_btn`
+  visibility predicate must NOT depend on `state.resend.resendCooldown`
+  (that's an `enabledResolver` concern). Symptom: reintroduces plan
+  §1.1 bug #3b — button flicker as cooldown expires. Mitigation: Spec
+  2 §8.5 + the cooldown-belongs-in-`enabledResolver` rule. → see
+  [forbidden-patterns.md §3 (j)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(k) Missing `motion:visibilityMode="ignore"`** on a state-driven
+  button — MotionScene animates VISIBLE → GONE during a transition,
+  overriding the per-slot `visibilityPredicate`. Symptom: visual jump
+  on transition. Mitigation: the `applySlotToView` documentation +
+  Block-5 acceptance manual test (Spec 2 §10). → see
+  [forbidden-patterns.md §3 (k)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(l) Click-Listener per render** — Lambda leaks. Symptom: memory
+  growth + double dispatch on rapid taps (Spec 2 §11.6 documents
+  the memory math). Mitigation: `wireStaticHandlers()` is the only
+  listener-attachment site; Block-5 acceptance includes an Espresso
+  assertion that `setOnClickListener` runs once per `attach()`. → see
+  [forbidden-patterns.md §3 (l)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
+- **(m) `actionResolver` returning `Action.NoOp`** — Falls through to
+  `dispatch(NoOp)` and logs `Unrouted`. Symptom: log spam +
+  unreachable routing. Mitigation: the `Action.NoOp` symbol does
+  not exist in the refactor (R.3); `null` is the canonical no-op —
+  compile-error guards us. → see
+  [forbidden-patterns.md §3 (m)](../architecture/state-architecture/forbidden-patterns.md#3-the-14-forbidden-patterns).
 
 ## References
 
@@ -336,6 +329,8 @@ a new button is the §"adding-a-button" walkthrough (`docs/architecture/state-ar
 - **Related Phase-2 Research:** `motionlayout-architecture-options.md`, `_pending-layout-container-architecture/_pending-layout-container-architecture.md`, `main-button-area-inventory.md`
 - **Related ADRs:**
   - **ADR-0001 — state-modular-orchestrator-pattern.** This ADR consumes the orchestrator's `StateFlow<DictateUiState>` and emits `Action`s via `onAction(action)`. The single-dispatch boundary + nullable-resolver idiom + once-wiring directly enforce ADR-0001's UI-Wiring §10 rules.
+  - **[ADR-0002 — Cross-Module Cascade](0002-state-cross-module-cascade.md)** — cascade-protocol whose outcomes this rendering layer must observe consistently.
+  - **[ADR-0003 — Service & Foreground-Pipeline Architecture](0003-service-foreground-pipeline-architecture.md)** — FGS lifecycle that bounds renderer initialization + teardown.
   - **ADR-0005 — ui-triangle-fsm-keyboard-widget-hover.** This ADR implements ADR-0005's Triangle-FSM via render-backend switching: `KEYBOARD → ImeViewBackend + ContentAreaController`, `WIDGET → OverlayBackend (5-button)`, `HOVER → OverlayBackend (5-button with Send disabled)`. The shared `OVERLAY_5BUTTON` LayoutMode is the structural foundation for ADR-0005's mode-merge.
 - **Architecture docs:**
   - [state-architecture/rendering.md](../architecture/state-architecture/rendering.md)
@@ -344,7 +339,46 @@ a new button is the §"adding-a-button" walkthrough (`docs/architecture/state-ar
   - [state-architecture/adding-a-sub-keyboard.md](../architecture/state-architecture/adding-a-sub-keyboard.md)
 - **Skill:** `~/.claude/skills/knowledge-adr-format/SKILL.md`
 
+## Supersede Triggers (Forward-Looking Notes)
+
+This ADR is one of the most stable (along with ADR-0001).
+A supersede would mean a significant render-stack change:
+
+- **Compose adoption.** If the wider app moves to Compose,
+  the keyboard view follows. The supersede creates a new
+  ADR (e.g. ADR-NNNN-ui-compose-keyboard) and this one is
+  marked Superseded.
+- **Per-mode XML inflation** (no MotionLayout). Counter-decision
+  if MotionLayout proves to have unfixable edge cases in some
+  Android version. The PulseLayout-spike (Spec 2 §11.3) is the
+  early-warning signal.
+
+Small revisions land as Decision-History additions: a new
+`LogicalButtonId`, a new slot property (`contentDescription`,
+`tint`), a new `BackendType` value. These are append-only and
+do not require a supersede.
+
 ## Decision History
+
+### 2026-05-14 — Accepted
+
+**Trigger:** Block-0 audit-consolidation pass (B0-VAL-SANITY) — plan §4.0 binding-pre-code-contract closeout.
+
+**Before:** Status: Proposed (per §4.0.1.0.3 lifecycle clause "Proposed during Block 0").
+
+**After:** Status: Accepted (body now append-only per knowledge-adr-format §"Lifecycle and editing rules").
+
+**Reasoning:** Block-0 acceptance criteria from plan §4.0.3 met; B0-AUDIT-PLAN-AND-API + B0-AUDIT-CONVENTION pass; ADR binds downstream Blocks 1b…6 per plan §4.0.4 "Bindender-Vertrag-Charakter".
+
+### 2026-05-14 — Block-0 doc-set audit cleanup (B0-VAL-REPAIR)
+
+**Trigger:** Validated findings F-3 (backend-stack diagram SSoT), F-10 (forbidden-patterns SSoT), F-11 (Phase-2-Superseding placement), F-1 (inter-ADR cross-reference completion).
+
+**Before:** §"Backend stack" duplicated the ASCII stack-diagram from `rendering.md §3` with a one-line wording drift (F-3). §"Failure Modes" re-described patterns (d, f, j, k, l, m) at paragraph-length parallel to `forbidden-patterns.md §3` (F-10). "Phase-2 Superseding Expectations" lived inside `## Decision History` (F-11). References → Related ADRs listed only ADR-0001 + ADR-0005 (F-1: ADR-0002 + ADR-0003 missing).
+
+**After:** §"Backend stack" compacted to a 3-bullet textual summary + pointer to `rendering.md §3` (architecture-doc is now SoT for the diagram). Failure-Modes condensed to problem + symptom + cross-reference per pattern. Phase-2-Superseding moved to new top-level section `## Supersede Triggers (Forward-Looking Notes)` between `## References` and `## Decision History`. Related-ADRs list completed with ADR-0002 + ADR-0003 (bidirectional graph).
+
+**Reasoning:** SSoT-rule (knowledge-doc-format §"Anti-redundancy") demands one canonical home per topic — architecture-doc holds long form, ADR holds binding contract + pointer. Forward-looking content does not belong inside an append-only audit log. Plan §4.0.1.0.2 demands universal inter-ADR cross-references.
 
 ### 2026-05-14 — Initial proposal
 
@@ -372,22 +406,3 @@ button) is more durable than fixing each bug individually.
 MotionLayout + the slot-resolver model is the smallest set of
 abstractions that gives us declarative rendering with reasonable
 implementation cost (no Compose migration).
-
-### Phase-2 Superseding Expectations
-
-This ADR is one of the most stable (along with ADR-0001).
-A supersede would mean a significant render-stack change:
-
-- **Compose adoption.** If the wider app moves to Compose,
-  the keyboard view follows. The supersede creates a new
-  ADR (e.g. ADR-NNNN-ui-compose-keyboard) and this one is
-  marked Superseded.
-- **Per-mode XML inflation** (no MotionLayout). Counter-decision
-  if MotionLayout proves to have unfixable edge cases in some
-  Android version. The PulseLayout-spike (Spec 2 §11.3) is the
-  early-warning signal.
-
-Small revisions land as Decision-History additions: a new
-`LogicalButtonId`, a new slot property (`contentDescription`,
-`tint`), a new `BackendType` value. These are append-only and
-do not require a supersede.

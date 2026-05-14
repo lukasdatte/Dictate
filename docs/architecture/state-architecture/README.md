@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: Entry point for the Dictate state architecture — links the ADR contracts to the implementer-facing teaching material, walkthroughs, and forbidden-pattern catalogue.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0001, ADR-0002, ADR-0003, ADR-0004, ADR-0005
@@ -111,6 +111,31 @@ Where each part of the parent plan §4.0 lives in this directory:
 | §4.0.6.3 Walkthrough — new module | [`adding-a-module.md`](adding-a-module.md) |
 | Spec 3 §7 Triangle-FSM (T1–T7) | [`triangle-fsm.md`](triangle-fsm.md) |
 
+## Walkthrough Decision Tree (Plan §4.0.6.4)
+
+Four questions, in order. Each leads to one or more topic pages in this directory.
+
+### 1. Where does the new feature live?
+
+- **A new button on an existing layout?** → see [`adding-a-button.md`](adding-a-button.md).
+- **A new sub-keyboard variant?** → see [`adding-a-sub-keyboard.md`](adding-a-sub-keyboard.md) (Variant A: declarative-only; Variant B: with module).
+- **A new module owning its own state axis?** → see [`adding-a-module.md`](adding-a-module.md).
+
+### 2. What does the feature touch?
+
+- **State?** Action shape + reducer entry → see [`state-and-actions.md`](state-and-actions.md) + [`modules.md`](modules.md).
+- **Effects?** Effect declaration + failure routing → see [`effects-and-failures.md`](effects-and-failures.md).
+- **UI rendering?** LayoutCatalog entry + MotionLayout transition → see [`rendering.md`](rendering.md) + [`wiring-ui.md`](wiring-ui.md).
+- **Cross-module behaviour?** Mode 1 or Mode 2 cascade — Mode 3 is forbidden → see [`cross-module-cascade.md`](cross-module-cascade.md).
+
+### 3. What needs testing?
+
+Four test types: reducer-purity, effect-runner, cascade-flow, UI-integration. Each walkthrough's `## Testing` section (or the `## Common mistakes` section, where testing is folded in) lists the relevant types.
+
+### 4. Where do inline anchors go?
+
+Three anchor types per the inline-anchor convention (`~/.claude/snippets/engineering-principles.md` → `knowledge-doc-format` skill §"Inline anchors"): module-header `@see <ADR>`, gotcha comments, plan-section pointers. The checklist for a new module is in [`adding-a-module.md`](adding-a-module.md) (Module-design checklist section).
+
 ## Properties this Architecture Guarantees
 
 Read the ADRs for the contract; this list summarises the **invariants
@@ -164,4 +189,4 @@ the implementation must preserve**:
 - [Spec 2 — Keyboard-Layout](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md)
 - [Spec 3 — Floating-Overlay](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md)
 - [ADR Index](../../decisions/README.md)
-- [knowledge-doc-format skill](https://github.com/...) (UDOC convention)
+- **UDOC convention skill:** `~/.claude/skills/knowledge-doc-format/SKILL.md`

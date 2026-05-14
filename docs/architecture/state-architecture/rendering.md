@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: The render-backend pattern, LayoutCatalog, MotionScene, and how predicates/resolvers turn state into views.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0004
@@ -430,7 +430,7 @@ override fun render(state: DictateUiState, mode: LayoutMode) {
 ```
 
 A missing view-map entry is a hard `error(...)` — Spec 2 §6 calls
-this the "Silent-Skip-Schutz" (silent-skip protection). Without it,
+this the "silent-skip protection" (Spec 2 cites it as `Silent-Skip-Schutz`). Without it,
 a newly added `LogicalButtonId` without a matching view would
 silently fail to render at runtime; with the error, build/run-time
 flags the omission.
@@ -473,11 +473,11 @@ per-slot `visibilityPredicate` would force every main-button slot
 to include a `state.layout.contentArea == ContentArea.MAIN_BUTTONS`
 gate — duplicate code in 9+ slots.
 
-## N. Information Gaps
+## 13. Information Gaps
 
 (no gaps known at this time — Spec 2 §3 + §4 + §5 + §6 + §7 + §8 cover the rendering layer)
 
-## N+1. Change History
+## 14. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -488,7 +488,7 @@ gate — duplicate code in 9+ slots.
   the architectural-iteration fixes that landed during Spec-2
   review.
 
-## N+2. References
+## 15. References
 
 - [ADR-0004 — ui-layout-catalog-motionlayout](../../decisions/0004-ui-layout-catalog-motionlayout.md)
 - [Spec 2 §3 — ButtonSlot / RowDescriptor / LayoutMode](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md)

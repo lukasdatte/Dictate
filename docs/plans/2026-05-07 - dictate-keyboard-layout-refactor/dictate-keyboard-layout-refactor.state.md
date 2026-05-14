@@ -307,7 +307,7 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 
 | Chunk-ID | Title | Plan-Block | Score | Bracket | Status |
 |----------|-------|-----------|------:|---------|--------|
-| C0-block0-arch-docs | Block 0: ADRs + state-architecture docs | Block 0 | 3600 | XL (D12-atomic Foundation-Pack) | ⏳ |
+| C0-block0-arch-docs | Block 0: ADRs + state-architecture docs | Block 0 | 3600 | XL (D12-atomic Foundation-Pack) | ✅ (commit 1ca3bcc, 18 files; Block-Validate pending) |
 | C1-block1a-quick-wins | Block 1a: Quick-Wins in today's code | Block 1a | 400 | S/M | ⏳ |
 | C2-block2-pipeline-service-skeleton | Block 2: DictatePipelineService skeleton + FGS | Block 2 | 850 | M | ⏳ |
 | C3-state-core | Block 1b/1: DictateUiState + Store + DictateModule + Action | Block 1b | 850 | M | ⏳ |

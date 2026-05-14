@@ -1,6 +1,6 @@
 # ADR-0005: UI — Triangle-FSM (KEYBOARD / WIDGET / HOVER)
 
-**Status:** Proposed
+**Status:** Accepted
 **Subsystem:** ui-mode
 **Scope:** Project-Wide
 **Date:** 2026-05-14
@@ -185,52 +185,21 @@ imeViewVisible | userPrefersWidget | pipelineActive | ViewMode
 
 ### Architecture-visible structure
 
-```
-                   ┌──────────────────────────────┐
-                   │        KEYBOARD              │
-                   │   (full keyboard, normal)    │
-                   │                              │
-                   │  - Two-Row / Single-Row      │
-                   │  - Send-mode variants        │
-                   │  - ReprocessStaging          │
-                   │  - InputConnection alive     │
-                   └──────────────────────────────┘
-                       │   ▲                  ▲
-                       │   │                  │
-              T1: user │   │ T2: user         │  T5: IME view returns
-              clicks   │   │ clicks Close     │      (no widget-pref)
-              Widget-  │   │ in WIDGET        │
-              Toggle   │   │ (→ SmallMode)    │
-                       ▼   │                  │
-                   ┌─────────────────────────┐  │
-                   │       WIDGET            │  │
-                   │   (user choice, float)  │  │
-                   │                         │  │
-                   │   - 5 buttons           │  │
-                   │   - Send works          │  │
-                   │   - InputConnection alv │  │
-                   └─────────────────────────┘  │
-                       │   ▲                    │
-                       │   │  T6: IME view      │
-              T4: view │   │  returns + widget- │
-              hidden + │   │  pref persists     │
-              pipeline │   │                    │
-              active   │   │                    │
-                       ▼   │                    │
-                   ┌─────────────────────────┐  │
-                   │      HOVER (auto)       │──┘
-                   │                         │  T7 (also via Pipeline-Done
-                   │   - 5 buttons (same     │      cascade, "Geist-Widget"
-                   │     layout as WIDGET)   │      structural guard)
-                   │   - Send DISABLED       │
-                   │   - Close → dismiss     │
-                   │   - InputConnection ∅   │
-                   └─────────────────────────┘
-                              ▲
-                              │
-                              │ T3: view hidden + pipeline active
-                              │     (from KEYBOARD)
-```
+Three view modes (`KEYBOARD`, `WIDGET`, `HOVER`) and seven transitions (T1–T7):
+- **T1:** `KEYBOARD → WIDGET` — user clicks Widget-Toggle.
+- **T2:** `WIDGET → KEYBOARD` — user clicks Close in WIDGET (→ SmallMode).
+- **T3:** `KEYBOARD → HOVER` — IME view hidden + pipeline active.
+- **T4:** `WIDGET → HOVER` — IME view hidden + pipeline active (was WIDGET).
+- **T5:** `HOVER → KEYBOARD` — view returns, no widget-pref.
+- **T6:** `HOVER → WIDGET` — view returns + widget-pref persists.
+- **T7:** `HOVER → KEYBOARD` — via Pipeline-Done cascade ("Geist-Widget" structural guard).
+
+> Full state-diagram + truth-table + per-transition example lives in
+> the teaching doc: see
+> [state-architecture/triangle-fsm.md §3 "The three modes"](../architecture/state-architecture/triangle-fsm.md#3-the-three-modes)
+> and [§5 "The seven transitions T1–T7"](../architecture/state-architecture/triangle-fsm.md#5-the-seven-transitions-t1t7)
+> for the canonical ASCII state-diagram (the ADR holds the binding
+> contract; the architecture-doc holds the SoT diagram).
 
 ## Alternatives Considered
 
@@ -341,7 +310,7 @@ imeViewVisible | userPrefersWidget | pipelineActive | ViewMode
 
 ## References
 
-- **Related Plan:** [dictate-keyboard-layout-refactor](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md) §1.2 (user-iteration requirements), §3.1 (Triangle-FSM diagram), §4.0.1.0 (ADR-5 decision-kernsatz), §7 OPEN-1, OPEN-2
+- **Related Plan:** [dictate-keyboard-layout-refactor](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md) §1.2 (user-iteration requirements), §3.1 (Triangle-FSM diagram), §4.0.1.0 (ADR-0005 decision-kernsatz), §7 OPEN-1, OPEN-2
 - **Related Specs:**
   - [Spec 3 — Floating-Overlay](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md) §6 (Close-button differential), §7.1 (computeViewMode), §7.3 (T1–T7 code-snippets), §11.9 (userPrefersWidget transience rationale)
   - [Spec 1 — Pipeline-Service](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md) §15.1 (Module-Inventar #4 ViewModeModule), §15.1.x (Coupling-Matrix), §15.2 (RecordingModule self-cascade)
@@ -356,7 +325,49 @@ imeViewVisible | userPrefersWidget | pipelineActive | ViewMode
   - [state-architecture/rendering.md](../architecture/state-architecture/rendering.md)
 - **Skill:** `~/.claude/skills/knowledge-adr-format/SKILL.md`
 
+## Supersede Triggers (Forward-Looking Notes)
+
+This ADR has the highest superseding-probability of the five:
+
+- **Fourth ViewMode (PIP / picture-in-picture).** Likely Phase-2
+  candidate. The supersede would add a fourth `ViewMode` value
+  and extend the truth table. Existing T1–T7 stay valid; new
+  transitions land as T8+.
+- **Different close behavior in HOVER** (e.g. "minimise to small
+  pill" instead of "dismiss entirely"). Supersede revises T2
+  / T7 + the `OVERLAY_CLOSE` resolver. Likely if user feedback
+  during Phase-1 testing surfaces a discoverability issue.
+- **STANDALONE_OVERLAY service** (plan §7.1). Decouples HOVER
+  from the IME-Service lifecycle. The truth table changes:
+  `imeViewVisible` is no longer the only "IME-View dead" signal.
+  Supersede revises `computeViewMode` and the T3 / T4 / T5 / T6
+  triggers.
+
+Smaller revisions (adding a transition between existing modes,
+e.g. WIDGET → HOVER via long-press) land as Decision-History
+entries with a new T-ID. The truth table form is stable.
+
 ## Decision History
+
+### 2026-05-14 — Accepted
+
+**Trigger:** Block-0 audit-consolidation pass (B0-VAL-SANITY) — plan §4.0 binding-pre-code-contract closeout.
+
+**Before:** Status: Proposed (per §4.0.1.0.3 lifecycle clause "Proposed during Block 0").
+
+**After:** Status: Accepted (body now append-only per knowledge-adr-format §"Lifecycle and editing rules").
+
+**Reasoning:** Block-0 acceptance criteria from plan §4.0.3 met; B0-AUDIT-PLAN-AND-API + B0-AUDIT-CONVENTION pass; ADR binds downstream Blocks 1b…6 per plan §4.0.4 "Bindender-Vertrag-Charakter".
+
+### 2026-05-14 — Block-0 doc-set audit cleanup (B0-VAL-REPAIR)
+
+**Trigger:** Validated findings F-4 (Triangle-FSM diagram SSoT), F-11 (Phase-2-Superseding placement), F-12 (`ADR-5` → `ADR-0005` shorthand).
+
+**Before:** §"Architecture-visible structure" duplicated the KEYBOARD/WIDGET/HOVER ASCII state-diagram from `triangle-fsm.md §3` with wording drift (`Send-Mode-Varianten` vs. `Send-mode variants`, `InputConnection alv` vs. `InputConnection alive`) — proof the SSoT-rule had already been lost (F-4). "Phase-2 Superseding Expectations" lived inside `## Decision History` (F-11). References → Related Plan cited `(ADR-5 decision-kernsatz)` using the 1-digit shorthand instead of the 4-digit `ADR-0005` form used everywhere else (F-12).
+
+**After:** §"Architecture-visible structure" compacted to a 7-bullet T1–T7 summary + pointer to `triangle-fsm.md §3 + §5` (architecture-doc is now SoT for the state-diagram). Phase-2-Superseding moved to new top-level section `## Supersede Triggers (Forward-Looking Notes)` between `## References` and `## Decision History`. `ADR-5` → `ADR-0005`.
+
+**Reasoning:** SSoT-rule (knowledge-doc-format §"Anti-redundancy") demands one canonical home per topic — already-drifted wording proves the duplicate was untenable. Forward-looking content does not belong inside an append-only audit log. 4-digit ADR identifiers are the convention across the doc-set; mixed forms erode it.
 
 ### 2026-05-14 — Initial proposal
 
@@ -384,25 +395,3 @@ The shared `OVERLAY_5BUTTON` LayoutMode (OPEN-2 resolution) lets us
 keep WIDGET/HOVER visually consistent. T7 is structural — it
 eliminates a UX-failure class by construction rather than via
 imperative cleanup code.
-
-### Phase-2 Superseding Expectations
-
-This ADR has the highest superseding-probability of the five:
-
-- **Fourth ViewMode (PIP / picture-in-picture).** Likely Phase-2
-  candidate. The supersede would add a fourth `ViewMode` value
-  and extend the truth table. Existing T1–T7 stay valid; new
-  transitions land as T8+.
-- **Different close behavior in HOVER** (e.g. "minimise to small
-  pill" instead of "dismiss entirely"). Supersede revises T2
-  / T7 + the `OVERLAY_CLOSE` resolver. Likely if user feedback
-  during Phase-1 testing surfaces a discoverability issue.
-- **STANDALONE_OVERLAY service** (plan §7.1). Decouples HOVER
-  from the IME-Service lifecycle. The truth table changes:
-  `imeViewVisible` is no longer the only "IME-View dead" signal.
-  Supersede revises `computeViewMode` and the T3 / T4 / T5 / T6
-  triggers.
-
-Smaller revisions (adding a transition between existing modes,
-e.g. WIDGET → HOVER via long-press) land as Decision-History
-entries with a new T-ID. The truth table form is stable.

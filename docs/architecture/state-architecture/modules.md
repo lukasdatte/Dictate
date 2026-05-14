@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: The DictateModule plugin contract — interface, lens pattern, registry, ModuleServices DI.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0001
@@ -333,11 +333,11 @@ The single loop guard against runaway cascades. See
 for details. Mentioned here because it's the only safety net once
 the self-filter was removed (KG-RSB-2 fix, Spec 1 §4.3 ⚠-banner).
 
-## N. Information Gaps
+## 11. Information Gaps
 
 (no gaps known at this time — the module interface is fully specified in Spec 1 §4.2 + §4.8)
 
-## N+1. Change History
+## 12. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -346,7 +346,7 @@ the self-filter was removed (KG-RSB-2 fix, Spec 1 §4.3 ⚠-banner).
   ADR-0001 in tutorial form. Content stays canonical to those
   sources.
 
-## N+2. References
+## 13. References
 
 - [ADR-0001 — state-modular-orchestrator-pattern](../../decisions/0001-state-modular-orchestrator-pattern.md)
 - [Spec 1 §4.2 — DictateModule interface](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md)

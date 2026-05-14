@@ -1,6 +1,6 @@
 # ADR-0003: Service — Foreground Pipeline Architecture
 
-**Status:** Proposed
+**Status:** Accepted
 **Subsystem:** service
 **Scope:** Project-Wide
 **Date:** 2026-05-14
@@ -223,7 +223,7 @@ discipline. Out of scope:
 - LocalBinder + `StateFlow` keeps the IME-side render layer
   identical to the in-process state container — no
   serialization, no marshalling, no schema versioning.
-- The Foreground-Service notification is **both** an Android-FGS-Pflicht
+- The Foreground-Service notification is **both** an Android FGS requirement
   AND a status indicator. Two requirements satisfied with one
   surface.
 - DB-replay-based recovery is testable in isolation (Room
@@ -291,6 +291,8 @@ discipline. Out of scope:
 - **Related Spec:** [Spec 1 — Pipeline-Service](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md) §1, §7 (FGS lifecycle), §7.2, §7.3, §7.4 (NotificationCoordinator), §7.5 (ActionRouter), §11.1 (FGS details), §11.3 (Bound-Service setup), §11.6 (OOM-Death recovery)
 - **Related ADRs:**
   - **ADR-0001 — state-modular-orchestrator-pattern.** This ADR hosts ADR-0001's `DictateOrchestrator` + module registry inside a Foreground Service. The two ADRs compose: ADR-0001 says how state mutates; this ADR says where the mutation lives so that it survives keyboard switches.
+  - **[ADR-0002 — Cross-Module Cascade](0002-state-cross-module-cascade.md)** — cascade-protocol the orchestrator running inside this FGS enforces.
+  - **[ADR-0004 — UI LayoutCatalog + MotionLayout](0004-ui-layout-catalog-motionlayout.md)** — UI layer the service-hosted orchestrator publishes state to.
   - **ADR-0005 — ui-triangle-fsm-keyboard-widget-hover.** The HOVER mode is structurally enabled by this ADR: HOVER means "IME-View is gone but pipeline is still running" — only possible because the pipeline-service outlives the IME-Service. The "Geist-Widget" failure mode (HOVER hanging after pipeline-done) is structurally guarded in ADR-0005 §T7 cascade.
 - **Architecture docs:**
   - [state-architecture/effects-and-failures.md](../architecture/state-architecture/effects-and-failures.md)
@@ -298,7 +300,51 @@ discipline. Out of scope:
   - [state-architecture/README.md](../architecture/state-architecture/README.md)
 - **Skill:** `~/.claude/skills/knowledge-adr-format/SKILL.md`
 
+## Supersede Triggers (Forward-Looking Notes)
+
+This ADR is likely to be superseded in two scenarios:
+
+- **WorkManager adoption.** If a use case arrives where
+  background pipeline work needs to survive process death and
+  re-run autonomously (e.g. "transcribe captured audio when the
+  device is on Wi-Fi"), WorkManager becomes attractive. The
+  supersede would add a `androidx.work` dependency, keep the
+  Foreground Service for live pipeline runs, and route
+  background runs to a Worker. Specifically: this ADR would be
+  superseded by ADR-NNNN-pipeline-workmanager-hybrid.
+- **STANDALONE_OVERLAY-Service.** If the overlay needs to live
+  independently of the IME (e.g. foldable outer-display
+  use case), a second FGS would be introduced. This ADR
+  stays valid for the pipeline-service; a new ADR adds the
+  second service as a peer. The plan §7.1 backlog entry is the
+  trigger.
+
+A full supersede would mean a different lifecycle model — e.g.
+moving the state container out of an Android Service entirely
+(e.g. a JobService scheduler with persistent state via Room).
+Not anticipated for Phase 2.
+
 ## Decision History
+
+### 2026-05-14 — Accepted
+
+**Trigger:** Block-0 audit-consolidation pass (B0-VAL-SANITY) — plan §4.0 binding-pre-code-contract closeout.
+
+**Before:** Status: Proposed (per §4.0.1.0.3 lifecycle clause "Proposed during Block 0").
+
+**After:** Status: Accepted (body now append-only per knowledge-adr-format §"Lifecycle and editing rules").
+
+**Reasoning:** Block-0 acceptance criteria from plan §4.0.3 met; B0-AUDIT-PLAN-AND-API + B0-AUDIT-CONVENTION pass; ADR binds downstream Blocks 1b…6 per plan §4.0.4 "Bindender-Vertrag-Charakter".
+
+### 2026-05-14 — Block-0 doc-set audit cleanup (B0-VAL-REPAIR)
+
+**Trigger:** Validated findings F-5 (German-language leakage), F-11 (Phase-2 Superseding placement), F-1 (inter-ADR cross-reference completion).
+
+**Before:** Body prose contained `Android-FGS-Pflicht` (F-5 German leakage). The "Phase-2 Superseding Expectations" block lived inside `## Decision History` (F-11). References → Related ADRs listed only ADR-0001 + ADR-0005 (F-1: ADR-0002 + ADR-0004 missing).
+
+**After:** `Android-FGS-Pflicht` → `Android FGS requirement` (body prose anglicised; load-bearing German Spec citations remain). Phase-2-Superseding moved to new top-level section `## Supersede Triggers (Forward-Looking Notes)` between `## References` and `## Decision History`. Related-ADRs list completed with ADR-0002 + ADR-0004 (bidirectional graph).
+
+**Reasoning:** Language convention (`~/.claude/snippets/docs/language-conventions.md`) requires English-only body prose in docs declared English. Forward-looking content belongs outside the post-Accepted append-only `Decision History` body. Plan §4.0.1.0.2 demands universal inter-ADR cross-references, not the direct-edge subset.
 
 ### 2026-05-14 — Initial proposal
 
@@ -325,27 +371,3 @@ naturally. WorkManager would have meant auto-resume which surprised
 users (plan §7 OPEN-4). The Foreground-Service notification is
 a tax we accept because it doubles as the only user-facing surface
 during keyboard-switch (where the IME-View is gone).
-
-### Phase-2 Superseding Expectations
-
-This ADR is likely to be superseded in two scenarios:
-
-- **WorkManager adoption.** If a use case arrives where
-  background pipeline work needs to survive process death and
-  re-run autonomously (e.g. "transcribe captured audio when the
-  device is on Wi-Fi"), WorkManager becomes attractive. The
-  supersede would add a `androidx.work` dependency, keep the
-  Foreground Service for live pipeline runs, and route
-  background runs to a Worker. Specifically: this ADR would be
-  superseded by ADR-NNNN-pipeline-workmanager-hybrid.
-- **STANDALONE_OVERLAY-Service.** If the overlay needs to live
-  independently of the IME (e.g. foldable outer-display
-  use case), a second FGS would be introduced. This ADR
-  stays valid for the pipeline-service; a new ADR adds the
-  second service as a peer. The plan §7.1 backlog entry is the
-  trigger.
-
-A full supersede would mean a different lifecycle model — e.g.
-moving the state container out of an Android Service entirely
-(e.g. a JobService scheduler with persistent state via Room).
-Not anticipated for Phase 2.

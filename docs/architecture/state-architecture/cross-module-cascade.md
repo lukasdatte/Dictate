@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: The two allowed cross-module-cascade modes, the forbidden third, self-cascade, frozen-snapshot semantics, depth guard, and coupling-matrix notation.
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0002
@@ -50,7 +50,7 @@ a use case arrives that's unsolvable by helper consolidation.
 
 1. **Two modes only.** Mode 1 (own SideEffect) and Mode 2 (Action-Cascade).
    Mode 3 (Atomic Cross-Axis-Update) raises a code-review failure
-   per ADR-0002 §"Code-Review Pflicht".
+   per ADR-0002 §"code-review requirement".
 2. **Frozen snapshot.** Every observer sees a consistent `(prev, next)`
    tuple in a given dispatch pass.
 3. **Self-cascade allowed.** A module observing its own axis in
@@ -377,11 +377,11 @@ When a `runEffect` throws, the orchestrator re-dispatches as
 [`effects-and-failures.md`](effects-and-failures.md) §6 for the
 full path.
 
-## N. Information Gaps
+## 12. Information Gaps
 
 (no gaps known at this time — Spec 1 §4.3 + §15.5 are the canonical sources)
 
-## N+1. Change History
+## 13. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -389,7 +389,7 @@ full path.
 - **Reasoning:** Captures the cascade rules from Spec 1 §15.5 +
   ADR-0002 + KG-RSB-2 + KG-RSB-3 + Phase-B S-9 in tutorial form.
 
-## N+2. References
+## 14. References
 
 - [ADR-0002 — state-cross-module-cascade](../../decisions/0002-state-cross-module-cascade.md)
 - [Spec 1 §4.3 — DictateOrchestrator.dispatchInternal](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md)

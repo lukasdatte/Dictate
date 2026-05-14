@@ -2,7 +2,7 @@
 date: 2026-05-14
 author: Lukas + Claude Code
 type: Architecture
-status: Skeleton
+status: Accepted
 context: Walkthrough — two variants for adding a sub-keyboard (A: new ContentArea inside the IME; B: new RenderBackend on a new window).
 related-plan: ../../plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 related-adrs: ADR-0004
@@ -330,11 +330,11 @@ permission, possibly new ViewMode + new T-transitions.
 | Variant B: backend calls another backend's methods | Backend-to-backend coupling | All cross-backend coordination via state observation |
 | New mode without `motion:visibilityMode="ignore"` on its state-driven buttons | MotionScene fights per-slot visibility | Add the attribute (forbidden pattern (k)) — IME-View backend only |
 
-## N. Information Gaps
+## 7. Information Gaps
 
 (no gaps known at this time — Plan §4.0.6.2 covers both variants)
 
-## N+1. Change History
+## 8. Change History
 
 ### 2026-05-14 — Initial draft
 
@@ -344,7 +344,7 @@ permission, possibly new ViewMode + new T-transitions.
   emoji-picker today); Variant B is the heavyweight path (new
   Window, used by overlay-window backend in WIDGET/HOVER).
 
-## N+2. References
+## 9. References
 
 - [Parent plan §4.0.6.2](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md)
 - [ADR-0004 — ui-layout-catalog-motionlayout](../../decisions/0004-ui-layout-catalog-motionlayout.md)

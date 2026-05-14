@@ -1,32 +1,107 @@
 package net.devemperor.dictate.state
 
+import android.content.ClipboardManager
+import android.content.SharedPreferences
+import android.view.inputmethod.InputConnection
+import kotlinx.coroutines.CoroutineScope
+
 /**
  * Dependency-injection container for the per-module side-effect handlers.
  *
- * **Skeleton (Chunk C3).** This file declares the type so [DictateModule]
- * compiles; the concrete fields (RecordingHardwareSubsystem,
- * BluetoothScoSubsystem, AudioFileFactory, scope, …) are filled out
- * in Chunk C4 (`orchestrator-and-registry`). Until then, modules can
- * declare effect handlers signing on `ModuleServices` without having
- * to reference its concrete field shape.
+ * The orchestrator hands an instance of this class to every
+ * [DictateModule.runEffect] call. Modules access subsystem dependencies
+ * **by name** (e.g. `services.recordingHardware.allocate(...)`) — the
+ * field shape is the DI contract.
  *
- * **Why a class (not an interface)?** Spec 1 §4.7 prescribes a concrete
- * class with `val`-fields. Modules access fields by name (not via
- * method calls), so the class form is the natural DI container — and
- * the orchestrator factory (`ModuleServicesFactory`) builds a fresh
- * instance per service-bind.
+ * **Why a `class` (not an interface)?** Spec 1 §4.7 prescribes a
+ * concrete class with `val`-fields. Modules access fields directly (not
+ * via method calls), so the class form is the natural DI container.
  *
- * **Threading contract:** all field accesses run on the
- * `serviceScope.dispatcher` (Main.immediate). Background effects
- * launch into [scope] via `services.scope.launch { … }`.
+ * **Lifecycle:** one instance per `DictatePipelineService` bind. The
+ * service builds the instance in `onCreate` (Block 3 wiring) and hands
+ * it to the orchestrator; the orchestrator just stores the reference.
+ * On `onDestroy` the service drops the reference and lets each
+ * subsystem clean up via [DictateModule.terminate].
+ *
+ * **Threading contract:** all field accesses run on
+ * `serviceScope.dispatcher` (Main.immediate). Background effects launch
+ * into [scope] via `services.scope.launch { … }`.
+ *
+ * **Concrete-subsystem status (Chunk C4):**
+ *
+ * - [scope] and [emitAction] — concrete, wired in this chunk via the
+ *   constructor.
+ * - All other fields — typed by **interface stubs** (`*Subsystem`,
+ *   `*Sink`, `*Factory`) declared in this file. The interfaces define
+ *   the contract that B3 implements with the real Android-backed
+ *   subsystem classes. Modules implemented in C5/C6 sign on these
+ *   interfaces, so the production wire-up in B3 is a swap-in.
+ * - [sharedPrefs], [clipboard], [inputConnectionProvider] — Android
+ *   types (already real), populated by the service from
+ *   `getSystemService(...)` calls in B3.
+ *
+ * @property recordingHardware MediaRecorder lifecycle adapter
+ *   (`allocate` → `prepare` → `start` → `stop` → `release`).
+ * @property bluetoothSco Bluetooth-SCO mic-route subsystem.
+ * @property audioFocus AudioFocus subsystem (request / release).
+ * @property recordingTimer monotonic recording-duration counter; emits
+ *   `RecordingTimer.Tick` actions or feeds a flow into the
+ *   amplitude/timer UI.
+ * @property amplitudeStream microphone-amplitude sampler for the
+ *   live recording UI.
+ * @property borderGlow keyboard-border glow animation driver.
+ * @property pipelineRunner pipeline-job submission + cancellation
+ *   (Spec 1 §4.9 `PipelineRunner`).
+ * @property sessionRepo persistence for `PendingSession` entities
+ *   (Spec 1 §4.9 `PipelineSessionRepo`).
+ * @property notificationCoordinator the persistent FGS notification
+ *   updater (no-op outside the service).
+ * @property inputConnectionProvider lazy supplier of the active
+ *   `InputConnection`. Effect handlers call
+ *   `inputConnectionProvider()?.commitText(…)` — `null` is a no-op
+ *   when the IME-View is detached.
+ * @property clipboard system clipboard (nullable per Android docs;
+ *   effect handlers treat `null` as no-op).
+ * @property sharedPrefs the app's default `SharedPreferences`; modules
+ *   may read but the canonical Pref-mirror lives in
+ *   `PipelinePrefMirror` (C7).
+ * @property toastSink Android `Toast` indirection (nullable backend
+ *   for test environments).
+ * @property audioFileFactory Pre-Dispatch-Allocator for audio cache
+ *   files (Spec 1 §4.11). The caller of `dispatch(StartRecording(...))`
+ *   allocates the `audioFile` first via this factory so the reducer
+ *   stays pure.
+ * @property scope FGS-scoped coroutine context (Spec 1 §4.7). All
+ *   async work inside `runEffect` launches into this scope; cancellation
+ *   on `Service.onDestroy` cancels every in-flight effect.
+ * @property emitAction posts a new action to the orchestrator for
+ *   **async** main-thread dispatch. Effect handlers that need to
+ *   trigger follow-up actions MUST use this (not call
+ *   `orchestrator.dispatch` directly) — see ADR-0001
+ *   §"Main-Thread Confined Dispatch" and forbidden pattern (h).
  *
  * @see net.devemperor.dictate.state.DictateModule.runEffect
+ * @see docs/architecture/state-architecture/effects-and-failures.md §3
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §4.7
  */
-class ModuleServices {
-    // C4 will populate concrete fields per Spec 1 §4.7. The skeleton class
-    // suffices for compile-green type-references from DictateModule.kt.
-}
+class ModuleServices(
+    val recordingHardware: RecordingHardwareSubsystem,
+    val bluetoothSco: BluetoothScoSubsystem,
+    val audioFocus: AudioFocusSubsystem,
+    val recordingTimer: RecordingTimerSubsystem,
+    val amplitudeStream: AmplitudeStreamSubsystem,
+    val borderGlow: BorderGlowSubsystem,
+    val pipelineRunner: PipelineRunnerSubsystem,
+    val sessionRepo: PipelineSessionRepoSubsystem,
+    val notificationCoordinator: PipelineNotificationCoordinatorSubsystem,
+    val inputConnectionProvider: () -> InputConnection?,
+    val clipboard: ClipboardManager?,
+    val sharedPrefs: SharedPreferences,
+    val toastSink: ToastSink,
+    val audioFileFactory: AudioFileFactory,
+    val scope: CoroutineScope,
+    val emitAction: (Action) -> Unit,
+)
 
 /**
  * Declarative SharedPreferences ↔ sub-state mirror entry.
@@ -55,6 +130,205 @@ class ModuleServices {
  */
 data class PrefBinding<S, T>(
     val prefKey: String,
-    val read: (android.content.SharedPreferences) -> T,
+    val read: (SharedPreferences) -> T,
     val write: (S, T) -> S,
 )
+
+// ════════════════════════════════════════════════════════════════════
+// Subsystem interfaces (Chunk C4 — contracts; B3 supplies implementations)
+// ════════════════════════════════════════════════════════════════════
+//
+// Each interface below is the minimum surface that **the module-side
+// effect handlers** need. Concrete Android-backed implementations land
+// in Block 3 (Subsystem-Adapter-Migration). Splitting the contract from
+// the implementation here lets C5/C6 modules sign on the interfaces and
+// be unit-tested with hand-rolled fakes — no Robolectric needed.
+//
+// Why interfaces (not bare class references)? Three reasons:
+//
+//  1. **K-1** — hand-rolled fakes (no mocking framework). An interface
+//     surface is what fakes implement.
+//  2. **Adapter substitution** — B3 will likely route legacy classes
+//     like `RecordingManager` through thin adapter implementations;
+//     interfaces make the substitution mechanical.
+//  3. **C4 testability** — `DictateOrchestrator` tests need to build
+//     a `ModuleServices` instance to invoke `runEffect`. With
+//     interfaces, the test can pass [NoopServices.instance] without
+//     pulling in Android infrastructure.
+
+/**
+ * Recording-hardware adapter. The minimum surface needed by
+ * `RecordingModule.runEffect` (Spec 1 §15.2).
+ *
+ * **`allocate` signature (Phase-B S-4 fix):** the audio-file path
+ * lives in the state (R.2 — `RecordingState.Preparing.audioFile`);
+ * `allocate` takes the file as the **third** argument so the
+ * subsystem never reads `cacheDir` directly. The pre-dispatch
+ * allocator ([AudioFileFactory]) builds the file before
+ * `Action.RecordingAction.StartRecording` is dispatched.
+ */
+interface RecordingHardwareSubsystem {
+    /**
+     * Allocate the MediaRecorder + storage for a new recording.
+     * Returns asynchronously via `Action.RecordingAction.MediaRecorderReady`
+     * (emitted by the subsystem's internal callback).
+     *
+     * @param target the insertion target captured at start-time.
+     * @param useBluetooth whether to wire the SCO mic route.
+     * @param audioFile pre-allocated output file (R.2).
+     */
+    fun allocate(target: InsertionTarget, useBluetooth: Boolean, audioFile: java.io.File)
+
+    /** Begin recording — must follow a successful `allocate`. */
+    fun start()
+
+    /** Pause the active recording (resumable). */
+    fun pause()
+
+    /** Resume a paused recording. */
+    fun resume()
+
+    /** Stop the recording and flush to disk. */
+    fun stop()
+
+    /** Release hardware (cancel + cleanup). Safe to call from `terminate()`. */
+    fun release()
+}
+
+/**
+ * Bluetooth-SCO subsystem (mic-route to Bluetooth headset).
+ *
+ * Emits Action.AudioAction.OnBluetoothScoStateChanged via the
+ * [ModuleServices.emitAction] indirection when the OS reports
+ * connection state changes.
+ */
+interface BluetoothScoSubsystem {
+    fun start()
+    fun stop()
+}
+
+/**
+ * AudioFocus subsystem (system-audio focus request / release).
+ */
+interface AudioFocusSubsystem {
+    fun request()
+    fun release()
+}
+
+/**
+ * Monotonic recording-duration timer.
+ *
+ * Lives behind an interface for two reasons:
+ *  1. Tests don't want a real clock thread.
+ *  2. The Phase-2 telemetry hook (anomalous-duration detection) will
+ *     intercept here.
+ */
+interface RecordingTimerSubsystem {
+    fun start()
+    fun pause()
+    fun resume()
+    fun reset()
+}
+
+/**
+ * Live amplitude sampler for the recording UI animation
+ * (`Recording.Active` → bar pulse).
+ */
+interface AmplitudeStreamSubsystem {
+    fun start()
+    fun stop()
+}
+
+/**
+ * Keyboard-border glow animation driver. Triggered during
+ * Recording.Active to give the user a visual indicator that recording
+ * is on.
+ */
+interface BorderGlowSubsystem {
+    fun start()
+    fun stop()
+}
+
+/**
+ * Pipeline-job submission + cancellation (Spec 1 §4.9).
+ *
+ * Modules call `submit(sessionId, audioFile)` from
+ * `PipelineModule.runEffect`; failures are routed back via
+ * `Action.PipelineAction.PipelineFailed`.
+ */
+interface PipelineRunnerSubsystem {
+    fun submit(sessionId: String, audioFile: java.io.File)
+    fun submitReprocess(
+        sessionId: String,
+        audioFile: java.io.File,
+        queue: List<Int>,
+        language: String?,
+    )
+
+    fun cancel(sessionId: String)
+    fun isRunning(sessionId: String): Boolean
+    fun activeJobCount(): Int
+}
+
+/**
+ * Persistence for the `PendingSession`-list (Spec 1 §4.9
+ * `PipelineSessionRepo`). PendingSessionsModule subscribes to
+ * [pendingFlow] and emits `PendingSessionsAction.Refresh` whenever the
+ * DB changes.
+ */
+interface PipelineSessionRepoSubsystem {
+    suspend fun loadPending(): List<PendingSession>
+    suspend fun markInserted(sessionId: String, at: Long)
+    suspend fun markFailed(sessionId: String, reason: String)
+    fun pendingFlow(): kotlinx.coroutines.flow.Flow<List<PendingSession>>
+}
+
+/**
+ * FGS persistent-notification updater. PipelineModule's effect handler
+ * delegates here to update the "Running step X of Y" text in the
+ * notification.
+ */
+interface PipelineNotificationCoordinatorSubsystem {
+    fun show(status: NotificationStatus)
+    fun dismiss()
+}
+
+/**
+ * Sealed notification-status hierarchy (Spec 1 §11.x). Phase-1 placeholder
+ * — the concrete variants are defined in B3 when the coordinator is
+ * implemented. Kept minimal here to break the dependency chain.
+ */
+sealed interface NotificationStatus {
+    data object Idle : NotificationStatus
+    data class Recording(val sessionId: String) : NotificationStatus
+    data class Pipeline(val sessionId: String, val step: String) : NotificationStatus
+}
+
+/**
+ * Toast indirection. Effect handlers call `services.toastSink.show(msg)`;
+ * the real implementation in B3 posts to the IME's Looper.
+ */
+interface ToastSink {
+    fun show(message: CharSequence)
+    fun showError(message: CharSequence)
+}
+
+/**
+ * Pre-Dispatch-Allocator for audio cache files (Spec 1 §4.11).
+ *
+ * The reducer is pure, so `Action.RecordingAction.StartRecording` must
+ * already carry an allocated [java.io.File]. Callers (the IME's
+ * record-button click handler) ask the factory for a fresh file before
+ * dispatching the action.
+ *
+ * Lives on `ModuleServices` so test code can inject a deterministic
+ * factory (e.g. `tmp-1.m4a`, `tmp-2.m4a`).
+ */
+interface AudioFileFactory {
+    /**
+     * Allocate a new cache-file path. The file is **not** created on
+     * disk by this call; `RecordingHardwareSubsystem.allocate` writes
+     * to it when `MediaRecorder.start()` runs.
+     */
+    fun allocate(): java.io.File
+}

@@ -540,7 +540,12 @@ public class DictateInputMethodService extends InputMethodService
                     && uiController.getState() instanceof PipelineUiState.ReprocessStaging
         );
 
-        // KeyboardUiController (wraps pipeline progress views, delegates visibility to stateManager)
+        // KeyboardUiController (wraps pipeline progress views, delegates visibility to stateManager).
+        // Block-1a Quick-Win (Spec 1 §11.2.2 step 2): the controller now also owns the
+        // record-button-appearance resolver for the recording axis. The dictate-button
+        // label provider is wired here so the Idle branch in
+        // KeyboardUiController.applyRecordButtonForRecording can read it without
+        // taking a dependency on the LanguageController / SharedPreferences plumbing.
         uiController = new KeyboardUiController(new KeyboardUiController.PipelineViews(
             dictateKeyboardView.findViewById(R.id.pipeline_steps_container),
             dictateKeyboardView.findViewById(R.id.pipeline_scroll_view),
@@ -548,7 +553,7 @@ public class DictateInputMethodService extends InputMethodService
             infoCl,
             LayoutInflater.from(context),
             mainHandler
-        ), stateManager);
+        ), stateManager, () -> getDictateButtonText());
 
         StaggeredGridLayoutManager promptsLayoutManager =
                 new StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.HORIZONTAL);
@@ -604,13 +609,26 @@ public class DictateInputMethodService extends InputMethodService
                 0.35f,  // max brightness boost
                 displayDensity
             );
+        // Block-1a Quick-Win: the previously combined "audio file exists AND
+        // Pref.ResendButton" lambda is split into two independent axes so the
+        // predResendVisible helper receives them separately (mirrors the
+        // future Block-5 LayoutCatalog RESEND-slot predicate, Spec 2 §3.2).
+        // The recordButton-appearance lambda points at
+        // KeyboardUiController.applyRecordButtonForRecording — that resolver
+        // combines this with the pipeline axis it already owns.
         recordingUiController = new RecordingUiController(
             recordButton, pauseButton, resendButton,
             recordingAnimation, stateManager, this,
             () -> getDictateButtonText(),
             () -> DictatePrefsKt.get(sp, Pref.Animations.INSTANCE),
-            () -> new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
-                    && DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
+            () -> new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
+            () -> DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
+            newRecordingState -> {
+                if (uiController != null) {
+                    uiController.applyRecordButtonForRecording(newRecordingState);
+                }
+                return kotlin.Unit.INSTANCE;
+            },
             () -> qwertzKeyboardView != null ? qwertzKeyboardView.findButtonForAction(KeyAction.RECORD) : null,
             promptRecIndicatorBtn,
             promptPauseBtn,
@@ -1339,13 +1357,18 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         if (isIdle) {
-            // enable resend button if previous audio file still exists in cache
-            if (new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
-                    && DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE)) {
-                resendButton.setVisibility(View.VISIBLE);
-            } else {
-                resendButton.setVisibility(View.GONE);
-            }
+            // Block-1a Quick-Win: resend visibility consolidated into the
+            // predResendVisible helper (KeyboardVisibilityPredicates).
+            // Recording is guaranteed Idle on this branch (isIdle gate above);
+            // pipeline is also Idle on a fresh onStartInputView so the helper
+            // returns true iff the cached audio still exists AND
+            // Pref.ResendButton is on — same expression that previously lived
+            // inline.
+            resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
+                    new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
+                    DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
+                    RecordingState.Idle.INSTANCE,
+                    PipelineUiState.Idle.INSTANCE));
 
             // get the currently selected input language
             recordButton.setText(getDictateButtonText());
@@ -1666,7 +1689,16 @@ public class DictateInputMethodService extends InputMethodService
         // Preparing state: button disabled, shows "Sending..." (state-driven via PipelineUiState.Preparing)
         try {
             uiController.preparePipeline();
-            resendButton.setVisibility(View.GONE);
+            // Block-1a Quick-Win: go through predResendVisible so this site
+            // shares the same expression as the rest. Pipeline is now
+            // Preparing (set above) → predicate returns false → GONE.
+            resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
+                    new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
+                    DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
+                    recordingStateController != null
+                            ? recordingStateController.getState()
+                            : RecordingState.Idle.INSTANCE,
+                    uiController.getState()));
             infoBarController.dismiss();
             updatePromptButtonsEnabledState();
             stateManager.refresh(); // updates pause/trash/prompts visibility
@@ -1836,6 +1868,20 @@ public class DictateInputMethodService extends InputMethodService
     public void onShowResend() {
         mainHandler.post(() -> {
             if (resendButton == null) return;  // View recreation not yet complete
+            // Block-1a Quick-Win exception (Spec 1 §9.4):
+            // This callback fires from PipelineOrchestrator BEFORE the
+            // pipeline-state transitions back to Idle (`onPipelineFinished()` is
+            // posted separately and calls `uiController.stopPipeline()` only
+            // after this returns). Running `predResendVisible` here would
+            // therefore evaluate to `false` and the resend button would never
+            // appear — the very thing the callback exists to do. Block 5
+            // (LayoutCatalog) folds the predicate into a state-driven
+            // subscriber and re-orders the pipeline-completion sequence so
+            // this explicit setter disappears entirely. Until then, the
+            // gating happens upstream: `onShowResend` is only fired when
+            // `PipelineConfig.showResendButton == true`, which is itself
+            // derived from `Pref.ResendButton` AND the cached audio file
+            // existing (see `runTranscriptionViaOrchestrator`).
             resendButton.setVisibility(View.VISIBLE);
         });
     }
@@ -2642,6 +2688,12 @@ public class DictateInputMethodService extends InputMethodService
         //   2. let the controller swap ConstraintSets + re-parent (animated
         //      iff Pref.Animations is true)
         //   3. play the editNumbersButton bounce as visual feedback
+        //   4. KSM.refresh() — Block-1a Quick-Win (Spec 1 §11.2.2 step 3):
+        //      the layout-mode controller's setSingleRowMode is structural
+        //      (ConstraintSet swap + re-parent) but does NOT recompute the
+        //      visibility axes owned by KeyboardStateManager. Without an
+        //      explicit refresh the action-row / input-row visibility could
+        //      lag a frame behind the pref-flip on the next state change.
         //
         // SmallMode-Vorrang (Plan-Z. 222-229): when SmallMode is on the
         // entire main_buttons_cl is GONE, so step 2 is invisible; the pref
@@ -2658,12 +2710,15 @@ public class DictateInputMethodService extends InputMethodService
         if (mainButtonsController != null) {
             mainButtonsController.animateEditNumbersBounce();
         }
+        if (stateManager != null) {
+            stateManager.refresh();
+        }
     }
 
     @Override
     public void onAudioFocusToggled() {
         // Block 2 (Quality-Gate W "Race Window"): the order
-        //   1. SP-write   2. live-hook   3. icon refresh
+        //   1. SP-write   2. live-hook   3. icon refresh   4. KSM.refresh
         // matters. Other components reading Pref.AudioFocus on a trigger (the
         // SP listener registered above, the next startRecording() pass) must
         // see the new value already; the icon only follows after the runtime
@@ -2683,6 +2738,19 @@ public class DictateInputMethodService extends InputMethodService
         // 3. UI refresh — both buttons synced via refreshAudioFocusIcon.
         if (mainButtonsController != null) {
             mainButtonsController.refreshAudioFocusIcon(newValue);
+        }
+
+        // 4. Block-1a Quick-Win (Spec 1 §11.2.2 step 3): the audio-focus
+        //    toggle does not directly change any KSM-owned axis today, but
+        //    downstream visibility resolvers may consult the pref via the
+        //    `isRecording`/`isPaused` lambdas in a future iteration. Adding
+        //    the refresh now keeps the toggle on the same "user-action ⇒
+        //    refresh" rhythm as setSmallMode / onSingleRowModeToggled and
+        //    eliminates the off-by-one frame the plan §11.2.2 step 3 calls
+        //    out (the icon update would otherwise reach the screen one
+        //    layout-pass before any KSM-driven downstream visibility).
+        if (stateManager != null) {
+            stateManager.refresh();
         }
     }
 

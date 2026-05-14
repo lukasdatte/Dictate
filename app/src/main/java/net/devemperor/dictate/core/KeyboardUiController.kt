@@ -29,7 +29,18 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 class KeyboardUiController(
     private val views: PipelineViews,
-    private val stateManager: KeyboardStateManager
+    private val stateManager: KeyboardStateManager,
+    /**
+     * Block-1a Quick-Win (Spec 1 §11.2.2 step 2): supplies the
+     * dictate-button label for the Idle recording branch so the central
+     * resolver in [applyRecordButtonForRecording] can paint text without
+     * owning the language / preferences plumbing. The previous owner —
+     * [RecordingUiController.applyIdleState] — read this via its own
+     * lambda; the lambda moved here so the recording-axis resolver lives
+     * in one place. Default is a constant empty string for tests that
+     * exercise the pipeline-axis branches in isolation.
+     */
+    private val dictateButtonTextProvider: () -> String = { "" }
 ) : PipelineUiStateReader {
 
     /**
@@ -456,6 +467,71 @@ class KeyboardUiController(
     }
 
     // ── Record button rendering from state ──
+
+    /**
+     * Block-1a Quick-Win (Spec 1 §11.2.2 step 2): central resolver for the
+     * recording-axis side of the record-button appearance.
+     *
+     * Before Block 1a, the record button was painted from two owners:
+     *  - [RecordingUiController.applyIdleState / applyPreparingState /
+     *    applyActiveState] for the recording axis, and
+     *  - [refreshRecordButtonFromState] for the pipeline axis.
+     *
+     * The ordering between the two was race-fragile across rotation +
+     * `restoreUiState` (§9.5 of Spec 1). This method is the single entry
+     * point invoked by [RecordingUiController.onStateChanged] — pipeline
+     * still wins for non-Idle pipeline states because [refreshRecordButton
+     * FromState] continues to be called from
+     * [updatePipelineState] / [stopPipeline] / per-tick.
+     *
+     * Behavior preserved verbatim from the previous Recording*UiController
+     * branches — only the call site moved.
+     */
+    fun applyRecordButtonForRecording(state: RecordingState) {
+        // When the pipeline owns the button (Preparing / Running /
+        // ReprocessStaging), the recording-axis branches must NOT
+        // overwrite the pipeline-painted text/icon/enabled — defer to the
+        // pipeline-axis resolver instead.
+        if (this.state !is PipelineUiState.Idle) {
+            refreshRecordButtonFromState()
+            return
+        }
+        when (state) {
+            is RecordingState.Idle -> {
+                views.recordButton.text = dictateButtonTextProvider()
+                views.recordButton.isEnabled = true
+                views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                    R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0
+                )
+            }
+            is RecordingState.Preparing -> {
+                // Preparing for SCO / MediaRecorder allocation: keep the
+                // button visible but blocked so the user cannot
+                // double-tap during the bring-up window.
+                views.recordButton.isEnabled = false
+            }
+            is RecordingState.Active -> {
+                views.recordButton.isEnabled = true
+                views.recordButton.setText(R.string.dictate_send)
+                if (state.useBluetooth) {
+                    views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                        R.drawable.ic_baseline_send_20, 0, R.drawable.ic_baseline_bluetooth_20, 0
+                    )
+                } else {
+                    views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                        R.drawable.ic_baseline_send_20, 0, 0, 0
+                    )
+                }
+            }
+            is RecordingState.Paused -> {
+                // No record-button mutation when entering Paused — text /
+                // isEnabled stay at the Active values until either resume
+                // (back to Active) or stop (back to Idle). Matches the
+                // previous behavior of [RecordingUiController.applyPaused
+                // State], which only touched the pause-button foreground.
+            }
+        }
+    }
 
     /**
      * Renders the record button based on the current [PipelineUiState].

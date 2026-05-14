@@ -31,7 +31,35 @@ class RecordingUiController(
     private val context: Context,
     private val getDictateButtonText: () -> String,
     private val isAnimationEnabled: () -> Boolean,
+    /**
+     * Returns `true` iff the cached "last recording" audio file is still
+     * present. Block-1a split from the former combined
+     * `getLastAudioFileExists` lambda — the resend-pref axis now travels
+     * via [getResendEnabled] so [predResendVisible] sees the two inputs
+     * independently. See [KeyboardVisibilityPredicates] for the rationale.
+     */
     private val getLastAudioFileExists: () -> Boolean,
+    /**
+     * Returns the current `Pref.ResendButton` value. Split from
+     * [getLastAudioFileExists] in Block 1a (Quick-Wins) so the
+     * [predResendVisible] helper receives each axis as a separate input
+     * — the future LayoutCatalog predicate (Spec 2 §3.2) has the same
+     * shape.
+     */
+    private val getResendEnabled: () -> Boolean,
+    /**
+     * Block-1a Quick-Win (Spec 1 §11.2.2 step 2): the central
+     * record-button-appearance resolver lives in
+     * [KeyboardUiController.applyRecordButtonForRecording]. The
+     * `RecordingUiController` no longer mutates `recordButton.text /
+     * isEnabled / compound drawables` itself — it forwards the new
+     * recording state via this callback so the resolver can combine the
+     * recording axis with the pipeline axis it already owns. The
+     * previously-race-fragile ordering between Idle/Active branches and
+     * the Preparing/Running branches in `KeyboardUiController` collapses
+     * into a single owner.
+     */
+    private val onRecordingStateChangedForRecordButton: (RecordingState) -> Unit,
     private val qwertzRecButtonProvider: () -> MaterialButton? = { null },
     private val promptRecButton: MaterialButton? = null,
     private val promptPauseButton: MaterialButton? = null,
@@ -49,6 +77,14 @@ class RecordingUiController(
     }
 
     override fun onStateChanged(oldState: RecordingState, newState: RecordingState) {
+        // Block-1a Quick-Win (Spec 1 §11.2.2 step 2): delegate the
+        // record-button-appearance recording-axis to the central resolver
+        // BEFORE running the auxiliary view work below. The resolver
+        // combines this with the pipeline axis it already owns, so the
+        // ordering between recording-state transitions (Idle/Active/...)
+        // and pipeline-state transitions (Preparing/Running/...) collapses
+        // into a single owner — eliminating the §9.5 race.
+        onRecordingStateChangedForRecordButton(newState)
         when (newState) {
             is RecordingState.Idle -> applyIdleState()
             is RecordingState.Preparing -> applyPreparingState()
@@ -113,11 +149,10 @@ class RecordingUiController(
     // ── State Application ──
 
     private fun applyIdleState() {
-        recordButton.text = getDictateButtonText()
-        recordButton.isEnabled = true
-        recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-            R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0
-        )
+        // Block-1a Quick-Win: recordButton text / isEnabled / compound
+        // drawables are owned by KeyboardUiController.applyRecordButtonFor
+        // Recording (called from onStateChanged before this branch) — no
+        // longer mutated here. See class header + §11.2.2 step 2.
         pauseButton.foreground = AppCompatResources.getDrawable(context, R.drawable.ic_baseline_pause_24)
 
         if (isAnimationEnabled()) {
@@ -133,29 +168,39 @@ class RecordingUiController(
         promptPauseButton?.foreground = null
         promptPauseButton?.setOnClickListener(null)
 
-        // Show resend button if previous audio exists
-        resendButton.visibility = if (getLastAudioFileExists()) View.VISIBLE else View.GONE
+        // Block-1a Quick-Win: single source of truth for resend visibility.
+        // Recording is Idle here (we just entered this branch). Pipeline
+        // state lives in KeyboardUiController, but at the moment a
+        // RecordingStateController-driven Idle transition runs, the
+        // pipeline FSM is also Idle (Preparing/Running never coexists with
+        // a recording-stop callback) — the explicit `PipelineUiState.Idle`
+        // argument captures that invariant.
+        resendButton.visibility = resolveResendVisibility(
+            lastAudioFileExists = getLastAudioFileExists(),
+            resendEnabled = getResendEnabled(),
+            recordingState = RecordingState.Idle,
+            pipelineState = PipelineUiState.Idle
+        )
     }
 
     private fun applyPreparingState() {
-        recordButton.isEnabled = false
+        // recordButton.isEnabled handled by KeyboardUiController's central
+        // resolver (Block-1a Quick-Win, §11.2.2 step 2).
     }
 
     private fun applyActiveState(useBluetooth: Boolean) {
-        recordButton.isEnabled = true
-        recordButton.setText(R.string.dictate_send)
+        // recordButton text / isEnabled / compound drawables: see Idle branch
+        // — owned by KeyboardUiController.applyRecordButtonForRecording.
 
-        if (useBluetooth) {
-            recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                R.drawable.ic_baseline_send_20, 0, R.drawable.ic_baseline_bluetooth_20, 0
-            )
-        } else {
-            recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                R.drawable.ic_baseline_send_20, 0, 0, 0
-            )
-        }
-
-        resendButton.visibility = View.GONE
+        // Recording is Active here, so the predicate evaluates to false
+        // regardless of audio-file or pref state. Going through the helper
+        // keeps every resend-visibility call site on the same expression.
+        resendButton.visibility = resolveResendVisibility(
+            lastAudioFileExists = getLastAudioFileExists(),
+            resendEnabled = getResendEnabled(),
+            recordingState = RecordingState.Active(useBluetooth = useBluetooth),
+            pipelineState = PipelineUiState.Idle
+        )
         pauseButton.foreground = AppCompatResources.getDrawable(context, R.drawable.ic_baseline_pause_24)
 
         if (isAnimationEnabled()) {

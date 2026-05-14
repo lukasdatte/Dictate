@@ -1,5 +1,6 @@
 package net.devemperor.dictate.state
 
+import net.devemperor.dictate.testutil.fakeModuleServices
 import org.junit.Assert.assertNotNull
 import org.junit.Test
 import kotlin.reflect.KClass
@@ -53,7 +54,11 @@ class DictateModuleTest {
         val ctx: ReducerContext = ReducerContext(global = state, now = 0L)
         val result: TransitionResult<RecordingState, *> =
             TransitionResult<RecordingState, SideEffectMarker>(nextState = RecordingState.Idle)
-        val services: ModuleServices = ModuleServices()
+        // ModuleServices is constructed via the `fakeModuleServices(...)`
+        // test fixture, which fills every subsystem field with a no-op
+        // fake. C3 used a parameterless `ModuleServices()` (skeleton);
+        // C4 supplied the concrete constructor surface.
+        val services: ModuleServices = fakeModuleServices()
         val binding: PrefBinding<RecordingState, Int> = PrefBinding(
             prefKey = "x",
             read = { 0 },

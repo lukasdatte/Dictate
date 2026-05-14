@@ -1,5 +1,6 @@
 package net.devemperor.dictate.core
 
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -10,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +19,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import net.devemperor.dictate.R
 import net.devemperor.dictate.settings.DictateSettingsActivity
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Foreground Service that hosts the Dictate pipeline state container.
@@ -48,8 +51,8 @@ import net.devemperor.dictate.settings.DictateSettingsActivity
  * keeps consuming its existing controllers and only the bind/unbind
  * lifecycle is exercised.
  *
- * @see docs/decisions/0003-service-foreground-pipeline-architecture.md §"Required mechanics"
- * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §7 §11.1 §11.3 §11.5
+ * @see `docs/decisions/0003-service-foreground-pipeline-architecture.md` §"Required mechanics"
+ * @see `docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md` §7 §11.1 §11.3 §11.5
  */
 class DictatePipelineService : Service() {
 
@@ -61,9 +64,12 @@ class DictatePipelineService : Service() {
      * with the service in [onDestroy]. The supervisor job ensures one failing
      * effect does not collapse the rest of the pipeline.
      *
-     * `Dispatchers.Main.immediate` matches Spec 1 §7.3 — the orchestrator's
-     * single-dispatch path is Main-thread-confined per ADR-0001 §"Required
-     * mechanics".
+     * `Dispatchers.Main.immediate` matches Spec 1 §4.3 — the orchestrator's
+     * single-dispatch path runs on Main.immediate so re-entrant dispatches
+     * stay on the same task.
+     *
+     * @see Spec 1 §4.3 (orchestrator single-dispatch on Main.immediate)
+     * @see `docs/decisions/0001-orchestrator-and-modules-architecture.md` §"Required mechanics" item 2
      */
     private val serviceScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -81,8 +87,12 @@ class DictatePipelineService : Service() {
      * the only observable side-effect of the no-op stub — letting the
      * binder-contract test exercise the IME-side call path before
      * Block 1b plugs the real orchestrator in.
+     *
+     * Atomic because same-process binder transactions are not guaranteed
+     * to be main-thread-confined; Block 1b adds a second client (Spec 1
+     * §11.3.4 Multi-Bind) which makes concurrent dispatch plausible.
      */
-    private var stubDispatchCount: Int = 0
+    private val stubDispatchCount: AtomicInteger = AtomicInteger(0)
 
     /**
      * Test-visibility hook: how many times the binder stub absorbed a
@@ -90,7 +100,7 @@ class DictatePipelineService : Service() {
      * and this counter is removed together with the stub.
      */
     val dispatchInvocationCount: Int
-        get() = stubDispatchCount
+        get() = stubDispatchCount.get()
 
     /**
      * Tracks whether [ensureNotificationChannel] has run. Exposed via
@@ -140,12 +150,42 @@ class DictatePipelineService : Service() {
         // in-memory NotificationCompat.Builder chain — measured well below
         // the 1-second p99 target on API-34 reference devices.
         //
+        // Defensive: on API ≥ 31 startForeground can throw
+        // `ForegroundServiceStartNotAllowedException` (background-start
+        // restrictions); on API ≥ 33 it can throw `SecurityException` when
+        // POST_NOTIFICATIONS is denied or the FGS-type does not match. The
+        // catch keeps the service from crash-looping behind the IME-side
+        // `onBindingDied` rebind (DictateInputMethodService Block-2 wiring).
+        // Spec 1 §11.5.1 anticipates this via the onboarding runtime
+        // prompt; until that lands (delegated to a follow-up — see Issue
+        // Index), stopSelf + START_NOT_STICKY is the safe recovery path.
+        //
         // Block 1b switches this call to
         // `notifCoordinator.buildInitial()` + `actionRouter.dispatch(intent)`
         // and adds `notifCoordinator.startReactiveUpdates(::stopSelfWhenTerminal)`
         // (Spec 1 §7.3). The 5-second budget remains the binding contract.
         // ──────────────────────────────────────────────────────────────
-        startForegroundCompat(buildInitialNotification())
+        try {
+            startForegroundCompat(buildInitialNotification())
+        } catch (e: SecurityException) {
+            // API 33+: POST_NOTIFICATIONS denied, FGS-type mismatch, etc.
+            Log.w(TAG, "FGS start denied (security)", e)
+            stopSelf()
+            return START_NOT_STICKY
+        } catch (e: Exception) {
+            // API 31+: ForegroundServiceStartNotAllowedException — caught via
+            // Exception base to keep the catch usable without an
+            // @RequiresApi gate. Re-throw anything else so genuine bugs
+            // still surface in logcat.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                e is ForegroundServiceStartNotAllowedException
+            ) {
+                Log.w(TAG, "FGS start denied (background-start restriction)", e)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            throw e
+        }
 
         // Block 1b: `intent?.let { actionRouter.dispatch(it) }` lands here.
         // Block 2 ignores incoming intents — no action-routing yet.
@@ -156,9 +196,11 @@ class DictatePipelineService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
-        // Block 1b: orchestrator.shutdown() with a runBlocking-withTimeout
-        // wrapper PLUS pre-cancel-dispatch for active recording goes here
-        // (Spec 1 §7.3 onDestroy + ADR-0003 §"Required mechanics" items 8+9).
+        // Block 1b: insert `runBlocking { withTimeout(2000L) { orchestrator.shutdown() } }`
+        // HERE — BEFORE serviceScope.cancel(). Otherwise the shutdown's
+        // suspending terminate calls run on an already-cancelled scope and
+        // abort instantly (Spec 1 §7.3 onDestroy + ADR-0003 §"Required
+        // mechanics" items 8+9; Spec 1 §11.5 Finding 6).
         // Block 2 has neither orchestrator nor recording state to release,
         // so only the scope-teardown step from the §7.3 sequence runs.
         serviceScope.cancel()
@@ -201,7 +243,15 @@ class DictatePipelineService : Service() {
             enableLights(false)
             lockscreenVisibility = Notification.VISIBILITY_PRIVATE
         }
-        mgr.createNotificationChannel(channel)
+        // Defensive: locked-down devices / restricted profiles can reject
+        // channel creation with a SecurityException. We swallow so the
+        // service still boots; without a channel, startForeground will
+        // raise its own error (handled in onStartCommand).
+        try {
+            mgr.createNotificationChannel(channel)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "NotificationChannel create denied", e)
+        }
     }
 
     /**
@@ -292,12 +342,14 @@ class DictatePipelineService : Service() {
     inner class LocalBinder : Binder() {
 
         /**
-         * Direct service-instance pointer — exposed so Block 1b can layer
-         * `state: StateFlow<DictateUiState>` on top without exposing the
-         * orchestrator to the IME-side. Block 2 callers must not depend on
-         * any field beyond what is wired here.
+         * Module-internal: enforces the ADR-0003 `state + dispatch` sealed
+         * contract by preventing IME-side callers from reaching into
+         * service internals. Block 1b layers `state: StateFlow<DictateUiState>`
+         * on top via `service.orchestrator.state` without exposing the
+         * orchestrator itself to the IME side. Tests in the same module
+         * still see `internal` via Kotlin module visibility.
          */
-        val service: DictatePipelineService get() = this@DictatePipelineService
+        internal val service: DictatePipelineService get() = this@DictatePipelineService
 
         /**
          * Block-2 single-dispatch entry point — a no-op until Block 1b
@@ -309,13 +361,13 @@ class DictatePipelineService : Service() {
          * The IME-side does not need to be re-touched — same method name,
          * compatible signature widening.
          */
-        @Suppress("UNUSED_PARAMETER")
+        @Suppress("UNUSED_PARAMETER") // TODO(Block 1b): remove when action is forwarded to orchestrator
         fun dispatch(action: Any) {
             // Block 1b: service.orchestrator.dispatch(action) goes here.
             // Block 2: deliberate no-op — only the invocation is observable
             // (via [dispatchInvocationCount]) so the IME-side bind/dispatch
             // path can be smoke-tested before the real orchestrator lands.
-            stubDispatchCount += 1
+            stubDispatchCount.incrementAndGet()
         }
     }
 

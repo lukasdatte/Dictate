@@ -319,4 +319,16 @@
     <string name="dictate_delete_audio_title">Audio löschen</string>
     <string name="dictate_delete_audio_message">Audio wird unwiderruflich gelöscht. Transkription und Ergebnisse bleiben erhalten.</string>
     <string name="dictate_delete_audio_confirm">Löschen</string>
+
+    <!--
+        Block 2 (DictatePipelineService): notification channel + content
+        + service description + IME bind-race fallback. See Spec 1 §11.1
+        §11.5 §11.3.2a.
+    -->
+    <string name="dictate_pipeline_service_description">Hintergrunddienst für die Dictate-Transkriptions-Pipeline.</string>
+    <string name="dictate_pipeline_channel_name">Dictate-Pipeline</string>
+    <string name="dictate_pipeline_channel_description">Persistente Benachrichtigung, während Dictate im Hintergrund aufnimmt oder Audio verarbeitet.</string>
+    <string name="dictate_pipeline_notif_title">Dictate</string>
+    <string name="dictate_pipeline_notif_idle">Bereit</string>
+    <string name="dictate_service_not_ready">Service startet noch — bitte kurz warten.</string>
 </resources>

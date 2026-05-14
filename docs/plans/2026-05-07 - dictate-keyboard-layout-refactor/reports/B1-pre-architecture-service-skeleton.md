@@ -18,7 +18,7 @@
 
 **Severity counts:**
 - Critical: 0
-- Important: 1
+- Important: 2
 - Nice-to-have: 0
 - Postponed: 0
 
@@ -27,6 +27,7 @@
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
 | IMPL-1 | B1-C2-IMPL-FULL | Important | delegated-to-orchestrator | JobExecutor-init move deferred to Block 1b (Spec 1 §11.2.2 Block 2 sub-step 7) | C2 IMPL-PLAN-FIX |
+| IMPL-2 | B1-VAL-REPAIR (F-3) | Important | delegated-to-orchestrator | POST_NOTIFICATIONS runtime prompt (Spec 1 §11.2.2 Block-2 sub-step 6) — not implemented in B1; on API 33+ devices the FGS notification will be hidden by default until a prompt is shown. Target: Phase 4.5 runbook line item (E2E TC-15 already exercises FGS notification visibility) OR a dedicated "Block-2-Onboarding-Completion" mini-chunk if unit-level coverage is preferred. UI-surface modification (OnboardingActivity ActivityResultLauncher per §11.5.1) is out of scope for a service-skeleton chunk; Block 1b's composition-root work does not touch onboarding. | Block-Validate Repair Wave 1 |
 
 ---
 
@@ -233,6 +234,7 @@ Steps 1-5 executed in a single fresh-agent invocation. Block-2 skeleton implemen
 |-----------|---------------|--------------|-----|------------------------|-----------|
 | D4 | State-file §"Test-Strategy" K-4 rule "no Android Context — no Robolectric" + B1 row "Robolectric only for FGS-boot-latency test in chunk C2" | First Robolectric dependency added to the JVM test classpath. Justified inline in `gradle/libs.versions.toml` and at the top of `DictatePipelineServiceTest.kt`. | Spec 1 §10 Phase-B S-5 acceptance "NotificationChannel-vor-startForeground" + "FGS-Boot < 5 s" cannot be expressed against a bare JVM Context — the channel-order assertion needs `NotificationManager.getNotificationChannel`, and `startForeground` needs `Shadow.lastForegroundNotification`. The state-file Test-Strategy explicitly anticipates this row ("Robolectric only for FGS-boot-latency test in chunk C2"). | Block 5 + Block 6 will also need Robolectric (RecordingAnimationController, DefaultOverlayPermissionGate per state-file §"Test-Strategy"). The dep is now in place — no further build-script change required. | inline-fixed |
 | D5 | Spec 1 §11.2.2 Block 2 sub-step 7 "JobExecutor-Init wandert vom IME-`onCreate` (Z. 389) in `Service.onCreate` (G7 in §13.5)" | NOT moved in Block 2 — left in `DictateInputMethodService.initLongLivedObjects` Z. 389 as-is. | The move requires constructing `PipelineOrchestrator(aiOrchestrator, autoFormattingService, promptQueueManager, …, this /* PipelineCallback */, …)` inside the service. The constructor has 12 dependencies tied to the IME-service-side architecture (PipelineCallback being the IME-Service itself, RecordingRepository being IME-scoped, etc.). Moving it without the orchestrator-side Composition-Root is a substantial cross-cutting touch that risks creating dual init paths between Block 2 and Block 1b. Spec 1 §7.3's full onCreate-snippet builds the orchestrator + ALL helpers in one composition — Block 1b absorbs JobExecutor.initialize naturally as step 10 of the §4.11.5.1 sequence. Leaving Z. 389 alone in Block 2 keeps the current pipeline working without behavioural regression. | Block 1b absorbs this when it builds the full Composition-Root (Spec 1 §11.2.2 Block 1b sub-step 2 "DictateOrchestrator + ModuleServicesFactory anlegen"). No impact on Block 3/4/5/6 — they consume the orchestrator, not JobExecutor's wiring. | delegated-to-orchestrator (see issue IMPL-1) |
+| D6 | ADR-0003 §"Required mechanics" item 3 (`state: StateFlow<DictateUiState>` + `dispatch(action: Action): DispatchOutcome`) | `LocalBinder` exposes `internal val service: DictatePipelineService` + `dispatch(action: Any): Unit` instead. Recorded retroactively during Block-Validate Repair Wave 1 (F-2). | Skeleton — orchestrator/Action sealed class don't exist until Block 1b; widening `Any` → `Action` and adding `state: StateFlow` is a non-breaking IME-side change once orchestrator is wired. The `service` accessor is `internal` (F-9) so IME-side callers cannot reach into private fields; only same-module tests + the Block-1b composition-root see it. | Block 1b restores the canonical ADR-0003 surface. If a Block-1b caller uses `binder.service.someInternal()` instead of `state`/`dispatch`, the contract regresses — Audit-Plan-and-API of B-Block-1b should re-check the surface. | flagged-for-validate (plan-deviation-resolved) |
 
 **Issues.**
 
@@ -332,7 +334,83 @@ The fix to `bindService_smokeTest_doesNotThrow` (Step 5): removed the tautologic
 **Agent-ID:** `B1-VAL-SANITY`
 **Output file:** `./reports/validated-findings-B1.md`
 
-⏳ to be filled
+Consolidator merged 26 raw audit findings into 23 unique 🟢 findings (Critical: 0, Important: 9, Nice-to-have: 14). 2 audit findings eliminated (OOS-1 out-of-scope, AUDIT-PLAN-AND-API-B1-6 false-positive informational). All 23 routed to one repair wave per D3.
+
+### Block-Validate Repair Wave 1 (B1-VAL-REPAIR)
+
+**Date:** 2026-05-15
+**Scope:** green-only (all 23 🟢 findings)
+**Findings addressed:** 23 (F-7 + F-23 are dedup-merged into F-3 + F-13 respectively → 21 effective fixes across code + docs + tests)
+
+| Finding ID | Severity | File | Status | Fix description |
+|------------|----------|------|--------|-----------------|
+| F-1 | Important | `app/src/main/java/net/devemperor/dictate/core/RecordingUiController.kt`, `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java` | fixed | Added `pipelineStateProvider: () -> PipelineUiState` constructor param to `RecordingUiController` (default `PipelineUiState.Idle`). Replaced the `PipelineUiState.Idle` literal in `applyIdleState()` + `applyActiveState()` with `pipelineStateProvider()`. IME-side wires provider to `uiController.getState()` mirroring the existing `isReprocessStaging` pattern. Comment in `applyIdleState` rewritten to "reads the live pipeline state via the injected provider" (drops the "invariant" framing). |
+| F-2 | Important | C2 Deviations table | fixed | Added deviation row D6 to the C2 `### Deviations` table (above) documenting the `LocalBinder.service + dispatch(Any)` surface vs the canonical ADR-0003 `state + dispatch(Action)` surface, with marker `plan-deviation-resolved`. |
+| F-3 (dedup F-7) | Important | Issue Index (above) | fixed | Added Issue IMPL-2 (POST_NOTIFICATIONS runtime prompt, target Phase 4.5 runbook OR Block-2-Onboarding-Completion mini-chunk) with status `delegated-to-orchestrator`. |
+| F-4 | Important | `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt` | fixed | Wrapped `startForegroundCompat(buildInitialNotification())` in try/catch covering `SecurityException` (API 33+ POST_NOTIFICATIONS / FGS-type) and `ForegroundServiceStartNotAllowedException` (API 31+ — caught via base `Exception` + instanceof + SDK guard to avoid `@RequiresApi`). Recovery: `Log.w` + `stopSelf()` + `START_NOT_STICKY`. Wrapped `mgr.createNotificationChannel(channel)` in try/catch for `SecurityException` on locked-down devices. Added `Log` import + reused existing `TAG`. |
+| F-5 | Important | `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java` | fixed | Captured `bindService(...)` return value in `onCreateInputView`. On `false`: `Log.e` + reset `pipelineServiceBindAttempted = false` so a subsequent view-recreate can retry. Pre-existing IllegalArgumentException catch in `onDestroy.unbindService` remains as second-line defence. |
+| F-6 | Important | `app/src/main/res/values-de/strings.xml`, `app/src/main/res/values-es/strings.xml`, `app/src/main/res/values-pt/strings.xml` | fixed | Added 6 localised strings (`dictate_pipeline_service_description`, `dictate_pipeline_channel_name`, `dictate_pipeline_channel_description`, `dictate_pipeline_notif_title`, `dictate_pipeline_notif_idle`, `dictate_service_not_ready`) to all three locale dirs. DE `dictate_service_not_ready` uses Spec 1 §11.3.2a verbatim ("Service startet noch — bitte kurz warten."). |
+| F-8 | Important | `app/src/main/java/net/devemperor/dictate/core/KeyboardVisibilityPredicates.kt`, `app/src/test/java/net/devemperor/dictate/core/KeyboardVisibilityPredicatesTest.kt`, `app/src/main/java/net/devemperor/dictate/core/RecordingUiController.kt`, `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java` | fixed | Renamed `fun predResendVisible` → `fun isResendVisible` (and KDoc refs). Updated 17 test method names + call sites via `sed`. Updated comments in `RecordingUiController` + `DictateInputMethodService.java` (lines 678-684, 1443, 1774, 1957). Working-title `predResendVisible` retained in KDoc note for backwards-traceability. |
+| F-9 | Nice-to-have | `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt:300` | fixed | Changed `val service` → `internal val service` on `LocalBinder`. Added KDoc note explaining "Module-internal: enforces the ADR-0003 sealed contract …". |
+| F-10 | Nice-to-have | `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt:312` | fixed | Appended `// TODO(Block 1b): remove when action is forwarded to orchestrator` to the `@Suppress("UNUSED_PARAMETER")` on `dispatch(action: Any)`. |
+| F-11 | Nice-to-have | `app/src/main/java/net/devemperor/dictate/core/KeyboardVisibilityPredicates.kt` | fixed | Replaced "Block 5 lifts the body verbatim" KDoc with the audit-suggested precise wording: "Block 5 collapses the 4-arg signature into the single-state-arg form `(DictateUiState) -> Boolean` per Spec 2 §3.2; the truth-table body — same 4 axes ANDed in same order — is preserved". |
+| F-12 | Nice-to-have | `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt:69` | fixed | Updated `serviceScope` KDoc `@see` to jointly cite `Spec 1 §4.3 (orchestrator single-dispatch on Main.immediate)` + `ADR-0001 §"Required mechanics" item 2`. |
+| F-13 (dedup F-23) | Nice-to-have | `app/src/test/java/net/devemperor/dictate/testutil/Quadruple.kt` (new), `app/src/test/java/net/devemperor/dictate/core/KeyboardVisibilityPredicatesTest.kt` | fixed | Extracted `Quadruple<A,B,C,D>` from the private inner declaration into `app/src/test/java/net/devemperor/dictate/testutil/Quadruple.kt` (`internal data class`). KDoc explains the Kotlin-stdlib gap + Spec 2 §14.2 future-block prep. Test file imports it from the new package. |
+| F-14 | Nice-to-have | `app/src/main/AndroidManifest.xml:25-28` | fixed | Split SYSTEM_ALERT_WINDOW into its own pre-decl comment block tagged `TODO(Block 6)`. FGS permissions (FOREGROUND_SERVICE, FOREGROUND_SERVICE_MICROPHONE, POST_NOTIFICATIONS) stay grouped under "Block 2 — DictatePipelineService Foreground Service". |
+| F-15 | Nice-to-have | `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt:85-93,318` | fixed | Replaced `private var stubDispatchCount: Int = 0` with `private val stubDispatchCount: AtomicInteger = AtomicInteger(0)`. `dispatch` uses `incrementAndGet()`. `dispatchInvocationCount` reader uses `.get()`. Test assertion remains identical (`binder.dispatchInvocationCount`). |
+| F-16 | Nice-to-have | `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt:158-166` | fixed | Replaced `onDestroy` Block-1b TODO comment with the explicit ordering invariant: "insert `runBlocking { withTimeout(2000L) { orchestrator.shutdown() } }` HERE — BEFORE serviceScope.cancel()". |
+| F-17 | Nice-to-have | `app/src/main/java/net/devemperor/dictate/core/KeyboardUiController.kt:495-498` | fixed | Added one-line comment above `refreshRecordButtonFromState()` in the pipeline-guard early-return: "Discarding `state` is intentional — pipeline owns record-button appearance entirely when non-Idle (Spec 1 §11.2.2 single-owner invariant)." |
+| F-18 | Nice-to-have | `app/src/main/java/net/devemperor/dictate/core/RecordingUiController.kt:79-96` | fixed | Added 4-step ordering-contract KDoc to `onStateChanged` capturing: (1) record-button resolver, (2) recording-axis side-effects, (3) QWERTZ rec-button mirror, (4) `stateManager.refresh()` — runs LAST. Plus inline step-numbered comments inside the method body. |
+| F-19 | Important | `app/src/test/java/net/devemperor/dictate/core/KeyboardUiControllerTest.kt` (new) | fixed | New Robolectric test class with 6 tests covering: pipeline-state guard (Preparing defers to refreshFromState — verified Idle/Active recording-state args do NOT enable button), Idle/Preparing/Active(BT=true)/Active(BT=false)/Paused branches of `applyRecordButtonForRecording` (text + isEnabled invariants). Uses a real `KeyboardStateManager` built with stub views (handwritten, no Mockito). |
+| F-20 | Important | `app/src/test/java/net/devemperor/dictate/core/PipelineServiceConnectionContractTest.kt` (new) | fixed | New Robolectric test class with 4 tests covering the IME-side `ServiceConnection` callback contract via a `FakePipelineConnection` that mirrors the IME-side anonymous class verbatim (Option B per F-20 — avoids extracting the inline class from a 2000-LOC Java service). Tests `onServiceConnected_storesBinder`, `onServiceDisconnected_clearsBinder`, `onBindingDied_attemptsRebind_andClearsBinder`, `onNullBinding_keepsBinderNull_andFlagsRegression`. |
+| F-21 | Nice-to-have | `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceTest.kt` | fixed | Renamed `notificationChannel_isImportanceLow_andSilent` → `notificationChannel_invariants`. Extended assertions: `canShowBadge() == false`, `sound == null`, `shouldVibrate() == false`, `shouldShowLights() == false`, `lockscreenVisibility == VISIBILITY_PRIVATE`. (Used `canShowBadge` not `shouldShowBadge` — the latter doesn't exist on `NotificationChannel`.) |
+| F-22 | Nice-to-have | `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServicePreApi34Test.kt` (new) | fixed | New `@Config(sdk = [33])` Robolectric test class with 1 test verifying the pre-API-34 implicit-type `startForeground(id, notification)` overload is used in `startForegroundCompat`. Pre-API-26 ensureNotificationChannel early-return is omitted as belt-and-suspenders (project `minSdk = 26` makes the path logically unreachable on real devices; defensive-coverage value marginal). |
+| F-24 | Important | `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt:51-52`, `app/src/main/java/net/devemperor/dictate/core/KeyboardVisibilityPredicates.kt:50-51`, `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceTest.kt:53-54` | fixed | Wrapped `@see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/...` paths in backticks. Backtick form chosen over markdown-link (simpler, consistent with non-spaced `@see` form). |
+| F-25 | Nice-to-have | `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java:319-360` | fixed | Added 4 section markers (`// ── onServiceConnected ──`, `// ── onServiceDisconnected ──`, `// ── onBindingDied ──`, `// ── onNullBinding ──`) inside the inline anonymous `ServiceConnection` (Option B per F-25 — keep inline + section markers). F-20 went with the Option B test approach (synthetic FakePipelineConnection) so no extraction overlap; if Block 1b extracts the connection later, the section markers can be dropped. |
+
+**Cross-fix conflicts:** none. F-9 + F-15 + F-10 (LocalBinder bundle), F-4 + F-5 (FGS-defensive bundle), and F-11 + F-12 + F-16 + F-17 + F-18 (docs bundle) all touch the same files but are non-conflicting edits.
+
+**Files modified:**
+- `app/src/main/AndroidManifest.xml` (F-14)
+- `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt` (F-4, F-9, F-10, F-12, F-15, F-16, F-24)
+- `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java` (F-1 IME-wire, F-5, F-8 comments, F-25)
+- `app/src/main/java/net/devemperor/dictate/core/KeyboardUiController.kt` (F-17)
+- `app/src/main/java/net/devemperor/dictate/core/RecordingUiController.kt` (F-1, F-8 KDoc, F-18)
+- `app/src/main/java/net/devemperor/dictate/core/KeyboardVisibilityPredicates.kt` (F-8 rename, F-11, F-24)
+- `app/src/main/res/values-de/strings.xml`, `values-es/strings.xml`, `values-pt/strings.xml` (F-6)
+- `app/src/test/java/net/devemperor/dictate/core/KeyboardVisibilityPredicatesTest.kt` (F-8, F-13)
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceTest.kt` (F-21, F-24)
+- `app/src/test/java/net/devemperor/dictate/testutil/Quadruple.kt` (new — F-13)
+- `app/src/test/java/net/devemperor/dictate/core/KeyboardUiControllerTest.kt` (new — F-19)
+- `app/src/test/java/net/devemperor/dictate/core/PipelineServiceConnectionContractTest.kt` (new — F-20)
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServicePreApi34Test.kt` (new — F-22)
+- This block-report (Issue Index, Deviations D6, this Repair Wave section).
+
+**Files in findings-scope:** all of the above are explicitly named in the F-1 … F-25 entries.
+**Files outside findings-scope (drift):** none — the wave-diff stays in scope.
+
+### Validate-Fixes Self-Check (B1-VAL-REPAIR-VERIFY)
+
+**Self-check performed during the wave.** For each fix the affected file was re-read after the edit, and the change verified against the validated-findings entry's "Suggested fix":
+
+- F-1: `RecordingUiController` constructor signature confirmed `pipelineStateProvider` param exists with default `{ PipelineUiState.Idle }`; both call sites (`applyIdleState:178-183`, `applyActiveState:198-204`) call `pipelineStateProvider()`; IME-side `new RecordingUiController(...)` passes the lambda `() -> uiController != null ? uiController.getState() : PipelineUiState.Idle.INSTANCE`.
+- F-4: try/catch verified in `onStartCommand`; `SecurityException` branch first, `Exception` (with `ForegroundServiceStartNotAllowedException` instanceof + SDK guard) second. Re-throw on unmatched. `ensureNotificationChannel` channel creation wrapped in try/catch for `SecurityException`.
+- F-5: `boolean bound = bindService(...)` captured; `!bound` resets `pipelineServiceBindAttempted` and logs E/.
+- F-6: 6 strings present in each of the 3 locale files (verified by file diff). DE `dictate_service_not_ready` is the Spec 1 §11.3.2a verbatim text.
+- F-8: `grep -rn "predResendVisible"` shows zero references in source + tests; `isResendVisible` is the only name. Comments in DictateInputMethodService updated. Working-title in `KeyboardVisibilityPredicates.kt` KDoc preserved for traceability.
+- F-9/F-10/F-15: LocalBinder.service is `internal`. `@Suppress("UNUSED_PARAMETER")` has Block-1b TODO. `stubDispatchCount` is `AtomicInteger`; test assertion `binder.dispatchInvocationCount` still works via `.get()`.
+- F-13: `app/src/test/java/net/devemperor/dictate/testutil/Quadruple.kt` exists with `internal data class`. `KeyboardVisibilityPredicatesTest.kt` imports it.
+- F-14: Manifest split — Block-2 FGS permissions in one group, SYSTEM_ALERT_WINDOW in its own pre-decl block with `TODO(Block 6)` comment.
+- F-19 / F-20 / F-21 / F-22: 4 new test classes / 1 extended test method, all on JUnit-4 + Robolectric. Run via `./gradlew test`: 6+4+10+1 + extended 1 = 22 tests in the new+changed classes, all passing.
+
+**Build/Test verification:**
+- `./gradlew assembleDebug` → BUILD SUCCESSFUL.
+- `./gradlew test` → BUILD SUCCESSFUL. All test classes pass with 0 failures, 0 errors, 0 skipped.
+- Specifically: `KeyboardVisibilityPredicatesTest` 17/17 passed (post-rename + post-Quadruple extraction), `DictatePipelineServiceTest` 10/10 passed (post-channel-invariants extension + AtomicInteger refactor), `DictatePipelineServicePreApi34Test` 1/1, `KeyboardUiControllerTest` 6/6, `PipelineServiceConnectionContractTest` 4/4. No cross-class regressions in the rest of the suite.
+
+**Unintended side-effects:** none observed. The `AtomicInteger` swap on `stubDispatchCount` left the public `dispatchInvocationCount` reader signature unchanged. The `pipelineStateProvider` default in `RecordingUiController` matches the previous hard-coded `PipelineUiState.Idle` so existing call sites that don't pass the new arg compile (none currently exist — the IME service is the only caller, and it now passes the live provider).
+
+**Phase complete — ready for orchestrator wave-commit.**
 
 ---
 

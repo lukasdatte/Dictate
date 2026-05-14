@@ -1,6 +1,7 @@
 package net.devemperor.dictate.core
 
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationManager
 import android.app.Service
 import android.content.ComponentName
@@ -11,6 +12,7 @@ import android.os.IBinder
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -50,8 +52,8 @@ import org.robolectric.annotation.Config
  * their own tests. This class covers only what the Block-2 skeleton
  * promises.
  *
- * @see docs/decisions/0003-service-foreground-pipeline-architecture.md §"Required mechanics"
- * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §10 §11.1 §11.3
+ * @see `docs/decisions/0003-service-foreground-pipeline-architecture.md` §"Required mechanics"
+ * @see `docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md` §10 §11.1 §11.3
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -101,18 +103,35 @@ class DictatePipelineServiceTest {
     }
 
     @Test
-    fun notificationChannel_isImportanceLow_andSilent() {
+    fun notificationChannel_invariants() {
+        // F-21: full invariant assertion — every property of the silent,
+        // unobtrusive FGS notification channel that the production code
+        // promises (Spec 1 §11.1.2):
+        //   - IMPORTANCE_LOW            no sound, no heads-up
+        //   - setShowBadge(false)       no launcher badge dot
+        //   - setSound(null, null)      audibly silent
+        //   - enableVibration(false)    no haptics
+        //   - enableLights(false)       no LED pulse
+        //   - lockscreenVisibility=PRIVATE  hides contents on lockscreen
         controller.create()
 
         val nm = ApplicationProvider.getApplicationContext<Application>()
             .getSystemService(NotificationManager::class.java)
         val channel = nm.getNotificationChannel(DictatePipelineService.CHANNEL_ID)
         assertNotNull("Channel must be registered", channel)
-        // IMPORTANCE_LOW means no sound + no heads-up — Spec 1 §11.1.2.
         assertEquals(
             "Channel importance must be LOW so the persistent FGS notification is not intrusive",
             NotificationManager.IMPORTANCE_LOW,
             channel!!.importance,
+        )
+        assertFalse("Channel must not show a launcher badge", channel.canShowBadge())
+        assertNull("Channel must be silent (no sound)", channel.sound)
+        assertFalse("Channel must not vibrate", channel.shouldVibrate())
+        assertFalse("Channel must not pulse lights", channel.shouldShowLights())
+        assertEquals(
+            "Channel must hide contents on lockscreen (VISIBILITY_PRIVATE)",
+            Notification.VISIBILITY_PRIVATE,
+            channel.lockscreenVisibility,
         )
     }
 

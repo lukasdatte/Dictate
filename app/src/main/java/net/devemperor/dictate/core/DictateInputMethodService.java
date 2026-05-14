@@ -326,12 +326,14 @@ public class DictateInputMethodService extends InputMethodService
     // subscription and routes UI events through pipelineBinder.dispatch.
     private DictatePipelineService.LocalBinder pipelineBinder;
     private final ServiceConnection pipelineConnection = new ServiceConnection() {
+        // ── onServiceConnected ──
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             // Same-process cast; LocalBinder is a real object, not a proxy.
             pipelineBinder = (DictatePipelineService.LocalBinder) service;
         }
 
+        // ── onServiceDisconnected ──
         @Override
         public void onServiceDisconnected(ComponentName name) {
             // Process-crash. In our same-process setup this should never
@@ -340,6 +342,7 @@ public class DictateInputMethodService extends InputMethodService
             pipelineBinder = null;
         }
 
+        // ── onBindingDied ──
         @Override
         public void onBindingDied(ComponentName name) {
             // Permanent breakage of the binding — re-bind. Should not
@@ -354,6 +357,7 @@ public class DictateInputMethodService extends InputMethodService
             bindService(intent, this, Context.BIND_AUTO_CREATE);
         }
 
+        // ── onNullBinding ──
         @Override
         public void onNullBinding(ComponentName name) {
             // DictatePipelineService.onBind always returns the singleton
@@ -464,7 +468,18 @@ public class DictateInputMethodService extends InputMethodService
             pipelineServiceBindAttempted = true;
             Intent pipelineIntent = new Intent(this, DictatePipelineService.class);
             ContextCompat.startForegroundService(this, pipelineIntent);
-            bindService(pipelineIntent, pipelineConnection, Context.BIND_AUTO_CREATE);
+            // bindService returns false when the system cannot resolve the
+            // component (missing manifest entry, permission denied,
+            // package-manager failure). Without checking the return value
+            // pipelineServiceBindAttempted would stay true with no
+            // ServiceConnection ever firing, and the matching unbindService
+            // in onDestroy would raise IllegalArgumentException. Reset the
+            // flag on failure so a subsequent onCreateInputView can retry.
+            boolean bound = bindService(pipelineIntent, pipelineConnection, Context.BIND_AUTO_CREATE);
+            if (!bound) {
+                Log.e("DictateIME", "bindService(DictatePipelineService) returned false");
+                pipelineServiceBindAttempted = false;
+            }
         }
 
         // ── 1. Clean up old controllers (on view recreation, not first call) ──
@@ -677,11 +692,16 @@ public class DictateInputMethodService extends InputMethodService
             );
         // Block-1a Quick-Win: the previously combined "audio file exists AND
         // Pref.ResendButton" lambda is split into two independent axes so the
-        // predResendVisible helper receives them separately (mirrors the
+        // isResendVisible helper receives them separately (mirrors the
         // future Block-5 LayoutCatalog RESEND-slot predicate, Spec 2 §3.2).
         // The recordButton-appearance lambda points at
         // KeyboardUiController.applyRecordButtonForRecording — that resolver
         // combines this with the pipeline axis it already owns.
+        // The pipelineStateProvider supplies the live pipeline axis to the
+        // RecordingUiController's resend-visibility call sites so a
+        // non-stop Idle transition (view-recreate restoreUiState, language-
+        // flip, cancel-recording paths) cannot evaluate against a stale
+        // PipelineUiState.Idle literal. SoT is KeyboardUiController.state.
         recordingUiController = new RecordingUiController(
             recordButton, pauseButton, resendButton,
             recordingAnimation, stateManager, this,
@@ -689,6 +709,7 @@ public class DictateInputMethodService extends InputMethodService
             () -> DictatePrefsKt.get(sp, Pref.Animations.INSTANCE),
             () -> new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
             () -> DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
+            () -> uiController != null ? uiController.getState() : PipelineUiState.Idle.INSTANCE,
             newRecordingState -> {
                 if (uiController != null) {
                     uiController.applyRecordButtonForRecording(newRecordingState);
@@ -1440,7 +1461,7 @@ public class DictateInputMethodService extends InputMethodService
 
         if (isIdle) {
             // Block-1a Quick-Win: resend visibility consolidated into the
-            // predResendVisible helper (KeyboardVisibilityPredicates).
+            // isResendVisible helper (KeyboardVisibilityPredicates).
             // Recording is guaranteed Idle on this branch (isIdle gate above);
             // pipeline is also Idle on a fresh onStartInputView so the helper
             // returns true iff the cached audio still exists AND
@@ -1771,7 +1792,7 @@ public class DictateInputMethodService extends InputMethodService
         // Preparing state: button disabled, shows "Sending..." (state-driven via PipelineUiState.Preparing)
         try {
             uiController.preparePipeline();
-            // Block-1a Quick-Win: go through predResendVisible so this site
+            // Block-1a Quick-Win: go through isResendVisible so this site
             // shares the same expression as the rest. Pipeline is now
             // Preparing (set above) → predicate returns false → GONE.
             resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
@@ -1954,7 +1975,7 @@ public class DictateInputMethodService extends InputMethodService
             // This callback fires from PipelineOrchestrator BEFORE the
             // pipeline-state transitions back to Idle (`onPipelineFinished()` is
             // posted separately and calls `uiController.stopPipeline()` only
-            // after this returns). Running `predResendVisible` here would
+            // after this returns). Running `isResendVisible` here would
             // therefore evaluate to `false` and the resend button would never
             // appear — the very thing the callback exists to do. Block 5
             // (LayoutCatalog) folds the predicate into a state-driven

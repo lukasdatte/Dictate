@@ -17,14 +17,16 @@
                                         persistent FGS notification (runtime
                                         prompt lives in OnboardingActivity —
                                         Block 2 §11.5.1)
-
-        Block 6 (Floating Overlay — Spec 3 §5.7) — declared here in Block 2
-        so the manifest is touched only once across blocks; no-op until
-        Block 6 wires the overlay window.
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        TODO(Block 6): keyboard-floating overlay (Spec 3 §5.7).
+        Pre-declared here so the manifest is touched only once across blocks;
+        no-op until Block 6 wires the overlay window.
+    -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <queries>

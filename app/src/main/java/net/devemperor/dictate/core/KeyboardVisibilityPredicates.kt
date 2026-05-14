@@ -29,14 +29,15 @@ import android.view.View
  * Adding a new input (recording-paused vs idle, ReprocessStaging, etc.)
  * meant editing five branches and getting all of them right.
  *
- * [predResendVisible] consolidates the rule into a pure function so all
+ * [isResendVisible] consolidates the rule into a pure function so all
  * five "compute the answer from current state" sites read the same
  * expression. The unconditional VISIBLE in `onShowResend` is kept as an
  * explicit call site for now because the pipeline-state has not yet
  * transitioned back to Idle when the callback fires — see the call site
- * for the timing note. Block 5 (LayoutCatalog) lifts this predicate
- * verbatim into the `RESEND` slot's `visibilityPredicate` once the global
- * `DictateUiState` exists.
+ * for the timing note. Block 5 (LayoutCatalog) collapses the 4-arg
+ * signature into the single-state-arg form `(DictateUiState) -> Boolean`
+ * per Spec 2 §3.2; the truth-table body — same 4 axes ANDed in same
+ * order — is preserved.
  *
  * # Future shape
  *
@@ -47,8 +48,11 @@ import android.view.View
  * intentionally written to mirror that future shape so the migration is a
  * rename, not a rewrite.
  *
- * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §9.4
- * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md §4 Block 1a
+ * Working title in the plan: `predResendVisible`. The implementation
+ * settled on the codebase `isXxx` convention for booleans.
+ *
+ * @see `docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md` §9.4
+ * @see `docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md` §4 Block 1a
  */
 
 /**
@@ -72,7 +76,7 @@ import android.view.View
  * itself (the [View.VISIBLE] / [View.GONE] translation lives in
  * [resolveResendVisibility]).
  */
-fun predResendVisible(
+fun isResendVisible(
     lastAudioFileExists: Boolean,
     resendEnabled: Boolean,
     recordingState: RecordingState,
@@ -84,7 +88,7 @@ fun predResendVisible(
         pipelineState is PipelineUiState.Idle
 
 /**
- * View-level helper: translates [predResendVisible] into [View.VISIBLE] /
+ * View-level helper: translates [isResendVisible] into [View.VISIBLE] /
  * [View.GONE]. Call sites that previously did
  * `resendButton.visibility = if (...) VISIBLE else GONE` collapse into
  * `resendButton.visibility = resolveResendVisibility(...)`.
@@ -95,7 +99,7 @@ fun resolveResendVisibility(
     recordingState: RecordingState,
     pipelineState: PipelineUiState
 ): Int =
-    if (predResendVisible(lastAudioFileExists, resendEnabled, recordingState, pipelineState)) {
+    if (isResendVisible(lastAudioFileExists, resendEnabled, recordingState, pipelineState)) {
         View.VISIBLE
     } else {
         View.GONE

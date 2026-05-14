@@ -301,4 +301,16 @@
     <string name="dictate_delete_audio_title">Eliminar audio</string>
     <string name="dictate_delete_audio_message">El audio se eliminará de forma permanente. La transcripción y los resultados se conservan.</string>
     <string name="dictate_delete_audio_confirm">Eliminar</string>
+
+    <!--
+        Block 2 (DictatePipelineService): notification channel + content
+        + service description + IME bind-race fallback. See Spec 1 §11.1
+        §11.5 §11.3.2a.
+    -->
+    <string name="dictate_pipeline_service_description">Servicio en segundo plano para la transcripción de Dictate.</string>
+    <string name="dictate_pipeline_channel_name">Canal de Dictate</string>
+    <string name="dictate_pipeline_channel_description">Notificación persistente mientras Dictate está grabando o procesando audio en segundo plano.</string>
+    <string name="dictate_pipeline_notif_title">Dictate</string>
+    <string name="dictate_pipeline_notif_idle">Listo</string>
+    <string name="dictate_service_not_ready">El servicio se está iniciando — espera un momento, por favor.</string>
 </resources>

@@ -1,6 +1,7 @@
 package net.devemperor.dictate.core
 
 import android.view.View
+import net.devemperor.dictate.testutil.Quadruple
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -8,7 +9,7 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Unit tests for [predResendVisible] + [resolveResendVisibility].
+ * Unit tests for [isResendVisible] + [resolveResendVisibility].
  *
  * Block-1a Quick-Win (Spec 1 §11.2.2 step 1): the helper is the single
  * source of truth for resend-button visibility. The full 25-case matrix
@@ -31,13 +32,13 @@ class KeyboardVisibilityPredicatesTest {
     private val dummyAudioFile = File("/tmp/dictate-predicate-test.m4a")
 
     // ────────────────────────────────────────────────────────────
-    // predResendVisible — happy path (all four axes hold)
+    // isResendVisible — happy path (all four axes hold)
     // ────────────────────────────────────────────────────────────
 
     @Test
-    fun `predResendVisible true when all four axes hold`() {
+    fun `isResendVisible true when all four axes hold`() {
         assertTrue(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = true,
                 resendEnabled = true,
                 recordingState = RecordingState.Idle,
@@ -47,13 +48,13 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     // ────────────────────────────────────────────────────────────
-    // predResendVisible — each axis flipped individually
+    // isResendVisible — each axis flipped individually
     // ────────────────────────────────────────────────────────────
 
     @Test
-    fun `predResendVisible false when audio file missing`() {
+    fun `isResendVisible false when audio file missing`() {
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = false,
                 resendEnabled = true,
                 recordingState = RecordingState.Idle,
@@ -63,9 +64,9 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     @Test
-    fun `predResendVisible false when Pref ResendButton disabled`() {
+    fun `isResendVisible false when Pref ResendButton disabled`() {
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = true,
                 resendEnabled = false,
                 recordingState = RecordingState.Idle,
@@ -75,9 +76,9 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     @Test
-    fun `predResendVisible false when recording is Preparing`() {
+    fun `isResendVisible false when recording is Preparing`() {
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = true,
                 resendEnabled = true,
                 recordingState = RecordingState.Preparing(useBluetooth = false),
@@ -87,9 +88,9 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     @Test
-    fun `predResendVisible false when recording is Active`() {
+    fun `isResendVisible false when recording is Active`() {
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = true,
                 resendEnabled = true,
                 recordingState = RecordingState.Active(useBluetooth = false),
@@ -99,9 +100,9 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     @Test
-    fun `predResendVisible false when recording is Paused`() {
+    fun `isResendVisible false when recording is Paused`() {
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = true,
                 resendEnabled = true,
                 recordingState = RecordingState.Paused,
@@ -111,9 +112,9 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     @Test
-    fun `predResendVisible false when pipeline is Preparing`() {
+    fun `isResendVisible false when pipeline is Preparing`() {
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = true,
                 resendEnabled = true,
                 recordingState = RecordingState.Idle,
@@ -123,9 +124,9 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     @Test
-    fun `predResendVisible false when pipeline is Running`() {
+    fun `isResendVisible false when pipeline is Running`() {
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = true,
                 resendEnabled = true,
                 recordingState = RecordingState.Idle,
@@ -140,9 +141,9 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     @Test
-    fun `predResendVisible false when pipeline is ReprocessStaging`() {
+    fun `isResendVisible false when pipeline is ReprocessStaging`() {
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = true,
                 resendEnabled = true,
                 recordingState = RecordingState.Idle,
@@ -157,17 +158,17 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     // ────────────────────────────────────────────────────────────
-    // predResendVisible — Bluetooth variant doesn't matter for Active
+    // isResendVisible — Bluetooth variant doesn't matter for Active
     // (guards against an accidental Bluetooth-only check)
     // ────────────────────────────────────────────────────────────
 
     @Test
-    fun `predResendVisible false for both Bluetooth and non-Bluetooth Active`() {
+    fun `isResendVisible false for both Bluetooth and non-Bluetooth Active`() {
         // Both useBluetooth=false (above) and useBluetooth=true must yield
         // false — the predicate cares only about the sealed subclass, not
         // its data.
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = true,
                 resendEnabled = true,
                 recordingState = RecordingState.Active(useBluetooth = true),
@@ -175,7 +176,7 @@ class KeyboardVisibilityPredicatesTest {
             )
         )
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = true,
                 resendEnabled = true,
                 recordingState = RecordingState.Preparing(useBluetooth = true),
@@ -185,15 +186,15 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     // ────────────────────────────────────────────────────────────
-    // predResendVisible — multi-axis conjunction
+    // isResendVisible — multi-axis conjunction
     // (each false axis is enough on its own)
     // ────────────────────────────────────────────────────────────
 
     @Test
-    fun `predResendVisible false when two axes fail simultaneously`() {
+    fun `isResendVisible false when two axes fail simultaneously`() {
         // Audio missing AND recording Active: still false (any-false → false).
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = false,
                 resendEnabled = true,
                 recordingState = RecordingState.Active(useBluetooth = false),
@@ -203,9 +204,9 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     @Test
-    fun `predResendVisible false when all four axes fail`() {
+    fun `isResendVisible false when all four axes fail`() {
         assertFalse(
-            predResendVisible(
+            isResendVisible(
                 lastAudioFileExists = false,
                 resendEnabled = false,
                 recordingState = RecordingState.Active(useBluetooth = false),
@@ -283,12 +284,12 @@ class KeyboardVisibilityPredicatesTest {
     }
 
     // ────────────────────────────────────────────────────────────
-    // resolveResendVisibility — consistency with predResendVisible
+    // resolveResendVisibility — consistency with isResendVisible
     // (guard against accidental drift between the two)
     // ────────────────────────────────────────────────────────────
 
     @Test
-    fun `resolveResendVisibility VISIBLE iff predResendVisible true (sample axes)`() {
+    fun `resolveResendVisibility VISIBLE iff isResendVisible true (sample axes)`() {
         // Spot-check a handful of axis combinations to make sure the wrapper
         // does not invent its own answer — VISIBLE ↔ true, GONE ↔ false.
         val cases: List<Pair<Boolean, Quadruple<Boolean, Boolean, RecordingState, PipelineUiState>>> =
@@ -314,25 +315,14 @@ class KeyboardVisibilityPredicatesTest {
             )
         for ((expectedVisible, axes) in cases) {
             val (lastAudio, resendEnabled, recState, pipeState) = axes
-            val pred = predResendVisible(lastAudio, resendEnabled, recState, pipeState)
+            val pred = isResendVisible(lastAudio, resendEnabled, recState, pipeState)
             val resolved = resolveResendVisibility(lastAudio, resendEnabled, recState, pipeState)
             assertEquals("predicate disagrees with expected for $axes", expectedVisible, pred)
             assertEquals(
-                "resolveResendVisibility out of sync with predResendVisible for $axes",
+                "resolveResendVisibility out of sync with isResendVisible for $axes",
                 if (pred) View.VISIBLE else View.GONE, resolved
             )
         }
     }
 
-    /**
-     * Local helper — used only by the consistency-check test. Avoids pulling
-     * in a `data class`-per-test artifact while still keeping the readable
-     * destructuring form.
-     */
-    private data class Quadruple<A, B, C, D>(
-        val first: A,
-        val second: B,
-        val third: C,
-        val fourth: D
-    )
 }

@@ -493,6 +493,9 @@ class KeyboardUiController(
         // overwrite the pipeline-painted text/icon/enabled — defer to the
         // pipeline-axis resolver instead.
         if (this.state !is PipelineUiState.Idle) {
+            // Discarding `state` is intentional — pipeline owns record-button
+            // appearance entirely when non-Idle (Spec 1 §11.2.2 single-owner
+            // invariant).
             refreshRecordButtonFromState()
             return
         }

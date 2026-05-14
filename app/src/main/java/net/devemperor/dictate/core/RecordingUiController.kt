@@ -35,18 +35,31 @@ class RecordingUiController(
      * Returns `true` iff the cached "last recording" audio file is still
      * present. Block-1a split from the former combined
      * `getLastAudioFileExists` lambda — the resend-pref axis now travels
-     * via [getResendEnabled] so [predResendVisible] sees the two inputs
+     * via [getResendEnabled] so [isResendVisible] sees the two inputs
      * independently. See [KeyboardVisibilityPredicates] for the rationale.
      */
     private val getLastAudioFileExists: () -> Boolean,
     /**
      * Returns the current `Pref.ResendButton` value. Split from
      * [getLastAudioFileExists] in Block 1a (Quick-Wins) so the
-     * [predResendVisible] helper receives each axis as a separate input
+     * [isResendVisible] helper receives each axis as a separate input
      * — the future LayoutCatalog predicate (Spec 2 §3.2) has the same
      * shape.
      */
     private val getResendEnabled: () -> Boolean,
+    /**
+     * Returns the live pipeline-axis state. The recording-axis-driven Idle
+     * transitions ([applyIdleState] / [applyActiveState]) need the
+     * current pipeline state so [resolveResendVisibility] can return GONE
+     * whenever the pipeline is still owning the UI (Preparing / Running /
+     * ReprocessStaging) — e.g. on view-recreate `restoreUiState`,
+     * language-flip, or cancel-recording paths that bypass
+     * `onRecordingCompleted`. The default supplies `PipelineUiState.Idle`
+     * so tests that don't care about the pipeline axis still compile.
+     * Mirrors the existing pattern in [DictateInputMethodService] (e.g.
+     * the `isReprocessStaging` provider).
+     */
+    private val pipelineStateProvider: () -> PipelineUiState = { PipelineUiState.Idle },
     /**
      * Block-1a Quick-Win (Spec 1 §11.2.2 step 2): the central
      * record-button-appearance resolver lives in
@@ -76,22 +89,41 @@ class RecordingUiController(
         }
     }
 
+    /**
+     * Ordering contract (load-bearing — Block 5 must preserve until
+     * LayoutCatalog collapses both axes into one subscriber):
+     *  1. record-button resolver (axis-aware appearance) —
+     *     [onRecordingStateChangedForRecordButton] delegates to
+     *     [KeyboardUiController.applyRecordButtonForRecording] BEFORE the
+     *     auxiliary view work, so the resolver paints the record button
+     *     first and any later mutations only adjust peripheral state.
+     *  2. recording-axis side-effects (pauseButton, animation, prompt
+     *     buttons, resend) — `when (newState)` dispatches into
+     *     [applyIdleState] / [applyPreparingState] / [applyActiveState] /
+     *     [applyPausedState].
+     *  3. QWERTZ rec-button mirror — [updateQwertzRecButton] reflects the
+     *     active-or-paused recording state on the dedicated QWERTZ key.
+     *  4. [KeyboardStateManager.refresh] — rebuilds visibilities; runs
+     *     LAST so all internal mutations above are visible to KSM in the
+     *     same Main-thread task (eliminates the §9.5 race).
+     *
+     * The single-owner invariant (recording-axis combined with pipeline-
+     * axis through the central resolver) collapses the previous Idle vs.
+     * Preparing/Running ordering races into a deterministic sequence.
+     */
     override fun onStateChanged(oldState: RecordingState, newState: RecordingState) {
-        // Block-1a Quick-Win (Spec 1 §11.2.2 step 2): delegate the
-        // record-button-appearance recording-axis to the central resolver
-        // BEFORE running the auxiliary view work below. The resolver
-        // combines this with the pipeline axis it already owns, so the
-        // ordering between recording-state transitions (Idle/Active/...)
-        // and pipeline-state transitions (Preparing/Running/...) collapses
-        // into a single owner — eliminating the §9.5 race.
+        // Step 1: central record-button resolver (Spec 1 §11.2.2 step 2).
         onRecordingStateChangedForRecordButton(newState)
+        // Step 2: recording-axis side-effects.
         when (newState) {
             is RecordingState.Idle -> applyIdleState()
             is RecordingState.Preparing -> applyPreparingState()
             is RecordingState.Active -> applyActiveState(newState.useBluetooth)
             is RecordingState.Paused -> applyPausedState()
         }
+        // Step 3: QWERTZ rec-button mirror.
         updateQwertzRecButton(newState.isRecordingOrPaused)
+        // Step 4: rebuild visibilities — MUST run last (ordering invariant).
         stateManager.refresh()
     }
 
@@ -169,17 +201,17 @@ class RecordingUiController(
         promptPauseButton?.setOnClickListener(null)
 
         // Block-1a Quick-Win: single source of truth for resend visibility.
-        // Recording is Idle here (we just entered this branch). Pipeline
-        // state lives in KeyboardUiController, but at the moment a
-        // RecordingStateController-driven Idle transition runs, the
-        // pipeline FSM is also Idle (Preparing/Running never coexists with
-        // a recording-stop callback) — the explicit `PipelineUiState.Idle`
-        // argument captures that invariant.
+        // Recording is Idle here (we just entered this branch). The pipeline
+        // axis is owned by KeyboardUiController; read it live via the
+        // injected provider so non-stop pathways (view-recreate
+        // restoreUiState, language-flip, cancel-recording bypassing
+        // onRecordingCompleted) cannot expose a stale "Idle pipeline"
+        // literal and let the resend button compete with a Sending… frame.
         resendButton.visibility = resolveResendVisibility(
             lastAudioFileExists = getLastAudioFileExists(),
             resendEnabled = getResendEnabled(),
             recordingState = RecordingState.Idle,
-            pipelineState = PipelineUiState.Idle
+            pipelineState = pipelineStateProvider()
         )
     }
 
@@ -195,11 +227,13 @@ class RecordingUiController(
         // Recording is Active here, so the predicate evaluates to false
         // regardless of audio-file or pref state. Going through the helper
         // keeps every resend-visibility call site on the same expression.
+        // The pipeline axis is read live via the injected provider so the
+        // call site stays consistent with [applyIdleState] (same SoT).
         resendButton.visibility = resolveResendVisibility(
             lastAudioFileExists = getLastAudioFileExists(),
             resendEnabled = getResendEnabled(),
             recordingState = RecordingState.Active(useBluetooth = useBluetooth),
-            pipelineState = PipelineUiState.Idle
+            pipelineState = pipelineStateProvider()
         )
         pauseButton.foreground = AppCompatResources.getDrawable(context, R.drawable.ic_baseline_pause_24)
 

@@ -3875,17 +3875,24 @@ class DictatePipelineService : Service() {
     // `DictateModule.terminate()` einen Default-Body `Unit` hat (§4.2) und RecordingModule
     // (§15.2) heute KEIN `terminate`-Override mit Hardware-Release definiert hat — der
     // MediaRecorder leakt also im Native-Heap, wenn der User die IME schließt während
-    // Recording aktiv ist. Disambiguierung Pipeline- vs. Recording-Cancel ist Cross-Spec-
-    // Klärung (siehe C-3 Action-Hierarchie); §10 + §13.5 referenzieren historisch
-    // `Action.PipelineAction.CancelPipeline`, semantisch korrekter wäre eine Branch-Action,
-    // die im jeweiligen Modul greift. Pre-Cancel-Dispatch unten als TODO-Marker verankert,
-    // Implementer-Pflicht: vor Block-2-Acceptance-Test entscheiden + dispatchen.
+    // Recording aktiv ist.
+    //
+    // FIX: Phase-C C-3 (2026-05-14) – Action-Naming-Disambiguation (C-2 F-3 Cross-Reference):
+    // Recording-Hardware wird vom `RecordingModule` (§15.2) gehalten — die korrekte Action ist
+    // `Action.RecordingAction.CancelRecording` (route via `moduleByLeafClass` an RecordingModule),
+    // dessen Reducer-Arm `Active/Paused/Preparing+CancelRecording` synchron `Effect.ReleaseMediaRecorder`
+    // emittiert. `Action.PipelineAction.CancelPipeline` (alte Plan-Variante, §10 + §13.5 vor C-3)
+    // routet an PipelineModule, das den Recording-Hardware-Release-Effect nicht hält (PipelineModule.Effect
+    // hat keinen `ReleaseMediaRecorder`-Eintrag). Pre-Cancel-Block unten ist mit der korrekten
+    // State-Switch-Logik ausformuliert; §10 + §13.5 G6 sind auf C-3-Variante synchron gezogen.
     override fun onDestroy() {
         super.onDestroy()
-        // 0. Pre-Cancel-Dispatch (Phase-C C-2 / §10 + §13.5 G6 Pfad A):
-        //    bei aktivem Recording / aktiver Pipeline eine Cancel-Action dispatchen, damit
-        //    der Reducer State→Idle setzt + Hardware-Release-Effect emittiert. Konkrete
-        //    Action-Variante hängt vom State ab (siehe Implementer-Pflicht im Marker oben):
+        // 0. Pre-Cancel-Dispatch (Phase-C C-2 + C-3 / §10 + §13.5 G6 Pfad A):
+        //    bei aktivem Recording bzw. aktiver Pipeline die jeweils Modul-eigene Cancel-Action
+        //    dispatchen, damit der Reducer State→Idle setzt + den passenden Hardware/Job-Release-
+        //    Effect aus dem normalen FSM-Pfad emittiert. Aktion hängt vom State ab — Recording
+        //    hat Priorität, weil MediaRecorder den Native-Heap leakt; Pipeline ist sekundär,
+        //    weil DB-Status + Job-Cancel idempotent sind:
         //
         //    val snap = orchestrator.state.value
         //    when {
@@ -4284,7 +4291,17 @@ Block 2 (DictatePipelineService) gilt als done, wenn:
 - [ ] `stopSelf()` greift: nach Insertion verschwindet die Notification ohne weitere Aktion.
 - [ ] Force-Stop der App: beim nächsten Tastatur-Open wird Restart-Button mit pending-Session gezeigt.
 - [ ] Manueller Restart-Button-Klick: PipelineService startet neu, Pipeline läuft mit korrektem State.
-- [ ] **MediaRecorder-release-Pfad (FIX Issue 3.0.11):** Service.onDestroy bei aktivem Recording ruft `orchestrator.dispatch(Action.PipelineAction.CancelPipeline)` → `recordingManager.release()` wird aufgerufen UND der MediaRecorder ist im released-State. Verifiziert via `MediaRecorder.release()`-Mock-Spy in Unit-Test (oder Robolectric); deckt §13.5 G6 Pfad A ab. (Spec 1 hat aktuell keine eigene Test-Strategie-Sektion; Test-Stub wird in Block-2-Implementation als `RecordingManagerReleaseTest.kt` angelegt.)
+<!-- FIX: Phase-C C-3 (2026-05-14) – C-2 F-3 cross-spec disambiguation: CancelPipeline → CancelRecording.
+     Recording-Hardware (MediaRecorder + audio cache file) wird vom `RecordingModule` (§15.2) gehalten,
+     NICHT vom PipelineModule. `Action.PipelineAction.CancelPipeline` routet via `moduleByLeafClass`
+     an PipelineModule, dessen Reducer keinen `Effect.ReleaseMediaRecorder` emittieren kann (Effect
+     lebt in RecordingModule.Effect, nicht in PipelineModule.Effect). Korrekte Action für den
+     MediaRecorder-Release-Pfad ist `Action.RecordingAction.CancelRecording` — RecordingModule
+     §15.2 Reducer-Arm `Preparing+CancelRecording` / `Active+CancelRecording` / `Paused+CancelRecording`
+     emittiert `Effect.ReleaseMediaRecorder` + `Effect.DeleteAudioFile` synchron. Der §7.3-onDestroy-
+     Pre-Cancel-Block (Phase-C C-2 F-3) wird in dieser Phase-C C-3-Iteration entsprechend disambiguiert. -->
+- [ ] **MediaRecorder-release-Pfad (FIX Issue 3.0.11):** Service.onDestroy bei aktivem Recording (`state.recording !is RecordingState.Idle`) ruft `orchestrator.dispatch(Action.RecordingAction.CancelRecording)` → `RecordingModule.reduce` setzt `recording = Idle` und emittiert `Effect.ReleaseMediaRecorder` (+ `Effect.DeleteAudioFile`) → `runEffect` ruft `services.recordingHardware.release()`. Verifiziert via `MediaRecorder.release()`-Mock-Spy in Unit-Test (oder Robolectric); deckt §13.5 G6 Pfad A ab. (Spec 1 hat aktuell keine eigene Test-Strategie-Sektion; Test-Stub wird in Block-2-Implementation als `RecordingManagerReleaseTest.kt` angelegt.)
+- [ ] **Pipeline-cancel-Pfad bei onDestroy (komplementär):** falls KEIN Recording aktiv, aber Pipeline aktiv (`state.pipeline !is PipelineUiState.Idle`), ruft Service.onDestroy `orchestrator.dispatch(Action.PipelineAction.CancelPipeline)` → `PipelineModule.reduce` setzt `pipeline = Idle` und emittiert die Pipeline-Cleanup-Effects (DB-Status-Update, Job-Cancel via `PipelineRunner.cancel(sessionId)`). Trennt die zwei Cancel-Domains entlang der Modul-Achsen (Recording = Hardware, Pipeline = DB+Job).
 <!-- FIX: Phase-B S-3 (2026-05-13) – Java-Brücke + KeyboardInputModule-Acceptance ergänzt. -->
 - [ ] **Phase-B S-3 Java-Brücke `DictateUiStateObserver`:** Datei `state/DictateUiStateObserver.kt` ist angelegt (analog zu `core/ActiveJobRegistryObserver.kt`); mindestens ein Java-Konsument (`DictateInputMethodService.java`) konsumiert den `DictateUiState` darüber statt über direkte Callbacks. Verifiziert via Robolectric-Test `DictateUiStateObserverTest.kt` (Lifecycle-Bind funktioniert; STOP cancellt, START repliziert State).
 - [ ] **Phase-B S-3 KeyboardInputModule (§15.6):** Backspace-, Enter- und Space-Button-Klicks lösen die korrekten InputConnection-Operationen aus. Manuell verifiziert (Tastatur öffnen, Buttons drücken, Output prüfen) UND via Reducer-Unit-Test `KeyboardInputModuleTest.kt` (jede Action erzeugt den passenden Effect). Verifiziert zusätzlich, dass `orchestrator.dispatch(Action.KeyboardInputAction.Backspace)` **nicht** `DispatchOutcome.Unrouted` zurückgibt — d.h. das Modul ist in `DictateModuleRegistry.all` (§4.8).
@@ -6106,7 +6123,7 @@ val DictateUiState.predRecordingControlsVisible: Boolean
 |---|---|---|---|
 | G1 | `KeyboardUiController.kt:241` mutiert `views.infoCl.visibility = GONE` direkt in `startPipeline` — das ist eine state-getriggerte Mutation, die heute über die Hilfsklasse `InfoBarController.dismiss()` laufen sollte, aber direkt geht. | Mittel | In Block 1: Mutation-Site auf `infoBarController.dismiss()` umstellen — danach hat InfoBarController die alleinige Verantwortung über infoCl. |
 | G2 | `DictateInputMethodService.java:2630-2636` (`onSmallModeToggled`) schreibt direkt in `Pref.SmallMode` UND ruft `stateManager.setSmallMode(newSmallMode)` — zwei Schritte, die in seltenen Fällen out-of-sync sein können. | Niedrig | In Block 1 ist mit dem DictateUiState-Pref-Spiegel-Pattern (§13.2.2) der State automatisch konsistent — der explizite `setSmallMode`-Call wird redundant und entfällt. |
-| G6 | Service-Death während aktivem Recording: `RecordingManager.stop()` wird nicht mehr gerufen → MediaRecorder bleibt im Native-Heap. | Mittel | Zwei Pfade explizit getrennt: **(A) Service.onDestroy normal (testbar)** — der Service ruft `orchestrator.dispatch(Action.PipelineAction.CancelPipeline)` → der `PipelineModule`-Reducer/EffectHandler emittiert `Effect.ReleaseRecording` → `recordingManager.release()`. Der `release()`-Pfad wird via Mock-Spy im Block-2-Unit-Test verifiziert (siehe §10 Block-2-Acceptance). **(B) Process-Kill (nicht testbar)** — Android-System-Cleanup räumt MediaRecorder und Native-Heap selbst ab. Akzeptiert. |
+| G6 | Service-Death während aktivem Recording: `RecordingManager.stop()` wird nicht mehr gerufen → MediaRecorder bleibt im Native-Heap. | Mittel | Zwei Pfade explizit getrennt: **(A) Service.onDestroy normal (testbar)** — der Service ruft <!-- FIX: Phase-C C-3 (2026-05-14) – CancelPipeline → CancelRecording + Effect.ReleaseRecording → Effect.ReleaseMediaRecorder. Vorherige Variante referenzierte einen `Effect.ReleaseRecording`, der NICHT existiert (RecordingModule.Effect-Liste in §15.2 kennt ausschließlich `ReleaseMediaRecorder`); plus die Action wurde fälschlich an PipelineModule geroutet, das die Recording-Hardware nicht hält. C-3-Disambiguation: Action gehört zur Recording-Achse, Effect ist `Effect.ReleaseMediaRecorder` (RecordingModule.Effect). --> `orchestrator.dispatch(Action.RecordingAction.CancelRecording)` → der `RecordingModule`-Reducer (§15.2 Reducer-Arm `Active/Paused/Preparing+CancelRecording`) emittiert `Effect.ReleaseMediaRecorder` (+ ggf. `Effect.DeleteAudioFile`) → `runEffect` ruft `services.recordingHardware.release()`. Der `release()`-Pfad wird via Mock-Spy im Block-2-Unit-Test verifiziert (siehe §10 Block-2-Acceptance). **(B) Process-Kill (nicht testbar)** — Android-System-Cleanup räumt MediaRecorder und Native-Heap selbst ab. Akzeptiert. |
 | G7 | `JobExecutor.initialize(orchestrator)` wird heute im IME-`onCreate` (Z. 389) gerufen — mit dem Service-Refactor muss das in den Service-onCreate. Wenn der IME-Service ohne den Pipeline-Service hochfährt (theoretisch nicht möglich, aber defensiv), ist `JobExecutor` un-initialisiert. Beachte: das `JobExecutor.initialize(orchestrator)` (Z. 56-58 verifiziert via Code-Read) erwartet den **alten `PipelineOrchestrator`** (Audio-Pipeline-Runner), NICHT den neuen `DictateOrchestrator` — siehe §1.x Naming-Konvention (Phase-B S-4). | Niedrig | `bindService` hält den Service-Lifecycle ans IME — es gibt keine Lifecycle-Sequenz, in der IME ohne Pipeline-Service läuft, sobald die Bind-Connection steht. Falls aus Robustheits-Gründen nötig: defensiv-`null`-Check in JobExecutor + lazy-init beim ersten Job-Start. |
 
 #### §13.5.b Cross-Spec Patches Pending
@@ -6441,6 +6458,17 @@ object RecordingModule : DictateModule<
          angeforderte Audio-File wird als orphan vom nächsten `cleanupOrphans`-Lauf eingesammelt
          (kein expliziter Delete-Effect nötig, weil MediaRecorder.prepare die Datei nie erzeugt hat
          bzw. nur ein 0-Byte-File hinterlässt — beides vom cleanup-Pfad erfasst). -->
+    <!-- FIX: Phase-C C-3 (2026-05-14) – Effect-Identifier-Matching für data-class-Effects.
+         Bug-Klasse: Der Orchestrator füllt `Action.EffectFailure.effect` per `effect.toString()`
+         (§4.3 Step 4). Kotlin `data class.toString()` enthält die Property-Werte
+         (`"AllocateMediaRecorder(target=..., useBluetooth=..., audioFile=...)"`), während
+         `object.toString()` den Simple-Name liefert (`"ReleaseMediaRecorder"`). Naiver String-
+         Vergleich `failure.effect == "AllocateMediaRecorder"` (vor C-3) hätte für die data-class-
+         Variante NIE gematched — der Preparing-Rollback-Arm wäre silent toter Code, jeder
+         AllocateMediaRecorder-Failure würde via Default-`null` als `Rejected("reducer-null")`
+         abgewiesen, Recording bliebe für immer in Preparing. Auflösung: Prefix-Match mit
+         `startsWith("AllocateMediaRecorder(")` für data-class-Effects, exakter Match für
+         `object`-Effects. Spec 2 §3.3 EffectFailure-KDoc dokumentiert die Konvention. -->
     override fun reduceFailure(
         state: RecordingState,
         failure: Action.EffectFailure,
@@ -6450,7 +6478,10 @@ object RecordingModule : DictateModule<
         // entzogen mid-prepare): State zurück auf Idle. Das angeforderte audioFile war noch nicht
         // im MediaRecorder geschrieben (`MediaRecorder.prepare()` wirft VOR dem ersten Frame) —
         // im worst case bleibt ein 0-Byte-File im cacheDir/audio/, das cleanupOrphans entsorgt.
-        failure.effect == "AllocateMediaRecorder" && state is RecordingState.Preparing ->
+        //
+        // Effect-Identifier ist `data class.toString()` = "AllocateMediaRecorder(target=..., ...)"
+        // — startsWith("AllocateMediaRecorder(") matched alle Args-Varianten dieses Effect-Typs.
+        failure.effect.startsWith("AllocateMediaRecorder(") && state is RecordingState.Preparing ->
             TransitionResult(
                 nextState = RecordingState.Idle,
                 sideEffects = listOf(
@@ -6459,14 +6490,16 @@ object RecordingModule : DictateModule<
                 ),
             )
         // Failure beim Stop-Effect (MediaRecorder.stop wirft): State auf Idle, kein File-Delete
-        // (Audio ist ggf. valid persistiert worden vor dem Stop-Throw).
+        // (Audio ist ggf. valid persistiert worden vor dem Stop-Throw). `StopMediaRecorder` ist
+        // ein `object` — `toString()` ist der Simple-Name, exakter Match korrekt.
         failure.effect == "StopMediaRecorder" && (state is RecordingState.Active || state is RecordingState.Paused) ->
             TransitionResult(
                 nextState = RecordingState.Idle,
                 sideEffects = listOf(Effect.ReleaseMediaRecorder, Effect.StopTimer, Effect.StopBorderGlow),
             )
         // Andere Failures: Default-Verhalten (Rejected). Künftige Effects können explizit ergänzt
-        // werden, wenn ein neuer Failure-Pfad nötig ist.
+        // werden, wenn ein neuer Failure-Pfad nötig ist. Bei zukünftigen data-class-Effects
+        // konsistent `startsWith("EffectName(")` verwenden (Spec 2 §3.3 EffectFailure-Konvention).
         else -> null
     }
 

@@ -95,11 +95,28 @@ data class ButtonSlot(
     val textResolver: (DictateUiState) -> CharSequence? = { null },
     val enabledResolver: (DictateUiState) -> Boolean = { true },
     val alphaResolver: (DictateUiState) -> Float = { 1f },
+    <!-- FIX: Phase-C C-3 (2026-05-14) – `null`-Semantik explizit als strukturelle Verhinderung
+         von `DispatchOutcome.Unrouted` dokumentiert (C-1 F-6 Offene Frage für C-3). Implementer-
+         Anchor: ein `null`-Return aus dem Resolver wird vom Click-Handler (§6 wireStaticHandlers)
+         per `?.let { onAction?.invoke(it) }` aussortiert — die Action erreicht den Orchestrator
+         erst gar nicht, weshalb es KEIN `DispatchOutcome.Rejected` oder `DispatchOutcome.Unrouted`
+         und keinen Telemetry-Log gibt. Das ist der bewusst gewählte "stille No-Op"-Pfad für
+         strukturell ungültige Clicks (Cooldown, Wrong-State). -->
     /**
      * Mappt (State, Services) → Action. `services` liefert nur den Pre-Dispatch-Allokator
      * für AudioFileFactory (R.2, Spec 1 §4.11) — Resolver dürfen KEINE anderen `services`-
      * Felder lesen (Pure-Function-Garantie: keine Hardware/IO-Reads außer File-Allocate).
-     * `null` bedeutet: Click ist im aktuellen State unbedeutend (kein dispatch, kein Log-Spam).
+     *
+     * **`null`-Semantik (Phase-C C-3):** Ein `null`-Return bedeutet "Click ist im aktuellen
+     * State unbedeutend" — der Click-Handler (§6 `wireStaticHandlers`,
+     * `slot.actionResolver(s, services)?.let { onAction?.invoke(it) }`) verschluckt das
+     * `null` per `?.let`, die Action erreicht den Orchestrator NIE. Damit gibt es kein
+     * `DispatchOutcome.Rejected("reducer-null")` und kein `DispatchOutcome.Unrouted`-Log-Spam
+     * für strukturell-ungültige Clicks (Cooldown, falscher Recording-Pfad, etc.). Resolver
+     * sind die **erste** Validierungs-Schicht (Spec 1 §4.3 Reducer ist die zweite). Konvention:
+     * Visibility/Enabled werden via `visibilityPredicate` / `enabledResolver` getrennt
+     * modelliert — der Resolver nutzt `null` nur, wenn die Action selbst State-abhängig
+     * inexistent ist (z.B. PAUSE-Click in Idle: kein `Action.RecordingAction.X` ist sinnvoll).
      */
     val actionResolver: (DictateUiState, ModuleServices) -> Action?,
 )
@@ -151,19 +168,44 @@ sealed class Action {
          Loop hätte sie als DispatchOutcome.Unrouted abgewiesen, Module hätten den State-Snapshot davor
          nie gesehen (kein prev/next-Cascade ohne erfolgreichen Reducer-Lauf). Failure-Channel war effektiv tot.
          Konvention jetzt: Routing über die ORIGIN-Modul-ID (Modul, dessen Effect failed hat). Damit erbt
-         EffectFailure das Routing des emittierenden Moduls; das Modul reagiert in seinem eigenen Reducer-
-         Arm `is Action.EffectFailure -> …` und kann den State-Rollback / Failure-Marker setzen. Andere
-         Module beobachten den State-Change anschließend regulär via onCrossModuleStateChange. -->
+         EffectFailure das Routing des emittierenden Moduls; das Modul reagiert in einem dedizierten
+         `reduceFailure(state, failure, ctx)`-Hook (DictateModule-Interface, Spec 1 §4.2) und kann den
+         State-Rollback / Failure-Marker setzen. Andere Module beobachten den State-Change anschließend
+         regulär via onCrossModuleStateChange. -->
+    <!-- FIX: Phase-C C-3 (2026-05-14) – Drift-Korrektur: Routing erfolgt jetzt über den separaten
+         `reduceFailure`-Hook (Phase-B S-3-Erweiterung des DictateModule-Interfaces), NICHT über einen
+         `is Action.EffectFailure -> …`-Arm im regulären `reduce`. Grund: `reduce`'s Action-Parameter
+         hat den Modul-spezifischen Typ `A` (z.B. `Action.RecordingAction`); `Action.EffectFailure`
+         ist ein direkter Action-Subtyp, KEINE `RecordingAction` — ein Reducer-Arm wäre type-unsicher
+         (siehe Spec 1 §4.2 reduceFailure-KDoc). KDoc hier auf den separaten Hook umgestellt. -->
     /**
      * Failure-Channel — vom Orchestrator emittiert, wenn ein Modul-`runEffect`-Aufruf wirft.
      *
-     * **Routing-Konvention (Spec 1 §4.3 Z. 617):** EffectFailure trägt die [originModuleId]
-     * des emittierenden Moduls; der Orchestrator routet sie **zurück an genau dieses Modul**
-     * (NICHT über `moduleByLeafClass`-KClass-Lookup, sondern über die ID). Begründung: nur
-     * das Owner-Modul des Effects weiß, welcher Sub-State-Rollback / Failure-Marker
-     * korrekt ist. Module ohne expliziten `EffectFailure`-Reducer-Arm geben `null` aus
-     * `reduce()` zurück — `DispatchOutcome.Rejected("reducer-null")` ist semantisch
-     * korrekt ("Modul hat keine Failure-Behandlung für diesen Effect"), kein Bug.
+     * **Routing-Konvention (Spec 1 §4.3, EffectFailure-Pfad `dispatchInternal` Step 1a + 2):**
+     * <!-- FIX: Phase-C C-3 (2026-05-14) – stale Z. 617 → Section-Anchor (F-5-Pattern aus C-1). -->
+     * EffectFailure trägt die [originModuleId] des emittierenden Moduls; der Orchestrator routet sie
+     * **zurück an genau dieses Modul** (NICHT über `moduleByLeafClass`-KClass-Lookup, sondern über
+     * die ID). Begründung: nur das Owner-Modul des Effects weiß, welcher Sub-State-Rollback /
+     * Failure-Marker korrekt ist. Module ohne überschriebenen `reduceFailure`-Hook erben das
+     * Interface-Default `null` (Spec 1 §4.2) — `DispatchOutcome.Rejected("reducer-null")` ist
+     * semantisch korrekt ("Modul hat keine Failure-Behandlung für diesen Effect"), kein Bug.
+     *
+     * **Reducer-Arm liegt im Hook `reduceFailure(state, failure, ctx)`, nicht im regulären
+     * `reduce(state, action, ctx)`:** Phase-B S-3 hat das Modul-Interface um den separaten
+     * Failure-Hook erweitert (Spec 1 §4.2). Ein `is Action.EffectFailure ->`-Arm im regulären
+     * `reduce` wäre type-unsicher, weil `reduce`'s Action-Parameter den Modul-spezifischen Typ `A`
+     * (z.B. `Action.RecordingAction`) hat — `Action.EffectFailure` ist ein direkter Action-Subtyp,
+     * KEINE `RecordingAction`. `reduceFailure` trennt die beiden Pfade ISP-konform.
+     *
+     * **Effect-Identifikator als String (Phase-C C-3 Hinweis):** `effect` wird vom Orchestrator
+     * über `effect.toString()` (Spec 1 §4.3 Step 4) befüllt. Für `object`-Effects (z.B.
+     * `Effect.ReleaseMediaRecorder`) ist `toString()` der Simple-Name — Module können direkt mit
+     * `failure.effect == "ReleaseMediaRecorder"` matchen. Für `data class`-Effects (z.B.
+     * `Effect.AllocateMediaRecorder(target, useBluetooth, audioFile)`) enthält `toString()` die
+     * Args-Repräsentation — naiver String-Vergleich `failure.effect == "AllocateMediaRecorder"`
+     * matcht NICHT. Module mit data-class-Effects MÜSSEN `failure.effect.startsWith("AllocateMediaRecorder(")`
+     * verwenden oder einen typisierten Effect-Discriminator etablieren (siehe Spec 1 §15.2
+     * RecordingModule.reduceFailure-FIX-Kommentar).
      *
      * Cross-Module-Beobachtung läuft danach wie bei jeder anderen erfolgreich-reduzierten
      * Action über `onCrossModuleStateChange` — z.B. kann PipelineModule auf
@@ -617,6 +659,10 @@ class ImeViewBackend(
 <!-- FIX: Issue 1.1.4 + 2.1.7 / R.3 – Click-Listener nutzt nullable Resolver-Result statt Action.NoOp -->
 <!-- FIX: Phase-B S-7 (2026-05-13) – Click-Listener ruft 2-arg-Resolver (state, services); services-Reference
      kommt vom Backend-Konstruktor (`ImeViewBackend(scope, services, onAction, …)`). -->
+<!-- FIX: Phase-C C-3 (2026-05-14) – `?.let { onAction?.invoke(it) }` ist die Resolver-`null`-Aussortierung
+     (siehe §3.2 ButtonSlot.actionResolver-KDoc). Verhindert strukturell `DispatchOutcome.Unrouted`-
+     Log-Spam für unsinnige Clicks (Cooldown, Wrong-State) — die Action erreicht den Orchestrator nie.
+     Strukturelle Verhinderung, KEIN Telemetry-Pfad. -->
     private fun wireStaticHandlers() {
         buttonViews.forEach { (id, view) ->
             view.setOnClickListener {
@@ -1317,8 +1363,10 @@ val KEYBOARD_REPROCESS_STAGING = LayoutMode(
     rows = listOf(
         RowDescriptor(slots = listOf(
             // FIX: Phase-B S-6 (2026-05-13) – SendStaging-Action ist `data class SendStaging(val sessionId: String)`
-            // (Spec 2 §3.3 Z. 205), NICHT object — sessionId muss aus dem aktuellen ReprocessStaging-State
-            // gelesen werden. Vorher als `{ Action.PipelineAction.SendStaging }` (Singleton-Use) Compile-Error.
+            // (Spec 2 §3.3 PipelineAction.SendStaging), NICHT object — sessionId muss aus dem aktuellen
+            // ReprocessStaging-State gelesen werden. Vorher als `{ Action.PipelineAction.SendStaging }`
+            // (Singleton-Use) Compile-Error.
+            // FIX: Phase-C C-3 (2026-05-14) – stale Z. 205 → Action-Name-Anchor (F-5-Pattern aus C-1).
             ButtonSlot(LogicalButtonId.RECORD, FillRemaining,
                 visibilityPredicate = { true },
                 textResolver = ::resolveRecordButtonTextStaging,    // "Audio 0:23 · Senden"
@@ -1347,8 +1395,9 @@ val KEYBOARD_REPROCESS_STAGING = LayoutMode(
         )),
         RowDescriptor(slots = listOf(
             // FIX: Phase-B S-6 (2026-05-13) – CancelReprocessStaging-Action ist `data class
-            // CancelReprocessStaging(val sessionId: String)` (Spec 2 §3.3 Z. 206) — sessionId aus
-            // ReprocessStaging-State.
+            // CancelReprocessStaging(val sessionId: String)` (Spec 2 §3.3 PipelineAction.CancelReprocessStaging)
+            // — sessionId aus ReprocessStaging-State.
+            // FIX: Phase-C C-3 (2026-05-14) – stale Z. 206 → Action-Name-Anchor (F-5-Pattern aus C-1).
             ButtonSlot(LogicalButtonId.TRASH, WrapContent,
                 visibilityPredicate = { true },
                 actionResolver = { state, _ ->
@@ -1705,7 +1754,7 @@ SRP-Antipattern in der KeyboardLayoutManager-Region.
 | `DictateInputMethodService.java:1345` (`resendButton.setVisibility(View.VISIBLE)` im onStartInputView Idle-Branch) | gelöscht — Predicate übernimmt |
 | `DictateInputMethodService.java:1347` (`resendButton.setVisibility(View.GONE)` im onStartInputView Idle-Branch) | gelöscht — Predicate übernimmt |
 | `DictateInputMethodService.java:1669` (`resendButton.setVisibility(View.GONE)` in `runTranscriptionViaOrchestrator`) | gelöscht — Predicate übernimmt (Pipeline-State wechselt zu Preparing → predResendVisible = false) |
-| `DictateInputMethodService.java:1839` (`resendButton.setVisibility(View.VISIBLE)` in `onShowResend()`) | wird zu Action-Dispatch: `orchestrator.dispatch(Action.ResendAction.MarkLastAudio(exists = true))` → ResendModule.reduce setzt `state.resend.lastAudioExists = true` → State emittiert → Predicate evaluiert → resend wird sichtbar. <!-- FIX: Phase-B S-6 (2026-05-13) – Drift gegen F-8 (LocalBinder hat NUR `state` + `dispatch`, kein `markLastAudioExists`-Forwarder; siehe Spec 1 §5 LocalBinder-API). Action `MarkLastAudio(exists: Boolean)` ist in Spec 2 §3.3 Z. 250 bereits definiert. --> |
+| `DictateInputMethodService.java:1839` (`resendButton.setVisibility(View.VISIBLE)` in `onShowResend()`) | wird zu Action-Dispatch: `orchestrator.dispatch(Action.ResendAction.MarkLastAudio(exists = true))` → ResendModule.reduce setzt `state.resend.lastAudioExists = true` → State emittiert → Predicate evaluiert → resend wird sichtbar. <!-- FIX: Phase-B S-6 (2026-05-13) – Drift gegen F-8 (LocalBinder hat NUR `state` + `dispatch`, kein `markLastAudioExists`-Forwarder; siehe Spec 1 §5 LocalBinder-API). Action `MarkLastAudio(exists: Boolean)` ist in Spec 2 §3.3 `ResendAction.MarkLastAudio` bereits definiert. <!-- FIX: Phase-C C-3 (2026-05-14) – stale Z. 250 → Action-Name-Anchor (F-5-Pattern aus C-1). --> --> |
 
 ---
 

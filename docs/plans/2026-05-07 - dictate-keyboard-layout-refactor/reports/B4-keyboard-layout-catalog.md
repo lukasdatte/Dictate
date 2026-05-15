@@ -251,11 +251,116 @@ no new test helpers were needed.
 
 ### Chunk C14-block5-ime-view-backend — ImeViewBackend + Controllers + Animation
 
-**Agent-IDs:** Steps 1-5: `B4-C14-IMPL-FULL`
+**Agent-IDs:** Steps 1-5 (combined): `B4-C14-IMPL-FULL`
 
-**Status:** ⏳ pending (depends on C13)
+**Status:** ✅ implementation + tests green (`./gradlew test` — 833 tests, 0 failures, 0 errors; `./gradlew assembleDebug` BUILD SUCCESSFUL)
+**Chunks file:** `../dictate-keyboard-layout-refactor.reviewed.chunks.json` chunk index 15 (C14-block5-ime-view-backend)
 
-⏳
+#### What was done
+
+Introduced the four parallel rendering backends and the
+[RecordingAnimationController] per Spec 2 §4, §4.1, §5, §5.1, §6,
+§11.5, §11.6, §11.7 + ADR-0004 §3. No live production wiring yet —
+C15 (Spec 2 §11.8 5c) attaches the backends to
+`DictatePipelineService.state.collect`; until then the legacy
+`KeyboardUiController` / `KeyboardStateManager` continue to drive the
+IME.
+
+**Production files (new) — `app/src/main/java/net/devemperor/dictate/state/render/`:**
+
+| File | Purpose |
+|------|---------|
+| `SlotRenderer.kt` | Top-level `applySlotToView` helper (F-7 / DRY, Spec 2 §5.1). Single code-path translating `ButtonSlot` resolver outputs into Android-view properties — consumed by `ImeViewBackend` today and by `OverlayBackend` once Spec 3 lands. `is MaterialButton` branch for icon/text resolvers; non-`MaterialButton` views skip the icon/text writes. |
+| `MotionSurface.kt` | Interface abstraction over `MotionLayout` + production `RealMotionSurface` wrapper. Lets `ImeViewBackend` JVM-test the jump-vs-transition selection logic without Robolectric (D7 — abstraction wins long-term maintainability). |
+| `ImeViewBackend.kt` | RenderBackend for `BackendType.IME_VIEW`. `wireStaticHandlers` runs once per `attach` (L8); click lambdas read `stateRef` / `modeRef` at click time. `firstRender` flag (R.14) snaps to scene state without animation on first emit. `staticHandlerInstaller` constructor hook for IME-side special-touch handlers (CursorSwipe / Backspace-Swipe / Enter-Overlay — Spec 2 §11.7) — keeps the backend independent of the handler classes. R.3 nullable-resolver-idiom (`?.let { onAction?.invoke(it) }`). Long-press wiring for RESEND (`ResendLastAudioLong`) + vibrate-only for RECORD/BACKSPACE per spec. `require(...)` mismatched-backend guard + `error(...)` silent-skip-guard (Issue 3.0.12). |
+| `ContentAreaController.kt` | Second RenderBackend (R.10 / 2.1.15 Option B) for the three IME content-areas (`MAIN_BUTTONS` / `QWERTZ` / `EMOJI_PICKER`). `backendType = null` so the manager fans every render-tick out regardless of which surface owns the active mode. |
+| `PromptVisibilityController.kt` | RenderBackend for the prompts container + `pipelineProgress` swap-in + QWERTZ-side recording controls. Truth-table per Spec 2 §9.3: smallMode / EMOJI_PICKER suppress prompts; active/staging/pipeline forces VISIBLE; otherwise driven by `features.rewordingEnabled`. `pipelineProgress` view replaces `promptsRv` while `pipeline is Running && !isStaging`. |
+| `OverlayResetHandler.kt` | RenderBackend that defensively resets `overlay_characters_ll` to GONE every render-tick — catches the edge case where a ViewMode transition interrupts an in-flight `EnterOverlayHandler` touch sequence and the handler never observes the matching release event. R.10 sub-backend. |
+| `RecordingAnimationController.kt` | Drives `RecordingAnimation` (BorderGlow) + `PulseLayout` from `state.recording` transitions. Class-comparison idempotency (`prev::class == curr::class`) means re-emitting the same state class is a no-op. `Preparing` is a deliberate no-op (recorder warm-up window). `onAmplitude` / `onTimerTick` side-channels forward to the animator without going through `DictateUiState` (per-tick state allocations would inflate StateFlow). `reset()` re-arms first-apply on detach. |
+
+**Production files (modified):**
+
+| File | Change |
+|------|--------|
+| `LayoutCatalog.kt` | Added `sceneStateId = R.id.<state>` to all 5 KEYBOARD layout modes (`KEYBOARD_TWO_ROW`, `KEYBOARD_SINGLE_ROW`, both `*_SEND_MODE` variants, `KEYBOARD_REPROCESS_STAGING`). The scene-id was deferred to C14 in C12; without it the `ImeViewBackend` cannot drive `MotionLayout.transitionToState(...)`. Added `import net.devemperor.dictate.R`. `OVERLAY_5BUTTON` keeps `sceneStateId = null` (overlay surface doesn't drive MotionLayout). |
+
+**Test files (new) — `app/src/test/java/net/devemperor/dictate/state/render/`:**
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| `RecordingAnimationControllerTest.kt` | 11 | Class-transition idempotency (Idle/Active/Paused/Preparing); `animationsEnabled=false` suppresses start (still allows cancel); `onAmplitude` / `onTimerTick` (MM:SS formatting) / `updateColor` forwarding; `reset()` re-arms first-apply. Hand-rolled `FakeRecordingAnimation` (K-1). |
+| `ContentAreaControllerTest.kt` | 5 | All three `ContentArea` values map to exactly one visible container; `backendType == null`; detach is a no-op against future renders. Robolectric (K-4 — `View.visibility` mutation requires real Android view classes). |
+| `PromptVisibilityControllerTest.kt` | 11 | Full truth-table coverage (smallMode / EMOJI_PICKER / active / preparing / running / staging / rewordingEnabled); pipelineProgress swap-in vs ReprocessStaging recycler; QWERTZ recording controls; nullable-view tolerance. Robolectric. |
+| `OverlayResetHandlerTest.kt` | 4 | `backendType == null`; reset forces GONE; null-view no-op; idempotency. Robolectric. |
+| `ImeViewBackendTest.kt` | 14 | First-render `jumpToState` (R.14); subsequent `transitionToState`; `animationsEnabled=false` forces jump every tick; visibility writes; click → `onAction` via resolver; cross-render single-listener (L8); R.3 null-action silent no-op; detach clears state; detach resets firstRender; mismatched-backend `require`; silent-skip-guard `error`; RecordingAnimationController forwarding; `staticHandlerInstaller` invocation; `onVibrate` per click. Robolectric (`Theme_Dictate` + `MaterialButton`). Hand-rolled `FakeMotionSurface`. |
+| `SlotRendererTest.kt` | 7 | Visibility predicate / enabled / alpha writes; text resolver applied on `MaterialButton` only; null text resolver leaves text intact; non-MaterialButton skips icon/text. Robolectric. |
+
+**Total new tests: 52** (RecordingAnimationController 11 + ContentArea 5 + PromptVisibility 11 + OverlayReset 4 + ImeViewBackend 14 + SlotRenderer 7), all green on `./gradlew test`.
+
+**Espresso UI-Tests (Spec 2 §14.2 #1-10) — `app/src/androidTest/java/net/devemperor/dictate/ui/`:**
+
+- `KeyboardLayoutUiTest.kt` — 10 skeleton tests, all `@Ignore`d with `pending:` markers. Test names + bug-symptom anchors locked in for the C15 implementer to un-ignore once `attachBackend(imeViewBackend)` is wired in `DictateInputMethodService.onCreateInputView`. Coverage:
+  - UI-1 (§1.1 #1) — toggle Single-Row in Idle, all 8 buttons visible
+  - UI-2 — active recording hides resend, shows trash/pause
+  - UI-3 — pipeline counter text on record_btn
+  - UI-4 (§1.1 #3a — bug-fix verifier) — SEND_MODE + Single-Row keeps record_btn unobstructed
+  - UI-5 — ReprocessStaging: pause visible+disabled+alpha 0.4
+  - UI-6 — rotation during recording, animation continues
+  - UI-7 (§1.1 #2) — toggle Single-Row during recording, Pulse keeps running
+  - UI-8 (§1.1 #3b — frame-capture) — resend stays VISIBLE through Two-Row ↔ Single-Row toggle
+  - UI-9 (§1.1 #3b) — resend cooldown VISIBLE+enabled=false+alpha 0.4
+  - UI-10 (§1.1 #3a + #3b — cross-bug) — no overlap during Active → Pipeline-Preparing transition
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| `RecordingAnimationController` constructor does NOT take `recordButton: MaterialButton` | Spec 2 §11.5 | Spec snippet holds the `recordButton` as a constructor field but only uses it indirectly via `RecordingAnimation.prepare(...)` — the helper never needs the button directly. The controller now takes only `RecordingAnimation` + nullable `PulseLayout` + `animationsEnabled` lambda. | Cleaner SRP — the IME service calls `animation.prepare(recordButton)` once during setup before constructing the controller. The controller's concern is state-to-animation forwarding, not view ownership. | C15 must call `animation.prepare(recordButton)` before passing the controller into `ImeViewBackend`. Otherwise no ripple. | inline-fixed |
+| `PulseLayout` parameter is nullable in `RecordingAnimationController` | Spec 2 §11.5 | Spec uses non-nullable `PulseLayout`. The nullable form lets JVM unit tests skip Robolectric for the controller (PulseLayout is a `FrameLayout` subclass — instantiating it requires a real Context). | Test-loose adaptation; production always passes non-null. | None — production passes the real wrapper. | inline-fixed |
+| `ImeViewBackend` constructor uses `MotionSurface` interface, not `MotionLayout` directly | Spec 2 §6 | Spec snippet types `motionLayout` as the concrete `MotionLayout` view; introducing the `MotionSurface` interface (with `RealMotionSurface` production impl) keeps the backend JVM-unit-testable via a hand-rolled fake. | Long-term maintainability gain (D7) — abstraction is one extra interface file, but lets us assert on jump-vs-transition selection without Robolectric ceremony. | C15 wraps the `MotionLayout` in `RealMotionSurface` before constructing the backend. One-line change in the service-wiring. | inline-fixed |
+| `ImeViewBackend` `staticHandlerInstaller` parameter | Spec 2 §6 / §11.7 | Spec embeds `buildSpaceTouchHandler()` / `buildBackspaceSwipeHandler()` / `buildEnterOverlayHandler()` directly inside the backend. Those handlers depend on IME-side classes (`CursorSwipeTouchHandler`, `BackspaceSwipeHandler`, `EnterOverlayHandler` — all in `core/keyboard/`) plus the `inputConnectionProvider` / `accentColorProvider` injections — keeping them inside the backend would force the backend to depend on the IME-side core. The installer hook lets C15 wire them up from outside without inverting the dependency. | SRP + DIP gain — the backend's slot-driven rendering surface stays independent of the special-touch handler classes. | C15 supplies the installer lambda; legacy handlers stay where they are. | inline-fixed |
+| `LayoutCatalog.OVERLAY_5BUTTON.sceneStateId = null` | (no explicit spec) | The overlay surface (Spec 3) does NOT drive MotionLayout — it uses a flat `LinearLayout` inside a `WindowManager` window. `null` matches the `LayoutMode.sceneStateId` KDoc rationale ("no MotionLayout transition to trigger"). | None — overlay backend doesn't reach the IME-side MotionSurface. | inline-fixed |
+| `PromptVisibilityController` accepts nullable views | Spec 2 §11.5 mentions container references | Some layout configurations (mini-keyboard variants in Phase 2) may omit the prompt area entirely. Nullable members + skip-write keeps the controller robust. | C15 always passes the real views from `onCreateInputView`. | None. | inline-fixed |
+| `LayoutCatalog` `sceneStateId` populated for all 5 KEYBOARD modes | C12 follow-up acknowledged in B4 block-report  | C12 deferred the scene-state-ids to C14 (didn't know `R.id.*` at C12-time). C14 now sets them per Spec 2 §6 — `mode.sceneStateId?.let { motionLayout.transitionToState(it) }`. | None — extends the data already in place. | inline-fixed |
+
+#### Inline-fixed items
+
+| Where | Issue | Fix |
+|-------|-------|-----|
+| `LayoutCatalog.kt` (modified) | C12 deferred `sceneStateId` on the 5 KEYBOARD layout modes; ImeViewBackend.render needs them to drive MotionLayout transitions. | Added `sceneStateId = R.id.two_row_state` / `single_row_state` / `two_row_send_mode_state` / `single_row_send_mode_state` / `reprocess_staging_state` on the matching `LayoutMode` literals. `OVERLAY_5BUTTON` keeps `sceneStateId = null`. |
+| `ImeViewBackend.kt` | Spec 2 §6 prescribes a single MotionLayout-typed field, but the backend's hot path is exactly two methods (`jumpToState` / `transitionToState`). Direct `MotionLayout` typing would force Robolectric on every backend unit test. | Introduced `MotionSurface` interface + `RealMotionSurface` production wrapper. JVM unit tests pass a `FakeMotionSurface` and assert on the recorded transitions. |
+| `RecordingAnimationController.kt` | Spec 2 §11.5 carries a `lastRecordingState: RecordingState?` cache but compares via `prev::class == curr::class`. Caching the whole state when only the sealed branch matters is wasteful (especially for `Active(useBluetooth, audioFile)` — different `audioFile` would falsely flag "state changed"). | Caches `Class<out RecordingState>?` directly. Same idempotency semantics, leaner allocation. |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|-------------|--------|--------|
+| IMPL-1 | NTH | UI-Tests 1-10 are `@Ignore`d skeletons — they cannot run until C15 wires the backend into `DictateInputMethodService.onCreateInputView`. | postponed | Acceptable — Spec 2 §14.2 explicitly schedules these for the cross-cutting phase (Block 5/4 / C15). Skeletons document the bug-symptom anchors so the un-ignore step is mechanical. |
+| IMPL-2 (C12 carry-over) | NTH | `resolveRecordButtonTextPipeline` still ignores `completedSteps`, `totalSteps`, `elapsedMs` — the `PipelineUiState.Running` data class doesn't carry those fields. | open | Out of C14 scope (modifying `PipelineUiState` would re-open B2 state-shape). C15 or B5/B6 follow-up after the pipeline-state extension lands. |
+| IMPL-3 (C12 carry-over) | NTH | `KEYBOARD_REPROCESS_STAGING.enabledResolver` still falls back to "any non-null staging" instead of reading `s.isStarting`. | open | Same reason as IMPL-2 — the field isn't on `PipelineUiState.ReprocessStaging` yet. Follow-up. |
+
+#### Overlooked points / known gaps
+
+- **Production wiring not done.** No `DictateInputMethodService.onCreateInputView` change in C14 (per chunk scope — Spec 2 §11.8 says wiring lives in 5c / C15). Legacy `KeyboardUiController` + `KeyboardStateManager` still drive the IME. Verified: `./gradlew assembleDebug` BUILD SUCCESSFUL.
+- **PulseLayout-Spike (§11.3) and Inflation-Cost-Spike (§11.4) not run.** Both need a connected device or Robolectric `LayoutInflater` with a real `MotionLayout` — out-of-scope for the implementer-agent that can't run instrumented tests. Block-validate / E2E (Phase 4.5) covers these.
+- **Espresso UI-Tests 1-10 not executable by the agent.** Per state-file B4 Test-Strategy + Spec 2 §14.2 — these require a connected device or emulator (`connectedAndroidTest`). The skeletons compile (`./gradlew compileDebugAndroidTestKotlin` passes) and document the contract. C15 will un-`@Ignore` and run them against a real device.
+- **`MotionLayoutSurface` could replace `MotionSurface` once `OverlayBackend` lands** — Spec 3's overlay surface doesn't use MotionLayout at all, so the abstraction stays local to `ImeViewBackend`. No premature generalisation.
+- **Long-press for RECORD currently consumes the event without dispatching an action.** Spec 2 §6 keeps this behaviour ("RECORD has a vibrate-only marker") — the legacy IME doesn't emit a record-long-press action either. Phase 2 may add one.
+
+#### Test-Infrastructure implemented
+
+None — all new test files reuse:
+- `testLayoutStrings()` from `LayoutCatalogTest.kt` (internal helper)
+- `fakeModuleServices()` from `testutil/FakeModuleServices.kt`
+- Robolectric (already on the build classpath)
+
+The only new test fixture is **`FakeRecordingAnimation`** (inside `RecordingAnimationControllerTest.kt`, internal) — a hand-rolled K-1 fake recording every `RecordingAnimation` method invocation. Re-used by `ImeViewBackendTest` to assert the controller forwarding.
+
+#### Build / test results
+
+- `./gradlew assembleDebug` — **BUILD SUCCESSFUL** (5s; 37 tasks).
+- `./gradlew test` — **BUILD SUCCESSFUL** (1m 18s; 833 tests, 0 failures, 0 errors). Render-package alone: **52 new tests, all green** (0.5s + 16s Robolectric).
+- `./gradlew compileDebugAndroidTestKotlin` — **BUILD SUCCESSFUL** (4s) — Espresso skeletons compile.
 
 ---
 

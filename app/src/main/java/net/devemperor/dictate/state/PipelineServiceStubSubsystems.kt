@@ -14,13 +14,14 @@ import java.io.File
  * **Post-B3 reality (B3-VAL-W1 F-18 documentation refresh):** after
  * the C8 subsystem-adapter migration, this file retains only:
  *
- *  - **Two production-route stubs** that B3 intentionally leaves
- *    for B5/B6: [pipelineRunner] (orchestrator-side job submission
- *    lands when LayoutCatalog drives recordings end-to-end) and
- *    [notificationCoordinator] (the Spec 1 §7.4
+ *  - **One production-route stub** that the cutover-completion Epic
+ *    leaves for C4: [notificationCoordinator] (the Spec 1 §7.4
  *    `PipelineNotificationCoordinator` class is unwritten — Spec 1
- *    §7.4-§7.5 will be implemented in B5/B6 alongside the action
- *    router).
+ *    §7.4-§7.5 implemented in C4-B2 alongside the action router).
+ *  - **Deprecated** [pipelineRunner] — superseded by
+ *    [net.devemperor.dictate.core.PipelineRunnerSubsystemAdapter]
+ *    (C3-B1, thin `JobExecutor.INSTANCE` delegation). Retained for
+ *    test-only compile-compat.
  *  - **A defensive fallback** for [bluetoothSco] when the system
  *    `AudioManager` is `null` (Robolectric / stripped Context
  *    paths). Production hardware paths always wire the real
@@ -100,7 +101,22 @@ internal object PipelineServiceStubSubsystems {
         override fun stop() { Log.w(TAG, "borderGlow.stop(): $MESSAGE") }
     }
 
-    /** Pipeline-job submission + cancellation stub. */
+    /**
+     * Pipeline-job submission + cancellation stub.
+     *
+     * **C3-B1 — demoted to test-only.** Production wiring no longer
+     * references this: `DictatePipelineService.onCreate` Step 4
+     * constructs a real
+     * [net.devemperor.dictate.core.PipelineRunnerSubsystemAdapter]
+     * (thin `JobExecutor.INSTANCE` delegation, Spec 1 §9.6/§13.3.11).
+     * Retained only for test code that wants a no-op `Log.w`-and-discard
+     * runner baseline (mirrors the [sessionRepo] / [audioFileFactory]
+     * deprecation discipline).
+     */
+    @Deprecated(
+        "Replaced by PipelineRunnerSubsystemAdapter in C3-B1 — kept for test-only compile-compat",
+        level = DeprecationLevel.WARNING,
+    )
     val pipelineRunner: PipelineRunnerSubsystem = object : PipelineRunnerSubsystem {
         override fun submit(sessionId: String, audioFile: File) {
             Log.w(TAG, "pipelineRunner.submit($sessionId, $audioFile): $MESSAGE")

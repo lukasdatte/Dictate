@@ -160,6 +160,14 @@ class DictatePipelineService : Service() {
     private lateinit var audioFocusGateImpl: AudioFocusGate
     private var bluetoothScoSubsystemAdapterImpl: BluetoothScoSubsystemAdapter? = null
 
+    // ── C3-B1 — real PipelineRunnerSubsystem (Spec 1 §9.6/§13.3.11) ────
+    //
+    // Thin JobExecutor.INSTANCE delegation. `lateinit` (set in onCreate
+    // Step 4); held as a field for symmetry with the other adapter impls
+    // and so a future LocalBinder accessor (C5) can reach the same
+    // instance without re-constructing.
+    private lateinit var pipelineRunnerSubsystemAdapterImpl: PipelineRunnerSubsystemAdapter
+
     // ── C11 — Pre-Dispatch audio file allocator (Spec 1 §4.11) ─────────
     //
     // Lives from `onCreate` through `onDestroy`. Held as `lateinit` so
@@ -409,6 +417,23 @@ class DictatePipelineService : Service() {
             cacheDirProvider = { applicationContext.cacheDir },
         )
 
+        // C3-B1 — real PipelineRunnerSubsystem (Spec 1 §9.6/§13.3.11).
+        // Thin delegation to JobExecutor.INSTANCE (OQ-1 thin-delegation
+        // option; PipelineOrchestrator NOT rewritten). Submit-direction
+        // only — the IME's legacy JobExecutor.start path stays
+        // authoritative until C5/C7 (Epic §6.2). R-1: the
+        // fresh-recording config resolver is the C5 insertion point;
+        // the C3 default resolver throws for IME-runtime-only fields
+        // rather than silently defaulting them (silent data loss is the
+        // R-1 failure mode). applicationContext is used for
+        // JobExecutor.start's Room failure-path (outlives any IME view).
+        pipelineRunnerSubsystemAdapterImpl = PipelineRunnerSubsystemAdapter(
+            context = applicationContext,
+            configResolver = DefaultPipelineConfigResolver(
+                filesDirProvider = { filesDir },
+            ),
+        )
+
         moduleServicesImpl = ModuleServices(
             recordingHardware = recordingHardware,
             bluetoothSco = bluetoothSco,
@@ -416,7 +441,7 @@ class DictatePipelineService : Service() {
             recordingTimer = recordingTimer,
             amplitudeStream = amplitudeStream,
             borderGlow = borderGlow,
-            pipelineRunner = PipelineServiceStubSubsystems.pipelineRunner,
+            pipelineRunner = pipelineRunnerSubsystemAdapterImpl,
             sessionRepo = sessionRepoAdapterImpl,
             notificationCoordinator = PipelineServiceStubSubsystems.notificationCoordinator,
             inputConnectionProvider = { binder.delegateInputConnectionProvider?.invoke() },

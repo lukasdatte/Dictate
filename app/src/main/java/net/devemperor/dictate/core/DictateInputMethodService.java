@@ -330,7 +330,13 @@ public class DictateInputMethodService extends InputMethodService
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             // Same-process cast; LocalBinder is a real object, not a proxy.
-            pipelineBinder = (DictatePipelineService.LocalBinder) service;
+            DictatePipelineService.LocalBinder localBinder =
+                (DictatePipelineService.LocalBinder) service;
+            pipelineBinder = localBinder;
+            // C8 IMPL-1 closure: pull the service-owned AI infrastructure
+            // into the IME's fields so existing call sites (record-button,
+            // pipeline-progress, etc.) work without rewriting.
+            bindAiInfrastructureFromService(localBinder);
         }
 
         // ── onServiceDisconnected ──
@@ -339,6 +345,9 @@ public class DictateInputMethodService extends InputMethodService
             // Process-crash. In our same-process setup this should never
             // fire — defensive: null the binder so following dispatches
             // hit the not-ready guard rather than a stale instance.
+            if (pipelineBinder != null) {
+                unbindAiInfrastructureFromService(pipelineBinder);
+            }
             pipelineBinder = null;
         }
 
@@ -347,6 +356,9 @@ public class DictateInputMethodService extends InputMethodService
         public void onBindingDied(ComponentName name) {
             // Permanent breakage of the binding — re-bind. Should not
             // happen in same-process, but follows Spec 1 §11.3.2.
+            if (pipelineBinder != null) {
+                unbindAiInfrastructureFromService(pipelineBinder);
+            }
             try {
                 unbindService(this);
             } catch (IllegalArgumentException ignored) {
@@ -395,19 +407,30 @@ public class DictateInputMethodService extends InputMethodService
         usageDao = dictateDb.usageDao();
         am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
 
-        // 2. Services
+        // 2. Pref migration (must happen before any AI service is bound to a Pref).
         PrefsMigration.migrateProviderPrefs(sp);
-        aiOrchestrator = new AIOrchestrator(sp, dictateDb.usageDao());
-        promptService = PromptService.create(sp);
-        autoFormattingService = AutoFormattingService.create(sp, aiOrchestrator);
-        sessionManager = new SessionManager(DictateDatabase.getInstance(this));
-        sessionTracker = new SessionTracker(DictateDatabase.getInstance(this).sessionDao());
-        recordingRepository = new RecordingRepository(this);
 
-        // 3. Managers
-        promptQueueManager = new PromptQueueManager(promptDao::getAutoApplyIds, sp, this);
+        // 3. AI infrastructure ownership transferred to DictatePipelineService
+        //    (Spec 1 §11.2.2 step 7 — IMPL-1 closure in B3 C8).
+        //    The Service constructs AIOrchestrator, AutoFormattingService,
+        //    PromptQueueManager, SessionManager, SessionTracker, PromptService,
+        //    PipelineOrchestrator, RecordingRepository, and calls
+        //    JobExecutor.initialize(...). The IME reads them from the
+        //    LocalBinder in onServiceConnected (see #bindAiInfrastructureFromService).
+        //    Until then, these fields are null; all callers gate on
+        //    pipelineBinder != null (record button is disabled, etc.).
 
-        // 4. Audio Focus (Lambda captures this.recordingStateController — safe: lazy eval)
+        // 4. Audio Focus seam — kept here because the IME-side
+        //    RecordingStateController is constructed below and consumes it.
+        //    The Service ALSO holds its own production AudioFocusGate
+        //    (see DictatePipelineService.buildAudioFocusGate); both gates
+        //    bind to the same AudioManager but request focus independently.
+        //    During the C8 migration window the IME-side gate is the
+        //    primary driver (the orchestrator-side audio module fires only
+        //    via emitted actions from the service-side gate's
+        //    OnAudioFocusChangeListener — no double-request because the
+        //    IME-side gate is the only one currently called from a
+        //    recording-start UI click).
         audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                 .setAudioAttributes(new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -433,24 +456,65 @@ public class DictateInputMethodService extends InputMethodService
         bluetoothScoManager = new BluetoothScoManager(this, am, recordingStateController);
         recordingStateController.setManagers(recordingManager, bluetoothScoManager);
 
-        // 6. Pipeline (this = PipelineCallback, survives rotation)
-        pipelineOrchestrator = new PipelineOrchestrator(
-            aiOrchestrator, autoFormattingService, promptQueueManager,
-            promptService, sessionManager, sessionTracker, promptDao, this,
-            recordingRepository,
-            dictateDb.transcriptionDao(),
-            dictateDb.processingStepDao(),
-            dictateDb);
-
-        // 6b. Initialise JobExecutor with the orchestrator so any caller
-        // (IME + HistoryDetailActivity) can start jobs (Finding SEC-10-2).
-        JobExecutor.INSTANCE.initialize(pipelineOrchestrator);
+        // 6. Pipeline construction + JobExecutor.initialize moved to
+        //    DictatePipelineService.onCreate (IMPL-1 closure, C8). The
+        //    pipelineOrchestrator field below is populated from the
+        //    binder in #bindAiInfrastructureFromService.
 
         // 7. User ID (one-time)
         if (DictatePrefsKt.get(sp, Pref.UserId.INSTANCE).equals("null")) {
             DictatePrefsKt.put(sp.edit(), Pref.UserId.INSTANCE,
                 String.valueOf((int) (Math.random() * 1000000))).apply();
         }
+    }
+
+    /**
+     * Populate the IME's AI-infrastructure fields from the bound service.
+     * Called from {@link #pipelineConnection}.onServiceConnected after the
+     * binder is non-null. After this method returns, fields like
+     * {@link #aiOrchestrator}, {@link #pipelineOrchestrator}, etc. are
+     * ready for use by record-button clicks and other user-triggered
+     * paths.
+     *
+     * IMPL-1 closure (C8): the Service constructs the heavy AI stack;
+     * the IME borrows the references. The IME also registers itself as
+     * the active PipelineCallback delegate (via PipelineCallbackBridge)
+     * and the PromptQueueCallback delegate so its callback methods
+     * still fire during recording/pipeline.
+     */
+    private void bindAiInfrastructureFromService(DictatePipelineService.LocalBinder binder) {
+        aiOrchestrator = binder.getAiOrchestrator();
+        autoFormattingService = binder.getAutoFormattingService();
+        promptQueueManager = binder.getPromptQueueManager();
+        sessionManager = binder.getSessionManager();
+        sessionTracker = binder.getSessionTracker();
+        promptService = binder.getPromptService();
+        recordingRepository = binder.getRecordingRepository();
+        pipelineOrchestrator = binder.getPipelineOrchestrator();
+
+        // Register the IME-side callbacks. The bridge routes
+        // PipelineOrchestrator callbacks back to this IME instance;
+        // unregistration happens in onDestroy / onBindingDied.
+        binder.registerPipelineCallback(this);
+        binder.registerPromptQueueCallback(this);
+        binder.registerInputConnectionProvider(this::getCurrentInputConnection);
+    }
+
+    /**
+     * Inverse of {@link #bindAiInfrastructureFromService}. Called when
+     * the binder dies or when the IME is destroyed.
+     */
+    private void unbindAiInfrastructureFromService(DictatePipelineService.LocalBinder binder) {
+        try {
+            binder.registerPipelineCallback(null);
+            binder.registerPromptQueueCallback(null);
+            binder.registerInputConnectionProvider(null);
+        } catch (Throwable t) {
+            Log.w("DictateIME", "unbindAiInfrastructureFromService: callback unregister threw", t);
+        }
+        // Leave the field references in place — the underlying objects
+        // are owned by the Service and survive bind/unbind cycles. The
+        // next bind reuses the same singletons.
     }
 
     // start method that is called when user opens the keyboard (also on view recreation / rotation)
@@ -612,7 +676,7 @@ public class DictateInputMethodService extends InputMethodService
             keyboardViews,
             () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Active,
             () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Paused,
-            () -> pipelineOrchestrator.isRunning(),
+            () -> pipelineOrchestrator != null && pipelineOrchestrator.isRunning(),
             () -> DictatePrefsKt.get(sp, Pref.RewordingEnabled.INSTANCE),
             keepAwake -> { updateKeepScreenAwake(keepAwake); return kotlin.Unit.INSTANCE; },
             infoBarController,
@@ -742,6 +806,20 @@ public class DictateInputMethodService extends InputMethodService
             if (mainButtonsController != null) {
                 mainButtonsController.updateRecordButtonText(getDictateButtonText());
             }
+            // C8 — bridge LanguageController → LanguageModule (Spec 1 §15.x).
+            // The LanguageController is the SoT for the IME-side language
+            // resolver; the orchestrator's `state.language` mirrors via the
+            // RefreshFromPref action. SetOverride paths during
+            // ReprocessStaging are routed via the PipelineUiState callback
+            // and stay in LanguageController for now (full migration is
+            // post-C8 per §9.6 "Final gelöscht in Block 1").
+            if (pipelineBinder != null) {
+                try {
+                    pipelineBinder.dispatch(net.devemperor.dictate.state.Action.LanguageAction.RefreshFromPref.INSTANCE);
+                } catch (Throwable t) {
+                    Log.w("DictateIME", "languageController bridge dispatch failed", t);
+                }
+            }
         });
 
         // Phase 3 cross-instance bridge: the Settings activity owns a separate
@@ -867,13 +945,15 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         // State (B): API request is running -> let it continue, just hide content panels
-        if (pipelineOrchestrator.isRunning()) {
+        if (pipelineOrchestrator != null && pipelineOrchestrator.isRunning()) {
             stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
             return;
         }
 
         // State (C): Idle -> full cleanup
-        pipelineOrchestrator.cancel();
+        if (pipelineOrchestrator != null) {
+            pipelineOrchestrator.cancel();
+        }
         pendingLivePromptChain = false;
         // Note: PipelineConfig is owned by uiController; stopPipeline() nulls it below.
 
@@ -894,9 +974,13 @@ public class DictateInputMethodService extends InputMethodService
             mainHandler.removeCallbacks(reloadPromptsRunnable);
         }
         if (recordingStateController != null) recordingStateController.onDestroy();
-        if (pipelineOrchestrator != null) {
-            pipelineOrchestrator.shutdown();
-        }
+        // PipelineOrchestrator.shutdown() is now invoked by
+        // DictatePipelineService.onDestroy (C8 IMPL-1 closure — the service
+        // owns the orchestrator's lifetime, not the IME). Calling shutdown
+        // from here would either (a) act on a null reference if the IME
+        // never bound, or (b) prematurely cancel the executor while the
+        // FGS is still alive. The IME just clears its local reference.
+        pipelineOrchestrator = null;
         if (promptsInvalidationObserver != null && dictateDb != null) {
             dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
         }
@@ -1116,7 +1200,7 @@ public class DictateInputMethodService extends InputMethodService
                 staging.getEditableQueue(),
                 staging.getSelectedLanguage()
             );
-        } else if (pipelineOrchestrator.isRunning()) {
+        } else if (pipelineOrchestrator != null && pipelineOrchestrator.isRunning()) {
             int total = pipelineOrchestrator.getTotalSteps();
             int completedSoFar = pipelineOrchestrator.getCompletedSteps();
             String stepName = pipelineOrchestrator.getCurrentStepName();
@@ -1252,7 +1336,7 @@ public class DictateInputMethodService extends InputMethodService
         if (newState instanceof PipelineUiState.ReprocessStaging) {
             PipelineUiState.ReprocessStaging s = (PipelineUiState.ReprocessStaging) newState;
             promptsAdapter.setQueuedPromptOrder(s.getEditableQueue());
-        } else {
+        } else if (promptQueueManager != null) {
             promptsAdapter.setQueuedPromptOrder(promptQueueManager.getQueuedIds());
         }
     }
@@ -1437,7 +1521,7 @@ public class DictateInputMethodService extends InputMethodService
         // Determine if we are truly idle (no recording, no pipeline running).
         // When not idle, skip UI resets that would overwrite state restored by restoreUiState().
         boolean isIdle = recordingStateController.getState() instanceof RecordingState.Idle
-                && !pipelineOrchestrator.isRunning();
+                && (pipelineOrchestrator == null || !pipelineOrchestrator.isRunning());
 
         if (DictatePrefsKt.get(sp, Pref.RewordingEnabled.INSTANCE)) {
             if (isIdle) {
@@ -1906,6 +1990,10 @@ public class DictateInputMethodService extends InputMethodService
             model, selStr, null,
             editorInfo != null ? editorInfo.packageName : null);
 
+        if (pipelineOrchestrator == null) {
+            Log.w("DictateIME", "runStandalonePrompt: pipelineOrchestrator not yet bound — dropping click");
+            return;
+        }
         pipelineOrchestrator.runStandalonePrompt(config);
     }
 
@@ -2746,9 +2834,11 @@ public class DictateInputMethodService extends InputMethodService
             cancelInfo = new PipelineOrchestrator.CancelInfo(
                     sessionTracker.getCurrentStepId(),
                     sessionTracker.getCurrentTranscriptionId());
-        } else {
+        } else if (pipelineOrchestrator != null) {
             // Legacy standalone-prompt path (no Registry entry).
             cancelInfo = pipelineOrchestrator.cancel();
+        } else {
+            cancelInfo = new PipelineOrchestrator.CancelInfo(null, null);
         }
 
         pendingLivePromptChain = false;

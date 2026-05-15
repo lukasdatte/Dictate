@@ -414,5 +414,19 @@
     <string name="dictate_service_not_ready">Service is starting — please wait a moment.</string>
     <string name="dictate_storage_full">Cache full — recording cannot start.</string>
 
+    <!--
+        Block 5 / Spec 3 (Floating-Overlay): content-descriptions for the
+        5-button overlay layout. The shared "Send" label re-uses the
+        existing `dictate_send` resource; per-button accessibility
+        descriptions live below so screen-readers announce each affordance
+        unambiguously when the overlay is on screen.
+    -->
+    <string name="overlay_record_cd">Start recording</string>
+    <string name="overlay_send">Send</string>
+    <string name="overlay_send_cd">Send recording</string>
+    <string name="overlay_pause_cd">Pause or resume recording</string>
+    <string name="overlay_trash_cd">Cancel recording</string>
+    <string name="overlay_close_cd">Close overlay</string>
+
     <string name="dictate_changelog_30">v3.2.0\n\nThis update brings some major improvements and new features! 🚀\n\n- Separate API keys: You can now save separate API keys for each provider (OpenAI, Groq, Custom), making switching between them seamless. 🔑\n\n- Improved Bluetooth support: Connecting to Bluetooth headsets is now faster and more reliable. 🎧\n\n- Auto Enter: Added an option to automatically press Enter/Send after transcription. ⚡\n\n- New Models: Added support for OpenAI o1, o4-mini, and GPT-5.2, including updated pricing info. 🤖\n\n- Various bug fixes and improvements. ✨\n\nI wish you a blessed New Year 2026! 🎆\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
 </resources>

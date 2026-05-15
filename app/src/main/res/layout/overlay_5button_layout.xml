@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Floating-overlay 5-button layout (Spec 3 §3.2).
+
+    Two-row 3+2 arrangement:
+      Row 1: [Record] [Send] [Pause]   — primary controls
+      Row 2: [Trash]  (spacer)  [Close] — destructive + dismiss
+
+    Layout is `wrap_content` so the WindowManager positions a compact
+    card; the visual size lands at ~270–310 dp wide × ~110 dp tall and
+    docks into any screen corner without obscuring app content. The
+    `OverlayBackend` finds each MaterialButton by id and drives its
+    visibility / icon / text / enabled state through the resolvers on
+    [LayoutCatalog.OVERLAY_5BUTTON].
+
+    Shared between WIDGET and HOVER ViewModes per Spec 3 §3.1 — the
+    `LayoutMode` is the same, only the resolvers differ on
+    `state.viewMode`.
+
+    @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §3.2
+    @see net.devemperor.dictate.state.layout.LayoutCatalog (OVERLAY_5BUTTON)
+    @see net.devemperor.dictate.state.render.overlay.OverlayBackend
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/overlay_root"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/overlay_background"
+    android:elevation="8dp"
+    android:padding="6dp">
+
+    <!-- Row 1: Record + Send + Pause -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlay_record_btn"
+            style="@style/OverlayButton.Icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            app:icon="@drawable/ic_baseline_mic_24"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/overlay_record_cd" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlay_send_btn"
+            style="@style/OverlayButton.Primary"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:minWidth="100dp"
+            android:text="@string/overlay_send"
+            app:icon="@drawable/ic_baseline_send_24"
+            app:iconGravity="textStart"
+            android:contentDescription="@string/overlay_send_cd" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlay_pause_btn"
+            style="@style/OverlayButton.Icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="6dp"
+            app:icon="@drawable/ic_baseline_pause_24"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/overlay_pause_cd" />
+    </LinearLayout>
+
+    <!-- Row 2: Trash on the left, Close in the bottom-right (user preference) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlay_trash_btn"
+            style="@style/OverlayButton.Icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            app:icon="@drawable/ic_baseline_delete_24"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/overlay_trash_cd" />
+
+        <Space
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlay_close_btn"
+            style="@style/OverlayButton.Icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            app:icon="@drawable/ic_baseline_close_24"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/overlay_close_cd" />
+    </LinearLayout>
+</LinearLayout>

@@ -17,6 +17,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +53,10 @@ import net.devemperor.dictate.state.layout.KeyboardLayoutManager
 import net.devemperor.dictate.state.layout.LayoutCatalog
 import net.devemperor.dictate.state.layout.LayoutStrings
 import net.devemperor.dictate.state.realToastSink
+import net.devemperor.dictate.state.render.overlay.AndroidOverlayWindow
+import net.devemperor.dictate.state.render.overlay.DefaultOverlayLayoutParamsFactory
+import net.devemperor.dictate.state.render.overlay.NoOverlayPermissionGate
+import net.devemperor.dictate.state.render.overlay.OverlayBackend
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -175,6 +180,20 @@ class DictatePipelineService : Service() {
     // and on the orchestrator's onAction sink.
     private lateinit var layoutCatalogImpl: LayoutCatalog
     private lateinit var keyboardLayoutManagerImpl: KeyboardLayoutManager
+
+    // ── C16 — Floating-overlay render backend (Spec 3 §4.2) ────────────
+    //
+    // [overlayBackendImpl] is constructed here so the Service owns its
+    // [OverlayWindow] reference (= the [android.view.WindowManager]
+    // indirection), but it is **not yet attached** to the
+    // [KeyboardLayoutManager]. C18 wires the attach into the
+    // ViewMode-transition logic (KEYBOARD ↔ WIDGET / HOVER per
+    // ADR-0005), so the overlay only appears on the user's explicit
+    // toggle or the auto-HOVER trigger.
+    //
+    // `permissions` is wired to [NoOverlayPermissionGate] until C17
+    // contributes `DefaultOverlayPermissionGate` (Spec 3 §5.1).
+    private var overlayBackendImpl: OverlayBackend? = null
 
     /**
      * Service-owned [ModuleServices] DI container. Promoted from a
@@ -478,6 +497,34 @@ class DictatePipelineService : Service() {
             orchestrator.state.collect { state ->
                 keyboardLayoutManagerImpl.onStateChanged(state)
             }
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Step 8 — Floating-overlay backend construction (C16, Spec 3 §4.2).
+        //
+        // The Service owns the WindowManager reference so the same
+        // OverlayBackend instance survives IME-View recreation
+        // (rotation, theme switch). NOT attached to the manager yet —
+        // C18 wires the attach into the ViewMode-transition logic so
+        // the window only appears on user-toggle (WIDGET) or auto
+        // (HOVER, ADR-0005).
+        // ──────────────────────────────────────────────────────────────
+        val windowManager: WindowManager? =
+            getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (windowManager != null) {
+            overlayBackendImpl = OverlayBackend(
+                ctx = this,
+                services = moduleServicesImpl,
+                overlayWindow = AndroidOverlayWindow(windowManager),
+                permissions = NoOverlayPermissionGate,
+                layoutParamsFactory = DefaultOverlayLayoutParamsFactory(this),
+            )
+        } else {
+            // Defensive: a Service without WindowManager (e.g. an
+            // isolated-process Robolectric environment) skips the
+            // overlay path entirely. WIDGET / HOVER ViewModes won't
+            // render anything until a real WindowManager is available.
+            Log.w(TAG, "WindowManager service unavailable — overlay backend disabled")
         }
     }
 
@@ -871,6 +918,18 @@ class DictatePipelineService : Service() {
          */
         val moduleServices: ModuleServices
             get() = moduleServicesImpl
+
+        /**
+         * Service-owned [OverlayBackend] (Spec 3 §4.2). Constructed in
+         * [onCreate] but NOT attached to the
+         * [keyboardLayoutManager] — C18 wires the attach into the
+         * ViewMode-transition logic (KEYBOARD ↔ WIDGET / HOVER per
+         * ADR-0005). `null` when the Service runs in an environment
+         * without a `WindowManager` (e.g. Robolectric isolated
+         * process).
+         */
+        val overlayBackend: OverlayBackend?
+            get() = overlayBackendImpl
 
         // ── Callback registration (IME → Service direction) ──────────
         //

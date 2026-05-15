@@ -10,6 +10,7 @@ import net.devemperor.dictate.state.InsertionTarget
 import net.devemperor.dictate.state.ModuleServices
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
+import net.devemperor.dictate.state.ViewMode
 
 /**
  * Shared `ButtonSlot.actionResolver` helpers consumed by the
@@ -170,3 +171,76 @@ fun resolveCancelStagingAction(
 ): Action? =
     (state.pipeline as? PipelineUiState.ReprocessStaging)
         ?.let { Action.PipelineAction.CancelReprocessStaging(it.sessionId) }
+
+/**
+ * OVERLAY_RECORD click resolver — Pre-Dispatch-Allocation in WIDGET mode.
+ *
+ * Mirrors [resolveRecordAction] for the keyboard surface, but only emits
+ * when [DictateUiState.viewMode] is [ViewMode.WIDGET] (HOVER has no
+ * InputConnection target — the visibility predicate hides the button
+ * there, and this defensive `null` returns nothing if a stale click
+ * arrives during a ViewMode transition).
+ *
+ * # IOException side-channel
+ *
+ * Identical to [resolveRecordAction]: `services.audioFileFactory.allocate()`
+ * may fail; the resolver fires a toast on `services.toastSink` and
+ * returns `null`. The reducer never sees the failure (R.2 Pure-Reducer
+ * invariant). See Spec 3 §3.1 + §4.2.
+ *
+ * @see resolveRecordAction
+ * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §3.1
+ */
+fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices): Action? {
+    if (state.viewMode != ViewMode.WIDGET) return null
+    if (state.recording !is RecordingState.Idle) return null
+    val file = try {
+        services.audioFileFactory.allocate()
+    } catch (e: java.io.IOException) {
+        services.toastSink.show(R.string.dictate_storage_full)
+        Log.w(TAG, "audioFileFactory.allocate failed (overlay record)", e)
+        return null
+    }
+    return Action.RecordingAction.StartRecording(
+        target = InsertionTarget.INPUT_CONNECTION,
+        audioFile = file,
+    )
+}
+
+/**
+ * OVERLAY_PAUSE click resolver — toggles Pause / Resume on the current
+ * recording. `null` outside Active / Paused.
+ *
+ * @see resolvePauseAction (keyboard-side sibling)
+ */
+fun resolveOverlayPauseAction(
+    state: DictateUiState,
+    @Suppress("UNUSED_PARAMETER") services: ModuleServices,
+): Action? = when (state.recording) {
+    is RecordingState.Paused -> Action.RecordingAction.ResumeRecording
+    is RecordingState.Active -> Action.RecordingAction.PauseRecording
+    else -> null
+}
+
+/**
+ * OVERLAY_CLOSE click resolver — differential behaviour per ViewMode
+ * (Spec 3 §6 + §3.1).
+ *
+ * | viewMode  | Action emitted                                        |
+ * |-----------|-------------------------------------------------------|
+ * | WIDGET    | `Action.ViewModeAction.ToggleViewModeWidget`          |
+ * | HOVER     | `Action.ViewModeAction.CloseOverlay`                  |
+ * | KEYBOARD  | `null` (button is hidden by visibility predicate)     |
+ *
+ * The HOVER → KEYBOARD transition fans a cancel-cascade through
+ * [net.devemperor.dictate.state.OverlayModule.onCrossModuleStateChange];
+ * the resolver here only emits the **trigger** action.
+ */
+fun resolveOverlayCloseAction(
+    state: DictateUiState,
+    @Suppress("UNUSED_PARAMETER") services: ModuleServices,
+): Action? = when (state.viewMode) {
+    ViewMode.WIDGET -> Action.ViewModeAction.ToggleViewModeWidget
+    ViewMode.HOVER -> Action.ViewModeAction.CloseOverlay
+    ViewMode.KEYBOARD -> null
+}

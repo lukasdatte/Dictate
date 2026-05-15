@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Floating-overlay button styles (Spec 3 §3.2).
+
+    Two narrow Material 3 button variants used exclusively by
+    `overlay_5button_layout.xml`:
+
+      - `OverlayButton.Primary` — the SEND button (text + leading icon).
+      - `OverlayButton.Icon` — Record / Pause / Trash / Close (icon-only,
+        48 dp square).
+
+    Both inherit Material 3 defaults; the only override is a 12dp corner
+    radius so the buttons echo the rounded `overlay_background` card.
+
+    @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §3.2
+-->
+<resources>
+
+    <style name="OverlayButton.Primary" parent="Widget.Material3.Button">
+        <item name="cornerRadius">12dp</item>
+        <item name="android:textAllCaps">false</item>
+    </style>
+
+    <style name="OverlayButton.Icon" parent="Widget.Material3.Button.IconButton">
+        <item name="cornerRadius">12dp</item>
+    </style>
+
+</resources>

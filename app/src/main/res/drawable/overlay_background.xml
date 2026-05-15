@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Floating-overlay background drawable (Spec 3 §3.2).
+
+    Material-Surface fill + rounded corners + thin outline so the
+    5-button widget reads as a self-contained card floating over the
+    underlying app. `?attr/colorSurface` and `?attr/colorOutlineVariant`
+    pick up the active Material 3 theme — light / dark / dynamic-color
+    all resolve transparently.
+
+    @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §3.2
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="?attr/colorSurface" />
+    <corners android:radius="16dp" />
+    <stroke
+        android:width="1dp"
+        android:color="?attr/colorOutlineVariant" />
+</shape>

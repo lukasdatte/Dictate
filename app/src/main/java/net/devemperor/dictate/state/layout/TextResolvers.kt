@@ -51,6 +51,11 @@ import net.devemperor.dictate.state.RecordingState
  * @property formatPipelineLabel mapper producing the running-pipeline
  *   label, e.g. `"2/3 ↵  0:08"`. Receives `(completedSteps, totalSteps,
  *   autoEnterActive, elapsedMs)`.
+ * @property overlaySend short literal for the overlay-surface SEND button
+ *   (`R.string.overlay_send` — "Send"). Distinct from [send] because the
+ *   keyboard-surface label is language-suffixed
+ *   (`R.string.dictate_send` = "Send (en)") while the overlay surface is
+ *   space-constrained and uses the icon for language hinting.
  */
 data class LayoutStrings(
     val record: String,
@@ -64,6 +69,7 @@ data class LayoutStrings(
         autoEnterActive: Boolean,
         elapsedMs: Long,
     ) -> CharSequence,
+    val overlaySend: CharSequence = "Send",
 )
 
 /**

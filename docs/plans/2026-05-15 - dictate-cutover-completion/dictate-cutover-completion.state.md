@@ -212,7 +212,26 @@ skip_recommendation: "NOT skip — staged destructive cutover on the product's c
 
 ### Plan-Consistency-Check
 
-(Populated by Phase 2.6.)
+```yaml
+status: pass
+checked_at: 2026-05-15
+broken_links: 0
+spec_existence: all_present       # Spec 1/2/3 in sibling 2026-05-07 folder all resolve
+external_unreachable: 0
+proceed_decision: yes
+```
+
+**Phase 2.6 mechanical findings (orchestrator-run 2026-05-15):**
+- All Epic §8 references resolve: parent plan, parent integration-check.md +
+  state.md, 3 research files, 3 specs, 5 ADRs (0001-0005) — all present.
+- All Epic §8 "Key code seams" exist at baseline HEAD 74217cf:
+  `PipelineServiceStubSubsystems.kt`, `DictatePipelineService.kt` (stub wiring
+  confirmed at `:419 pipelineRunner` / `:421 notificationCoordinator`),
+  `DictateInputMethodService.java`, `PipelineOrchestrator.kt`,
+  `DictateUiState.kt`, `Action.kt`, `ModuleServices.kt`,
+  `LanguageController.kt`, 4 dead controllers, `KeyboardLayoutUiTest.kt`.
+- Spec heading-refs in chunks.json validated by Phase 1a (one Spec-2 §9
+  heading-text mismatch fixed during 1a). No blocking issues — Phase 3 starts.
 
 ---
 

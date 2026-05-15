@@ -2083,13 +2083,22 @@ file maps directly to an F-1…F-9 finding.
 
 ## Block Closeout (Orchestrator)
 
-- **All chunks complete (5-step, both commits):** ⏳
-- **C6-D2pre gate GREEN (authorises C7 + Theme C):** ⏳
-- **Block-Validate converged:** ⏳
-- **AUDIT-TEST: coverage + no cross-chunk regressions:** ⏳
-- **Build green at block-end:** ⏳
-- **Issue index reconciled:** ⏳
-- **Cross-block-API consumer info forwarded to B3:** ⏳
+- **All chunks complete (5-step, both commits):** ✅ C3-B1 (7967306+b6e2011) · C4-B2 (715c452+0cc96b6) · C5-B3 (bf62eee+987432a) · C6-D2pre (397a148 gate) · C7-B3 (799f3af + MID-W1 6159d4c)
+- **C6-D2pre gate GREEN (authorises C7 + Theme C):** ✅ RED → W1-repair (13c273c) → independent RE-GATE GREEN
+- **Block-Validate converged:** ✅ 1 wave (B2-VAL-W1 a3ca1e3; soft-cap 3 not approached) — incl. Critical BT-SCO-hang fix
+- **AUDIT-TEST: coverage + no cross-chunk regressions:** ✅ 1050/1050 ×2 uncached; R-7 closed (F-6); BT-SCO/audio-focus edges exhaustively tested
+- **Build green at block-end:** ✅ assembleDebug + `./gradlew test` (AC-9 ≥946 holds)
+- **Issue index reconciled:** ✅ C6-IMPL-1/2, C7-IMPL-1, F-1..F-9 closed; C4-IMPL-2 + C5-IMPL-3 NTH genuinely postponed
+- **Cross-block-API consumer info forwarded to B3:** ✅ AC-10 GREEN — only RESUME legacy `JobExecutor.start` survives (C6-IMPL-2 carve-out). Theme C may retire legacy LanguageController/audioFile/dead-controllers; new recording path is sole driver (proven C6 GREEN + VAL-W1).
 
-**Block completed at:** ⏳
-**Block-End-Commit:** ⏳
+**Phase 4.7 note:** the staged-cutover safety net caught two legacy-parity
+regressions before irreversible deletion (C6: audio-focus/BT-SCO,
+100%-users; C7-IMPL-1: overlooked imported-file legacy consumer) and one
+Critical concurrency hang (F-1 BT-SCO already-connected) — all closed
+spec-faithfully. Epic AC-4/§4-A1 amended in B1 (F-1 option-b). Dev-W1-1..5
+documented.
+
+**Block completed at:** 2026-05-15
+**Block-End-Commit:** a3ca1e3
+**Cross-reference set in state file:** ✅
+**Postponed issues forwarded to phase 4 aggregate:** C4-IMPL-2 (NTH) + C5-IMPL-3 (NTH)

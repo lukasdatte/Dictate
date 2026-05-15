@@ -11,6 +11,15 @@ import net.devemperor.dictate.state.layout.RenderBackend
 /**
  * Container-visibility RenderBackend (Spec 2 §4.1 / R.10).
  *
+ * # Wiring status (IMPL-STATE post-C15, B4-VAL F-6)
+ *
+ * **Not yet attached in production.** `DictateInputMethodService` only
+ * attaches [ImeViewBackend] today; [net.devemperor.dictate.core.KeyboardStateManager.applyContentAreaVisibility]
+ * continues to own this axis until the D-13 follow-up block migrates the
+ * IME-side wiring. The unit tests in `ContentAreaControllerTest` exercise
+ * the contract so the controller can be wired in one step once the
+ * matching KSM method is removed.
+ *
  * # Why a separate backend?
  *
  * The IME-View hosts **three mutually-exclusive content areas**: the
@@ -76,12 +85,10 @@ class ContentAreaController(
         onAction = null
     }
 
-    override fun render(state: DictateUiState, mode: LayoutMode) {
+    override fun render(state: DictateUiState, @Suppress("UNUSED_PARAMETER") mode: LayoutMode) {
         // Mode is unused — content-area is orthogonal to LayoutMode by
         // design. We still receive it because [RenderBackend.render] is
-        // a single contract for all backends; the `mode` reference is
-        // discarded here.
-        @Suppress("UNUSED_VARIABLE") val _unused = mode
+        // a single contract for all backends.
 
         val area = state.layout.contentArea
         views.mainButtonsContainer.visibility =

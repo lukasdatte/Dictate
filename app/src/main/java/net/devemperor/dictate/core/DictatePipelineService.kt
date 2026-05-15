@@ -53,6 +53,7 @@ import net.devemperor.dictate.state.layout.LayoutCatalog
 import net.devemperor.dictate.state.layout.LayoutStrings
 import net.devemperor.dictate.state.realToastSink
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 /**
  * Foreground Service that hosts the Dictate pipeline state container.
@@ -508,9 +509,11 @@ class DictatePipelineService : Service() {
         formatStagingLabel = { audioDurationSeconds ->
             // Defensive default — Spec 1 §3 `ReprocessStaging` will
             // grow `audioDurationSeconds`; format as MM:SS.
+            // Locale.US: technical format — keeps digits ASCII regardless
+            // of device locale (B4-VAL F-5, mirrors RecordingAnimationController).
             val minutes = audioDurationSeconds / 60
             val seconds = audioDurationSeconds % 60
-            String.format("Audio %d:%02d · Send", minutes, seconds)
+            String.format(Locale.US, "Audio %d:%02d · Send", minutes, seconds)
         },
         formatPipelineLabel = { completedSteps, totalSteps, autoEnterActive, elapsedMs ->
             // Live values come from `PipelineUiState.Running`. The
@@ -520,9 +523,9 @@ class DictatePipelineService : Service() {
             val mm = seconds / 60
             val ss = seconds % 60
             if (autoEnterActive) {
-                String.format("%d/%d ↵ %d:%02d", completedSteps, totalSteps, mm, ss)
+                String.format(Locale.US, "%d/%d ↵ %d:%02d", completedSteps, totalSteps, mm, ss)
             } else {
-                String.format("%d/%d %d:%02d", completedSteps, totalSteps, mm, ss)
+                String.format(Locale.US, "%d/%d %d:%02d", completedSteps, totalSteps, mm, ss)
             }
         },
     )

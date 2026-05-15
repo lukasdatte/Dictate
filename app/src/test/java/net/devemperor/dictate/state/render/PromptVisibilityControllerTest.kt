@@ -165,6 +165,24 @@ class PromptVisibilityControllerTest {
     }
 
     @Test
+    fun `pipeline idle plus rewording off hides prompts but keeps recycler visible`() {
+        // B4-VAL F-34d: covers the truth-table "no-pipeline" branch with
+        // rewordingEnabled=false. Recycler stays VISIBLE (the controller
+        // only flips it for the `Running` swap-to-progress case) — that's
+        // intentional so a future flip into running has nothing to
+        // re-attach.
+        val state = DictateUiState.initial().copy(
+            recording = RecordingState.Idle,
+            pipeline = PipelineUiState.Idle,
+            features = DictateUiState.initial().features.copy(rewordingEnabled = false),
+        )
+        controller.render(state, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.GONE, promptsContainer.visibility)
+        assertEquals(View.VISIBLE, promptsRv.visibility)
+        assertEquals(View.GONE, pipelineProgress.visibility)
+    }
+
+    @Test
     fun `nullable views are safely skipped`() {
         val controllerNoViews = PromptVisibilityController(
             PromptVisibilityViews(

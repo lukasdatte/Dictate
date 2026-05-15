@@ -971,11 +971,15 @@ public class DictateInputMethodService extends InputMethodService
             // the meantime the legacy controllers still drive the UI.
             return;
         }
-        MotionLayout motionLayout = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
-        if (motionLayout == null) {
+        // B4-VAL F-17: Java findViewById<T> throws ClassCastException on
+        // type-mismatch rather than returning null — defend via instanceof
+        // so the log warning actually fires in the broken-layout case.
+        View mainButtonsView = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
+        if (!(mainButtonsView instanceof MotionLayout)) {
             Log.w("DictateIME", "main_buttons_cl is not a MotionLayout — ImeViewBackend not attached");
             return;
         }
+        MotionLayout motionLayout = (MotionLayout) mainButtonsView;
         // Build the LogicalButtonId → View map. All nine state-driven
         // buttons resolve from the inflated tree; WIDGET_TOGGLE was
         // added in C13 (placeholder icon, B5 supplies the real

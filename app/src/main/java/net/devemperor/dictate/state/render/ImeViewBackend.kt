@@ -155,15 +155,19 @@ class ImeViewBackend(
         // 1 — MotionLayout transition. Scene-id comes from the layout
         //     mode (R.12 / OCP). A null scene-id is legal (e.g. tests
         //     using a mode with no MotionScene binding) and skips this
-        //     step entirely.
+        //     step entirely. The firstRender flag only flips after an
+        //     actual jump/transition fires — a render-tick that skips
+        //     this step (null sceneStateId) leaves the flag set so the
+        //     **next** tick with a non-null sceneStateId still snaps
+        //     instead of animating (F-21 / Issue 2.1.18).
         mode.sceneStateId?.let { sceneId ->
             if (firstRender || !state.layout.animationsEnabled) {
                 motionSurface.jumpToState(sceneId)
             } else {
                 motionSurface.transitionToState(sceneId)
             }
+            firstRender = false
         }
-        firstRender = false
 
         // 2 — Per-slot apply via the shared helper (Spec 2 §5.1 / F-7).
         //     A slot in `mode.rows` whose `logicalId` is missing from
@@ -219,12 +223,31 @@ class ImeViewBackend(
      * [stateRef] / [modeRef] **at click-time** so the listener captures
      * a single lambda per button, not one per render-tick (L8).
      *
-     * Long-press wiring stays minimal here — only the two long-press
-     * affordances declared in Spec 2 §6 (RECORD has a vibrate-only
-     * marker, RESEND emits `ResendLastAudioLong`). Special touch
-     * handlers (CursorSwipe / Backspace-Swipe / Enter-Overlay) come
-     * via the `staticHandlerInstaller` hook so the backend doesn't
-     * depend on the IME-side handler classes directly.
+     * # Long-press wiring scope (D7 interim, post-B4-VAL)
+     *
+     * The new render path only wires the **RESEND** long-press — it is the
+     * only long-press the catalog actually models today
+     * ([Action.ResendAction.ResendLastAudioLong]). The other two long-press
+     * cascades stay on their legacy owners until the next refactor:
+     *
+     *  - **RECORD** long-press: `onRecordLongClicked` in `MainButtonsController`
+     *    drives a two-mode handler (a) Idle → open Settings + audio-file
+     *    picker, (b) Active/Paused → set `autoSwitchKeyboard = true` then
+     *    `stopRecording()`. Wiring a vibrate-only listener here would
+     *    **silently overwrite** the legacy listener on the same View (Android
+     *    keeps the most-recent `setOnLongClickListener` only), erasing both
+     *    user features. F-2 (validated-findings-B4) Option (c) interim: drop
+     *    the wire entirely so the legacy handler survives. The longer-term
+     *    fix is to model long-press as an `Action.RecordingAction.OnRecord*`
+     *    via a `longClickResolver` slot field, deferred to B5/B7 follow-up.
+     *  - **BACKSPACE** long-press: `MainButtonsController` installs the
+     *    accelerated-delete `deleteHandler.postDelayed` cascade. A bare
+     *    `setOnLongClickListener { true }` here would consume the event and
+     *    kill the cascade — F-1 (validated-findings-B4) drop the wire.
+     *
+     * Special touch handlers (CursorSwipe / Backspace-Swipe /
+     * Enter-Overlay) come via the [staticHandlerInstaller] hook so the
+     * backend doesn't depend on the IME-side handler classes directly.
      */
     private fun wireStaticHandlers() {
         buttonViews.forEach { (id, view) ->
@@ -240,20 +263,16 @@ class ImeViewBackend(
             }
         }
 
-        // Long-press for RESEND emits the long-action (resend-with-
-        // staging). RECORD's long-press is consumed for vibration but
-        // doesn't currently emit an action — Spec 2 §6 preserves the
-        // legacy behaviour so we keep the listener wired (returns
-        // `true` to consume so the OnClick doesn't double-fire).
-        buttonViews[LogicalButtonId.RECORD]?.setOnLongClickListener {
-            onVibrate(); true
-        }
+        // RESEND long-press is the only long-press the catalog currently
+        // models (Spec 2 §6). RECORD + BACKSPACE long-presses remain on
+        // their legacy owners (`MainButtonsController.onRecordLongClicked`
+        // + accelerated-delete `deleteHandler`) — see the function KDoc
+        // for rationale.
         buttonViews[LogicalButtonId.RESEND]?.setOnLongClickListener {
             onVibrate()
             onAction?.invoke(Action.ResendAction.ResendLastAudioLong)
             true
         }
-        buttonViews[LogicalButtonId.BACKSPACE]?.setOnLongClickListener { true }
     }
 
     /**

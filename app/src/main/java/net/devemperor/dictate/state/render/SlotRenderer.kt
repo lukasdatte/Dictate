@@ -6,6 +6,7 @@ import android.content.Context
 import android.view.View
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
+import net.devemperor.dictate.R
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.layout.ButtonSlot
 
@@ -62,11 +63,25 @@ fun applySlotToView(
     view.isEnabled = slot.enabledResolver(state)
     view.alpha = slot.alphaResolver(state)
     if (view is MaterialButton) {
+        // B4-VAL F-28: cache last-applied @DrawableRes Int per View under
+        // a stable tag-id so a `getDrawable(...)` allocation only happens
+        // when the resource id actually changed (Spec 2 §11.5 — per-tick
+        // allocation budget). The tag-id is declared in `res/values/ids.xml`.
         slot.iconResolver(state)?.let { iconRes ->
-            view.icon = ContextCompat.getDrawable(ctx, iconRes)
+            val cached = view.getTag(R.id.slot_renderer_last_icon_res) as? Int
+            if (cached != iconRes) {
+                view.icon = ContextCompat.getDrawable(ctx, iconRes)
+                view.setTag(R.id.slot_renderer_last_icon_res, iconRes)
+            }
         }
         slot.textResolver(state)?.let { text ->
-            view.text = text
+            // Same short-circuit for text — String objects are interned but
+            // the assignment triggers MaterialButton internal relayout work.
+            val cached = view.getTag(R.id.slot_renderer_last_text) as? CharSequence
+            if (cached != text) {
+                view.text = text
+                view.setTag(R.id.slot_renderer_last_text, text)
+            }
         }
     }
     return visible

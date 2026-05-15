@@ -13,6 +13,15 @@ import net.devemperor.dictate.state.layout.RenderBackend
 /**
  * RenderBackend driving the prompt-area visibility (Spec 2 §4.1 / R.10).
  *
+ * # Wiring status (IMPL-STATE post-C15, B4-VAL F-6)
+ *
+ * **Not yet attached in production.** `DictateInputMethodService` only
+ * attaches [ImeViewBackend] today; [net.devemperor.dictate.core.KeyboardStateManager.applyPromptsVisibility]
+ * continues to own this axis until the D-13 follow-up block migrates the
+ * IME-side wiring. The unit tests in `PromptVisibilityControllerTest`
+ * exercise the contract so the controller can be wired in one step once
+ * the matching KSM method is removed.
+ *
  * The prompts container sits **above** the main buttons and shows one
  * of three faces depending on state:
  *
@@ -77,9 +86,7 @@ class PromptVisibilityController(
         onAction = null
     }
 
-    override fun render(state: DictateUiState, mode: LayoutMode) {
-        @Suppress("UNUSED_VARIABLE") val _unused = mode
-
+    override fun render(state: DictateUiState, @Suppress("UNUSED_PARAMETER") mode: LayoutMode) {
         val layout = state.layout
         val isActive = state.recording.isActiveOrPaused
         val pipeline = state.pipeline

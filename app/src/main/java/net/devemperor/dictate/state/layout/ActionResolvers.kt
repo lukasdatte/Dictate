@@ -3,8 +3,10 @@
 package net.devemperor.dictate.state.layout
 
 import android.util.Log
+import net.devemperor.dictate.R
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
+import net.devemperor.dictate.state.InsertionTarget
 import net.devemperor.dictate.state.ModuleServices
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
@@ -69,12 +71,14 @@ fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action
             val file = try {
                 services.audioFileFactory.allocate()
             } catch (e: java.io.IOException) {
-                services.toastSink.showError("Storage full — recording failed to start")
+                // B4-VAL F-4: toast via @StringRes overload so the user-visible
+                // message goes through Android's i18n machinery (Spec 2 §8.5).
+                services.toastSink.show(R.string.dictate_storage_full)
                 Log.w(TAG, "audioFileFactory.allocate failed", e)
                 return null
             }
             Action.RecordingAction.StartRecording(
-                target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+                target = InsertionTarget.INPUT_CONNECTION,
                 audioFile = file,
             )
         }
@@ -92,13 +96,14 @@ fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action
  * In any other pipeline state (including `Preparing`) the click is
  * structurally meaningless and the resolver returns `null`.
  */
-fun resolveRecordActionPipeline(state: DictateUiState, services: ModuleServices): Action? {
-    @Suppress("UNUSED_PARAMETER") services
-    return when (state.pipeline) {
+fun resolveRecordActionPipeline(
+    state: DictateUiState,
+    @Suppress("UNUSED_PARAMETER") services: ModuleServices,
+): Action? =
+    when (state.pipeline) {
         is PipelineUiState.Running -> Action.FeatureToggleAction.ToggleAutoEnter
         else -> null
     }
-}
 
 /**
  * Trash-button click resolver.
@@ -109,8 +114,10 @@ fun resolveRecordActionPipeline(state: DictateUiState, services: ModuleServices)
  * | `recording is Idle && pipeline is Idle`                   | `null` (visibility predicate hides it)|
  * | otherwise (recording active/paused, or pipeline Preparing)| `CancelRecording`                     |
  */
-fun resolveTrashAction(state: DictateUiState, services: ModuleServices): Action? {
-    @Suppress("UNUSED_PARAMETER") services
+fun resolveTrashAction(
+    state: DictateUiState,
+    @Suppress("UNUSED_PARAMETER") services: ModuleServices,
+): Action? {
     val pipe = state.pipeline
     return when {
         pipe is PipelineUiState.ReprocessStaging ->
@@ -129,14 +136,15 @@ fun resolveTrashAction(state: DictateUiState, services: ModuleServices): Action?
  * hide the button there, but the second layer of defence keeps the
  * orchestrator-dispatch path clean per R.3).
  */
-fun resolvePauseAction(state: DictateUiState, services: ModuleServices): Action? {
-    @Suppress("UNUSED_PARAMETER") services
-    return when (state.recording) {
+fun resolvePauseAction(
+    state: DictateUiState,
+    @Suppress("UNUSED_PARAMETER") services: ModuleServices,
+): Action? =
+    when (state.recording) {
         is RecordingState.Paused -> Action.RecordingAction.ResumeRecording
         is RecordingState.Active -> Action.RecordingAction.PauseRecording
         else -> null
     }
-}
 
 /**
  * Resolver for the SendStaging click in `KEYBOARD_REPROCESS_STAGING`.
@@ -145,18 +153,20 @@ fun resolvePauseAction(state: DictateUiState, services: ModuleServices): Action?
  * [Action.PipelineAction.SendStaging]; `null` when the pipeline isn't in
  * staging (defensive — the visibility predicate excludes this case).
  */
-fun resolveSendStagingAction(state: DictateUiState, services: ModuleServices): Action? {
-    @Suppress("UNUSED_PARAMETER") services
-    return (state.pipeline as? PipelineUiState.ReprocessStaging)
+fun resolveSendStagingAction(
+    state: DictateUiState,
+    @Suppress("UNUSED_PARAMETER") services: ModuleServices,
+): Action? =
+    (state.pipeline as? PipelineUiState.ReprocessStaging)
         ?.let { Action.PipelineAction.SendStaging(it.sessionId) }
-}
 
 /**
  * Resolver for the trash-button click in `KEYBOARD_REPROCESS_STAGING` —
  * cancels the staging session by id.
  */
-fun resolveCancelStagingAction(state: DictateUiState, services: ModuleServices): Action? {
-    @Suppress("UNUSED_PARAMETER") services
-    return (state.pipeline as? PipelineUiState.ReprocessStaging)
+fun resolveCancelStagingAction(
+    state: DictateUiState,
+    @Suppress("UNUSED_PARAMETER") services: ModuleServices,
+): Action? =
+    (state.pipeline as? PipelineUiState.ReprocessStaging)
         ?.let { Action.PipelineAction.CancelReprocessStaging(it.sessionId) }
-}

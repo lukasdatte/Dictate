@@ -60,13 +60,12 @@ class LayoutCatalog(private val strings: LayoutStrings) {
     // KEYBOARD_TWO_ROW (Spec 2 §8.1)
     // ════════════════════════════════════════════════════════════════
 
-    val KEYBOARD_TWO_ROW: LayoutMode by lazy {
-        LayoutMode(
+    val KEYBOARD_TWO_ROW: LayoutMode = LayoutMode(
             id = LayoutModeId.KEYBOARD_TWO_ROW,
             backend = BackendType.IME_VIEW,
             sceneStateId = R.id.two_row_state,
             rows = listOf(
-                // Row 1 — action_row: record / resend / backspace / audio-focus (gone) / widget-toggle
+                // Row 1 (formerly action_row): record / resend / backspace / audio-focus (gone) / widget-toggle
                 RowDescriptor(slots = listOf(
                     ButtonSlot(
                         logicalId = LogicalButtonId.RECORD,
@@ -101,11 +100,16 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     ButtonSlot(
                         logicalId = LogicalButtonId.WIDGET_TOGGLE,
                         widthPolicy = WidthPolicy.WrapContent,
-                        visibilityPredicate = ::isWidgetToggleVisible,
+                        // B4-VAL F-18: visibility gating happens at the
+                        // forKeyboard() mode-selection layer — this slot is
+                        // only evaluated when viewMode == KEYBOARD, so the
+                        // structurally-always-true predicate is the honest
+                        // value here.
+                        visibilityPredicate = { true },
                         actionResolver = { _, _ -> Action.ViewModeAction.ToggleViewModeWidget },
                     ),
                 )),
-                // Row 2 — input_row: trash / space / pause / enter
+                // Row 2 (formerly input_row): trash / space / pause / enter
                 RowDescriptor(slots = listOf(
                     ButtonSlot(
                         logicalId = LogicalButtonId.TRASH,
@@ -137,14 +141,12 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                 )),
             ),
         )
-    }
 
     // ════════════════════════════════════════════════════════════════
     // KEYBOARD_SINGLE_ROW (Spec 2 §8.2)
     // ════════════════════════════════════════════════════════════════
 
-    val KEYBOARD_SINGLE_ROW: LayoutMode by lazy {
-        LayoutMode(
+    val KEYBOARD_SINGLE_ROW: LayoutMode = LayoutMode(
             id = LayoutModeId.KEYBOARD_SINGLE_ROW,
             backend = BackendType.IME_VIEW,
             sceneStateId = R.id.single_row_state,
@@ -160,7 +162,7 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     widthPolicy = WidthPolicy.WrapContent,
                     visibilityPredicate = { true },
                     textResolver = { state -> resolveRecordButtonText(state, strings) },
-                    enabledResolver = { state -> state.recording !is net.devemperor.dictate.state.RecordingState.Preparing },
+                    enabledResolver = { state -> state.recording !is RecordingState.Preparing },
                     actionResolver = ::resolveRecordAction,
                 ),
                 ButtonSlot(
@@ -209,12 +211,12 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                 ButtonSlot(
                     logicalId = LogicalButtonId.WIDGET_TOGGLE,
                     widthPolicy = WidthPolicy.WrapContent,
-                    visibilityPredicate = ::isWidgetToggleVisible,
+                    // B4-VAL F-18: see KEYBOARD_TWO_ROW WIDGET_TOGGLE slot.
+                    visibilityPredicate = { true },
                     actionResolver = { _, _ -> Action.ViewModeAction.ToggleViewModeWidget },
                 ),
             ))),
         )
-    }
 
     // ════════════════════════════════════════════════════════════════
     // KEYBOARD_TWO_ROW_SEND_MODE (Spec 2 §8.3)
@@ -224,8 +226,7 @@ class LayoutCatalog(private val strings: LayoutStrings) {
     // replace with `::isTrashVisible` / `::isPauseVisible`. The hardcoded
     // value is the bug #1.1 #3a eliminator (Spec 2 §8.3 prose).
 
-    val KEYBOARD_TWO_ROW_SEND_MODE: LayoutMode by lazy {
-        LayoutMode(
+    val KEYBOARD_TWO_ROW_SEND_MODE: LayoutMode = LayoutMode(
             id = LayoutModeId.KEYBOARD_TWO_ROW_SEND_MODE,
             backend = BackendType.IME_VIEW,
             sceneStateId = R.id.two_row_send_mode_state,
@@ -295,14 +296,12 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                 )),
             ),
         )
-    }
 
     // ════════════════════════════════════════════════════════════════
     // KEYBOARD_SINGLE_ROW_SEND_MODE (Spec 2 §8.3)
     // ════════════════════════════════════════════════════════════════
 
-    val KEYBOARD_SINGLE_ROW_SEND_MODE: LayoutMode by lazy {
-        LayoutMode(
+    val KEYBOARD_SINGLE_ROW_SEND_MODE: LayoutMode = LayoutMode(
             id = LayoutModeId.KEYBOARD_SINGLE_ROW_SEND_MODE,
             backend = BackendType.IME_VIEW,
             sceneStateId = R.id.single_row_send_mode_state,
@@ -366,14 +365,12 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                 ),
             ))),
         )
-    }
 
     // ════════════════════════════════════════════════════════════════
     // KEYBOARD_REPROCESS_STAGING (Spec 2 §8.4)
     // ════════════════════════════════════════════════════════════════
 
-    val KEYBOARD_REPROCESS_STAGING: LayoutMode by lazy {
-        LayoutMode(
+    val KEYBOARD_REPROCESS_STAGING: LayoutMode = LayoutMode(
             id = LayoutModeId.KEYBOARD_REPROCESS_STAGING,
             backend = BackendType.IME_VIEW,
             sceneStateId = R.id.reprocess_staging_state,
@@ -445,7 +442,6 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                 )),
             ),
         )
-    }
 
     // ════════════════════════════════════════════════════════════════
     // OVERLAY_5BUTTON (Spec 3 §3.1 — placeholder until B5/C16)
@@ -461,6 +457,20 @@ class LayoutCatalog(private val strings: LayoutStrings) {
     //
     // **B5/C16 will replace the empty rows with the real 5-button layout
     // (Record / Send / Pause / Trash / Close) per Spec 3 §3.1.**
+    //
+    // # Cross-spec implementation note (B4-VAL F-16)
+    //
+    // Spec 3 §3.1's `object OVERLAY_5BUTTON : LayoutMode(...)` wording is
+    // decorative — this catalog is a `class` (not `object`), so nested
+    // `object` members aren't an option. B5 supplies the body via the
+    // `LayoutMode(...)` literal below. The slot bodies (Record / Send /
+    // Pause / Trash / Close) replace the `emptyList()` here; the property
+    // form stays `val = LayoutMode(...)`.
+    //
+    // OVERLAY_5BUTTON keeps `by lazy { ... }` deliberately: the empty-row
+    // placeholder serves as the B5 trigger point — converting to eager
+    // requires a body replacement at the same moment as the `by lazy →
+    // val =` swap, which keeps the cross-spec coupling visible.
 
     val OVERLAY_5BUTTON: LayoutMode by lazy {
         LayoutMode(
@@ -497,12 +507,15 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         val pipe = state.pipeline
         val isStaging = pipe is PipelineUiState.ReprocessStaging
         val isPipelineLive = pipe is PipelineUiState.Preparing || pipe is PipelineUiState.Running
+        // B4-VAL F-24: every case explicit; `else -> error(...)` guards
+        // against future state-shape changes that break exhaustiveness.
         return when {
             isStaging -> KEYBOARD_REPROCESS_STAGING
             isPipelineLive && state.layout.singleRowMode -> KEYBOARD_SINGLE_ROW_SEND_MODE
             isPipelineLive && !state.layout.singleRowMode -> KEYBOARD_TWO_ROW_SEND_MODE
             !isPipelineLive && state.layout.singleRowMode -> KEYBOARD_SINGLE_ROW
-            else -> KEYBOARD_TWO_ROW
+            !isPipelineLive && !state.layout.singleRowMode -> KEYBOARD_TWO_ROW
+            else -> error("forKeyboard: impossible state shape (pipe=$pipe, layout=${state.layout})")
         }
     }
 

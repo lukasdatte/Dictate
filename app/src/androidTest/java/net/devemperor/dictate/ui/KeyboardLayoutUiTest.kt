@@ -1,6 +1,7 @@
 package net.devemperor.dictate.ui
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.fail
 import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,6 +50,7 @@ class KeyboardLayoutUiTest {
         //         each `.isDisplayed()`.
         // Step 4: verify layout is single-row by reading MotionLayout
         //         currentState == R.id.single_row_state.
+        fail("pending: spec 2 §14.2 UI-1 — body skeleton; un-ignore + implement assertions")
     }
 
     /** Spec 2 coverage-baseline — recording active hides resend, shows trash/pause. */
@@ -56,6 +58,7 @@ class KeyboardLayoutUiTest {
     @Ignore("pending: C15-wiring landed — body still skeleton; un-ignore + implement assertions")
     fun ui2_activeRecording_hidesResend_showsTrashPause() {
         // start recording; assert resend GONE, trash + pause VISIBLE.
+        fail("pending: spec 2 §14.2 UI-2 — body skeleton; un-ignore + implement assertions")
     }
 
     /** Spec 2 coverage-baseline — pipeline counter on record_btn. */
@@ -64,6 +67,7 @@ class KeyboardLayoutUiTest {
     fun ui3_pipelineRunning_recordButtonShowsCounter() {
         // start recording, stop → pipeline; assert record_btn.text
         // matches the catalog's resolveRecordButtonTextPipeline output.
+        fail("pending: spec 2 §14.2 UI-3 — body skeleton; un-ignore + implement assertions")
     }
 
     /** Spec 2 §1.1 #3a — bug-fix verifier: Send-Mode + Single-Row keeps record_btn unobstructed. */
@@ -74,6 +78,7 @@ class KeyboardLayoutUiTest {
         // assert KEYBOARD_SINGLE_ROW_SEND_MODE active; assert
         // trash_btn + pause_btn are both GONE; record_btn occupies
         // the full chain width.
+        fail("pending: spec 2 §14.2 UI-4 — body skeleton; un-ignore + implement assertions")
     }
 
     /** Spec 2 coverage-baseline — ReprocessStaging: pause visible+disabled+alpha 0.4. */
@@ -82,6 +87,7 @@ class KeyboardLayoutUiTest {
     fun ui5_reprocessStaging_pauseDisabledAlpha04() {
         // dispatch ReprocessStaging entry; assert pause.isEnabled false,
         // pause.alpha == 0.4f.
+        fail("pending: spec 2 §14.2 UI-5 — body skeleton; un-ignore + implement assertions")
     }
 
     /** Spec 2 coverage-baseline — rotation during Recording: animation continues, correct mode on first frame. */
@@ -92,6 +98,7 @@ class KeyboardLayoutUiTest {
         // first frame after re-inflate is in the correct LayoutMode
         // (jump-to-state, R.14) and the BorderGlow animation is still
         // active.
+        fail("pending: spec 2 §14.2 UI-6 — body skeleton; un-ignore + implement assertions")
     }
 
     /** Spec 2 §1.1 #2 — Toggle Single-Row during Recording. */
@@ -100,6 +107,7 @@ class KeyboardLayoutUiTest {
     fun ui7_toggleSingleRowDuringRecording_pulseAnimationContinues() {
         // start recording → toggle single-row → assert PulseLayout
         // animator still running (via custom matcher on PulseLayout.isPulsing).
+        fail("pending: spec 2 §14.2 UI-7 — body skeleton; un-ignore + implement assertions")
     }
 
     /** Spec 2 §1.1 #3b — frame-capture: resend stays VISIBLE through Two-Row ↔ Single-Row toggle in Idle+lastAudio. */
@@ -109,6 +117,7 @@ class KeyboardLayoutUiTest {
         // pre-arrange: state.recording=Idle, pipeline=Idle,
         // resend.lastAudioExists=true, resend.resendEnabled=true.
         // Toggle single-row; per-frame assert resend.visibility == VISIBLE.
+        fail("pending: spec 2 §14.2 UI-8 — body skeleton; un-ignore + implement assertions")
     }
 
     /** Spec 2 §1.1 #3b — Resend cooldown: VISIBLE+enabled=false+alpha 0.4. */
@@ -117,6 +126,7 @@ class KeyboardLayoutUiTest {
     fun ui9_resendCooldown_visibleDisabledAlpha04() {
         // click resend → enter cooldown; assert resend.visibility VISIBLE,
         // isEnabled false, alpha 0.4.
+        fail("pending: spec 2 §14.2 UI-9 — body skeleton; un-ignore + implement assertions")
     }
 
     /** Spec 2 §1.1 #3a + #3b — cross-bug check: trash/pause never overlap record_btn during transition. */
@@ -125,5 +135,6 @@ class KeyboardLayoutUiTest {
     fun ui10_activeToPipelinePreparing_noOverlap() {
         // start recording → stop → enter Preparing; per-frame Z-order
         // check trash_btn / pause_btn are not above record_btn.
+        fail("pending: spec 2 §14.2 UI-10 — body skeleton; un-ignore + implement assertions")
     }
 }

@@ -56,10 +56,18 @@ class RecordingAnimationController(
 ) {
 
     /**
-     * Cached last-observed [RecordingState] class — drives the
-     * idempotency check. `null` until the first [onState] call.
+     * Cached last-observed [RecordingState] value — drives the idempotency
+     * check via class-comparison (`prev::class == curr::class`). `null`
+     * until the first [onState] call.
+     *
+     * Caching the value (not the Java class) matches Spec 2 §11.5 verbatim
+     * and avoids the misleading "value-equality" mismatch the previous
+     * `Class<out RecordingState>?` cache implied — `::class` already
+     * ignores constructor arguments, so two `Active` states with different
+     * `audioFile` are correctly seen as the same class transition (B4-VAL
+     * F-14 / Spec 2 §11.5).
      */
-    private var lastRecordingClass: Class<out RecordingState>? = null
+    private var lastRecordingState: RecordingState? = null
 
     /**
      * Idempotent reactive entry point. Called by [ImeViewBackend.render]
@@ -68,8 +76,7 @@ class RecordingAnimationController(
      */
     fun onState(state: DictateUiState) {
         val curr = state.recording
-        val currClass: Class<out RecordingState> = curr::class.java
-        if (lastRecordingClass == currClass) return
+        if (lastRecordingState?.let { prev -> prev::class == curr::class } == true) return
 
         when (curr) {
             is RecordingState.Idle -> {
@@ -99,7 +106,7 @@ class RecordingAnimationController(
                 }
             }
         }
-        lastRecordingClass = currClass
+        lastRecordingState = curr
     }
 
     /**
@@ -132,6 +139,6 @@ class RecordingAnimationController(
      * recording-state apply on the next render-tick.
      */
     fun reset() {
-        lastRecordingClass = null
+        lastRecordingState = null
     }
 }

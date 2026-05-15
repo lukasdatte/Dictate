@@ -75,7 +75,17 @@ import android.view.View
  * call from any thread; no Android dependency in the predicate body
  * itself (the [View.VISIBLE] / [View.GONE] translation lives in
  * [resolveResendVisibility]).
+ *
+ * @see net.devemperor.dictate.state.layout.isResendVisible — the
+ *   single-state-argument B4 replacement (Spec 2 §3.2).
  */
+@Deprecated(
+    "Use net.devemperor.dictate.state.layout.isResendVisible(state) — the " +
+        "legacy four-arg form is scheduled for removal once the legacy " +
+        "DictateInputMethodService + RecordingUiController consumers migrate " +
+        "(D-13 / B7 follow-up).",
+    level = DeprecationLevel.WARNING,
+)
 fun isResendVisible(
     lastAudioFileExists: Boolean,
     resendEnabled: Boolean,
@@ -93,6 +103,7 @@ fun isResendVisible(
  * `resendButton.visibility = if (...) VISIBLE else GONE` collapse into
  * `resendButton.visibility = resolveResendVisibility(...)`.
  */
+@Suppress("DEPRECATION") // legacy four-arg form — see isResendVisible KDoc.
 fun resolveResendVisibility(
     lastAudioFileExists: Boolean,
     resendEnabled: Boolean,

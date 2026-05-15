@@ -43,15 +43,22 @@ fun resolvePauseIcon(state: DictateUiState): Int = when (state.recording) {
 /**
  * Audio-focus-button icon based on the user-pref toggle.
  *
- * - `true` (focus requested) → volume_up
- * - `false` → volume_off
+ * The icon depicts the **effect on other audio sources**, not the toggle
+ * state — pressing the button **toggles** AudioFocus:
  *
- * Free function (not a slot resolver wrapper) because the `EditBarController`
- * uses it too — F-4 SSoT (Spec 2 §13.5.c / Gap 1).
+ * - `true` (focus requested, other audio muted) → `volume_off`
+ *   (other audio is muted; pressing the button unmutes / releases focus)
+ * - `false` (no focus, other audio plays) → `volume_up`
+ *   (other audio is audible; pressing the button mutes / acquires focus)
+ *
+ * This matches the legacy `MainButtonsController.refreshAudioFocusIcon`
+ * semantics (B4-VAL F-3 / Spec 2 §13.5.c). Free function (not a slot
+ * resolver wrapper) because `EditBarController` uses it too — F-4 SSoT
+ * (Spec 2 §13.5.c / Gap 1).
  */
 fun resolveAudioFocusIcon(enabled: Boolean): Int =
-    if (enabled) R.drawable.ic_baseline_volume_up_24
-    else R.drawable.ic_baseline_volume_off_24
+    if (enabled) R.drawable.ic_baseline_volume_off_24
+    else R.drawable.ic_baseline_volume_up_24
 
 /**
  * Slot-resolver convenience wrapping [resolveAudioFocusIcon] for the

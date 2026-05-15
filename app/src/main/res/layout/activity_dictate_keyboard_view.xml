@@ -55,6 +55,10 @@
             app:pulseMaxRadiusFactor="1.4"
             app:pulseStyle="fill">
 
+            <!-- B4-VAL F-29: catalog overrides android:text at render-time
+                 via ButtonSlot.textResolver — the per-mode label resolves
+                 from LayoutCatalog.KEYBOARD_*_RECORD slots (Spec 2 §8.5).
+                 The static text here is the inflation fallback. -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/record_btn"
                 android:layout_width="match_parent"
@@ -86,7 +90,10 @@
         <!-- widget_toggle_btn — opens the floating WIDGET overlay (Spec 3
              OPEN-2 / Phase-1-1.0.2). Catalog hides it during pipeline /
              reprocess-staging; position lives in MotionScene. Placeholder
-             icon (change_circle) until B5 ships a dedicated drawable. -->
+             icon (change_circle) until B5 ships a dedicated drawable.
+             B4-VAL F-29: catalog overrides android:foreground via
+             ButtonSlot.iconResolver — see LogicalButtonId.WIDGET_TOGGLE
+             slot definitions (Spec 2 §8.1 / §8.2). -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/widget_toggle_btn"
             android:layout_width="wrap_content"

@@ -16,11 +16,11 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:**
-- Critical: 0
-- Important: 1 (IMPL-1 — D-13 re-deferred to dedicated follow-up block)
+**Severity counts (post-Block-Validate Repair Wave 1):**
+- Critical: 0 (4 closed in repair-wave: F-1 / F-2 / F-3 / F-7)
+- Important: 1 + 4 🟡 deferred (IMPL-1 D-13; F-10/F-12/F-13/F-15 deferred to B5-pre)
 - Nice-to-have: 2 (IMPL-2 LayoutStrings language-awareness · IMPL-3 UI-tests pending body implementation)
-- Postponed: 0
+- Postponed (forwarded): 4 🟡 plan-evolution + 3 NTH-test (B3 carry-over) + B2 §15.1 = 8
 
 **By status:**
 
@@ -34,6 +34,10 @@
 | C15 IMPL-2 | B4-C15-IMPL-FULL | NTH | open (tied to D-13) | LayoutStrings.dictateButtonText is base "Record" string, not effective-language label — visible only when new path renders alone (currently superseded by legacy MainButtonsController.updateRecordButtonText) | tied to D-13 |
 | C15 IMPL-3 | B4-C15-IMPL-FULL | NTH-test | postponed | UI-Tests 1-10 wiring landed; bodies still skeletons. Un-ignore + implement Espresso assertions on a connected device. | Espresso device-test phase |
 | B2 F-11+F-14 | B2-VAL-W1 | NTH | postponed | Spec-internal §15.1 matrix/column inconsistency — spec-doc-edits | Phase 4.6c |
+| F-10 (B4 audit, 🟡 deferred) | B4-VAL-SANITY | Important | postponed → B5-pre | `Action.RecordingAction.StopRecordingAndSend(sessionId = "")` empty-string sentinel — research: sessionId nullable vs sentinel | B5-pre (Spec 1 §3 state-shape evolution mini-block) |
+| F-12 (B4 audit, 🟡 deferred) | B4-VAL-SANITY | Important | postponed → B5-pre | `PipelineUiState.ReprocessStaging.isStarting` field doesn't exist — `enabledResolver` falls back to "always enabled while staging"; double-click race during SendStaging load. | B5-pre |
+| F-13 (B4 audit, 🟡 deferred) | B4-VAL-SANITY | Important | postponed → B5-pre | `PipelineUiState.Running.completedSteps/totalSteps/elapsedMs` fields missing — `resolveRecordButtonTextPipeline` passes placeholders. | B5-pre |
+| F-15 (B4 audit, 🟡 deferred) | B4-VAL-SANITY | Important | postponed → B7 | `LayoutStrings.dictateButtonText` not language-aware — tied to D-13 (LanguageController removal). | B7 (D-13 follow-up) |
 
 ---
 
@@ -476,25 +480,178 @@ None new — reused Robolectric `buildService(DictatePipelineService::class.java
 
 ## Block-Validate (Phase 3.2)
 
-**Status:** ⏳ pending (run after all 4 chunks)
-**Pre-Validate Commit:** ⏳
-**Validate-Pass Commit:** ⏳
+**Status:** ✅ multi-agent audit + sanity-check + repair-wave applied
+**Pre-Validate Commit:** ⏳ (set by orchestrator)
+**Validate-Pass Commit:** ⏳ (set by orchestrator)
 
 ### Audit-Topic Outputs
 
 | Topic | Agent-ID | Status | Output File | Findings (counts) |
 |-------|----------|--------|-------------|-------------------|
-| plan-and-api | `B4-AUDIT-PLAN-AND-API` | ⏳ | `./reports/audit-plan-and-api-B4.md` | — |
-| convention | `B4-AUDIT-CONVENTION` | ⏳ | `./reports/audit-convention-B4.md` | — |
-| logic | `B4-AUDIT-LOGIC` | ⏳ | `./reports/audit-logic-B4.md` | — |
-| test | `B4-AUDIT-TEST` | ⏳ | `./reports/audit-test-B4.md` | — |
+| plan-and-api | `B4-AUDIT-PLAN-AND-API` | ✅ | `./reports/audit-plan-and-api-B4.md` | 10 (0 C / 6 Imp / 4 NTH) |
+| convention | `B4-AUDIT-CONVENTION` | ✅ | `./reports/audit-convention-B4.md` | 10 (0 C / 4 Imp / 6 NTH) |
+| logic | `B4-AUDIT-LOGIC` | ✅ | `./reports/audit-logic-B4.md` | 15 (4 C / 6 Imp / 5 NTH) |
+| test | `B4-AUDIT-TEST` | ✅ | `./reports/audit-test-B4.md` | 8 (0 C / 2 Imp / 6 NTH) |
 
 ### Sanity-Check Consolidator
 
 **Agent-ID:** `B4-VAL-SANITY`
 **Output file:** `./reports/validated-findings-B4.md`
 
-⏳
+Result: 33 distinct findings (after dedup from 43 raw). 30 🟢 + 3 🟡 + 0 ❌.
+
+### Repair Wave 1 (B4-VAL-REPAIR)
+
+**Date:** 2026-05-15
+**Scope:** `green-only` (30 🟢 fixes applied)
+**Findings addressed:** 30
+
+| Finding ID | Severity | File | Status | Fix description |
+|------------|----------|------|--------|-----------------|
+| F-1 | Critical | `state/render/ImeViewBackend.kt` | fixed | Removed BACKSPACE long-press wiring so legacy `MainButtonsController.deleteHandler` accelerated-delete cascade survives. |
+| F-2 | Critical | `state/render/ImeViewBackend.kt` | fixed | Removed RECORD long-press wiring so legacy `onRecordLongClicked` (file-picker on Idle + auto-switch-keyboard on Active) survives. Documented interim status in `wireStaticHandlers` KDoc + flagged longer-term resolver-pattern (B5/B7 follow-up). |
+| F-3 | Critical | `state/layout/IconResolvers.kt` + `ActionResolversTest.kt` | fixed | Inverted `resolveAudioFocusIcon`: `enabled=true → volume_off` / `false → volume_up` (matches legacy `MainButtonsController.refreshAudioFocusIcon`). Updated KDoc + 2 tests. |
+| F-7 | Critical | `res/xml/motion_scene_keyboard.xml` | fixed | Single_row_state: chained `widget_toggle_btn` BEFORE `audio_focus_btn` (`end_toStartOf="@+id/audio_focus_btn"`) and rewired `resend_btn`/`audio_focus_btn` to flow through `widget_toggle_btn`. No more parent-end overlap. |
+| F-4 | Important | `state/layout/ActionResolvers.kt` + `state/ModuleServices.kt` + `PipelineServiceStubSubsystems.kt` + `ActionResolversTest.kt` | fixed | Added `ToastSink.show(@StringRes Int)` overload (default no-op) with `realToastSink` Context-aware override. Resolver switched from hardcoded "Storage full — recording failed to start" to `services.toastSink.show(R.string.dictate_storage_full)`. |
+| F-5 | Important | `core/DictatePipelineService.kt` | fixed | Added `import java.util.Locale` + `Locale.US` to all 3 `String.format` sites in `buildLayoutStrings`. |
+| F-6 | Important | `state/render/ContentAreaController.kt`, `PromptVisibilityController.kt`, `OverlayResetHandler.kt`, `state/layout/RenderBackend.kt` | fixed | Added "Wiring status (IMPL-STATE post-C15)" KDoc anchors documenting the controllers are defined + tested but not yet attached in production. RenderBackend KDoc reflects production reality (`ImeViewBackend` only). |
+| F-8 | Important | `test/.../MotionSceneSchemaTest.kt` | fixed | New test `every Constraint block in every ConstraintSet carries visibilityMode=ignore` — iterates all 5 ConstraintSets (not just `two_row_state`). |
+| F-9 | Important | `androidTest/.../KeyboardLayoutUiTest.kt` | fixed | Added `fail("pending: spec 2 §14.2 UI-N — body skeleton; un-ignore + implement assertions")` to each of the 10 tests. Imports `org.junit.Assert.fail`. |
+| F-14 | Important | `state/render/RecordingAnimationController.kt` | fixed | Renamed `lastRecordingClass: Class<out RecordingState>?` to `lastRecordingState: RecordingState?` (matches Spec 2 §11.5 verbatim). Comparison via `prev::class == curr::class`. |
+| F-16 | Important | `state/layout/LayoutCatalog.kt` | fixed | Converted 5 KEYBOARD modes from `by lazy { ... }` to `val = LayoutMode(...)` (eager). OVERLAY_5BUTTON keeps `by lazy` (B5 placeholder trigger point — documented). |
+| F-17 | Important | `core/DictateInputMethodService.java` | fixed | Replaced unreachable null-check with explicit `instanceof MotionLayout` (Java findViewById<T> throws ClassCastException on type-mismatch; the defensive log only fires now). |
+| F-18 | Important | `state/layout/LayoutCatalog.kt` + `LayoutPredicates.kt` | fixed | KEYBOARD_TWO_ROW + KEYBOARD_SINGLE_ROW WIDGET_TOGGLE slots use `visibilityPredicate = { true }` (gating happens at `forKeyboard()` selection). `isWidgetToggleVisible` function retained as a stand-alone helper with updated KDoc. |
+| F-27 | Important | `res/xml/motion_scene_keyboard.xml` | fixed | Added "B4-deviation notes" comment block in the head documenting widget_toggle_btn + record_btn-PropertySet additions. Spec 2 §7.1 sync deferred to Phase 4.6. |
+| F-28 | Important | `state/render/SlotRenderer.kt` + new `res/values/ids.xml` | fixed | Added per-View tag-cache (`R.id.slot_renderer_last_icon_res`, `R.id.slot_renderer_last_text`) — skips `ContextCompat.getDrawable` / `view.text =` when the resolved value hasn't changed. Declared the tag-keys in a new `res/values/ids.xml`. |
+| F-32 | Important | `core/KeyboardVisibilityPredicates.kt` + test file | fixed | Annotated legacy 4-arg `isResendVisible` with `@Deprecated(level = WARNING)` cross-referencing the new single-arg form. Suppressed in `resolveResendVisibility` wrapper + test file. |
+| F-33 | Important | `core/KeyboardStateManager.kt` | fixed | Added `TODO(D-13 follow-up)` anchors on `applyPromptsVisibility`, `applyContentAreaVisibility`, and the `overlayCharactersLl.visibility = GONE` line — pair with F-6 KDoc on the controller side. |
+| F-19 | NTH | rename `Predicates.kt` → `LayoutPredicates.kt` | fixed | Git rename via `git mv` — no content change. JvmName + package stay. |
+| F-20 | NTH | `state/layout/ActionResolvers.kt` + 3 controller render() methods | fixed | Standardised on annotation-on-parameter form (`@Suppress("UNUSED_PARAMETER") services`). Removed 9 statement-level dummy expressions. |
+| F-21 | NTH | `state/render/ImeViewBackend.kt` | fixed | Moved `firstRender = false` INSIDE the `mode.sceneStateId?.let { ... }` block so the flag only flips after an actual jump/transition fires. |
+| F-22 | NTH | `state/render/ImeViewBackend.kt` | fixed | Vibrate inconsistency collapses naturally into F-1+F-2: RESEND is the only long-press wired now. |
+| F-23 | NTH | `state/layout/LayoutCatalog.kt` + `ActionResolvers.kt` | fixed | LayoutCatalog.kt:163 → short form `RecordingState.Preparing`. ActionResolvers.kt → added `import net.devemperor.dictate.state.InsertionTarget`, switched to short form. |
+| F-24 | NTH | `state/layout/LayoutCatalog.kt` | fixed | `forKeyboard` decision tree: explicit `!isPipelineLive && !state.layout.singleRowMode -> KEYBOARD_TWO_ROW` + defensive `else -> error(...)`. |
+| F-25 | NTH | `res/xml/motion_scene_keyboard.xml` | fixed | Added 3 missing `<Transition>` edges (TWO_ROW_SEND ↔ SINGLE_ROW_SEND, both _SEND ↔ REPROCESS_STAGING) per Spec 2 §7.1 transition matrix. |
+| F-26 | NTH | `res/xml/motion_scene_keyboard.xml` | fixed | Added `<PropertySet motion:visibilityMode="ignore"/>` to `record_pulse_layout` Constraint in `two_row_state`. |
+| F-29 | NTH | `res/layout/activity_dictate_keyboard_view.xml` | fixed | Added catalog-override anchor comments near `record_btn` (`android:text` overridden) and `widget_toggle_btn` (`android:foreground` overridden) inline-anchor convention. |
+| F-30 | NTH | `state/layout/LayoutCatalog.kt` + `res/xml/motion_scene_keyboard.xml` | fixed | Updated stale `action_row` / `input_row` inline comments to "Row N (formerly action_row/input_row)" — references are now greppable but the deleted-container labels are clear. |
+| F-31 | NTH | `test/.../LayoutCatalogTest.kt` | fixed | New test `OVERLAY_5BUTTON is still the empty B5 placeholder` — flips from pass to fail once B5 ships the body (structural reminder). |
+| F-34a | NTH | `test/.../KeyboardLayoutManagerTest.kt` | fixed | New test `two backends with the same backendType both receive renders` — pins R.10 multi-backend fan-out across identical-backendType members. |
+| F-34b | NTH | `test/.../ContentAreaControllerTest.kt` | fixed | `detach is a no-op against future renders` extended with assertions on the two non-active containers (`mainButtons` + `emoji` → GONE). |
+| F-34c | NTH | `test/.../VisibilityMatrixTest.kt` | fixed | Added `state.viewMode == ViewMode.KEYBOARD` precondition assertion at the top of every case (defensive — pins the cross-mode invariant). |
+| F-34d | NTH | `test/.../PromptVisibilityControllerTest.kt` | fixed | New test `pipeline idle plus rewording off hides prompts but keeps recycler visible` — covers the `else -> rewordingEnabled` branch with recycler-visibility cross-check. |
+| F-34e | NTH | `test/.../ImeViewBackendTest.kt` | fixed | New test `staticHandlerInstaller is NOT invoked on render (single-wire L8)` — pins the attach-only contract. |
+| F-34f | NTH | `test/.../DictatePipelineServiceLayoutWiringTest.kt` | fixed | `state emissions reach attached backends via the manager`: added `assertSame(binder.state.value, captured.last())` for refactor-safety. |
+
+**Cross-fix conflicts:** none. F-22 collapsed naturally into F-1+F-2 as predicted.
+
+**Files modified:**
+
+Production (Kotlin/Java/XML):
+- `app/src/main/java/net/devemperor/dictate/state/render/ImeViewBackend.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/RecordingAnimationController.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/SlotRenderer.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/ContentAreaController.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/PromptVisibilityController.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/OverlayResetHandler.kt`
+- `app/src/main/java/net/devemperor/dictate/state/layout/IconResolvers.kt`
+- `app/src/main/java/net/devemperor/dictate/state/layout/ActionResolvers.kt`
+- `app/src/main/java/net/devemperor/dictate/state/layout/LayoutCatalog.kt`
+- `app/src/main/java/net/devemperor/dictate/state/layout/LayoutPredicates.kt` (renamed from `Predicates.kt`)
+- `app/src/main/java/net/devemperor/dictate/state/layout/RenderBackend.kt`
+- `app/src/main/java/net/devemperor/dictate/state/ModuleServices.kt`
+- `app/src/main/java/net/devemperor/dictate/state/PipelineServiceStubSubsystems.kt`
+- `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt`
+- `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java`
+- `app/src/main/java/net/devemperor/dictate/core/KeyboardStateManager.kt`
+- `app/src/main/java/net/devemperor/dictate/core/KeyboardVisibilityPredicates.kt`
+- `app/src/main/res/xml/motion_scene_keyboard.xml`
+- `app/src/main/res/layout/activity_dictate_keyboard_view.xml`
+- `app/src/main/res/values/ids.xml` (new — tag-id declarations for SlotRenderer cache)
+
+Tests (Kotlin):
+- `app/src/test/java/net/devemperor/dictate/state/layout/ActionResolversTest.kt`
+- `app/src/test/java/net/devemperor/dictate/state/layout/LayoutCatalogTest.kt`
+- `app/src/test/java/net/devemperor/dictate/state/layout/KeyboardLayoutManagerTest.kt`
+- `app/src/test/java/net/devemperor/dictate/state/layout/MotionSceneSchemaTest.kt`
+- `app/src/test/java/net/devemperor/dictate/state/layout/VisibilityMatrixTest.kt`
+- `app/src/test/java/net/devemperor/dictate/state/render/ContentAreaControllerTest.kt`
+- `app/src/test/java/net/devemperor/dictate/state/render/ImeViewBackendTest.kt`
+- `app/src/test/java/net/devemperor/dictate/state/render/PromptVisibilityControllerTest.kt`
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceLayoutWiringTest.kt`
+- `app/src/test/java/net/devemperor/dictate/core/KeyboardVisibilityPredicatesTest.kt`
+- `app/src/androidTest/java/net/devemperor/dictate/ui/KeyboardLayoutUiTest.kt`
+
+**Files in findings-scope:** all production + test files above are explicitly named in a finding.
+**Files outside findings-scope (drift):** none — the touched-but-unnamed files in this wave are:
+- `app/src/main/java/net/devemperor/dictate/state/ModuleServices.kt` — added the `ToastSink.show(@StringRes Int)` overload required by F-4; rationale documented in the finding.
+- `app/src/main/java/net/devemperor/dictate/state/PipelineServiceStubSubsystems.kt` — added the overload's production implementation in `realToastSink`, paired with the ModuleServices change.
+- `app/src/main/res/values/ids.xml` — new resource file declaring tag-key ids for the SlotRenderer cache (F-28); the alternative was hardcoded magic numbers.
+
+### Validate-Fixes Self-Check (B4-VAL-W1)
+
+**Date:** 2026-05-15
+**Method:** `./gradlew assembleDebug` + `./gradlew test` + `./gradlew compileDebugAndroidTestKotlin`
+
+| Check | Result |
+|-------|--------|
+| `./gradlew assembleDebug` | ✅ BUILD SUCCESSFUL (19s, 37 tasks) |
+| `./gradlew test` | ✅ BUILD SUCCESSFUL (1m 47s, 843 unit tests, 0 failures, 0 errors) — net +5 vs C15 baseline (838 → 843 from F-31 + F-34a + F-34d + F-34e + F-8) |
+| `./gradlew compileDebugAndroidTestKotlin` | ✅ BUILD SUCCESSFUL (4s) — Espresso skeletons compile |
+
+**Per-finding self-check (re-reads after fix):**
+
+- F-1: `ImeViewBackend.wireStaticHandlers` no longer touches BACKSPACE.
+- F-2: `ImeViewBackend.wireStaticHandlers` no longer touches RECORD long-press. KDoc states the rationale.
+- F-3: `IconResolvers.resolveAudioFocusIcon` returns `volume_off` for enabled=true (matches legacy). Test assertions inverted.
+- F-7: `motion_scene_keyboard.xml` single_row_state — chain order is `enter → resend → widget_toggle → audio_focus → parent-end`. No two siblings share `end_toEndOf=parent`.
+- F-4: `ActionResolvers.resolveRecordAction` calls `services.toastSink.show(R.string.dictate_storage_full)`. `ToastSink` interface has the new overload; `realToastSink` wires it via `applicationContext.getString(resId)`; `RecordingToastSink` test fake captures into `resourceIds`.
+- F-5: `DictatePipelineService.buildLayoutStrings` — 3 `String.format(Locale.US, ...)` sites; `import java.util.Locale` added.
+- F-6: All 3 controllers + `RenderBackend.kt` carry "Wiring status (IMPL-STATE post-C15)" KDoc blocks.
+- F-8: `MotionSceneSchemaTest` now iterates all 5 ConstraintSets — verified by reading the new test.
+- F-9: All 10 UI tests end with `fail("pending: spec 2 §14.2 UI-N — ...")`.
+- F-14: `RecordingAnimationController.lastRecordingState: RecordingState?` + `prev::class == curr::class`. `reset()` nulls it.
+- F-16: All 5 KEYBOARD modes are `val = LayoutMode(...)` eager; OVERLAY_5BUTTON kept `by lazy` with documented rationale.
+- F-17: `DictateInputMethodService.attachImeViewBackendIfReady` uses `View v = findViewById(...); if (!(v instanceof MotionLayout)) {...}`.
+- F-18: KEYBOARD_TWO_ROW + KEYBOARD_SINGLE_ROW WIDGET_TOGGLE slots use `{ true }`; `isWidgetToggleVisible` retained with updated KDoc.
+- F-19: File `LayoutPredicates.kt` (renamed via `git mv`); JvmName unchanged.
+- F-20: All 6 ActionResolvers use parameter-list annotation; 3 controllers' `render` methods use parameter-list annotation.
+- F-21: `firstRender = false` is inside `mode.sceneStateId?.let { ... }`.
+- F-22: Collapsed into F-1+F-2 (no separate fix).
+- F-23: `LayoutCatalog.kt:163` short form + `ActionResolvers.kt` imports `InsertionTarget`.
+- F-24: `forKeyboard` has explicit `!isPipelineLive && !state.layout.singleRowMode` branch + `else -> error(...)`.
+- F-25: 3 new transitions appended.
+- F-26: `record_pulse_layout` Constraint carries the PropertySet.
+- F-27: `motion_scene_keyboard.xml` head comment carries the B4-deviation block.
+- F-28: `SlotRenderer.applySlotToView` reads/writes `R.id.slot_renderer_last_icon_res` + `R.id.slot_renderer_last_text` tags.
+- F-29: Activity layout has inline anchors near `record_btn` + `widget_toggle_btn`.
+- F-30: All "Row N (formerly action_row/input_row)" comment-rewrites applied.
+- F-31: `LayoutCatalogTest.OVERLAY_5BUTTON is still the empty B5 placeholder` runs green; will fail when B5 supplies the body.
+- F-32: `@Deprecated(... level = WARNING)` on legacy `isResendVisible(4-arg)`; `resolveResendVisibility` carries `@Suppress("DEPRECATION")`; test file annotates `@file:Suppress`.
+- F-33: TODO anchors on the 3 KSM methods + the overlay-reset line.
+- F-34a..f: All 6 small test additions/extensions land green.
+
+No post-fix regressions detected.
+
+---
+
+## Postponed Issues — 🟡 deferrals (B4 audit)
+
+These three findings are 🟡 (Important — research-needed). They describe Spec 1 §3 state-shape extensions whose impact is cross-block (B5/B6/B7) — the consolidator recommends a dedicated "B5-pre: pipeline state-shape evolution" mini-block before B5. Documented here + forwarded to the main state-file Postponed Issues section.
+
+| ID | Severity | Title | Recommended follow-up | Reference |
+|----|----------|-------|-----------------------|-----------|
+| F-10 | Important | `Action.RecordingAction.StopRecordingAndSend(sessionId = "")` empty-string sentinel — should sessionId be `String?` with reducer-generated id, or stay-as-`String` with documented sentinel? | Spawn `VAL-RES` research-agent in the proposed B5-pre block; touches data-class + RecordingModule.reduce + every call-site. | validated-findings-B4.md F-10 |
+| F-12 | Important | `PipelineUiState.ReprocessStaging.isStarting` field — `enabledResolver` should gate on `!s.isStarting` per Spec 2 §8.4 but the field doesn't exist on the state shape yet. Affects double-click race. | B5-pre: extend `PipelineUiState.ReprocessStaging` with `isStarting: Boolean = false` + reducer transitions. | validated-findings-B4.md F-12 |
+| F-13 | Important | `PipelineUiState.Running.completedSteps/totalSteps/elapsedMs` fields — `resolveRecordButtonTextPipeline` passes placeholders; live counter would die the moment legacy retires (B5/B6 AC violation). | B5-pre: extend `PipelineUiState.Running` with the three fields + PipelineModule reducer updates + LayoutStrings consumption. | validated-findings-B4.md F-13 |
+| F-15 | Important | `LayoutStrings.dictateButtonText` is static (`R.string.dictate_record`) — legacy `getDictateButtonText()` is language-aware via `LanguageController.getEffectiveLanguage()`. Latent regression once legacy retires. | Tied to D-13 / B7 LanguageController + Settings-UI decoupling. Wire `LanguageModule.effectiveLanguage` into `LayoutStrings.dictateButtonText` once B7 lands. | validated-findings-B4.md F-15 |
+
+**Why deferred (not addressed in this wave):**
+- Each touches `DictateUiState` sub-state shape — out of B4 scope (Spec 2 §3 declares the state evolution as cross-block).
+- Each requires reducer changes in B5/B6 modules.
+- Each has explicit research-need (sessionId type choice, counter field placement, language-flow plumbing).
+
+**Recommended scheduling:** The orchestrator can either (a) open a dedicated "B5-pre" mini-block to run research+implementation for these 4 findings before B5, or (b) fold the research into B5's first chunk. The consolidator's recommendation is (a) for diff-locality.
 
 ---
 

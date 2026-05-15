@@ -101,6 +101,48 @@ class MotionSceneSchemaTest {
     }
 
     @Test
+    fun `every Constraint block in every ConstraintSet carries visibilityMode=ignore`() {
+        // B4-VAL F-8: derive-from siblings can silently drop the marker. Spec
+        // 2 §7.3 / R.11 is non-negotiable — every `<Constraint>` block that
+        // names one of the state-driven button ids in ANY of the 5
+        // ConstraintSets must explicitly declare the PropertySet. A derived
+        // ConstraintSet without an override still gets the parent's
+        // PropertySet, so this test asserts on declared <Constraint> blocks
+        // only (a missing Constraint is OK — it inherits — but a present
+        // Constraint without the marker would override the inherited one).
+        val sets = parseConstraintSetElements()
+        require(sets.isNotEmpty()) { "No ConstraintSets parsed — XML smoke" }
+
+        sets.forEach { set ->
+            val setId = extractId(set) ?: error("Anonymous ConstraintSet — id missing")
+            val constraints = set.getElementsByTagName("Constraint")
+            for (i in 0 until constraints.length) {
+                val c = constraints.item(i) as Element
+                val cId = extractId(c) ?: continue
+                if (cId !in visibilityIgnoreButtonIds) continue
+                // Found a Constraint block for a state-driven button — it
+                // MUST carry the PropertySet.
+                val propertySets = c.getElementsByTagName("PropertySet")
+                var hasIgnore = false
+                for (j in 0 until propertySets.length) {
+                    val p = propertySets.item(j) as Element
+                    val mode = p.getAttributeNS(MOTION_NS, "visibilityMode").ifBlank {
+                        p.getAttribute("motion:visibilityMode")
+                    }
+                    if (mode == "ignore") { hasIgnore = true; break }
+                }
+                if (!hasIgnore) {
+                    fail(
+                        "ConstraintSet `$setId` has a <Constraint android:id=\"@+id/$cId\"> " +
+                            "block without <PropertySet motion:visibilityMode=\"ignore\"/> " +
+                            "(Spec 2 §7.3 / R.11 — non-negotiable).",
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
     fun `motion scene declares transitions between adjacent constraint sets`() {
         val transitions = parseTransitions()
         // Spec 2 §7.1 transitions table:

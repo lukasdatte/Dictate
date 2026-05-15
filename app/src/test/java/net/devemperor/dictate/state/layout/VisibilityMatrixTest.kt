@@ -49,6 +49,14 @@ class VisibilityMatrixTest(
 
     @Test
     fun `every slot in the mode satisfies the spec truth-table`() {
+        // B4-VAL F-34c: pin the cross-mode invariant — every state-builder
+        // in this matrix is for the KEYBOARD viewMode. Catalog modes only
+        // run on KEYBOARD; if a future helper ever returns a state with a
+        // different viewMode the matrix's expectations no longer hold.
+        assertEquals(
+            "VisibilityMatrixTest only exercises KEYBOARD viewMode (caseName=$caseName)",
+            net.devemperor.dictate.state.ViewMode.KEYBOARD, state.viewMode,
+        )
         val mode = modeProvider(catalog)
         // For every (logicalId, expected) pair, locate the slot in the
         // mode and assert visibility matches. A slot that is *missing*

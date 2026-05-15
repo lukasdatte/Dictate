@@ -8,10 +8,21 @@ import net.devemperor.dictate.state.DictateUiState
  *
  * Backends translate a `(state, mode)` pair into Android-view property
  * writes. The [KeyboardLayoutManager] keeps **a list** of attached
- * backends (Spec 2 §4.1 / R.10 — C-4 F-6) and fans each render-tick out to
- * every member — `ImeViewBackend` + `ContentAreaController` are both
- * attached during normal IME runs, and Spec 3 adds `OverlayBackend` as a
- * third member when WIDGET/HOVER is active.
+ * backends (Spec 2 §4.1 / R.10 — C-4 F-6) and fans each render-tick out
+ * to every member.
+ *
+ * # Production wiring status (post-C15, B4-VAL F-6)
+ *
+ * Today only `ImeViewBackend` is attached in production. The
+ * companion controllers (`ContentAreaController`,
+ * `PromptVisibilityController`, `OverlayResetHandler`) are defined +
+ * unit-tested, but their IME-side `attachBackend(...)` calls are
+ * deferred to the D-13 follow-up block — `KeyboardStateManager` still
+ * owns those view-axes. The plan is one-step migration per controller
+ * once the legacy KSM method on the same axis is removed.
+ *
+ * Spec 3 adds `OverlayBackend` as a future member when WIDGET/HOVER is
+ * active.
  *
  * # Attach/detach lifecycle
  *

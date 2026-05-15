@@ -52,6 +52,21 @@ class LayoutCatalogTest {
     }
 
     @Test
+    fun `OVERLAY_5BUTTON is still the empty B5 placeholder`() {
+        // B4-VAL F-31: structural reminder that the OVERLAY_5BUTTON body
+        // is a placeholder until B5/C16 ships the 5-button layout
+        // (Record / Send / Pause / Trash / Close). When B5 supplies the
+        // body, this assertion flips from pass to fail — that's the
+        // trigger to delete this test and exercise OVERLAY_5BUTTON for
+        // real.
+        assertEquals(
+            "OVERLAY_5BUTTON.rows must remain empty until B5/C16 ships the body.",
+            emptyList<RowDescriptor>(),
+            catalog.OVERLAY_5BUTTON.rows,
+        )
+    }
+
+    @Test
     fun `no LayoutMode contains duplicate logical button ids`() {
         catalog.allModes().forEach { mode ->
             val ids = mode.slots.map { it.logicalId }

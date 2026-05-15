@@ -97,7 +97,10 @@ class ActionResolversTest {
         assertNull(result)
 
         // Toast must surface the failure so the user knows the click didn't take.
-        assertEquals(1, toast.errorMessages.size)
+        // B4-VAL F-4: switched from showError(literal) to show(@StringRes) so the
+        // user-visible string goes through Android i18n.
+        assertEquals(listOf(net.devemperor.dictate.R.string.dictate_storage_full), toast.resourceIds)
+        assertTrue("Should not use error-channel String overload", toast.errorMessages.isEmpty())
     }
 
     // ─── resolveRecordActionPipeline ──────────────────────────────────
@@ -226,13 +229,18 @@ class ActionResolversTest {
     // ─── Icon resolvers ───────────────────────────────────────────────
 
     @Test
-    fun `resolveAudioFocusIcon returns volume_up when enabled`() {
-        assertEquals(net.devemperor.dictate.R.drawable.ic_baseline_volume_up_24, resolveAudioFocusIcon(enabled = true))
+    fun `resolveAudioFocusIcon returns volume_off when enabled (legacy semantics)`() {
+        // enabled=true → AudioFocus IS held → other audio is muted →
+        // icon depicts the effect on others (silenced) → volume_off.
+        // Matches MainButtonsController.refreshAudioFocusIcon semantics.
+        assertEquals(net.devemperor.dictate.R.drawable.ic_baseline_volume_off_24, resolveAudioFocusIcon(enabled = true))
     }
 
     @Test
-    fun `resolveAudioFocusIcon returns volume_off when disabled`() {
-        assertEquals(net.devemperor.dictate.R.drawable.ic_baseline_volume_off_24, resolveAudioFocusIcon(enabled = false))
+    fun `resolveAudioFocusIcon returns volume_up when disabled (legacy semantics)`() {
+        // enabled=false → AudioFocus NOT held → other audio plays normally
+        // → icon depicts other-audio-audible → volume_up.
+        assertEquals(net.devemperor.dictate.R.drawable.ic_baseline_volume_up_24, resolveAudioFocusIcon(enabled = false))
     }
 
     @Test
@@ -317,6 +325,7 @@ private class FailingAudioFileFactory(private val thrown: IOException) : AudioFi
 private class RecordingToastSink : ToastSink {
     val messages: MutableList<CharSequence> = mutableListOf()
     val errorMessages: MutableList<CharSequence> = mutableListOf()
+    val resourceIds: MutableList<Int> = mutableListOf()
 
     override fun show(message: CharSequence) {
         messages.add(message)
@@ -324,6 +333,10 @@ private class RecordingToastSink : ToastSink {
 
     override fun showError(message: CharSequence) {
         errorMessages.add(message)
+    }
+
+    override fun show(resId: Int) {
+        resourceIds.add(resId)
     }
 }
 

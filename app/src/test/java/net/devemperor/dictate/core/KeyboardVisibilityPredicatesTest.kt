@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION") // tests legacy four-arg isResendVisible / resolveResendVisibility (B4-VAL F-32).
+
 package net.devemperor.dictate.core
 
 import android.view.View

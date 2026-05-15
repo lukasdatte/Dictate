@@ -137,6 +137,8 @@ class KeyboardStateManager(
         applyContentAreaVisibility()
         applyRecordingControlsVisibility()
         applyPromptsVisibility()
+        // TODO(D-13 follow-up): remove once `OverlayResetHandler` attaches
+        // in production — mirrors the new path's defensive reset (B4-VAL F-33).
         views.overlayCharactersLl.visibility = View.GONE
         infoBarController?.onStateChanged(contentArea, isSmallMode)
         // C15 — layoutModeController?.refresh() removed. The single-row
@@ -144,6 +146,17 @@ class KeyboardStateManager(
         // against state emissions, not against KSM refresh callbacks.
     }
 
+    /**
+     * Owns the three IME content-area containers (`mainButtonsCl` /
+     * `qwertzContainer` / `emojiPickerCl`) until the new
+     * [net.devemperor.dictate.state.render.ContentAreaController] is wired
+     * into production. Both implementations read the same SoT
+     * (`state.layout.contentArea`); the new path is a parallel
+     * RenderBackend ready to take over once the IME-side attach lands.
+     *
+     * TODO(D-13 follow-up): delete this method once
+     * `ContentAreaController` attaches in production (B4-VAL F-33).
+     */
     private fun applyContentAreaVisibility() {
         views.mainButtonsClTyped.visibility =
             if (contentArea == ContentArea.MAIN_BUTTONS) View.VISIBLE else View.GONE
@@ -167,6 +180,17 @@ class KeyboardStateManager(
         views.trashButton.visibility = if (isActive || isStaging) View.VISIBLE else View.GONE
     }
 
+    /**
+     * Owns the prompt-container visibility + `pipelineProgress` swap +
+     * QWERTZ-side recording controls until the new
+     * [net.devemperor.dictate.state.render.PromptVisibilityController]
+     * is wired into production. Same SoT (`state.layout.smallMode` +
+     * `state.layout.contentArea` + recording / pipeline / rewording
+     * axes) is read by both implementations.
+     *
+     * TODO(D-13 follow-up): delete this method once
+     * `PromptVisibilityController` attaches in production (B4-VAL F-33).
+     */
     private fun applyPromptsVisibility() {
         val isPipelineProgress = isPipelineProgressVisible() && !isReprocessStaging()
         val isActive = isRecording() || isPaused()

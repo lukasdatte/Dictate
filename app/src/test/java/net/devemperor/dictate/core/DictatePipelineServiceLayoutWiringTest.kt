@@ -146,6 +146,13 @@ class DictatePipelineServiceLayoutWiringTest {
             "Backend must observe at least one further render after a state mutation (got count=$countBefore → ${captured.size})",
             captured.size > countBefore,
         )
+        // B4-VAL F-34f: refactor-safe assertion — the last captured state
+        // must equal the binder's current state-flow value, not depend
+        // on the specific reduce semantics of MarkLastAudio.
+        assertSame(
+            "Backend's last observed state must match binder.state.value",
+            binder.state.value, captured.last(),
+        )
         manager.detachBackend(fakeBackend)
     }
 

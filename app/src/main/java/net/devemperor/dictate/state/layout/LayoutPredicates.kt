@@ -91,12 +91,21 @@ fun isPauseVisible(state: DictateUiState): Boolean =
         state.pipeline is PipelineUiState.ReprocessStaging
 
 /**
- * Widget-toggle visibility in standard keyboard layouts.
+ * Widget-toggle visibility — predicate-form retained as a stand-alone helper.
  *
- * Visible only when `viewMode == ViewMode.KEYBOARD`. In SEND_MODE +
- * REPROCESS_STAGING the slot is hardcoded `{ false }` so the user can't
- * tear down the running pipeline by accidentally toggling to WIDGET
- * mid-flight (Spec 2 §8.3 Phase-B S-6 note).
+ * # Status (B4-VAL F-18)
+ *
+ * The catalog's KEYBOARD_TWO_ROW / KEYBOARD_SINGLE_ROW slots use
+ * `visibilityPredicate = { true }` because gating happens one layer up:
+ * `LayoutCatalog.forKeyboard(state)` is only entered when
+ * `state.viewMode == ViewMode.KEYBOARD`. SEND_MODE + REPROCESS_STAGING
+ * slots hardcode `{ false }` (Spec 2 §8.3 Phase-B S-6 — user mustn't
+ * tear down the running pipeline mid-flight).
+ *
+ * This function is kept as a reusable helper for code that needs to ask
+ * the question outside the catalog flow — e.g. unit tests asserting the
+ * truth-table, or future container-side decisions that don't go through
+ * the catalog at all. Direct catalog use is no longer required.
  */
 fun isWidgetToggleVisible(state: DictateUiState): Boolean =
     state.viewMode == net.devemperor.dictate.state.ViewMode.KEYBOARD

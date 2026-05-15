@@ -316,10 +316,26 @@ sealed interface NotificationStatus {
 /**
  * Toast indirection. Effect handlers call `services.toastSink.show(msg)`;
  * the real implementation in B3 posts to the IME's Looper.
+ *
+ * # `@StringRes` overload (B4-VAL F-4)
+ *
+ * [show] takes a `@StringRes Int` overload so resolvers without an Android
+ * Context can dispatch toasts by resource id — the production
+ * [net.devemperor.dictate.state.realToastSink] resolves it via
+ * `applicationContext.getString(...)`. Test fakes default to no-op via
+ * the interface default (override to capture if needed).
  */
 interface ToastSink {
     fun show(message: CharSequence)
     fun showError(message: CharSequence)
+
+    /**
+     * Show a toast for a string-resource id. The default body is a no-op
+     * — real implementations bound to an Android Context resolve the id
+     * via `Context.getString(resId)` and forward to [show]. Test fakes
+     * may override to capture the resource id for assertions.
+     */
+    fun show(@androidx.annotation.StringRes resId: Int) = Unit
 }
 
 /**

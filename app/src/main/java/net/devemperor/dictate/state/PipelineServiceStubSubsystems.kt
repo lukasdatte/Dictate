@@ -208,6 +208,9 @@ internal fun realToastSink(applicationContext: android.content.Context): ToastSi
         override fun showError(message: CharSequence) {
             Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
         }
+        override fun show(resId: Int) {
+            show(applicationContext.getString(resId))
+        }
     }
 
 /**

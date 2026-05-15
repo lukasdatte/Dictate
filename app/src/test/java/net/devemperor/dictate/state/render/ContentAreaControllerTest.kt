@@ -102,7 +102,12 @@ class ContentAreaControllerTest {
         val state = stateWithContentArea(ContentArea.QWERTZ)
         controller.render(state, catalog.KEYBOARD_TWO_ROW)
 
+        // B4-VAL F-34b: also assert the two non-active containers go GONE
+        // — guards against a future refactor that splits visibility into
+        // multiple methods and forgets one container.
         assertEquals(View.VISIBLE, qwertz.visibility)
+        assertEquals(View.GONE, mainButtons.visibility)
+        assertEquals(View.GONE, emoji.visibility)
     }
 
     private fun stateWithContentArea(area: ContentArea): DictateUiState =

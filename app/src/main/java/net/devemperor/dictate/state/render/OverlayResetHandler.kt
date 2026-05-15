@@ -11,6 +11,16 @@ import net.devemperor.dictate.state.layout.RenderBackend
  * RenderBackend that resets IME-View widgets which the overlay surface
  * controls during WIDGET/HOVER mode (Spec 2 §4.1 / R.10).
  *
+ * # Wiring status (IMPL-STATE post-C15, B4-VAL F-6)
+ *
+ * **Not yet attached in production.** The
+ * `overlay_characters_ll.visibility = View.GONE` line inside
+ * [net.devemperor.dictate.core.KeyboardStateManager.applyVisibility]
+ * continues to own this defensive reset until the D-13 follow-up block
+ * migrates the IME-side wiring. `OverlayResetHandlerTest` exercises the
+ * contract so the handler can be wired in one step once the matching
+ * KSM line is removed.
+ *
  * # The reset concern
  *
  * Two IME-View widgets are mutated by overlay-side logic:
@@ -65,9 +75,10 @@ class OverlayResetHandler(
         onAction = null
     }
 
-    override fun render(state: DictateUiState, mode: LayoutMode) {
-        @Suppress("UNUSED_VARIABLE") val _unused1 = mode
-        @Suppress("UNUSED_VARIABLE") val _unused2 = state
+    override fun render(
+        @Suppress("UNUSED_PARAMETER") state: DictateUiState,
+        @Suppress("UNUSED_PARAMETER") mode: LayoutMode,
+    ) {
         // The overlay-characters strip is **always** invisible at the
         // start of any state-driven render-tick. The
         // [net.devemperor.dictate.keyboard.EnterOverlayHandler] sets it

@@ -212,6 +212,23 @@ class KeyboardLayoutManagerTest {
         assertEquals(1, manager.attachedBackendCount())
     }
 
+    @Test
+    fun `two backends with the same backendType both receive renders`() {
+        // B4-VAL F-34a: the multi-backend fan-out (R.10) must keep both
+        // members live even when they share a backendType. Earlier code
+        // could have hashed on backendType and lost one — assert both
+        // see every render-tick.
+        val a = TestRenderBackend(backendType = BackendType.IME_VIEW)
+        val b = TestRenderBackend(backendType = BackendType.IME_VIEW)
+        manager.attachBackend(a)
+        manager.attachBackend(b)
+
+        manager.onStateChanged(stateForKeyboard(singleRow = false))
+
+        assertEquals(1, a.renderCount)
+        assertEquals(1, b.renderCount)
+    }
+
     // ─── Test fixtures ─────────────────────────────────────────────────
 
     private fun stateForKeyboard(singleRow: Boolean): DictateUiState =

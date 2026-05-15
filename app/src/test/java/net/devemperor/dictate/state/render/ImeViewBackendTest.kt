@@ -326,6 +326,35 @@ class ImeViewBackendTest {
     }
 
     @Test
+    fun `staticHandlerInstaller is NOT invoked on render (single-wire L8)`() {
+        // B4-VAL F-34e: render must not re-fire the installer. The L8
+        // single-wire contract pins listener-attachment to attach() only;
+        // a per-render installer call would re-register the special-touch
+        // handlers every tick.
+        var calls = 0
+        val backend = ImeViewBackend(
+            motionSurface = motion,
+            buttonViews = buttons.toMap(),
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            recordingAnimationController = controller,
+            staticHandlerInstaller = { _ -> calls++ },
+        )
+
+        backend.attach { /* */ }
+        assertEquals("Installer must fire once on attach.", 1, calls)
+
+        backend.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
+        backend.render(DictateUiState.initial(), catalog.KEYBOARD_SINGLE_ROW)
+        backend.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
+
+        assertEquals(
+            "Installer must NOT fire on render (L8 single-wire contract).",
+            1, calls,
+        )
+    }
+
+    @Test
     fun `onVibrate fires on every click`() {
         var vibrations = 0
         val backend = ImeViewBackend(

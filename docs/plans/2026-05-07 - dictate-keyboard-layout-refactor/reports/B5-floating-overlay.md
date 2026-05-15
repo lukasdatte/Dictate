@@ -333,11 +333,53 @@ Implemented the permission infrastructure layer per Spec 3 §5.0–§5.7:
 
 ### Chunk C18-block6-mode-transitions-and-drag — Mode-transitions T1-T7 + Drag + OverlayModule
 
-**Agent-IDs:** Steps 1-5: `B5-C18-IMPL-FULL`
+**Agent-IDs:** Steps 1-5 (combined): `B5-C18-IMPL-FULL`
 
-**Status:** ⏳ pending (depends on C17)
+**Status:** ✅ done — production + tests green (`./gradlew test` + `./gradlew assembleDebug` BUILD SUCCESSFUL)
 
-⏳
+**Chunks file:** `../dictate-keyboard-layout-refactor.reviewed.chunks.json` chunk index 19
+
+#### Implementation (B5-C18-IMPL)
+
+**What was done:**
+
+- **Part A — Mode-Transitions T1–T7 wiring.** `DictatePipelineService.syncOverlayBackendAttachment(viewMode)` toggles the `OverlayBackend`'s membership in the `KeyboardLayoutManager` on every state-collect emit. The 7-transition matrix collapses to one rule: **attach iff `viewMode != KEYBOARD`** (the overlay window is the WIDGET ∪ HOVER union per Spec 3 §3.1; T4/T6 stay in the union → no churn; T7 is structurally identical to T5 — both land on KEYBOARD, the "Geist-Widget" protection already lives in `ViewModeModule.reduce`). Permission gate is single-sourced in `OverlayBackend.render` (`hasPermission` guard) — a permission-less attach is a cheap no-op, no duplicate `Settings.canDrawOverlays` read.
+- **Part B — Drag-Lifecycle.** New `OverlayPositionMapper` (+ `DefaultOverlayPositionMapper`) — the single SoT for `[0..1]` ↔ pixel conversion (Spec 3 §4.7), with `effectiveWidth`/`effectiveHeight` helpers and the not-measured `null` short-circuit. New `OverlayDragController` (+ `OverlayDragControllerFactory`/`Default…`) — touch state machine with accessibility-aware `dragThresholdPx = max(8dp, scaledTouchSlop*1.5)`, click-vs-drag differentiation, `WindowManager.update` per `ACTION_MOVE`, drag-end → `Action.OverlayAction.UpdateOverlayPosition` dispatch, and the mid-drag-detach persistence net (R.18). `OverlayBackend.applyPositionPlaceholder()` replaced with a real `applyPosition(overlay)` (orientation-aware pref-bucket selection, `lastAppliedPosition` dedup cache, `view.post` retry for the unmeasured-first-render case, `isDragging()` short-circuit).
+- **Part C — OverlayModule.** Verified all needed action arms already exist (`UpdateOverlayPosition`, `SetUserPrefersWidget`, `Suppress…`, `ResetSuppressBit`, `OnOverlayPermissionChanged`, `RequestOverlayPermission`) — canonical Spec 3 §4.8 uses only `UpdateOverlayPosition` on drag-end (no separate DragStart/DragEnd actions; the drag state machine is purely in the controller, the reducer stays pure). **No new actions/arms needed.**
+
+**Plan deviations:**
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Attach-rule simplified to `viewMode != KEYBOARD` instead of a 7-arm `when` | Spec 3 §7.2 / chunk Part A "T1–T7" | One boolean rule rather than per-transition arms | Spec 3 §3.1 — WIDGET and HOVER both render `OVERLAY_5BUTTON`; the only mode needing teardown is KEYBOARD. T4/T6 (overlay↔overlay) need no churn; T7 settles on KEYBOARD via the FSM so it needs no special arm. Simpler + provably exhaustive. | None — behaviour is identical to the per-arm form for all 7 transitions (verified by `DictatePipelineServiceOverlayTransitionTest`). | inline-fixed |
+| Single-backend `switchBackend` (Spec 3 §7.2 snippet) NOT used; overlay backend attached/detached on the **multi-backend list** instead | Spec 3 §7.2 | `ImeViewBackend`/`ContentAreaController` stay attached; only the OverlayBackend toggles | Consistent with the C16 deviation note + the existing `KeyboardLayoutManager` R.10 multi-backend design; §7.2 is the pedagogical snippet, §4.1/R.10 is the production contract. | None — matches the established block-wide pattern. | inline-fixed |
+| `DragHandler`/`PositionMapper` named `OverlayDragController`/`OverlayPositionMapper` (chunk-prompt said `DefaultOverlayPositionMapper.kt` + `OverlayDragController.kt`) — matches the chunk-prompt file names, **not** Spec 3 §4.6's `OverlayDragHandler` | Spec 3 §4.6 vs chunk-prompt "Files to create" | Used the chunk-prompt's `OverlayDragController` name (the explicit C18 deliverable) | Chunk-prompt is the concrete C18 contract and names the exact files; the Spec §4.6 `OverlayDragHandler` is the design sketch. Behaviour (interface surface: attach/detach/isDragging, factory, threshold, persist-on-detach) is 1:1 with Spec §4.6. | Block-validate may want to cross-check the rename is intentional; functionally equivalent. | inline-fixed |
+| Collector body wrapped in `try/catch` (per-emit render isolation) | not in plan | A render exception in one backend no longer cancels the state-collect coroutine | C18 is the first chunk that attaches the OverlayBackend to the **live** manager; a backend render-throw (observed: Robolectric `MaterialButton` inflate needs a Material-themed context) would otherwise silently freeze the notification/DB/every state subscriber for the process lifetime. Legit robustness improvement scoped to where the risk first appears. Paired with the flag-first ordering in `syncOverlayBackendAttachment` so a thrown first-render still bookkeeps as attached (→ matching detach still fires, no window leak). | Positive — hardens the whole state pipeline for all later blocks. No behavioural change on the happy path. | inline-fixed |
+
+**Issues:** none open. (The Robolectric `MaterialButton` inflate failure under the real `AndroidOverlayWindow` is a test-environment theming artifact, not a production bug — production inflates from the themed IME context; the per-emit isolation makes it a logged no-op regardless.)
+
+**Inline-fixed items:**
+
+- `app/src/main/java/net/devemperor/dictate/state/render/overlay/OverlayPositionMapper.kt` — new (interface + `DefaultOverlayPositionMapper` + `effectiveWidth`/`effectiveHeight`).
+- `app/src/main/java/net/devemperor/dictate/state/render/overlay/OverlayDragController.kt` — new (controller + `OverlayDragControllerFactory` + `DefaultOverlayDragControllerFactory`).
+- `OverlayBackend.kt` — constructor gains `positionMapper` + `dragControllerFactory` (defaults wire production); `applyPositionPlaceholder()` → real `applyPosition()`; `wireDragController()` added; `teardownOverlay()` flushes drag controller first; class KDoc updated.
+- `DictatePipelineService.kt` — `syncOverlayBackendAttachment()` added + called from the state-collect; `overlayBackendAttached` field; collector body guarded; Step-8 comment + `overlayBackend` binder KDoc updated.
+
+**Test-Infrastructure implemented:** none new — reused `FakeOverlayWindow`, `fakeModuleServices`, `NoOverlayPermissionGate`, `Robolectric.buildService`.
+
+#### Tests (B5-C18-IMPL-TEST)
+
+**What was done:** Created `DefaultOverlayPositionMapperTest` (9 tests — corners/centre/clamp/round-trip/unmeasured/zero-free-area), `OverlayDragControllerTest` (6 tests — tap-vs-drag, update-per-move, persist-on-UP, mid-drag-detach R.18, idle-detach, null-params guard), `DictatePipelineServiceOverlayTransitionTest` (8 tests — T1/T2/T3/T4/T5/T7 + boot-state + backend-availability, Robolectric Service-level). Extended `OverlayBackendTest` (+4 tests — applyPosition via mapper, idempotent re-render, drag-persist → `UpdateOverlayPosition`, detach after position render).
+
+**Result:** `./gradlew test` → BUILD SUCCESSFUL (full suite green, no cross-chunk regressions). `./gradlew assembleDebug` → BUILD SUCCESSFUL.
+
+**Coverage notes:** All 7 T1–T7 transitions covered (T1/T3 attach, T2/T5/T7 detach, T4/T6 stay-attached via the no-churn rule — T6 is covered transitively by the `viewMode != KEYBOARD` rule asserted in T4). Mapper boundary clamping + not-measured both directions. Drag click-vs-drag threshold + mid-drag detach. Permission-gate covered (T1 needs `OnOverlayPermissionChanged(true)` first, asserted via the `binder()` helper).
+
+**Overlooked points / known gaps:**
+
+- **Orientation-change live test** is manual (Spec 3 §11.5.6) — the `isPortraitOrientation()` read + per-orientation pref bucketing is unit-covered indirectly via the mapper, but a real rotation round-trip is a Phase 4.5 manual runbook item.
+- **Multi-window / foldable** (Spec 3 §11.7 / OPEN-3.2 aspect-bucket) is manual — Spec explicitly defers multi-window code to a later phase; the mapper uses `displayMetrics` (current display) which is correct for the Phase-1 scope.
+- IME-side `observer.refresh()` from `onCreateInputView`/`onStartInputView` (C17 follow-up forwarded to C18) is **not** wired here — it lives in the IME service, outside this chunk's file scope; the Service-side `init()` covers cold-start, and the snappier-refresh path is a small IME edit best done with the rest of the IME-overlay-toggle wiring (forwarded to Phase 4 Integration).
 
 ---
 

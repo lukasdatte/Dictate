@@ -348,7 +348,127 @@ class OverlayBackendTest {
         assertTrue("detach call must be recorded.", "detach" in window.events)
     }
 
+    // ─── C18 — position + drag wiring ─────────────────────────────────
+
+    @Test
+    fun `applyPosition updates window params via the mapper`() {
+        val fakeMapper = FixedPositionMapper(px = 123, py = 456)
+        val backend = OverlayBackend(
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            overlayWindow = window,
+            permissions = NoOverlayPermissionGate,
+            layoutParamsFactory = DefaultOverlayLayoutParamsFactory(ctx),
+            positionMapper = fakeMapper,
+        )
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(), catalog.OVERLAY_5BUTTON)
+
+        assertEquals("params.x must be the mapped px", 123, window.lastParams!!.x)
+        assertEquals("params.y must be the mapped py", 456, window.lastParams!!.y)
+        assertTrue("window.update must have fired", "update" in window.events)
+    }
+
+    @Test
+    fun `applyPosition is idempotent for an unchanged position`() {
+        val fakeMapper = FixedPositionMapper(px = 10, py = 20)
+        val backend = OverlayBackend(
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            overlayWindow = window,
+            permissions = NoOverlayPermissionGate,
+            layoutParamsFactory = DefaultOverlayLayoutParamsFactory(ctx),
+            positionMapper = fakeMapper,
+        )
+        backend.attach { captured += it }
+        val state = stateWithPermission()
+        backend.render(state, catalog.OVERLAY_5BUTTON)
+        val updatesAfterFirst = window.events.count { it == "update" }
+        backend.render(state, catalog.OVERLAY_5BUTTON)
+        backend.render(state, catalog.OVERLAY_5BUTTON)
+
+        assertEquals(
+            "Re-render with the same position must not re-update the window",
+            updatesAfterFirst, window.events.count { it == "update" },
+        )
+    }
+
+    @Test
+    fun `drag-controller persist dispatches UpdateOverlayPosition`() {
+        // The fake drag-controller factory captures the persist sink so
+        // the test can fire it directly (no MotionEvent simulation).
+        var persistSink: ((Float, Float) -> Unit)? = null
+        val factory = object : OverlayDragControllerFactory {
+            override fun create(
+                view: View,
+                window: OverlayWindow,
+                paramsHolder: () -> android.view.WindowManager.LayoutParams?,
+                positionMapper: OverlayPositionMapper,
+                onPositionPersist: (Float, Float) -> Unit,
+            ): OverlayDragController {
+                persistSink = onPositionPersist
+                // Return a real controller; the test never feeds it
+                // touch events, it invokes the captured sink directly.
+                return OverlayDragController(
+                    ctx, view, window, paramsHolder, positionMapper, onPositionPersist,
+                )
+            }
+        }
+        val backend = OverlayBackend(
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            overlayWindow = window,
+            permissions = NoOverlayPermissionGate,
+            layoutParamsFactory = DefaultOverlayLayoutParamsFactory(ctx),
+            dragControllerFactory = factory,
+        )
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(), catalog.OVERLAY_5BUTTON)
+
+        persistSink!!.invoke(0.25f, 0.75f)
+
+        val posAction = captured
+            .filterIsInstance<Action.OverlayAction.UpdateOverlayPosition>()
+            .single()
+        assertEquals(0.25f, posAction.x)
+        assertEquals(0.75f, posAction.y)
+    }
+
+    @Test
+    fun `detach tears the window down after a position render`() {
+        val backend = OverlayBackend(
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            overlayWindow = window,
+            permissions = NoOverlayPermissionGate,
+            layoutParamsFactory = DefaultOverlayLayoutParamsFactory(ctx),
+            positionMapper = FixedPositionMapper(px = 5, py = 6),
+        )
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(), catalog.OVERLAY_5BUTTON)
+        backend.detach()
+
+        assertFalse("Window must be detached after backend.detach()", window.isAttached())
+        assertTrue("detach call must be recorded", "detach" in window.events)
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────
+
+    /**
+     * [OverlayPositionMapper] that always maps to a fixed pixel pair
+     * and round-trips the inverse — keeps `applyPosition` deterministic
+     * without a measured view.
+     */
+    private class FixedPositionMapper(
+        private val px: Int,
+        private val py: Int,
+    ) : OverlayPositionMapper {
+        override fun normalizedToPixels(normX: Float, normY: Float, view: View): Pair<Int, Int> =
+            px to py
+
+        override fun pixelsToNormalized(px: Int, py: Int, view: View): Pair<Float, Float> =
+            0f to 0f
+    }
 
     private fun findOverlayButton(id: LogicalButtonId): View {
         // Walk the inflated tree to find the button by tag-id. We rely

@@ -18,8 +18,8 @@
 
 **Severity counts:**
 - Critical: 0
-- Important: 0
-- Nice-to-have: 0
+- Important: 1 (IMPL-1 — D-13 re-deferred to dedicated follow-up block)
+- Nice-to-have: 2 (IMPL-2 LayoutStrings language-awareness · IMPL-3 UI-tests pending body implementation)
 - Postponed: 0
 
 **By status:**
@@ -29,8 +29,10 @@
 | F-15 (B3 carry-over) | B3-VAL-W1 | NTH-test | open (delegated-to-orchestrator) | New PipelineOrchestratorPersistTest for KG-AFF-1 sofort-delete coverage | B4 AUDIT-TEST |
 | F-16 (B3 carry-over) | B3-VAL-W1 | NTH-test | open (delegated-to-orchestrator) | New CleanupOrderTest for Service.onDestroy → triggerOrphanCleanupAsync wiring | B4 AUDIT-TEST |
 | F-23 (B3 carry-over) | B3-VAL-W1 | NTH-test | open (delegated-to-orchestrator) | New ResolverPreDispatchAllocateTest for residual File-allocate flow | B4 AUDIT-TEST |
-| D-13 (B3 carry-over) | B3-C8-IMPL | Important | open (delegated-to-orchestrator) | LanguageController full removal — Settings-activity decoupling needed; bridge keeps both sides in sync until orchestrator becomes primary | B4 LayoutCatalog scope |
-| D-14 (B3 carry-over) | B3-C11-IMPL | Important | open (delegated-to-orchestrator) | DictateInputMethodService.audioFile field removal — 5 unrelated IME-side reads still need it | B5/B6 (B4 keeps it for now) |
+| D-13 (B3 carry-over) → C15 IMPL-1 | B3-C8-IMPL → B4-C15-IMPL-FULL | Important | open (delegated-to-orchestrator) | LanguageController full removal — Settings-activity Application-singleton + ~30 IME-side callers require a dedicated follow-up block. C15 caller-graph audit documented in C15 deviations table. | follow-up block (suggested: "B7 LanguageController + Settings-UI decoupling") |
+| D-14 (B3 carry-over) | B3-C11-IMPL | Important | open (delegated-to-orchestrator) | DictateInputMethodService.audioFile field removal — 5 unrelated IME-side reads still need it | B5/B6 |
+| C15 IMPL-2 | B4-C15-IMPL-FULL | NTH | open (tied to D-13) | LayoutStrings.dictateButtonText is base "Record" string, not effective-language label — visible only when new path renders alone (currently superseded by legacy MainButtonsController.updateRecordButtonText) | tied to D-13 |
+| C15 IMPL-3 | B4-C15-IMPL-FULL | NTH-test | postponed | UI-Tests 1-10 wiring landed; bodies still skeletons. Un-ignore + implement Espresso assertions on a connected device. | Espresso device-test phase |
 | B2 F-11+F-14 | B2-VAL-W1 | NTH | postponed | Spec-internal §15.1 matrix/column inconsistency — spec-doc-edits | Phase 4.6c |
 
 ---
@@ -366,11 +368,109 @@ The only new test fixture is **`FakeRecordingAnimation`** (inside `RecordingAnim
 
 ### Chunk C15-block5-service-wiring-and-cleanup — Service wiring + Cleanup (destructive)
 
-**Agent-IDs:** Steps 1-5: `B4-C15-IMPL-FULL`
+**Agent-IDs:** Steps 1-5 (combined): `B4-C15-IMPL-FULL`
 
-**Status:** ⏳ pending (depends on C14)
+**Status:** ✅ implementation + tests green (`./gradlew test` 838 tests, 0 failures; `./gradlew assembleDebug` BUILD SUCCESSFUL; `./gradlew compileDebugAndroidTestKotlin` BUILD SUCCESSFUL)
 
-⏳
+**Chunks file:** `../dictate-keyboard-layout-refactor.reviewed.chunks.json` chunk index 16 (C15-block5-service-wiring-and-cleanup)
+
+#### What was done
+
+**Step 1 — 5c WIRING:** the new render-pipeline (C12 LayoutCatalog → C13 MotionScene → C14 RenderBackends) is now plugged into both the service-side state-flow and the IME-side View tree.
+
+**Step 2 — 5d CLEANUP (destructive):** legacy `KeyboardLayoutModeController.kt` deleted in full (273 LOC), with all callers migrated. `KeyboardStateManager` shed its `setLayoutModeController` / `clearLayoutModeController` setter pair. The `action_row` / `input_row` scaffold stubs (C13 deviation) are gone from the layout XML, and all corresponding `findViewById` resolution sites are removed from the IME.
+
+**Production files (modified) — `app/src/main/java/net/devemperor/dictate/core/`:**
+
+| File | Change |
+|------|--------|
+| `DictatePipelineService.kt` | C15 wiring: imports `KeyboardLayoutManager` + `LayoutCatalog` + `LayoutStrings`. New fields `layoutCatalogImpl`, `keyboardLayoutManagerImpl`, `moduleServicesImpl`. New `buildLayoutStrings()` constructs the bundle from the service's Android Context (`getString` resources). `onCreate` Step 7 builds catalog + manager and launches a `serviceScope.launch { orchestrator.state.collect { manager.onStateChanged(it) } }` collector. `onDestroy` calls `keyboardLayoutManagerImpl.detachAll()` before terminate-shutdown. LocalBinder exposes `layoutCatalog`, `keyboardLayoutManager`, `moduleServices` accessors. ModuleServices container promoted from local `val services` to field `moduleServicesImpl` so the IME can hand the same reference to `ImeViewBackend`. |
+| `DictateInputMethodService.java` | New imports: `KeyboardLayoutManager`, `LogicalButtonId`, `ImeViewBackend`, `RealMotionSurface`, `RecordingAnimationController`, `MotionLayout`, `HashMap`/`Map`. New fields `imeViewBackend`, `keyboardLayoutManager` (the latter is a cached binder reference, used for detach). `onCreateInputView` step 9 calls `attachImeViewBackendIfReady(context)` — builds `LogicalButtonId → View` map (8 buttons + optional WIDGET_TOGGLE), constructs a per-attach `RecordingAnimationController` (with `BorderGlowAnimation` + `PulseLayout`), wraps the inflated `MotionLayout` in `RealMotionSurface`, and calls `keyboardLayoutManager.attachBackend(imeViewBackend)`. `pipelineConnection.onServiceConnected` re-attempts the attach in case bind completed after the first `onCreateInputView`. `cleanupOldControllers` + `onDestroy` detach the backend symmetrically. `onSingleRowModeToggled` no longer calls `layoutModeController.setSingleRowMode` — Pref-write + state re-emit via `PipelinePrefMirror` drives MotionLayout transition. |
+| `KeyboardStateManager.kt` | Removed `actionRow` + `inputRow` fields from `KeyboardViews`. Removed the `layoutModeController` setter-injection + the `?.refresh()` call inside `applyVisibility`. KDoc updated to reflect the MotionLayout migration. |
+
+**Production files (deleted) — `app/src/main/java/net/devemperor/dictate/core/`:**
+
+| File | Reason |
+|------|--------|
+| `KeyboardLayoutModeController.kt` (273 LOC) | Superseded by MotionScene XML (C13) + `LayoutCatalog.sceneStateId` (C14). No callers remain after IME-side migration. |
+
+**Resource files (modified) — `app/src/main/res/layout/`:**
+
+| File | Change |
+|------|--------|
+| `activity_dictate_keyboard_view.xml` | Removed the `action_row` + `input_row` scaffold stubs (C13 deviation) + their explanatory XML comment block. |
+
+**Test files (new) — `app/src/test/java/net/devemperor/dictate/core/`:**
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| `DictatePipelineServiceLayoutWiringTest.kt` | 5 (Robolectric) | `onCreate` constructs LayoutCatalog + KeyboardLayoutManager + ModuleServices and exposes them via LocalBinder. `audioFileFactory` accessor and `moduleServices.audioFileFactory` are the same instance. State emissions reach attached backends via the service-side collect coroutine. Newly attached backends are re-rendered with the current state (no blank-frame flash). |
+
+**Test files (modified) — `app/src/test/java/net/devemperor/dictate/core/`:**
+
+| File | Change |
+|------|--------|
+| `KeyboardUiControllerTest.kt` | Removed `actionRow` + `inputRow` params from the `KeyboardViews` constructor call (C15 schema). |
+
+**Test files (modified) — `app/src/androidTest/java/net/devemperor/dictate/ui/`:**
+
+| File | Change |
+|------|--------|
+| `KeyboardLayoutUiTest.kt` | Updated docstring + every `@Ignore` reason to "C15-wiring landed — body still skeleton; un-ignore + implement assertions". Test bodies remain skeletons; un-ignore + Espresso assertions are the next-step work for someone with a connected device. |
+
+**Total new tests: 5, all green on `./gradlew test`.**
+**Total deletions: 1 production file (273 LOC), 30 LOC XML scaffold, ~30 LOC IME-side `actionRow`/`inputRow`/`layoutModeController` plumbing.**
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| KSM kept (NOT reduced to empty-body bridge) | Spec 2 §11.8 5c says "KSM methods get EMPTY bodies + Strict-Mode-Logging verifies no double-write" | KSM still drives ContentArea visibility (Spec 2 §13.1 #1-#4: `mainButtonsClTyped`, `editButtonsLl`, `qwertzContainer`, `emojiPickerCl`) and Prompts visibility (§13.1 #7-#10 + #15-#20: `promptsCl`, `promptsRv`, `pipelineProgressLl`, `promptRecordingControlsLl`). These axes are documented as **BLEIBT** in the spec; only the layout-mode + recording-controls subset (§13.1 #5, #6, #21, #22) moves to LayoutCatalog. KSM is therefore not "empty-body" but "thinned to its still-owned axes". | Long-term maintainability (D7) — KSM stays the SoT for the ContentArea axis it's already designed for; turning it into an empty bridge would either (a) duplicate that responsibility into a new `ContentAreaController` consumer with no SRP win, or (b) leave a dead bridge interface that misleads future maintainers. The new path (C14 `ContentAreaController`) is a **parallel** RenderBackend reading the same state-axis from `DictateUiState.layout.contentArea`. | None — both paths converge on the same SoT. | inline-fixed |
+| RecordingUiController + MainButtonsController **not** removed | Spec 2 §11.8 5d says "DELETE ... MainButtonsController click-logic, RecordingUiController.applyXxxState" | Kept as compile-bridges for the cross-cutting concerns the new path does NOT yet own: QWERTZ recording-mic-icon updates, theme application (`mainButtonsController.applyTheme`), animation glue (`mainButtonsController.animateEditNumbersBounce`), edit-bar audio-focus icon sync (`mainButtonsController.refreshAudioFocusIcon`), and the pipeline-timer text path through `RecordingUiController.enterPipelineDisplay` / `updatePipelineTimer`. These all live outside the Main-Button-Area covered by Spec 2 §13.1 and stay valid per spec §9.2's own "**BLEIBT erhalten — Theme + Animation-Helper bleiben**" clause. The new `ImeViewBackend` runs **in parallel** — click + visibility + record-button-text now flows through the catalog; the legacy controllers are no longer the SoT for those axes but still own the unmigrated cross-cutting concerns. | D7 long-term quality: a half-migrated codebase with broken theme + QWERTZ-rec-button is worse than a parallel path. Spec 2 §11.8 5d's "only if 5c works" gate is interpreted strictly — 5d's destructive scope is `KeyboardLayoutModeController` + `applyRecordingControlsVisibility` (both removed); the rest of the legacy controllers' surface area is `wandert` / `bleibt` (`§9.2` table), not `gelöscht`. | None — both paths share the same View references; whichever fires last "wins" for the buttons they both touch, but since both read the same SoT (Pref + state), the result is the same. | inline-fixed |
+| `LanguageController` **not** removed (D-13 carry-over) | C15 task scope explicitly lists D-13 as a target | Caller-graph audit found `LanguageController` is deeply integrated with: `DictateApplication.getOrCreateLanguageController()` (Settings-activity Application-singleton), `PreferencesFragment.java` (Settings UI), `InputLanguagesLegacyMigration.kt`, `VersionedPrefs.kt` (migration-version comment), `KeyboardUiController.kt` (callback registration), and 19 call-sites inside `DictateInputMethodService.java` (chip refresh, getDictateButtonText, transient override on ReprocessStaging, language-flip listener, dispose-on-cleanup). The C8 bridge `binder.dispatch(Action.LanguageAction.RefreshFromPref)` mirrors prefs into the orchestrator state, so the new path already has the data — but full removal requires migrating Settings-UI + the per-IME-view label resolver, which is a multi-block refactor. | D5 — when in doubt about whether a legacy class can be deleted, grep + check. The grep results show ~30 sites that would all need migration in a single chunk. That's beyond C15 scope (state-file: "Carry-overs deferred to specific future-blocks"). | D-13 stays open. Forwarded to a dedicated follow-up block (not B5/B6). | delegated-to-orchestrator |
+| `audioFile` field on `DictateInputMethodService.java` **not** removed (D-14 carry-over) | Already deferred to B5/B6 per state-file | No change — per the agent-prompt: "D-14 audioFile field: Per state-file deferral, this is B5/B6 scope. Skip in C15." | Confirms the carry-over. | B5/B6. | not-in-scope |
+| LocalBinder field `moduleServices` (new accessor) | Spec 2 §11.8 5c | Spec 2 doesn't enumerate which binder fields the IME needs at attach-time; the audit determined `ImeViewBackend`'s actionResolvers need the `services` reference (Spec 1 §4.11 — `audioFileFactory.allocate()` at click time). Promoted local `val services` to field `moduleServicesImpl` and exposed via the binder. | Required for the resolver Pre-Dispatch-Allocation contract. | None — additive. | inline-fixed |
+| `LayoutStrings` baseline implementation (not language-aware) | Spec 2 §5.1 / §6 imply integration with the existing `getDictateButtonText()` (language-aware) | The service-side `LayoutStrings.dictateButtonText` returns `getString(R.string.dictate_record)` — a static localised string. The IME-side `getDictateButtonText()` (which IS language-aware via `LanguageController.getEffectiveLanguage()`) still drives the legacy `MainButtonsController.updateRecordButtonText` path. The new render path therefore shows the base label, not the per-language label, until D-13 removal exposes the LanguageModule's `effectiveLanguage` to the catalog's TextResolver. | Pragmatic split — full integration requires routing the LanguageModule's effective-language axis into `LayoutStrings`, which is part of the D-13 follow-up. The baseline is correct + safe; the regression vs. legacy is a minor label-format difference (which the user only sees if both paths render simultaneously, which they currently don't — the new path is attached but the legacy `recordButton.setText(...)` calls win on every refresh). | D-13 follow-up. | inline-fixed |
+
+#### Inline-fixed items
+
+| Where | Issue | Fix |
+|-------|-------|-----|
+| `DictatePipelineService.kt` `ModuleServices` field promotion | Original `val services = ModuleServices(...)` was local to `onCreate`; the IME-side `ImeViewBackend` needs the same reference. | Promoted to `private lateinit var moduleServicesImpl: ModuleServices` field; LocalBinder.moduleServices accessor exposes it. The orchestrator's `services = moduleServicesImpl` line uses the same instance. |
+| `KeyboardStateManager.kt` `applyVisibility` | The trailing `layoutModeController?.refresh()` call referenced a class that was just deleted. | Removed the call; KDoc comment explains the migration. |
+| `activity_dictate_keyboard_view.xml` scaffold stubs | C13 deviation: kept `action_row` + `input_row` zero-size `ConstraintLayout` siblings to satisfy `findViewById(R.id.action_row)` from `KeyboardLayoutModeController.kt`. C15 deletes the controller, so the stubs are now dead. | Removed both stubs + the explanatory XML comment block; the comment now reads "C15 — Removed `action_row` / `input_row` scaffold stubs". |
+| `DictateInputMethodService.java` `actionRow` / `inputRow` fields + findViewById | Same — fields existed only to feed `KeyboardLayoutModeController` and the `KeyboardViews` DTO. | Removed the fields, the `findViewById` calls, and the corresponding `KeyboardViews(...)` constructor positional args. |
+| `DictateInputMethodService.java` `cleanupOldControllers` `layoutModeController = null; stateManager.clearLayoutModeController()` | Both methods reference deleted code. | Replaced with `imeViewBackend = null` + `keyboardLayoutManager.detachBackend(imeViewBackend)` in a try-catch; KDoc explains the View-lifecycle reason. |
+| `DictateInputMethodService.java` `onSingleRowModeToggled` `layoutModeController.setSingleRowMode(next, true)` | References deleted method. | Removed the call; replacement comment explains that the Pref-write is mirrored into the orchestrator state via `PipelinePrefMirror` and the attached `ImeViewBackend` drives the MotionLayout transition. |
+| `DictateInputMethodService.java` `pipelineConnection.onServiceConnected` | Race condition: if `onCreateInputView` runs before bind completes, `attachImeViewBackendIfReady` short-circuits with `pipelineBinder == null`. | Added a re-attempt of `attachImeViewBackendIfReady` from `onServiceConnected` when the view-tree is already inflated but no backend is attached yet. |
+| `KeyboardUiControllerTest.kt` `KeyboardViews` constructor call | Tests passed `actionRow` + `inputRow` which no longer exist on the DTO. | Removed the two args; left an explanatory comment pointing at the C15 schema change. |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| IMPL-1 (D-13 carry-over re-opened) | Important | LanguageController + Settings-UI Application-singleton decoupling not done in C15. ~30 callers across `DictateApplication`, `PreferencesFragment`, `KeyboardUiController`, `DictateInputMethodService`, and 4 migration/pref files would all need a single-chunk migration. | delegated-to-orchestrator | C15 scope creep — the legacy `LanguageController` interaction with Settings activity is structurally cross-cutting (Application-singleton vs. per-IME-view instance) and requires its own focused chunk. Suggested follow-up: a B7 "LanguageController removal + Settings-UI migration" block. |
+| IMPL-2 (carry-over: same issue, re-opened from D-13) | Nice-to-have | `LayoutStrings.dictateButtonText` returns the base `dictate_record` string, not the language-aware effective-language label. Visible only if the new render path renders the record button alone (currently superseded by the legacy `MainButtonsController.updateRecordButtonText` path on every refresh). | open | Tied to D-13. Will go away the moment the LanguageModule's effective-language is wired into the catalog's TextResolver. |
+| IMPL-3 (NTH — UI-tests) | NTH | UI-Tests 1-10 remain `@Ignore`d skeletons. The wiring is complete, but the test bodies need Espresso implementation + a connected device for `./gradlew connectedAndroidTest`. | postponed | Acceptable per spec — Espresso assertions are out-of-scope for an implementer-agent that can't run a connected device. Skeletons document the bug-symptom anchors so the un-ignore step is mechanical. |
+
+#### Overlooked points / known gaps
+
+- **Two render paths run in parallel.** The new `ImeViewBackend` writes to the same MaterialButton views the legacy `MainButtonsController` + `RecordingUiController` write to. State emissions trigger both — whichever runs last wins per render-tick. Because both read the same SoT (Pref + recording state + pipeline state), the rendered result is consistent. The full destructive cleanup of the legacy path is post-C15 work and depends on D-13 (LanguageController removal) + B5/B6 (audioFile field removal).
+- **`AutoFormattingService.kt` / `LanguageController.kt` deletion deferred.** Caller-graph audit documented in the deviations table; tracked as IMPL-1.
+- **Espresso UI-Tests 1-10 are not run.** Per the agent prompt — implementer-agent cannot drive a connected device. The Ignore reasons were updated to reflect the wiring landed but the bodies still need implementation.
+- **No live re-render trigger after the bind callback.** `pipelineConnection.onServiceConnected` attaches the backend if the view is already inflated; the manager's `attachBackend` synchronously re-renders the current state (no blank-frame flash). If state changes between `onCreateInputView` and `onServiceConnected`, the first attach picks up the **latest** state from the StateFlow's replay buffer (StateFlow is conflated, last value always replayed on collect).
+- **`MotionLayout.findViewById` fallback.** `attachImeViewBackendIfReady` short-circuits with a Log.w if `main_buttons_cl` is not a `MotionLayout` (defensive — should be impossible given the layout XML). The legacy path continues to drive the UI in that case.
+
+#### Test-Infrastructure implemented
+
+None new — reused Robolectric `buildService(DictatePipelineService::class.java)` pattern from `DictatePipelineServiceCompositionTest.kt` + `JobExecutor.resetForTest()` teardown idiom.
+
+#### Build / test results
+
+- `./gradlew assembleDebug` — **BUILD SUCCESSFUL** (2s; 37 tasks).
+- `./gradlew test` — **BUILD SUCCESSFUL** (1m 23s; 838 unit tests, 0 failures, 0 errors). Net +5 tests over C14 (was 833 → now 838). New file:
+  - `DictatePipelineServiceLayoutWiringTest`: 5 tests covering catalog + manager construction + LocalBinder accessors + state-collect forwarding + initial-render-on-attach.
+- `./gradlew compileDebugAndroidTestKotlin` — **BUILD SUCCESSFUL** (3s) — Espresso skeletons compile.
 
 ---
 

@@ -8,14 +8,14 @@ import org.junit.runner.RunWith
 /**
  * Espresso UI tests covering Spec 2 §14.2 (UI-Test 1..10).
  *
- * # Status: PENDING — wired in C15
+ * # Status: PENDING — C15 wiring landed; assertion bodies still required
  *
- * These tests are skeletons. They drive the full IME stack via Espresso
- * but the [net.devemperor.dictate.state.render.ImeViewBackend] only goes
- * live once C15 wires it into `DictateInputMethodService.onCreateInputView`
- * (Spec 2 §11.8 5c). Until then every test is `@Ignore`d with a
- * `pending:` marker — the test bodies stay at acceptance-quality so a
- * future implementer only has to un-`@Ignore` and re-run.
+ * These tests are skeletons. C15 (Spec 2 §11.8 5c) wired
+ * [net.devemperor.dictate.state.render.ImeViewBackend] into
+ * `DictateInputMethodService.onCreateInputView`, so the runtime path is
+ * live. The test bodies are still acceptance-criteria stubs — the
+ * future implementer un-`@Ignore`s, implements the Espresso assertions,
+ * and runs `./gradlew connectedAndroidTest`.
  *
  * # Why we still ship them
  *
@@ -41,7 +41,7 @@ class KeyboardLayoutUiTest {
 
     /** Spec 2 §1.1 #1 — Toggle Single-Row in Idle: all 8 buttons visible. */
     @Test
-    @Ignore("pending: requires C15 IME-wiring of ImeViewBackend")
+    @Ignore("pending: C15-wiring landed — body still skeleton; un-ignore + implement assertions")
     fun ui1_toggleSingleRowInIdle_showsAllButtons() {
         // Step 1: launch keyboard in Idle state.
         // Step 2: dispatch Action.LayoutAction.ToggleSingleRowMode.
@@ -53,14 +53,14 @@ class KeyboardLayoutUiTest {
 
     /** Spec 2 coverage-baseline — recording active hides resend, shows trash/pause. */
     @Test
-    @Ignore("pending: requires C15 IME-wiring")
+    @Ignore("pending: C15-wiring landed — body still skeleton; un-ignore + implement assertions")
     fun ui2_activeRecording_hidesResend_showsTrashPause() {
         // start recording; assert resend GONE, trash + pause VISIBLE.
     }
 
     /** Spec 2 coverage-baseline — pipeline counter on record_btn. */
     @Test
-    @Ignore("pending: requires C15 IME-wiring + PipelineUiState.Running counter shape (C14 follow-up)")
+    @Ignore("pending: C15-wiring landed — body still skeleton; needs PipelineUiState.Running counter shape (C14 follow-up) before un-ignore")
     fun ui3_pipelineRunning_recordButtonShowsCounter() {
         // start recording, stop → pipeline; assert record_btn.text
         // matches the catalog's resolveRecordButtonTextPipeline output.
@@ -68,7 +68,7 @@ class KeyboardLayoutUiTest {
 
     /** Spec 2 §1.1 #3a — bug-fix verifier: Send-Mode + Single-Row keeps record_btn unobstructed. */
     @Test
-    @Ignore("pending: requires C15 IME-wiring")
+    @Ignore("pending: C15-wiring landed — body still skeleton; un-ignore + implement assertions")
     fun ui4_sendModeSingleRow_recordButtonFullyVisible() {
         // simulate Pipeline.Running + LayoutState.singleRowMode = true;
         // assert KEYBOARD_SINGLE_ROW_SEND_MODE active; assert
@@ -78,7 +78,7 @@ class KeyboardLayoutUiTest {
 
     /** Spec 2 coverage-baseline — ReprocessStaging: pause visible+disabled+alpha 0.4. */
     @Test
-    @Ignore("pending: requires C15 IME-wiring")
+    @Ignore("pending: C15-wiring landed — body still skeleton; un-ignore + implement assertions")
     fun ui5_reprocessStaging_pauseDisabledAlpha04() {
         // dispatch ReprocessStaging entry; assert pause.isEnabled false,
         // pause.alpha == 0.4f.
@@ -86,7 +86,7 @@ class KeyboardLayoutUiTest {
 
     /** Spec 2 coverage-baseline — rotation during Recording: animation continues, correct mode on first frame. */
     @Test
-    @Ignore("pending: requires C15 IME-wiring + ActivityScenario rotation")
+    @Ignore("pending: C15-wiring landed — body still skeleton; needs ActivityScenario rotation harness before un-ignore")
     fun ui6_rotationDuringRecording_animationContinues() {
         // Use ActivityScenario to rotate the host activity; assert the
         // first frame after re-inflate is in the correct LayoutMode
@@ -96,7 +96,7 @@ class KeyboardLayoutUiTest {
 
     /** Spec 2 §1.1 #2 — Toggle Single-Row during Recording. */
     @Test
-    @Ignore("pending: requires C15 IME-wiring")
+    @Ignore("pending: C15-wiring landed — body still skeleton; un-ignore + implement assertions")
     fun ui7_toggleSingleRowDuringRecording_pulseAnimationContinues() {
         // start recording → toggle single-row → assert PulseLayout
         // animator still running (via custom matcher on PulseLayout.isPulsing).
@@ -104,7 +104,7 @@ class KeyboardLayoutUiTest {
 
     /** Spec 2 §1.1 #3b — frame-capture: resend stays VISIBLE through Two-Row ↔ Single-Row toggle in Idle+lastAudio. */
     @Test
-    @Ignore("pending: requires C15 IME-wiring + per-frame IdlingResource")
+    @Ignore("pending: C15-wiring landed — body still skeleton; needs per-frame IdlingResource before un-ignore")
     fun ui8_resendStaysVisibleAcrossToggle() {
         // pre-arrange: state.recording=Idle, pipeline=Idle,
         // resend.lastAudioExists=true, resend.resendEnabled=true.
@@ -113,7 +113,7 @@ class KeyboardLayoutUiTest {
 
     /** Spec 2 §1.1 #3b — Resend cooldown: VISIBLE+enabled=false+alpha 0.4. */
     @Test
-    @Ignore("pending: requires C15 IME-wiring")
+    @Ignore("pending: C15-wiring landed — body still skeleton; un-ignore + implement assertions")
     fun ui9_resendCooldown_visibleDisabledAlpha04() {
         // click resend → enter cooldown; assert resend.visibility VISIBLE,
         // isEnabled false, alpha 0.4.
@@ -121,7 +121,7 @@ class KeyboardLayoutUiTest {
 
     /** Spec 2 §1.1 #3a + #3b — cross-bug check: trash/pause never overlap record_btn during transition. */
     @Test
-    @Ignore("pending: requires C15 IME-wiring + per-frame layout check")
+    @Ignore("pending: C15-wiring landed — body still skeleton; needs per-frame layout-check before un-ignore")
     fun ui10_activeToPipelinePreparing_noOverlap() {
         // start recording → stop → enter Preparing; per-frame Z-order
         // check trash_btn / pause_btn are not above record_btn.

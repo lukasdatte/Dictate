@@ -207,8 +207,8 @@ class KeyboardUiControllerTest {
             promptTrashBtn = null,
             promptsRv = RecyclerView(themed),
             pipelineProgressLl = null,
-            actionRow = ConstraintLayout(themed),
-            inputRow = ConstraintLayout(themed),
+            // C15: actionRow + inputRow removed from KeyboardViews (MotionLayout owns
+            // the layout switch). KeyboardLayoutModeController is deleted.
             recordPulseLayout = View(themed),
             spaceButton = MaterialButton(themed),
             backspaceButton = MaterialButton(themed),

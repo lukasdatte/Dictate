@@ -9,167 +9,172 @@
     android:clipToPadding="false"
     android:background="@color/dictate_keyboard_background_light">
 
-    <LinearLayout
+    <!-- ════════════════════════════════════════════════════════════
+         Main button area — MotionLayout-rooted, flat button hierarchy.
+
+         See: docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/
+              research/2-keyboard-layout/2-keyboard-layout.reviewed.md §7.2
+              docs/decisions/0004-ui-layout-catalog-motionlayout.md §3
+
+         The old vertical LinearLayout + two nested ConstraintLayouts
+         (action_row / input_row) are gone (Spec 2 §11.1). All nine buttons
+         are now direct children of the MotionLayout; their positions live
+         in res/xml/motion_scene_keyboard.xml, NOT here. The only constraints
+         in this file are the MotionLayout's own placement inside the parent
+         ConstraintLayout.
+
+         Visibility is owned by LayoutCatalog (ADR-0004 §3 / Spec 2 §7.3) —
+         every state-driven button keeps an initial android:visibility hint
+         (so the layout-preview is sane) but MotionScene PropertySet entries
+         set visibilityMode="ignore" on each, so Catalog predicates win at
+         render time.
+         ════════════════════════════════════════════════════════════ -->
+    <androidx.constraintlayout.motion.widget.MotionLayout
         android:id="@+id/main_buttons_cl"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
         android:paddingStart="72dp"
         android:paddingEnd="16dp"
         android:clipChildren="false"
         android:clipToPadding="false"
+        app:layoutDescription="@xml/motion_scene_keyboard"
         app:layout_constraintTop_toBottomOf="@id/edit_buttons_keyboard_ll"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <!-- Row 1: Action buttons (record, resend, backspace) -->
-        <androidx.constraintlayout.widget.ConstraintLayout
-            android:id="@+id/action_row"
-            android:layout_width="match_parent"
+        <!-- record_pulse_layout — PulseLayout wrapper around record_btn (L7).
+             The wrapper is the direct MotionLayout child; record_btn lives
+             inside it. -->
+        <net.devemperor.dictate.widget.PulseLayout
+            android:id="@+id/record_pulse_layout"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:clipChildren="false"
-            android:clipToPadding="false">
-
-            <net.devemperor.dictate.widget.PulseLayout
-                android:id="@+id/record_pulse_layout"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                app:pulseCount="3"
-                app:pulseDuration="2000"
-                app:pulseStartAlpha="0.3"
-                app:pulseMaxRadiusFactor="1.4"
-                app:pulseStyle="fill"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintEnd_toStartOf="@+id/resend_btn"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toTopOf="parent">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/record_btn"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/dictate_record"
-                    android:textSize="14sp"
-                    android:maxLines="1" />
-
-            </net.devemperor.dictate.widget.PulseLayout>
+            app:pulseCount="3"
+            app:pulseDuration="2000"
+            app:pulseStartAlpha="0.3"
+            app:pulseMaxRadiusFactor="1.4"
+            app:pulseStyle="fill">
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/resend_btn"
-                android:layout_width="wrap_content"
+                android:id="@+id/record_btn"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:foreground="@drawable/ic_outline_change_circle_24"
-                android:foregroundGravity="center"
-                android:minWidth="0dp"
-                android:visibility="gone"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintEnd_toStartOf="@+id/backspace_btn"
-                app:layout_constraintStart_toEndOf="@+id/record_pulse_layout"
-                app:layout_constraintTop_toTopOf="parent"
-                tools:visibility="visible" />
+                android:text="@string/dictate_record"
+                android:textSize="14sp"
+                android:maxLines="1" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/backspace_btn"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:foreground="@drawable/ic_baseline_keyboard_backspace_24"
-                android:foregroundGravity="center"
-                android:minWidth="56dp"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintStart_toEndOf="@+id/resend_btn"
-                app:layout_constraintTop_toTopOf="parent" />
+        </net.devemperor.dictate.widget.PulseLayout>
 
-            <!-- Block 2: audio-focus toggle (Single-Row variant). Permanently
-                 hosted in the action_row regardless of the active layout mode;
-                 visibility is gated by SingleRowMode (see Block 1, Chunk 3).
-                 Initial constraints overlap backspace_btn while gone — Chunk 3's
-                 KeyboardLayoutModeController will re-parent the row's children
-                 into a single-row chain when SingleRowMode is enabled. -->
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/audio_focus_btn"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:foreground="@drawable/ic_baseline_volume_off_24"
-                android:foregroundGravity="center"
-                android:minWidth="56dp"
-                android:visibility="gone"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintTop_toTopOf="parent"
-                tools:visibility="gone" />
-
-        </androidx.constraintlayout.widget.ConstraintLayout>
-
-        <!-- Row 2: Input buttons (trash, space, pause, enter) -->
-        <androidx.constraintlayout.widget.ConstraintLayout
-            android:id="@+id/input_row"
-            android:layout_width="match_parent"
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/resend_btn"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
-            android:clipChildren="false"
-            android:clipToPadding="false">
+            android:foreground="@drawable/ic_outline_change_circle_24"
+            android:foregroundGravity="center"
+            android:minWidth="0dp"
+            android:visibility="gone"
+            tools:visibility="visible" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/trash_btn"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:foreground="@drawable/ic_baseline_delete_24"
-                android:foregroundGravity="center"
-                android:minWidth="0dp"
-                android:visibility="gone"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintEnd_toStartOf="@id/space_btn"
-                app:layout_constraintTop_toTopOf="parent"
-                tools:visibility="visible" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/backspace_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:foreground="@drawable/ic_baseline_keyboard_backspace_24"
+            android:foregroundGravity="center"
+            android:minWidth="56dp" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/space_btn"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                app:layout_goneMarginStart="0dp"
-                android:layout_marginEnd="8dp"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintEnd_toStartOf="@+id/pause_btn"
-                app:layout_constraintStart_toEndOf="@+id/trash_btn"
-                app:layout_constraintTop_toTopOf="parent" />
+        <!-- widget_toggle_btn — opens the floating WIDGET overlay (Spec 3
+             OPEN-2 / Phase-1-1.0.2). Catalog hides it during pipeline /
+             reprocess-staging; position lives in MotionScene. Placeholder
+             icon (change_circle) until B5 ships a dedicated drawable. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/widget_toggle_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:foreground="@drawable/ic_outline_change_circle_24"
+            android:foregroundGravity="center"
+            android:minWidth="56dp"
+            android:visibility="gone"
+            tools:visibility="visible" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/pause_btn"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:foreground="@drawable/ic_baseline_pause_24"
-                android:foregroundGravity="center"
-                android:minWidth="0dp"
-                android:visibility="gone"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintEnd_toStartOf="@+id/enter_btn"
-                app:layout_constraintStart_toEndOf="@id/space_btn"
-                app:layout_constraintTop_toTopOf="parent"
-                tools:visibility="visible" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/audio_focus_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:foreground="@drawable/ic_baseline_volume_off_24"
+            android:foregroundGravity="center"
+            android:minWidth="56dp"
+            android:visibility="gone"
+            tools:visibility="gone" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/enter_btn"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:foreground="@drawable/ic_baseline_subdirectory_arrow_left_24"
-                android:foregroundGravity="center"
-                android:minWidth="56dp"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintStart_toEndOf="@id/pause_btn"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintTop_toTopOf="parent" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/trash_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:foreground="@drawable/ic_baseline_delete_24"
+            android:foregroundGravity="center"
+            android:minWidth="0dp"
+            android:visibility="gone"
+            tools:visibility="visible" />
 
-        </androidx.constraintlayout.widget.ConstraintLayout>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/space_btn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content" />
 
-    </LinearLayout>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/pause_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:foreground="@drawable/ic_baseline_pause_24"
+            android:foregroundGravity="center"
+            android:minWidth="0dp"
+            android:visibility="gone"
+            tools:visibility="visible" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/enter_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:foreground="@drawable/ic_baseline_subdirectory_arrow_left_24"
+            android:foregroundGravity="center"
+            android:minWidth="56dp" />
+
+    </androidx.constraintlayout.motion.widget.MotionLayout>
+
+    <!-- ════════════════════════════════════════════════════════════
+         Legacy `action_row` / `input_row` scaffold stubs (C13 deviation).
+
+         The MotionLayout refactor (Spec 2 §7 / §11.1) flattens all nine
+         buttons into direct MotionLayout children — the two wrapper
+         ConstraintLayouts are conceptually gone. The legacy controllers
+         (`KeyboardLayoutModeController`, `KeyboardStateManager.KeyboardViews`,
+         `DictateInputMethodService.actionRow/inputRow`) still resolve these
+         IDs and would fail to compile / NPE without them.
+
+         These two stubs exist ONLY so the legacy resolution chain stays
+         compile-green between C13 and C15. C15 deletes the controllers
+         and these stubs in one step (Spec 2 §11.8 5d). They live OUTSIDE
+         the MotionLayout (siblings within the root ConstraintLayout) so
+         the scene's flat-hierarchy guarantee holds, with
+         android:visibility="gone" + zero size so they don't influence
+         layout at runtime.
+         ════════════════════════════════════════════════════════════ -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/action_row"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/input_row"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/info_cl"

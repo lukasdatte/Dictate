@@ -20,7 +20,7 @@ Single overview of every issue in this block — populated as the block progress
 
 **Severity counts:**
 - Critical: 0
-- Important: 0
+- Important: 1
 - Nice-to-have: 2
 - Postponed: 0
 
@@ -28,7 +28,7 @@ Single overview of every issue in this block — populated as the block progress
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
-| IMPL-1 (B1 carry-over) | B1-C2-IMPL-FULL | Important | open (delegated-to-orchestrator) | Spec 1 §11.2.2 Block-2 sub-step 7: JobExecutor-Init move from IME `onCreate` to Service `onCreate` (requires full PipelineOrchestrator from C4) | C7 scope (unblocked by C4) |
+| IMPL-1 (B1 carry-over) | B1-C2-IMPL-FULL | Important | delegated-to-orchestrator (re-deferred to Block 3 / C8) | Spec 1 §11.2.2 Block-2 sub-step 7: JobExecutor-Init move from IME `onCreate` to Service `onCreate` — **NOT moved in C7 per D5**: the move requires the Service to construct the legacy `PipelineOrchestrator` (12-arg constructor with `AIOrchestrator`, `AutoFormattingService`, `PromptQueueManager`, `SessionManager`, `SessionTracker`, IME-implemented `PipelineCallback`, …). Those subsystems are IME-scoped today; rewriting their construction into the service is Block 3 (subsystem-adapter migration, chunk C8) scope. C7 wires the **new** `DictateOrchestrator` into the service — the LEGACY `PipelineOrchestrator` stays IME-owned until C8. | C7 scope per IMPL-1 brief; re-deferred per D5 (subsystem-impls not in C7 scope) |
 | IMPL-2 | B2-C5-IMPL-FULL | Nice-to-have | open | `OverlayModule.Effect.DeleteAudioFile` is defined but never emitted (cancel-cascade routes file-delete through RecordingModule). | C5-modules-core |
 | IMPL-3 | B2-C5-IMPL-FULL | Nice-to-have | open | `PipelineModule.runEffect` uses `services.scope.launch` for the suspend `sessionRepo.markInserted/markFailed` DB call (per `ModuleServices.scope` KDoc — acceptable fire-and-forget pattern). | C5-modules-core |
 
@@ -766,10 +766,280 @@ Per the combined-step pattern, test writing + review are inline in the IMPL pass
 
 **Agent-IDs:** Steps 1-5 (combined): `B2-C7-IMPL-FULL`
 
-**Status:** ⏳ pending (depends on C6)
+**Status:** ✅ done (pending orchestrator commits)
 **Chunks file:** `../dictate-keyboard-layout-refactor.reviewed.chunks.json` chunk index 8 (C7-prefmirror-recovery-wiring)
+**Implementation-Commit:** ⏳ (Commit 1 — production code)
+**Test-Commit:** ⏳ (Commit 2 — tests)
 
-⏳
+#### Implementation (B2-C7-IMPL)
+
+**What was done:** Wired the modular-orchestrator composition root
+into `DictatePipelineService` per Spec 1 §4 + §7.3 + §11.2.2. Five
+production-code files touched / added:
+
+**Files created (production):**
+
+- `app/src/main/java/net/devemperor/dictate/state/PipelinePrefMirror.kt` —
+  Spec 1 §4.5 verbatim. Mirrors the 19 UI-state-relevant prefs (3
+  layout + 3 audio + 1 resend + 4 features + 4 theming + 4 overlay
+  positions via raw keys consistent with `OverlayModule.Effect.PersistOverlayPosition`)
+  on `attach`, and registers an `OnSharedPreferenceChangeListener` to
+  mirror subsequent changes on a per-key basis. `applyChange(current, key)`
+  is exposed `internal` so unit tests exercise the switch without
+  driving the Android listener mechanism. `detach()` unregisters the
+  listener.
+- `app/src/main/java/net/devemperor/dictate/state/PipelineRecovery.kt` —
+  Spec 1 §4.6 baseline. `suspend recover(store)` calls
+  `sessionRepo.loadPending()` and writes the result into
+  `state.pendingSessions` as a `PersistentList`. Single-call, idempotent.
+  Full Spec 1 §6.3 recovery algorithm (status promotion, ghost-session
+  cleanup) is Block 3 scope.
+- `app/src/main/java/net/devemperor/dictate/state/PipelineServiceStubSubsystems.kt` —
+  C7-only production-side **no-op stubs** for the 11 subsystem
+  interfaces in `ModuleServices` (`RecordingHardwareSubsystem`,
+  `BluetoothScoSubsystem`, `AudioFocusSubsystem`, `RecordingTimerSubsystem`,
+  `AmplitudeStreamSubsystem`, `BorderGlowSubsystem`,
+  `PipelineRunnerSubsystem`, `PipelineSessionRepoSubsystem`,
+  `PipelineNotificationCoordinatorSubsystem`, `ToastSink`,
+  `AudioFileFactory`). Each `runEffect`-driven call logs at WARN with
+  a "B3 fills this" marker. The `ToastSink` has a **production-quality
+  variant** (`realToastSink(applicationContext)`) bound to the system
+  Toast — user-visible errors surface today via the stub. Per D5: the
+  real adapter implementations land in Block 3 (chunk C8); these stubs
+  are the contract surface until then.
+
+**Files modified (production):**
+
+- `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt` —
+  full rewrite of `onCreate`/`onDestroy` to host the composition root
+  (Spec 1 §7.3). `onCreate` builds `DictateUiStateStore → ModuleServices
+  → PipelinePrefMirror → PipelineRecovery → DictateOrchestrator` in
+  the binding order. After construction, calls
+  `DictateModuleRegistry.assertCompleteCoverage()` to fail fast on a
+  missing module registration. `onDestroy` calls `orchestrator.shutdown()`
+  **before** `serviceScope.cancel()` per the Spec 1 §4.3 Aufrufer-
+  Vertrag. `LocalBinder` signature changes:
+  - `dispatch(action: Any)` → `dispatch(action: Action): DispatchOutcome`
+    — typed surface (forwards to `orchestrator.dispatch`).
+  - new `state: StateFlow<DictateUiState>` getter — exposes
+    `orchestrator.state` for the IME to `collect { … }`.
+  - removed `dispatchInvocationCount`, `notificationChannelReady` is
+    kept as a test hook (channel-order acceptance).
+- `app/src/main/java/net/devemperor/dictate/state/DictateOrchestrator.kt` —
+  constructor extended with two nullable args:
+  `prefMirror: PipelinePrefMirror? = null` and
+  `recovery: PipelineRecovery? = null`. Init block calls
+  `prefMirror.attach(store)` **synchronously** before
+  `scope.launch { recovery.recover(store) }` (Spec 1 §4.3 +
+  §11.2.2 Block-1b sub-steps 7-8). `shutdown()` updated to call
+  `prefMirror?.detach()` first.
+- `app/src/main/java/net/devemperor/dictate/state/DictateModuleRegistry.kt` —
+  added `fun assertCompleteCoverage()`. Iterates
+  `Action::class.sealedSubclasses`, asserts every direct subclass
+  except `Action.EffectFailure` is claimed by a module in `all`. Called
+  by `DictatePipelineService.onCreate` after the orchestrator is wired.
+  The looser `validate()` already runs in `init {}`; the strict check
+  is a separate entry point so tests with subset registries skip it.
+
+**Files modified (testutil):**
+
+- `app/src/test/java/net/devemperor/dictate/testutil/FakeSharedPreferences.kt` —
+  C7 update: previously a no-op for `register/unregister` listener;
+  now records listeners and dispatches change notifications on
+  `Editor.apply()`/`commit()`. Required by the listener-path tests for
+  `PipelinePrefMirror`. The change is additive (listener list is empty
+  by default).
+
+**Files added (test):**
+
+- `app/src/test/java/net/devemperor/dictate/state/PipelinePrefMirrorTest.kt`
+  (17 tests) — `attach` with empty SP / per-axis snapshot tests
+  (layout 3, audio 3, resend 1, features 4, theming 4, overlay 4 = 19);
+  `applyChange` per-key routing tests (15 typed prefs + 4 overlay raw
+  keys + unknown-key + null-key); listener-firing path; `detach`
+  unregister verification; non-mirror-axis preservation.
+- `app/src/test/java/net/devemperor/dictate/state/PipelineRecoveryTest.kt`
+  (6 tests) — `recover` empty / non-empty / order-preservation /
+  idempotency / re-run-overwrite / non-mutation of other sub-states.
+- `app/src/test/java/net/devemperor/dictate/state/DictateOrchestratorInitOrderTest.kt`
+  (5 tests) — `prefMirror.attach` synchronous-during-init; recovery
+  sees post-PrefMirror state (Phase-B S-1 init-order acceptance);
+  recovery writes `pendingSessions`; shutdown detaches the SP listener;
+  legacy null-prefMirror/null-recovery construction path.
+- `app/src/test/java/net/devemperor/dictate/state/DictateModuleRegistryCoverageTest.kt`
+  (3 tests) — production registry passes; missing module throws
+  with a locatable error message; EffectFailure is correctly excluded
+  from the coverage requirement.
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceTest.kt`
+  — updated `localBinderDispatch_isNoOp_butCountsInvocations` to
+  `localBinderDispatch_forwardsToOrchestrator_andReturnsTypedOutcome`
+  (new contract). Added `localBinderState_exposesOrchestratorStateFlow`,
+  `onCreate_wiresOrchestrator_andPrefMirrorRunsBeforeBindReturn`,
+  `onDestroy_runsOrchestratorShutdown_beforeScopeCancellation`,
+  `onCreate_succeeds_withDefaultProductionRegistry`.
+
+**Build-config files modified:**
+
+- `gradle/libs.versions.toml` + `app/build.gradle` — added
+  `kotlinx-coroutines-test` (test-scope only) for `TestScope` +
+  `advanceUntilIdle` in `DictateOrchestratorInitOrderTest`.
+
+**Plan deviations:**
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| `OverlayPositionPortrait/LandscapeX/Y` use raw string keys instead of `Pref.*` entries | Spec 1 §4.5 references `Pref.OverlayPositionPortraitX` etc. | The `Pref` keys do NOT exist in `DictatePrefs.kt` today. `OverlayModule.Effect.PersistOverlayPosition` writes the raw keys `overlay_pos_portrait_x` etc. directly. PipelinePrefMirror uses the same raw keys, exposed as `companion object` constants for test reuse. | Spec 1 §4.5 snippet implicitly assumed the `Pref` entries; promoting them is a Phase-2 cleanup, not C7 scope. | Phase 2 cleanup may add `Pref.OverlayPositionPortraitX/Y`; the constants in `PipelinePrefMirror` become forwarders. | inline-fixed (small + locally decidable) |
+| Production-side subsystem stubs in `PipelineServiceStubSubsystems.kt` instead of real adapters | Spec 1 §7.3 composition root snippet calls `RecordingHardware(audioManager, ...)`, `BluetoothScoSubsystem(...)`, etc. | The real adapter classes don't exist yet — Block 3 / chunk C8 (subsystem-adapter migration) builds them. Per D5: "Don't invent subsystem impls C7 has no scope for." Stubs log a "B3 fills this" marker so the cost of any module's `runEffect` call surfaces in logcat. | Block 3 / chunk C8 swaps each `PipelineServiceStubSubsystems.<x>` reference for the real adapter. The wiring shape stays the same. | inline-fixed (D5 — small + locally decidable + documented) |
+| `JobExecutor.initialize` move from IME to Service **NOT done in C7** | Spec 1 §11.2.2 Block-2 sub-step 7 (carry-over IMPL-1) | The move requires constructing the legacy `PipelineOrchestrator(...)` (12-arg) inside the service — those 12 dependencies (AIOrchestrator with API-key Pref reads, AutoFormattingService, PromptQueueManager, SessionManager, SessionTracker, the IME-implemented PipelineCallback, …) are IME-scoped today; rewriting their construction into the service is the body of Block 3 (subsystem-adapter migration). Per D5: "Don't invent subsystem impls C7 has no scope for." | The IME still owns the legacy `PipelineOrchestrator` instance + the `JobExecutor.initialize` call. The **new** `DictateOrchestrator` is service-owned (this chunk). Block 3 (chunk C8) absorbs the JobExecutor move as part of the broader subsystem migration. | IMPL-1 stays `delegated-to-orchestrator`, re-deferred to C8. |
+| `DictateOrchestrator` constructor adds `prefMirror` + `recovery` as **nullable** args (not required) | Spec 1 §4.3 lists them as positional non-null params | Pre-C7 tests (DictateOrchestratorTest, DictateOrchestratorCascadeOrderTest, etc.) construct the orchestrator without these — making them required would force a touch of every existing test. Nullable defaults preserve backward-compat. | None — production wiring always supplies both. | inline-fixed (small + locally decidable) |
+| `DictateUiStateObserver.kt` Java bridge NOT added in C7 | Spec 1 §4.4 calls it a Block-2 acceptance pre-condition | The IME-side does NOT consume `binder.state` yet — the existing IME callbacks (`PipelineCallback`, `RecordingStateController.Callback`, etc.) still drive UI updates. The Java bridge is needed when the IME migrates onto `binder.state.collect`; that's Block 3 / chunk C8 territory along with the subsystem migration. | Block 3 / chunk C8 adds `DictateUiStateObserver.kt` when the first Java IME consumer subscribes to state. | flagged-for-validate (smaller deviation, but B3 may want to add the bridge proactively when planning C8) |
+
+**Issues:**
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|-------------|--------|--------|
+| (none new) | — | — | — | — |
+
+The B1 carry-over `IMPL-1` is re-deferred to Block 3 / C8 (see Issue Index above).
+
+**Inline-fixed items:**
+
+- All four plan deviations above are inline-fixed (small + locally
+  decidable, per Iter-10 D7 inline-fix-scope rule).
+
+**Overlooked points / known gaps:**
+
+- The **legacy** `PipelineOrchestrator` (audio-pipeline runner, distinct
+  from the new `DictateOrchestrator` state-action-router) remains IME-
+  owned. Two PipelineOrchestrator types now co-exist with the
+  IME-vs-Service split (Spec 1 §1.x naming-convention). Block 3 / C8
+  consolidates.
+- The C7 stubs in `PipelineServiceStubSubsystems` are deliberately
+  **silent** for the duration of any test that calls `binder.dispatch`
+  with a state-mutating action — `runEffect` logs the WARN but does
+  not surface to the caller. That's a feature (the test asserts on
+  `DispatchOutcome`, not on the side-effect's success), but a future
+  test that checks "the right effect ran" must use a counting fake
+  in place of the stub.
+
+#### Plan-Correctness Fix (B2-C7-IMPL-PLAN-FIX)
+
+Re-read Spec 1 §4.3 (orchestrator constructor + shutdown contract),
+§4.5 (PrefMirror), §4.6 (Recovery), §4.8 (registry assertCompleteCoverage),
+§7.3 (composition root snippet), §11.2.2 (Block-1b sub-steps 5-8) +
+ADR-0001 / ADR-0003. Findings:
+
+- `prefMirror.attach(store)` runs synchronously in the orchestrator
+  constructor BEFORE the async `recovery.recover` launch — verified
+  by `DictateOrchestratorInitOrderTest`.
+- `shutdown()` calls `prefMirror?.detach()` FIRST so a late SP-listener-
+  fire cannot write into the dying store — verified by
+  `DictateOrchestratorInitOrderTest.shutdown_calls_prefMirror_detach`.
+- `LocalBinder.state` is read-only and forwards `orchestrator.state`;
+  `LocalBinder.dispatch(action: Action)` returns the typed
+  `DispatchOutcome` — verified by `DictatePipelineServiceTest`.
+- `DictateModuleRegistry.assertCompleteCoverage()` is invoked AFTER
+  all C5/C6 modules are wired (in `Service.onCreate`) — the production
+  singleton passes; the negative-path test pins the error message.
+- The four plan-deviations are each small or D5-driven; no
+  architecture-conflict.
+
+#### Self-Code Fix (B2-C7-IMPL-CODE-FIX)
+
+Code-quality review against `knowledge-doc-format` + Spec 1 §4 + ADR-0001
++ ADR-0003:
+
+- KDoc on every public type carries `@see` anchors into the relevant
+  Spec § / ADR / architecture-doc paths (per the project's Inline-
+  Anchor convention).
+- All `runEffect`-handling stub overrides use **block bodies** (not
+  expression bodies) so `Log.w` (returns `Int`) doesn't break the
+  `Unit` return type — caught + fixed during build.
+- `DictateModuleRegistry.assertCompleteCoverage` exclusion list
+  documents the `EffectFailure` special-case + the ProGuard dependency.
+- `DictatePipelineService.onCreate` ordering comment makes the
+  composition-root construction-sequence (Store → Services → PrefMirror
+  + Recovery → Orchestrator → coverage-check) reviewer-greppable.
+- `PREFS_NAME = "net.devemperor.dictate"` pinned as a constant so the
+  service uses the **same** SP file as the IME (otherwise the pref-mirror
+  would read a different file from the one the user wrote to).
+- Forward-reference `emitAction = { action -> orchestrator.emitAction(action) }`
+  in `ModuleServices` resolves at first invocation, not at construction
+  — documented in the constructor.
+
+#### Tests (B2-C7-IMPL-TEST)
+
+Wrote four new test classes (34 tests total, pure-JVM except the
+service test which is Robolectric per K-4 exception):
+
+| File | Tests | Coverage focus |
+|------|-------|----------------|
+| `PipelinePrefMirrorTest.kt` | 17 | attach with empty / per-axis SP (19 prefs); applyChange per-key routing (15 typed + 4 raw overlay keys); unknown-key + null-key no-op; listener-firing path; detach; non-mirror-axis preservation; data-class-equal sub-state |
+| `PipelineRecoveryTest.kt` | 6 | empty repo; non-empty PersistentList write; order preservation; idempotency; re-run overwrite (not union); non-mutation of other sub-states |
+| `DictateOrchestratorInitOrderTest.kt` | 5 | prefMirror.attach synchronous-during-init (Phase-B S-1); recovery sees post-PrefMirror state; recovery writes pendingSessions; shutdown detaches SP listener; legacy null-prefMirror/null-recovery construction |
+| `DictateModuleRegistryCoverageTest.kt` | 3 | production registry passes assertCompleteCoverage; missing-module throws with locatable msg; EffectFailure excluded |
+
+Plus `DictatePipelineServiceTest.kt` updated with 4 new wiring tests
+(localBinder.dispatch → orchestrator routing, localBinder.state, pref-
+mirror-before-bind-return, registry-coverage at service startup).
+Total Robolectric service tests are now 13 (was 9).
+
+**Code-bugs found while writing tests:** none — all tests went green
+on the first run after fixing two test-side assumptions (identity vs
+equality of `data class.copy()` results; `DictateUiState.initial()`
+returns a new instance each call so cross-call `assertSame` is
+incorrect). Both fixes are in the test file only; production code is
+correct.
+
+**Test results:**
+
+```
+> Task :app:testDebugUnitTest
+BUILD SUCCESSFUL — 529 tests, 0 failures (debug + release both green)
+```
+
+Test breakdown: 495 pre-C7 + 34 new C7 = 529.
+
+#### Test-Review (B2-C7-IMPL-TEST-FIX)
+
+- All Plan-AC for C7 covered:
+  - **PrefMirror**: 19-pref initial-snapshot path, per-key listener
+    routing, detach lifecycle. Includes the Phase-B S-1 init-order
+    acceptance (recovery sees post-PrefMirror state).
+  - **Recovery**: baseline (load → write to pendingSessions);
+    Block-3 algorithm tests deferred to C9/C10 with the DB migration.
+  - **Wiring**: orchestrator composed in Service.onCreate; LocalBinder
+    forwards to orchestrator; LocalBinder.state exposes the StateFlow.
+  - **assertCompleteCoverage**: production registry passes; subset
+    registry fails with locatable diagnostic; EffectFailure excluded.
+- Edge cases pinned:
+  - **Order**: PrefMirror BEFORE Recovery (verified by recovery seeing
+    a mirrored pref value during its loadPending callback).
+  - **Detach lifecycle**: post-shutdown SP writes do NOT mutate the
+    store (regression test for the inverse bug-class).
+  - **Non-mirror axes preserved**: attach doesn't touch `recording`,
+    `pipeline`, `viewMode`, `livePrompt`, `language`, `pendingSessions`,
+    `lastResultNeedsManualPaste`.
+- One `experimental coroutines API` warning surfaced; added
+  `@file:OptIn(ExperimentalCoroutinesApi)` to silence at file scope.
+
+**Code-bugs found during test self-review:** none.
+
+#### Build verification
+
+```
+./gradlew test  → BUILD SUCCESSFUL (529 tests, 0 failures; debug + release variants)
+```
+
+#### IMPL-1 status update (B1 carry-over)
+
+Re-deferred to Block 3 / chunk C8 (subsystem-adapter migration) per
+D5 reasoning above. The actual move requires the Service to own the
+construction of `AIOrchestrator`, `AutoFormattingService`,
+`PromptQueueManager`, `SessionManager`, `SessionTracker`, and the
+`PipelineCallback` role — all IME-scoped today. C8 absorbs them
+naturally as part of subsystem migration. Issue stays open with the
+clear target.
 
 ---
 

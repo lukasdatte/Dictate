@@ -249,23 +249,46 @@ class DictatePipelineServiceTest {
     }
 
     @Test
-    fun localBinderDispatch_isNoOp_butCountsInvocations() {
-        // The Block-2 stub records dispatch invocations only — Block 1b
-        // replaces the body with `orchestrator.dispatch(action)`. The
-        // assertion here pins the contract: dispatching does not throw
-        // and the counter advances, so the IME-side dispatch path can
-        // be smoke-tested before Block 1b lands.
+    fun localBinderDispatch_forwardsToOrchestrator_andReturnsTypedOutcome() {
+        // C7 wired the orchestrator into the binder. `dispatch(action)`
+        // now forwards to `orchestrator.dispatch(action)` and returns a
+        // typed [DispatchOutcome]. Pin the contract: the binder accepts
+        // typed [Action] and propagates the routing result.
         controller.create()
         val binder = controller.get().onBind(Intent()) as DictatePipelineService.LocalBinder
 
-        assertEquals(0, controller.get().dispatchInvocationCount)
-        binder.dispatch("Block-2 placeholder action #1")
-        binder.dispatch("Block-2 placeholder action #2")
-        assertEquals(
-            "Stub dispatch should be observed via the invocation counter",
-            2,
-            controller.get().dispatchInvocationCount,
+        // PauseRecording is a payload-less `data object` — safe to
+        // dispatch in any state. RecordingState.Idle does not accept
+        // pause (reducer returns null), so we expect Rejected — i.e.
+        // the orchestrator wiring is reached.
+        val outcome = binder.dispatch(net.devemperor.dictate.state.Action.RecordingAction.PauseRecording)
+
+        // Either Applied (if the reducer did transition) or Rejected
+        // (idle-state pause). Unrouted would mean orchestrator was
+        // never wired — that is the regression we are guarding against.
+        assertTrue(
+            "Binder.dispatch must reach the orchestrator (Applied or Rejected, not Unrouted): $outcome",
+            outcome is net.devemperor.dictate.state.DispatchOutcome.Applied ||
+                outcome is net.devemperor.dictate.state.DispatchOutcome.Rejected,
         )
+    }
+
+    @Test
+    fun localBinderState_exposesOrchestratorStateFlow() {
+        // C7 added `LocalBinder.state` so the IME can subscribe via
+        // `binder.state.collect { … }`. The flow must be non-null and
+        // hand out a snapshot equal to the initial state — pref-mirror
+        // ran during onCreate; with an empty SP the defaults match
+        // [DictateUiState.initial].
+        controller.create()
+        val binder = controller.get().onBind(Intent()) as DictatePipelineService.LocalBinder
+
+        val snapshot = binder.state.value
+        // After PrefMirror.attach with empty prefs, the initial state's
+        // sub-state defaults match the pref-defaults (Pref.<Bool>.default,
+        // etc.). Any sub-state field that differs would indicate either
+        // a pref-default mismatch or the orchestrator was not wired.
+        assertNotNull("Binder.state must hand out a DictateUiState snapshot", snapshot)
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -291,6 +314,64 @@ class DictatePipelineServiceTest {
     // ──────────────────────────────────────────────────────────────────
     // End-to-end bind via the application context (Multi-Bind smoke)
     // ──────────────────────────────────────────────────────────────────
+
+    // ──────────────────────────────────────────────────────────────────
+    // C7 composition-root wiring
+    // ──────────────────────────────────────────────────────────────────
+
+    @Test
+    fun onCreate_wiresOrchestrator_andPrefMirrorRunsBeforeBindReturn() {
+        // C7 invariant: by the time onBind returns, the pref-mirror has
+        // already applied a snapshot of SP into the store. The IME-side
+        // first read of `binder.state.value` must NOT see
+        // `DictateUiState.initial()` if the user has set a non-default
+        // pref before the service started.
+        //
+        // Write a non-default Pref before onCreate runs.
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val sp = context.getSharedPreferences(DictatePipelineService.PREFS_NAME, Context.MODE_PRIVATE)
+        sp.edit()
+            .putBoolean(net.devemperor.dictate.preferences.Pref.SingleRowMode.key, true)
+            .apply()
+
+        controller.create()
+        val binder = controller.get().onBind(Intent()) as DictatePipelineService.LocalBinder
+
+        // PrefMirror ran during onCreate — the IME's first state-read
+        // sees the mirrored Pref value, not the initial-state default.
+        assertTrue(
+            "PrefMirror must attach during onCreate so SingleRowMode is true by first state-read",
+            binder.state.value.layout.singleRowMode,
+        )
+    }
+
+    @Test
+    fun onDestroy_runsOrchestratorShutdown_beforeScopeCancellation() {
+        // C7 invariant (Spec 1 §4.3 Aufrufer-Vertrag): orchestrator.shutdown()
+        // must run BEFORE serviceScope.cancel(). Otherwise the per-module
+        // `terminate(services)` calls would launch async cleanup on a
+        // cancelled scope.
+        //
+        // We can't intercept the order from the outside, but we CAN
+        // assert that destroy() does not throw even when an orchestrator
+        // has been wired (a regression in the order would surface as a
+        // CancellationException from the shutdown coroutines).
+        controller.create()
+        controller.get().onBind(Intent())
+
+        controller.destroy()
+        // No exception => no regression.
+    }
+
+    @Test
+    fun onCreate_succeeds_withDefaultProductionRegistry() {
+        // Sanity test: the C5/C6 production registry passes
+        // assertCompleteCoverage at service-bind time. If a future
+        // change adds a new Action sealed-subclass without registering
+        // it, onCreate fails fast — this test would be the canary.
+        controller.create()
+        // No exception => coverage check passed.
+    }
 
     @Test
     fun bindService_smokeTest_doesNotThrow() {

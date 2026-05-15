@@ -18,6 +18,7 @@ import android.content.SharedPreferences
  */
 class FakeSharedPreferences : SharedPreferences {
     private val store = mutableMapOf<String, Any?>()
+    private val listeners = mutableListOf<SharedPreferences.OnSharedPreferenceChangeListener>()
 
     override fun getAll(): MutableMap<String, *> = store.toMutableMap()
 
@@ -38,17 +39,33 @@ class FakeSharedPreferences : SharedPreferences {
 
     override fun contains(key: String?): Boolean = store.containsKey(key)
 
-    override fun edit(): SharedPreferences.Editor = FakeEditor(store)
+    override fun edit(): SharedPreferences.Editor = FakeEditor(store, listeners, this)
 
+    /**
+     * **Note (C7 update):** previously a no-op; now records the
+     * listener and dispatches change notifications on every successful
+     * `Editor.apply()` / `Editor.commit()`. This matches the Android
+     * framework contract closely enough for [PipelinePrefMirror] tests
+     * (the listener fires synchronously on the same thread as
+     * `apply()`).
+     */
     override fun registerOnSharedPreferenceChangeListener(
         listener: SharedPreferences.OnSharedPreferenceChangeListener?
-    ) { /* no-op */ }
+    ) {
+        if (listener != null) listeners.add(listener)
+    }
 
     override fun unregisterOnSharedPreferenceChangeListener(
         listener: SharedPreferences.OnSharedPreferenceChangeListener?
-    ) { /* no-op */ }
+    ) {
+        if (listener != null) listeners.remove(listener)
+    }
 
-    private class FakeEditor(private val store: MutableMap<String, Any?>) :
+    private class FakeEditor(
+        private val store: MutableMap<String, Any?>,
+        private val listeners: List<SharedPreferences.OnSharedPreferenceChangeListener>,
+        private val owningPrefs: SharedPreferences,
+    ) :
         SharedPreferences.Editor {
 
         private val pending = mutableMapOf<String, Any?>()
@@ -106,6 +123,19 @@ class FakeSharedPreferences : SharedPreferences {
             if (clearAll) store.clear()
             removals.forEach { store.remove(it) }
             store.putAll(pending)
+
+            // C7: dispatch change notifications. Order is best-effort
+            // — Android docs do not promise insertion order, only that
+            // a listener fires once per changed key. Listener snapshot
+            // is copied first because a listener may unregister itself
+            // during the callback (concurrent modification).
+            val notifyKeys = removals + pending.keys
+            if (notifyKeys.isNotEmpty() && listeners.isNotEmpty()) {
+                val snapshot = listeners.toList()
+                notifyKeys.forEach { key ->
+                    snapshot.forEach { it.onSharedPreferenceChanged(owningPrefs, key) }
+                }
+            }
         }
     }
 }

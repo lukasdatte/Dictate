@@ -202,11 +202,132 @@ Implemented the floating-overlay rendering surface as a parallel
 
 ### Chunk C17-block6-permission-onboarding — Permission-Observer + Gate + Onboarding-UI
 
-**Agent-IDs:** Steps 1-5: `B5-C17-IMPL-FULL`
+**Agent-IDs:** Steps 1-5 (combined): `B5-C17-IMPL-FULL`
 
-**Status:** ⏳ pending (depends on C16)
+**Status:** ✅ complete (all 5 steps combined; `./gradlew test` green, `./gradlew assembleDebug` green)
+**Chunks file:** `../dictate-keyboard-layout-refactor.reviewed.chunks.json` chunk index 18 (C17-block6-permission-onboarding)
+**Test result:** 22 new tests / 22 pass (10 `DefaultOverlayPermissionGateTest` + 5 `OverlayPermissionObserverTest` + 7 `OverlayPermissionOnboardingActivityTest`); full project `./gradlew test` green.
+**Build result:** `./gradlew assembleDebug` green.
 
-⏳
+#### What was done
+
+Implemented the permission infrastructure layer per Spec 3 §5.0–§5.7:
+
+- **Production files (Commit 1):**
+  - `app/src/main/java/net/devemperor/dictate/state/render/overlay/DefaultOverlayPermissionGate.kt` —
+    production `OverlayPermissionGate` impl. `hasOverlayPermission()` wraps
+    `Settings.canDrawOverlays(ctx)`; `shouldShowOnboarding()` returns
+    `!hasOverlayPermission() && !prefs.get(Pref.OverlayOnboardingDismissed)` per
+    Spec 3 §5.1. `markOnboardingShown` / `markPermanentlyDenied` write the typed
+    `Pref.OverlayOnboardingShown` / `Pref.OverlayOnboardingDismissed` entries via
+    the project's `Pref` sealed class (`CLAUDE.md` rule).
+  - `app/src/main/java/net/devemperor/dictate/state/render/overlay/OverlayPermissionObserver.kt` —
+    the only live source for `state.overlay.hasPermission` (Issue 3.1.3 / R.2).
+    Per Spec 3 §5.0 *no polling*: lifecycle-trigger model with two entry points,
+    `init()` (called from `DictatePipelineService.onCreate`) and `refresh()`
+    (designed to be called from the IME's `onCreateInputView` /
+    `onStartInputView`). Both call `gate.hasOverlayPermission()` and dispatch
+    `Action.OverlayAction.OnOverlayPermissionChanged(granted)`. Constructor
+    takes `(Action) -> Unit` instead of `DictateOrchestrator` directly — DIP for
+    JVM-pure tests; production wires `orchestrator::dispatch`.
+  - `app/src/main/java/net/devemperor/dictate/onboarding/OverlayPermissionOnboardingActivity.kt` —
+    standalone Activity surface (Spec 3 §5.2). Inflates an explainer + Allow +
+    Later layout. Allow triggers `Settings.ACTION_MANAGE_OVERLAY_PERMISSION` with
+    a `package:` data Uri + `FLAG_ACTIVITY_NEW_TASK`, then calls
+    `gate.markOnboardingShown()`. Later just `finish()`s — the permanently-denied
+    bit lives in the in-IME info-bar flow (Spec 3 §5.4), per SRP. `onResume`
+    refreshes the status TextView so a returning user sees the granted state.
+  - `app/src/main/res/layout/activity_overlay_permission_onboarding.xml` —
+    Material 3 ConstraintLayout with title + explainer + grant + dismiss +
+    status line.
+  - `app/src/main/res/values/strings.xml` — six new strings
+    (`overlay_perm_onboarding_title`, `overlay_perm_explainer`,
+    `overlay_perm_later`, `overlay_perm_grant`,
+    `overlay_perm_onboarding_granted`, `overlay_perm_onboarding_pending`).
+  - `app/src/main/AndroidManifest.xml` — declared
+    `OverlayPermissionOnboardingActivity` (`exported="false"`).
+
+- **Modified files (Commit 1):**
+  - `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt` —
+    Step-8 block now constructs `DefaultOverlayPermissionGate` +
+    `OverlayPermissionObserver` (gate + dispatch-sink), wires the **real** gate
+    into `OverlayBackend.permissions` (replaces the `NoOverlayPermissionGate`
+    stub from C16), and calls `overlayPermissionObserverImpl.init()` after
+    backend construction so the first state-emit carries the live permission
+    boolean. `LocalBinder` exposes `overlayPermissionObserver` and
+    `overlayPermissionGate` for IME-side use (IME-lifecycle refresh + non-reducer
+    consumers per Spec 3 §13.3).
+
+- **Test files (Commit 2):**
+  - `app/src/test/java/net/devemperor/dictate/state/render/overlay/FakeOverlayPermissionGate.kt` —
+    in-memory test double with mutable `hasPermission` / `permanentlyDenied`
+    fields + call counters (K-1).
+  - `app/src/test/java/net/devemperor/dictate/state/render/overlay/DefaultOverlayPermissionGateTest.kt` —
+    10 Robolectric tests (`@Config(sdk = [34])`); covers
+    `hasOverlayPermission` delegation (Robolectric default = false),
+    `shouldShowOnboarding` over the permission × permanently-denied matrix,
+    `markOnboardingShown` / `markPermanentlyDenied` write-paths via typed `Pref`
+    accessors, SRP-separation (each method touches only its own pref),
+    idempotency, plus a K-4-style canonical-pref-key round-trip.
+  - `app/src/test/java/net/devemperor/dictate/state/render/overlay/OverlayPermissionObserverTest.kt` —
+    5 pure-JVM tests (no Robolectric). Covers `init` dispatches false / true,
+    `refresh` dispatches current gate value, `refresh` unconditional dispatch
+    (idempotency contract owned by `OverlayModule.reduce`), and a three-emit
+    transition sequence (false → true → false).
+  - `app/src/test/java/net/devemperor/dictate/onboarding/OverlayPermissionOnboardingActivityTest.kt` —
+    7 Robolectric tests. Covers View inflation, grant button (`Settings`
+    intent with package URI + `FLAG_ACTIVITY_NEW_TASK`), grant flips
+    `Pref.OverlayOnboardingShown`, grant does NOT touch the dismissed pref
+    (SRP), dismiss button calls `finish()`, dismiss does NOT touch dismissed
+    pref, and the status TextView shows the pending copy by default.
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| D-1 | Chunk-prompt vs Spec 3 §5.0 — chunk description floated "periodic polling" as an alternative | Implemented the lifecycle-trigger model (no polling) — `init()` + `refresh()` with explicit lifecycle hooks | Spec 3 §5.0 explicitly says "Pollt nicht — reagiert auf Lifecycle-Trigger" and explains why (no system broadcast, lifecycle hooks are sufficient). Spec is the design truth; the chunk-prompt was a fallback hint. | C18 (mode-transitions) needs to call `observer.refresh()` from the IME's `onCreateInputView` / `onStartInputView` if it wants snappier permission-update detection. The Service-side `init()` covers the cold-start case. | inline-fixed |
+| D-2 | Chunk-prompt: "OverlayPermissionOnboardingActivityTest.kt (Robolectric) — view inflation + button-click → intent" — implicit assumption that the Activity has no state machine of its own | Spec 3 §5.4 says the permanently-denied bit lives in the in-IME flow; the Activity is a fire-and-forget Settings-launch surface. The dismiss-button-tests assert the Activity does NOT touch the dismissed pref, reinforcing the SRP boundary. | The earlier reading of "the Activity dismisses permanently" would have duplicated the in-IME info-bar's "Later" semantics across two surfaces and risked drift on a future copy edit. | Activity stays a thin surface; the in-IME info-bar (C18 work) is the canonical onboarding interactor. | inline-fixed |
+| D-3 | Chunk-prompt: `OverlayPermissionObserver` constructor planned to take `DictateOrchestrator` | Constructor takes `dispatch: (Action) -> Unit` instead (DIP) | `DictateOrchestrator` is a concrete class with a non-trivial constructor — JVM-pure tests need a recording lambda, not a full orchestrator. Production calls `orchestrator::dispatch`. | None — IME-side will get the observer through the LocalBinder and call `init()` / `refresh()` directly; no consumer touches the constructor wiring. | inline-fixed |
+
+#### Issues
+
+(none — clean implementation; all spec requirements met)
+
+#### Inline-fixed items
+
+- `DictatePipelineService.kt` line 519: swap `NoOverlayPermissionGate` → real
+  `overlayPermissionGateImpl` in the `OverlayBackend` constructor. The
+  no-permission stub from C16 is now retired in production wiring (still
+  retained in the `OverlayPermissionGate.kt` source file for `OverlayBackendTest`
+  to consume).
+- `DictatePipelineService.kt` step-8 block extended with the
+  `overlayPermissionGateImpl` + `overlayPermissionObserverImpl` construction
+  and the post-construction `observer.init()` call (Spec 3 §5.0 boot-default
+  race-window mitigation).
+- `OverlayPermissionOnboardingActivity.kt`: deduplicated `PREFS_NAME` literal
+  to reference `DictatePipelineService.PREFS_NAME` (single source of truth).
+
+#### Overlooked points / known gaps
+
+- **IME-side refresh wiring**: C17 stops at constructing the observer + exposing
+  it via the LocalBinder. The actual `observer.refresh()` calls from the IME's
+  `onCreateInputView` / `onStartInputView` are an explicit C18 follow-up (lives
+  with the rest of the WIDGET-toggle wiring + the in-IME info-bar's
+  `MarkOverlayOnboardingShown` dispatch). State today still flows correctly via
+  the `init()` cold-start dispatch + the `OverlayModule.onCrossModuleStateChange`
+  permission-loss cascade.
+- **Permission-granted Robolectric branch**: `Settings.canDrawOverlays()`
+  returns `false` in Robolectric without a custom shadow setup, so the
+  permission-granted-→-shouldShowOnboarding-false branch of
+  `DefaultOverlayPermissionGate.shouldShowOnboarding` is verified via the
+  `FakeOverlayPermissionGate` truth-table (in `OverlayPermissionObserverTest`)
+  rather than a direct shadow-poke. Acceptable — the boolean composition is
+  trivial and the Fake-based truth-table covers all four cells.
+- **In-IME info-bar (Spec 3 §5.3 XML + InfoBar layout in
+  `overlay_permission_infobar.xml`)** is **not** in this chunk's scope —
+  according to the chunks.json description, the in-IME info-bar binding is part
+  of C18 (mode-transitions + drag) since it sits next to the WIDGET-toggle
+  permission-fehlt handler.
 
 ---
 

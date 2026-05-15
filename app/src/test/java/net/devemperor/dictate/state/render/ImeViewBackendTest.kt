@@ -290,7 +290,7 @@ class ImeViewBackendTest {
         val active = DictateUiState.initial().copy(
             recording = RecordingState.Active(
                 useBluetooth = false,
-                audioFile = File("/tmp/x.m4a"),
+                audioFile = File("/tmp/x.m4a"), sessionId = "sid-test",
             ),
         )
         backend.render(active, catalog.KEYBOARD_TWO_ROW)

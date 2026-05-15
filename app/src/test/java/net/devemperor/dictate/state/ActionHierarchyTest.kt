@@ -95,8 +95,8 @@ class ActionHierarchyTest {
     @Test
     fun `RecordingAction StartRecording equality is by content`() {
         val f = File("/cache/a.m4a")
-        val a = Action.RecordingAction.StartRecording(InsertionTarget.INPUT_CONNECTION, f)
-        val b = Action.RecordingAction.StartRecording(InsertionTarget.INPUT_CONNECTION, f)
+        val a = Action.RecordingAction.StartRecording(InsertionTarget.INPUT_CONNECTION, f, sessionId = "sid-test")
+        val b = Action.RecordingAction.StartRecording(InsertionTarget.INPUT_CONNECTION, f, sessionId = "sid-test")
 
         assertEquals(a, b)
     }
@@ -104,8 +104,8 @@ class ActionHierarchyTest {
     @Test
     fun `RecordingAction StartRecording with different target is not equal`() {
         val f = File("/cache/a.m4a")
-        val a = Action.RecordingAction.StartRecording(InsertionTarget.INPUT_CONNECTION, f)
-        val b = Action.RecordingAction.StartRecording(InsertionTarget.REPROCESS_STAGING, f)
+        val a = Action.RecordingAction.StartRecording(InsertionTarget.INPUT_CONNECTION, f, sessionId = "sid-test")
+        val b = Action.RecordingAction.StartRecording(InsertionTarget.REPROCESS_STAGING, f, sessionId = "sid-test")
 
         assertNotEquals(a, b)
     }

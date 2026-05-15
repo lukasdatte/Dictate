@@ -166,15 +166,15 @@ private fun stateWithRecording(recording: RecordingState): DictateUiState =
     DictateUiState.initial().copy(recording = recording)
 
 private fun activeRecording(): RecordingState.Active =
-    RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/test.m4a"))
+    RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/test.m4a"), sessionId = "sid-test")
 
 private fun pausedRecording(): RecordingState.Paused =
-    RecordingState.Paused(useBluetooth = false, audioFile = File("/tmp/test.m4a"))
+    RecordingState.Paused(useBluetooth = false, audioFile = File("/tmp/test.m4a"), sessionId = "sid-test")
 
 private fun preparingRecording(): RecordingState.Preparing =
     RecordingState.Preparing(
         useBluetooth = false,
-        audioFile = File("/tmp/test.m4a"),
+        audioFile = File("/tmp/test.m4a"), sessionId = "sid-test",
     )
 
 // ─── Hand-rolled fake animator (K-1) ───────────────────────────────────

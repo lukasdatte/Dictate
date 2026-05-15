@@ -16,11 +16,13 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 0 · Important: 1 · Nice-to-have: 0 · Postponed: 0
+**Severity counts:** Critical: 0 · Important: 3 · Nice-to-have: 0 · Postponed: 0
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
 | IMPL-PLAN-FIX-1 | B1-C1-A1-IMPL | Important | delegated-to-orchestrator | Dev-2: SendStaging keeps existing →Preparing edge instead of literal `copy(isStarting=true)` (literal would break runner handshake); guard satisfied via isStarting→null branch. Block-Validate (AUDIT-PLAN-AND-API/LOGIC) must confirm this reading vs Epic §4-A1 + Spec 1 §3/§15.2 | step-2-plan-fix |
+| IMPL-PLAN-FIX-1 (C2-A2) | B1-C2-A2-IMPL | Important | delegated-to-orchestrator | Dev-1: `sessionId` added to `RecordingState.Preparing/Active/Paused` — Spec 1 §15.2/§3 show these without it; resolved per Epic §4 Block A2's explicit authorisation. FSM graph unchanged (payload-only). Block-Validate (AUDIT-PLAN-AND-API/LOGIC) must confirm spec-faithfulness vs §15.2 | step-2-plan-fix |
+| IMPL-PLAN-FIX-2 (C2-A2) | B1-C2-A2-IMPL | Important | delegated-to-orchestrator | Dev-2: `StopRecordingAndSend` payload removed (now `data object`) — A2-vs-B3 plan-internal contract inconsistency; resolved per A2's authoritative seam (id flows via `StartRecording`). Cross-block: B3 must dispatch `StartRecording(…,preAllocatedId)` + payload-less `StopRecordingAndSend`. Orchestrator forward to B3. | step-2-plan-fix |
 
 ---
 
@@ -239,68 +241,253 @@ architecture-conflict / blocks-following-chunks issue.
 
 **Agent-IDs:** Step 1 `B1-C2-A2-IMPL` (fresh, combined Steps 1-5).
 
-**Status:** ⏳ pending
+**Status:** ✅ implemented (combined 5-step, awaiting orchestrator 2-commit split)
 **Chunks file:** `../dictate-cutover-completion.chunks.json` Chunk C2-A2-sessionid-langstrings
-**Implementation-Commit (Commit 1):** ⏳
-**Test-Commit (Commit 2):** ⏳
+**Implementation-Commit (Commit 1):** ⏳ (orchestrator — production file list below)
+**Test-Commit (Commit 2):** ⏳ (orchestrator — test file list below)
 
-**What was done:** (filled by agent)
+**What was done:**
+
+- **F-10 — real sessionId source.** `RecordingState.Preparing/Active/Paused`
+  gained a `sessionId: String` field (non-defaulted — a default would
+  silently re-introduce a sentinel, defeating F-10). `RecordingAction.StartRecording`
+  gained `sessionId: String`; the caller-minted UUID is carried into
+  `Preparing` and propagated verbatim through every FSM transition
+  (`MediaRecorderReady`, `PauseRecording`, `ResumeRecording`).
+  `StopRecordingAndSend` became a `data object` (payload removed); its
+  reducer arms (Active + Paused) now read `state.sessionId` for the
+  `EmitPipelineTrigger` effect instead of `action.sessionId`. The two
+  click resolvers (`resolveRecordAction`, `resolveOverlayRecordAction`)
+  + the `LayoutCatalog` OVERLAY_SEND slot now mint a fresh UUID via a
+  shared private `newSessionId()` helper instead of passing `""`. The
+  empty-string sentinel is gone everywhere: `grep -rn 'sessionId = ""'
+  app/src/main` → **ZERO** (also zero in `app/src/test`).
+- **F-15 — language-aware dictateButtonText.** `LayoutStrings.dictateButtonText`
+  signature changed from `() -> CharSequence` to
+  `(effectiveLanguage: String) -> CharSequence`; `resolveRecordButtonText`
+  feeds `state.language.effective` (the `LanguageModule` axis, read-only
+  — no legacy writer added, D-13 untouched). The production wiring in
+  `DictatePipelineService.buildLayoutStrings()` produces a
+  language-suffixed label (`"Record (en)"`); `"system"`/empty renders
+  the plain `"Record"`.
+- FSM transition graph **unchanged** — only the `Preparing/Active/Paused`
+  payload widened with `sessionId` (spec-faithful to Spec 1 §15.2; the
+  §15.2/§3 reference predates F-10, see Dev-1). `assembleDebug` +
+  `testDebugUnitTest` (964 pass / 0 fail) green.
+
+**Files created/modified (production, Commit 1 — disjoint from test list):**
+
+- `app/src/main/java/net/devemperor/dictate/state/DictateUiState.kt` —
+  `sessionId` field on `RecordingState.Preparing/Active/Paused` + KDoc.
+- `app/src/main/java/net/devemperor/dictate/state/Action.kt` —
+  `StartRecording.sessionId` field; `StopRecordingAndSend` → `data object`
+  (payload removed) + KDoc.
+- `app/src/main/java/net/devemperor/dictate/state/modules/RecordingModule.kt`
+  — sessionId propagation on all transitions; `StopRecordingAndSend`
+  arms read `state.sessionId`; updated `EmitPipelineTrigger` KDoc.
+- `app/src/main/java/net/devemperor/dictate/state/modules/PipelineModule.kt`
+  — stale `StopRecordingAndSend(sessionId)` comment corrected (no behavior).
+- `app/src/main/java/net/devemperor/dictate/state/layout/ActionResolvers.kt`
+  — `newSessionId()` helper; `StartRecording` call-sites mint a UUID;
+  `StopRecordingAndSend` payload-less; KDoc table updated.
+- `app/src/main/java/net/devemperor/dictate/state/layout/LayoutCatalog.kt`
+  — OVERLAY_SEND actionResolver payload-less `StopRecordingAndSend`.
+- `app/src/main/java/net/devemperor/dictate/state/layout/TextResolvers.kt`
+  — `dictateButtonText` signature `(String) -> CharSequence`;
+  `resolveRecordButtonText` passes `state.language.effective` + KDoc.
+- `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt`
+  — `buildLayoutStrings()` `dictateButtonText` lambda is language-aware.
+
+**Files in plan-prescribed scope:** all 8 above. Epic §4 Block A2 "Files"
+names `state/Action.kt`, `state/RecordingState` payload (= `DictateUiState.kt`),
+`state/modules/RecordingModule.kt`, `LayoutStrings`/record-button resolver
+(= `TextResolvers.kt`). `ActionResolvers.kt` + `LayoutCatalog.kt` +
+`PipelineModule.kt` + `DictatePipelineService.kt` are **drift** (call-sites
+the contract change forced): `ActionResolvers.kt`/`LayoutCatalog.kt` are the
+`StopRecordingAndSend`/`StartRecording` call-sites the F-10 sentinel removal
+required; `DictatePipelineService.kt` is the F-15 `LayoutStrings` production
+wiring; `PipelineModule.kt` is a one-line stale-comment correction. All four
+are mechanically necessitated by the two plan-named contract changes — no
+out-of-scope behavior added.
 
 **Plan deviations:**
 
-| Deviation | Plan Location | What changed | Why | Impact | Inline-fixed? |
-|-----------|---------------|--------------|-----|--------|----------------|
-| — | — | — | — | — | — |
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Inline-fixed? |
+|-----------|---------------|--------------|-----|------------------------|----------------|
+| Dev-1: `RecordingState.Preparing/Active/Paused` gain a `sessionId` field; `Spec 1 §15.2`/`§3` reference impl shows these variants WITHOUT `sessionId` | Spec 1 §3 (`1-pipeline-service.reviewed.md:251-253`) + §15.2 reducer (`:6360-6429`) | Added `sessionId: String` to the 3 non-Idle `RecordingState` variants and threaded it on every transition | Spec 1 §3/§15.2 predate F-10; Epic §4 Block A2 (`dictate-cutover-completion.md:343-346`) **explicitly authorises** this: "`RecordingState.Active` currently carries `audioFile`+`useBluetooth`; adding `sessionId` here is the clean source". The FSM transition graph is unchanged — only the payload widens, so §15.2's documented transitions stay faithful. | B3 (recording-trigger cutover) must supply `sessionId` to `StartRecording` (it has the IME's `preAllocatedId` already). No PipelineModule/other-module API change — `EmitPipelineTrigger`/`TriggerPipeline` shapes unchanged. | inline-fixed + flagged `plan-deviation-resolved` (IMPL-PLAN-FIX-1) |
+| Dev-2: `StopRecordingAndSend` is now a `data object` (no payload); Epic §4 Block B3 sketch says `dispatch(...StopRecordingAndSend(realSessionId))` | Epic §4 Block B3 (`dictate-cutover-completion.md:438-439`) | Removed the `sessionId` payload from `StopRecordingAndSend` | Epic §4 Block A2 (the chunk I own) prescribes the clean design: "thread into `StartRecording` → carried in `RecordingState` → read on `StopRecordingAndSend`". B3's `StopRecordingAndSend(realSessionId)` phrasing is a forward-reference sketch that A2's chosen approach refines — the id flows via `StartRecording`, not the stop action. Plan-internal inconsistency between Block A2 (authoritative design for this seam) and Block B3 (downstream sketch), resolved in favour of A2. | B3 implementer: dispatch `StartRecording(target, audioFile, preAllocatedId)` then `StopRecordingAndSend` (no arg). The IME's `preAllocatedId` (`DictateInputMethodService.java:2213`) flows in at `StartRecording`, not at stop. | inline-fixed + flagged `plan-deviation-resolved` (IMPL-PLAN-FIX-2) |
+| Dev-3: existing tests across 13 files mechanically updated for the F-10/F-15 contract change | n/a (test-side contract follow-through) | ~70 `RecordingState.*`/`StartRecording` call-sites gained `sessionId = "sid-test"`; `StopRecordingAndSend(sessionId=…)` → `StopRecordingAndSend`; `testLayoutStrings().dictateButtonText` is now `(lang) -> …` | Required follow-through of two plan-named contract changes (not a code-bug — see Step-4 Code-Bugs note). The non-recording tests' intent is unchanged (the `sid-test` value is irrelevant to audio/overlay/viewmode assertions). | None — these are test-only mechanical edits. | inline-fixed (test-contract update) |
 
 **Issues (Step 1 — IMPL):**
 
 | ID | Severity | Description | Status | Reason |
 |----|----------|--------------|--------|--------|
-| — | — | — | — | — |
+| — | — | — | — | none — implementation matched plan intent; deviations handled per D22 |
 
 **Issues (Step 2 — IMPL-PLAN-FIX):**
 
 | ID | Severity | Description | Status | Reason |
 |----|----------|--------------|--------|--------|
-| — | — | — | — | — |
+| IMPL-PLAN-FIX-1 | Important | Dev-1: `sessionId` added to `RecordingState.Preparing/Active/Paused` — Spec 1 §15.2/§3 show these without `sessionId`; resolved in favour of Epic §4 Block A2's explicit authorisation. FSM graph unchanged (payload-only widening). Block-Validate (AUDIT-PLAN-AND-API/LOGIC) should confirm spec-faithfulness vs §15.2. | delegated-to-orchestrator | marker `plan-deviation-resolved` — mid-size deviation, Epic §4 Block A2 explicitly prescribes "adding sessionId here is the clean source"; implemented + flagged per D22 |
+| IMPL-PLAN-FIX-2 | Important | Dev-2: `StopRecordingAndSend` payload removed (now `data object`) — Epic §4 Block B3 sketch (`:438-439`) shows `StopRecordingAndSend(realSessionId)`. Plan-internal A2-vs-B3 inconsistency; resolved per A2's authoritative seam design (id flows via `StartRecording`). B3 implementer must dispatch `StartRecording(...,preAllocatedId)` + payload-less `StopRecordingAndSend`. | delegated-to-orchestrator | marker `plan-deviation-resolved` — cross-block API contract clarification; A2 owns this seam's design, B3 phrasing is a refinable forward-reference. Block-Validate + B3 must adopt this contract. |
+
+Plan-requirement check: F-10 `StartRecording` carries real sessionId ✓ ·
+F-10 sessionId in `RecordingState` (Preparing/Active/Paused) ✓ (Dev-1) ·
+F-10 `StopRecordingAndSend` reads FSM sessionId ✓ · F-10 sentinel removed
+(`grep` zero) ✓ · F-10 `Action.kt` KDoc updated ✓ · F-15
+`dictateButtonText` reads `LanguageState.effective` ✓ · F-15 read-only,
+no legacy writer ✓ (D-13 untouched) · F-15 label differs across
+languages ✓. Files in plan-prescribed scope vs drift: see "Files" block
+above (drift = forced call-sites + F-15 production wiring + 1 stale comment).
 
 **Issues (Step 3 — IMPL-CODE-FIX):**
 
 | ID | Severity | Description | Status | Reason |
 |----|----------|--------------|--------|--------|
-| — | — | — | — | — |
+| — | — | — | — | none delegated |
 
-**Test-Files created (Step 4 — Commit 2):** (filled by agent)
+Knowledge skills consulted: `knowledge-reference` (plugin-system /
+versioned-envelope — neither applies to a pure-Kotlin reducer payload
+widening + a label-provider signature change). No `knowledge-kotlin`/
+`-android` skill exists — grounded against surrounding state-module
+conventions (mirrors C1-A1's approach). Aspects: DRY ✓ (the UUID-mint
+hit 2 resolver call-sites → extracted private `newSessionId()` helper,
+same rationale class as C1-A1's `elapsedSince()` — the B3-migration-seam
+intent is a single reused concern). Naming ✓ (`sessionId` matches the
+existing `PipelineUiState.*.sessionId` convention; `newSessionId()`
+camelCase). Type-safety ✓ (non-nullable `sessionId: String`, R.15;
+`StopRecordingAndSend` `data object` strictly tighter than the old
+nullable-sentinel payload). Comments ✓ (KDoc captures the WHY: F-10
+single-source rationale, spec-predates-F-10 note, B3-migration seam).
+Inline fix applied: `ActionResolvers.newSessionId()` private helper +
+cleaned an accidental dead `.let { _ -> }` in the
+`DictatePipelineService` `dictateButtonText` lambda. Verified the legacy
+`core.RecordingState` / `core.KeyboardUiController.dictateButtonTextProvider`
+are **separate classes** (different package) — untouched, no drift into
+legacy-retire surface. Files modified this step: `ActionResolvers.kt`,
+`DictatePipelineService.kt`. Drift: none beyond the contract-forced set
+already documented.
 
-**Test-Run-Result (Step 4):** ⏳
+**Test-Files created (Step 4 — Commit 2):** none newly created — extended
+existing suites + mechanically updated 13 contract-affected suites:
+
+- `app/src/test/java/net/devemperor/dictate/state/RecordingModuleTest.kt`
+  — rewrote the 2 `StopRecordingAndSend` tests as F-10 FSM-sessionId
+  tests; added `F-10 sessionId minted at StartRecording survives the
+  full FSM round-trip`; strengthened `StartRecording from Idle` to
+  assert the carried sessionId. Net 24 → 26 `@Test`.
+- `app/src/test/java/net/devemperor/dictate/state/layout/ActionResolversTest.kt`
+  — added `F-10 resolveRecordAction mints a fresh sessionId` + `F-15
+  resolveRecordButtonText label differs across two effective languages`;
+  fixed the `dictateButtonText in Idle` test for the new signature. Net
+  31 → 33 `@Test`.
+- `app/src/test/java/net/devemperor/dictate/state/layout/LayoutCatalogTest.kt`
+  — `testLayoutStrings()` helper `dictateButtonText` is now `(lang) ->
+  "Dictate ($lang)"` (F-15 language-aware fixture; used by both
+  ActionResolversTest + LayoutCatalogTest).
+- Mechanical contract-update (no behavior change, `sessionId = "sid-test"`
+  / payload-less `StopRecordingAndSend` / language-arg fixture) in:
+  `AudioModuleTest.kt`, `ViewModeModuleTest.kt`, `OverlayModuleTest.kt`,
+  `DictateUiStateTest.kt`, `ActionHierarchyTest.kt`,
+  `render/overlay/OverlayBackendTest.kt`,
+  `render/PromptVisibilityControllerTest.kt`,
+  `render/RecordingAnimationControllerTest.kt`,
+  `render/ImeViewBackendTest.kt`, `layout/VisibilityMatrixTest.kt`,
+  `core/DictatePipelineServiceOverlayTransitionTest.kt`.
+
+Plan-AC mapping (AC-4 F-10/F-15 part):
+
+| AC-4 clause | Test |
+|-------------|------|
+| `StopRecordingAndSend` carries the same sessionId minted at `StartRecording` | `F-10 sessionId minted at StartRecording survives the full FSM round-trip`, `F-10 StopRecordingAndSend from Active uses the FSM sessionId not an action payload`, `F-10 StopRecordingAndSend from Paused uses the FSM sessionId`, `StartRecording from Idle … carried into the FSM` |
+| no `sessionId = ""` literal anywhere (`grep`) | grep verification (zero in `app/src/main` AND `app/src/test`) + `F-10 resolveRecordAction mints a fresh sessionId on each StartRecording` (UUID-shaped, non-empty) |
+| `dictateButtonText` differs across two `LanguageState.effective` values | `F-15 resolveRecordButtonText label differs across two effective languages` (asserts `"Dictate (en)"` ≠ `"Dictate (de)"`) |
+
+Helper-Decisions: reused `testLayoutStrings()` + `stubAudioFile()` from
+`LayoutCatalogTest.kt` (already committed; `dictateButtonText` fixture
+field updated for F-15 — shared by 2 suites). Reused
+`fakeModuleServices()` / `FixedAudioFileFactory` from existing
+`testutil`. No new helpers (K-1/K-4 satisfied — pure reducers + existing
+handwritten fakes; no Mockito/Robolectric).
+
+**Test-Run-Result (Step 4):** `./gradlew testDebugUnitTest` — **964 pass /
+0 fail / 0 error / 0 skipped** (up from 959; +5 net new tests).
+`RecordingModuleTest` 26, `ActionResolversTest` 33. `./gradlew
+assembleDebug` green.
 
 **Issues (Step 4 — IMPL-TEST):**
 
 | ID | Severity | Description | Status | Reason |
 |----|----------|--------------|--------|--------|
-| — | — | — | — | — |
+| — | — | — | — | no production code-bugs surfaced (see Code-Bugs note: all red tests were the expected plan-driven contract change, not bugs) |
 
-#### Code-Bugs Found While Writing Tests *(Step 4 — only if any)*
+#### Code-Bugs Found While Writing Tests *(Step 4)*
 
-| File:Line | Bug-Symptom | Root-Cause | Fix (vorher → nachher) | Recherche |
-|-----------|-------------|-----------|------------------------|-----------|
-| — | — | — | — | — |
+No production code-bugs. ~70 existing test call-sites + the 2
+`StopRecordingAndSend` tests went red **by design** — the F-10/F-15
+contract changes (sessionId now required on `RecordingState`/`StartRecording`;
+`StopRecordingAndSend` payload removed; `dictateButtonText` signature)
+are plan-mandated. Documented here for the audit trail as a
+test-contract update, **not** a code-bug fix:
 
-**Test-Review-Result (Step 5):** ⏳
+| File:Line | Symptom | Root-Cause | Fix (before → after) | Research |
+|-----------|---------|-----------|----------------------|----------|
+| 13 test files, ~70 sites | `No value passed for parameter 'sessionId'` / `Unresolved reference 'StopRecordingAndSend'` / `No value passed for parameter 'effectiveLanguage'` | Tests encoded the *pre-F-10/F-15* contract (no `sessionId` on FSM, payload on `StopRecordingAndSend`, no-arg `dictateButtonText`) | Mechanical: `RecordingState.*`/`StartRecording` ctors gain `sessionId = "sid-test"`; `StopRecordingAndSend(sessionId=…)` → `StopRecordingAndSend`; `testLayoutStrings().dictateButtonText` → `(lang) -> "Dictate ($lang)"`. Bracket-balanced script for the bulk; RecordingModuleTest/ActionResolversTest hand-edited with real F-10/F-15 assertions. | Epic §4 Block A2 (`dictate-cutover-completion.md:330-357`); Spec 1 §15.2; this chunk's production diff. |
+
+**Test-Review-Result (Step 5):** all green; AC-4 F-10/F-15 fully mapped
+(table above). Coverage assessment (branch-level, reasoned — project has
+no Jacoco wiring, `coverage_threshold_branches: 70`): every new/changed
+production branch is exercised — `StartRecording` (sessionId→Preparing),
+`MediaRecorderReady`/`Pause`/`Resume` (sessionId propagation),
+`StopRecordingAndSend` Active+Paused (reads `state.sessionId`),
+`resolveRecordAction` Idle (mints UUID) / Active / Paused,
+`resolveRecordButtonText` Idle (two language values). The full FSM
+round-trip test covers the Preparing→Active→Paused→Active→Idle path
+end-to-end. Estimated branch coverage of the touched lines: ~100% of
+new branches, well above the 70% threshold. Test quality: names describe
+behavior (F-10/F-15 prefixed); assertions concrete (id equality, label
+inequality, UUID regex); no weak assertions; no mocks (K-1/K-4 — pure
+reducers + existing handwritten fakes).
 
 **Issues (Step 5 — IMPL-TEST-FIX):**
 
 | ID | Severity | Description | Status | Reason |
 |----|----------|--------------|--------|--------|
-| — | — | — | — | — |
+| — | — | — | — | none |
 
-#### Code-Bugs Found During Test Self-Review *(Step 5 — only if any)*
+#### Code-Bugs Found During Test Self-Review *(Step 5)*
 
 | File:Line | Bug-Symptom | Root-Cause | Fix (vorher → nachher) | Recherche |
 |-----------|-------------|-----------|------------------------|-----------|
-| — | — | — | — | — |
+| — | — | — | — | none — no code-bugs; coverage + quality already adequate |
 
-**Overlooked / Known Gaps:** (filled by agent)
+**Mid-Chunk-Triage** *(only if Critical-blocker)*: none — no
+architecture-conflict. Both deviations (Dev-1 spec-§15.2 payload
+widening, Dev-2 A2-vs-B3 contract) are Epic-authorised / plan-internal
+clarifications resolved per D22, flagged Important (not Critical) for
+Block-Validate confirmation — they do not block following chunks (B3
+adopts the documented `StartRecording`-carries-sessionId contract).
+
+**Overlooked / Known Gaps:**
+- The `ReprocessStaging` staging-**duration** placeholder in
+  `resolveRecordButtonTextStaging` (`TextResolvers.kt` —
+  `formatStagingLabel(0)`) is still intentionally left (C1-A1 already
+  flagged it; out of F-10/F-15 scope).
+- `DictatePipelineService.buildLayoutStrings().dictateButtonText` uses a
+  simple `"Record ($lang)"` format as the new-render-path baseline. The
+  legacy `MainButtonsController.updateRecordButtonText` path still owns
+  the live label in Phase 1 (D-13 removes the legacy writer later); the
+  exact production label string is a UI-polish concern a later
+  Theme-C/D block can refine — F-15's testable contract ("label differs
+  across two effective languages") is met.
+- B3 contract dependency (Dev-2): B3 must dispatch
+  `StartRecording(target, audioFile, preAllocatedId)` then payload-less
+  `StopRecordingAndSend`. Flagged as IMPL-PLAN-FIX-2 so the orchestrator
+  forwards the cross-block-API contract to B3.
+- The legacy `core.RecordingState` / `core.RecordingStateController` /
+  `core.KeyboardUiController` are untouched (separate `core`-package
+  classes — legacy-retire surface owned by Theme-C, not the new
+  `state/` module).
 
 ---
 

@@ -97,7 +97,7 @@ class VisibilityMatrixTest(
             DictateUiState.initial().copy(
                 recording = RecordingState.Active(
                     useBluetooth = false,
-                    audioFile = stubAudioFile(),
+                    audioFile = stubAudioFile(), sessionId = "sid-test",
                 ),
                 pipeline = PipelineUiState.Idle,
                 layout = LayoutState(singleRowMode = singleRow),
@@ -322,7 +322,7 @@ class LayoutPredicatesTest {
         assertEquals(false, isResendVisible(base.copy(resend = base.resend.copy(lastAudioExists = false))))
         assertEquals(false, isResendVisible(base.copy(resend = base.resend.copy(resendEnabled = false))))
         assertEquals(false, isResendVisible(base.copy(
-            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )))
         assertEquals(false, isResendVisible(base.copy(pipeline = PipelineUiState.Preparing("s1"))))
     }
@@ -344,16 +344,16 @@ class LayoutPredicatesTest {
     @Test
     fun `isTrashVisible true for recording-active and staging`() {
         val recording = DictateUiState.initial().copy(
-            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         val paused = DictateUiState.initial().copy(
-            recording = RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         val staging = DictateUiState.initial().copy(
             pipeline = PipelineUiState.ReprocessStaging("s1", "transcript"),
         )
         val preparing = DictateUiState.initial().copy(
-            recording = RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         assertEquals(true, isTrashVisible(recording))
         assertEquals(true, isTrashVisible(paused))
@@ -369,7 +369,7 @@ class LayoutPredicatesTest {
         val cases = listOf(
             DictateUiState.initial(),
             DictateUiState.initial().copy(
-                recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile()),
+                recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
             ),
             DictateUiState.initial().copy(
                 pipeline = PipelineUiState.ReprocessStaging("s1", "transcript"),

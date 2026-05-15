@@ -235,7 +235,7 @@ class OverlayBackendTest {
         backend.render(
             stateWithPermission(
                 viewMode = ViewMode.HOVER,
-                recording = RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x.m4a")),
+                recording = RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x.m4a"), sessionId = "sid-test"),
             ),
             catalog.OVERLAY_5BUTTON,
         )

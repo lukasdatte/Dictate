@@ -119,19 +119,19 @@ class DictateUiStateTest {
     @Test
     fun `RecordingState Preparing carries useBluetooth + audioFile`() {
         val f = File("/cache/audio.m4a")
-        val p = RecordingState.Preparing(useBluetooth = true, audioFile = f)
+        val p = RecordingState.Preparing(useBluetooth = true, audioFile = f, sessionId = "sid-test")
 
         assertTrue(p.useBluetooth)
         assertEquals(f, p.audioFile)
         // Equality by content (data class)
-        assertEquals(p, RecordingState.Preparing(true, f))
+        assertEquals(p, RecordingState.Preparing(true, f, sessionId = "sid-test"))
     }
 
     @Test
     fun `RecordingState Active and Paused are distinct types with same payload shape`() {
         val f = File("/cache/audio.m4a")
-        val active = RecordingState.Active(useBluetooth = false, audioFile = f)
-        val paused = RecordingState.Paused(useBluetooth = false, audioFile = f)
+        val active = RecordingState.Active(useBluetooth = false, audioFile = f, sessionId = "sid-test")
+        val paused = RecordingState.Paused(useBluetooth = false, audioFile = f, sessionId = "sid-test")
 
         assertNotEquals(active as RecordingState, paused as RecordingState)
     }

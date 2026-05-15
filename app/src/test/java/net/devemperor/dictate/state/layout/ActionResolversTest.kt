@@ -47,7 +47,7 @@ class ActionResolversTest {
     @Test
     fun `resolveRecordAction returns null while recording is Preparing`() {
         val s = state.copy(
-            recording = RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         assertNull(resolveRecordAction(s, fakeModuleServices()))
     }
@@ -65,12 +65,26 @@ class ActionResolversTest {
         assertEquals(recordingFile, action.audioFile)
         assertEquals(InsertionTarget.INPUT_CONNECTION, action.target)
         assertEquals(1, factory.allocateCallCount)
+        // F-10 — the resolver mints a real (non-empty, UUID-shaped)
+        // sessionId; no empty-string sentinel.
+        assertTrue(action.sessionId.isNotEmpty())
+        assertTrue(action.sessionId.matches(Regex("[0-9a-fA-F-]{36}")))
+    }
+
+    @Test
+    fun `F-10 resolveRecordAction mints a fresh sessionId on each StartRecording`() {
+        val services = fakeModuleServices(audioFileFactory = FixedAudioFileFactory(File("/tmp/r.m4a")))
+        val s = state.copy(recording = RecordingState.Idle)
+        val a = resolveRecordAction(s, services) as Action.RecordingAction.StartRecording
+        val b = resolveRecordAction(s, services) as Action.RecordingAction.StartRecording
+        // Distinct clicks get distinct ids (UUID per session).
+        assertTrue(a.sessionId != b.sessionId)
     }
 
     @Test
     fun `resolveRecordAction emits StopRecordingAndSend from Active`() {
         val s = state.copy(
-            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         assertTrue(resolveRecordAction(s, fakeModuleServices()) is Action.RecordingAction.StopRecordingAndSend)
     }
@@ -78,7 +92,7 @@ class ActionResolversTest {
     @Test
     fun `resolveRecordAction emits StopRecordingAndSend from Paused`() {
         val s = state.copy(
-            recording = RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         assertTrue(resolveRecordAction(s, fakeModuleServices()) is Action.RecordingAction.StopRecordingAndSend)
     }
@@ -153,7 +167,7 @@ class ActionResolversTest {
     @Test
     fun `resolveTrashAction returns CancelRecording while recording`() {
         val s = state.copy(
-            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         assertEquals(
             Action.RecordingAction.CancelRecording,
@@ -166,7 +180,7 @@ class ActionResolversTest {
     @Test
     fun `resolvePauseAction returns PauseRecording while Active`() {
         val s = state.copy(
-            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         assertEquals(
             Action.RecordingAction.PauseRecording,
@@ -177,7 +191,7 @@ class ActionResolversTest {
     @Test
     fun `resolvePauseAction returns ResumeRecording while Paused`() {
         val s = state.copy(
-            recording = RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         assertEquals(
             Action.RecordingAction.ResumeRecording,
@@ -191,7 +205,7 @@ class ActionResolversTest {
         assertNull(
             resolvePauseAction(
                 state.copy(
-                    recording = RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile()),
+                    recording = RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
                 ),
                 fakeModuleServices(),
             ),
@@ -246,7 +260,7 @@ class ActionResolversTest {
     @Test
     fun `resolvePauseIcon returns mic icon while Paused`() {
         val s = state.copy(
-            recording = RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         assertEquals(net.devemperor.dictate.R.drawable.ic_baseline_mic_24, resolvePauseIcon(s))
     }
@@ -254,7 +268,7 @@ class ActionResolversTest {
     @Test
     fun `resolvePauseIcon returns pause icon otherwise`() {
         val active = state.copy(
-            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         val idle = state.copy(recording = RecordingState.Idle)
         assertEquals(net.devemperor.dictate.R.drawable.ic_baseline_pause_24, resolvePauseIcon(active))
@@ -267,7 +281,7 @@ class ActionResolversTest {
     fun `resolveRecordButtonText returns send text in Active`() {
         val strings = testLayoutStrings()
         val s = state.copy(
-            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         assertEquals(strings.send, resolveRecordButtonText(s, strings))
     }
@@ -276,14 +290,38 @@ class ActionResolversTest {
     fun `resolveRecordButtonText returns dictateButtonText in Idle`() {
         val strings = testLayoutStrings()
         val s = state.copy(recording = RecordingState.Idle)
-        assertEquals(strings.dictateButtonText(), resolveRecordButtonText(s, strings))
+        // F-15 — the resolver feeds the effective-language code into the
+        // provider; the default initial state is "system".
+        assertEquals(
+            strings.dictateButtonText(s.language.effective),
+            resolveRecordButtonText(s, strings),
+        )
+    }
+
+    @Test
+    fun `F-15 resolveRecordButtonText label differs across two effective languages`() {
+        val strings = testLayoutStrings()
+        val en = state.copy(
+            recording = RecordingState.Idle,
+            language = state.language.copy(effective = "en"),
+        )
+        val de = state.copy(
+            recording = RecordingState.Idle,
+            language = state.language.copy(effective = "de"),
+        )
+        val enLabel = resolveRecordButtonText(en, strings)
+        val deLabel = resolveRecordButtonText(de, strings)
+        assertEquals("Dictate (en)", enLabel)
+        assertEquals("Dictate (de)", deLabel)
+        // Core F-15 acceptance: the label is language-sensitive.
+        assertTrue(enLabel != deLabel)
     }
 
     @Test
     fun `resolveRecordButtonText returns record string while Preparing`() {
         val strings = testLayoutStrings()
         val s = state.copy(
-            recording = RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile()),
+            recording = RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
         )
         assertEquals(strings.record, resolveRecordButtonText(s, strings))
     }

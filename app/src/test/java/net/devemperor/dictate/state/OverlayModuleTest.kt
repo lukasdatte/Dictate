@@ -185,7 +185,7 @@ class OverlayModuleTest {
     fun `cascade HOVER to KEYBOARD emits SuppressBit + CancelRecording (when active)`() {
         val prev = DictateUiState.initial().copy(
             viewMode = ViewMode.HOVER,
-            recording = RecordingState.Active(false, testFile),
+            recording = RecordingState.Active(false, testFile, sessionId = "sid-test"),
         )
         val next = prev.copy(viewMode = ViewMode.KEYBOARD)
         val cascade = module.onCrossModuleStateChange(prev, next)
@@ -207,7 +207,7 @@ class OverlayModuleTest {
         // them serially at depth+1 with re-snapshotting.
         val prev = DictateUiState.initial().copy(
             viewMode = ViewMode.HOVER,
-            recording = RecordingState.Active(false, testFile),
+            recording = RecordingState.Active(false, testFile, sessionId = "sid-test"),
             pipeline = PipelineUiState.Preparing("sid"),
         )
         val next = prev.copy(viewMode = ViewMode.KEYBOARD)
@@ -228,7 +228,7 @@ class OverlayModuleTest {
     fun `cascade HOVER to KEYBOARD with Paused recording emits SuppressBit + CancelRecording`() {
         val prev = DictateUiState.initial().copy(
             viewMode = ViewMode.HOVER,
-            recording = RecordingState.Paused(false, testFile),
+            recording = RecordingState.Paused(false, testFile, sessionId = "sid-test"),
         )
         val next = prev.copy(viewMode = ViewMode.KEYBOARD)
         val cascade = module.onCrossModuleStateChange(prev, next)
@@ -239,7 +239,7 @@ class OverlayModuleTest {
     fun `cascade HOVER to KEYBOARD with Preparing recording emits SuppressBit + CancelRecording`() {
         val prev = DictateUiState.initial().copy(
             viewMode = ViewMode.HOVER,
-            recording = RecordingState.Preparing(false, testFile),
+            recording = RecordingState.Preparing(false, testFile, sessionId = "sid-test"),
         )
         val next = prev.copy(viewMode = ViewMode.KEYBOARD)
         val cascade = module.onCrossModuleStateChange(prev, next)

@@ -273,7 +273,7 @@ class DictatePipelineServiceOverlayTransitionTest {
         b.dispatch(
             Action.RecordingAction.StartRecording(
                 target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
-                audioFile = java.io.File("/tmp/a.m4a"),
+                audioFile = java.io.File("/tmp/a.m4a"), sessionId = "sid-test",
             ),
         )
         idle()
@@ -347,7 +347,7 @@ class DictatePipelineServiceOverlayTransitionTest {
         b.dispatch(
             Action.RecordingAction.StartRecording(
                 target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
-                audioFile = java.io.File("/tmp/a.m4a"),
+                audioFile = java.io.File("/tmp/a.m4a"), sessionId = "sid-test",
             ),
         )
         idle()

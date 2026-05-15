@@ -84,7 +84,7 @@ class AudioModuleTest {
     fun `cross-module AudioFocus loss during Active recording cascades PauseRecording`() {
         val prev = DictateUiState.initial().copy(
             audio = AudioState(audioFocusGranted = true),
-            recording = RecordingState.Active(useBluetooth = false, audioFile = testFile),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-test"),
         )
         val next = prev.copy(audio = prev.audio.copy(audioFocusGranted = false))
         val cascade = module.onCrossModuleStateChange(prev, next)
@@ -96,7 +96,7 @@ class AudioModuleTest {
         // Per `isActiveOrPaused` semantics — Paused is included.
         val prev = DictateUiState.initial().copy(
             audio = AudioState(audioFocusGranted = true),
-            recording = RecordingState.Paused(useBluetooth = false, audioFile = testFile),
+            recording = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "sid-test"),
         )
         val next = prev.copy(audio = prev.audio.copy(audioFocusGranted = false))
         val cascade = module.onCrossModuleStateChange(prev, next)
@@ -115,7 +115,7 @@ class AudioModuleTest {
         // Spec 1 §15.3 — resume is user-driven, not auto.
         val prev = DictateUiState.initial().copy(
             audio = AudioState(audioFocusGranted = false),
-            recording = RecordingState.Paused(false, testFile),
+            recording = RecordingState.Paused(false, testFile, "sid-test"),
         )
         val next = prev.copy(audio = prev.audio.copy(audioFocusGranted = true))
         assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))
@@ -127,7 +127,7 @@ class AudioModuleTest {
         // don't auto-pause it (it'd race with the prepare-callback).
         val prev = DictateUiState.initial().copy(
             audio = AudioState(audioFocusGranted = true),
-            recording = RecordingState.Preparing(false, testFile),
+            recording = RecordingState.Preparing(false, testFile, "sid-test"),
         )
         val next = prev.copy(audio = prev.audio.copy(audioFocusGranted = false))
         assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))

@@ -31,6 +31,9 @@ import java.io.File
  * - reduceFailure: StopMediaRecorder failure during Active/Paused rolls back to Idle
  * - reduceFailure: other failures return null (default Rejected)
  * - useBluetooth invariant: captured at Preparing time, propagated through Active/Paused
+ * - F-10 (Epic §4 Block A2): sessionId minted at StartRecording is carried
+ *   through Preparing/Active/Paused and read on StopRecordingAndSend
+ *   (which carries no payload); survives a full Pause/Resume round-trip
  *
  * @see net.devemperor.dictate.state.RecordingModule
  */
@@ -53,6 +56,7 @@ class RecordingModuleTest {
             action = Action.RecordingAction.StartRecording(
                 target = InsertionTarget.INPUT_CONNECTION,
                 audioFile = testFile,
+                sessionId = "sid-start-42",
             ),
             ctx = ctx(global),
         )
@@ -60,6 +64,8 @@ class RecordingModuleTest {
         val next = result!!.nextState as RecordingState.Preparing
         assertEquals(true, next.useBluetooth)
         assertEquals(testFile, next.audioFile)
+        // F-10 — the caller-minted sessionId is carried into the FSM.
+        assertEquals("sid-start-42", next.sessionId)
         // Allocate effect carries the same 3 args
         val effect = result.sideEffects.single() as RecordingModule.Effect.AllocateMediaRecorder
         assertEquals(InsertionTarget.INPUT_CONNECTION, effect.target)
@@ -72,7 +78,7 @@ class RecordingModuleTest {
         val global = DictateUiState.initial().copy(audio = AudioState(useBluetoothMic = false))
         val result = module.reduce(
             state = RecordingState.Idle,
-            action = Action.RecordingAction.StartRecording(InsertionTarget.INPUT_CONNECTION, testFile),
+            action = Action.RecordingAction.StartRecording(InsertionTarget.INPUT_CONNECTION, testFile, sessionId = "sid-test"),
             ctx = ctx(global),
         )
         val next = result!!.nextState as RecordingState.Preparing
@@ -96,7 +102,7 @@ class RecordingModuleTest {
         // B3-VAL-W1 F-10: StartMediaRecorder added to the Preparing →
         // Active side-effect set so the subsystem-level start() runs
         // in the orchestrator-driven flow.
-        val state = RecordingState.Preparing(useBluetooth = false, audioFile = testFile)
+        val state = RecordingState.Preparing(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(
             state = state,
             action = Action.RecordingAction.MediaRecorderReady(audioFile = testFile),
@@ -114,7 +120,7 @@ class RecordingModuleTest {
 
     @Test
     fun `CancelRecording from Preparing emits Idle + Release + DeleteAudioFile`() {
-        val state = RecordingState.Preparing(useBluetooth = true, audioFile = testFile)
+        val state = RecordingState.Preparing(useBluetooth = true, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(
             state = state,
             action = Action.RecordingAction.CancelRecording,
@@ -129,7 +135,7 @@ class RecordingModuleTest {
 
     @Test
     fun `PauseRecording from Active emits Paused + 4 pause effects`() {
-        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile)
+        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(state, Action.RecordingAction.PauseRecording, ctx())
         val next = result!!.nextState as RecordingState.Paused
         assertEquals(false, next.useBluetooth)
@@ -143,7 +149,7 @@ class RecordingModuleTest {
 
     @Test
     fun `StopRecording from Active emits Idle + 4 stop effects`() {
-        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile)
+        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(state, Action.RecordingAction.StopRecording, ctx())
         assertEquals(RecordingState.Idle, result!!.nextState)
         assertEquals(4, result.sideEffects.size)
@@ -151,21 +157,24 @@ class RecordingModuleTest {
     }
 
     @Test
-    fun `StopRecordingAndSend from Active drops to Idle and emits EmitPipelineTrigger`() {
-        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile)
+    fun `F-10 StopRecordingAndSend from Active uses the FSM sessionId not an action payload`() {
+        // F-10 (Epic §4 Block A2): StopRecordingAndSend carries NO payload.
+        // The EmitPipelineTrigger sessionId is read off RecordingState.Active
+        // — the same id minted at StartRecording — not from the action.
+        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-active")
         val result = module.reduce(
             state,
-            Action.RecordingAction.StopRecordingAndSend(sessionId = "sid-42"),
+            Action.RecordingAction.StopRecordingAndSend,
             ctx(),
         )
         assertEquals(RecordingState.Idle, result!!.nextState)
         // F-2 — the "Send" semantic produces an EmitPipelineTrigger effect
         // on top of the StopRecording effects so the pipeline takes over
-        // once recording is stopped.
+        // once recording is stopped. The sessionId is the FSM's, not "".
         assertTrue(
             result.sideEffects.contains(
                 RecordingModule.Effect.EmitPipelineTrigger(
-                    sessionId = "sid-42",
+                    sessionId = "sid-active",
                     audioFile = testFile,
                 ),
             ),
@@ -175,18 +184,18 @@ class RecordingModuleTest {
     }
 
     @Test
-    fun `StopRecordingAndSend from Paused drops to Idle and emits EmitPipelineTrigger`() {
-        val state = RecordingState.Paused(useBluetooth = false, audioFile = testFile)
+    fun `F-10 StopRecordingAndSend from Paused uses the FSM sessionId`() {
+        val state = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "sid-paused")
         val result = module.reduce(
             state,
-            Action.RecordingAction.StopRecordingAndSend(sessionId = "sid-99"),
+            Action.RecordingAction.StopRecordingAndSend,
             ctx(),
         )
         assertEquals(RecordingState.Idle, result!!.nextState)
         assertTrue(
             result.sideEffects.contains(
                 RecordingModule.Effect.EmitPipelineTrigger(
-                    sessionId = "sid-99",
+                    sessionId = "sid-paused",
                     audioFile = testFile,
                 ),
             ),
@@ -194,8 +203,46 @@ class RecordingModuleTest {
     }
 
     @Test
+    fun `F-10 sessionId minted at StartRecording survives the full FSM round-trip`() {
+        // The clean-source contract: StartRecording.sessionId → Preparing →
+        // (MediaRecorderReady) → Active → (Pause) → Paused → (Resume) →
+        // Active → (StopRecordingAndSend) → EmitPipelineTrigger carries the
+        // SAME id end-to-end.
+        val sid = "sid-roundtrip-42"
+        val prep = module.reduce(
+            RecordingState.Idle,
+            Action.RecordingAction.StartRecording(InsertionTarget.INPUT_CONNECTION, testFile, sessionId = sid),
+            ctx(),
+        )!!.nextState as RecordingState.Preparing
+        assertEquals(sid, prep.sessionId)
+
+        val active = module.reduce(
+            prep,
+            Action.RecordingAction.MediaRecorderReady(audioFile = testFile),
+            ctx(),
+        )!!.nextState as RecordingState.Active
+        assertEquals(sid, active.sessionId)
+
+        val paused = module.reduce(active, Action.RecordingAction.PauseRecording, ctx())!!
+            .nextState as RecordingState.Paused
+        assertEquals(sid, paused.sessionId)
+
+        val resumed = module.reduce(paused, Action.RecordingAction.ResumeRecording, ctx())!!
+            .nextState as RecordingState.Active
+        assertEquals(sid, resumed.sessionId)
+
+        val stopped = module.reduce(resumed, Action.RecordingAction.StopRecordingAndSend, ctx())!!
+        assertEquals(RecordingState.Idle, stopped.nextState)
+        assertTrue(
+            stopped.sideEffects.contains(
+                RecordingModule.Effect.EmitPipelineTrigger(sessionId = sid, audioFile = testFile),
+            ),
+        )
+    }
+
+    @Test
     fun `CancelRecording from Active emits Idle + Stop effects + DeleteAudioFile`() {
-        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile)
+        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(state, Action.RecordingAction.CancelRecording, ctx())
         assertEquals(RecordingState.Idle, result!!.nextState)
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.DeleteAudioFile(testFile)))
@@ -205,7 +252,7 @@ class RecordingModuleTest {
 
     @Test
     fun `ResumeRecording from Paused emits Active + 4 resume effects`() {
-        val state = RecordingState.Paused(useBluetooth = true, audioFile = testFile)
+        val state = RecordingState.Paused(useBluetooth = true, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(state, Action.RecordingAction.ResumeRecording, ctx())
         val next = result!!.nextState as RecordingState.Active
         assertEquals(true, next.useBluetooth)
@@ -217,7 +264,7 @@ class RecordingModuleTest {
 
     @Test
     fun `StopRecording from Paused emits Idle + stop effects (no delete - Issue 2_0_8)`() {
-        val state = RecordingState.Paused(useBluetooth = false, audioFile = testFile)
+        val state = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(state, Action.RecordingAction.StopRecording, ctx())
         assertEquals(RecordingState.Idle, result!!.nextState)
         // No DeleteAudioFile on Stop (Paused holds a valid recording)
@@ -226,7 +273,7 @@ class RecordingModuleTest {
 
     @Test
     fun `CancelRecording from Paused emits Idle + stop effects + DeleteAudioFile`() {
-        val state = RecordingState.Paused(useBluetooth = false, audioFile = testFile)
+        val state = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(state, Action.RecordingAction.CancelRecording, ctx())
         assertEquals(RecordingState.Idle, result!!.nextState)
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.DeleteAudioFile(testFile)))
@@ -238,7 +285,7 @@ class RecordingModuleTest {
     fun `cross-module Idle to Preparing cascades ResetSuppressBit`() {
         val prev = DictateUiState.initial()  // recording = Idle
         val next = prev.copy(
-            recording = RecordingState.Preparing(useBluetooth = false, audioFile = testFile),
+            recording = RecordingState.Preparing(useBluetooth = false, audioFile = testFile, sessionId = "sid-test"),
         )
         val cascade = module.onCrossModuleStateChange(prev, next)
         assertEquals(listOf<Action>(Action.OverlayAction.ResetSuppressBit), cascade)
@@ -247,9 +294,9 @@ class RecordingModuleTest {
     @Test
     fun `cross-module Preparing to Active does NOT cascade`() {
         val prev = DictateUiState.initial()
-            .copy(recording = RecordingState.Preparing(false, testFile))
+            .copy(recording = RecordingState.Preparing(false, testFile, sessionId = "sid-test"))
         val next = prev.copy(
-            recording = RecordingState.Active(false, testFile),
+            recording = RecordingState.Active(false, testFile, sessionId = "sid-test"),
         )
         assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))
     }
@@ -257,7 +304,7 @@ class RecordingModuleTest {
     @Test
     fun `cross-module Active to Idle does NOT cascade`() {
         val prev = DictateUiState.initial()
-            .copy(recording = RecordingState.Active(false, testFile))
+            .copy(recording = RecordingState.Active(false, testFile, sessionId = "sid-test"))
         val next = prev.copy(recording = RecordingState.Idle)
         assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))
     }
@@ -267,7 +314,7 @@ class RecordingModuleTest {
         // Boundary check is strictly forward: Idle → Preparing is the
         // only cascade trigger. Cancel-during-Preparing must NOT fire.
         val prev = DictateUiState.initial()
-            .copy(recording = RecordingState.Preparing(false, testFile))
+            .copy(recording = RecordingState.Preparing(false, testFile, sessionId = "sid-test"))
         val next = prev.copy(recording = RecordingState.Idle)
         assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))
     }
@@ -276,7 +323,7 @@ class RecordingModuleTest {
 
     @Test
     fun `reduceFailure AllocateMediaRecorder during Preparing rolls back to Idle`() {
-        val state = RecordingState.Preparing(useBluetooth = false, audioFile = testFile)
+        val state = RecordingState.Preparing(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val failure = Action.EffectFailure(
             originModuleId = ModuleId.Recording,
             effect = "AllocateMediaRecorder(target=INPUT_CONNECTION, useBluetooth=false, audioFile=/tmp/test-rec.m4a)",
@@ -290,7 +337,7 @@ class RecordingModuleTest {
 
     @Test
     fun `reduceFailure StopMediaRecorder during Active rolls back to Idle (keeps file)`() {
-        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile)
+        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val failure = Action.EffectFailure(
             originModuleId = ModuleId.Recording,
             effect = "StopMediaRecorder",
@@ -304,7 +351,7 @@ class RecordingModuleTest {
 
     @Test
     fun `reduceFailure StopMediaRecorder during Paused also rolls back`() {
-        val state = RecordingState.Paused(useBluetooth = true, audioFile = testFile)
+        val state = RecordingState.Paused(useBluetooth = true, audioFile = testFile, sessionId = "sid-test")
         val failure = Action.EffectFailure(ModuleId.Recording, "StopMediaRecorder", "x")
         val result = module.reduceFailure(state, failure, ctx())
         assertEquals(RecordingState.Idle, result!!.nextState)
@@ -312,7 +359,7 @@ class RecordingModuleTest {
 
     @Test
     fun `reduceFailure unknown effect returns null (default Rejected)`() {
-        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile)
+        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val failure = Action.EffectFailure(ModuleId.Recording, "PauseMediaRecorder", "x")
         assertNull(module.reduceFailure(state, failure, ctx()))
     }
@@ -335,10 +382,10 @@ class RecordingModuleTest {
     @Test
     fun `lens round-trip preserves recording axis`() {
         val state = DictateUiState.initial()
-            .copy(recording = RecordingState.Active(true, testFile))
+            .copy(recording = RecordingState.Active(true, testFile, sessionId = "sid-test"))
         val sub = module.read(state)
         val back = module.write(state, RecordingState.Idle)
-        assertEquals(RecordingState.Active(true, testFile), sub)
+        assertEquals(RecordingState.Active(true, testFile, sessionId = "sid-test"), sub)
         assertEquals(RecordingState.Idle, back.recording)
     }
 

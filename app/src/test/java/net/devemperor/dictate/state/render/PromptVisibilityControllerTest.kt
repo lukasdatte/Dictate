@@ -81,7 +81,7 @@ class PromptVisibilityControllerTest {
     @Test
     fun `active recording shows prompts`() {
         val state = DictateUiState.initial().copy(
-            recording = RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x")),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x"), sessionId = "sid-test"),
         )
         controller.render(state, catalog.KEYBOARD_TWO_ROW)
         assertEquals(View.VISIBLE, promptsContainer.visibility)
@@ -142,7 +142,7 @@ class PromptVisibilityControllerTest {
     @Test
     fun `qwertz recording controls visible only when active in qwertz area`() {
         val state = DictateUiState.initial().copy(
-            recording = RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x")),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x"), sessionId = "sid-test"),
             layout = DictateUiState.initial().layout.copy(contentArea = ContentArea.QWERTZ),
         )
         controller.render(state, catalog.KEYBOARD_TWO_ROW)
@@ -152,7 +152,7 @@ class PromptVisibilityControllerTest {
     @Test
     fun `qwertz recording controls hidden during running pipeline`() {
         val state = DictateUiState.initial().copy(
-            recording = RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x")),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x"), sessionId = "sid-test"),
             layout = DictateUiState.initial().layout.copy(contentArea = ContentArea.QWERTZ),
             pipeline = PipelineUiState.Running(
                 sessionId = "s",

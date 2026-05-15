@@ -272,7 +272,9 @@ internal fun testLayoutStrings(): LayoutStrings = LayoutStrings(
     record = "Record",
     send = "Send (en)",
     sending = "Sending …",
-    dictateButtonText = { "Dictate (en)" },
+    // F-15 — language-aware: the label reflects the effective language
+    // code passed by `resolveRecordButtonText` (state.language.effective).
+    dictateButtonText = { effectiveLanguage -> "Dictate ($effectiveLanguage)" },
     formatStagingLabel = { secs -> "Audio 0:${"%02d".format(secs)} · Send" },
     formatPipelineLabel = { done, total, autoEnter, elapsedMs ->
         val mark = if (autoEnter) " ↵" else ""

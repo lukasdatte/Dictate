@@ -41,7 +41,7 @@ class ViewModeModuleTest {
             PipelineUiState.Idle
         }
         val recording: RecordingState = if (recordingActive) {
-            RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x.m4a"))
+            RecordingState.Active(useBluetooth = false, audioFile = File("/tmp/x.m4a"), sessionId = "sid-test")
         } else {
             RecordingState.Idle
         }

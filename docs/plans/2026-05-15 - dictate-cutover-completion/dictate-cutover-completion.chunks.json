@@ -1,0 +1,473 @@
+{
+  "source": "docs/plans/2026-05-15 - dictate-cutover-completion/dictate-cutover-completion.md",
+  "note": "Modular-plan-pattern (D21) ACTIVE. The Epic's implementation detail lives in §4 (all 10 plan-block descriptions, 4661 tok — read whole, cheap) PLUS the 3 parent-plan specs which are the Single-Source-of-Truth. Each implementation chunk carries `main: [§4]` + `context` background sections + `spec_references` (free-text §-pointers, parent-chunks.json convention) + `targeted_sub_sections` (structured: spec-relative-path → parent H2 section heading → the sub-section IDs the impl-agent narrows to after `plan-reader read <spec> \"<H2 heading>\"`). Specs are NOT re-chunked — reuse the existing per-spec *.reviewed.chunks.json in the sibling 2026-05-07 folder. Spec-relative paths are Epic-dir-relative: `../2026-05-07 - dictate-keyboard-layout-refactor/research/<spec>/<spec>.reviewed.md`. CONSISTENCY-FINDING (resolved): Epic §4.1 prose says \"9 blocks total\" but §4 lists 10 plan-blocks (A1,A2,B1,B2,B3,C1,C2,C3,D1,D2); the EXECUTION-PLAN ESTIMATE says \"9 blocks, ~15-17 chunks\". Resolution: 10 plan-blocks is correct; the \"9\" is an off-by-one in the prose (counts the 4 themes' blocks as A=2,B=3,C=3,D=2=10, miscounted as 9). This does not affect chunking — plan-blocks are the author's narrative, skill-blocks come from aggregate complexity. ORDERING NOTE is load-bearing and ADOPTED: D2 is a verification GATE, not a tail. B3 is split into B3-guarded (C5, behind USE_LEGACY_RECORDING_DRIVE) and B3-final-deletion (C7, deletes the legacy call-site + boolean), with D2-pre (C6) as its own gate chunk between them. C7 + all Theme-C chunks (C8/C9/C10) are GATED on a green C6 (D2-pre) run.",
+  "sections": [
+    {
+      "heading": "Table of Contents",
+      "estimatedTokens": 146
+    },
+    {
+      "heading": "Glossary",
+      "estimatedTokens": 734
+    },
+    {
+      "heading": "1. Kontext & Auslöser",
+      "estimatedTokens": 908
+    },
+    {
+      "heading": "2. Ziele / Acceptance-Kriterien",
+      "estimatedTokens": 972
+    },
+    {
+      "heading": "3. Architektur-Übergang (legacy → new cutover seam map)",
+      "estimatedTokens": 1368
+    },
+    {
+      "heading": "4. Building Blocks (Implementierungs-Reihenfolge)",
+      "estimatedTokens": 4661
+    },
+    {
+      "heading": "5. Spec-References",
+      "estimatedTokens": 344
+    },
+    {
+      "heading": "6. Risiken & Rollback",
+      "estimatedTokens": 1222
+    },
+    {
+      "heading": "7. Verbleibende offene Fragen",
+      "estimatedTokens": 454
+    },
+    {
+      "heading": "8. Referenzen",
+      "estimatedTokens": 717
+    },
+    {
+      "heading": "9. Iteration-Log",
+      "estimatedTokens": 1804
+    }
+  ],
+  "blocks": [
+    {
+      "id": "B1",
+      "name": "Theme A — state-shape (non-destructive foundation; unblocks B+C)",
+      "chunk_ids": [
+        "C1-A1-state-shape-counters",
+        "C2-A2-sessionid-langstrings"
+      ],
+      "test_agent_count": 1,
+      "notes": "Pure JVM reducer-tests (K-1 handwritten fakes, no Android Context — K-4 clean). Additive defaulted fields + reducer arms only — independently revertible, nothing downstream breaks (Epic §6.2 invariant 1). 2 chunks (below the ≥4 chunks/block guideline) is DELIBERATE: Theme A is the non-destructive foundation that gates the destructive Themes B/C; keeping it in its own audit scope means Block-Validate sees the state-shape diff cleanly BEFORE the recording-drive cutover mixes in. Aggregate score ~900 (M+M). Block diff < 800 LOC → test_agent_count=1."
+    },
+    {
+      "id": "B2",
+      "name": "Theme B — recording-drive cutover + D2-pre gate (the live flip, guarded-fallback)",
+      "chunk_ids": [
+        "C3-B1-pipelinerunner-adapter",
+        "C4-B2-notification-coordinator",
+        "C5-B3-ime-trigger-guarded",
+        "C6-D2pre-verification-gate",
+        "C7-B3-legacy-deletion"
+      ],
+      "test_agent_count": 3,
+      "notes": "The load-bearing risk concentration (3 HIGH/HIGHEST-risk chunks: C3 R-1, C4 R-2, C5 R-1/R-4). Robolectric binder-harness required (K-4 justified opt-out — mirrors DictatePipelineServiceOverlayTransitionTest tearDown discipline per b5-ime-activation-wiring.md §8, R-7). C6 (D2-pre) is a verification GATE chunk inside this block: it runs the keystone F-1/F-2/F-3 + Triangle-FSM T1-T7 trace on the new LIVE path to authorise C7's legacy-call-site deletion. C7 is a pure-delete chunk GATED on a green C6. Mid-chunk-triage ARMED for C3/C4/C5 (architecture-conflict / blocks-following-chunks markers likely on the recording-drive flip — Epic §9 ESTIMATE). 5 chunks, aggregate score ~5200. Block diff > 2500 LOC → test_agent_count=3."
+    },
+    {
+      "id": "B3",
+      "name": "Theme C — legacy-retire (point of no return; gated on green D2-pre/C6)",
+      "chunk_ids": [
+        "C8-C1-languagecontroller-removal",
+        "C9-C2-audiofile-field-removal",
+        "C10-C3-dead-controller-retire"
+      ],
+      "test_agent_count": 2,
+      "notes": "DESTRUCTIVE — deletes legacy paths. Every chunk here is GATED on a green C6 (D2-pre) run (Epic §6.2: 'Themes C1/C2/C3 are the point of no return — they run after D2 proves the new path'). Mostly compile-invariant greps + regression (AC-5/AC-6/AC-7). C8 is MED-HIGH risk (R-3 Application-singleton boot-before-bind). C9/C10 are MED. 3 chunks, aggregate score ~2400. Block diff 800-2500 LOC → test_agent_count=2."
+    },
+    {
+      "id": "B4",
+      "name": "Theme D — test-completion (locks the result; final regression gate)",
+      "chunk_ids": [
+        "C11-D1-espresso-ui-tests",
+        "C12-D2-final-integration-e2e"
+      ],
+      "test_agent_count": 2,
+      "notes": "Test/verification only — no production risk (R-6 mitigated by Robolectric mirror). C11 (D1) implements Espresso UI-1..10 bodies per Spec 2 §14.2 + a Robolectric mirror fallback (OQ-4). C12 (D2-final) is the post-all-blocks holistic re-run: full ./gradlew test + assembleDebug + Spec 1 §9.6 cleanup-greps + parent keystone trace. 2 chunks (below ≥4 guideline) is DELIBERATE: Theme D is the verification tail and must have its own clean audit scope (no production diff mixed in) so AUDIT-TEST assesses test-completion against the now-frozen production code. Aggregate score ~1400. Block diff 800-2500 LOC (mostly test code) → test_agent_count=2."
+    }
+  ],
+  "chunks": [
+    {
+      "id": "C1-A1-state-shape-counters",
+      "title": "Block A1 — F-12 isStarting + F-13 Running counters",
+      "description": "Add PipelineUiState.ReprocessStaging.isStarting:Boolean=false (F-12, SendStaging double-click guard) and PipelineUiState.Running.completedSteps/totalSteps/elapsedMs (F-13, live progress for record-button text + notification). Wire the reducer arms in PipelineModule.reduce (SendStaging: !isStarting guard; StepCompleted→completedSteps++; StartPipeline/StepStarted→totalSteps; elapsedMs from ReducerContext.now). Replace the B4-resolver placeholders that read these. Non-destructive — additive defaulted fields, source-compatible.",
+      "main": [
+        "Table of Contents",
+        "Glossary",
+        "1. Kontext & Auslöser",
+        "2. Ziele / Acceptance-Kriterien",
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)",
+        "5. Spec-References",
+        "6. Risiken & Rollback",
+        "7. Verbleibende offene Fragen",
+        "8. Referenzen",
+        "9. Iteration-Log"
+      ],
+      "context": [],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §3 (DictateUiState data model — ReprocessStaging/Running variants)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §15.1.x (Cross-Module-Coupling-Matrix — Pipeline×Resend)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§3 Datenmodell: `DictateUiState`": [
+            "PipelineUiState.ReprocessStaging shape",
+            "PipelineUiState.Running shape"
+          ],
+          "§15 Modul-Inventar (F-11)": [
+            "§15.1.x Cross-Module-Coupling-Matrix (Pipeline×Resend)"
+          ]
+        }
+      },
+      "implementation_score_estimate": 450,
+      "bracket": "M",
+      "files_estimate": 4,
+      "loc_estimate": 250,
+      "notes": "[INDEX-CHUNK: owns all plan sections as `main` per the modular-plan-pattern validator convention — mirrors the parent plan's C0-block0-arch-docs. Every other chunk has main:[] and works from §4 + spec_references/targeted_sub_sections. The Epic plan is the block-index; the 3 parent specs are SoT.] Epic §4 Block A1. AC-4 (F-12/F-13 part). Files: state/DictateUiState.kt, state/modules/PipelineModule.kt, B4 record-button-text resolver + LayoutStrings counter consumer. First block — no deps. Risk LOW (Epic §4 Block A1)."
+    },
+    {
+      "id": "C2-A2-sessionid-langstrings",
+      "title": "Block A2 — F-10 sessionId source + F-15 language-aware strings",
+      "description": "F-10: give StopRecordingAndSend a real sessionId — thread the IME's pre-allocated UUID (DictateInputMethodService.java:2213 preAllocatedId) through RecordingAction.StartRecording → carried in RecordingState → read on StopRecordingAndSend. Remove the documented empty-string sentinel (Action.kt:137 KDoc + every call-site). F-15: make LayoutStrings.dictateButtonText read LanguageModule's effective-language state (LanguageState.effective, already in DictateUiState — read-only, no D-13 dependency, do NOT add a legacy writer).",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §15.2 (RecordingModule reducer — sessionId/audioFile payload, full impl)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §15.1.x (Cross-Module-Coupling-Matrix)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §3 (Action.kt StopRecordingAndSend shape, RecordingState payload)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§15 Modul-Inventar (F-11)": [
+            "§15.2 RecordingModule (Beispiel-Implementation, vollständig)",
+            "§15.1.x Cross-Module-Coupling-Matrix"
+          ],
+          "§3 Datenmodell: `DictateUiState`": [
+            "Action.RecordingAction.StopRecordingAndSend",
+            "RecordingState.Preparing/Active payload"
+          ]
+        }
+      },
+      "implementation_score_estimate": 500,
+      "bracket": "M",
+      "files_estimate": 5,
+      "loc_estimate": 300,
+      "notes": "Epic §4 Block A2. AC-4 (F-10/F-15 part). dep: C1 (sequential — same DictateUiState.kt/Action.kt surface, avoid two parallel diffs). Files: state/Action.kt, state/RecordingState payload, state/modules/RecordingModule.kt, LayoutStrings/record-button resolver. Risk MEDIUM — RecordingModule FSM must stay spec-faithful (Spec 1 §15.2); F-15 must not pre-empt D-13."
+    },
+    {
+      "id": "C3-B1-pipelinerunner-adapter",
+      "title": "Block B1 — Real PipelineRunnerSubsystem adapter (JobExecutor-backed)",
+      "description": "Replace PipelineServiceStubSubsystems.pipelineRunner with a production PipelineRunnerSubsystem adapter backed by JobExecutor (Spec 1 §9.6: JobExecutor implements PipelineRunner; §13.3.11). submit(sessionId,audioFile) builds a JobRequest.TranscriptionPipeline mirroring DictateInputMethodService.java:2214-2236 (language, prompt-queue, style-prompt, livePrompt, autoSwitch, recordingsDir, origin — ALL fields, R-1); submitReprocess→reprocess JobRequest; cancel→JobExecutor.cancel; isRunning/activeJobCount→ActiveJobRegistry. Wire into DictatePipelineService.onCreate Step 4 replacing line 419. JobExecutor/PipelineOrchestrator NOT rewritten — thin delegation (OQ-1).",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §9.6 (Lösch-/Adapter-/Erhalt-Tabelle — JobExecutor implements PipelineRunner, never deleted)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §13.3.11 (PipelineSessionRepo + PipelineRunner — F-2/DIP contract)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§9 Migration vorhandener Klassen": [
+            "§9.6 Lösch-/Adapter-/Erhalt-Tabelle (heutige Klassen → künftiger Status)"
+          ],
+          "§13 Vollständigkeits-Verifikation": [
+            "§13.3.11 PipelineSessionRepo + PipelineRunner (F-2 / DIP, unverändert)"
+          ]
+        }
+      },
+      "implementation_score_estimate": 1100,
+      "bracket": "L",
+      "files_estimate": 3,
+      "loc_estimate": 650,
+      "notes": "Epic §4 Block B1. AC-1 (pipelineRunner part). dep: C2 (needs real sessionId in RecordingState). RISK HIGH (R-1 — JobRequest field-by-field fidelity). New core/PipelineRunnerSubsystemAdapter.kt (mirrors core/*Adapter.kt pattern, e.g. BluetoothScoSubsystemAdapter), core/DictatePipelineService.kt onCreate Step 3/4, state/PipelineServiceStubSubsystems.kt (demote pipelineRunner @Deprecated test-only or delete). Robolectric: dispatch→JobExecutor.start spy + full JobRequest assert. Mid-chunk-triage armed (OQ-1 escalation path). Score sized down from raw LOC due to HIGH spec-research-load (§9.6+§13.3.11+IME construction trace)."
+    },
+    {
+      "id": "C4-B2-notification-coordinator",
+      "title": "Block B2 — Real PipelineNotificationCoordinator + PipelineActionRouter",
+      "description": "Write the Spec 1 §7.4 PipelineNotificationCoordinator (fully spec'd: §7.4/§7.6 Notification-Inhalt, §11.1.2 Notification.Builder concrete impl, §7.5 PipelineActionRouter action-button→Action back-channel). Replace PipelineServiceStubSubsystems.notificationCoordinator; wire into onCreate Step 4 (replacing line 421) + BroadcastReceiver/PendingIntent. show(Recording)→persistent FGS notification with [Pause][Stopp][Senden]; Pipeline→progress; dismiss() on Idle. NOTIF_ID single-source (only PipelineNotificationCoordinator.NOTIF_ID). Add pipeline-notification strings if missing (OQ-3, mirrors F-5 locale discipline).",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §7.4 (PipelineNotificationCoordinator class)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §7.5 (PipelineActionRouter — action-button back-channel)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §7.6 (Notification-Inhalt — [Pause][Stopp][Senden], status mapping)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §11.1.2 (Notification.Builder — konkrete Implementation)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §10 (Acceptance-Kriterien — Block-2: persistent notification, FGS survival, OOM, NOTIF_ID-Konsistenz)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §11.5 (Notification-UX — POST_NOTIFICATIONS Android 13+)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§7 Lifecycle: Foreground Service": [
+            "§7.4 PipelineNotificationCoordinator",
+            "§7.5 PipelineActionRouter",
+            "§7.6 Notification-Inhalt"
+          ],
+          "§11 Research-TODOs für Agent — Detail-Antworten": [
+            "§11.1.2 Notification.Builder — konkrete Implementation",
+            "§11.5 Notification-UX (POST_NOTIFICATIONS, MediaStyle, click-behaviour)"
+          ],
+          "§10 Acceptance-Kriterien": [
+            "Block-2 acceptance (persistente Notification, FGS-Survival, OOM, NOTIF_ID-Konsistenz)"
+          ]
+        }
+      },
+      "implementation_score_estimate": 1200,
+      "bracket": "L",
+      "files_estimate": 4,
+      "loc_estimate": 700,
+      "notes": "Epic §4 Block B2. AC-2 + AC-3. dep: C3 (runner live so Recording/Pipeline status reachable E2E) + C1 (F-13 counters the notification displays). RISK HIGH (R-2 — startForeground OS-version-sensitive; channel-before-start ordering, FGS-5s-Frist, Android 13+). New core/PipelineNotificationCoordinator.kt + core/PipelineActionRouter.kt, onCreate Step 4 + BroadcastReceiver/PendingIntent, demote notificationCoordinator stub, res/strings.xml. Mid-chunk-triage armed. Score sized for very heavy spec-research-load (6 spec sub-sections)."
+    },
+    {
+      "id": "C5-B3-ime-trigger-guarded",
+      "title": "Block B3 (guarded) — IME recording-trigger flip behind USE_LEGACY_RECORDING_DRIVE",
+      "description": "Flip DictateInputMethodService.java's recording trigger from JobExecutor.INSTANCE.start(request) (:2236) to pipelineBinder.dispatch(RecordingAction.StartRecording(target,audioFile)) and stop-and-send to dispatch(StopRecordingAndSend(realSessionId)) (F-10, sessionId from C2). The legacy JobExecutor.start call-site is KEPT one boolean (USE_LEGACY_RECORDING_DRIVE) away — guarded fallback, NOT deleted here (deletion is C7, gated on C6/D2-pre). Audit AC-10: every IME pipelineBinder.dispatch + JobExecutor.start so no user action double-dispatches (R-4 — fallback is mutually-exclusive boolean).",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §15.2 (RecordingModule reducer — sessionId/audioFile payload)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §10 (Block-2 acceptance — Tastatur-Wechsel-Survival)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §8 (IME-Service-Integration)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§15 Modul-Inventar (F-11)": [
+            "§15.2 RecordingModule (Beispiel-Implementation, vollständig)"
+          ],
+          "§10 Acceptance-Kriterien": [
+            "Block-2 Tastatur-Wechsel-Survival acceptance"
+          ],
+          "§8 IME-Service-Integration": [
+            "IME dispatch contract"
+          ]
+        }
+      },
+      "implementation_score_estimate": 1000,
+      "bracket": "L",
+      "files_estimate": 2,
+      "loc_estimate": 550,
+      "notes": "Epic §4 Block B3 (guarded portion only). AC-2 + AC-3 + AC-10 (the new path; legacy still reachable behind boolean). dep: C3 + C4 + C2. RISK HIGHEST (R-1/R-4 — irreversible flip of core feature; mitigated by guarded fallback until C6 signs off). Files: DictateInputMethodService.java (startRecording, stop-and-send, cancel ~:2165-2293, onFinishInputView recording-active branch, standalone-prompt :2251-2290). Java legacy file — do NOT convert to Kotlin. Mid-chunk-triage armed (architecture-conflict / blocks-following-chunks markers likely). NOTE: the legacy-call-site DELETION is C7, NOT here."
+    },
+    {
+      "id": "C6-D2pre-verification-gate",
+      "title": "D2-pre — verification GATE (sign-off on the new live path)",
+      "description": "Epic EXECUTION-PLAN ORDERING NOTE: D2 is a verification GATE, not a tail. This chunk re-runs the parent plan's keystone F-1/F-2/F-3 trace + Triangle-FSM T1-T7 E2E at integration level ON THE NEW LIVE PATH (C3 runner + C4 notification + C5 guarded trigger). Two-keyboard manual E2E (Spec 1 §10 Tastatur-Wechsel-Survival), FGS-survival + OOM-kill-recovery, notification action-button round-trip. A GREEN run here AUTHORISES C7's legacy-call-site deletion + all Theme-C (B3-block) destructive removals. If RED: triage before any deletion proceeds.",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §10 (Acceptance-Kriterien — Block-2 + FGS-survival + OOM + NOTIF_ID)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/b5-ime-activation-wiring.md §3 (Triangle-FSM IME-wiring, T1-T7 trace)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§10 Acceptance-Kriterien": [
+            "Block-2 acceptance",
+            "FGS-survival + OOM-kill-recovery",
+            "NOTIF_ID-Konsistenz"
+          ]
+        }
+      },
+      "implementation_score_estimate": 400,
+      "bracket": "S/M",
+      "files_estimate": 1,
+      "loc_estimate": 250,
+      "merge_exemption": "Verification-Gate — D12-atomic. This is NOT an implementation chunk; it is the load-bearing dependency GATE the Epic EXECUTION-PLAN ORDERING NOTE mandates between B3-guarded (C5) and B3-final-deletion (C7) + Theme-C. Merging it into C5 or C7 would destroy the gate semantics (the whole point is a separate, independently-evaluable sign-off run BEFORE any destructive deletion). Modelled as its own chunk per the Epic author's explicit instruction.",
+      "notes": "Epic §4 Block D2 (the D2-PRE run). AC-9 + AC-10 holistic on the new path. dep: C5 (+ C3/C4 transitively). RISK LOW (verification gate). Files: new DictateCutoverE2ETest.kt aggregating keystone+T1-T7 (or extend existing Robolectric binder-harness). GATE OUTPUT: green → orchestrator proceeds to C7+B3-block(Theme C); red → mid-chunk-triage, no deletion until resolved. This is the chunk the ORDERING NOTE calls 'D2-pre (verify new path green) to authorise B3-final + Themes C'."
+    },
+    {
+      "id": "C7-B3-legacy-deletion",
+      "title": "Block B3 (final) — delete legacy JobExecutor.start call-site + USE_LEGACY_RECORDING_DRIVE boolean",
+      "description": "GATED ON GREEN C6 (D2-pre). The B3 final, separately-committed, revertible chunk: remove the now-dead direct JobExecutor.INSTANCE.start(request) call-site in DictateInputMethodService.java and the USE_LEGACY_RECORDING_DRIVE guard boolean (OQ-2 default: remove immediately after D2 green — D7, no lingering dead switch). After this, the new orchestrator is the SOLE recording driver (AC-10 single-architecture invariant); rollback is now git-revert of this one commit only (legacy code still in history).",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §9.6 (Lösch-/Adapter-/Erhalt-Tabelle — legacy call-site status)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§9 Migration vorhandener Klassen": [
+            "§9.6 Lösch-/Adapter-/Erhalt-Tabelle"
+          ]
+        }
+      },
+      "implementation_score_estimate": 350,
+      "bracket": "S",
+      "files_estimate": 1,
+      "loc_estimate": 120,
+      "merge_exemption": "Pure-Delete-Pass + dependency-gated. This is the deletion half of B3, deliberately split from C5 (guarded flip) per the Epic §6.2 rollback invariant + EXECUTION-PLAN ORDERING NOTE: the deletion MUST be a separate revertible commit GATED on a green C6/D2-pre. Merging into C5 would delete the safety net before it is proven, violating Epic §6.2. No creative work — pure removal of dead code + the now-redundant boolean.",
+      "notes": "Epic §4 Block B3 (final chunk). AC-10. dep: C6 GREEN (HARD GATE — orchestrator must NOT start this chunk until C6 signs off green). RISK MED (pure delete of proven-dead code). Files: DictateInputMethodService.java only. Separately committed for git-revert isolation (Epic §6.2 invariant 3)."
+    },
+    {
+      "id": "C8-C1-languagecontroller-removal",
+      "title": "Block C1 — LanguageController full removal (D-13)",
+      "description": "Delete core/LanguageController.kt + its test. Migrate every consumer to LanguageModule + dispatch: DictateApplication.java (Application-singleton — the hard one, process-global, boot-before-bind; route via DictatePrefs + LanguageModule), DictateInputMethodService.java, settings/PreferencesFragment.java, core/KeyboardUiController.kt (if not yet deleted by C10), core/PipelineUiStateReader.kt, core/DictatePipelineService.kt, plus the B3-era bridge dispatch. Extend the existing LanguageAction.RefreshFromPref pattern (IME :874). F-15 (C2) consumers now read LanguageState.effective with no legacy writer behind it.",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §9.6 (Lösch-/Adapter-/Erhalt-Tabelle — LanguageController disposition)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§9 Migration vorhandener Klassen": [
+            "§9.6 Lösch-/Adapter-/Erhalt-Tabelle (LanguageController → entfällt)"
+          ]
+        }
+      },
+      "implementation_score_estimate": 1000,
+      "bracket": "L",
+      "files_estimate": 8,
+      "loc_estimate": 500,
+      "notes": "Epic §4 Block C1. AC-5. dep: C6 GREEN (Theme-C point-of-no-return — gated) + C5 (language-during-recording on new orchestrator). RISK MED-HIGH (R-3 — Application-singleton boot-before-bind; mitigate via DictatePrefs + pipelineBinder!=null guard discipline). Delete core/LanguageController.kt + test; edit DictateApplication.java, IME, PreferencesFragment.java, KeyboardUiController, PipelineUiStateReader, DictatePipelineService; adjust FakePipelineUiStateReader.kt, MultiCallbackForwardingTest.kt."
+    },
+    {
+      "id": "C9-C2-audiofile-field-removal",
+      "title": "Block C2 — audioFile field removal (D-14)",
+      "description": "Delete DictateInputMethodService.audioFile (:222). Source the ~9 reads/writes (:1374,:1880,:2104,:2116,:2122,:2218,:2379,:3042) from orchestrator state (state.recording is Active(useBluetooth,audioFile)/Preparing — audioFile lives there post-C5) or from CacheDirAudioFileFactory directly where the field was a scratch handle. onAudioPersisted (:2379) already takes the file as a parameter. Per-site source-analysis table mandatory (R-5 — wrong source silently breaks resend/migration; Pref.LastFileName semantics already researched in parent b3-cleanup research).",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §15.2 (RecordingState audioFile payload — the post-cutover source)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/b3-cleanup-cascade-and-backfill-policy.md §6 (Pref.LastFileName semantics — forward-compat)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§15 Modul-Inventar (F-11)": [
+            "§15.2 RecordingModule (RecordingState.Active/Preparing audioFile payload)"
+          ]
+        }
+      },
+      "implementation_score_estimate": 450,
+      "bracket": "M",
+      "files_estimate": 1,
+      "loc_estimate": 300,
+      "notes": "Epic §4 Block C2. AC-6. dep: C6 GREEN (Theme-C gated) + C5 (audioFile authoritative in RecordingState) + C2 (RecordingState payload pattern). RISK MED (R-5 — non-recording reads :1880 migration, :2104 resend must trace to correct source). Files: DictateInputMethodService.java only. Sequenced after C8 for git-index safety (Epic §4.1: 'C2 parallelizable with C1 after B3 but sequenced')."
+    },
+    {
+      "id": "C10-C3-dead-controller-retire",
+      "title": "Block C3 — dead-controller retire + PipelineOrchestrator disposition",
+      "description": "Delete the legacy render/state controllers Theme B + the parent RenderBackend path made dead, per Spec 1 §9.6 + Spec 2 §9.1-§9.6 retire-tables: KeyboardLayoutModeController (verify already deleted in parent C15), MainButtonsController, RecordingUiController, KeyboardUiController (state+view), KeyboardStateManager. Run Spec 1 §9.6 End-of-Block-Cleanup-Check grep per class. Confirm PipelineOrchestrator disposition (OQ-1): NOT deleted — survives as the PipelineRunnerSubsystem adaptee (C3's adapter delegates to it, not a reimplementation); annotate the boundary. Per-class responsibility-trace against Spec 2 §9.x before deletion.",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §9.6 (Lösch-/Adapter-/Erhalt-Tabelle — per-class per-block, PipelineOrchestrator never deleted)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.1 (KeyboardLayoutModeController → entfällt vollständig)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.2 (MainButtonsController → ImeViewBackend)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.3 (KeyboardStateManager → drei Owner-Klassen R.10)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.4 (RecordingUiController → KeyboardUiController-Anteile + LayoutCatalog)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.5 (KeyboardUiController.refreshRecordButtonFromState → record_btn-Resolver)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.6 (DictateInputMethodService.java — 4 problematische resend-Mutationen)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§9 Migration vorhandener Klassen": [
+            "§9.6 Lösch-/Adapter-/Erhalt-Tabelle (PipelineOrchestrator never deleted)"
+          ]
+        },
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md": {
+          "§9 Migration vorhandener Klassen — Code-Pointer pro Aussage": [
+            "§9.1 KeyboardLayoutModeController → entfällt vollständig",
+            "§9.2 MainButtonsController → ImeViewBackend",
+            "§9.3 KeyboardStateManager → drei Owner-Klassen (R.10)",
+            "§9.4 RecordingUiController → KeyboardUiController-Anteile + LayoutCatalog",
+            "§9.5 KeyboardUiController.refreshRecordButtonFromState → record_btn-Resolver",
+            "§9.6 DictateInputMethodService.java — die 4 problematischen resend-Mutationen"
+          ]
+        }
+      },
+      "implementation_score_estimate": 950,
+      "bracket": "L",
+      "files_estimate": 8,
+      "loc_estimate": 450,
+      "notes": "Epic §4 Block C3. AC-7 + AC-10. dep: C6 GREEN (Theme-C gated) + C5 (render path solely RenderBackend) + C8 (KeyboardUiController held LanguageController ref) + C9. RISK MED (residual IME ref = fast compile error; subtle risk = unported side-effect — mitigate via per-class responsibility-trace). Pure-delete-leaning but carries the OQ-1 PipelineOrchestrator-boundary confirmation (creative). Delete MainButtonsController, RecordingUiController, KeyboardUiController, KeyboardStateManager (+tests); keep+annotate PipelineOrchestrator. NOTE: §9 heading text in Spec 2 chunks.json may differ — impl-agent resolves via plan-reader headings on the spec."
+    },
+    {
+      "id": "C11-D1-espresso-ui-tests",
+      "title": "Block D1 — Espresso UI-Tests 1–10 bodies + Robolectric mirror",
+      "description": "Implement the 10 @Ignore/fail(\"pending:\") skeletons in androidTest/.../ui/KeyboardLayoutUiTest.kt per Spec 2 §14.2 test-body table (UI-1..UI-10, each mapped to a §1.1 bug-symptom). Un-@Ignore, implement the Espresso assertions. UI-3/UI-8/UI-10 depend on F-13 Running counters (C1) + the live recording-drive (C5). Where device infra unavailable in CI, provide the equivalent Robolectric render-assertion (parent DictatePipelineServiceOverlayTransitionTest binder-harness pattern, R-7 tearDown discipline) and keep the Espresso body for connectedAndroidTest (OQ-4: AC-8 green via either).",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §14.2 (Neue Tests Unit+Integration — Espresso UI-1..10 bodies + bug-symptom map)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md": {
+          "§14 Test-Strategie": [
+            "§14.2 Neue Tests (Unit + Integration) — Espresso UI-1..10 bodies + §1.1 bug-symptom map"
+          ]
+        }
+      },
+      "implementation_score_estimate": 1000,
+      "bracket": "L",
+      "files_estimate": 2,
+      "loc_estimate": 600,
+      "notes": "Epic §4 Block D1. AC-8. dep: C1 (F-13 counters) + C5 (live drive) + C10 (render path solely RenderBackend so assertions test the real path). RISK LOW-MED (R-6 Espresso device-infra flakiness; mitigated by Robolectric mirror). Pure test code — no production risk. Files: androidTest/.../ui/KeyboardLayoutUiTest.kt (10 bodies) + possible new Robolectric mirror under test/. NOTE: this chunk's primary output IS test code (exception to the 'tests are IMPL-TEST's concern' rule — Spec 2 §14.2 specifies the bodies as plan-spec deliverables, so the IMPL agent implements them; the chunk's own IMPL-TEST step then sanity-checks/extends)."
+    },
+    {
+      "id": "C12-D2-final-integration-e2e",
+      "title": "Block D2 (final) — integration E2E + full regression + cleanup-grep gate",
+      "description": "Post-all-blocks holistic re-run (distinct from C6/D2-pre which gated the deletions). Re-run keystone F-1/F-2/F-3 + Triangle-FSM T1-T7 at integration level on the now-fully-cutover path (legacy deleted). Confirm AC-9 + AC-10 holistically: full ./gradlew test (≥946 tests, no net behaviour-coverage deletion) + ./gradlew assembleDebug + every Spec 1 §9.6 cleanup-grep + the AC-1/AC-5/AC-6/AC-7 compile-invariant greps. DictateCutoverE2ETest.kt aggregates the cross-block trace. This is the final lock — no production code, verification only.",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §9.6 (cleanup-grep per 'Final gelöscht' class)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §10 (Acceptance-Kriterien — holistic)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/b5-ime-activation-wiring.md §3 (Triangle-FSM T1-T7 re-trace)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
+          "§9 Migration vorhandener Klassen": [
+            "§9.6 End-of-Block-Cleanup-Check grep (every 'Final gelöscht' class)"
+          ],
+          "§10 Acceptance-Kriterien": [
+            "holistic acceptance re-trace"
+          ]
+        }
+      },
+      "implementation_score_estimate": 400,
+      "bracket": "S/M",
+      "files_estimate": 1,
+      "loc_estimate": 250,
+      "merge_exemption": "Verification-Gate — D12-atomic. Final regression+cleanup-grep lock; distinct from C6 (D2-pre, which gated deletions). Not an implementation chunk; aggregates the cross-block trace. Kept separate from C11 so AUDIT-TEST evaluates test-completion against frozen production code.",
+      "notes": "Epic §4 Block D2 (final run). AC-9 + AC-10 + parent keystone trace green on the fully-cutover path. dep: ALL prior chunks (C11 + C7 + C8/C9/C10). RISK LOW (verification gate). Files: test/runbook only, possible new DictateCutoverE2ETest.kt. This is the Phase-4.5-style in-plan holistic verification; the skill's own Phase 4.5 is the post-all-blocks re-run on top of this."
+    }
+  ]
+}

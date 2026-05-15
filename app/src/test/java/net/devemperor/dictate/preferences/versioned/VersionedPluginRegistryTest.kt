@@ -141,5 +141,5 @@ class VersionedPluginRegistryTest {
     }
 
     // FakeSharedPreferences hoisted to net.devemperor.dictate.testutil for re-use
-    // across LanguageController + Migration tests (Chunk 3).
+    // across LanguageResolver + Migration tests (Chunk 3).
 }

@@ -70,7 +70,7 @@ class DictateOrchestratorTest {
         )
         val orchestrator = newOrchestrator(modules = listOf(moduleA, moduleB))
 
-        val outcome = orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+        val outcome = orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
 
         assertSame(DispatchOutcome.Applied, outcome)
         assertEquals(1, lens.get(TestModuleId.A))
@@ -88,7 +88,7 @@ class DictateOrchestratorTest {
         )
         val orchestrator = newOrchestrator(modules = listOf(module))
 
-        val outcome = orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+        val outcome = orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
 
         assertTrue("expected Rejected, got $outcome", outcome is DispatchOutcome.Rejected)
         assertEquals("reducer-null", (outcome as DispatchOutcome.Rejected).reason)
@@ -100,15 +100,15 @@ class DictateOrchestratorTest {
     fun `dispatch returns Unrouted when no module claims the action class`() {
         val orchestrator = newOrchestrator(modules = emptyList())
 
-        val outcome = orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+        val outcome = orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
 
         assertTrue("expected Unrouted, got $outcome", outcome is DispatchOutcome.Unrouted)
     }
 
     @Test
     fun `dispatch routes deeply-nested sealed leaf actions to the owning module`() {
-        // Action.LanguageAction is a sealed class with a `SetOverride` data class
-        // and a `RefreshFromPref` data object leaf. Claiming the root must route
+        // Action.LanguageAction is a sealed class with `SetOverride` and
+        // `RefreshFromPref` data-class leaves. Claiming the root must route
         // every leaf — exercising the collectLeaves recursion.
         val module = TestDictateModule(
             id = TestModuleId.A,
@@ -118,7 +118,7 @@ class DictateOrchestratorTest {
         val orchestrator = newOrchestrator(modules = listOf(module))
 
         orchestrator.dispatch(Action.LanguageAction.SetOverride("de"))
-        orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+        orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
 
         assertEquals(2, lens.get(TestModuleId.A))
     }
@@ -141,7 +141,7 @@ class DictateOrchestratorTest {
         )
         val orchestrator = newOrchestrator(modules = listOf(module))
 
-        orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+        orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
 
         assertEquals(
             listOf(TestEffect.Tag("first"), TestEffect.Tag("second")),
@@ -169,7 +169,7 @@ class DictateOrchestratorTest {
         )
         val orchestrator = newOrchestrator(modules = listOf(module))
 
-        val outcome = orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+        val outcome = orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
 
         assertSame(DispatchOutcome.Applied, outcome)
         assertEquals("EffectFailure was not routed back to origin module", 1, failures.size)
@@ -260,7 +260,7 @@ class DictateOrchestratorTest {
         )
         val orchestrator = newOrchestrator(modules = listOf(moduleA, moduleB))
 
-        orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+        orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
 
         // A: incremented by initial dispatch
         assertEquals(1, lens.get(TestModuleId.A))
@@ -291,7 +291,7 @@ class DictateOrchestratorTest {
                 // Cascade once on the FIRST observation only — we differentiate
                 // by the lens counter.
                 if (lens.get(TestModuleId.A) == 1) {
-                    listOf(Action.LanguageAction.RefreshFromPref)
+                    listOf(Action.LanguageAction.RefreshFromPref("en"))
                 } else {
                     emptyList()
                 }
@@ -299,7 +299,7 @@ class DictateOrchestratorTest {
         )
         val orchestrator = newOrchestrator(modules = listOf(module))
 
-        orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+        orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
 
         // First dispatch → counter 0→1. Cross-module observer fires:
         //   prev != next AND lens.get == 1 → cascade Refresh.
@@ -378,7 +378,7 @@ class DictateOrchestratorTest {
         // (size > 1 short-circuits the trigger's hook).
         val orchestrator = newOrchestrator(modules = listOf(trigger, moduleZ, moduleY, moduleX))
 
-        orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+        orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
 
         // The three cascade actions are dispatched in cascade-list order:
         //   1. AudioAction.ToggleAudioFocusPref → moduleZ
@@ -414,13 +414,13 @@ class DictateOrchestratorTest {
             id = TestModuleId.A,
             actionClass = Action.LanguageAction::class,
             lens = lens,
-            crossModule = { _, _ -> listOf(Action.LanguageAction.RefreshFromPref) },
+            crossModule = { _, _ -> listOf(Action.LanguageAction.RefreshFromPref("en")) },
         )
         val orchestrator = newOrchestrator(modules = listOf(module))
 
         if (net.devemperor.dictate.BuildConfig.DEBUG) {
             try {
-                orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+                orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
                 fail("expected IllegalStateException from MAX_CASCADE_DEPTH error() on debug builds")
             } catch (t: IllegalStateException) {
                 assertTrue(
@@ -432,7 +432,7 @@ class DictateOrchestratorTest {
             // Release path: no throw; the recursive dispatch hits Rejected,
             // but the outermost dispatch's chain still returns Applied
             // (the original action was applied).
-            val outcome = orchestrator.dispatch(Action.LanguageAction.RefreshFromPref)
+            val outcome = orchestrator.dispatch(Action.LanguageAction.RefreshFromPref("en"))
             assertSame(DispatchOutcome.Applied, outcome)
         }
 
@@ -524,7 +524,7 @@ class DictateOrchestratorTest {
         // in the test thread — emitAction completes before we assert.
         val orchestrator = newOrchestrator(modules = listOf(module))
 
-        orchestrator.emitAction(Action.LanguageAction.RefreshFromPref)
+        orchestrator.emitAction(Action.LanguageAction.RefreshFromPref("en"))
 
         assertEquals(
             "emitAction should have triggered one dispatch on Unconfined scope",

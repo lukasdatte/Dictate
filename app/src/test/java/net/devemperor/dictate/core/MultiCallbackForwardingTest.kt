@@ -15,8 +15,10 @@ import org.junit.Test
  * Quality-Gate K-2: replaces the obsolete `CompositePipelineCallbackTest`.
  * The original plan suggested a Composite-Wrapper around a single-slot
  * `setCallback`; the K-2 review collapsed that into a listener list directly
- * on the `KeyboardUiController`. Both consumers (the Service-side observer
- * and the `LanguageController`) now register independently via `addCallback`.
+ * on the `KeyboardUiController`. Multiple `PipelineUiCallback` consumers
+ * register independently via `addCallback` (D-13: the legacy
+ * effective-language controller consumer was removed; the Service-side
+ * pipeline observer remains the production consumer).
  *
  * The real [KeyboardUiController] cannot be instantiated in a JVM unit test
  * (it constructor-depends on `LayoutInflater`, `Handler`, `MaterialButton`,

@@ -11,13 +11,17 @@ import java.io.File
  * Test-only stubs + production fallbacks for the subsystem
  * interfaces in [ModuleServices].
  *
- * **Post-B3 reality (B3-VAL-W1 F-18 documentation refresh):** after
- * the C8 subsystem-adapter migration, this file retains only:
+ * **Post-C4-B2 reality (cutover-completion Epic):** after the C8
+ * subsystem-adapter migration and the B1/B2 cutover chunks, this file
+ * retains **no production-route stubs** — every subsystem the
+ * orchestrator drives has a real adapter wired in
+ * `DictatePipelineService.onCreate`. What remains:
  *
- *  - **One production-route stub** that the cutover-completion Epic
- *    leaves for C4: [notificationCoordinator] (the Spec 1 §7.4
- *    `PipelineNotificationCoordinator` class is unwritten — Spec 1
- *    §7.4-§7.5 implemented in C4-B2 alongside the action router).
+ *  - **Deprecated** [notificationCoordinator] — superseded by
+ *    [net.devemperor.dictate.core.PipelineNotificationCoordinator]
+ *    (C4-B2, Spec 1 §7.4/§7.6/§11.1.2 + the §7.5
+ *    [net.devemperor.dictate.core.PipelineActionRouter]). Retained
+ *    for test-only compile-compat.
  *  - **Deprecated** [pipelineRunner] — superseded by
  *    [net.devemperor.dictate.core.PipelineRunnerSubsystemAdapter]
  *    (C3-B1, thin `JobExecutor.INSTANCE` delegation). Retained for
@@ -158,7 +162,24 @@ internal object PipelineServiceStubSubsystems {
         override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
     }
 
-    /** Notification coordinator stub — Block 1b will wire the real `PipelineNotificationCoordinator`. */
+    /**
+     * Notification coordinator stub.
+     *
+     * **C4-B2 — demoted to test-only.** Production wiring no longer
+     * references this: `DictatePipelineService.onCreate` Step 4
+     * constructs a real
+     * [net.devemperor.dictate.core.PipelineNotificationCoordinator]
+     * (Spec 1 §7.4/§7.6/§11.1.2, with the §7.5
+     * [net.devemperor.dictate.core.PipelineActionRouter] back-channel).
+     * Retained only for test code that wants a no-op
+     * `Log.w`-and-discard coordinator baseline (mirrors the
+     * [pipelineRunner] / [sessionRepo] / [audioFileFactory]
+     * deprecation discipline established in C3-B1 / C10 / C11).
+     */
+    @Deprecated(
+        "Replaced by PipelineNotificationCoordinator in C4-B2 — kept for test-only compile-compat",
+        level = DeprecationLevel.WARNING,
+    )
     val notificationCoordinator: PipelineNotificationCoordinatorSubsystem =
         object : PipelineNotificationCoordinatorSubsystem {
             override fun show(status: NotificationStatus) {

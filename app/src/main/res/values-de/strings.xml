@@ -336,6 +336,20 @@
     <string name="dictate_service_not_ready">Service startet noch — bitte kurz warten.</string>
     <string name="dictate_storage_full">Cache voll — Aufnahme kann nicht starten.</string>
 
+    <!-- C4-B2 (Epic OQ-3 / FN-2): PipelineNotificationCoordinator — zustandsabhängige Untertitel + [Pause][Stopp][Senden]-Action-Buttons (Spec 1 §7.6). -->
+    <string name="dictate_notif_recording_active">Aufnahme läuft …</string>
+    <string name="dictate_notif_recording_paused">Aufnahme pausiert</string>
+    <string name="dictate_notif_processing">Verarbeite …</string>
+    <string name="dictate_notif_ready_to_insert">Bereit zum Einfügen</string>
+    <string name="dictate_notif_overlay_permission_required">Schwebe-Widget ausgeblendet — Berechtigung entzogen</string>
+    <string name="dictate_action_pause">Pause</string>
+    <string name="dictate_action_resume">Fortsetzen</string>
+    <string name="dictate_action_stop">Stopp</string>
+    <string name="dictate_action_send">Senden</string>
+    <string name="dictate_action_cancel">Abbrechen</string>
+    <string name="dictate_action_insert">Einfügen</string>
+    <string name="dictate_action_discard">Verwerfen</string>
+
     <!-- Block 5 / Spec 3 (Floating-Overlay): Inhaltsbeschreibungen für das 5-Tasten-Overlay. -->
     <string name="overlay_record_cd">Aufnahme starten</string>
     <string name="overlay_send">Senden</string>

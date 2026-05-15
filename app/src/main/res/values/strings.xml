@@ -415,6 +415,28 @@
     <string name="dictate_storage_full">Cache full — recording cannot start.</string>
 
     <!--
+        C4-B2 (Epic OQ-3 / FN-2): PipelineNotificationCoordinator
+        state-driven subtitles + the [Pause][Stopp][Senden] /
+        [Resume][Stopp][Senden] / [Cancel] / [Insert][Discard]
+        action-button labels (Spec 1 §7.6). `dictate_history_pause`
+        already existed but is the history-row label — the FGS
+        notification needs its own keyed strings so a future history
+        re-word doesn't silently change the notification.
+    -->
+    <string name="dictate_notif_recording_active">Recording …</string>
+    <string name="dictate_notif_recording_paused">Recording paused</string>
+    <string name="dictate_notif_processing">Processing …</string>
+    <string name="dictate_notif_ready_to_insert">Ready to insert</string>
+    <string name="dictate_notif_overlay_permission_required">Floating widget hidden — permission revoked</string>
+    <string name="dictate_action_pause">Pause</string>
+    <string name="dictate_action_resume">Resume</string>
+    <string name="dictate_action_stop">Stop</string>
+    <string name="dictate_action_send">Send</string>
+    <string name="dictate_action_cancel">Cancel</string>
+    <string name="dictate_action_insert">Insert</string>
+    <string name="dictate_action_discard">Discard</string>
+
+    <!--
         Block 5 / Spec 3 (Floating-Overlay): content-descriptions for the
         5-button overlay layout. The shared "Send" label re-uses the
         existing `dictate_send` resource; per-button accessibility

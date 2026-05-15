@@ -4,7 +4,6 @@ import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.ClipboardManager
 import android.content.Context
@@ -18,7 +17,6 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import android.view.WindowManager
-import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,7 +30,6 @@ import net.devemperor.dictate.R
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.prompt.PromptService
 import net.devemperor.dictate.database.DictateDatabase
-import net.devemperor.dictate.settings.DictateSettingsActivity
 import net.devemperor.dictate.migration.LegacyAudioFileMigration
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.AudioFileFactory
@@ -167,6 +164,21 @@ class DictatePipelineService : Service() {
     // and so a future LocalBinder accessor (C5) can reach the same
     // instance without re-constructing.
     private lateinit var pipelineRunnerSubsystemAdapterImpl: PipelineRunnerSubsystemAdapter
+
+    // ── C4-B2 — real PipelineNotificationCoordinator + ActionRouter ────
+    //
+    // Spec 1 §7.4/§7.5/§7.6/§11.1.2. The coordinator implements the
+    // `PipelineNotificationCoordinatorSubsystem` command interface (wired
+    // into ModuleServices, Step 4) and also supplies `buildInitial()` for
+    // the Service's `startForeground` call. The router is the
+    // notification-action-button → Action back-channel; its
+    // `dispatch(intent)` is invoked from `onStartCommand` when a
+    // `[Pause]`/`[Stopp]`/`[Senden]`/… button is tapped. Both are
+    // `lateinit` (set in onCreate Step 4); held as fields so
+    // `onStartCommand`/`onDestroy` reach the same instances without
+    // reconstruction (mirrors the C3-B1 adapter field discipline).
+    private lateinit var pipelineActionRouterImpl: PipelineActionRouter
+    private lateinit var notificationCoordinatorImpl: PipelineNotificationCoordinator
 
     // ── C11 — Pre-Dispatch audio file allocator (Spec 1 §4.11) ─────────
     //
@@ -434,6 +446,24 @@ class DictatePipelineService : Service() {
             ),
         )
 
+        // C4-B2 — real notification coordinator + action router (Spec 1
+        // §7.4/§7.5/§7.6/§11.1.2). Replaces the
+        // `PipelineServiceStubSubsystems.notificationCoordinator` no-op.
+        // The router dispatches decoded notification-button actions via
+        // a late-bound `orchestrator.dispatch` lambda (the orchestrator
+        // is constructed below — same construction-order pattern as
+        // `emitAction`). The coordinator does NOT create a second
+        // NotificationChannel — it reuses the one
+        // `ensureNotificationChannel()` (Step 1) already created
+        // (R-2: channel-before-startForeground ordering preserved).
+        pipelineActionRouterImpl = PipelineActionRouter(
+            dispatchAction = { action -> orchestrator.dispatch(action) },
+        )
+        notificationCoordinatorImpl = PipelineNotificationCoordinator(
+            context = this,
+            actionRouter = pipelineActionRouterImpl,
+        )
+
         moduleServicesImpl = ModuleServices(
             recordingHardware = recordingHardware,
             bluetoothSco = bluetoothSco,
@@ -443,7 +473,7 @@ class DictatePipelineService : Service() {
             borderGlow = borderGlow,
             pipelineRunner = pipelineRunnerSubsystemAdapterImpl,
             sessionRepo = sessionRepoAdapterImpl,
-            notificationCoordinator = PipelineServiceStubSubsystems.notificationCoordinator,
+            notificationCoordinator = notificationCoordinatorImpl,
             inputConnectionProvider = { binder.delegateInputConnectionProvider?.invoke() },
             clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager,
             sharedPrefs = sharedPrefs,
@@ -839,8 +869,27 @@ class DictatePipelineService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // C4-B2 — notification-action back-channel (Spec 1 §7.3/§7.5).
+        // A tap on a `[Pause]`/`[Stopp]`/`[Senden]`/`[Abbrechen]`/
+        // `[Einfügen]`/`[Verwerfen]` button re-enters here; the router
+        // decodes the intent's action and forwards the typed Action to
+        // the orchestrator. Non-action starts (the first FGS start)
+        // carry no `intent.action` and are ignored by the router.
+        if (::pipelineActionRouterImpl.isInitialized) {
+            try {
+                pipelineActionRouterImpl.dispatch(intent)
+            } catch (t: Throwable) {
+                // R-2: an action-decode failure must not abort the FGS
+                // start below (which keeps recording alive). Log + carry
+                // on to startForeground.
+                Log.w(TAG, "notification-action dispatch failed", t)
+            }
+        }
         try {
-            startForegroundCompat(buildInitialNotification())
+            // C4-B2 — `buildInitial()` is the coordinator's pure,
+            // in-memory state→notification render (Spec 1 §7.4); safe
+            // within the FGS-5-second budget (no DB/IO).
+            startForegroundCompat(notificationCoordinatorImpl.buildInitial())
         } catch (e: SecurityException) {
             Log.w(TAG, "FGS start denied (security)", e)
             stopSelf()
@@ -929,6 +978,19 @@ class DictatePipelineService : Service() {
             }
         }
         serviceScope.cancel()
+        // C4-B2 — explicit notification cancel (Spec 1 §7.3 final
+        // step). Idempotent: `stopSelf()` on a terminal state already
+        // removes the FGS-sticky notification, but an onDestroy not
+        // preceded by `stopSelf` (Android-initiated stop, OOM) would
+        // otherwise leave the notification orphaned. Double-cancel is a
+        // harmless no-op. Uses the single SoT NOTIF_ID.
+        if (::notificationCoordinatorImpl.isInitialized) {
+            try {
+                notificationCoordinatorImpl.dismiss()
+            } catch (t: Throwable) {
+                Log.w(TAG, "notification dismiss during onDestroy failed", t)
+            }
+        }
         super.onDestroy()
     }
 
@@ -962,39 +1024,29 @@ class DictatePipelineService : Service() {
         }
     }
 
-    private fun buildInitialNotification(): Notification {
-        val contentIntent: PendingIntent? = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, DictateSettingsActivity::class.java).addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP,
-            ),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_baseline_mic_20)
-            .setContentTitle(getString(R.string.dictate_pipeline_notif_title))
-            .setContentText(getString(R.string.dictate_pipeline_notif_idle))
-            .setOngoing(true)
-            .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .apply { if (contentIntent != null) setContentIntent(contentIntent) }
-            .build()
-    }
+    // C4-B2 — `buildInitialNotification()` removed. The initial
+    // `startForeground` notification is now built by
+    // `notificationCoordinatorImpl.buildInitial()` (Spec 1 §7.4); the
+    // idle/Recording/Pipeline content + action buttons live in
+    // `PipelineNotificationCoordinator` (Spec 1 §7.6/§11.1.2). The
+    // builder block here was a duplicate of §11.1.2 that the coordinator
+    // now owns as the single source.
 
     private fun startForegroundCompat(notification: Notification) {
+        // C4-B2 — NOTIF_ID is sourced from
+        // `PipelineNotificationCoordinator.NOTIF_ID` (Spec 1 §7.4/§10
+        // "NOTIF_ID-Konsistenz" SoT). The Service no longer declares its
+        // own `const val NOTIF_ID` — one id ⇒ no duplicate/orphan
+        // notification.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
-                NOTIF_ID,
+                PipelineNotificationCoordinator.NOTIF_ID,
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
             )
         } else {
             @Suppress("DEPRECATION")
-            startForeground(NOTIF_ID, notification)
+            startForeground(PipelineNotificationCoordinator.NOTIF_ID, notification)
         }
     }
 
@@ -1184,7 +1236,11 @@ class DictatePipelineService : Service() {
     companion object {
         const val TAG: String = "DictatePipelineSvc"
         const val CHANNEL_ID: String = "dictate_pipeline"
-        const val NOTIF_ID: Int = 0xD1C7A7E
+        // C4-B2 — `NOTIF_ID` removed from this companion (Spec 1 §10
+        // "NOTIF_ID-Konsistenz", Epic AC-3). The canonical constant is
+        // `PipelineNotificationCoordinator.NOTIF_ID`; a second
+        // definition here is the exact drift the spec forbids
+        // (`1001` vs `0xD1C7A7E` → duplicate/orphan notification).
 
         /**
          * SharedPreferences file name used by the rest of the app

@@ -282,6 +282,9 @@
     <string name="dictate_status_failed">Falhou</string>
     <string name="dictate_status_cancelled">Cancelado</string>
     <string name="dictate_status_running">Processando…</string>
+    <string name="dictate_status_recording">Gravando…</string>
+    <string name="dictate_status_transcribing">Transcrevendo…</string>
+    <string name="dictate_cache_clear_blocked_recording">O cache não pode ser limpo enquanto uma gravação está ativa.</string>
 
     <!-- History detail actions -->
     <string name="dictate_history_direct_reprocess">Executar diretamente</string>

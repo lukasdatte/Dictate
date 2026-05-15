@@ -101,6 +101,17 @@ sealed class Pref<T>(val key: String, val default: T) {
     object TranscriptionAudioFile : Pref<String>("net.devemperor.dictate.transcription_audio_file", "")
     object QueuedPromptIds : Pref<String>("net.devemperor.dictate.queued_prompt_ids", "")
 
+    /**
+     * Idempotence flag for [net.devemperor.dictate.migration.LegacyAudioFileMigration]
+     * (B3-VAL-W1 F-7). The key is namespaced (project rule: prefs go
+     * through this sealed-class registry, never raw strings); the
+     * default `false` matches the migration semantic ("not yet run").
+     *
+     * @see net.devemperor.dictate.migration.LegacyAudioFileMigration
+     */
+    object LegacyAudioPurgedV4 :
+        Pref<Boolean>("net.devemperor.dictate.legacy_audio_purged_v4", false)
+
     // ── Input Languages (Set<String>, separate access) ──
     object InputLanguages : Pref<String>("net.devemperor.dictate.input_languages", "")  // Sentinel, actually Set<String>
 
@@ -130,6 +141,26 @@ sealed class Pref<T>(val key: String, val default: T) {
     // cycle by a small clock skew.
     object SessionCleanupGracePeriodMs :
         Pref<Long>("net.devemperor.dictate.session_cleanup_grace_period_ms", 608_400_000L)
+
+    // ── Pending-Insertion Freshness Floor (B3 §6.5 + B3-VAL-W1 F-2) ──
+    //
+    // After M4 backfilled `inserted_at = NULL` for all pre-existing COMPLETED
+    // rows (the only way to keep them safe from `deleteInsertedOlderThan`),
+    // `findPendingInsertion` would otherwise surface every legacy COMPLETED
+    // row as a pending-paste candidate and trigger NotifyManualPasteNeeded
+    // N times on first boot after upgrade. The freshness floor caps which
+    // rows are considered "fresh enough" to surface — only sessions whose
+    // `created_at` is within the last PendingInsertionFreshnessMs are
+    // pending-insertion candidates.
+    //
+    // Default: 24h (anything older was either pasted long ago, or the user
+    // has moved on — the M4 upgrade window is the canonical case the
+    // freshness floor protects against).
+    //
+    // @see net.devemperor.dictate.database.dao.SessionDao.findPendingInsertion
+    // @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/b3-cleanup-cascade-and-backfill-policy.md §4
+    object PendingInsertionFreshnessMs :
+        Pref<Long>("net.devemperor.dictate.pending_insertion_freshness_ms", 86_400_000L)
 }
 
 // ── Extension Functions ──

@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * @see net.devemperor.dictate.state.AmplitudeStreamSubsystem
  * @see net.devemperor.dictate.core.AmplitudeProcessor
+ * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §4.7 §15.x
  */
 class AmplitudeStreamAdapter : AmplitudeStreamSubsystem {
 

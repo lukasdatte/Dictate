@@ -92,7 +92,10 @@ class RecordingModuleTest {
     // ─── Preparing → Active / Idle ─────────────────────────────────────
 
     @Test
-    fun `MediaRecorderReady from Preparing emits Active + 3 start effects`() {
+    fun `MediaRecorderReady from Preparing emits Active + 4 start effects`() {
+        // B3-VAL-W1 F-10: StartMediaRecorder added to the Preparing →
+        // Active side-effect set so the subsystem-level start() runs
+        // in the orchestrator-driven flow.
         val state = RecordingState.Preparing(useBluetooth = false, audioFile = testFile)
         val result = module.reduce(
             state = state,
@@ -102,7 +105,8 @@ class RecordingModuleTest {
         val next = result!!.nextState as RecordingState.Active
         assertEquals(false, next.useBluetooth)
         assertEquals(testFile, next.audioFile)
-        assertEquals(3, result.sideEffects.size)
+        assertEquals(4, result.sideEffects.size)
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartMediaRecorder))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartTimer))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartAmplitudeStream))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartBorderGlow))

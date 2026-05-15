@@ -1,12 +1,17 @@
 package net.devemperor.dictate.settings;
 
+import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.util.Log;
 import android.widget.Toast;
 
 import androidx.preference.EditTextPreference;
@@ -23,6 +28,7 @@ import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateApplication;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.core.DictatePipelineService;
 import net.devemperor.dictate.core.LanguageController;
 import net.devemperor.dictate.preferences.DictatePrefsKt;
 import net.devemperor.dictate.preferences.Pref;
@@ -30,6 +36,7 @@ import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.dao.UsageDao;
+import net.devemperor.dictate.state.RecordingState;
 import net.devemperor.dictate.usage.UsageActivity;
 
 import java.io.File;
@@ -42,8 +49,35 @@ import java.util.stream.Collectors;
 
 public class PreferencesFragment extends PreferenceFragmentCompat {
 
+    private static final String TAG = "DictatePrefsFragment";
+
     SharedPreferences sp;
     UsageDao usageDao;
+
+    /**
+     * Held connection to {@link DictatePipelineService} so the
+     * "Clear cache" preference can snapshot the recording state
+     * before unlinking files (B3-VAL-W1 F-4 / KG-AFF-3 race-protect).
+     * Bound in {@link #onStart()} and released in {@link #onStop()}; a
+     * null binder reads as "service not connected → cannot be
+     * actively recording", which is the safe default.
+     */
+    @androidx.annotation.Nullable
+    private DictatePipelineService.LocalBinder pipelineBinder;
+
+    private final ServiceConnection pipelineConnection = new ServiceConnection() {
+        @Override public void onServiceConnected(ComponentName name, IBinder service) {
+            if (service instanceof DictatePipelineService.LocalBinder) {
+                pipelineBinder = (DictatePipelineService.LocalBinder) service;
+            }
+        }
+
+        @Override public void onServiceDisconnected(ComponentName name) {
+            pipelineBinder = null;
+        }
+    };
+
+    private boolean pipelineBound = false;
 
     @Override
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
@@ -284,10 +318,37 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
             cachePreference.setTitle(getString(R.string.dictate_settings_cache, cacheFileCount, cacheSize / 1024f / 1024f));
 
             cachePreference.setOnPreferenceClickListener(preference -> {
+                // B3-VAL-W1 F-4 / Spec 1 §4.11.6.3 KG-AFF-3 — block
+                // the clear if a recording is currently active. The
+                // race we're protecting against: user taps the
+                // preference mid-recording, we unlink() the open
+                // MediaRecorder FD, the recorder keeps writing to the
+                // unlinked inode, persistFromCache then fails →
+                // Ghost-Session FAILED with no clear user-facing
+                // cause. Snapshot the orchestrator state via the
+                // service binder; null binder means the service
+                // isn't running, so no recording can be in flight.
+                if (isRecordingActive()) {
+                    Toast.makeText(
+                            requireContext(),
+                            R.string.dictate_cache_clear_blocked_recording,
+                            Toast.LENGTH_LONG).show();
+                    return true;
+                }
                 new MaterialAlertDialogBuilder(requireContext())
                         .setTitle(R.string.dictate_cache_clear_title)
                         .setMessage(R.string.dictate_cache_clear_message)
                         .setPositiveButton(R.string.dictate_yes, (dialog, which) -> {
+                            // Re-check at confirmation time — the user may have
+                            // tapped the record button between the click and the
+                            // confirm dialog.
+                            if (isRecordingActive()) {
+                                Toast.makeText(
+                                        requireContext(),
+                                        R.string.dictate_cache_clear_blocked_recording,
+                                        Toast.LENGTH_LONG).show();
+                                return;
+                            }
                             clearCacheRecursively(cacheDir);
                             cachePreference.setTitle(getString(R.string.dictate_settings_cache, 0, 0f));
                             Toast.makeText(requireContext(), R.string.dictate_cache_cleared, Toast.LENGTH_SHORT).show();
@@ -427,5 +488,65 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
         // because we just drained the directory above.
         // noinspection ResultOfMethodCallIgnored
         entry.delete();
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        // B3-VAL-W1 F-4 — bind to the running pipeline service so the
+        // cache-clear click handler can snapshot the recording state.
+        // BIND_AUTO_CREATE would start the service; we only need to
+        // observe the existing one (the IME ensures it's running while
+        // the user keyboard is active). If the service isn't up,
+        // pipelineBinder stays null → isRecordingActive() returns false
+        // (safe default: nothing to race against).
+        Context appCtx = requireContext().getApplicationContext();
+        Intent intent = new Intent(appCtx, DictatePipelineService.class);
+        try {
+            pipelineBound = appCtx.bindService(intent, pipelineConnection, 0);
+        } catch (SecurityException e) {
+            Log.w(TAG, "bindService(DictatePipelineService) denied", e);
+            pipelineBound = false;
+        }
+    }
+
+    @Override
+    public void onStop() {
+        if (pipelineBound) {
+            try {
+                requireContext().getApplicationContext().unbindService(pipelineConnection);
+            } catch (IllegalArgumentException e) {
+                // Already unbound — safe to ignore.
+                Log.w(TAG, "unbindService(DictatePipelineService) failed", e);
+            }
+            pipelineBound = false;
+        }
+        pipelineBinder = null;
+        super.onStop();
+    }
+
+    /**
+     * Returns {@code true} when the orchestrator reports a non-Idle
+     * recording state (Preparing / Active / Paused). Used by the
+     * Cache-Clear preference handler (B3-VAL-W1 F-4) so it can refuse
+     * to unlink MediaRecorder's open file descriptor mid-recording.
+     *
+     * A null binder (service not bound yet, or not running) reads as
+     * <em>not recording</em>: the safe default — if the user can't
+     * reach the service, they can't be recording through it.
+     */
+    private boolean isRecordingActive() {
+        DictatePipelineService.LocalBinder binder = pipelineBinder;
+        if (binder == null) return false;
+        try {
+            return !(binder.getState().getValue().getRecording() instanceof RecordingState.Idle);
+        } catch (Throwable t) {
+            // Defensive — a torn-down binder may throw on state read.
+            // Falling back to "not recording" matches the safe-default
+            // intent (false-positive blocks would be more annoying
+            // than a false-negative race window).
+            Log.w(TAG, "recording-state snapshot failed", t);
+            return false;
+        }
     }
 }

@@ -21,8 +21,11 @@ import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import net.devemperor.dictate.R
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.prompt.PromptService
@@ -299,7 +302,32 @@ class DictatePipelineService : Service() {
         // into both ModuleServices.sessionRepo AND PipelineRecovery (the
         // recovery class reads via the same Adapter so the §6.3 algorithm
         // and the steady-state pendingFlow share a single DAO instance).
-        val sessionRepoAdapterImpl = PipelineSessionRepoAdapter(database.sessionDao())
+        // B3-VAL-W1 F-12 — Run the legacy-audio migration synchronously
+        // BEFORE constructing the orchestrator + adapters. The migration
+        // promotes leftover `cacheDir/audio.m4a`-referencing sessions to
+        // FAILED; if recovery (which runs in orchestrator init {}) reads
+        // those rows concurrently, the resulting `last_error_message`
+        // is non-deterministic (`recording-interrupted-by-process-death`
+        // vs. `audio_file_path_legacy_purged`). Synchronous + ordered
+        // first yields a deterministic post-migration state. Migration
+        // is sub-100ms per its own KDoc, so the FGS 5s budget holds.
+        try {
+            LegacyAudioFileMigration.run(applicationContext)
+        } catch (t: Throwable) {
+            // Migration is best-effort. A DB or pref failure must not
+            // crash the service boot — the next service start retries.
+            Log.w(TAG, "LegacyAudioFileMigration failed", t)
+        }
+
+        val sessionRepoAdapterImpl = PipelineSessionRepoAdapter(
+            sessionDao = database.sessionDao(),
+            // F-2 freshness floor — gate legacy pre-M4 rows so
+            // NotifyManualPasteNeeded doesn't flood on first post-upgrade
+            // boot (Spec 1 §6.5 + Pref.PendingInsertionFreshnessMs).
+            pendingInsertionFreshnessFloor = {
+                System.currentTimeMillis() - sharedPrefs.get(Pref.PendingInsertionFreshnessMs)
+            },
+        )
         sessionRepoAdapterRef = sessionRepoAdapterImpl
         orphanCleaner = PipelineOrphanCleaner(database.sessionDao())
 
@@ -341,6 +369,12 @@ class DictatePipelineService : Service() {
             sessionDao = database.sessionDao(),
             sessionRepo = sessionRepoAdapterImpl,
             emitAction = { action -> orchestrator.emitAction(action) },
+            // F-2 freshness floor — same supplier as the adapter so
+            // Phase 4 SF-4 dispatch + Phase 2 loadPending agree on the
+            // legacy-row cutoff.
+            pendingInsertionFreshnessFloor = {
+                System.currentTimeMillis() - sharedPrefs.get(Pref.PendingInsertionFreshnessMs)
+            },
         )
 
         orchestrator = DictateOrchestrator(
@@ -360,25 +394,10 @@ class DictatePipelineService : Service() {
         }
 
         // ──────────────────────────────────────────────────────────────
-        // Step 5 — Legacy audio-file migration (Spec 1 §4.11.6.2 KG-AFF-2).
-        //
-        // One-shot, idempotent: a SharedPreferences flag short-circuits
-        // every boot after the first; the DAO query also filters by
-        // status to preserve historical error context. Runs synchronously
-        // on Main thread — three small operations (pref read, file
-        // delete, indexed UPDATE), all bounded.
-        //
-        // Runs AFTER orchestrator construct (so DB and modules are live)
-        // and BEFORE the orphan-cleanup launch (so legacy entries leave
-        // the DB before `findAllAudioFilePaths()` consults it).
+        // Step 5 — Legacy audio-file migration moved to BEFORE
+        // orchestrator construction (B3-VAL-W1 F-12). See the comment
+        // block at the top of the adapter wiring above.
         // ──────────────────────────────────────────────────────────────
-        try {
-            LegacyAudioFileMigration.run(applicationContext)
-        } catch (t: Throwable) {
-            // Migration is best-effort. A DB or pref failure must not
-            // crash the service boot — the next service start retries.
-            Log.w(TAG, "LegacyAudioFileMigration failed", t)
-        }
 
         // ──────────────────────────────────────────────────────────────
         // Step 6 — Crash-orphan cleanup (Spec 1 §4.11.5.1 step 8).
@@ -437,7 +456,7 @@ class DictatePipelineService : Service() {
                 Log.i(
                     TAG,
                     "orphan-cleanup: deletedCompletedRows=${result.deletedCompletedRows}, " +
-                        "deletedAudioFiles=${result.deletedAudioFiles}, " +
+                        "filesActuallyDeleted=${result.filesActuallyDeleted}, " +
                         "clearedAudioPathRows=${result.clearedAudioPathRows}",
                 )
             } catch (t: Throwable) {
@@ -507,10 +526,38 @@ class DictatePipelineService : Service() {
         // and re-runnable on the next boot's recovery pass).
         triggerOrphanCleanupAsync()
 
-        // Spec 1 §4.3: orchestrator.shutdown() BEFORE serviceScope.cancel().
+        // B3-VAL-W1 F-3 — Pre-Cancel-Dispatch (ADR-0003 §"Required
+        // mechanics" item 9). If a recording is in flight when the
+        // service is destroyed, dispatch CancelRecording through the
+        // existing reduce → runEffect path so MediaRecorder.release()
+        // runs deterministically. Without this, the native-heap
+        // allocation leaks until the process dies. The check is a
+        // pure snapshot read — no IO, no allocations.
         if (::orchestrator.isInitialized) {
             try {
-                orchestrator.shutdown()
+                val recordingSnapshot = orchestrator.state.value.recording
+                if (recordingSnapshot !is net.devemperor.dictate.state.RecordingState.Idle) {
+                    orchestrator.dispatch(Action.RecordingAction.CancelRecording)
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Pre-Cancel-Dispatch failed during onDestroy", t)
+            }
+        }
+
+        // B3-VAL-W1 F-3 — Timeout-bounded shutdown (ADR-0003
+        // §"Required mechanics" item 8). The 2-second wall clock
+        // bounds module-terminate so a single stuck module can't
+        // wedge Android's onDestroy slot (which itself has a system
+        // budget). On timeout we proceed without joining — the
+        // serviceScope.cancel() below ensures launched coroutines
+        // are torn down regardless.
+        if (::orchestrator.isInitialized) {
+            try {
+                runBlocking {
+                    withTimeout(SHUTDOWN_TIMEOUT_MS) { orchestrator.shutdown() }
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.w(TAG, "orchestrator.shutdown() timed out at ${SHUTDOWN_TIMEOUT_MS}ms — proceeding with onDestroy", e)
             } catch (t: Throwable) {
                 Log.w(TAG, "Orchestrator shutdown failed", t)
             }
@@ -726,6 +773,15 @@ class DictatePipelineService : Service() {
          * `getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE)`).
          */
         const val PREFS_NAME: String = "net.devemperor.dictate"
+
+        /**
+         * Wall-clock budget for `orchestrator.shutdown()` in onDestroy
+         * (B3-VAL-W1 F-3 + ADR-0003 §"Required mechanics" item 8).
+         * Beyond 2 seconds Android's onDestroy slot risks ANR-style
+         * termination — better to log + proceed than block forever on
+         * a wedged module-terminate.
+         */
+        private const val SHUTDOWN_TIMEOUT_MS: Long = 2_000L
     }
 }
 

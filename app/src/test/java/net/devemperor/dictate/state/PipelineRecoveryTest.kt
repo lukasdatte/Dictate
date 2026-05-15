@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 import net.devemperor.dictate.database.entity.SessionStatus
 import net.devemperor.dictate.testutil.FakePipelineSessionRepo
+import net.devemperor.dictate.testutil.testPipelineRecovery
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -34,7 +35,7 @@ class PipelineRecoveryTest {
         val repo = FakePipelineSessionRepo(emptyList())
         val store = DictateUiStateStore(DictateUiState.initial())
 
-        runBlocking { PipelineRecovery(repo).recover(store) }
+        runBlocking { testPipelineRecovery(repo).recover(store) }
 
         assertTrue(store.snapshot.pendingSessions.isEmpty())
     }
@@ -44,7 +45,7 @@ class PipelineRecoveryTest {
         val repo = FakePipelineSessionRepo(listOf(session("a"), session("b"), session("c")))
         val store = DictateUiStateStore(DictateUiState.initial())
 
-        runBlocking { PipelineRecovery(repo).recover(store) }
+        runBlocking { testPipelineRecovery(repo).recover(store) }
 
         val ids = store.snapshot.pendingSessions.map { it.sessionId }
         assertEquals(listOf("a", "b", "c"), ids)
@@ -55,7 +56,7 @@ class PipelineRecoveryTest {
         val repo = FakePipelineSessionRepo(listOf(session("z"), session("a"), session("m")))
         val store = DictateUiStateStore(DictateUiState.initial())
 
-        runBlocking { PipelineRecovery(repo).recover(store) }
+        runBlocking { testPipelineRecovery(repo).recover(store) }
 
         // Same order as the repo handed back — no re-sort.
         assertEquals(listOf("z", "a", "m"), store.snapshot.pendingSessions.map { it.sessionId })
@@ -65,7 +66,7 @@ class PipelineRecoveryTest {
     fun `recover is idempotent across repeated calls`() {
         val repo = FakePipelineSessionRepo(listOf(session("only")))
         val store = DictateUiStateStore(DictateUiState.initial())
-        val recovery = PipelineRecovery(repo)
+        val recovery = testPipelineRecovery(repo)
 
         runBlocking {
             recovery.recover(store)
@@ -97,7 +98,7 @@ class PipelineRecoveryTest {
             override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
         }
         val store = DictateUiStateStore(DictateUiState.initial())
-        val recovery = PipelineRecovery(repo)
+        val recovery = testPipelineRecovery(repo)
 
         runBlocking {
             recovery.recover(store)
@@ -117,7 +118,7 @@ class PipelineRecoveryTest {
         val initial = DictateUiState.initial()
         val store = DictateUiStateStore(initial)
 
-        runBlocking { PipelineRecovery(repo).recover(store) }
+        runBlocking { testPipelineRecovery(repo).recover(store) }
 
         val after = store.snapshot
         assertEquals(initial.recording, after.recording)

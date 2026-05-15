@@ -118,6 +118,14 @@ interface SessionDao {
      *
      * Ordered newest-first so the UI shows the most recent pending
      * result at the top.
+     *
+     * **Freshness floor (B3-VAL-W1 F-2 + Spec 1 §6.5):** the
+     * `created_at >= :freshnessFloor` clause excludes legacy pre-M4
+     * rows whose `inserted_at` was backfilled to NULL. Without this
+     * filter every legacy COMPLETED row would surface as a
+     * pending-paste candidate on the first post-upgrade boot, flooding
+     * `Action.ResendAction.NotifyManualPasteNeeded`. Callers pass
+     * `now - Pref.PendingInsertionFreshnessMs` (default 24h).
      */
     @Query(
         """
@@ -125,10 +133,11 @@ interface SessionDao {
         WHERE status = 'COMPLETED'
           AND final_output_text IS NOT NULL
           AND inserted_at IS NULL
+          AND created_at >= :freshnessFloor
         ORDER BY created_at DESC
         """
     )
-    fun findPendingInsertion(): List<SessionEntity>
+    fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity>
 
     /**
      * Cleanup query for the idle-stop slot — deletes COMPLETED sessions
@@ -241,10 +250,18 @@ interface SessionDao {
  * delete the file and zero out the DB column in a follow-up bulk
  * update (`clearAudioFilePathBulk`).
  *
- * The class lives next to `SessionDao` because it is purely a DAO
- * projection — Room synthesises the column mapping at compile time
- * (`id` → `id`, `audio_file_path` → `audioFilePath`). Promoting it to
- * a top-level type elsewhere would obscure that relationship.
+ * **Top-level location (B3-VAL-W1 F-30 deviation):** Sibling DAO
+ * projections in the project are nested inside their DAO interface
+ * (e.g. `TranscriptionDao.OrphanRow`). `OrphanedAudioRow` keeps a
+ * top-level location because external consumers (`PipelineOrphanCleaner`)
+ * reference the type by its short name in field signatures; nesting it
+ * would force `SessionDao.OrphanedAudioRow` across two-three call
+ * sites for marginal nesting benefit. Re-evaluated against the
+ * project's typical 1-2-call-site projections, the top-level form
+ * stays — convention drift accepted.
+ *
+ * Room synthesises the column mapping at compile time (`id` → `id`,
+ * `audio_file_path` → `audioFilePath`).
  */
 data class OrphanedAudioRow(
     @androidx.room.ColumnInfo(name = "id") val id: String,

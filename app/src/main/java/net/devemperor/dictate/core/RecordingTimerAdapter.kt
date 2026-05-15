@@ -36,6 +36,7 @@ import net.devemperor.dictate.state.RecordingTimerSubsystem
  * migration window.
  *
  * @see net.devemperor.dictate.state.RecordingTimerSubsystem
+ * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §4.7 §15.x
  */
 class RecordingTimerAdapter : RecordingTimerSubsystem {
 

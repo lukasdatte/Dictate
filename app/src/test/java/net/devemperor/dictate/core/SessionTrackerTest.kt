@@ -134,7 +134,7 @@ private class FakeSessionDao : SessionDao {
     // contract demands an implementation. Throwing keeps the fake's
     // "fail loud" intent intact.
     override fun markInserted(id: String, timestamp: Long) = notUsed()
-    override fun findPendingInsertion(): List<SessionEntity> = notUsed()
+    override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> = notUsed()
     override fun deleteInsertedOlderThan(cutoff: Long): Int = notUsed()
     override fun findOrphanedTerminalAudio(
         cutoff: Long

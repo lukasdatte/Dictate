@@ -1614,7 +1614,14 @@ public class DictateInputMethodService extends InputMethodService
 
         // start audio file transcription if user selected an audio file
         if (!DictatePrefsKt.get(sp, Pref.TranscriptionAudioFile.INSTANCE).isEmpty()) {
-            audioFile = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.TranscriptionAudioFile.INSTANCE));
+            // B3-VAL-W1 F-5: read from `cacheDir/audio/` (the
+            // CacheDirAudioFileFactory's scope). DictateSettingsActivity
+            // writes the imported file there; the orphan-cleanup pass
+            // sees it as a referenced path via SessionEntity.audio_file_path
+            // once transcription starts, and the pre-refactor leak
+            // (file in cacheDir root falling outside the factory's
+            // cleanupOrphans scope) is closed.
+            audioFile = new File(new File(getCacheDir(), "audio"), DictatePrefsKt.get(sp, Pref.TranscriptionAudioFile.INSTANCE));
             DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, audioFile.getName()).apply();
 
             sp.edit().remove(Pref.TranscriptionAudioFile.INSTANCE.getKey()).apply();

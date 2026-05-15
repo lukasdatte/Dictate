@@ -5,6 +5,9 @@ import android.util.Log
 import androidx.preference.PreferenceManager
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.database.entity.SessionStatus
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.preferences.put
 import java.io.File
 
 /**
@@ -66,8 +69,14 @@ object LegacyAudioFileMigration {
 
     private const val TAG = "LegacyAudioMigration"
 
-    /** Idempotence pref flag — set once the first run completes. */
-    internal const val FLAG_PREF = "legacy_audio_purged_v4"
+    /**
+     * Idempotence pref key — exposed for test-helper readability
+     * (B3-VAL-W1 F-7). Production paths use [Pref.LegacyAudioPurgedV4]
+     * via the typed [get] / [put] extensions; tests reach for this
+     * constant when they need to wipe / pre-set the flag through
+     * [PreferenceManager.getDefaultSharedPreferences].
+     */
+    internal fun flagPrefKey(): String = Pref.LegacyAudioPurgedV4.key
 
     /** Historical fixed-name file path (Spec 1 §4.11.6.2). */
     internal const val LEGACY_NAME = "audio.m4a"
@@ -77,7 +86,7 @@ object LegacyAudioFileMigration {
 
     fun run(context: Context) {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        if (prefs.getBoolean(FLAG_PREF, false)) return
+        if (prefs.get(Pref.LegacyAudioPurgedV4)) return
 
         val legacy = File(context.cacheDir, LEGACY_NAME)
         if (legacy.exists()) {
@@ -95,6 +104,6 @@ object LegacyAudioFileMigration {
             )
         }.onFailure { Log.w(TAG, "legacy-session FAILED-mark failed", it) }
 
-        prefs.edit().putBoolean(FLAG_PREF, true).apply()
+        prefs.edit().put(Pref.LegacyAudioPurgedV4, true).apply()
     }
 }

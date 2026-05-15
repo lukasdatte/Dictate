@@ -342,6 +342,13 @@
     <string name="dictate_status_recording">Recording…</string>
     <string name="dictate_status_transcribing">Transcribing…</string>
 
+    <!-- B3-VAL-W1 F-4 (Spec 1 §4.11.6.3, KG-AFF-3): user-visible
+         toast shown when the user taps "Clear cache" while a recording
+         is in flight. Clearing mid-recording would unlink the open
+         MediaRecorder file descriptor and silently corrupt the
+         session (Ghost-FAILED with no clear cause). -->
+    <string name="dictate_cache_clear_blocked_recording">Cache cannot be cleared while recording is active.</string>
+
     <!-- History detail actions -->
     <string name="dictate_history_direct_reprocess">Run directly</string>
     <string name="dictate_history_reprocess_edit">Reprocess</string>

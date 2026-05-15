@@ -101,12 +101,13 @@ class FakeSessionDao : SessionDao {
         rows[id]?.let { rows[id] = it.copy(insertedAt = timestamp) }
     }
 
-    override fun findPendingInsertion(): List<SessionEntity> =
+    override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> =
         rows.values
             .filter {
                 it.status == "COMPLETED" &&
                     it.finalOutputText != null &&
-                    it.insertedAt == null
+                    it.insertedAt == null &&
+                    it.createdAt >= freshnessFloor
             }
             .sortedByDescending { it.createdAt }
 

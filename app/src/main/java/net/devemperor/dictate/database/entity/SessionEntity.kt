@@ -7,12 +7,30 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import net.devemperor.dictate.ai.AIProviderException
 
+/**
+ * Persistent session row (Spec 1 §6.1, M4 schema).
+ *
+ * **FK semantics — `parent_session_id ON DELETE SET NULL`
+ * (B3-VAL-W1 F-1):** any row-level DELETE on a parent session (cleanup
+ * policy, user-driven delete, future paths) preserves the children;
+ * their `parent_session_id` becomes NULL and they surface as
+ * root-level history items. CASCADE would have allowed
+ * `deleteInsertedOlderThan` to silently take fresh POST_PROCESSING
+ * children with their aged-out parent — see Spec 1 §6.5 +
+ * `research/b3-cleanup-cascade-and-backfill-policy.md` §3.
+ *
+ * History UI shows sessions as a flat list, so the lost parent-child
+ * link has no user-visible regression. The data-preservation
+ * guarantee outweighs it.
+ *
+ * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §6.5
+ */
 @Entity(
     tableName = "sessions",
     foreignKeys = [ForeignKey(
         entity = SessionEntity::class,
         parentColumns = ["id"], childColumns = ["parent_session_id"],
-        onDelete = ForeignKey.CASCADE
+        onDelete = ForeignKey.SET_NULL
     )],
     indices = [
         Index("parent_session_id"),
@@ -52,16 +70,28 @@ data class SessionEntity(
 
     /**
      * Milliseconds-since-epoch when the COMPLETED result was inserted
-     * into the editor. `NULL` means "result available but not yet
-     * surfaced to the user" — drives the pending-insertion query
-     * (see [net.devemperor.dictate.database.dao.SessionDao.findPendingInsertion])
-     * and the 7-day cleanup window (Spec 1 §6.2 R.17,
-     * [net.devemperor.dictate.database.dao.SessionDao.deleteInsertedOlderThan]).
+     * into the editor.
      *
-     * Backfilled in MIGRATION_3_4 with `created_at` for pre-existing
-     * COMPLETED rows (best-effort; the exact insertion timestamp is not
-     * reconstructable, but the cutoff-based cleanup tolerates the
-     * approximation). Intentionally NOT indexed — see §6.1 "Warum kein
+     * **NULL semantics (Spec 1 §6.5 + B3-VAL-W1 F-2):** NULL means
+     * either "result available but not yet surfaced to the user" (live
+     * post-M4 flow) OR "pre-M4 legacy row whose insertion timestamp is
+     * not reconstructable" (migration-time backfill). Both classes are
+     * **immune to `deleteInsertedOlderThan`**, which filters
+     * `inserted_at IS NOT NULL`. The two callers disambiguate by
+     * adding their own filter:
+     *
+     *  - [net.devemperor.dictate.database.dao.SessionDao.findPendingInsertion]
+     *    gates the legacy class with a freshness floor on `created_at`
+     *    (caller passes `Pref.PendingInsertionFreshnessMs` cutoff) so
+     *    months of pre-M4 history don't flood manual-paste notifications
+     *    on the first post-upgrade boot.
+     *  - [net.devemperor.dictate.database.dao.SessionDao.deleteInsertedOlderThan]
+     *    leaves NULL rows alone (the cleanup-marker doesn't apply).
+     *
+     * Pre-existing rows are backfilled to NULL in MIGRATION_3_4 —
+     * see [net.devemperor.dictate.database.migration.MIGRATION_3_4]
+     * step 2 + `research/b3-cleanup-cascade-and-backfill-policy.md` §4.
+     * Intentionally NOT indexed — see §6.1 "Warum kein
      * `index_sessions_inserted_at`?" for the cost/benefit reasoning.
      */
     @ColumnInfo(name = "inserted_at") val insertedAt: Long? = null

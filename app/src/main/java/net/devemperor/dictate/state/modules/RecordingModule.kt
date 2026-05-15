@@ -99,6 +99,19 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
             val audioFile: File,
         ) : Effect
 
+        /**
+         * Begin recording on an already-allocated MediaRecorder
+         * (B3-VAL-W1 F-10 + RecordingHardwareSubsystem KDoc). Emitted
+         * on the Preparing → Active reducer arm together with the
+         * timer/amplitude/glow start effects. Without it the
+         * subsystem-level `start()` never runs in the orchestrator-
+         * driven flow (Phase 1 IME side-path still drives
+         * MediaRecorder directly; this seam is dormant until B5/B6
+         * LayoutCatalog routes through orchestrator, at which point
+         * the omission would surface as silent empty audio files).
+         */
+        data object StartMediaRecorder : Effect
+
         data object ReleaseMediaRecorder : Effect
         data object PauseMediaRecorder : Effect
         data object ResumeMediaRecorder : Effect
@@ -188,6 +201,11 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     audioFile = state.audioFile,
                 ),
                 sideEffects = listOf(
+                    // B3-VAL-W1 F-10 — start MediaRecorder before
+                    // peripheral effects. Order matters: timer +
+                    // amplitude + glow are UI-only; the actual audio
+                    // capture begins with `start()`.
+                    Effect.StartMediaRecorder,
                     Effect.StartTimer,
                     Effect.StartAmplitudeStream,
                     Effect.StartBorderGlow,
@@ -307,6 +325,8 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
     override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
         is Effect.AllocateMediaRecorder ->
             services.recordingHardware.allocate(effect.target, effect.useBluetooth, effect.audioFile)
+        // B3-VAL-W1 F-10 — bridge the new Effect.StartMediaRecorder.
+        Effect.StartMediaRecorder -> services.recordingHardware.start()
         Effect.ReleaseMediaRecorder -> services.recordingHardware.release()
         Effect.PauseMediaRecorder -> services.recordingHardware.pause()
         Effect.ResumeMediaRecorder -> services.recordingHardware.resume()
@@ -379,6 +399,23 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.ReleaseMediaRecorder,
                     Effect.StopTimer,
                     Effect.StopBorderGlow,
+                ),
+            )
+
+        // B3-VAL-W1 F-11 — Start failure during Active: roll back to
+        // Idle, release the recorder, delete the (likely 0-byte) file.
+        // `MediaRecorder.start()` throws on a stale prepare / native
+        // resource conflict; without this arm the FSM gets stuck in
+        // Active while the hardware is broken.
+        failure.effect == "StartMediaRecorder" && state is RecordingState.Active ->
+            TransitionResult(
+                nextState = RecordingState.Idle,
+                sideEffects = listOf(
+                    Effect.ReleaseMediaRecorder,
+                    Effect.DeleteAudioFile(state.audioFile),
+                    Effect.StopTimer,
+                    Effect.StopBorderGlow,
+                    Effect.StopAmplitudeStream,
                 ),
             )
 

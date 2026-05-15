@@ -8,51 +8,40 @@ import kotlinx.coroutines.flow.emptyFlow
 import java.io.File
 
 /**
- * Production-side bindings used by the
- * [net.devemperor.dictate.core.DictatePipelineService] to construct a
- * [ModuleServices] instance in chunk C7.
+ * Test-only stubs + production fallbacks for the subsystem
+ * interfaces in [ModuleServices].
  *
- * **Note (F-15 2026-05-15) — file contains both stub and production
- * bindings:**
+ * **Post-B3 reality (B3-VAL-W1 F-18 documentation refresh):** after
+ * the C8 subsystem-adapter migration, this file retains only:
  *
- *  - The `stub*` / inline `object : XxxSubsystem` properties below are
- *    **no-op placeholders** that B3 replaces with real Android-backed
- *    adapters. They log each call at WARN with a "B3 fills this"
- *    marker so the production cost surfaces in logcat until the real
- *    adapter swap.
+ *  - **Two production-route stubs** that B3 intentionally leaves
+ *    for B5/B6: [pipelineRunner] (orchestrator-side job submission
+ *    lands when LayoutCatalog drives recordings end-to-end) and
+ *    [notificationCoordinator] (the Spec 1 §7.4
+ *    `PipelineNotificationCoordinator` class is unwritten — Spec 1
+ *    §7.4-§7.5 will be implemented in B5/B6 alongside the action
+ *    router).
+ *  - **A defensive fallback** for [bluetoothSco] when the system
+ *    `AudioManager` is `null` (Robolectric / stripped Context
+ *    paths). Production hardware paths always wire the real
+ *    [BluetoothScoSubsystemAdapter] in
+ *    [net.devemperor.dictate.core.DictatePipelineService.onCreate].
+ *  - **Deprecated** [sessionRepo] + [audioFileFactory] — superseded
+ *    by `PipelineSessionRepoAdapter` (C10) and
+ *    `CacheDirAudioFileFactory` (C11). Retained for test-only
+ *    compile-compat.
+ *  - **Test-only** [recordingHardware], [audioFocus],
+ *    [recordingTimer], [amplitudeStream], [borderGlow] — the
+ *    production adapters live in [net.devemperor.dictate.core.*Adapter]
+ *    files and are wired directly into `ModuleServices` at service
+ *    construction.
  *  - [realToastSink] is a **production-quality binding** to the
- *    Android Toast system that ships in Phase 1 because user-visible
- *    error toasts are needed **before** B3's full adapter swap (a
- *    silent toast-channel during the migration window would mask real
- *    errors). Keep `realToastSink` here for now; when more production
- *    bindings join it (B3+), consider splitting into a separate
- *    `PipelineServiceProductionSubsystems.kt`.
+ *    Android Toast system.
  *
- * **Why these exist:** the [ModuleServices] DI container (Spec 1 §4.7)
- * lists 14 subsystem interfaces (`RecordingHardwareSubsystem`,
- * `BluetoothScoSubsystem`, `AudioFocusSubsystem`, `RecordingTimerSubsystem`,
- * `AmplitudeStreamSubsystem`, `BorderGlowSubsystem`, `PipelineRunnerSubsystem`,
- * `PipelineSessionRepoSubsystem`, `PipelineNotificationCoordinatorSubsystem`,
- * `ToastSink`, `AudioFileFactory`). The real Android-backed
- * implementations land in Block 3 (subsystem-adapter migration,
- * chunk C8) — pre-existing legacy classes (`RecordingManager`,
- * `BluetoothScoManager`, …) get re-fronted by adapter shims at that
- * point.
- *
- * In C7 we still need a working [ModuleServices] so the orchestrator
- * can be constructed at service-onCreate time and `runEffect` calls
- * don't NPE. These stubs are **deliberately log-only**: when a module
- * emits an Effect, the stub logs it at WARN with a clear "B3 fills
- * this" message, then returns. No state change, no real hardware
- * call.
- *
- * **B3 replacement contract:** when Block 3 lands the real adapter
- * classes, the wiring in
- * [net.devemperor.dictate.core.DictatePipelineService.onCreate] swaps
- * each `Stub*` constant reference for the real adapter. This file
- * stays around as a documentation anchor for the contract surface
- * (and a regression net — running the orchestrator with the real
- * adapters but a stub for one subsystem should fail visibly).
+ * **Cross-reference for the post-B3 production wiring:** see
+ * [net.devemperor.dictate.core.DictatePipelineService.onCreate]
+ * Step 3 (subsystem adapters) and Step 4 (`ModuleServices`
+ * construction).
  *
  * @see net.devemperor.dictate.state.ModuleServices
  * @see net.devemperor.dictate.core.DictatePipelineService
@@ -60,7 +49,7 @@ import java.io.File
 internal object PipelineServiceStubSubsystems {
 
     private const val TAG = "PipelineServiceStub"
-    private const val MESSAGE = "B3 fills this — module emitted an effect that the stub absorbs"
+    private const val MESSAGE = "Test-only stub — real subsystem lives in the *Adapter classes in core/"
 
     // Note: `Log.w(...)` returns `Int` in the Android SDK; wrapping each
     // override in a block-body keeps the function return type `Unit`
@@ -138,6 +127,10 @@ internal object PipelineServiceStubSubsystems {
      * `PendingSessionsModule` observer (when wired in B3) does not
      * NPE.
      */
+    @Deprecated(
+        "Replaced by PipelineSessionRepoAdapter in C10 — kept for test-only compile-compat",
+        level = DeprecationLevel.WARNING,
+    )
     val sessionRepo: PipelineSessionRepoSubsystem = object : PipelineSessionRepoSubsystem {
         override suspend fun loadPending(): List<PendingSession> = emptyList()
         override suspend fun markInserted(sessionId: String, at: Long) {
@@ -187,6 +180,10 @@ internal object PipelineServiceStubSubsystems {
      * field. Retained only for test code that wants a deterministic
      * no-FS factory.
      */
+    @Deprecated(
+        "Replaced by CacheDirAudioFileFactory in C11 — kept for test-only compile-compat",
+        level = DeprecationLevel.WARNING,
+    )
     val audioFileFactory: AudioFileFactory = object : AudioFileFactory {
         override fun allocate(): File {
             Log.w(TAG, "audioFileFactory.allocate(): $MESSAGE — returning /tmp/dictate-stub-audio.m4a")
@@ -234,6 +231,6 @@ internal fun realToastSink(applicationContext: android.content.Context): ToastSi
  * @param sharedPrefs unused; preserved as a no-op signature parameter
  *   so callers that previously passed prefs don't break.
  */
-@Suppress("UNUSED_PARAMETER")
+@Suppress("UNUSED_PARAMETER", "DEPRECATION")
 internal fun stubSessionRepo(sharedPrefs: SharedPreferences): PipelineSessionRepoSubsystem =
     PipelineServiceStubSubsystems.sessionRepo

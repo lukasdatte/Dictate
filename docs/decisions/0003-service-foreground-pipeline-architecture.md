@@ -326,6 +326,59 @@ Not anticipated for Phase 2.
 
 ## Decision History
 
+### 2026-05-15 — Cleanup-policy + FK-cascade semantics (B3-VAL-REPAIR)
+
+**Trigger:** B3 block-audit findings F-1 (parent-cascade wipes
+children) + F-2 (M3→M4 backfill makes pre-existing history
+immediately deletable). Both are Critical silent-data-loss bugs
+discovered during the B3 sanity-pass on the worktree's M4 migration
+implementation (pre-merge, no users shipped).
+
+**Before:**
+- `SessionEntity.parent_session_id` declared `ForeignKey.CASCADE`,
+  allowing `deleteInsertedOlderThan` (idle-stop slot) to wipe
+  POST_PROCESSING children of an aged-out parent. Concrete scenario:
+  user records text on day 1, applies a translate-prompt on day 8 —
+  the day-1 parent ages out, cascade wipes the day-8 child created
+  five minutes ago.
+- `MigrationTo4.kt` backfilled `inserted_at = created_at` for
+  pre-existing COMPLETED rows, exposing months of pre-M4 history to
+  the 7-day cleanup at the first idle-stop after upgrade (~500
+  sessions silently wiped for a multi-month user on first boot
+  after installing v4).
+
+**After:**
+- FK is `ForeignKey.SET_NULL`. Children become root-level history
+  items when their parent is deleted by any row-level DELETE
+  pathway (cleanup, user-driven, future paths). The history UI
+  shows sessions as a flat list — no UX regression for the lost
+  parent-child link.
+- Migration backfill is `inserted_at = NULL` for all pre-existing
+  rows. NULL-semantics = "the cleanup-marker does not apply to
+  this row"; immune to `deleteInsertedOlderThan` (which already
+  filters `inserted_at IS NOT NULL`).
+- New `Pref.PendingInsertionFreshnessMs` (default 24h) gates
+  `findPendingInsertion` so legacy pre-M4 COMPLETED rows don't flood
+  the manual-paste notification surface on the first post-upgrade
+  boot.
+- M4 is amended in place (no MIGRATION_4_5) because the worktree
+  has not shipped to any user device.
+
+**Reasoning:** Both fixes converge on NULL-as-unknown semantics for
+"this row is alive but the cleanup-marker does not apply". The
+data-preservation guarantee outweighs the lost parent-child link
+(history UI shows sessions as a flat list anyway). Alternative
+options (FK RESTRICT, NOT EXISTS sub-query, sentinel value,
+is_legacy column, migration-timestamp pref) were evaluated in
+`docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/b3-cleanup-cascade-and-backfill-policy.md`
+§§3-4 and rejected on data-preservation, complexity, or
+Kotlin-idiomaticity grounds.
+
+**References:**
+- `docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/b3-cleanup-cascade-and-backfill-policy.md` (full research + alternatives)
+- `docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/reports/validated-findings-B3.md` F-1 + F-2
+- Spec 1 §6.1 + §6.2 R.17 + §6.3 + §6.5 (canonical post-fix)
+
 ### 2026-05-14 — Accepted
 
 **Trigger:** Block-0 audit-consolidation pass (B0-VAL-SANITY) — plan §4.0 binding-pre-code-contract closeout.
@@ -337,6 +390,8 @@ Not anticipated for Phase 2.
 **Reasoning:** Block-0 acceptance criteria from plan §4.0.3 met; B0-AUDIT-PLAN-AND-API + B0-AUDIT-CONVENTION pass; ADR binds downstream Blocks 1b…6 per plan §4.0.4 "Bindender-Vertrag-Charakter".
 
 ### 2026-05-14 — Block-0 doc-set audit cleanup (B0-VAL-REPAIR)
+
+### 2026-05-14 — F-1 / F-5 / F-11 post-review pass (ADR-0003 reviewed.md)
 
 **Trigger:** Validated findings F-5 (German-language leakage), F-11 (Phase-2 Superseding placement), F-1 (inter-ADR cross-reference completion).
 

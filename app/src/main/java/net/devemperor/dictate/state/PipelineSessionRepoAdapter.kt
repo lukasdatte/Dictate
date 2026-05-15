@@ -1,6 +1,7 @@
 package net.devemperor.dictate.state
 
 import android.util.Log
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -68,6 +69,22 @@ import java.io.File
  */
 class PipelineSessionRepoAdapter(
     private val sessionDao: SessionDao,
+    /**
+     * Freshness floor supplier for [findPendingInsertion]. Production
+     * wiring captures `now - Pref.PendingInsertionFreshnessMs` lazily;
+     * tests inject a constant (e.g. `{ 0L }`) so the floor doesn't
+     * exclude rows with synthetic `created_at` values. See
+     * `research/b3-cleanup-cascade-and-backfill-policy.md` §5.3 — the
+     * floor distinguishes "freshly COMPLETED but not yet inserted" from
+     * "pre-M4 legacy whose NULL inserted_at is a backfill artefact".
+     */
+    private val pendingInsertionFreshnessFloor: () -> Long = { 0L },
+    /**
+     * Injectable IO dispatcher — production passes `Dispatchers.IO`,
+     * tests can inject `Dispatchers.Unconfined` or a `TestDispatcher`
+     * (B3-VAL-W1 F-25 alignment with `PipelineRecovery`).
+     */
+    private val ioContext: CoroutineContext = Dispatchers.IO,
 ) : PipelineSessionRepoSubsystem {
 
     /**
@@ -81,16 +98,17 @@ class PipelineSessionRepoAdapter(
      *     still exist on disk; otherwise the row is a ghost and gets
      *     filtered.
      *  2. **`COMPLETED` rows with `final_output_text != NULL AND
-     *     inserted_at IS NULL`** — the pipeline produced text but the
-     *     user hasn't seen it yet (IME-service-death window or a manual
-     *     dismiss-without-insert).
+     *     inserted_at IS NULL AND created_at >= freshnessFloor`** — the
+     *     pipeline produced text but the user hasn't seen it yet. The
+     *     freshness floor excludes pre-M4 legacy rows (Spec 1 §6.5,
+     *     B3-VAL-W1 F-2).
      *
      * Both sets are surfaced in the UI as "Resume" entries. The user
      * either clicks Resend (RECORDED → retry pipeline) or taps the
      * pending-text affordance (COMPLETED → insert from clipboard /
      * paste-hint per F-1).
      */
-    override suspend fun loadPending(): List<PendingSession> = withContext(Dispatchers.IO) {
+    override suspend fun loadPending(): List<PendingSession> = withContext(ioContext) {
         // RECORDED rows with existing audio
         val recordedWithAudio = sessionDao.getSessionsByStatuses(listOf(SessionStatus.RECORDED.name))
             .filter { entity ->
@@ -98,13 +116,23 @@ class PipelineSessionRepoAdapter(
             }
 
         // COMPLETED rows with pending insertion — uses dedicated DAO query
-        val pendingInsertion = sessionDao.findPendingInsertion()
+        // with the freshness floor that gates legacy rows.
+        val pendingInsertion = sessionDao.findPendingInsertion(pendingInsertionFreshnessFloor())
 
         (recordedWithAudio + pendingInsertion).map { it.toPendingSession() }
     }
 
     override suspend fun markInserted(sessionId: String, at: Long) {
-        withContext(Dispatchers.IO) { sessionDao.markInserted(sessionId, at) }
+        withContext(ioContext) {
+            try {
+                sessionDao.markInserted(sessionId, at)
+            } catch (t: Throwable) {
+                // Fail-soft: the adapter never throws back into the
+                // module/effect-handler. Logged so debug builds surface
+                // the failure (B3-VAL-W1 F-24).
+                Log.w(TAG, "markInserted failed for $sessionId", t)
+            }
+        }
     }
 
     /**
@@ -119,13 +147,18 @@ class PipelineSessionRepoAdapter(
      * (callers that need a typed error use the DAO directly).
      */
     override suspend fun markFailed(sessionId: String, reason: String) {
-        withContext(Dispatchers.IO) {
-            sessionDao.updateStatus(sessionId, SessionStatus.FAILED.name)
-            sessionDao.updateError(
-                sessionId,
-                net.devemperor.dictate.ai.AIProviderException.ErrorType.UNKNOWN.name,
-                reason,
-            )
+        withContext(ioContext) {
+            try {
+                sessionDao.updateStatus(sessionId, SessionStatus.FAILED.name)
+                sessionDao.updateError(
+                    sessionId,
+                    net.devemperor.dictate.ai.AIProviderException.ErrorType.UNKNOWN.name,
+                    reason,
+                )
+            } catch (t: Throwable) {
+                // Fail-soft: see [markInserted] (B3-VAL-W1 F-24).
+                Log.w(TAG, "markFailed failed for $sessionId", t)
+            }
         }
     }
 

@@ -21,6 +21,8 @@ package net.devemperor.dictate.database.entity
  * Follows the Double-Enum pattern (see docs/DATABASE-PATTERNS.md):
  * the SQL column has a CHECK constraint matching these values exactly
  * (see [net.devemperor.dictate.database.migration.MIGRATION_3_4]).
+ *
+ * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §6.1 §6.1.3
  */
 enum class SessionStatus {
     /**

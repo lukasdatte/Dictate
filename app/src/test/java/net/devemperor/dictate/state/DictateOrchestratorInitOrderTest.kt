@@ -14,6 +14,7 @@ import net.devemperor.dictate.preferences.put
 import net.devemperor.dictate.testutil.FakePipelineSessionRepo
 import net.devemperor.dictate.testutil.FakeSharedPreferences
 import net.devemperor.dictate.testutil.fakeModuleServices
+import net.devemperor.dictate.testutil.testPipelineRecovery
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -56,7 +57,7 @@ class DictateOrchestratorInitOrderTest {
         val store = DictateUiStateStore(DictateUiState.initial())
         val prefMirror = PipelinePrefMirror(sp)
         // F-22 — shared fake (testutil/FakePipelineSessionRepo).
-        val recovery = PipelineRecovery(FakePipelineSessionRepo())
+        val recovery = testPipelineRecovery(FakePipelineSessionRepo())
 
         // Construct the orchestrator. Pref-mirror attaches in init {}.
         DictateOrchestrator(
@@ -83,7 +84,7 @@ class DictateOrchestratorInitOrderTest {
         sp.edit().put(Pref.ResendButton, true).apply()
 
         val store = DictateUiStateStore(DictateUiState.initial())
-        val recovery = PipelineRecovery(
+        val recovery = testPipelineRecovery(
             object : PipelineSessionRepoSubsystem {
                 // recovery.recover() calls loadPending() and writes to store —
                 // capture the snapshot it saw via state-read inside the
@@ -138,7 +139,7 @@ class DictateOrchestratorInitOrderTest {
             registry = DictateModuleRegistry(emptyList()),
             prefMirror = PipelinePrefMirror(sp),
             // F-22 — shared fake (testutil/FakePipelineSessionRepo).
-            recovery = PipelineRecovery(FakePipelineSessionRepo(pending = pending)),
+            recovery = testPipelineRecovery(FakePipelineSessionRepo(pending = pending)),
         )
 
         testScheduler.advanceUntilIdle()
@@ -159,7 +160,7 @@ class DictateOrchestratorInitOrderTest {
             registry = DictateModuleRegistry(emptyList()),
             prefMirror = prefMirror,
             // F-22 — shared fake (testutil/FakePipelineSessionRepo).
-            recovery = PipelineRecovery(FakePipelineSessionRepo()),
+            recovery = testPipelineRecovery(FakePipelineSessionRepo()),
         )
 
         // Sanity: SP write before shutdown DOES reach the store via the listener.

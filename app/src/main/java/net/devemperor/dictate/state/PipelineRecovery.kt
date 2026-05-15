@@ -2,7 +2,6 @@ package net.devemperor.dictate.state
 
 import android.util.Log
 import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.collections.immutable.toPersistentList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -98,24 +97,15 @@ class PipelineRecovery(
      * while letting tests run synchronously.
      */
     private val ioContext: CoroutineContext = Dispatchers.IO,
-) {
-
     /**
-     * Convenience constructor for tests that do not need the SF-4
-     * action-sink. The previous (C7) signature was
-     * `PipelineRecovery(sessionRepo)` and is preserved here as a
-     * legacy-friendly path — it wires a dummy DAO that returns empty
-     * for every query, which is the same behaviour the C7 stub had.
-     * Uses `EmptyCoroutineContext` for the IO block — keeps the suspend
-     * call on the caller's dispatcher so test schedulers stay in sync.
-     *
-     * **Why keep the C7 signature alive:** the
-     * `DictateOrchestratorInitOrderTest` (and any other test that builds
-     * a recovery with no DAO) shouldn't break on the C10 swap. New
-     * tests should use the primary constructor with a fake DAO.
+     * Freshness floor supplier for `findPendingInsertion` (B3-VAL-W1
+     * F-2 + Spec 1 §6.5). Defaults to `0L` for the test path; production
+     * wiring captures `now - Pref.PendingInsertionFreshnessMs`. Without
+     * this gate the first post-upgrade boot would surface every legacy
+     * pre-M4 COMPLETED row as a pending-paste candidate.
      */
-    constructor(sessionRepo: PipelineSessionRepoSubsystem) :
-        this(EmptySessionDao, sessionRepo, emitAction = {}, ioContext = EmptyCoroutineContext)
+    private val pendingInsertionFreshnessFloor: () -> Long = { 0L },
+) {
 
     /**
      * Run the full §6.3 recovery algorithm and atomically hydrate
@@ -129,9 +119,23 @@ class PipelineRecovery(
     suspend fun recover(store: DictateUiStateStore) {
         try {
             // ── Phase 1: status-promotion (DB writes) ────────────────
-            withContext(ioContext) { runStatusPromotion() }
+            // F-19 dedup: read `findPendingInsertion` once at the start
+            // of the IO block, so Phase 2's `sessionRepo.loadPending()`
+            // and Phase 4's SF-4 dispatch share the same list (avoids
+            // two SELECTs against the same query).
+            val freshnessFloor = pendingInsertionFreshnessFloor()
+            val pendingInsertionRows = withContext(ioContext) {
+                runStatusPromotion()
+                runCatching { sessionDao.findPendingInsertion(freshnessFloor) }
+                    .onFailure { Log.w(TAG, "findPendingInsertion failed during recovery", it) }
+                    .getOrDefault(emptyList())
+            }
 
             // ── Phase 2: read post-cleanup pending list ──────────────
+            // `loadPending` runs RECORDED-with-audio + a second
+            // `findPendingInsertion(freshnessFloor)` — the second query
+            // is the canonical adapter contract; the dedup is internal
+            // here so Phase 4 doesn't issue a third SELECT.
             val pending = sessionRepo.loadPending()
 
             // ── Phase 3: merge into store (idempotent on sessionId) ─
@@ -142,15 +146,13 @@ class PipelineRecovery(
             }
 
             // ── Phase 4: SF-4 — dispatch manual-paste hint per row ───
-            // For every COMPLETED + final_output_text != NULL + inserted_at IS NULL
-            // row we surfaced, the IME process previously died before the
-            // commitText could land (or no InputConnection was available).
-            // Tell ResendModule to flip the user-facing flag — when the IME
+            // For every COMPLETED + final_output_text != NULL +
+            // inserted_at IS NULL + fresh-enough row we surfaced, the
+            // IME process previously died before the commitText could
+            // land (or no InputConnection was available). Tell
+            // ResendModule to flip the user-facing flag — when the IME
             // re-binds, the header shows "tap-to-paste".
-            val manualPasteCandidates = withContext(ioContext) {
-                sessionDao.findPendingInsertion()
-            }
-            manualPasteCandidates.forEach { entity ->
+            pendingInsertionRows.forEach { entity ->
                 emitAction(Action.ResendAction.NotifyManualPasteNeeded(entity.id))
             }
         } catch (t: Throwable) {
@@ -243,59 +245,16 @@ class PipelineRecovery(
         if (path == null) return
         val file = File(path)
         if (!file.exists()) return
-        try {
-            file.delete()
-        } catch (t: Throwable) {
-            Log.w(TAG, "opportunistic audio-delete failed for $path", t)
-        }
+        // B3-VAL-W1 F-26 — runCatching idiom matches
+        // CacheDirAudioFileFactory.cleanupOrphans + LegacyAudioFileMigration
+        // for best-effort single-statement file ops. Multi-line
+        // `safeUpdateStatus / safeUpdateError / safeClearAudioPath`
+        // stay as try/catch because they have multi-statement bodies.
+        runCatching { file.delete() }
+            .onFailure { Log.w(TAG, "opportunistic audio-delete failed for $path", it) }
     }
 
     private companion object {
         private const val TAG = "PipelineRecovery"
     }
-}
-
-/**
- * Stand-in DAO used by the legacy `PipelineRecovery(sessionRepo)`
- * constructor (kept for backward compatibility with C7-era tests). Every
- * query returns empty / does nothing — the recovery class then degrades
- * to the C7 baseline behaviour of "load pending from repo, nothing else".
- *
- * **Why an object, not a top-level lambda or anonymous-object literal?**
- * `SessionDao` is an interface with ~20 methods; an anonymous-object
- * literal in the constructor body would inflate the class file and
- * obscure the legacy-path intent. An object singleton with explicit
- * no-op overrides documents the contract surface.
- */
-private object EmptySessionDao : SessionDao {
-    override fun insert(entity: SessionEntity) = Unit
-    override fun getById(id: String): SessionEntity? = null
-    override fun updateFinalOutputText(sessionId: String, text: String?) = Unit
-    override fun updateInputText(sessionId: String, text: String?) = Unit
-    override fun updateAudioDuration(sessionId: String, durationSeconds: Long) = Unit
-    override fun getAll(): List<SessionEntity> = emptyList()
-    override fun getByType(type: String): List<SessionEntity> = emptyList()
-    override fun search(query: String): List<SessionEntity> = emptyList()
-    override fun deleteById(id: String) = Unit
-    override fun deleteAll() = Unit
-    override fun findLatestByOrigin(origin: String): SessionEntity? = null
-    override fun findWithMissingDuration(): List<SessionEntity> = emptyList()
-    override fun updateStatus(id: String, status: String) = Unit
-    override fun updateError(id: String, type: String?, message: String?) = Unit
-    override fun updateQueuedPromptIds(id: String, ids: String?) = Unit
-    override fun clearAudioFilePath(id: String) = Unit
-    override fun updateAudioFilePath(id: String, path: String) = Unit
-    override fun markInserted(id: String, timestamp: Long) = Unit
-    override fun findPendingInsertion(): List<SessionEntity> = emptyList()
-    override fun deleteInsertedOlderThan(cutoff: Long): Int = 0
-    override fun findOrphanedTerminalAudio(cutoff: Long):
-        List<net.devemperor.dictate.database.dao.OrphanedAudioRow> = emptyList()
-    override fun clearAudioFilePathBulk(ids: List<String>) = Unit
-    override fun getSessionsByStatuses(statuses: List<String>): List<SessionEntity> = emptyList()
-    override fun findAllAudioFilePaths(): List<String?> = emptyList()
-    override fun markLegacyAudioSessionsFailed(
-        legacyPath: String,
-        reason: String,
-        failedStatus: String
-    ): Int = 0
 }

@@ -118,11 +118,23 @@ public class DictateSettingsActivity extends AppCompatActivity {
                                 return;
                             }
 
-                            // copy the inputFileUri file to app cache directory
+                            // copy the inputFileUri file to app cache directory.
+                            //
+                            // B3-VAL-W1 F-5: write into `cacheDir/audio/`
+                            // (the same sub-directory CacheDirAudioFileFactory
+                            // owns) so the imported file participates in
+                            // the M4 orphan-cleanup pass (Spec 1 §4.11.5.1).
+                            // The pre-fix path `cacheDir/<name>` fell outside
+                            // the factory's `audioCacheDir` scope and leaked
+                            // indefinitely unless the user manually cleared
+                            // the cache.
                             Toast.makeText(this, getString(R.string.dictate_file_copying_to_cache), Toast.LENGTH_SHORT).show();
+                            File audioCacheDir = new File(getCacheDir(), "audio");
+                            //noinspection ResultOfMethodCallIgnored
+                            audioCacheDir.mkdirs();
                             try {
                                 InputStream inputStream = getContentResolver().openInputStream(uri);
-                                FileOutputStream outputStream = new FileOutputStream(new File(getCacheDir(), fileName));
+                                FileOutputStream outputStream = new FileOutputStream(new File(audioCacheDir, fileName));
                                 byte[] buffer = new byte[4096];
                                 int bytesRead;
                                 if (inputStream != null) {

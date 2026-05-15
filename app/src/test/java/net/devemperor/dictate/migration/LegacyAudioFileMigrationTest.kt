@@ -51,7 +51,7 @@ class LegacyAudioFileMigrationTest {
         // SharedPreferences per test, but defensive reset costs nothing).
         PreferenceManager.getDefaultSharedPreferences(context)
             .edit()
-            .remove(LegacyAudioFileMigration.FLAG_PREF)
+            .remove(LegacyAudioFileMigration.flagPrefKey())
             .apply()
         // The DictateDatabase singleton may carry rows across tests
         // (Robolectric reuses application state across the JVM). Clear
@@ -68,7 +68,7 @@ class LegacyAudioFileMigrationTest {
         db.sessionDao().deleteAll()
         PreferenceManager.getDefaultSharedPreferences(context)
             .edit()
-            .remove(LegacyAudioFileMigration.FLAG_PREF)
+            .remove(LegacyAudioFileMigration.flagPrefKey())
             .apply()
         // Delete any stray legacy file we might have created.
         File(context.cacheDir, LegacyAudioFileMigration.LEGACY_NAME).delete()
@@ -105,7 +105,7 @@ class LegacyAudioFileMigrationTest {
         // Pre-set the flag — migration must NOT touch the legacy file.
         PreferenceManager.getDefaultSharedPreferences(context)
             .edit()
-            .putBoolean(LegacyAudioFileMigration.FLAG_PREF, true)
+            .putBoolean(LegacyAudioFileMigration.flagPrefKey(), true)
             .apply()
 
         val legacy = File(context.cacheDir, LegacyAudioFileMigration.LEGACY_NAME).apply {
@@ -145,7 +145,7 @@ class LegacyAudioFileMigrationTest {
         assertTrue(
             "pref flag must be set even when no legacy file was present",
             PreferenceManager.getDefaultSharedPreferences(context)
-                .getBoolean(LegacyAudioFileMigration.FLAG_PREF, false),
+                .getBoolean(LegacyAudioFileMigration.flagPrefKey(), false),
         )
     }
 
@@ -284,7 +284,7 @@ class LegacyAudioFileMigrationTest {
         // Pre-condition: flag absent.
         assertFalse(
             PreferenceManager.getDefaultSharedPreferences(context)
-                .getBoolean(LegacyAudioFileMigration.FLAG_PREF, false),
+                .getBoolean(LegacyAudioFileMigration.flagPrefKey(), false),
         )
 
         LegacyAudioFileMigration.run(context)
@@ -292,7 +292,7 @@ class LegacyAudioFileMigrationTest {
         assertTrue(
             "pref flag MUST be set after first successful run",
             PreferenceManager.getDefaultSharedPreferences(context)
-                .getBoolean(LegacyAudioFileMigration.FLAG_PREF, false),
+                .getBoolean(LegacyAudioFileMigration.flagPrefKey(), false),
         )
     }
 }

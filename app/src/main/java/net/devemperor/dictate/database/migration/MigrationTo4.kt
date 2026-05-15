@@ -4,15 +4,15 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
- * M3 → M4 makes two coupled schema changes to the `sessions` table:
+ * M3 → M4 makes three coupled schema changes to the `sessions` table:
  *
  * 1. **Adds the `inserted_at` column** (INTEGER, nullable) — the
  *    "COMPLETED but not yet surfaced to the user" marker that drives
  *    the restart-button logic and the 7-day cleanup policy
- *    (Spec 1 §6.1 + §6.2 R.17). Backfilled with `created_at` for
- *    existing COMPLETED rows (best-effort; the exact insertion time
- *    is not reconstructable, but the cutoff-based cleanup tolerates
- *    the approximation).
+ *    (Spec 1 §6.1 + §6.2 R.17). Pre-existing rows are backfilled with
+ *    `inserted_at = NULL` — NULL means "the cleanup-marker does not
+ *    apply to this row" so the user's pre-M4 history is immune to
+ *    `deleteInsertedOlderThan` (see Spec 1 §6.5 + B3-VAL-W1 F-2).
  *
  * 2. **Extends the `status` CHECK constraint** to include `RECORDING`
  *    and `TRANSCRIBING`. Before M4 those live states existed only in
@@ -20,11 +20,27 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *    persisting them enables the OOM-death-recovery path
  *    (Spec 1 §6.3 + §11.6).
  *
+ * 3. **Changes the self-referential FK on `parent_session_id`** from
+ *    `ON DELETE CASCADE` to `ON DELETE SET NULL`. Row-level DELETE on
+ *    `sessions` (e.g. `deleteInsertedOlderThan`) used to take the
+ *    POST_PROCESSING children of the deleted parent with it — a fresh
+ *    translation could be silently wiped when its source-session aged
+ *    out. After M4 the children survive with `parent_session_id = NULL`;
+ *    they show as root-level history items (the history UI is a flat
+ *    list anyway — no UX regression). See Spec 1 §6.5 + B3-VAL-W1 F-1
+ *    + research/b3-cleanup-cascade-and-backfill-policy.md.
+ *
  * SQLite cannot ALTER an existing CHECK constraint, so this migration
  * uses the standard table-recreate pattern (create `sessions_new`,
  * copy rows, drop the original, rename). The whole sequence runs in
  * a single Room transaction — a failure half-way through aborts
  * atomically and the schema stays on M3.
+ *
+ * **Data-preservation contract (B3-VAL-W1, F-1 + F-2):** Both the
+ * FK-change (SET NULL) and the NULL-backfill converge on the same
+ * NULL-as-unknown semantics — "this row is alive but the cleanup-marker
+ * doesn't apply". Pre-existing user history is conserved across the
+ * upgrade; future row-level DELETEs preserve children unconditionally.
  *
  * **Why no `index_sessions_inserted_at`?** The two queries that read
  * the column (`findPendingInsertion` and `deleteInsertedOlderThan`)
@@ -56,6 +72,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * - The `FOREIGN KEY` reference targets the FINAL table name
  *   (`sessions`), not the transient `sessions_new`. SQLite stores
  *   the FK text verbatim across `ALTER TABLE RENAME`.
+ *
+ * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §6.1 §6.5
+ * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/b3-cleanup-cascade-and-backfill-policy.md
  */
 val MIGRATION_3_4 = object : Migration(3, 4) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -94,19 +113,27 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
                 final_output_text TEXT,
                 input_text TEXT,
                 inserted_at INTEGER,
-                FOREIGN KEY (parent_session_id) REFERENCES sessions (id) ON DELETE CASCADE
+                FOREIGN KEY (parent_session_id) REFERENCES sessions (id) ON DELETE SET NULL
             )
             """.trimIndent()
         )
 
         // 2. Copy existing rows. `inserted_at` is backfilled with
-        //    `created_at` for COMPLETED rows with a non-null final
-        //    output text (the cleanup policy treats them as already
-        //    "user-visible"). All other rows get NULL — the recovery
-        //    pass on the next boot will surface `RECORDED` rows as
-        //    pending and treat half-written `RECORDING`/`TRANSCRIBING`
-        //    rows per Spec 1 §6.3 (but neither of those last two can
-        //    occur in pre-M4 data, since they were never persisted).
+        //    NULL for ALL pre-existing rows (Spec 1 §6.5 + B3-VAL-W1
+        //    F-2). NULL means "the cleanup-marker doesn't apply to
+        //    this row" — `deleteInsertedOlderThan` filters
+        //    `inserted_at IS NOT NULL`, so pre-M4 history is immune.
+        //    The user's "history is forever" pre-M4 expectation is
+        //    preserved across the upgrade. Backfilling with `created_at`
+        //    (the pre-fix value) would have made every COMPLETED row
+        //    older than 7 days immediately eligible for deletion at the
+        //    first idle-stop after upgrade — silent loss of months of
+        //    history.
+        //
+        //    Pre-existing COMPLETED rows still surface as candidates in
+        //    `findPendingInsertion`, gated by `Pref.PendingInsertionFreshnessMs`
+        //    (default 24h on `created_at`) so the first post-upgrade boot
+        //    doesn't flood `NotifyManualPasteNeeded`.
         db.execSQL(
             """
             INSERT INTO sessions_new (
@@ -122,11 +149,7 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
                 status, origin, queued_prompt_ids,
                 last_error_type, last_error_message,
                 final_output_text, input_text,
-                CASE
-                    WHEN status = 'COMPLETED' AND final_output_text IS NOT NULL
-                        THEN created_at
-                    ELSE NULL
-                END
+                NULL
             FROM sessions
             """.trimIndent()
         )

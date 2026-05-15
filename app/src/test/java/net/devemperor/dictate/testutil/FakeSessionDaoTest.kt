@@ -75,9 +75,24 @@ class FakeSessionDaoTest {
         // Non-COMPLETED → not eligible.
         dao.seed(entity("recorded", SessionStatus.RECORDED, 5000L, finalOutputText = "d"))
 
-        val pending = dao.findPendingInsertion()
+        // freshnessFloor = 0 admits all rows (matches pre-F-2 semantics).
+        val pending = dao.findPendingInsertion(freshnessFloor = 0L)
 
         assertEquals(listOf("pending-new", "pending-old"), pending.map { it.id })
+    }
+
+    @Test
+    fun `findPendingInsertion filters out legacy rows below the freshness floor`() {
+        // B3-VAL-W1 F-2: pre-M4 rows backfilled to inserted_at=NULL would
+        // otherwise flood NotifyManualPasteNeeded on first post-upgrade
+        // boot. The freshness floor on created_at gates them.
+        dao.seed(entity("legacy", SessionStatus.COMPLETED, createdAt = 100L, finalOutputText = "old"))
+        dao.seed(entity("recent", SessionStatus.COMPLETED, createdAt = 9_000L, finalOutputText = "new"))
+
+        val pending = dao.findPendingInsertion(freshnessFloor = 5_000L)
+
+        // Only the recent row passes the floor.
+        assertEquals(listOf("recent"), pending.map { it.id })
     }
 
     @Test

@@ -20,11 +20,14 @@ import org.junit.runner.RunWith
  * connected device or emulator before opening the PR. A future CI
  * emulator plan will pick these tests up automatically.
  *
- * Coverage (6 cases, mapping to Spec 1 §11.4.2 + KG-SST-2/3/4/5):
+ * Coverage (8 cases, mapping to Spec 1 §11.4.2 + KG-SST-2/3/4/5 +
+ * B3-VAL-W1 F-1 + F-2):
  *
- *  1. [migrate3To4_addsInsertedAtColumn_andBackfillsCompleted] —
- *     the new column appears and COMPLETED rows are backfilled with
- *     `created_at`; non-COMPLETED rows keep `inserted_at = NULL`.
+ *  1. [migrate3To4_backfillsInsertedAt_asNull_forAllPreExistingRows]
+ *     — the new column appears and **all** pre-existing rows
+ *     (including COMPLETED) get `inserted_at = NULL` so the cleanup
+ *     policy doesn't wipe months of user history on first
+ *     post-upgrade idle-stop (Spec 1 §6.5, F-2).
  *  2. [migrate3To4_checkConstraint_acceptsNewStatusValues] — the new
  *     `RECORDING` / `TRANSCRIBING` enum values are insertable after
  *     migration (CHECK extends, doesn't replace).
@@ -39,6 +42,10 @@ import org.junit.runner.RunWith
  *     ops; see KDoc on [MIGRATION_3_4]).
  *  6. [migrate3To4_preservesIndices] — all five indices the migration
  *     recreates in step 4 are present afterwards.
+ *  7. [migrate3To4_setsForeignKeyToSetNull] — row-level DELETE on a
+ *     parent preserves POST_PROCESSING children with NULL
+ *     `parent_session_id` (Spec 1 §6.5, F-1). The FK changed from
+ *     `ON DELETE CASCADE` to `ON DELETE SET NULL`.
  *
  *  Plus the bonus [migrate1To4_chain_preservesData] case for the
  *  multi-step v1→v4 chain (KG-SST-3, exercises a backup-restore
@@ -55,9 +62,9 @@ class MigrationTo4Test {
         FrameworkSQLiteOpenHelperFactory()
     )
 
-    // 1
+    // 1 — B3-VAL-W1 F-2: all pre-existing rows get inserted_at = NULL.
     @Test
-    fun migrate3To4_addsInsertedAtColumn_andBackfillsCompleted() {
+    fun migrate3To4_backfillsInsertedAt_asNull_forAllPreExistingRows() {
         helper.createDatabase(TEST_DB, 3).use { db ->
             db.execSQL(
                 """
@@ -79,12 +86,18 @@ class MigrationTo4Test {
         db.query("SELECT id, inserted_at FROM sessions ORDER BY id").use { c ->
             assertTrue(c.moveToFirst())
             assertEquals("s1", c.getString(0))
-            // Backfilled to created_at for COMPLETED + non-null output.
-            assertEquals(1000L, c.getLong(1))
+            // Spec 1 §6.5 + F-2: pre-existing rows are immune to
+            // deleteInsertedOlderThan — backfill is NULL, not
+            // created_at. NULL means "the cleanup-marker doesn't
+            // apply to this row".
+            assertTrue(
+                "COMPLETED pre-existing row must have inserted_at = NULL after M4 (F-2)",
+                c.isNull(1)
+            )
             assertTrue(c.moveToNext())
             assertEquals("s2", c.getString(0))
-            // RECORDED row → inserted_at stays NULL.
-            assertTrue("inserted_at must be NULL for non-COMPLETED rows", c.isNull(1))
+            // RECORDED row was already NULL pre-fix; stays NULL.
+            assertTrue("inserted_at must be NULL for RECORDED rows", c.isNull(1))
         }
     }
 
@@ -231,7 +244,53 @@ class MigrationTo4Test {
         }
     }
 
-    // 7 (bonus — KG-SST-3, v1→v4 chain for backup-restore scenarios)
+    // 7 — B3-VAL-W1 F-1: FK changed from CASCADE to SET NULL.
+    @Test
+    fun migrate3To4_setsForeignKeyToSetNull() {
+        helper.createDatabase(TEST_DB, 3).use { db ->
+            // Parent + POST_PROCESSING child pre-migration.
+            db.execSQL(
+                """
+                INSERT INTO sessions (id, type, created_at, status, origin,
+                    audio_duration_seconds)
+                VALUES ('parent', 'RECORDING', 1000, 'COMPLETED', 'KEYBOARD', 5)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO sessions (id, type, created_at, status, origin,
+                    audio_duration_seconds, parent_session_id)
+                VALUES ('child', 'RECORDING', 2000, 'COMPLETED', 'POST_PROCESSING', 5, 'parent')
+                """.trimIndent()
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 4, true, MIGRATION_3_4)
+
+        // Room disables FK enforcement during migration; tests must
+        // explicitly turn it back on to exercise the FK semantics
+        // (otherwise row-level DELETE skips the FK action entirely).
+        db.execSQL("PRAGMA foreign_keys = ON")
+
+        // Row-level DELETE on the parent — the cleanup policy's hot
+        // path. Under the pre-F-1 (CASCADE) semantics this would have
+        // wiped the child silently.
+        db.execSQL("DELETE FROM sessions WHERE id = 'parent'")
+
+        // Child must SURVIVE with parent_session_id = NULL.
+        db.query(
+            "SELECT id, parent_session_id FROM sessions WHERE id = 'child'"
+        ).use { c ->
+            assertTrue("child row was deleted — FK still cascades?", c.moveToFirst())
+            assertEquals("child", c.getString(0))
+            assertTrue(
+                "parent_session_id must be NULL after parent DELETE (F-1 SET NULL)",
+                c.isNull(1)
+            )
+        }
+    }
+
+    // 8 (bonus — KG-SST-3, v1→v4 chain for backup-restore scenarios)
     @Test
     fun migrate1To4_chain_preservesData() {
         // Known v1 state: a RECORDING-type session with an audio file

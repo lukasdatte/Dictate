@@ -115,7 +115,7 @@ class PipelineOrphanCleanerTest {
 
         val result = runBlocking { cleaner.cleanup(gracePeriodMs = 1000L) }
 
-        assertEquals(1, result.deletedAudioFiles)
+        assertEquals(1, result.clearedAudioPathRows)
         assertEquals(1, result.clearedAudioPathRows)
         assertFalse("audio file removed from disk", tmp.exists())
         assertNull("audio_file_path cleared in DB", dao.getById("failed-1")!!.audioFilePath)
@@ -135,7 +135,7 @@ class PipelineOrphanCleanerTest {
 
         val result = runBlocking { cleaner.cleanup(gracePeriodMs = 1000L) }
 
-        assertEquals(1, result.deletedAudioFiles)
+        assertEquals(1, result.clearedAudioPathRows)
         assertFalse(tmp.exists())
         assertNull(dao.getById("cancelled-1")!!.audioFilePath)
     }
@@ -155,7 +155,7 @@ class PipelineOrphanCleanerTest {
 
         // No orphan-audio paths cleared (RECORDED/COMPLETED-without-insertedAt
         // are NOT eligible).
-        assertEquals(0, result.deletedAudioFiles)
+        assertEquals(0, result.clearedAudioPathRows)
         assertEquals(0, result.clearedAudioPathRows)
         assertTrue("RECORDED audio kept", recAudio.exists())
         assertTrue("COMPLETED audio kept", complAudio.exists())
@@ -179,7 +179,7 @@ class PipelineOrphanCleanerTest {
 
         val result = runBlocking { cleaner.cleanup(gracePeriodMs = 1000L) }
 
-        assertEquals(0, result.deletedAudioFiles)
+        assertEquals(0, result.clearedAudioPathRows)
         assertEquals(0, result.clearedAudioPathRows)
         assertTrue(tmp.exists())
         assertNotNull(dao.getById("failed-fresh")!!.audioFilePath)
@@ -202,7 +202,7 @@ class PipelineOrphanCleanerTest {
         val result = runBlocking { cleaner.cleanup(gracePeriodMs = 1000L) }
 
         // File didn't exist → counted as success (no-op delete is ok).
-        assertEquals(1, result.deletedAudioFiles)
+        assertEquals(1, result.clearedAudioPathRows)
         assertEquals(1, result.clearedAudioPathRows)
         assertNull(dao.getById("failed-ghost")!!.audioFilePath)
     }
@@ -214,11 +214,11 @@ class PipelineOrphanCleanerTest {
             audioFilePath = tmp.absolutePath)
 
         val r1 = runBlocking { cleaner.cleanup(gracePeriodMs = 1000L) }
-        assertEquals(1, r1.deletedAudioFiles)
+        assertEquals(1, r1.clearedAudioPathRows)
 
         val r2 = runBlocking { cleaner.cleanup(gracePeriodMs = 1000L) }
         // Second pass: audio_file_path was cleared, no orphans found.
-        assertEquals(0, r2.deletedAudioFiles)
+        assertEquals(0, r2.clearedAudioPathRows)
         assertEquals(0, r2.clearedAudioPathRows)
     }
 
@@ -245,7 +245,7 @@ class PipelineOrphanCleanerTest {
         val result = runBlocking { resilient.cleanup(gracePeriodMs = 1000L) }
 
         assertEquals(0, result.deletedCompletedRows) // delete path failed silently
-        assertEquals(1, result.deletedAudioFiles) // orphan path still ran
+        assertEquals(1, result.clearedAudioPathRows) // orphan path still ran
         assertNull(throwingDao.getById("failed-absorb")!!.audioFilePath)
     }
 
@@ -263,7 +263,7 @@ class PipelineOrphanCleanerTest {
 
         val result = runBlocking { resilient.cleanup(gracePeriodMs = 1000L) }
 
-        assertEquals(0, result.deletedAudioFiles)
+        assertEquals(0, result.clearedAudioPathRows)
         assertEquals(0, result.clearedAudioPathRows)
         // deleteInsertedOlderThan still ran (returns 0 since no eligible rows).
         assertEquals(0, result.deletedCompletedRows)

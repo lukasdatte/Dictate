@@ -115,21 +115,34 @@ object ResendModule : DictateModule<ResendState, Action.ResendAction, ResendModu
         // recovery path when a completed session's result couldn't be
         // inserted via InputConnection (the result is on the clipboard;
         // the user must tap to paste). Idempotent — re-dispatch is a
-        // no-op once the flag is already set.
+        // no-op once the session is already in the set.
+        //
+        // B3-VAL-W1 F-14: add the sessionId to pendingPasteSessionIds.
+        // The Boolean alias `lastResultNeedsManualPaste` mirrors
+        // "set non-empty" so existing IME consumers keep working
+        // (per-session UI consumer wiring lands in B5/B6).
         is Action.ResendAction.NotifyManualPasteNeeded ->
-            if (!state.lastResultNeedsManualPaste) {
+            if (action.sessionId !in state.pendingPasteSessionIds) {
+                val updated = state.pendingPasteSessionIds + action.sessionId
                 TransitionResult(
-                    nextState = state.copy(lastResultNeedsManualPaste = true),
+                    nextState = state.copy(
+                        pendingPasteSessionIds = updated,
+                        lastResultNeedsManualPaste = updated.isNotEmpty(),
+                    ),
                     sideEffects = emptyList(),
                 )
             } else null
 
-        // F-1 — user pasted (or dismissed). Idempotent — re-dispatch is
-        // a no-op once the flag is already cleared.
+        // F-1 — user pasted (or dismissed). Clears the whole set
+        // (current single-Boolean UI semantic). Idempotent —
+        // re-dispatch is a no-op once already cleared.
         Action.ResendAction.ClearManualPasteFlag ->
-            if (state.lastResultNeedsManualPaste) {
+            if (state.pendingPasteSessionIds.isNotEmpty() || state.lastResultNeedsManualPaste) {
                 TransitionResult(
-                    nextState = state.copy(lastResultNeedsManualPaste = false),
+                    nextState = state.copy(
+                        pendingPasteSessionIds = emptySet(),
+                        lastResultNeedsManualPaste = false,
+                    ),
                     sideEffects = emptyList(),
                 )
             } else null

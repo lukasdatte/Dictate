@@ -300,6 +300,9 @@
     <string name="dictate_status_failed">Fehlgeschlagen</string>
     <string name="dictate_status_cancelled">Abgebrochen</string>
     <string name="dictate_status_running">Wird verarbeitet…</string>
+    <string name="dictate_status_recording">Aufnahme läuft…</string>
+    <string name="dictate_status_transcribing">Transkription läuft…</string>
+    <string name="dictate_cache_clear_blocked_recording">Cache kann während einer aktiven Aufnahme nicht geleert werden.</string>
 
     <!-- History detail actions -->
     <string name="dictate_history_direct_reprocess">Direkt ausführen</string>

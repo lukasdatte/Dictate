@@ -292,12 +292,26 @@ enum class ScoPhase {
  *   `research/manual-paste-field-architecture.md`). Sibling to
  *   [lastAudioExists] — both are post-pipeline UI affordances surviving
  *   the pipeline-FSM's return to Idle.
+ *
+ *   **B3-VAL-W1 F-14 (data-shape):** the Boolean form drops N-1 of N
+ *   pending paste sessions on recovery. The new
+ *   [pendingPasteSessionIds] set is the canonical store; the Boolean
+ *   stays as a derived "any pending" alias for IME consumers that
+ *   haven't migrated to the per-session affordance (consumer wiring
+ *   tracked for B5/B6, see Issue Index "F-14 IME consumer wiring").
+ * @property pendingPasteSessionIds set of session-ids that have a
+ *   COMPLETED result the user has not yet seen (manual-paste hint
+ *   surface). Populated by `Action.ResendAction.NotifyManualPasteNeeded(sessionId)`.
+ *   `ClearManualPasteFlag` clears the whole set; the per-session
+ *   clear lands when the IME consumer learns the per-session
+ *   affordance (B5/B6).
  */
 data class ResendState(
     val lastAudioExists: Boolean = false,
     val resendEnabled: Boolean = false,
     val resendCooldown: Boolean = false,
     val lastResultNeedsManualPaste: Boolean = false,
+    val pendingPasteSessionIds: Set<String> = emptySet(),
 )
 
 /**

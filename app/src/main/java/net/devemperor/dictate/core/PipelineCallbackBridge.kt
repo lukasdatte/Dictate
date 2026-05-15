@@ -70,9 +70,12 @@ class PipelineCallbackBridge : PipelineOrchestrator.PipelineCallback {
         }
         try {
             block(cb)
-        } catch (t: Throwable) {
-            // A misbehaving IME-side callback must NOT abort the pipeline thread.
-            Log.w(TAG, "$method delegate threw — swallowed to keep pipeline alive", t)
+        } catch (e: Exception) {
+            // A misbehaving IME-side callback must NOT abort the
+            // pipeline thread. B3-VAL-W1 F-21: catch Exception, NOT
+            // Throwable — JVM Errors (OOM, StackOverflow, LinkageError)
+            // must propagate so Crashlytics sees them.
+            Log.w(TAG, "$method delegate threw — swallowed to keep pipeline alive", e)
         }
     }
 

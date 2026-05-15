@@ -1,6 +1,7 @@
 package net.devemperor.dictate.state
 
 import android.util.Log
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.devemperor.dictate.database.dao.SessionDao
@@ -62,6 +63,13 @@ import java.io.File
 class PipelineOrphanCleaner(
     private val sessionDao: SessionDao,
     private val nowProvider: () -> Long = { System.currentTimeMillis() },
+    /**
+     * Injectable IO dispatcher — production passes `Dispatchers.IO`,
+     * tests can inject `Dispatchers.Unconfined` or a `TestDispatcher`.
+     * Aligns with [PipelineRecovery] and [PipelineSessionRepoAdapter]
+     * (B3-VAL-W1 F-25 — same-operation-three-ways drift fix).
+     */
+    private val ioContext: CoroutineContext = Dispatchers.IO,
 ) {
 
     /**
@@ -79,7 +87,7 @@ class PipelineOrphanCleaner(
      *
      * @return [CleanupResult] with counts of rows/files affected.
      */
-    suspend fun cleanup(gracePeriodMs: Long): CleanupResult = withContext(Dispatchers.IO) {
+    suspend fun cleanup(gracePeriodMs: Long): CleanupResult = withContext(ioContext) {
         val cutoff = nowProvider() - gracePeriodMs
 
         // Step 1 — drop expired inserted-COMPLETED rows.
@@ -95,7 +103,7 @@ class PipelineOrphanCleaner(
 
         CleanupResult(
             deletedCompletedRows = deletedRows,
-            deletedAudioFiles = filesDeleted,
+            filesActuallyDeleted = filesDeleted,
             clearedAudioPathRows = idsCleared.size,
         )
     }
@@ -133,12 +141,12 @@ class PipelineOrphanCleaner(
         var deletedFiles = 0
         for (row in orphans) {
             val file = File(row.audioFilePath)
-            val ok = try {
-                !file.exists() || file.delete()
-            } catch (t: Throwable) {
-                Log.w(TAG, "orphan-audio delete failed for ${row.audioFilePath}", t)
-                false
-            }
+            // B3-VAL-W1 F-26 — runCatching for single-statement
+            // best-effort file delete (style alignment with
+            // CacheDirAudioFileFactory.cleanupOrphans).
+            val ok = runCatching { !file.exists() || file.delete() }
+                .onFailure { Log.w(TAG, "orphan-audio delete failed for ${row.audioFilePath}", it) }
+                .getOrDefault(false)
             if (ok) {
                 cleared += row.id
                 deletedFiles++
@@ -158,12 +166,42 @@ class PipelineOrphanCleaner(
      * Aggregate diagnostic returned from [cleanup]. Logged at the
      * service-side caller for observability; tests assert against the
      * fields.
+     *
+     * **Counter split (B3-VAL-W1 F-20):** the old single
+     * `deletedAudioFiles` field counted both "file actually deleted"
+     * and "row whose `audio_file_path` was cleared because the file
+     * was already gone". The split keeps the legacy aggregate
+     * ([clearedAudioPathRows] — total rows touched, the existing
+     * semantic) plus a precise [filesActuallyDeleted] counter for
+     * telemetry (only `File.delete()` calls that returned true).
      */
     data class CleanupResult(
         val deletedCompletedRows: Int,
-        val deletedAudioFiles: Int,
+        /**
+         * Count of audio files where `File.delete()` returned true.
+         * Excludes rows whose file was already missing (those rows
+         * still appear in [clearedAudioPathRows]).
+         */
+        val filesActuallyDeleted: Int,
+        /**
+         * Total rows whose `audio_file_path` we zeroed in the DB.
+         * Includes both "just deleted" and "was already missing"
+         * cases — matches the historical
+         * `deletedAudioFiles` headline metric.
+         */
         val clearedAudioPathRows: Int,
-    )
+    ) {
+        /**
+         * Backwards-compat alias for code that still reads the
+         * pre-split field name. Same value as [clearedAudioPathRows].
+         */
+        @Deprecated(
+            "Use clearedAudioPathRows or filesActuallyDeleted — F-20",
+            replaceWith = ReplaceWith("clearedAudioPathRows"),
+            level = DeprecationLevel.WARNING,
+        )
+        val deletedAudioFiles: Int get() = clearedAudioPathRows
+    }
 
     private companion object {
         private const val TAG = "PipelineOrphanCleaner"

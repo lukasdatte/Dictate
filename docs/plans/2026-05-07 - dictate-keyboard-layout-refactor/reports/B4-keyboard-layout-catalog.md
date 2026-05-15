@@ -151,9 +151,101 @@ Reuses existing fixtures: `fakeModuleServices()` + `NoopAudioFileFactory` + `Noo
 
 **Agent-IDs:** Steps 1-5: `B4-C13-IMPL-FULL`
 
-**Status:** ⏳ pending (depends on C12)
+**Status:** ✅ done (2026-05-15)
 
-⏳
+#### What was done
+
+Created `app/src/main/res/xml/motion_scene_keyboard.xml` per Spec 2 §7
+with all five KEYBOARD ConstraintSets (`two_row_state`,
+`single_row_state`, `two_row_send_mode_state`,
+`single_row_send_mode_state`, `reprocess_staging_state`), declared
+`motion:visibilityMode="ignore"` on the nine state-driven button
+constraint blocks (Spec 2 §7.3 / R.11 — non-negotiable), and wired the
+five sibling transitions (Two-Row ↔ Single-Row at 250 ms; both ↔ their
+send-mode variants and staging at 200 ms).
+
+Refactored `app/src/main/res/layout/activity_dictate_keyboard_view.xml`
+to turn `main_buttons_cl` into a `MotionLayout` with `layoutDescription`
+pointing at the scene XML. The legacy nested `action_row` / `input_row`
+`ConstraintLayout` containers were dissolved — all nine buttons are now
+direct children of the `MotionLayout`, with PulseLayout still wrapping
+`record_btn` (L7).
+
+Added `widget_toggle_btn` to the layout XML (LogicalButtonId.WIDGET_TOGGLE
+view-id from C12's LayoutCatalog) so C14's `ImeViewBackend.buttonViews`
+`findViewById(R.id.widget_toggle_btn)` resolves to a real view — Spec 2
+§7.1 / §7.2 omitted it, this is a recorded plan-deviation (see below).
+
+Wrote `app/src/test/java/net/devemperor/dictate/state/layout/MotionSceneSchemaTest.kt`
+— eight JVM-pure DOM-parser tests covering: file existence,
+ConstraintSet inventory (exactly 5 required), `visibilityMode="ignore"`
+presence per button in the base state, transition inventory + positive
+duration, derive-from relationships for both single-row and the
+send-mode/staging trio.
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Stub `action_row` + `input_row` `ConstraintLayout`s kept as gone-sized siblings of the new `MotionLayout` | Spec 2 §11.1 ("entfallen vollständig") | Legacy `DictateInputMethodService` (`actionRow`, `inputRow` fields) + `KeyboardStateManager.KeyboardViews` + `KeyboardLayoutModeController` still resolve `R.id.action_row` / `R.id.input_row` via `findViewById` and would throw `IllegalStateException` (or fail to compile in Java) without these IDs. C15 (5d cleanup, Spec 2 §11.8) deletes those legacy classes and these stubs in one step. | Without the stubs, the build is red at `:app:compileDebugJavaWithJavac` between C13 and C15. The stubs are 0dp + gone so they don't influence runtime layout. They are explicitly documented as scaffold-only in the layout-XML comment block. | inline-fixed, C15 cleanup-target |
+| `widget_toggle_btn` added to both motion_scene_keyboard.xml and layout XML (Spec 2 §7.1 / §7.2 omitted it) | Spec 2 §7.1 / §7.2 only list 9 buttons but §7.3 + §13.1-22b + C12 LayoutCatalog list 10 (`WIDGET_TOGGLE`) | Without the view-id, `ImeViewBackend.buttonViews` (Spec 2 §6, C14) would throw `error("No view registered for WIDGET_TOGGLE in ImeViewBackend.buttonViews")` at the first render-tick (Issue 3.0.12 silent-skip-guard). Spec 2 §3.1 already places it "neben AUDIO_FOCUS im action_row" — the constraint positions follow that spec hint. Placeholder foreground icon (`ic_outline_change_circle_24`) until B5 ships a dedicated drawable. | C14 / B5 can wire the proper icon resolver; no other ripple. | inline-fixed |
+
+#### Inline-fixed items
+
+- `app/src/main/res/xml/motion_scene_keyboard.xml` — new file, 5
+  ConstraintSets + 5 transitions, all 9 visible buttons carry
+  `visibilityMode="ignore"`.
+- `app/src/main/res/layout/activity_dictate_keyboard_view.xml` —
+  `main_buttons_cl` is now `androidx.constraintlayout.motion.widget.MotionLayout`
+  with `app:layoutDescription="@xml/motion_scene_keyboard"`. All nine
+  buttons (including new `widget_toggle_btn`) are direct children with
+  per-button XML defaults but no per-button position constraints
+  (positions live in MotionScene). Legacy `action_row` / `input_row`
+  scaffold stubs added at file end with explanatory comment.
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|-------------|--------|--------|
+
+(no open issues — both plan-deviations are inline-fixed; scaffold stubs
+are tracked as C15 cleanup-target via the in-XML comment)
+
+#### Overlooked points / known gaps
+
+- **Runtime behaviour between C13 and C15 is not yet correct.**
+  `KeyboardLayoutModeController.rehome` will (at small-mode toggle)
+  remove the flat-hierarchy buttons from the MotionLayout and add them
+  to the empty `action_row` stub — breaking the visible keyboard.
+  Spec 2 §11.8 5c says KSM methods get empty bodies for exactly this
+  reason; the empty-body conversion is C15's job. C13's contract is
+  XML-isolated compile-green, not runtime parity.
+- `record_pulse_layout` (the PulseLayout wrapper) does **not** carry
+  `visibilityMode="ignore"` — Spec 2 §7.3 lists only the nine MaterialButton
+  ids. The wrapper's visibility is currently `VISIBLE` from XML and never
+  toggled programmatically against the MotionLayout, so this should be
+  safe. If C14 needs to drive the wrapper's visibility, an additional
+  `<Constraint android:id="@+id/record_pulse_layout"><PropertySet motion:visibilityMode="ignore"/></Constraint>`
+  entry will need to be added.
+- The `<Constraint android:id="@+id/record_btn">` block in `two_row_state`
+  references a non-direct MotionLayout child (record_btn is nested inside
+  PulseLayout). It's kept harmless — MotionLayout silently ignores
+  PropertySet entries it cannot bind — but if C14's ImeViewBackend ever
+  manipulates this entry directly, the path may need re-validation.
+- Espresso UI-Tests (Spec 2 §14.2 1-10) are deferred to C14 / later
+  blocks; they need an `ImeViewBackend` running. The eight JVM-pure
+  schema tests cover the C13 XML-shape contract.
+
+#### Test-Infrastructure implemented
+
+None — the schema tests reuse `DocumentBuilderFactory` from the JDK,
+no new test helpers were needed.
+
+#### Build / test results
+
+- `./gradlew assembleDebug` — **BUILD SUCCESSFUL** (37 tasks).
+- `./gradlew test` — **BUILD SUCCESSFUL**;
+  `MotionSceneSchemaTest`: 8 tests, 0 failures, 0 errors, 0 skipped.
 
 ---
 

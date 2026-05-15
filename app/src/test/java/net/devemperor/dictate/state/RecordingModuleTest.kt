@@ -129,10 +129,13 @@ class RecordingModuleTest {
     // ─── Preparing → Active / Idle ─────────────────────────────────────
 
     @Test
-    fun `MediaRecorderReady from Preparing emits Active + 4 start effects`() {
+    fun `MediaRecorderReady from Preparing emits Active + 4 start effects + Recording notification`() {
         // B3-VAL-W1 F-10: StartMediaRecorder added to the Preparing →
         // Active side-effect set so the subsystem-level start() runs
         // in the orchestrator-driven flow.
+        // C5 / C4-IMPL-1: + Effect.UpdateNotification(Recording) so the
+        // §7.6 Recording-Active FGS notification surfaces once the
+        // recorder is confirmed alive (AC-2).
         val state = RecordingState.Preparing(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(
             state = state,
@@ -142,11 +145,18 @@ class RecordingModuleTest {
         val next = result!!.nextState as RecordingState.Active
         assertEquals(false, next.useBluetooth)
         assertEquals(testFile, next.audioFile)
-        assertEquals(4, result.sideEffects.size)
+        assertEquals(5, result.sideEffects.size)
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartMediaRecorder))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartTimer))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartAmplitudeStream))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartBorderGlow))
+        assertTrue(
+            result.sideEffects.contains(
+                RecordingModule.Effect.UpdateNotification(
+                    NotificationStatus.Recording("sid-test"),
+                ),
+            ),
+        )
     }
 
     @Test
@@ -165,26 +175,40 @@ class RecordingModuleTest {
     // ─── Active → Paused / Idle ────────────────────────────────────────
 
     @Test
-    fun `PauseRecording from Active emits Paused + 4 pause effects`() {
+    fun `PauseRecording from Active emits Paused + 4 pause effects + Paused notification`() {
+        // C5 / C4-IMPL-1: + Effect.UpdateNotification(Paused) — the §7.6
+        // Recording-Paused row swaps the action set to [Resume][Stopp][Senden].
         val state = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(state, Action.RecordingAction.PauseRecording, ctx())
         val next = result!!.nextState as RecordingState.Paused
         assertEquals(false, next.useBluetooth)
         assertEquals(testFile, next.audioFile)
-        assertEquals(4, result.sideEffects.size)
+        assertEquals(5, result.sideEffects.size)
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.PauseMediaRecorder))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.PauseTimer))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.PauseBorderGlow))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StopAmplitudeStream))
+        assertTrue(
+            result.sideEffects.contains(
+                RecordingModule.Effect.UpdateNotification(
+                    NotificationStatus.Paused("sid-test"),
+                ),
+            ),
+        )
     }
 
     @Test
-    fun `StopRecording from Active emits Idle + 4 stop effects`() {
+    fun `StopRecording from Active emits Idle + 4 stop effects + DismissNotification`() {
+        // C5 — stop-without-send: recording discarded, no pipeline
+        // hand-off, so the FGS notification is torn down (the
+        // StopRecordingAndSend arm deliberately does NOT dismiss — the
+        // pipeline trigger re-shows on the same NOTIF_ID).
         val state = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-test")
         val result = module.reduce(state, Action.RecordingAction.StopRecording, ctx())
         assertEquals(RecordingState.Idle, result!!.nextState)
-        assertEquals(4, result.sideEffects.size)
+        assertEquals(5, result.sideEffects.size)
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StopMediaRecorder))
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.DismissNotification))
     }
 
     @Test
@@ -308,6 +332,103 @@ class RecordingModuleTest {
         val result = module.reduce(state, Action.RecordingAction.CancelRecording, ctx())
         assertEquals(RecordingState.Idle, result!!.nextState)
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.DeleteAudioFile(testFile)))
+    }
+
+    // ─── C5 / C4-IMPL-1 — recording-phase FGS notification emission ─────
+    //
+    // Spec 1 §7.6 Recording-Active / Recording-Paused. The recording FSM
+    // is the on-path owner of the recording-phase notification once C5
+    // flips the IME trigger to dispatch. The Recording→Pipeline hand-off
+    // is seamless (StopRecordingAndSend does NOT dismiss — the
+    // EmitPipelineTrigger → PipelineModule re-show()s a Pipeline status on
+    // the same NOTIF_ID).
+
+    @Test
+    fun `C5 ResumeRecording re-shows the Recording notification`() {
+        val state = RecordingState.Paused(useBluetooth = true, audioFile = testFile, sessionId = "sid-resume")
+        val result = module.reduce(state, Action.RecordingAction.ResumeRecording, ctx())!!
+        assertTrue(
+            "Resume swaps the §7.6 notification back to Recording-Active ([Pause]…)",
+            result.sideEffects.contains(
+                RecordingModule.Effect.UpdateNotification(
+                    NotificationStatus.Recording("sid-resume"),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `C5 StopRecordingAndSend does NOT dismiss (seamless Recording to Pipeline hand-off)`() {
+        // The pipeline trigger re-shows a Pipeline status on the same
+        // NOTIF_ID; a dismiss here would cause a visible flicker / a
+        // window with no FGS notification (FGS-5s-Frist risk, R-2).
+        val active = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-send")
+        val r1 = module.reduce(active, Action.RecordingAction.StopRecordingAndSend, ctx())!!
+        assertTrue(
+            "StopRecordingAndSend from Active must NOT emit DismissNotification",
+            r1.sideEffects.none { it is RecordingModule.Effect.DismissNotification },
+        )
+        assertTrue(
+            r1.sideEffects.contains(
+                RecordingModule.Effect.EmitPipelineTrigger("sid-send", testFile),
+            ),
+        )
+        val paused = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "sid-send2")
+        val r2 = module.reduce(paused, Action.RecordingAction.StopRecordingAndSend, ctx())!!
+        assertTrue(
+            "StopRecordingAndSend from Paused must NOT emit DismissNotification",
+            r2.sideEffects.none { it is RecordingModule.Effect.DismissNotification },
+        )
+    }
+
+    @Test
+    fun `C5 CancelRecording dismisses the notification from every recording state`() {
+        // Discard (no pipeline hand-off) tears the FGS notification down.
+        val prep = RecordingState.Preparing(useBluetooth = false, audioFile = testFile, sessionId = "s")
+        assertTrue(
+            module.reduce(prep, Action.RecordingAction.CancelRecording, ctx())!!
+                .sideEffects.contains(RecordingModule.Effect.DismissNotification),
+        )
+        val active = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "s")
+        assertTrue(
+            module.reduce(active, Action.RecordingAction.CancelRecording, ctx())!!
+                .sideEffects.contains(RecordingModule.Effect.DismissNotification),
+        )
+        val paused = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "s")
+        assertTrue(
+            module.reduce(paused, Action.RecordingAction.CancelRecording, ctx())!!
+                .sideEffects.contains(RecordingModule.Effect.DismissNotification),
+        )
+    }
+
+    @Test
+    fun `C5 StopRecording from Paused dismisses the notification`() {
+        val state = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "s")
+        val result = module.reduce(state, Action.RecordingAction.StopRecording, ctx())!!
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.DismissNotification))
+    }
+
+    @Test
+    fun `C5 UpdateNotification and DismissNotification reach the coordinator subsystem`() {
+        // runEffect wiring: the recording-phase effects drive the SAME
+        // notificationCoordinator subsystem PipelineModule uses. K-1
+        // handwritten capturing fake (no mocking framework).
+        val showCalls = mutableListOf<NotificationStatus>()
+        var dismissCount = 0
+        val capturingCoordinator = object : net.devemperor.dictate.state.PipelineNotificationCoordinatorSubsystem {
+            override fun show(status: NotificationStatus) { showCalls += status }
+            override fun dismiss() { dismissCount++ }
+        }
+        val services = net.devemperor.dictate.testutil.fakeModuleServices(
+            notificationCoordinator = capturingCoordinator,
+        )
+        module.runEffect(
+            RecordingModule.Effect.UpdateNotification(NotificationStatus.Recording("sid-x")),
+            services,
+        )
+        module.runEffect(RecordingModule.Effect.DismissNotification, services)
+        assertEquals(listOf<NotificationStatus>(NotificationStatus.Recording("sid-x")), showCalls)
+        assertEquals(1, dismissCount)
     }
 
     // ─── Cross-module cascade (KG-RSB-2-Fix verification) ───────────────

@@ -119,6 +119,25 @@ class PipelineNotificationCoordinatorTest {
     }
 
     @Test
+    fun show_paused_postsNotificationWithResumeStopSendActions() {
+        // C5 / C4-IMPL-1 — Spec 1 §7.6 Recording-Paused row: the Pause
+        // button becomes Resume; Stopp/Senden stay.
+        coordinator.show(NotificationStatus.Paused(sessionId = "s-1"))
+
+        val n = posted()
+        assertNotNull("Paused status must post a notification", n)
+        assertEquals(
+            "Paused subtitle (Spec 1 §7.6 Recording-Paused)",
+            app.getString(R.string.dictate_notif_recording_paused),
+            shadowOf(n).contentText,
+        )
+        assertEquals("Paused must show exactly 3 action buttons", 3, n!!.actions.size)
+        assertEquals(app.getString(R.string.dictate_action_resume), n.actions[0].title.toString())
+        assertEquals(app.getString(R.string.dictate_action_stop), n.actions[1].title.toString())
+        assertEquals(app.getString(R.string.dictate_action_send), n.actions[2].title.toString())
+    }
+
+    @Test
     fun show_pipeline_postsProgressNotificationWithCancelAction() {
         coordinator.show(NotificationStatus.Pipeline(sessionId = "s-1", step = "running"))
 

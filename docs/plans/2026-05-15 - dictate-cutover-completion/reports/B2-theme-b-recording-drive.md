@@ -39,14 +39,17 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 0 · Important: 2 · Nice-to-have: 2 · Postponed: 0
+**Severity counts:** Critical: 0 · Important: 2 (resolved by C5) · Nice-to-have: 2 (1 resolved, 1 still-deferred) · Postponed: 0 · New from C5: Important: 2 (delegated), Nice-to-have: 1 (postponed)
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
-| C3-IMPL-1 | B2-C3-B1-IMPL | Important | delegated-to-orchestrator → **C5 owns** | Fresh-recording config resolver: 8 IME-runtime fields (language/stylePrompt/queuedPromptIds/livePrompt/autoSwitch/targetApp/totalSteps/showResend) not on orchestrator path; DefaultPipelineConfigResolver throws (fail-loud). C5 must thread these from the IME when it flips the trigger. marker `plan-deviation-resolved`. | step-1-impl (C3-B1) |
-| C3-IMPL-2 | B2-C3-B1-IMPL | Nice-to-have | delegated-to-orchestrator → **C5 owns** | Reprocess minor fields: modelOverride/targetAppPackage null + AutoFormatting +1 step on new path. Resolve when C5 threads IME context. | step-1-impl (C3-B1) |
-| C4-IMPL-1 | B2-C4-B2-IMPL | Important | delegated-to-orchestrator → **C5 owns** | `NotificationStatus.Recording` rendered with §7.6 `[Pause][Stopp][Senden]` but no module emits it (RecordingModule has no notif effect) + no `Paused` variant. C5 emits Recording/-Paused from the recording FSM on the IME-trigger flip + adds the `Paused` variant. NOT architecture-conflict (path doesn't exist yet by design, mirrors C3-IMPL-1). marker `plan-deviation-resolved`. | step-1/2 (C4-B2) |
-| C4-IMPL-2 | B2-C4-B2-IMPL | Nice-to-have | delegated-to-orchestrator | `Pipeline` notif subtitle is generic "Processing …" not §7.6 `Schritt X/Y`; `NotificationStatus.Pipeline` doesn't carry the A1 F-13 counters. Cosmetic (live counter already in the record-button label); extending needs a payload change across PipelineModule emit-sites. | step-1/2 (C4-B2) |
+| C3-IMPL-1 | B2-C3-B1-IMPL | Important | **fixed (C5)** | Fresh-recording config resolver: 8 IME-runtime fields not on orchestrator path. **C5 closed it** via `ImePipelineConfigResolver` (IME snapshots all 8 at the send-tap) + `DelegatingPipelineConfigResolver` + `LocalBinder.registerPipelineConfigResolver`. All 8 fields threaded 1:1 (see C5 fidelity table). | step-1-impl (C3-B1) → fixed C5 |
+| C3-IMPL-2 | B2-C3-B1-IMPL | Nice-to-have | **fixed (C5)** | Reprocess modelOverride/targetAppPackage null + AutoFormatting +1. **C5 closed it**: `ImePipelineConfigResolver.snapshotReprocess` threads selectedModel/targetAppPackage/totalSteps; the new-path reprocess branch in `handleReprocessSend` routes via the C3 adapter with the snapshot. | step-1-impl (C3-B1) → fixed C5 |
+| C4-IMPL-1 | B2-C4-B2-IMPL | Important | **fixed (C5)** | `NotificationStatus.Recording` had no emitter + no `Paused` variant. **C5 closed it**: added `NotificationStatus.Paused`, the coordinator `Paused` arm (`[Resume][Stopp][Senden]` + recording_paused subtitle), and `RecordingModule.Effect.UpdateNotification`/`DismissNotification` emitted across the FSM (Active→Recording, Paused→Paused, Resume→Recording, Stop/Cancel→Dismiss; StopRecordingAndSend deliberately NO dismiss for a seamless Recording→Pipeline hand-off). | step-1/2 (C4-B2) → fixed C5 |
+| C4-IMPL-2 | B2-C4-B2-IMPL | Nice-to-have | postponed | `Pipeline` notif subtitle generic, no F-13 counters in `NotificationStatus.Pipeline`. Still-deferred (cosmetic; live counter already in record-button label; needs a `NotificationStatus.Pipeline` payload change across PipelineModule emit-sites — out of C5 recording-trigger scope). | step-1/2 (C4-B2) |
+| C5-IMPL-1 | B2-C5-B3-IMPL | Important | delegated-to-orchestrator | New-path **AudioFocus not requested** + **Bluetooth SCO route not established**. Pre-existing dormant-layer gap (AudioModule `RequestAudioFocus` never emitted on recording start; `RecordingHardwareAdapter` sets the MediaRecorder source but does not start the BT SCO connection). Surfaced (not caused) by C5 making the path live. Guarded fallback (`USE_LEGACY_RECORDING_DRIVE=true`) restores full legacy BT/audio-focus. Owner: a follow-up audio-subsystem-wiring block / C6-D2pre will surface it. NOT a fresh-recording R-1 silent-config-loss (the JobRequest is field-faithful) and NOT an architecture-conflict blocking C6/C7. | C5 step-1/3 |
+| C5-IMPL-2 | B2-C5-B3-IMPL | Important | delegated-to-orchestrator | Legacy recording **UI/animation/keyboard-hide-pause** sites (~12 `recordingStateController.getState()` reads outside the record-button gate: `:730`/`:1215`/`:1855`/amplitude/timer/onKeyboardHidden) stay legacy-driven; on the new path the legacy controller is never started so they read Idle (no legacy recording animation, no legacy keyboard-hide auto-pause). The FGS notification (AC-2) is the authoritative new-path recording-active surface. The RenderBackend recording-UI migration is Theme-C/C3, out of C5's recording-trigger scope. Documented Known-Gap. | C5 step-2 |
+| C5-IMPL-3 | B2-C5-B3-IMPL | Nice-to-have | postponed | RESUME (`startResumeJob`, JobExecutor.start #2) has no orchestrator equivalent (`PipelineRunnerSubsystem` has no `resume`); both boolean branches keep legacy `JobExecutor.start` (single-dispatch, orthogonal to the fresh-recording cutover). Adding a resume subsystem action is an architecture change beyond C5 (prompt forbids a fragile flip). C7/later owns retiring it. | C5 step-1 |
 
 ---
 
@@ -477,8 +480,262 @@ chunks` marker.
 
 ### Chunk C5-B3 — IME recording-trigger flip (guarded fallback)
 
-**Agent-IDs:** `B2-C5-B3-IMPL` · **Status:** ⏳ pending · **Risk:** HIGHEST (R-1/R-4)
-(subsections filled when chunk runs)
+**Agent-IDs:** `B2-C5-B3-IMPL` (fresh, combined Steps 1-5).
+**Status:** ✅ complete · **Risk:** HIGHEST (R-1/R-4) — **R-1 verdict: GREEN (field-faithful); R-4 verdict: GREEN (no double-dispatch)**
+**Implementation-Commit (Commit 1):** ⏳ (orchestrator) · **Test-Commit (Commit 2):** ⏳ (orchestrator)
+
+#### Implementation (B2-C5-B3-IMPL)
+
+**What was done:** Flipped `DictateInputMethodService.java`'s recording
+trigger from the legacy `recordingStateController` + `JobExecutor.INSTANCE.start`
+to `pipelineBinder.dispatch(RecordingAction.StartRecording/StopRecordingAndSend)`,
+**behind a compile-time `USE_LEGACY_RECORDING_DRIVE` guard (default `false`
+= new path active)**. On the new path the orchestrator's RecordingModule
+drives the real `RecordingHardwareAdapter` MediaRecorder (Idle→Preparing→
+Active), the C4 coordinator shows the §7.6 FGS notification, and
+StopRecordingAndSend → `EmitPipelineTrigger` → `TriggerPipeline` →
+`SubmitPipeline` → the C3 `PipelineRunnerSubsystemAdapter` → an
+IME-faithful `JobRequest`. Closed all 4 delegated issues (C3-IMPL-1/-2,
+C4-IMPL-1; C4-IMPL-2 stays postponed). Build + 1009 tests green.
+
+**Boolean home + default + rationale (AC-10 / R-4 / OQ-2 / FN-3):**
+`private static final boolean USE_LEGACY_RECORDING_DRIVE = false;` in
+`DictateInputMethodService.java`. Compile-time `static final` (not a
+`DictatePrefs` entry / `BuildConfig`): the cutover is literally "one
+boolean away", the dead branch is reviewer-visible, no migration
+overhead — matches Epic §6.2 wording. Default `false` so C6-D2pre can
+verify the new path; legacy reachable by flipping to `true` (byte-for-
+byte pre-C5 in every guarded branch). Removed in C7 after C6 green
+(FN-3 / OQ-2 — not C5's job).
+
+**C3-IMPL-1 fidelity (all 8 fresh fields threaded 1:1 — R-1 GREEN):**
+The IME computes the 8 IME-runtime fields at the send-tap (the legacy
+trigger instant, identical timing) in `captureFreshConfigSnapshot`,
+stashes them in `ImePipelineConfigResolver` keyed by the
+`preAllocatedId`, and the orchestrator's async `SubmitPipeline` →
+`DelegatingPipelineConfigResolver.resolveFresh` rebuilds the
+`JobRequest` field-for-field:
+
+| Legacy IME field (pre-C5 `:2214-2230`) | C5 source | Status |
+|---|---|---|
+| `preAllocatedId` | `StartRecording.sessionId` minted in `startRecording()`, carried by the FSM (F-10) | ✅ 1:1 |
+| `totalSteps` | `1 + autoFormatting + promptQueue.size` (same expr) | ✅ 1:1 |
+| `audioFilePath` | `audioFile.getAbsolutePath()` (same allocated file) | ✅ 1:1 |
+| `language` | `languageController.getEffectiveLanguage()` → null on "detect" (READ only; D-13/C8 removes the writer later) | ✅ 1:1 |
+| `stylePrompt` | `promptService.resolveWhisperStylePrompt(effectiveLanguage)` | ✅ 1:1 |
+| `queuedPromptIds` | `promptQueueManager.getQueuedIds()` | ✅ 1:1 |
+| `targetAppPackage` | `getCurrentInputEditorInfo().packageName` | ✅ 1:1 |
+| `livePrompt` | IME instance flag (captured before reset) | ✅ 1:1 |
+| `autoSwitchKeyboard` | IME instance flag (captured before reset) | ✅ 1:1 |
+| `showResendButton` | `LastFileName.exists() && Pref.ResendButton` | ✅ 1:1 |
+| `modelOverride`/`reuseSessionId`/`recordingsDir`/`origin`/`kind` | constants/null exactly as legacy | ✅ 1:1 |
+
+`pendingLivePromptChain = livePrompt; livePrompt=false; autoSwitchKeyboard=false`
+post-snapshot mirrors the legacy `:2232-2234` one-shot-flag reset, so
+the live-prompt chain (`onPipelineCompleted` callback — still fires, the
+pipeline body is still `PipelineOrchestrator` per Spec §9.6) works
+unchanged.
+
+**C3-IMPL-2 (reprocess) closed:** `ImePipelineConfigResolver.snapshotReprocess`
+threads `selectedModel`/`targetAppPackage`/`totalSteps` (incl. the
+AutoFormatting +1); the new-path branch in `handleReprocessSend` routes
+via `pipelineBinder.getModuleServices().getPipelineRunner().submitReprocess(...)`
+(the C3 adapter, which calls JobExecutor.start internally — not an IME
+site). Falls back to the C3 default when no snapshot (staging-FSM path
+the IME does not flip in C5).
+
+**C4-IMPL-1 (notification emission) closed:** added
+`NotificationStatus.Paused`, the coordinator `Paused` arm
+(`[Resume][Stopp][Senden]` + `dictate_notif_recording_paused`), and
+`RecordingModule.Effect.UpdateNotification`/`DismissNotification`
+emitted across the FSM. The Recording→Pipeline hand-off is seamless:
+`StopRecordingAndSend` deliberately does **NOT** dismiss — the
+`EmitPipelineTrigger → TriggerPipeline` cascade has PipelineModule
+immediately re-`show()` a `Pipeline` status on the same NOTIF_ID (no
+flicker, no FGS-less window — R-2-safe).
+
+**AC-10 no-double-dispatch grep table (R-4 GREEN):**
+
+| Site | File:line (post-C5) | `USE_LEGACY_RECORDING_DRIVE` true-branch | false-branch | Double-dispatch? |
+|---|---|---|---|---|
+| #1 fresh recording (`runTranscriptionViaOrchestrator`) | `DictateInputMethodService.java:2596` | `JobExecutor.INSTANCE.start(request)` (legacy, byte-identical) | suppressed + `uiController.stopPipeline()` + `Log.w` (method is unreachable on new path — only the legacy `onRecordingCompleted` callback reaches it; new path dispatches `StartRecording`/`StopRecordingAndSend` at `startRecording()`/`stopRecording()` instead) | **NO** — mutually exclusive on the boolean; the new-path trigger is `StopRecordingAndSend` (a different method), legacy is `JobExecutor.start` |
+| #2 RESUME (`startResumeJob`) | `:3286` | `JobExecutor.INSTANCE.start(Resume)` | `JobExecutor.INSTANCE.start(Resume)` (no orchestrator resume action exists — single-dispatch, documented C5-IMPL-3) | **NO** — single-dispatch; orthogonal to the fresh-recording flip (recovery path, distinct user action) |
+| #3 REPROCESS_STAGING (`handleReprocessSend`) | `:3463` | `JobExecutor.INSTANCE.start(REPROCESS_STAGING)` | `pipelineRunner.submitReprocess(...)` via the C3 adapter (closes C3-IMPL-2) | **NO** — mutually exclusive on the boolean; single-dispatch each branch |
+| new-path fresh trigger | `:2334` `StartRecording`, `:2383` `StopRecordingAndSend` | (not reached — legacy `recordingStateController` path) | `pipelineBinder.dispatch(StartRecording/StopRecordingAndSend)` | **NO** — the false-branch dispatch and the true-branch `JobExecutor.start` are guarded by the same boolean; no user action reaches both |
+
+**Audit conclusion:** every IME `JobExecutor.INSTANCE.start` is fenced
+by `USE_LEGACY_RECORDING_DRIVE`; every new-path
+`dispatch(StartRecording/StopRecordingAndSend)` is the false-branch of
+the same boolean at the recording-lifecycle methods. No user action
+triggers both a legacy `JobExecutor.start` and a new `StartRecording/
+StopRecordingAndSend` dispatch for the same recording. RESUME is
+single-dispatch legacy in both branches by design (no orchestrator
+equivalent — C5-IMPL-3, not the fresh-recording R-1/R-4 path). **R-4
+GREEN — no double-dispatch.**
+
+**Record-button gating migrated to orchestrator state:** the
+record-button start/stop decision (`onRecordClicked`,
+`onRecordLongClicked`, the instant-prompt path, prompt-queue toggle,
+`onSettingsClicked` cancel, `onPauseClicked`, `onTrashClicked`) reads
+`isEffectiveRecording{Idle,ActiveOrPaused,InFlight}()` /
+`cancelEffectiveRecording()` / `togglePauseEffectiveRecording()` —
+these consult the orchestrator `state.recording` on the new path
+(legacy `recordingStateController` is never started there) and the
+legacy controller on the legacy path. Two distinct `RecordingState`
+types (`core.*` legacy vs `state.*` orchestrator) → boolean predicates,
+not a unified object.
+
+**Files created/modified (production, Commit 1):**
+- `app/src/main/java/net/devemperor/dictate/state/ModuleServices.kt` (NEW `NotificationStatus.Paused`)
+- `app/src/main/java/net/devemperor/dictate/core/PipelineNotificationCoordinator.kt` (`Paused` arm in `build()` + `subtitleFor()`)
+- `app/src/main/java/net/devemperor/dictate/state/modules/RecordingModule.kt` (NEW `Effect.UpdateNotification`/`DismissNotification` + emissions across the FSM + `runEffect` arms)
+- `app/src/main/java/net/devemperor/dictate/core/PipelineRunnerSubsystemAdapter.kt` (NEW `DelegatingPipelineConfigResolver`; `resolveReprocess` refactored to a shared `buildReprocess`)
+- `app/src/main/java/net/devemperor/dictate/core/ImePipelineConfigResolver.kt` (NEW — R-1 IME-faithful resolver + fresh/reprocess snapshots)
+- `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt` (DelegatingPipelineConfigResolver wiring, `delegatePipelineConfigResolver` field + `registerPipelineConfigResolver`)
+- `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java` (the guarded flip: `USE_LEGACY_RECORDING_DRIVE` const, resolver fields + register/unregister, `startRecording`/`stopRecording` flip, `captureFreshConfigSnapshot`/`primePipelineUiForNewPath`, `isEffectiveRecording*`/`cancelEffectiveRecording`/`togglePauseEffectiveRecording` helpers + their gating call-sites, the 3 guarded `JobExecutor.start` sites + the reprocess new-path route)
+
+**Files in chunk-scope:** all named in Epic §4 B3 / the C5 prompt.
+**Files outside chunk-scope (drift):** none.
+
+**Plan deviations:**
+
+| Deviation | Plan Location | What changed | Why | Impact | Resolved? |
+|-----------|---------------|--------------|-----|--------|-----------|
+| Flip the **record-button start/stop** (`startRecording`/`stopRecording`), not just the post-record `JobExecutor.start` trigger | Epic §4-B3 ("flip the recording trigger from `JobExecutor.start` (:2236) to `dispatch(StartRecording)`") | The `:2236` site fires from the legacy `onRecordingCompleted` callback AFTER the legacy recorder already produced audio; dispatching `StartRecording` there would re-allocate+restart a 2nd MediaRecorder over the recorded file (R-1 catastrophic). Spec 1 §15.2 (`StartRecording → AllocateMediaRecorder → RecordingManager.start(file)`) + AC-2 (`state.recording` Idle→Preparing→**Active**) confirm the orchestrator owns the *whole* recording, so the flip belongs at the button. The 3 `JobExecutor.start` sites are still guarded (FN-1) for the AC-10 audit + C7 deletion. | The orchestrator's `RecordingHardwareAdapter` becomes the sole recorder on the new path; legacy `recordingStateController` is the guarded fallback. C6 verifies; C7 deletes legacy. | inline-fixed (mid-size; solution clear from Spec §15.2 + AC-2 + the R-1 directive) → marker `plan-deviation-resolved` |
+| RESUME (`startResumeJob`) kept legacy in **both** boolean branches | FN-1 ("C5 guards all three; … C6 grep covers all three") | `PipelineRunnerSubsystem` has `submit`/`submitReprocess`/`cancel` but no `resume`; adding one is an architecture change beyond C5 and the prompt explicitly forbids a fragile flip. RESUME is the recovery path, single-dispatch, orthogonal to the fresh-recording R-1/R-4 cutover. | C5-IMPL-3 (postponed, Nice-to-have). C7/later owns retiring it. AC-10 still holds (single-dispatch, not double). | flagged C5-IMPL-3 |
+
+#### Plan-Correctness Fix (B2-C5-B3-IMPL-PLAN-FIX)
+
+Plan-requirement check (C5 prompt AC-2/AC-3/AC-10 + FN-1..FN-4 + F-7):
+
+| Requirement | Status |
+|---|---|
+| Guard ALL 3 `JobExecutor.start` sites behind one boolean (FN-1) | ✓ (fresh `:2596`, resume `:3286`, reprocess `:3463`; resume both-branches-legacy by documented necessity) |
+| `StartRecording(target, audioFile, preAllocatedId)` then payload-less `StopRecordingAndSend()` (FN-4) | ✓ |
+| Non-blank real `preAllocatedId` (F-7 `require(isNotBlank())`) | ✓ (UUID minted in `startRecording`, never `""`) |
+| Boolean default `false` = new path active (for C6) | ✓ |
+| No code path does BOTH legacy + new for one action (AC-10 / R-4) | ✓ (grep table above) |
+| `pipelineBinder` null → handled (logged-skip, legacy authoritative) | ✓ (defensive bail in `stopRecording` new path + `effectiveRecording*` fall through to legacy) |
+| C3-IMPL-1 — 8 fresh fields threaded 1:1 (R-1) | ✓ (fidelity table) |
+| C3-IMPL-2 — reprocess modelOverride/targetApp/AutoFormatting | ✓ |
+| C4-IMPL-1 — emit Recording/Paused + add `Paused` variant | ✓ |
+| C4-IMPL-2 — Pipeline step counters | △ postponed (cosmetic, payload refactor out of scope) |
+| `language` still READ from `LanguageController` (D-13/C8 later) | ✓ (READ only, not removed) |
+| `DictateInputMethodService.java` stays Java; new helpers Kotlin | ✓ |
+| `assembleDebug` + `test` green (≥987 baseline) | ✓ (1009 tests, 0 failures) |
+
+**Files modified in this step:** none (Step 1 was plan-faithful; the
+record-button-flip deviation is documented + marker-flagged).
+**Files outside plan-prescribed scope (drift):** none.
+
+#### Self-Code Fix (B2-C5-B3-IMPL-CODE-FIX)
+
+Knowledge skills consulted: `knowledge-reference` (plugin-system /
+versioned-envelope — N/A; this is subsystem-adapter + provider-lambda
+seam work, not a registry/persisted schema). Grounded in the
+project-established `core/*Adapter` provider-lambda + `LocalBinder.delegate*`
+`@Volatile` register-pattern (read `PipelineRunnerSubsystemAdapter`,
+`PipelineActionRouter`, `RecordingHardwareAdapter`, the existing
+`registerInputConnectionProvider`). Aspects: DRY ✓ (`buildReprocess`
+extracted so the C3 default + IME resolver don't duplicate the reprocess
+JobRequest; `captureFreshConfigSnapshot`/`primePipelineUiForNewPath`
+factor the new-path bookkeeping out of `stopRecording`); the new
+`DelegatingPipelineConfigResolver`/`ImePipelineConfigResolver` mirror
+the established lambda-seam + `@Volatile` delegate convention; boolean
+predicates (not a fake unified `RecordingState`) given the two distinct
+state types — type-safe; comments explain WHY (R-1, R-4, the two
+RecordingState types, the seamless hand-off, the resume-no-equivalent
+decision). No `!!`/unchecked casts. One inline call-out: the resume
+both-branches-legacy is documented as C5-IMPL-3 rather than silently
+duplicating. No additional delegated items beyond C5-IMPL-1/-2/-3.
+
+**Files modified in this step:** none beyond Step 1 (the DRY
+`buildReprocess` extraction + helper factoring were applied during
+Step 1 as the code was written). Drift: none.
+
+#### Tests (B2-C5-B3-IMPL-TEST) + Test-Review (B2-C5-B3-IMPL-TEST-FIX)
+
+Test-files (Commit 2):
+- `app/src/test/java/net/devemperor/dictate/core/ImePipelineConfigResolverTest.kt` (NEW, 12 pure-JVM tests — fresh fidelity, snapshot-consume, fallback-throw, discard, reprocess C3-IMPL-2, DelegatingResolver delegate/fallback/late-bind)
+- `app/src/test/java/net/devemperor/dictate/core/ImeRecordingDriveCutoverTest.kt` (NEW, 5 Robolectric tests — StartRecording→Active+notification, Pause/Resume notif swap, Cancel→dismiss, StopRecordingAndSend→resolver with FSM sessionId + field-faithful JobRequest, seamless Recording→Pipeline hand-off)
+- `app/src/test/java/net/devemperor/dictate/state/RecordingModuleTest.kt` (UPDATED 3 existing effect-count assertions for the intended notification effects + 5 NEW C5 notification-emission tests)
+- `app/src/test/java/net/devemperor/dictate/core/PipelineNotificationCoordinatorTest.kt` (1 NEW — `Paused` arm `[Resume][Stopp][Senden]` + subtitle)
+
+**Test-Run-Result:** ✅ **1009 tests, 0 failures, 0 errors** (987 C4
+baseline + 22 net new; AC-9 regression invariant holds). `./gradlew
+assembleDebug` green. Robolectric K-4 justified opt-out (Service/IME
+binder wiring); K-1 handwritten fakes only (capturing coordinator +
+instrumented resolver; no Mockito/MockK). Test self-review: all
+AC-2/AC-3/AC-10 surfaces + every new FSM arm + the R-1
+field-by-field + the DelegatingResolver late-bind covered; test
+boundary for the deep 5-hop runner leg is the resolver call (the
+resolver→JobExecutor leg is C3's tested territory + the C6-D2pre E2E
+gate's job — asserting it through 5 async hops + a JobExecutor worker
+thread is brittle, so the C5 test boundary is the R-1 surface).
+
+#### Code-Bugs Found While Writing/Reviewing Tests
+
+No **production** code-bugs. Test-only fixes (mechanical, documented):
+
+| File:Line | Symptom | Root-Cause | Fix (before → after) | Research |
+|---|---|---|---|---|
+| `RecordingModuleTest.kt` 3 existing effect-count tests | `expected:<4> but was:<5>` | Intended C4-IMPL-1 production change adds 1 notification effect to MediaRecorderReady/Pause/Stop arms | updated the 3 assertions to `5` + assert the new `UpdateNotification`/`DismissNotification` (the new behaviour is correct per C4-IMPL-1) | C4-IMPL-1 directive + Spec 1 §7.6 |
+| `ImeRecordingDriveCutoverTest.kt` | `createTempFile("c5"…)` `prefix too short` | JDK `createTempFile` requires prefix ≥3 chars | `"c5"` → `"c5rec"` | JDK `File.createTempFile` contract |
+| `ImeRecordingDriveCutoverTest.kt` 2 tests | async chain not drained / `JobExecutor.INSTANCE` unresolved in Kotlin | single `idleMainLooper()` insufficient for the 5-hop `emitAction` chain; `JobExecutor` is a Kotlin `object` | added `pumpUntil { … }` looper-pump helper + waited for `RecordingState.Active` before send; `JobExecutor.INSTANCE.cancel` → `JobExecutor.cancel`; narrowed the runner-leg assertion to the resolver-call boundary (C3/C6 own the runner leg) | `JobExecutorTest.waitForRegistryEmpty` spin pattern; `object JobExecutor` |
+
+#### Mid-Chunk-Triage *(ARMED for this chunk)*: **Not triggered.**
+
+R-1 resolved in-chunk (the `ImePipelineConfigResolver` threads all 8
+fields field-faithfully; the throw-fallback keeps the no-IME case
+fail-loud). R-4 resolved (the guarded fallback is genuinely
+mutually-exclusive — grep table). The record-button-flip deviation was
+mid-size with a clear Spec-§15.2 + AC-2 solution (inline-fixed +
+marker, not an architecture-conflict). The AudioFocus/BT-SCO gap
+(C5-IMPL-1) is a **pre-existing dormant-layer** incompleteness surfaced
+by the live path, NOT a C5-introduced architecture-conflict and NOT a
+blocker for C6/C7 (the guarded fallback explicitly protects against it;
+C6-D2pre is the verification gate where it gets caught before C7 deletes
+legacy) — delegated `Important`, no `architecture-conflict` /
+`blocks-following-chunks` marker, so no mid-chunk-triage per the
+prompt's own criterion ("R-1 silent-data-loss" — here the JobRequest IS
+field-faithful; the gap is audio-focus/BT quality-of-experience the
+boolean fallback covers, not silent config loss).
+
+| Triggering Issue | Step | Research Topic | Repair Agent-ID | Wave-Commit | Outcome |
+|------------------|------|----------------|------------------|-------------|---------|
+| — | — | — | — | — | — |
+
+**Overlooked / Known Gaps:**
+- **C5-IMPL-1** (AudioFocus + BT-SCO not wired on the new path) —
+  pre-existing dormant-layer gap; guarded fallback covers it; C6/follow-up owns.
+- **C5-IMPL-2** (legacy recording UI/animation/keyboard-hide-pause
+  sites stay legacy-Idle on the new path) — RenderBackend recording-UI
+  migration is Theme-C/C3; FGS notification is the authoritative
+  new-path surface.
+- **C5-IMPL-3** (RESUME has no orchestrator equivalent — both branches
+  legacy) — single-dispatch, orthogonal to the fresh-recording cutover.
+- **C4-IMPL-2** (Pipeline notif step-counter) — still postponed
+  (cosmetic; needs a `NotificationStatus.Pipeline` payload refactor).
+- The deep `SubmitPipeline → JobExecutor runner` E2E is intentionally
+  C6-D2pre's gate (the C5 test boundary is the resolver call — the
+  R-1 surface; the runner leg is C3-tested).
+- `LegacyAudioFileMigrationTest` is a **pre-existing R-7 test-pollution
+  flake** (Epic R-7; order-dependent, different method each run, passes
+  in isolation + on full-suite re-run) — NOT caused by C5.
+
+**Commit boundaries (orchestrator splits — lists disjoint):**
+- **Commit 1 (production):**
+  `state/ModuleServices.kt`, `state/modules/RecordingModule.kt`,
+  `core/PipelineNotificationCoordinator.kt`,
+  `core/PipelineRunnerSubsystemAdapter.kt`,
+  `core/ImePipelineConfigResolver.kt`,
+  `core/DictatePipelineService.kt`,
+  `core/DictateInputMethodService.java`
+- **Commit 2 (tests):**
+  `test/.../core/ImePipelineConfigResolverTest.kt`,
+  `test/.../core/ImeRecordingDriveCutoverTest.kt`,
+  `test/.../state/RecordingModuleTest.kt`,
+  `test/.../core/PipelineNotificationCoordinatorTest.kt`
 
 ---
 

@@ -313,4 +313,5 @@
     <string name="dictate_pipeline_notif_title">Dictate</string>
     <string name="dictate_pipeline_notif_idle">Pronto</string>
     <string name="dictate_service_not_ready">O serviço está iniciando — aguarde um momento, por favor.</string>
+    <string name="dictate_storage_full">Cache cheio — não é possível iniciar a gravação.</string>
 </resources>

@@ -181,10 +181,11 @@ internal object PipelineServiceStubSubsystems {
     // ditto sessionRepo's suspend methods (already block bodies).
 
     /**
-     * Lazy `AudioFileFactory` stub that returns a cache-dir path.
-     * Block 4 (`CacheDirAudioFileFactory`) supplies the real
-     * pre-dispatch allocator. The stub returns a constant filename so
-     * effect-handler regressions land predictably.
+     * Deprecated `AudioFileFactory` stub (C7 baseline). Block 4 / C11
+     * replaced production wiring with [net.devemperor.dictate.core.CacheDirAudioFileFactory]
+     * — `DictatePipelineService.onCreate` no longer references this
+     * field. Retained only for test code that wants a deterministic
+     * no-FS factory.
      */
     val audioFileFactory: AudioFileFactory = object : AudioFileFactory {
         override fun allocate(): File {

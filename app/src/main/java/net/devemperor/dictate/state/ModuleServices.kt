@@ -332,12 +332,52 @@ interface ToastSink {
  *
  * Lives on `ModuleServices` so test code can inject a deterministic
  * factory (e.g. `tmp-1.m4a`, `tmp-2.m4a`).
+ *
+ * **Two responsibilities, two threads (Spec 1 §4.11.5.2):**
+ *
+ *  - [allocate] — runs on the **Main thread** from the View-layer
+ *    pre-dispatch resolver. O(1) (`mkdirs()` + UUID name); no `listFiles`
+ *    or `delete` operations allowed here.
+ *  - [cleanupOrphans] — runs on **`Dispatchers.IO`** once per service
+ *    boot. `listFiles` + per-file `delete` loop; bounded by the
+ *    `referencedPaths` set from `SessionDao.findAllAudioFilePaths()`
+ *    and a 60 s freshness cut-off (KG-AFF-4) that guards the
+ *    allocate → MediaRecorder.prepare race.
+ *
+ * @see net.devemperor.dictate.core.CacheDirAudioFileFactory
  */
 interface AudioFileFactory {
     /**
      * Allocate a new cache-file path. The file is **not** created on
      * disk by this call; `RecordingHardwareSubsystem.allocate` writes
      * to it when `MediaRecorder.start()` runs.
+     *
+     * `@Throws` is mandatory so Java callers (the IME's
+     * `startRecording` resolver) can `catch (IOException)` without a
+     * "never thrown" compile error.
+     *
+     * @throws java.io.IOException when the audio cache directory cannot
+     *   be created (storage full, FS permission). Resolvers MUST catch
+     *   and translate to a user-visible toast — the reducer never sees
+     *   the failure (R.2 Pure-Reducer invariant).
      */
+    @Throws(java.io.IOException::class)
     fun allocate(): java.io.File
+
+    /**
+     * Best-effort cleanup: deletes every file inside the audio cache
+     * sub-directory that matches the factory's naming scheme AND is
+     * neither referenced in [referencedPaths] NOR within the freshness
+     * cut-off (Spec 1 §4.11 KG-AFF-4).
+     *
+     * Called once per `DictatePipelineService.onCreate` on
+     * `Dispatchers.IO` so the FGS-5-second start budget is preserved
+     * (Spec 1 §4.11.5.1 step 8). Default implementation is a no-op so
+     * test doubles / minimal fakes do not need to implement it.
+     *
+     * @param referencedPaths absolute paths that MUST NOT be deleted.
+     *   Source: `SessionDao.findAllAudioFilePaths()` filtered to
+     *   non-null entries (the database is the source of truth).
+     */
+    fun cleanupOrphans(referencedPaths: Set<String>) = Unit
 }

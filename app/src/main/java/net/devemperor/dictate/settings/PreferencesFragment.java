@@ -269,23 +269,26 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
         }
 
         Preference cachePreference = findPreference("net.devemperor.dictate.cache");
-        File[] cacheFiles = requireContext().getCacheDir().listFiles();
+        File cacheDir = requireContext().getCacheDir();
         if (cachePreference != null) {
-            if (cacheFiles != null) {
-                long cacheSize = Arrays.stream(cacheFiles).mapToLong(File::length).sum();
-                cachePreference.setTitle(getString(R.string.dictate_settings_cache, cacheFiles.length, cacheSize / 1024f / 1024f));
-            }
+            // KG-AFF-3 (Spec 1 §4.11.6.3): the new AudioFileFactory writes
+            // to `cacheDir/audio/` (a sub-directory). The pre-refactor
+            // `cacheDir.listFiles()` + `File.delete()` loop was a no-op
+            // on non-empty sub-directories, so the new audio sub-tree
+            // would survive a user-initiated "clear cache". Switch to a
+            // recursive size + count + delete trio so both the legacy
+            // top-level layout AND the new sub-directory layout behave
+            // identically from the user's perspective.
+            long cacheSize = computeCacheSizeRecursive(cacheDir);
+            int cacheFileCount = countCacheFilesRecursive(cacheDir);
+            cachePreference.setTitle(getString(R.string.dictate_settings_cache, cacheFileCount, cacheSize / 1024f / 1024f));
 
             cachePreference.setOnPreferenceClickListener(preference -> {
                 new MaterialAlertDialogBuilder(requireContext())
                         .setTitle(R.string.dictate_cache_clear_title)
                         .setMessage(R.string.dictate_cache_clear_message)
                         .setPositiveButton(R.string.dictate_yes, (dialog, which) -> {
-                            if (cacheFiles != null) {
-                                for (File file : cacheFiles) {
-                                    file.delete();
-                                }
-                            }
+                            clearCacheRecursively(cacheDir);
                             cachePreference.setTitle(getString(R.string.dictate_settings_cache, 0, 0f));
                             Toast.makeText(requireContext(), R.string.dictate_cache_cleared, Toast.LENGTH_SHORT).show();
                         })
@@ -338,5 +341,91 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
                 scrollToPreference(scrollTo);
             }
         }
+    }
+
+    /**
+     * Recursive byte-size sum of {@code root} (files + sub-directories).
+     * Used by the cache preference summary so the displayed size reflects
+     * the audio sub-directory the new {@link
+     * net.devemperor.dictate.core.CacheDirAudioFileFactory} writes into
+     * (Spec 1 §4.11.6.3, KG-AFF-3). A pre-Block-4 top-level scan would
+     * report 0 for the audio sub-tree even when it holds several megabytes.
+     *
+     * @param root the cache root (typically {@code getCacheDir()}). May be
+     *   {@code null} when called against a stripped {@code Context}; the
+     *   helper returns 0.
+     * @return total byte count of all regular files under {@code root}.
+     */
+    private static long computeCacheSizeRecursive(File root) {
+        if (root == null || !root.exists()) return 0L;
+        long total = 0L;
+        File[] children = root.listFiles();
+        if (children == null) return 0L;
+        for (File child : children) {
+            if (child.isDirectory()) {
+                total += computeCacheSizeRecursive(child);
+            } else if (child.isFile()) {
+                total += child.length();
+            }
+        }
+        return total;
+    }
+
+    /**
+     * Recursive file count under {@code root}. Mirrors {@link
+     * #computeCacheSizeRecursive(File)} so the displayed "N files / MB"
+     * pair stays consistent (Spec 1 §4.11.6.3, KG-AFF-3).
+     *
+     * @param root the cache root. {@code null} returns 0.
+     * @return number of regular files (directories not counted).
+     */
+    private static int countCacheFilesRecursive(File root) {
+        if (root == null || !root.exists()) return 0;
+        int total = 0;
+        File[] children = root.listFiles();
+        if (children == null) return 0;
+        for (File child : children) {
+            if (child.isDirectory()) {
+                total += countCacheFilesRecursive(child);
+            } else if (child.isFile()) {
+                total += 1;
+            }
+        }
+        return total;
+    }
+
+    /**
+     * Recursively delete every entry under {@code root} but keep {@code
+     * root} itself (the cache directory is owned by the OS — deleting it
+     * is incorrect, but emptying it is). The pre-Block-4 code path
+     * called {@link File#delete()} on each top-level entry — Java's
+     * contract for that method is "fail when non-empty directory", so
+     * the audio sub-tree survived a user-triggered cache wipe.
+     *
+     * @param root the cache root. {@code null} is a no-op.
+     */
+    private static void clearCacheRecursively(File root) {
+        if (root == null || !root.exists()) return;
+        File[] children = root.listFiles();
+        if (children == null) return;
+        for (File child : children) {
+            deleteRecursively(child);
+        }
+    }
+
+    /** Tail recursion helper for {@link #clearCacheRecursively(File)}. */
+    private static void deleteRecursively(File entry) {
+        if (entry.isDirectory()) {
+            File[] nested = entry.listFiles();
+            if (nested != null) {
+                for (File n : nested) {
+                    deleteRecursively(n);
+                }
+            }
+        }
+        // File.delete() returns false on non-empty dirs; harmless here
+        // because we just drained the directory above.
+        // noinspection ResultOfMethodCallIgnored
+        entry.delete();
     }
 }

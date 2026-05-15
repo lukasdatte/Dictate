@@ -331,4 +331,5 @@
     <string name="dictate_pipeline_notif_title">Dictate</string>
     <string name="dictate_pipeline_notif_idle">Bereit</string>
     <string name="dictate_service_not_ready">Service startet noch — bitte kurz warten.</string>
+    <string name="dictate_storage_full">Cache voll — Aufnahme kann nicht starten.</string>
 </resources>

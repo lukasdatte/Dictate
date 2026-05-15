@@ -855,6 +855,23 @@ class PipelineOrchestrator @JvmOverloads constructor(
             val recording = repo.persistFromCache(audioFile, sessionId)
             audioDurationSec = repo.extractDurationSeconds(recording.audioFile)
             audioPathForRow = recording.audioFile.absolutePath
+
+            // KG-AFF-1 (Spec 1 §4.11.6.1): explicit cleanup of the cache
+            // file once persistFromCache (copyTo + DB-row-create) lands
+            // its result in filesDir/recordings/. The session row now
+            // points at the persisted path, so the cache entry is no
+            // longer in the "referenced" set — leaving it on disk would
+            // only delay reclamation until the next boot's
+            // `cleanupOrphans`. Idempotent: if `delete` fails (FS race,
+            // permission), the next boot's orphan sweep catches it.
+            runCatching { audioFile.delete() }
+                .onFailure {
+                    android.util.Log.w(
+                        "PipelineOrchestrator",
+                        "cache delete after persist failed: ${audioFile.name}",
+                        it,
+                    )
+                }
         } else {
             // Legacy path: copy to recordingsDir, no synchronous duration.
             config.recordingsDir.mkdirs()

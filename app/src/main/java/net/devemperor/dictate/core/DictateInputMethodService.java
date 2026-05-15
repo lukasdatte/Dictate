@@ -1819,7 +1819,37 @@ public class DictateInputMethodService extends InputMethodService
     private void startRecording() {
         promptQueueManager.prepareAutoApplyQueue();
 
-        audioFile = new File(getCacheDir(), "audio.m4a");
+        // Pre-Dispatch-Allocation (Spec 1 §4.11.4, R.2). The Service-owned
+        // AudioFileFactory is the single source for cache-file paths; it
+        // produces a UUID-suffixed name in cacheDir/audio/ that survives
+        // the multi-job model (R.8) and the boot-time orphan cleanup
+        // (KG-AFF-4 freshness cut-off).
+        //
+        // The legacy fixed `cacheDir/audio.m4a` path is migrated by
+        // LegacyAudioFileMigration on the next Service boot.
+        //
+        // The factory is only available once the Service binder is up
+        // (`onServiceConnected`). The early-tap defensive path below
+        // toasts and bails — the user retries once the bind lands.
+        if (pipelineBinder == null) {
+            android.widget.Toast.makeText(
+                    this, R.string.dictate_service_not_ready,
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            audioFile = pipelineBinder.getAudioFileFactory().allocate();
+        } catch (java.io.IOException e) {
+            // Storage full / FS permission. Surface a user-visible
+            // toast and bail out — the reducer never sees the failure
+            // (R.2 Pure-Reducer invariant: IO lives in the resolver).
+            Log.w("DictateIME", "AudioFileFactory.allocate failed", e);
+            android.widget.Toast.makeText(
+                    this, R.string.dictate_storage_full,
+                    android.widget.Toast.LENGTH_LONG).show();
+            return;
+        }
+
         DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, audioFile.getName()).apply();
 
         boolean useBt = DictatePrefsKt.get(sp, Pref.UseBluetoothMic.INSTANCE);

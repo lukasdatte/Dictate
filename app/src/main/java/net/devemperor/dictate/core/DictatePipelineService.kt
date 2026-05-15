@@ -28,7 +28,9 @@ import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.prompt.PromptService
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.settings.DictateSettingsActivity
+import net.devemperor.dictate.migration.LegacyAudioFileMigration
 import net.devemperor.dictate.state.Action
+import net.devemperor.dictate.state.AudioFileFactory
 import net.devemperor.dictate.state.DictateModuleRegistry
 import net.devemperor.dictate.state.DictateOrchestrator
 import net.devemperor.dictate.state.DictateUiState
@@ -142,6 +144,14 @@ class DictatePipelineService : Service() {
     // ── C8 — Subsystem adapters (production-quality) ───────────────────
     private lateinit var audioFocusGateImpl: AudioFocusGate
     private var bluetoothScoSubsystemAdapterImpl: BluetoothScoSubsystemAdapter? = null
+
+    // ── C11 — Pre-Dispatch audio file allocator (Spec 1 §4.11) ─────────
+    //
+    // Lives from `onCreate` through `onDestroy`. Held as `lateinit` so
+    // the [LocalBinder] surface can hand the same instance to the IME
+    // for its pre-dispatch resolver (`startRecording → allocate()`),
+    // while `runEffect`-callers consume it via [ModuleServices].
+    private lateinit var audioFileFactoryImpl: AudioFileFactory
 
     /** Single binder instance — Spec 1 §11.3.4 Multi-Bind. */
     private val binder: LocalBinder = LocalBinder()
@@ -293,6 +303,15 @@ class DictatePipelineService : Service() {
         sessionRepoAdapterRef = sessionRepoAdapterImpl
         orphanCleaner = PipelineOrphanCleaner(database.sessionDao())
 
+        // C11 — Pre-Dispatch audio-file allocator (Spec 1 §4.11). Replaces
+        // the C7 stub. The factory is `lateinit` (see field declaration)
+        // so the LocalBinder can expose it to the IME's startRecording
+        // resolver while ModuleServices.audioFileFactory routes the
+        // orchestrator-side pre-dispatch.
+        audioFileFactoryImpl = CacheDirAudioFileFactory(
+            cacheDirProvider = { applicationContext.cacheDir },
+        )
+
         val services = ModuleServices(
             recordingHardware = recordingHardware,
             bluetoothSco = bluetoothSco,
@@ -307,7 +326,7 @@ class DictatePipelineService : Service() {
             clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager,
             sharedPrefs = sharedPrefs,
             toastSink = realToastSink(applicationContext),
-            audioFileFactory = PipelineServiceStubSubsystems.audioFileFactory,
+            audioFileFactory = audioFileFactoryImpl,
             scope = serviceScope,
             emitAction = { action -> orchestrator.emitAction(action) },
         )
@@ -338,6 +357,51 @@ class DictatePipelineService : Service() {
         } catch (t: IllegalStateException) {
             Log.e(TAG, "Registry coverage assertion failed — module(s) missing", t)
             throw t
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Step 5 — Legacy audio-file migration (Spec 1 §4.11.6.2 KG-AFF-2).
+        //
+        // One-shot, idempotent: a SharedPreferences flag short-circuits
+        // every boot after the first; the DAO query also filters by
+        // status to preserve historical error context. Runs synchronously
+        // on Main thread — three small operations (pref read, file
+        // delete, indexed UPDATE), all bounded.
+        //
+        // Runs AFTER orchestrator construct (so DB and modules are live)
+        // and BEFORE the orphan-cleanup launch (so legacy entries leave
+        // the DB before `findAllAudioFilePaths()` consults it).
+        // ──────────────────────────────────────────────────────────────
+        try {
+            LegacyAudioFileMigration.run(applicationContext)
+        } catch (t: Throwable) {
+            // Migration is best-effort. A DB or pref failure must not
+            // crash the service boot — the next service start retries.
+            Log.w(TAG, "LegacyAudioFileMigration failed", t)
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Step 6 — Crash-orphan cleanup (Spec 1 §4.11.5.1 step 8).
+        //
+        // Async via `Dispatchers.IO` so the FGS-5-second start budget
+        // (§11.1.4) is preserved. Reads every non-null `audio_file_path`
+        // from the DB, builds the "referenced" set, then deletes every
+        // file in `cacheDir/audio/` that matches the factory naming
+        // scheme AND is older than the 60-second freshness cut-off
+        // (KG-AFF-4 — closes the allocate → MediaRecorder.prepare race).
+        // Errors stay best-effort — a DB failure mid-boot is logged but
+        // does not kill the service.
+        // ──────────────────────────────────────────────────────────────
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val referenced = database.sessionDao()
+                    .findAllAudioFilePaths()
+                    .filterNotNull()
+                    .toSet()
+                audioFileFactoryImpl.cleanupOrphans(referenced)
+            } catch (t: Throwable) {
+                Log.w(TAG, "audio-file orphan cleanup failed at boot", t)
+            }
         }
     }
 
@@ -594,6 +658,22 @@ class DictatePipelineService : Service() {
         /** The service-owned production [AudioFocusGate]. */
         val audioFocusGate: AudioFocusGate
             get() = audioFocusGateImpl
+
+        /**
+         * The service-owned [AudioFileFactory] (Spec 1 §4.11 — Pre-Dispatch).
+         *
+         * Exposed so the IME's `startRecording` resolver can call
+         * `allocate()` **before** dispatching
+         * `Action.RecordingAction.StartRecording(target, audioFile)`.
+         * The reducer is pure (R.2) — the file has to be picked
+         * outside the dispatch, in the View-layer.
+         *
+         * Same instance also lives in [ModuleServices.audioFileFactory]
+         * for orchestrator-side consumers (LayoutCatalog resolvers,
+         * Spec 2 §10).
+         */
+        val audioFileFactory: AudioFileFactory
+            get() = audioFileFactoryImpl
 
         // ── Callback registration (IME → Service direction) ──────────
         //

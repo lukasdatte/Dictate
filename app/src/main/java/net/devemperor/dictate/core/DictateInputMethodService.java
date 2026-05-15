@@ -144,8 +144,8 @@ public class DictateInputMethodService extends InputMethodService
      * {@link #bindAiInfrastructureFromService}. The orchestrator's pipeline
      * runner adapter consults it (through the
      * {@code DelegatingPipelineConfigResolver}) so the new path builds a
-     * {@code JobRequest} field-for-field identical to the legacy
-     * {@code runTranscriptionViaOrchestrator()} construction.
+     * {@code JobRequest} field-for-field identical to the IME-runtime
+     * construction snapshotted by {@link #captureFreshConfigSnapshot}.
      */
     private ImePipelineConfigResolver imePipelineConfigResolver;
 
@@ -555,10 +555,11 @@ public class DictateInputMethodService extends InputMethodService
 
         // C5 (R-1 closure) — install the IME-faithful PipelineConfigResolver
         // so the new recording-drive path builds a JobRequest
-        // field-for-field identical to the legacy
-        // runTranscriptionViaOrchestrator() construction. The orchestrator's
+        // field-for-field identical to the IME-runtime construction
+        // snapshotted by captureFreshConfigSnapshot(). The orchestrator's
         // pipeline runner adapter consults it (through the
-        // DelegatingPipelineConfigResolver) on the new recording path.
+        // DelegatingPipelineConfigResolver) on the new recording path and
+        // the imported-audio-file path (C7-IMPL-1).
         if (imePipelineConfigResolver == null) {
             imePipelineConfigResolver = new ImePipelineConfigResolver(
                     this::getFilesDir,
@@ -1410,9 +1411,18 @@ public class DictateInputMethodService extends InputMethodService
 
             @Override
             public void onRecordingCompleted(File file) {
+                // Dead on the new path: C7 deleted the legacy
+                // recordingStateController record-button branches, so the
+                // controller is never started and this completion callback
+                // never fires (the orchestrator's RecordingModule owns
+                // recording end-to-end). Kept compiling + routed through
+                // the same orchestrator entry-point for behavioural
+                // equivalence should any future legacy caller reach it
+                // (the legacy-controller retire is Theme-C/C3 scope —
+                // C5-IMPL-2, not this mid-chunk-triage wave).
                 mainHandler.post(() -> {
                     audioFile = file;
-                    runTranscriptionViaOrchestrator();
+                    transcribeImportedAudioFileViaOrchestrator();
                 });
             }
 
@@ -1920,7 +1930,7 @@ public class DictateInputMethodService extends InputMethodService
             DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, audioFile.getName()).apply();
 
             sp.edit().remove(Pref.TranscriptionAudioFile.INSTANCE.getKey()).apply();
-            runTranscriptionViaOrchestrator();
+            transcribeImportedAudioFileViaOrchestrator();
 
         } else if (DictatePrefsKt.get(sp, Pref.InstantRecording.INSTANCE)) {
             recordButton.performClick();
@@ -2327,12 +2337,18 @@ public class DictateInputMethodService extends InputMethodService
 
     /**
      * C5 (R-1) — compute the 8 IME-runtime-only fresh-recording
-     * {@code JobRequest} fields exactly as the legacy
-     * {@link #runTranscriptionViaOrchestrator()} does
-     * ({@code DictateInputMethodService.java:2214-2230} pre-C5) and stash
-     * them in {@link #imePipelineConfigResolver} keyed by {@code sessionId}.
-     * The orchestrator consumes the snapshot asynchronously when its
-     * pipeline runner submits.
+     * {@code JobRequest} fields exactly as the legacy pre-C7 inline
+     * {@code JobRequest.TranscriptionPipeline} construction did
+     * ({@code DictateInputMethodService.java:2214-2230} pre-C5; deleted
+     * by C7 — this helper is now the single field-faithful source) and
+     * stash them in {@link #imePipelineConfigResolver} keyed by
+     * {@code sessionId}. The orchestrator consumes the snapshot
+     * asynchronously when its pipeline runner submits.
+     *
+     * <p>Shared by both the fresh-recording send-tap
+     * ({@link #stopRecording()}) and the imported-audio-file path
+     * ({@link #transcribeImportedAudioFileViaOrchestrator()},
+     * C7-IMPL-1).</p>
      *
      * <p>Called at the send-tap (the legacy trigger instant) so every
      * field — including the {@code livePrompt}/{@code autoSwitchKeyboard}
@@ -2387,8 +2403,10 @@ public class DictateInputMethodService extends InputMethodService
     /**
      * C5 — drive the legacy {@code KeyboardUiController} pipeline UI for
      * the new path so the keyboard still shows the "Sending…"/progress
-     * affordance the legacy {@link #runTranscriptionViaOrchestrator()}
-     * set up. The orchestrator owns the authoritative
+     * affordance the legacy pre-C7 fresh-recording trigger set up. Shared
+     * by {@link #stopRecording()} and
+     * {@link #transcribeImportedAudioFileViaOrchestrator()} (C7-IMPL-1).
+     * The orchestrator owns the authoritative
      * {@code state.pipeline}; this is the same thin UI bookkeeping the
      * legacy trigger performed (the RenderBackend cutover that makes this
      * unnecessary is Theme-C/C3, out of C5 scope).
@@ -2455,114 +2473,89 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * Prepares UI and launches transcription pipeline via PipelineOrchestrator.
-     * Replaces the old startWhisperApiRequest() method.
+     * Transcribe a user-imported, pre-existing audio file via the new
+     * orchestrator (C7-IMPL-1 closure, mid-chunk-triage wave
+     * B2-C7-MID-W1).
+     *
+     * <p><b>Why this is orchestrator-routed (AC-10).</b> The Settings
+     * "transcribe an imported audio file" feature
+     * ({@code Pref.TranscriptionAudioFile}, picked up by
+     * {@link #onStartInputView}) submits a brand-new {@code RECORDING}-kind
+     * transcription of a file that already exists — there is no recording
+     * FSM to drive. C7 deleted the legacy fresh-recording + reprocess
+     * {@code JobExecutor.start} branches; this site was the last
+     * non-RESUME legacy {@code JobExecutor.start} survivor. It is now
+     * routed through the orchestrator exactly like a fresh recording's
+     * post-record submit: snapshot the IME-runtime config (field-faithful
+     * via the shared {@link #captureFreshConfigSnapshot}) then dispatch
+     * {@link net.devemperor.dictate.state.Action.PipelineAction.TriggerPipeline}
+     * — the documented Spec 1 §3 pipeline entry-point that the recording
+     * FSM itself emits ({@code RecordingModule.Effect.EmitPipelineTrigger}).
+     * {@code PipelineModule} reduces it from {@code Idle} to
+     * {@code Preparing} and emits {@code Effect.SubmitPipeline} →
+     * {@code PipelineRunnerSubsystemAdapter.submit} →
+     * {@code ImePipelineConfigResolver.resolveFresh} (consuming the
+     * snapshot) → {@code JobExecutor.start} <i>inside the C3 adapter</i>
+     * (the sole legacy {@code JobExecutor.start} site; AC-10 satisfied —
+     * only RESUME remains in the IME).</p>
+     *
+     * <p><b>R-1 fidelity.</b> {@link #captureFreshConfigSnapshot} computes
+     * the 8 IME-runtime fields identically to the pre-C7 inline
+     * construction (it was extracted from this very method in C5), so the
+     * resulting {@code JobRequest} is provably field-for-field identical
+     * to the deleted legacy construction (no silent config drift).</p>
+     *
+     * <p>The single-submit guard is the {@code PipelineUiState.Idle}
+     * reducer edge (a second trigger while {@code Preparing}/{@code Running}
+     * is a reducer no-op) — structurally equivalent to the legacy
+     * {@code JobExecutor.start} busy-{@code false}. The
+     * {@link ActiveJobRegistry#isAnyActive()} pre-check preserves the
+     * legacy busy-toast user feedback (mirrors the new-path reprocess
+     * route in {@link #handleReprocessSend}).</p>
      */
-    private void runTranscriptionViaOrchestrator() {
-        // Preparing state: button disabled, shows "Sending..." (state-driven via PipelineUiState.Preparing)
-        try {
-            uiController.preparePipeline();
-            // Block-1a Quick-Win: go through isResendVisible so this site
-            // shares the same expression as the rest. Pipeline is now
-            // Preparing (set above) → predicate returns false → GONE.
-            resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
-                    new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
-                    DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
-                    recordingStateController != null
-                            ? recordingStateController.getState()
-                            : RecordingState.Idle.INSTANCE,
-                    uiController.getState()));
-            infoBarController.dismiss();
-            updatePromptButtonsEnabledState();
-            stateManager.refresh(); // updates pause/trash/prompts visibility
-
-            // Show pipeline progress
-            int totalSteps = 1; // transcription always
-            if (autoFormattingService.isEnabled()) totalSteps++;
-            totalSteps += promptQueueManager.getQueuedIds().size();
-
-            boolean autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-            uiController.startPipeline(totalSteps, new KeyboardUiController.AutoEnterConfig(autoEnter));
-
-            // Phase 2 §2.6: language source is now the LanguageController
-            // (Single-Source-of-Truth across normal mode + ReprocessStaging
-            // override). "detect" remains the explicit "let Whisper detect"
-            // sentinel — passed as null on the wire.
-            String effectiveLanguage = languageController != null
-                    ? languageController.getEffectiveLanguage()
-                    : "detect";
-            String language = !"detect".equals(effectiveLanguage) ? effectiveLanguage : null;
-            String stylePrompt = promptService.resolveWhisperStylePrompt(effectiveLanguage);
-
-            EditorInfo info = getCurrentInputEditorInfo();
-            boolean showResend = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
-                    && DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE);
-
-            // W3: Route the initial recording pipeline through JobExecutor so
-            // the lifecycle is tracked in ActiveJobRegistry, the single-job
-            // lock applies, and cancel() goes through the cooperative token.
-            // Pre-allocate the sessionId so JobExecutor.register() happens
-            // BEFORE the orchestrator persists the session row.
-            String preAllocatedId = java.util.UUID.randomUUID().toString();
-            JobRequest.TranscriptionPipeline request = new JobRequest.TranscriptionPipeline(
-                    preAllocatedId,
-                    totalSteps,
-                    JobRequest.TranscriptionKind.RECORDING,
-                    /* audioFilePath */ audioFile.getAbsolutePath(),
-                    /* language */ language,
-                    /* modelOverride */ null,
-                    /* queuedPromptIds */ promptQueueManager.getQueuedIds(),
-                    /* targetAppPackage */ info != null ? info.packageName.toString() : null,
-                    /* recordingsDir */ new File(getFilesDir(), "recordings"),
-                    /* reuseSessionId */ null,
-                    /* stylePrompt */ stylePrompt,
-                    /* origin */ net.devemperor.dictate.database.entity.SessionOrigin.KEYBOARD,
-                    /* livePrompt */ livePrompt,
-                    /* autoSwitchKeyboard */ autoSwitchKeyboard,
-                    /* showResendButton */ showResend
-            );
-
-            pendingLivePromptChain = livePrompt;
-            livePrompt = false;
-            autoSwitchKeyboard = false;
-
-            // Imported-audio-file transcription path (C7-IMPL-1, flagged).
-            //
-            // The fresh-recording record-button trigger now lives in
-            // startRecording()/stopRecording() (the orchestrator's
-            // RecordingModule owns it end-to-end), so this method is NOT
-            // reached for a normal recording — the legacy
-            // recordingStateController is never started, so its
-            // onRecordingCompleted callback (the other caller, :1451) never
-            // fires on the live path.
-            //
-            // The ONE caller that still reaches this method is
-            // onStartInputView() (the Settings "transcribe an imported audio
-            // file" feature, Pref.TranscriptionAudioFile): the file already
-            // exists, there is no recording FSM to drive, and the
-            // orchestrator exposes no "transcribe a pre-existing file"
-            // entry — so JobExecutor.start is the only working route for it.
-            // Routing it through the orchestrator is an architecture change
-            // (a new RecordingAction/PipelineAction + reducer arm) beyond
-            // C7's pure-deletion scope; see C7-IMPL-1 (Critical,
-            // architecture-conflict) in the block-report. Until that lands
-            // this single-dispatch JobExecutor.start MUST stay — deleting it
-            // silently breaks imported-audio-file transcription (AC-9
-            // behaviour-coverage regression). Single-dispatch (a distinct
-            // one-shot user action cleared at onStartInputView:1958) — no
-            // double-dispatch with the orchestrator recording path (AC-10).
-            boolean started = JobExecutor.INSTANCE.start(this, request);
-            if (!started) {
-                // Another job is active — the UI we just set up for
-                // "preparing" is out of sync. Reset and inform the user.
-                uiController.stopPipeline();
-                showJobBusyToast();
-            }
-        } finally {
-            // JobExecutor.start is non-blocking (submits onto its own executor),
-            // so from this point on the pipeline is owned by JobExecutor and
-            // observed via the registry — no extra state field needed.
+    private void transcribeImportedAudioFileViaOrchestrator() {
+        // Service not yet bound: the orchestrator route is unavailable.
+        // Surface a not-ready toast and bail (mirror handleReprocessSend).
+        if (pipelineBinder == null || imePipelineConfigResolver == null) {
+            android.widget.Toast.makeText(
+                    this, R.string.dictate_service_not_ready,
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
         }
+        // Single-submit busy pre-check (faithful to the legacy
+        // started == false branch + the established new-path reprocess
+        // pattern in handleReprocessSend). The FSM Idle-guard is the
+        // structural protection; this only preserves the user-visible
+        // busy feedback the legacy path showed.
+        if (ActiveJobRegistry.INSTANCE.isAnyActive()) {
+            showJobBusyToast();
+            return;
+        }
+
+        // Preparing state: keyboard shows "Sending..."/progress exactly as
+        // the legacy trigger did (the orchestrator owns the authoritative
+        // state.pipeline; this is the same thin IME-side UI bookkeeping).
+        infoBarController.dismiss();
+        updatePromptButtonsEnabledState();
+        primePipelineUiForNewPath();
+
+        // Mint the sessionId (was preAllocatedId pre-C7) and snapshot the
+        // IME-runtime config field-for-field via the shared C5 helper —
+        // it reads the IME `audioFile` field (set to the imported file by
+        // onStartInputView), computes all 8 IME-runtime fields exactly as
+        // the deleted legacy construction did, snapshots them into
+        // imePipelineConfigResolver, and performs the
+        // pendingLivePromptChain / one-shot-flag reset (legacy parity).
+        String sessionId = java.util.UUID.randomUUID().toString();
+        captureFreshConfigSnapshot(sessionId);
+
+        // Dispatch the documented pipeline entry-point. No recording FSM:
+        // TriggerPipeline goes straight Idle → Preparing → SubmitPipeline →
+        // the C3 runner adapter → the IME-faithful resolver (single
+        // dispatch, ADR-0001; Mode-1 same-axis effect, ADR-0002).
+        pipelineBinder.dispatch(
+                new net.devemperor.dictate.state.Action.PipelineAction.TriggerPipeline(
+                        sessionId, audioFile));
     }
 
     /**
@@ -2683,7 +2676,7 @@ public class DictateInputMethodService extends InputMethodService
             // gating happens upstream: `onShowResend` is only fired when
             // `PipelineConfig.showResendButton == true`, which is itself
             // derived from `Pref.ResendButton` AND the cached audio file
-            // existing (see `runTranscriptionViaOrchestrator`).
+            // existing (see `captureFreshConfigSnapshot`).
             resendButton.setVisibility(View.VISIBLE);
         });
     }

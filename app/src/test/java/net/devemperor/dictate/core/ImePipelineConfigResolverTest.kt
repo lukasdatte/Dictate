@@ -116,6 +116,62 @@ class ImePipelineConfigResolverTest {
         }
     }
 
+    // ── Imported-audio-file path — C7-IMPL-1 closure ───────────────────
+
+    /**
+     * The imported-audio-file path (C7-IMPL-1, mid-chunk-triage
+     * B2-C7-MID-W1) reuses the SAME fresh snapshot mechanism as a
+     * post-record send: it computes the IME-runtime config via the shared
+     * `captureFreshConfigSnapshot` helper and submits via the orchestrator
+     * `TriggerPipeline` → C3 adapter → `resolveFresh`. This asserts the
+     * resolver rebuilds a `JobRequest` field-for-field identical to the
+     * deleted legacy `DictateInputMethodService.java:2507-2523`
+     * `JobRequest.TranscriptionPipeline` construction (R-1 / AC-9: a
+     * dropped field silently transcribes the imported file with the wrong
+     * language / no prompts — exactly the behaviour-coverage regression
+     * AC-9 forbids).
+     */
+    @Test
+    fun `imported-file fresh snapshot rebuilds the legacy 2507-2523 JobRequest field-for-field`() {
+        val r = resolver()
+        val importedFile = File("/tmp/c7-imported.m4a")
+        // Same fields captureFreshConfigSnapshot computes (the exact
+        // sources the deleted legacy :2507-2523 construction read).
+        r.snapshotFresh(
+            "imported-sid",
+            ImePipelineConfigResolver.FreshConfig(
+                totalSteps = 4,
+                audioFilePath = importedFile.absolutePath,
+                language = "it",
+                queuedPromptIds = listOf(11, 12),
+                targetAppPackage = "com.imported.target",
+                stylePrompt = "formal",
+                livePrompt = false,
+                autoSwitchKeyboard = false,
+                showResendButton = true,
+            ),
+        )
+
+        val req = r.resolveFresh("imported-sid", importedFile)
+
+        // Field-for-field == legacy DictateInputMethodService.java:2507-2523.
+        assertEquals("imported-sid", req.sessionId)
+        assertEquals(4, req.totalSteps)
+        assertEquals(JobRequest.TranscriptionKind.RECORDING, req.kind)
+        assertEquals(importedFile.absolutePath, req.audioFilePath)
+        assertEquals("it", req.language)
+        assertNull(req.modelOverride)
+        assertEquals(listOf(11, 12), req.queuedPromptIds)
+        assertEquals("com.imported.target", req.targetAppPackage)
+        assertEquals(File(filesDir, "recordings"), req.recordingsDir)
+        assertNull("imported file is a fresh session → reuseSessionId null", req.reuseSessionId)
+        assertEquals("formal", req.stylePrompt)
+        assertEquals(SessionOrigin.KEYBOARD, req.origin)
+        assertEquals(false, req.livePrompt)
+        assertEquals(false, req.autoSwitchKeyboard)
+        assertTrue(req.showResendButton)
+    }
+
     // ── Reprocess — C3-IMPL-2 closure ──────────────────────────────────
 
     @Test

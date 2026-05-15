@@ -39,7 +39,7 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 1 (C7-IMPL-1 — NEW, delegated, `architecture-conflict`) · Important: 2 (resolved by C5) · Nice-to-have: 2 (1 resolved, 1 still-deferred) · From C5: Important: 1 fixed (C5-IMPL-1 via C6-W1) + 1 delegated (C5-IMPL-2 documented Known-Gap), Nice-to-have: 1 postponed (C5-IMPL-3) · From C6 gate: Important: 1 (C6-IMPL-1) → FIXED (C6-W1); Nice-to-have: 1 (C6-IMPL-2) → **fixed by C7 (RESUME carve-out honoured)** · **From C7: Critical: 1 (C7-IMPL-1) → delegated-to-orchestrator (imported-audio-file path has no orchestrator route — reachable code not deleted per STOP directive)**
+**Severity counts:** Critical: 1 (C7-IMPL-1 — **FIXED by mid-chunk-triage wave B2-C7-MID-W1**) · Important: 2 (resolved by C5) · Nice-to-have: 2 (1 resolved, 1 still-deferred) · From C5: Important: 1 fixed (C5-IMPL-1 via C6-W1) + 1 delegated (C5-IMPL-2 documented Known-Gap), Nice-to-have: 1 postponed (C5-IMPL-3) · From C6 gate: Important: 1 (C6-IMPL-1) → FIXED (C6-W1); Nice-to-have: 1 (C6-IMPL-2) → **fixed by C7 (RESUME carve-out honoured)** · **From C7: Critical: 1 (C7-IMPL-1) → FIXED (B2-C7-MID-W1: imported-audio-file path now orchestrator-routed via `PipelineAction.TriggerPipeline`; AC-10 fully GREEN modulo the documented RESUME exception)**
 
 > **🟢 C6-IMPL-1 CLOSED by repair-wave B2-C6-W1 — C6-D2pre may RE-GATE.**
 > The gate-RED-blocking legacy-parity regression is repaired:
@@ -72,7 +72,7 @@
 | C5-IMPL-3 | B2-C5-B3-IMPL | Nice-to-have | postponed | RESUME (`startResumeJob`, JobExecutor.start #2) has no orchestrator equivalent (`PipelineRunnerSubsystem` has no `resume`); both boolean branches keep legacy `JobExecutor.start` (single-dispatch, orthogonal to the fresh-recording cutover). Adding a resume subsystem action is an architecture change beyond C5 (prompt forbids a fragile flip). C7/later owns retiring it. | C5 step-1 |
 | C6-IMPL-1 | B2-C6-D2pre-IMPL | Important | **fixed (C6-W1)** | Consolidated gate-validated form of C5-IMPL-1. **Closed by repair-wave B2-C6-W1.** Audio-focus + BT-SCO are now emitted on the new path with legacy parity: `AudioModule.onCrossModuleStateChange` observes the RecordingState FSM (recording-engaged → `RecordingStarted` → `RequestAudioFocus` gated on `audioFocusEnabledPref` default-true + `StartBluetoothSco` gated on `useBluetoothMic`; disengaged → `RecordingEnded` → `ReleaseAudioFocus`+`StopBluetoothSco`). BT-mic recordings defer `AllocateMediaRecorder` until `ScoRouteResolved` (SCO-Connected→`VOICE_COMMUNICATION`, SCO-Failed/timeout→`MIC`, subsystem-owned 2500 ms timeout), eliminating the silent phone-mic substitution. Stale `AudioModule.kt` KDoc rewritten to describe the real path. ADR-0002 Mode-1/2 only; no Mode-3. New-path audio-focus proven E2E (`DictateCutoverE2ETest` shadow-AudioManager assertions) + pure-reducer/observer tests. **C7 + Theme C may now re-gate via a fresh C6-D2pre run.** | C6 gate → fixed C6-W1 |
 | C6-IMPL-2 | B2-C6-D2pre-IMPL | Nice-to-have | **fixed (C7)** | C7 must carve out the RESUME `JobExecutor.start` site from its deletion scope — no orchestrator resume equivalent exists. **C7 honoured it:** `startResumeJob`'s byte-identical `if (USE_LEGACY_RECORDING_DRIVE) {…} else {…}` branches were collapsed to the single unconditional `JobExecutor.INSTANCE.start` they both contained — RESUME stays legacy, not fenced/deleted/rerouted (carve-out satisfied exactly). | C6 gate → fixed C7 |
-| C7-IMPL-1 | B2-C7-B3-IMPL | **Critical** | **delegated-to-orchestrator** (`architecture-conflict`, `blocks-following-chunks`) | Imported-audio-file transcription (`onStartInputView:1959` → `runTranscriptionViaOrchestrator()` → `JobExecutor.INSTANCE.start`, `DictateInputMethodService.java:2554`) has **no orchestrator route**. The C7 prompt + C5/C6 grep tables assumed `runTranscriptionViaOrchestrator` was dead-on-new-path ("only the legacy `onRecordingCompleted` callback reaches it") — they overlooked the `onStartInputView` Settings-import caller (`Pref.TranscriptionAudioFile`). That file already exists (no recording FSM); the orchestrator exposes no "transcribe a pre-existing file" entry-point, so the legacy `JobExecutor.start` is its ONLY working route. Per the C7 STOP directive (reachable "dead" branch → don't delete, flag) the fresh `JobExecutor.start` was kept (made unconditional, boolean+no-op-else removed) rather than deleted — so AC-10's single-architecture invariant is structurally **not yet met for the imported-audio-file user action** (2 not 1 IME `JobExecutor.start` survivors: RESUME carve-out + this). Deleting it would silently break the feature (AC-9 regression). Also blocks the later Theme-C legacy-pipeline-trigger retire (a residual live consumer remains). Needs a new `RecordingAction`/`PipelineAction` + reducer arm — an architecture change beyond C7's pure-deletion scope. | C7 step-1/3 |
+| C7-IMPL-1 | B2-C7-B3-IMPL | **Critical** | **fixed** (B2-C7-MID-W1) | Imported-audio-file transcription (`onStartInputView` → `runTranscriptionViaOrchestrator()` → `JobExecutor.INSTANCE.start`, `:2554`) had **no orchestrator route**. **Fixed by mid-chunk-triage wave B2-C7-MID-W1:** the method was repurposed to `transcribeImportedAudioFileViaOrchestrator()` — it now snapshots the IME-runtime config via the shared C5 `captureFreshConfigSnapshot` helper (field-for-field identical to the deleted legacy `:2507-2523` construction — R-1/AC-9) and dispatches `Action.PipelineAction.TriggerPipeline(sessionId, audioFile)` (the documented Spec 1 §3 pipeline entry-point the recording FSM itself emits) → `PipelineModule` `Idle → Preparing` → `Effect.SubmitPipeline` → the C3 `PipelineRunnerSubsystemAdapter.submit` → `ImePipelineConfigResolver.resolveFresh` → `JobExecutor.start` **inside the C3 adapter** (the sole legacy start site). The legacy `:2554` `JobExecutor.start` + dead `JobRequest`/`preAllocatedId`/flag-reset removed. No new Action/reducer arm needed (the C3 submit seam already supported it). AFTER-grep: the ONLY surviving IME `JobExecutor.INSTANCE.start` is `:3222` (RESUME carve-out, C6-IMPL-2). **AC-10 fully GREEN modulo the documented RESUME exception**; Theme-C legacy-pipeline-trigger retire unblocked. Build + full suite green. See `### Mid-Chunk-Triage Wave B2-C7-MID-W1` + `../research/imported-audiofile-orchestrator-route.md`. | C7 step-1/3 → fixed B2-C7-MID-W1 |
 
 ---
 
@@ -1523,13 +1523,15 @@ comment was rewritten to record the carve-out (no `USE_LEGACY` ref).
   with the orchestrator recording path. AC-10's "no code path starts
   BOTH a legacy and a new pipeline for the same user action" holds.
 
-**RESUME-only legacy survivor?** Not strictly — there are **2**
-surviving IME `JobExecutor.start` sites: RESUME (carve-out, expected)
-**and** the imported-audio-file path (`:2554`, C7-IMPL-1, a
-pre-existing C5-overlooked gap, NOT a C7 regression). Both are
-single-dispatch and orthogonal to the recording-drive cutover; neither
-violates AC-10. The C7 prompt expected RESUME to be the only survivor;
-the import path is the documented deviation below.
+**RESUME-only legacy survivor?** At C7-close there were **2** surviving
+IME `JobExecutor.start` sites: RESUME (carve-out, expected) **and** the
+imported-audio-file path (`:2554`, C7-IMPL-1, a pre-existing
+C5-overlooked gap, NOT a C7 regression). **→ Resolved by
+mid-chunk-triage wave B2-C7-MID-W1:** the imported-file `:2554` site is
+now orchestrator-routed (`PipelineAction.TriggerPipeline`) and deleted.
+The IME now has exactly **1** surviving `JobExecutor.INSTANCE.start`:
+RESUME (`:3222`, the documented carve-out). See `### Mid-Chunk-Triage
+Wave B2-C7-MID-W1`.
 
 **Files created/modified (production, Commit 1):**
 - `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java`
@@ -1705,6 +1707,119 @@ reprocess legacy branch + dead locals); only the single import-file
 orchestrator-route recommendation (new `RecordingAction`/`PipelineAction`
 + reducer arm — a Theme-C/follow-up architecture addition, not an inline
 IMPL fix).
+
+> **→ RESOLVED by mid-chunk-triage wave B2-C7-MID-W1 (see below).**
+
+### Mid-Chunk-Triage Wave B2-C7-MID-W1
+
+**Agent-IDs:** `B2-C7-MID-RES-1` (research) → `B2-C7-MID-REPAIR-1`
+(repair) → `-VERIFY` (self-check), one session. **Wave:**
+B2-C7-MID-W1, iter 1 (iter-cap 2). **Triggering issue:** C7-IMPL-1
+(Critical, `architecture-conflict`, `blocks-following-chunks`).
+**Wave-Commit:** ⏳ (orchestrator).
+
+> Research pointer: `../research/imported-audiofile-orchestrator-route.md`
+
+**Design decision — route (b): reuse the existing pipeline-trigger
+dispatch with a pre-supplied audioFile and no recording step, via the
+existing `Action.PipelineAction.TriggerPipeline`.** No new Action /
+reducer arm. `TriggerPipeline(sessionId, audioFile)` is the documented
+Spec 1 §3 pipeline entry-point that the recording FSM itself emits
+(`RecordingModule.Effect.EmitPipelineTrigger`); `PipelineModule`
+reduces it `Idle → Preparing` + `Effect.SubmitPipeline` →
+`PipelineRunnerSubsystemAdapter.submit` →
+`ImePipelineConfigResolver.resolveFresh` → `JobExecutor.start` **inside
+the C3 adapter** (the sole legacy start site). Spec-faithful: Spec 1
+specifies **no** dedicated imported-file Action — the source-agnostic
+`(sessionId, audioFile)` `TriggerPipeline` IS the canonical entry. A
+bespoke `SubmitImportedFile` Action (option a) would be a redundant
+second entry-point for an identical submit (rejected, D4); the
+reprocess route (option c) is semantically distinct
+(`REPROCESS_STAGING`/`reuseSessionId`/staging-FSM) — an imported file
+is a *fresh* `RECORDING`-kind transcription (rejected c). ADR-0001
+single-dispatch ✓; ADR-0002 Mode-1 same-axis effect, no Mode-3 ✓.
+
+**R-1 fidelity (AC-9):** the repurposed method reuses the existing C5
+`captureFreshConfigSnapshot` helper verbatim — it was *extracted from
+the very `runTranscriptionViaOrchestrator` method being replaced* in
+C5, so the `JobRequest` is provably field-for-field identical to the
+deleted legacy `:2507-2523` construction (zero duplicated config logic,
+no silent drift). Busy-toast user feedback preserved via an
+`ActiveJobRegistry.isAnyActive()` pre-check (mirrors the established
+new-path reprocess route in `handleReprocessSend`); the structural
+single-submit guard is the `PipelineUiState.Idle` reducer edge.
+
+**What changed:**
+- `runTranscriptionViaOrchestrator()` → renamed/repurposed to
+  `transcribeImportedAudioFileViaOrchestrator()`: not-ready guard +
+  `ActiveJobRegistry.isAnyActive()` busy pre-check +
+  `infoBarController.dismiss()`/`updatePromptButtonsEnabledState()`/
+  `primePipelineUiForNewPath()` UI bookkeeping + `captureFreshConfigSnapshot(sessionId)`
+  + `pipelineBinder.dispatch(PipelineAction.TriggerPipeline(sessionId,
+  audioFile))`. The legacy `:2554` `JobExecutor.INSTANCE.start` + the
+  dead `JobRequest request` construction + `preAllocatedId` local +
+  the inline `pendingLivePromptChain`/`livePrompt`/`autoSwitchKeyboard`
+  reset (now done inside the shared snapshot helper) are **deleted**.
+- Both callers updated: `onStartInputView` (`Pref.TranscriptionAudioFile`,
+  the live caller) + the dead legacy `onRecordingCompleted` callback
+  (kept compiling, routed to the same orchestrator entry-point; the
+  legacy-controller retire is Theme-C/C3 scope per C5-IMPL-2).
+- 4 stale `runTranscriptionViaOrchestrator()` doc references rewritten
+  to point at `captureFreshConfigSnapshot` / the new method (the
+  legacy construction they described was C7-deleted).
+
+**AFTER grep:** `grep -n JobExecutor.INSTANCE.start
+DictateInputMethodService.java` → **exactly 1 site**: `:3222`
+(`startResumeJob` — the RESUME carve-out, C6-IMPL-2). The imported-file
+`:2554` site is gone. **AC-10 fully GREEN modulo the documented RESUME
+exception.** Theme-C legacy-pipeline-trigger retire is unblocked (no
+residual live consumer of the legacy `JobExecutor.start` trigger
+besides the RESUME recovery path).
+
+**Files modified (production — for wave-commit; DISJOINT from test list):**
+- `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java`
+  (method repurpose + legacy `:2554` deletion + 2 caller updates + 4
+  doc-ref rewrites)
+
+**Files modified (test — for wave-commit; DISJOINT from production list):**
+- `app/src/test/java/net/devemperor/dictate/core/ImeRecordingDriveCutoverTest.kt`
+  (2 NEW tests: imported-file `TriggerPipeline` → IME-faithful resolver
+  with no recording FSM; second-trigger-while-running no-op /
+  single-submit guard)
+- `app/src/test/java/net/devemperor/dictate/core/ImePipelineConfigResolverTest.kt`
+  (1 NEW test: imported-file fresh snapshot rebuilds the legacy
+  `:2507-2523` JobRequest field-for-field — R-1/AC-9 config parity)
+
+**Files outside findings-scope (drift):** none. All edits are the
+C7-IMPL-1 orchestrator-route + its tests + the doc-refs the route
+rendered stale (no behaviour change in the doc edits).
+
+**Test result:** `./gradlew assembleDebug` green; `./gradlew test`
+green — 2082 tests across debug+release variants (~1041/variant =
+~1038 baseline + 3 new), 0 failures, 0 errors. The known R-7
+`LegacyAudioFileMigrationTest` / `PipelineRunnerSubsystemAdapterTest`
+order-dependent flake did **not** surface (full suite green; no
+migration/DB files touched by this wave) — not a regression.
+
+**Plan deviations (D22):**
+
+| Deviation | Plan Location | What changed | Why | Impact | Resolved? |
+|-----------|---------------|--------------|-----|--------|-----------|
+| Imported-file path routed via existing `PipelineAction.TriggerPipeline` (no new Action) | C7-IMPL-1 hypothesised "needs a new `RecordingAction`/`PipelineAction` + reducer arm" | Reused the existing documented `TriggerPipeline` entry-point — it already carries exactly `(sessionId, audioFile)` and is what the recording FSM itself emits; a new Action would be a redundant second entry-point for an identical submit | Smaller, more maintainable, fully spec-faithful change than the IMPL agent's worst-case estimate (the C3 submit seam already supported it). Theme-C dead-controller retire unblocked. | resolved (this wave) |
+| Dead `onRecordingCompleted` legacy callback kept (re-routed, not deleted) | — | C7 deleted the legacy record-button branches so the callback is dead, but removing the whole callback structure is broader (Theme-C/C3 dead-controller retire, C5-IMPL-2) than this triage's scope | Minimal, scoped change; the callback compiles + is behaviourally equivalent if any future legacy caller reaches it | scoped-out (Theme-C owns) |
+
+**Self-check (validate-fixes):** Completeness ✓ (C7-IMPL-1 fully
+addressed). New problems ✓ none (build + full suite green). Type-safety
+✓ (no `any`/unchecked casts; `assertSame` import added).
+Imports/exports ✓ (`JobRequest` import retained — still used by RESUME
+`:3197`; no orphaned imports). Consistency ✓ (mirrors the established
+new-path reprocess pattern). Behaviour preserved ✓ (config
+field-faithful via the shared extracted helper; busy-toast + UI
+bookkeeping + live-prompt-chain preserved). Deterministic tests ✓ (the
+new tests reuse the file's existing `pumpUntil` spin-wait discipline +
+`tearDown` JobExecutor/DB reset; no timing/ordering dependency
+introduced). RESUME path untouched ✓. **Convergence: ✓ converged** —
+no new issues, no forwarded issues.
 
 ---
 

@@ -652,10 +652,113 @@ Test breakdown: 304 pre-existing tests (B0/B1/C3/C4) + 110 new C5 tests.
 
 **Agent-IDs:** Steps 1-5 (combined): `B2-C6-IMPL-FULL`
 
-**Status:** ⏳ pending (depends on C5)
+**Status:** ✅ complete (all 5 steps in one invocation)
 **Chunks file:** `../dictate-keyboard-layout-refactor.reviewed.chunks.json` chunk index 7 (C6-modules-auxiliary)
 
-⏳
+#### What was done (B2-C6-IMPL-FULL)
+
+Implemented **9 modules** (per Spec 1 §15.1 module inventory + registry comment in `DictateModuleRegistry.kt`): the 8 from chunks.json (`ResendModule`, `LivePromptModule`, `LanguageModule`, `LayoutModule`, `KeyboardInputModule`, `FeatureToggleModule`, `ThemingModule`, `PendingSessionsModule`) plus the Phase-2 stub `InterruptionModule`. All live in `app/src/main/java/net/devemperor/dictate/state/modules/` (parent package `net.devemperor.dictate.state` per the sealed-interface rule).
+
+`DictateModuleRegistry.Default.all` now contains **14 entries** = 5 core (C5) + 9 added here (8 active + 1 stub), matching the §15.1 inventory ("13 aktive + 1 Phase-2-Stub"). The Action-hierarchy now has 14 inner sealed module-actions + `EffectFailure` = 15 direct subclasses.
+
+A new sealed `Action.ThemingAction` was added (with `SetTheme` / `SetAccentColor` / `SetOverlayCharacters` / `SetOutputSpeed` variants) — there was no `ThemingAction` in the existing hierarchy, which would have left `ThemingModule` without an `actionClass` token to register. The four new leaves mirror the four `ThemingState` fields and `Pref.Theme` / `AccentColor` / `OverlayCharacters` / `OutputSpeed`.
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Added `Action.ThemingAction` sealed class with 4 leaves (`SetTheme`, `SetAccentColor`, `SetOverlayCharacters`, `SetOutputSpeed`) | Spec 1 §15.1 row 11 (Theming) + Action.kt | Plan inventory lists ThemingModule among the 13 active modules, but Action.kt as shipped from C3 had no `ThemingAction` inner sealed. Module registration requires an `actionClass` token. | The four setters mirror the four `ThemingState` fields and `Pref.*` counterparts — the leaves are mechanically derivable from the state shape. | C7 PrefMirror wiring may dispatch these directly when SP changes propagate; no other chunks affected. | inline-fixed (small + locally decidable) |
+| `FeatureToggleAction.ToggleVibration` returns `null` from `FeatureToggleModule.reduce` | Spec 1 §15.1 + Action.kt `FeatureToggleAction` | `vibrationEnabled` lives on `AudioState`, not `FeatureToggles`. Cross-axis writes are forbidden by the lens (ADR-0001). The reducer rejects to preserve purity; the legacy SP-write path keeps the UI functional in Phase 1. | The action lives in `FeatureToggleAction` because that's how the legacy UI groups the 5 toggles. Moving it would also require renaming/relocating the action — out of C6 scope. | B3 may re-route `ToggleVibration` to `Action.AudioAction` when it migrates the click resolver. Documented in `FeatureToggleModule` KDoc. | inline-fixed (small + locally decidable); flagged for B3 attention via module KDoc |
+| `LanguageAction.RefreshFromPref` reducer returns `null` (no state-change) | Spec 1 §15.1 row 9 (Language) | The plan describes LanguageModule as "subsumes today's LanguageController — direct migration". The legacy `core.LanguageController` still owns the SharedPreferences read surface (curated list + pos); Phase 1 keeps the controller and only mirrors `language.effective` from the dispatch path. `RefreshFromPref` carries no payload yet — it's an acknowledgement signal. | Adding the payload now (e.g. `RefreshFromPref(effective: String)`) would force the action's data shape before B3 has wired the resolver. Conservative Phase-1 stub. | B3 wires the legacy controller through `Action.LanguageAction.SetEffective(code)` (or similar) after `RefreshFromPref` becomes payload-bearing. Documented in `LanguageModule` KDoc. | inline-fixed (small); flagged for B3 attention |
+| `PendingSessionsModule.Effect.PersistDismissal` routes through `sessionRepo.markInserted` | Spec 1 §15.1 row 12 (PendingSessions) | The repo subsystem interface (from C4) has `markInserted` / `markFailed`; there's no dedicated `markDismissed` channel. "User acknowledged this session" maps closest to `markInserted` semantics ("the session has been handled by the user"). | A dedicated dismissal channel would require extending `PipelineSessionRepoSubsystem` — that's B3 surface, not C6. | B3 may add `markDismissed` to the subsystem; the module is one-line-swap to use it. Documented in `PendingSessionsModule.runEffect`. | inline-fixed (small + locally decidable) |
+| `ResendModule` cooldown timer driven by externally-dispatched `ResendCooldownExpired` action | Spec 1 §15.1 row 7 (Resend) | The cooldown mechanism is Phase-1 placeholder — a dedicated cooldown subsystem is a Phase-2 nicety. The UI side scheduling `Handler.postDelayed { dispatch(ResendCooldownExpired) }` is the simplest correct mechanism. | The reducer is pure and tests are deterministic (no real timer). | B3/B4 may add a `CooldownTimerSubsystem` to `ModuleServices` if the UI side becomes inconvenient. Documented in `ResendModule` KDoc. | inline-fixed (small) |
+
+#### Inline-fixed items
+
+| File | What was fixed |
+|------|----------------|
+| `app/src/main/java/net/devemperor/dictate/state/Action.kt` | Added `sealed class ThemingAction : Action()` with 4 typed setter leaves. |
+| `app/src/main/java/net/devemperor/dictate/state/DictateModuleRegistry.kt` | Default list grew from 5 (C5) to 14 entries (8 aux + 1 stub from C6). Added explanatory comments grouping core / aux / Phase-2-stub. |
+| `app/src/main/java/net/devemperor/dictate/state/TestOnlyModules.kt` | Updated stale comment that said "C4 ships before any production module is registered" — now correctly notes that tests use ad-hoc registries, not Default. |
+| `app/src/test/java/net/devemperor/dictate/state/ActionHierarchyTest.kt` | Updated `Action sealedSubclasses…` test to expect 14 module sealed actions + EffectFailure (was 13 + EffectFailure). |
+| `app/src/test/java/net/devemperor/dictate/state/DictateModuleRegistryTest.kt` | Updated `production singleton…` test to expect the full 14-entry list (was just the 5 core modules from C5). |
+
+#### Files added (Commit 1 — production code)
+
+| File | Purpose |
+|------|---------|
+| `app/src/main/java/net/devemperor/dictate/state/modules/ResendModule.kt` | Owns `ResendState`; cooldown + lastAudioExists + enabled-pref-mirror. |
+| `app/src/main/java/net/devemperor/dictate/state/modules/LivePromptModule.kt` | Owns `LivePromptState`; enabled + pendingChain. |
+| `app/src/main/java/net/devemperor/dictate/state/modules/LanguageModule.kt` | Owns `LanguageState`; SetOverride + RefreshFromPref ack. |
+| `app/src/main/java/net/devemperor/dictate/state/modules/LayoutModule.kt` | Owns `LayoutState`; **atomic `SetSmallMode` contract** (Spec 2 §4.1 — small + non-MAIN_BUTTONS forbidden, clamped on enable). |
+| `app/src/main/java/net/devemperor/dictate/state/modules/FeatureToggleModule.kt` | Owns `FeatureToggles`; four toggle setters + ToggleVibration deviation. |
+| `app/src/main/java/net/devemperor/dictate/state/modules/ThemingModule.kt` | Owns `ThemingState`; 4 typed setters mirroring Pref.*. |
+| `app/src/main/java/net/devemperor/dictate/state/modules/PendingSessionsModule.kt` | Owns `pendingSessions`; Refresh + Dismiss + PersistDismissal effect. |
+| `app/src/main/java/net/devemperor/dictate/state/modules/KeyboardInputModule.kt` | §15.6 canonical — Unit-state, 4 input effects (Backspace/Enter/Space/Clipboard). |
+| `app/src/main/java/net/devemperor/dictate/state/modules/InterruptionModule.kt` | Phase-2 stub; reducer rejects all actions in Phase 1, reserves ModuleId slot. |
+
+#### Files added (Commit 2 — tests)
+
+| File | Test count | Notes |
+|------|-----------:|-------|
+| `app/src/test/java/net/devemperor/dictate/state/ResendModuleTest.kt` | 11 | cooldown arming + cooldown-blocked no-op + MarkLastAudio idempotency. |
+| `app/src/test/java/net/devemperor/dictate/state/LivePromptModuleTest.kt` | 9 | enable/disable + ChainNext consumes-bit + Disable clears pending. |
+| `app/src/test/java/net/devemperor/dictate/state/LanguageModuleTest.kt` | 7 | SetOverride install/clear/idempotent + RefreshFromPref null + lens. |
+| `app/src/test/java/net/devemperor/dictate/state/LayoutModuleTest.kt` | 15 | **Atomic setSmallMode + ToggleSmallMode tests** (4 dedicated cases) — verifies QWERTZ/EMOJI clamp on enable, no-clamp on disable, idempotency, and the small+non-MAIN_BUTTONS rejection in SetContentArea. |
+| `app/src/test/java/net/devemperor/dictate/state/FeatureToggleModuleTest.kt` | 8 | 4 owned-toggles + ToggleVibration-returns-null deviation test. |
+| `app/src/test/java/net/devemperor/dictate/state/ThemingModuleTest.kt` | 11 | 4 setters × (apply + idempotent) + lens + id + initial. |
+| `app/src/test/java/net/devemperor/dictate/state/PendingSessionsModuleTest.kt` | 7 | Refresh + Dismiss(matching+missing) + PersistDismissal emission + lens. |
+| `app/src/test/java/net/devemperor/dictate/state/KeyboardInputModuleTest.kt` | 7 | 4 action→effect 1:1 mappings + lens write returns same global. |
+| `app/src/test/java/net/devemperor/dictate/state/InterruptionModuleTest.kt` | 6 | All 3 actions return null (Phase-1 stub) + lens accepts a non-null sub-state. |
+
+**Total new tests:** 81. Combined with the existing 414 from earlier chunks, the suite is now **495 tests, 0 failures, 0 errors** across both debug + release variants.
+
+#### Test-Infrastructure implemented
+
+None — all 9 new test files reuse the existing `FakeModuleServices` / `FakeSharedPreferences` testutil from C4 + pure-reducer pattern (no module-services needed for the simple Phase-1 reducers).
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|-------------|--------|--------|
+| IMPL-1 | Nice-to-have | `Action.FeatureToggleAction.ToggleVibration` is a cross-axis action (writes to `AudioState.vibrationEnabled`, not `FeatureToggles`) — currently a `null`-rejecting stub in `FeatureToggleModule.reduce`. Either move it to `Action.AudioAction` or make `vibrationEnabled` a `FeatureToggles` field. | delegated-to-orchestrator | Needs cross-block coordination with B3's click-resolver wiring. Documented in `FeatureToggleModule` KDoc; the legacy UI still has a working SP-write path for Phase 1. |
+| IMPL-2 | Nice-to-have | `Action.LanguageAction.RefreshFromPref` carries no payload — needs an `effective: String` (or similar) field so the dispatch surface is self-contained once B3 migrates the legacy `LanguageController`. | delegated-to-orchestrator | Conservative Phase-1 stub. The legacy controller still owns the SP read; the action just acks the refresh trigger. |
+| IMPL-3 | Nice-to-have | `PendingSessionsModule.Effect.PersistDismissal` routes through `sessionRepo.markInserted` because the subsystem has no dedicated dismissal channel. Cleaner would be `markDismissed` (semantic clarity). | delegated-to-orchestrator | Subsystem-interface change — B3 surface. |
+
+#### Code-Bugs Found While Writing Tests
+
+None.
+
+#### Overlooked points / known gaps
+
+- **Resend cooldown timing is UI-side in Phase 1.** The reducer arms / clears the `resendCooldown` bit, but a real Android `Handler.postDelayed { dispatch(ResendCooldownExpired) }` wiring lives outside C6 (B3 — main-button-controller migration). The reducer is purely deterministic; tests don't validate the timing.
+- **LivePromptModule does not yet emit the actual next-pipeline-trigger** on `ChainNext` (it only clears the `pendingChain` bit). The pipeline-resubmission lives in the resolver/IME layer that already has the audio-file reference — B3 / B5 wires that.
+- **Language module reads no SP.** The legacy `LanguageController` still owns the curated-list + pos read surface. B3 will wire the controller to dispatch typed actions through this module.
+- **No effects in 7 of 9 modules.** Only `PendingSessionsModule` (DB write) and `KeyboardInputModule` (InputConnection + Clipboard) have non-empty effect surfaces in Phase 1. The seven pref-mirror modules (Resend/LivePrompt/Language/Layout/FeatureToggle/Theming/Interruption-stub) emit no effects — the canonical SharedPreferences write happens in `PipelinePrefMirror` (C7).
+- **Cross-module observers absent from all 9 modules** — Spec 1 §15.1 marks these explicitly as observer-free. The observer-rich modules (RecordingModule, PipelineModule, AudioModule, ViewModeModule, OverlayModule) already ship in C5.
+
+#### Self-Code Fix notes (Step 3)
+
+- KDoc cross-references (`@see`) consistently point at Spec 1 §15.1 + ADR-0001 / 0002 anchors.
+- Reducer `when`-blocks are expression-form over the sealed Action sub-class (no `else`-branches, forbidden pattern (c)).
+- Idempotency guards (`if (action.x != state.x) ...` returning `null` on equal) applied uniformly across the four pref-mirror modules to keep store-subscribers from re-rendering on no-op dispatches (Phase-B S-9 distinct-emit Vertrag).
+- All effect handlers wrap `services.scope.launch { ... }` for DB calls (`PendingSessionsModule.PersistDismissal`) so the dispatch thread stays unblocked.
+
+#### Build + test results (final)
+
+```
+./gradlew test  → BUILD SUCCESSFUL
+Tests: 495, failures: 0, errors: 0 (both debug + release variants)
+```
+
+#### Tests (B2-C6-IMPL-TEST + B2-C6-IMPL-TEST-FIX)
+
+Per the combined-step pattern, test writing + review are inline in the IMPL pass. Coverage summary:
+
+- All 4 sub-classes of each module Action surface covered with ≥1 reducer test (some with idempotency + edge-case variants).
+- Atomic `setSmallMode` invariant verified in 4 dedicated LayoutModule tests (`ToggleSmallMode false→true atomically clamps`, `Toggle…with EMOJI_PICKER also clamps`, `Toggle…true→false leaves contentArea alone`, `SetSmallMode(true) atomically clamps`).
+- Lens round-trip + module-id + initial state covered for every module.
+- DictateModuleRegistry + ActionHierarchy tests updated to reflect the new 14-module population + 14-action-sealed hierarchy.
 
 ---
 

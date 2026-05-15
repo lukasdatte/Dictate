@@ -32,20 +32,27 @@ class DictateModuleRegistryTest {
     }
 
     @Test
-    fun `production singleton contains the 5 core modules from C5`() {
-        // C5 populates `Default.all` with the 5 core modules
-        // (Recording / Pipeline / Audio / ViewMode / Overlay). C6 will
-        // append the 8 auxiliary modules; this assertion grows then.
-        //
+    fun `production singleton contains 13 active modules plus the Phase-2 stub (C5 + C6)`() {
         // Order is a binding contract (cascade order, ADR-0002) — the
         // list literal in `DictateModuleRegistry.Default` is the single
-        // source of truth.
+        // source of truth. 5 core (C5) + 8 aux (C6) + 1 Phase-2 stub
+        // (InterruptionModule) = 14 entries; the §15.1 module inventory
+        // calls this "13 aktive + 1 Phase-2-Stub".
         val expected: List<DictateModule<*, *, *>> = listOf(
             RecordingModule,
             PipelineModule,
             AudioModule,
             ViewModeModule,
             OverlayModule,
+            ResendModule,
+            LivePromptModule,
+            LanguageModule,
+            LayoutModule,
+            FeatureToggleModule,
+            ThemingModule,
+            PendingSessionsModule,
+            KeyboardInputModule,
+            InterruptionModule,
         )
         assertEquals(expected, DictateModuleRegistry.Default.all)
     }

@@ -294,6 +294,7 @@ triage armed for C3/C4/C5 (architecture-conflict / blocks-following-chunks).
 
 | Wave-ID | Caller | Iter | Findings (🟢/🟡/❌) | Outcome | Wave-commit |
 |---------|--------|------|---------------------|---------|-------------|
+| B1-VAL-W1 | Block-Validate B1 (4 audits: PLAN-AND-API + CONVENTION + LOGIC + TEST) | 1 | 🟢5 / 🟡1 / ❌1 (9 raw → 7 unique; 0 Crit / 2 Imp / 5 NTH). 🟡 F-1 = isStarting inert dead-code; research `sendstaging-isstarting-guard-semantics` → **Option (b)** (delete inert trio, FSM-edge is canonical guard, amend Epic AC-4/§4-A1 + F-12 tests — code+spec+Epic agree, D4). 3 C1-A1/C2-A2 plan-deviation-resolved issues all CONFIRMED-JUSTIFIED. F-5 ❌ (F-15 raw lang code intentional-deferred). | ✓ converged 1 wave (soft-cap 3 not approached); 964 tests green; assembleDebug green | 48e3be5 |
 
 ## Postponed Issues
 
@@ -324,6 +325,7 @@ verification GATE — Phase 4.5 is the post-all-blocks holistic re-run.)
 | Block | Block-Start-Commit | Block-End-Commit | Status |
 |-------|--------------------|--------------------|--------|
 | (Epic-start baseline) | 65bb303 | — | — |
+| B1 (Theme A — state-shape) | 58bb9a1 | 48e3be5 | ✅ (C1-A1 + C2-A2; VAL-W1 1 wave; 964 tests green; Epic AC-4/§4-A1 amended per F-1 option-b — documented plan-deviation) |
 
 ---
 
@@ -338,6 +340,7 @@ verification GATE — Phase 4.5 is the post-all-blocks holistic re-run.)
 | Timestamp | Phase | Action | Outcome |
 |-----------|-------|--------|---------|
 | 2026-05-15 | Phase 0 | Epic state-file created in worktree feature/dictate-keyboard-layout-refactor; reports/ dir created; Epic file committed (65bb303). Plan in-place (no mv). Doc-landscape probed: docs/decisions/ (5 ADRs) + docs/architecture/state-architecture/ exist (parent plan B0). Phase-4.6 activation `full` (skill-default, "ohne Walkthrough"). | ✅ |
+| 2026-05-15 | Phase 3.2 B1 | Block-Validate B1: 4-topic audit (PLAN-AND-API/CONVENTION/LOGIC/TEST) → 0 Crit / 2 Imp / 5 NTH raw → VAL-SANITY 7 unique → 🟢5 / 🟡1 / ❌1. B1-VAL-W1 (combined research+repair+self-check, SendMessage unavailable): 🟡 F-1 isStarting-inert → research → **Option (b)** delete inert trio + amend Epic AC-4/§4-A1 + F-12 tests (Spec1 §3 canonical ReprocessStaging has no isStarting; FSM-edge is the real guard; main-thread dispatch ADR-0001). 5 🟢 fixed (doc-drift cluster, UUID-import, completedSteps-comment, F-7 require(sessionId.isNotBlank)+regression). F-5 ❌. 3 C1-A1/C2-A2 plan-deviation-resolved CONFIRMED-JUSTIFIED. 964 tests green. Wave-commit 48e3be5. **Block B1 ✅ COMPLETE** (D2 — converged 1 wave). | ✅ |
 | 2026-05-15 | Phase 3.1 B1-C2-A2 | B1-C2-A2-IMPL combined Steps 1-5: F-10 real sessionId (threaded through RecordingState.Preparing/Active/Paused + StartRecording; StopRecordingAndSend → payload-less data object; `grep sessionId=""` → zero) + F-15 language-aware dictateButtonText (reads state.language.effective read-only, no legacy writer, D-13 untouched). 8 prod files, 14 test files (12 sibling compile-fix updates), 964-test suite green, assembleDebug green. FSM graph unchanged (payload-only widening, Spec1 §15.2 faithful). 2 Important deviations delegated for B1 Block-Validate (IMPL-PLAN-FIX-1 sessionId-on-RecordingState Epic-authorised; IMPL-PLAN-FIX-2 StopRecordingAndSend payload removed → cross-block FN-4 to B3). No Critical/architecture-conflict → no mid-chunk-triage. Commit 1 d236ab2 + Commit 2 015b616. | ✅ |
 | 2026-05-15 | Phase 3.1 B1-C1-A1 | B1-C1-A1-IMPL combined Steps 1-5: F-12 isStarting + F-13 Running counters (completedSteps/totalSteps/startedAtMs/elapsedMs) + B4 placeholder replaced. 3 prod files, 2 test files (+15 @Test), 959-test suite green, assembleDebug green, additive/source-compatible confirmed. 3 deviations inline-resolved (Dev-1 StepStarted no totalSteps payload; Dev-2 SendStaging keeps →Preparing edge — flagged IMPL-PLAN-FIX-1 Important `plan-deviation-resolved` for B1 Block-Validate to confirm; Dev-3 added startedAtMs reducer-baseline). No Critical/architecture-conflict → no mid-chunk-triage. Commit 1 9bacace (prod) + Commit 2 ca5dbed (tests). | ✅ |
 | 2026-05-15 | Phase 1a | B0-PLAN-ANALYSIS agent created dictate-cutover-completion.chunks.json: 12 chunks, 4 skill-blocks (B1=Theme A 2ch, B2=Theme B+D2pre-gate 5ch, B3=Theme C 3ch, B4=Theme D 2ch), aggregate Impl-Score ≈9900. Modular-pattern: each chunk carries spec_references + targeted_sub_sections pointing at parent plan's 3 specs (NOT re-chunked). D2-pre gate (C6) modelled as atomic verification-chunk between C5(guarded flip) + C7(legacy deletion); C7 + all B3 hard-gated on green C6. Epic author's EXECUTION-PLAN breakdown adopted in full (no defect). Off-by-one "9 vs 10 blocks" prose noted (no chunking impact). Spec heading-refs all validated via plan-reader. | ✅ |

@@ -675,13 +675,22 @@ forward to B3 (no state-file edit made — block-report only, per prompt).
 
 ## Block Closeout (Orchestrator)
 
-- **All chunks complete (5-step, both commits):** ⏳
-- **Block-Validate converged:** ⏳
-- **AUDIT-TEST: coverage + no cross-chunk regressions:** ⏳
-- **Build green at block-end:** ⏳
-- **Issue index reconciled:** ⏳
-- **Conventions section filled:** ⏳
-- **Cross-block-API consumer info forwarded to B2:** ⏳
+- **All chunks complete (5-step, both commits):** ✅ C1-A1 (9bacace+ca5dbed) · C2-A2 (d236ab2+015b616)
+- **Block-Validate converged:** ✅ 1 wave (B1-VAL-W1 48e3be5; soft-cap 3 not approached)
+- **AUDIT-TEST: coverage + no cross-chunk regressions:** ✅ 964 tests green; ~100% new-branch coverage; 12 C2-A2 sibling-test edits = pure compile-fixes (no weakened assertions)
+- **Build green at block-end:** ✅ `./gradlew assembleDebug` + `./gradlew test`
+- **Issue index reconciled:** ✅ 3 plan-deviation-resolved CONFIRMED-JUSTIFIED; F-1 option-b; 5 🟢 fixed; F-5 ❌
+- **Conventions section filled:** ✅ sealed-class reducer + handwritten-fake conventions consistent with siblings
+- **Cross-block-API consumer info forwarded to B2/B3:** ✅ state-file FN-1..FN-4 + F-7 (B3 mints non-blank UUID for StartRecording; StopRecordingAndSend payload-less; sessionId flows via StartRecording→RecordingState)
 
-**Block completed at:** ⏳
-**Block-End-Commit:** ⏳
+**Plan-deviation of note (Phase 4.7):** F-1 option-(b) amended the **Epic
+itself** — §2 AC-4 (`!isStarting` removed) + §4-A1 (`copy(isStarting=true)`
+removed). Justified: the Epic's literal F-12 pseudo-code was based on a
+legacy `core/PipelineUiState.kt` carry-over field absent from canonical
+Spec 1 §3. Code + spec + Epic now agree (D4). See
+research/sendstaging-isstarting-guard-semantics.md.
+
+**Block completed at:** 2026-05-15
+**Block-End-Commit:** 48e3be5
+**Cross-reference set in state file:** ✅
+**Postponed issues forwarded to phase 4 aggregate:** 0

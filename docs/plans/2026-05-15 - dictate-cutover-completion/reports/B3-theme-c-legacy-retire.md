@@ -270,8 +270,172 @@ complete. No quality issues found.
 
 ### Chunk C9-C2 — audioFile field removal (D-14)
 
-**Agent-IDs:** `B3-C9-C2-IMPL` · **Status:** ⏳ pending · **Risk:** MED (R-5 non-recording reads)
-(subsections filled when chunk runs)
+**Agent-IDs:** `B3-C9-C2-IMPL` (fresh, combined Steps 1-5).
+**Status:** ✅ done (Steps 1-5, both commit-boundaries) · **Risk:** MED (R-5 non-recording reads) — **R-5 verdict: GREEN (every site provably correctly sourced; resend/migration never touched the field)**
+**Implementation-Commit (Commit 1):** ⏳ (orchestrator) · **Test-Commit (Commit 2):** ⏳ (orchestrator)
+
+#### What was done (Steps 1-5)
+
+Deleted the `DictateInputMethodService.audioFile` field. Verified the
+**current** line via grep (decl was `:240`, not Epic's stale `:222` —
+C8 shifted the file as warned). All field use-sites re-sourced from
+their correct post-cutover source: recording-active reads from the
+orchestrator `state.recording` payload (Spec 1 §15.2), scratch-handle
+uses kept as method-locals (`CacheDirAudioFileFactory.allocate()` /
+imported-file `new File(...)`), and the shared
+`captureFreshConfigSnapshot` / `transcribeImportedAudioFileViaOrchestrator`
+helpers now take the file as a parameter instead of reading a field.
+
+A canonical Kotlin accessor `RecordingState.audioFileOrNull` was added
+to `state/DictateUiState.kt` next to the sibling `isActiveOrPaused`
+extension (same documented DRY rationale — the sealed-interface payload
+extraction would otherwise be an `is`-cascade at the IME read site).
+This is the documented Dev-1 deviation (plan said "DictateInputMethodService.java
+only", but the plan *also* mandates sourcing recording-active reads
+"from orchestrator state" — the accessor is the minimal, plan-faithful
+way to do that from Java).
+
+#### MANDATORY per-site source-analysis table (R-5 evidence)
+
+Field decl + 8 field use-sites traced individually. (Line numbers are
+pre-edit; the field was at `:240`, NOT the Epic's stale `:222`/`:1374`/
+… — C8 shifted the IME file, re-grepped as the prompt directed.)
+
+| Pre-edit line | Usage (read/write, context) | old: `this.audioFile` | new source | why this source is correct | risk |
+|---|---|---|---|---|---|
+| `:240` | field declaration | `private File audioFile;` | **deleted** | the field is the removal target (AC-6) | — |
+| `:1397` | write — dead `onRecordingCompleted(File file)` legacy callback (dead post-C7: legacy controller never started on new path) | `audioFile = file;` then read at `:2655` | pass `file` → `transcribeImportedAudioFileViaOrchestrator(file)` param | the callback already receives the file as a param; the field was only a bridge to the downstream read. Param threads the exact handle. Dead path but kept behaviour-equivalent. | LOW (dead path) |
+| `:2003` | write — Settings audio-import path in `onStartInputView` | `audioFile = new File(cacheDir/audio, Pref.TranscriptionAudioFile)` | method-local `File importedAudio = new File(...)` | an import has **no orchestrator recording session** → not in `state.recording`; it is a scratch handle local to this import flow. Traced: this is the *import* non-recording read, distinct from resend. | MED→LOW (non-recording, traced) |
+| `:2004` | read `.getName()` — `Pref.LastFileName` write | `audioFile.getName()` | `importedAudio.getName()` (same local, same instant) | identical value; LastFileName semantics unchanged (b3-cleanup research §6: LastFileName is the persistent last-recording filename, independent of the live handle) | LOW |
+| `:2345` | write — `startRecording()` | `audioFile = pipelineBinder.getAudioFileFactory().allocate()` | method-local `File audioFile` | the just-allocated file is handed to the orchestrator via `StartRecording` and becomes `RecordingState`'s authoritative payload (Spec 1 §15.2; B2 C5-B3 report confirms FSM carries it). The IME field was a redundant mirror. | MED→LOW (recording path; orchestrator is post-cutover SoT) |
+| `:2357` | read `.getName()` — `Pref.LastFileName` write | `audioFile.getName()` | local `audioFile.getName()` (same local, same instant) | identical value, same allocation instant | LOW |
+| `:2371` | read — `StartRecording(target, audioFile, id)` dispatch | field | local `audioFile` | passes the just-allocated file *into* the FSM where it becomes the SoT | LOW |
+| `:2481` | read `.getAbsolutePath()` — `captureFreshConfigSnapshot()` | field | **parameter** `File audioFile` | `stopRecording()` caller sources it from `RecordingState.Active/Paused.audioFile` via `pipelineBinder.getState()` + `audioFileOrNull` (post-cutover authoritative, Spec 1 §15.2). Guarded: `stopRecording()` early-returns if `pipelineBinder == null` (`:2393`); the Active/Paused guard (`:2422`) guarantees non-null, plus an explicit defensive null-bail added. Import caller passes its local. | **MED (R-5 core)** — recording: state; import: param. **Both traced.** |
+| `:2655` | read — `TriggerPipeline(sessionId, audioFile)` dispatch in `transcribeImportedAudioFileViaOrchestrator()` | field | **parameter** `File audioFile` | the two callers thread the correct file explicitly: `:1397` dead-legacy → its `file` param; `:2007` import → `importedAudio` local. No field. | LOW (param from traced callers) |
+| `:2787`/`:2792` | `onAudioPersisted(File audioFile, …)` | **method parameter** (shadowed the field) | unchanged | already a parameter — never referenced the field (Epic confirmed) | NONE |
+| `:2641` | comment "it reads the IME `audioFile` field" | comment | rewritten to describe the param | doc-only | NONE |
+
+**R-5 trap analysis — resend + legacy-migration (the load-bearing risk):**
+
+- **Resend** (`handleReprocessSend`, `:3431`): sources the audio file
+  from the **Room DB** — `session.getAudioFilePath()` for the target
+  session. It **never referenced the `audioFile` field** (verified by
+  grep + reading the full method). R-5 resend concern: **not
+  applicable** — the field was structurally uninvolved in resend.
+- **Legacy-migration / resend-button visibility** (`:877`, `:1934`,
+  `:2474`, `:2515`): all source from `new File(getCacheDir(),
+  Pref.LastFileName)` **directly**, never the field. The Epic's
+  `:1880`/`:2104` "non-recording read" line numbers are stale; the
+  *actual* non-recording reads that exist source from `Pref.LastFileName`
+  / DB, not the field. The field's only roles were: (a) fresh-recording
+  scratch handle (now `RecordingState`), (b) import scratch handle (now
+  a local), (c) bridge into the two shared helpers (now params).
+
+**Verdict:** all 9 sites provably correctly sourced. **Zero sites
+flagged** — no guessed source. R-5 GREEN: the field never participated
+in resend or migration, so removing it cannot break them; the only
+behaviour-bearing re-source (the fresh-recording send-tap) reads the
+orchestrator's authoritative `state.recording` payload, the documented
+post-cutover SoT.
+
+#### BEFORE / AFTER grep (AC-6)
+
+| Command | BEFORE | AFTER |
+|---|---|---|
+| `grep -n "private File audioFile" …/DictateInputMethodService.java` | `240: private File audioFile;` (1 hit) | **ZERO hits — AC-6 PASS** (exit 1 verified) |
+| `grep -n "audioFile" …/DictateInputMethodService.java` | 11 lines (field + 8 field-use + onAudioPersisted param + comment) | 14 lines — all method-locals (`:2350/2352/2364/2378`), the `captureFreshConfigSnapshot(String,File)` + `transcribeImportedAudioFileViaOrchestrator(File)` params + their uses, the `onAudioPersisted` param, a log string, and updated comments. **No field, no `this.audioFile`, no bare-field ref.** |
+
+#### Resend + migration still work (acceptance)
+
+- **Resend:** unchanged — `handleReprocessSend` reads `session.getAudioFilePath()`
+  (DB), code path not touched by this chunk (zero edits in/around `:3431`).
+- **Legacy-migration:** unchanged — sources from `Pref.LastFileName`,
+  code path not touched. `LegacyAudioFileMigrationTest` passes
+  **isolated** (8 tests, 0 fail). The full `testReleaseUnitTest`
+  BUILD-FAILED is the **pre-existing C8-IMPL-1 pollution flake**
+  (DB-singleton/`DurationHealingJob` shared-state axis) — NOT a
+  regression: my change does not touch the audioFile/migration axis
+  (resend/migration source from `Pref.LastFileName`/DB, never the
+  deleted field), and full `testDebugUnitTest` is green (1048/0/0).
+  Documented per the acceptance note — my re-sourcing does not worsen
+  the C8-IMPL-1 axis.
+
+#### Build + test (AC-9)
+
+- `./gradlew assembleDebug` → **BUILD SUCCESSFUL**.
+- `./gradlew testDebugUnitTest` → **BUILD SUCCESSFUL**, **1048 tests,
+  0 failures, 0 skipped** (baseline ~1043 + 5 new `audioFileOrNull`
+  tests).
+
+#### Disjoint commit-boundary file lists
+
+**=== COMMIT 1 (production) ===**
+- `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java`
+- `app/src/main/java/net/devemperor/dictate/state/DictateUiState.kt` (new `audioFileOrNull` accessor — Dev-1)
+
+**=== COMMIT 2 (tests) ===**
+- `app/src/test/java/net/devemperor/dictate/state/DictateUiStateTest.kt` (5 new `audioFileOrNull` cases)
+
+(lists are disjoint — production vs test)
+
+#### Deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Dev-1 | Epic §4 Block C2 ("Files: `DictateInputMethodService.java` only"); chunks.json `files_estimate: 1` | Added `RecordingState.audioFileOrNull` extension to `state/DictateUiState.kt` | The plan *also* mandates "recording-active reads → orchestrator state (`state.recording`)". Extracting `audioFile` from the sealed `RecordingState` interface in Java needs either an `is`-cascade at the read site or a canonical accessor. The project's own documented convention (`DictateUiState.kt:187` `isActiveOrPaused`) is a centralised extension next to the FSM definition — the most plan-compatible, DRY, sustainable solution. One extra production file, additive (no behaviour change to existing callers). | C10-C3 (dead-controller retire) may consume the same accessor when collapsing legacy recording-UI reads; it is the canonical sealed-payload accessor going forward. | inline-fixed (small + locally decidable — the plan's own "source from state.recording" requirement forces a state-side accessor; project convention dictates its form) |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| (none) | — | All 9 sites provably correctly sourced; no guessed source, no architecture conflict, no state-shape change needed. The pre-existing `LegacyAudioFileMigrationTest` release-suite flake is C8-IMPL-1 (already delegated to B3 AUDIT-TEST) — confirmed unrelated to this chunk (no audioFile/migration-axis edit; isolated test green). | — | — |
+
+#### Code-Bugs Found While Writing Tests (Step 4)
+
+(none — the new `audioFileOrNull` accessor and the IME re-sourcing are
+covered by the 5 new tests; all green first run. No production bug
+surfaced.)
+
+#### Test-Review (Step 5)
+
+5 new tests in `DictateUiStateTest.kt` cover all 4 `when`-arms of
+`audioFileOrNull` (Preparing/Active/Paused → file; Idle → null) plus
+the R-5 handle-identity invariant (`assertSame` proves the *exact*
+minted handle is returned across Preparing→Active→Paused, not a
+re-derived path — this is the precise R-5 risk under test). Branch
+coverage of the new accessor is 100% (exhaustive sealed `when`, all
+arms exercised). Test names describe behaviour; assertions use
+`assertSame`/`assertNull` (identity, the load-bearing property), no
+weak assertions. No quality issues; no fixes needed.
+
+#### Files modified — drift classification
+
+- **In plan-prescribed scope:** `DictateInputMethodService.java` (Epic
+  §4 Block C2 "Files: …only"); `DictateUiStateTest.kt` (test for the
+  diff).
+- **Drift (touched, not directly named):** `DictateUiState.kt` —
+  Dev-1; the plan's "source from `state.recording`" mandate forces a
+  state-side accessor, project convention (`isActiveOrPaused` sibling)
+  dictates its form. Additive, no behaviour change to existing callers.
+
+#### Overlooked points / known gaps
+
+- The Epic's site line numbers (`:222/:1374/:1880/:2104/…`) were stale
+  pre-C8; the prompt anticipated this and directed a re-grep — done.
+  The Epic's "`:1880` legacy-migration / `:2104` resend" *field* reads
+  do not exist as field reads in the current code: those paths source
+  from `Pref.LastFileName`/DB independently of the field. This is a
+  *favourable* finding (less R-5 surface than the Epic feared), but
+  noting it so a reviewer does not look for field-based migration/resend
+  reads that were never there.
+- `onAudioPersisted(File audioFile, …)` keeps a *parameter* named
+  `audioFile` — intentionally not renamed (it shadowed nothing after
+  the field deletion; renaming would be churn with no clarity gain;
+  it is unambiguously a method param).
+- C8-IMPL-1 (`LegacyAudioFileMigrationTest` release-suite pollution
+  flake) remains delegated to B3 AUDIT-TEST — confirmed here as
+  unrelated to C9-C2 (no audioFile/migration-axis code edit; the test
+  passes isolated).
 
 ---
 
@@ -309,6 +473,7 @@ complete. No quality issues found.
 |---|---------------|--------------|-----|--------|--------------|--------------|--------------|
 | Dev-1 | Epic §4 Block C1 (RefreshFromPref dispatch pattern) | `RefreshFromPref` `data object` → `data class(effective)`; reducer writes `effective` | Phase-1 reducer was a no-op + PrefMirror does not mirror language ⇒ `LanguageState.effective` would stay `"system"` (latent F-15 bug); Spec 1 §4.11 + module KDoc anticipated the payload promotion | Any future LanguageAction consumer; placeholder test usages updated; F-15 now live | yes (`plan-deviation-resolved`) | `B3-C8-C1-IMPL` | Step 2 |
 | Dev-2 | Epic §4 Block C1 (caller graph / R-3) | `onServiceConnected` re-pushes `pushPermanentLanguageToOrchestrator()` | Boot-before-bind race: onCreateInputView push runs before binder arrives → `effective` stays `"system"`; plan mandates documenting the ordering + `pipelineBinder != null` discipline | IME-internal, idempotent; closes R-3 silent-stale risk | yes | `B3-C8-C1-IMPL` | Step 2 |
+| Dev-3 (chunk-local Dev-1) | Epic §4 Block C2 ("Files: `DictateInputMethodService.java` only") | Added `RecordingState.audioFileOrNull` extension to `state/DictateUiState.kt` | The plan also mandates "recording-active reads → orchestrator state (`state.recording`)"; sourcing the sealed-`RecordingState` `audioFile` from Java needs a canonical accessor — project convention is a centralised extension next to the FSM def (`isActiveOrPaused` sibling). Most plan-compatible/DRY. Additive, no behaviour change. | C10-C3 may consume the same canonical accessor when collapsing legacy recording-UI reads | yes (small + locally decidable — plan's own state-source mandate forces it) | `B3-C9-C2-IMPL` | Step 2 |
 
 ---
 

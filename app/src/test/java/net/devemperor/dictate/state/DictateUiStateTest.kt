@@ -137,6 +137,67 @@ class DictateUiStateTest {
     }
 
     // ────────────────────────────────────────────────────────────────
+    // RecordingState.audioFileOrNull (D-14 / C9-C2)
+    //
+    // Post-cutover the IME's removed `audioFile` field is sourced from
+    // this canonical accessor: the orchestrator state is the single
+    // authoritative source for the in-flight recording's audio file.
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `audioFileOrNull returns the file for Preparing`() {
+        val f = File("/cache/audio/abc.m4a")
+        val state: RecordingState =
+            RecordingState.Preparing(useBluetooth = true, audioFile = f, sessionId = "sid")
+
+        assertSame(f, state.audioFileOrNull)
+    }
+
+    @Test
+    fun `audioFileOrNull returns the file for Active`() {
+        val f = File("/cache/audio/abc.m4a")
+        val state: RecordingState =
+            RecordingState.Active(useBluetooth = false, audioFile = f, sessionId = "sid")
+
+        assertSame(f, state.audioFileOrNull)
+    }
+
+    @Test
+    fun `audioFileOrNull returns the file for Paused`() {
+        val f = File("/cache/audio/abc.m4a")
+        val state: RecordingState =
+            RecordingState.Paused(useBluetooth = false, audioFile = f, sessionId = "sid")
+
+        assertSame(f, state.audioFileOrNull)
+    }
+
+    @Test
+    fun `audioFileOrNull is null for Idle`() {
+        val state: RecordingState = RecordingState.Idle
+
+        assertNull(state.audioFileOrNull)
+    }
+
+    @Test
+    fun `audioFileOrNull preserves the exact handle minted at StartRecording`() {
+        // The IME mints the file once (factory.allocate / import) and the
+        // FSM carries it Preparing → Active → Paused unchanged — the
+        // send-tap must read back the SAME handle, not a re-derived path
+        // (R-5: a wrong source silently breaks the transcription).
+        val minted = File("/cache/audio/de305d54-75b4.m4a")
+        val preparing: RecordingState =
+            RecordingState.Preparing(useBluetooth = true, audioFile = minted, sessionId = "s")
+        val active: RecordingState =
+            RecordingState.Active(useBluetooth = true, audioFile = minted, sessionId = "s")
+        val paused: RecordingState =
+            RecordingState.Paused(useBluetooth = true, audioFile = minted, sessionId = "s")
+
+        assertSame(minted, preparing.audioFileOrNull)
+        assertSame(minted, active.audioFileOrNull)
+        assertSame(minted, paused.audioFileOrNull)
+    }
+
+    // ────────────────────────────────────────────────────────────────
     // PipelineUiState sealed hierarchy
     // ────────────────────────────────────────────────────────────────
 

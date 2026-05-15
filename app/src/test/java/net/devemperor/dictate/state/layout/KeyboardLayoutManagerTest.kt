@@ -1,0 +1,232 @@
+package net.devemperor.dictate.state.layout
+
+import net.devemperor.dictate.state.Action
+import net.devemperor.dictate.state.DictateUiState
+import net.devemperor.dictate.state.LayoutState
+import net.devemperor.dictate.state.PipelineUiState
+import net.devemperor.dictate.state.ViewMode
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
+import org.junit.Test
+
+/**
+ * Tests for [KeyboardLayoutManager] — the render-orchestrator.
+ *
+ * Focus areas:
+ *
+ * 1. **Multi-backend fan-out** — every state-emit reaches every attached
+ *    backend whose `backendType` matches (or is `null`).
+ * 2. **Mode selection** — `computeLayoutMode(state)` picks correctly for
+ *    every `ViewMode` × `pipeline` × `singleRowMode` combination
+ *    (Spec 2 §4 + §8.6).
+ * 3. **Attach / detach lifecycle** — backends get exactly one `attach` and
+ *    one `detach`, the click-sink is wired through.
+ * 4. **Initial render on attach** — a backend attached mid-session sees
+ *    the current state immediately (no blank-frame flash).
+ */
+class KeyboardLayoutManagerTest {
+
+    private val catalog = LayoutCatalog(testLayoutStrings())
+    private val emittedActions = mutableListOf<Action>()
+    private val manager = KeyboardLayoutManager(catalog) { action -> emittedActions.add(action) }
+
+    // ─── Attach lifecycle ──────────────────────────────────────────────
+
+    @Test
+    fun `attachBackend wires onAction sink`() {
+        val backend = TestRenderBackend()
+        manager.attachBackend(backend)
+        backend.simulateClick(Action.KeyboardInputAction.Backspace)
+        assertEquals(listOf(Action.KeyboardInputAction.Backspace), emittedActions)
+    }
+
+    @Test
+    fun `attachBackend invokes attach exactly once`() {
+        val backend = TestRenderBackend()
+        manager.attachBackend(backend)
+        assertEquals(1, backend.attachCount)
+    }
+
+    @Test
+    fun `attachBackend twice raises IllegalStateException`() {
+        val backend = TestRenderBackend()
+        manager.attachBackend(backend)
+        assertThrows(IllegalStateException::class.java) {
+            manager.attachBackend(backend)
+        }
+    }
+
+    @Test
+    fun `attachBackend re-renders current state to the new backend`() {
+        val backend = TestRenderBackend()
+        manager.onStateChanged(stateForKeyboard(singleRow = false))
+        // Backend attached AFTER the state emit — must still see it on
+        // attach so the user doesn't get a blank UI frame.
+        manager.attachBackend(backend)
+        assertEquals(1, backend.renderCount)
+        assertSame(catalog.KEYBOARD_TWO_ROW, backend.lastMode)
+    }
+
+    // ─── Detach lifecycle ──────────────────────────────────────────────
+
+    @Test
+    fun `detachBackend invokes detach and stops future renders`() {
+        val backend = TestRenderBackend()
+        manager.attachBackend(backend)
+        manager.detachBackend(backend)
+        manager.onStateChanged(stateForKeyboard(singleRow = false))
+        assertEquals(1, backend.detachCount)
+        // The first render is the on-attach replay (currentState was
+        // null, so attachBackend skipped it); after detach, the manager
+        // emits to no one.
+        assertEquals(0, backend.renderCount)
+    }
+
+    @Test
+    fun `detachBackend on unknown backend is a no-op`() {
+        val unattached = TestRenderBackend()
+        // No exception thrown — defensive lifecycle.
+        manager.detachBackend(unattached)
+        assertEquals(0, unattached.detachCount)
+    }
+
+    @Test
+    fun `detachAll tears down every attached backend`() {
+        val a = TestRenderBackend()
+        val b = TestRenderBackend()
+        manager.attachBackend(a)
+        manager.attachBackend(b)
+        manager.detachAll()
+        assertEquals(1, a.detachCount)
+        assertEquals(1, b.detachCount)
+        assertEquals(0, manager.attachedBackendCount())
+    }
+
+    // ─── Fan-out ───────────────────────────────────────────────────────
+
+    @Test
+    fun `onStateChanged renders to every backend whose backendType matches`() {
+        val ime = TestRenderBackend(backendType = BackendType.IME_VIEW)
+        val crossCutting = TestRenderBackend(backendType = null)
+        val overlay = TestRenderBackend(backendType = BackendType.OVERLAY_WINDOW)
+        manager.attachBackend(ime)
+        manager.attachBackend(crossCutting)
+        manager.attachBackend(overlay)
+
+        // KEYBOARD ViewMode → IME_VIEW mode.
+        manager.onStateChanged(stateForKeyboard(singleRow = false))
+
+        // ime + crossCutting both see the render; overlay skipped.
+        assertEquals(1, ime.renderCount)
+        assertEquals(1, crossCutting.renderCount)
+        assertEquals(0, overlay.renderCount)
+    }
+
+    @Test
+    fun `onStateChanged routes WIDGET viewMode to OVERLAY_WINDOW backends`() {
+        val ime = TestRenderBackend(backendType = BackendType.IME_VIEW)
+        val overlay = TestRenderBackend(backendType = BackendType.OVERLAY_WINDOW)
+        manager.attachBackend(ime)
+        manager.attachBackend(overlay)
+
+        manager.onStateChanged(DictateUiState.initial().copy(viewMode = ViewMode.WIDGET))
+
+        assertEquals(0, ime.renderCount)
+        assertEquals(1, overlay.renderCount)
+        assertSame(catalog.OVERLAY_5BUTTON, overlay.lastMode)
+    }
+
+    @Test
+    fun `onStateChanged routes HOVER viewMode to OVERLAY_WINDOW backends`() {
+        val overlay = TestRenderBackend(backendType = BackendType.OVERLAY_WINDOW)
+        manager.attachBackend(overlay)
+
+        manager.onStateChanged(DictateUiState.initial().copy(viewMode = ViewMode.HOVER))
+
+        assertEquals(1, overlay.renderCount)
+        assertSame(catalog.OVERLAY_5BUTTON, overlay.lastMode)
+    }
+
+    // ─── Mode selection (Spec 2 §8.6) ─────────────────────────────────
+
+    @Test
+    fun `computeLayoutMode returns KEYBOARD_TWO_ROW for keyboard idle two-row`() {
+        val state = stateForKeyboard(singleRow = false)
+        assertSame(catalog.KEYBOARD_TWO_ROW, manager.computeLayoutMode(state))
+    }
+
+    @Test
+    fun `computeLayoutMode returns SINGLE_ROW for keyboard idle single-row`() {
+        val state = stateForKeyboard(singleRow = true)
+        assertSame(catalog.KEYBOARD_SINGLE_ROW, manager.computeLayoutMode(state))
+    }
+
+    @Test
+    fun `computeLayoutMode picks SEND_MODE for active pipeline`() {
+        val state = stateForKeyboard(singleRow = false).copy(
+            pipeline = PipelineUiState.Preparing("s1"),
+        )
+        assertSame(catalog.KEYBOARD_TWO_ROW_SEND_MODE, manager.computeLayoutMode(state))
+    }
+
+    @Test
+    fun `computeLayoutMode picks REPROCESS_STAGING for staging state`() {
+        val state = stateForKeyboard(singleRow = false).copy(
+            pipeline = PipelineUiState.ReprocessStaging("s1", "transcript"),
+        )
+        assertSame(catalog.KEYBOARD_REPROCESS_STAGING, manager.computeLayoutMode(state))
+    }
+
+    @Test
+    fun `computeLayoutMode picks OVERLAY for non-KEYBOARD viewModes`() {
+        val widget = DictateUiState.initial().copy(viewMode = ViewMode.WIDGET)
+        val hover = DictateUiState.initial().copy(viewMode = ViewMode.HOVER)
+        assertSame(catalog.OVERLAY_5BUTTON, manager.computeLayoutMode(widget))
+        assertSame(catalog.OVERLAY_5BUTTON, manager.computeLayoutMode(hover))
+    }
+
+    // ─── State propagation ────────────────────────────────────────────
+
+    @Test
+    fun `onStateChanged with no backends attached is a no-op`() {
+        // Just don't throw. The state still gets cached so a future
+        // attachBackend re-renders it.
+        manager.onStateChanged(stateForKeyboard(singleRow = false))
+        val backend = TestRenderBackend()
+        manager.attachBackend(backend)
+        assertEquals(1, backend.renderCount)
+    }
+
+    @Test
+    fun `attachedBackendCount tracks active backends`() {
+        assertEquals(0, manager.attachedBackendCount())
+        val a = TestRenderBackend()
+        val b = TestRenderBackend()
+        manager.attachBackend(a)
+        assertEquals(1, manager.attachedBackendCount())
+        manager.attachBackend(b)
+        assertEquals(2, manager.attachedBackendCount())
+        manager.detachBackend(a)
+        assertEquals(1, manager.attachedBackendCount())
+    }
+
+    // ─── Test fixtures ─────────────────────────────────────────────────
+
+    private fun stateForKeyboard(singleRow: Boolean): DictateUiState =
+        DictateUiState.initial().copy(
+            viewMode = ViewMode.KEYBOARD,
+            layout = LayoutState(singleRowMode = singleRow),
+        )
+
+    @Suppress("unused")
+    private fun assertedNoActionsBeyond(expected: List<Action>) {
+        assertEquals(expected, emittedActions)
+    }
+}
+
+// Suppress unused-warning for the helper-anchor — referenced only by tests.
+@Suppress("unused") private val _anchor: (Action) -> Unit = { _ ->
+    assertNull(null)  // keeps the import live
+}

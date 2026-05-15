@@ -1,0 +1,169 @@
+package net.devemperor.dictate.state
+
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.withContext
+import net.devemperor.dictate.database.dao.SessionDao
+import net.devemperor.dictate.database.entity.SessionEntity
+import net.devemperor.dictate.database.entity.SessionStatus
+import java.io.File
+
+/**
+ * Production adapter that implements [PipelineSessionRepoSubsystem] on top
+ * of [SessionDao] (Spec 1 §6.3, §6.4).
+ *
+ * **What this replaces (C7 → C10):** the no-op
+ * `PipelineServiceStubSubsystems.sessionRepo` from C7 — that stub returned
+ * `emptyList()` from [loadPending] and dropped every other call into
+ * logcat. With C9's `SessionDao` surface (M4 migration) and C10's recovery
+ * algorithm, the real adapter can drive boot-time hydration of
+ * [DictateUiState.pendingSessions] from persistent storage.
+ *
+ * **What `loadPending()` returns (Spec 1 §6.3, recovery-tabelle):**
+ *
+ * The repo's purview is the **steady-state read** for the
+ * `PendingSessionsModule`. The §6.3 status-promotion logic (RECORDING →
+ * FAILED, TRANSCRIBING → RECORDED-or-FAILED, ghost-session cleanup) is
+ * **not** the repo's job — [PipelineRecovery] runs that algorithm *first*
+ * and then calls `loadPending()` to read the now-cleaned list. The split:
+ *
+ *  - `PipelineRecovery.recover(store)` — runs the status-promotion pass
+ *    (writes DB), then calls `sessionRepo.loadPending()` to read the
+ *    cleaned list, then writes it into [DictateUiState.pendingSessions].
+ *  - `PipelineSessionRepoAdapter.loadPending()` — returns the
+ *    user-visible "pending" set: `RECORDED` rows with an existing audio
+ *    file + `COMPLETED` rows whose result hasn't been inserted yet
+ *    (`final_output_text != NULL AND inserted_at IS NULL`).
+ *
+ * Returning the cleaned list (not the raw mid-flight rows) keeps the
+ * `PendingSessionsModule` reducer pure — it doesn't see a `RECORDING`
+ * row that needs to be filtered out. The recovery pass is the only place
+ * that promotes statuses.
+ *
+ * **`markInserted` / `markFailed`:** straightforward DAO update wrappers.
+ * Both run on `Dispatchers.IO` because Room queries on the main thread
+ * would block dispatch + paint (see [DictateDatabase.buildDatabase] which
+ * does allow main-thread queries as a legacy concession — the repo
+ * adapter dispatches off explicitly so future callers don't have to
+ * remember the convention).
+ *
+ * **`pendingFlow()`:** Phase-1 returns [emptyFlow] — the
+ * `PendingSessionsModule` doesn't yet have a Flow-driven observer wired
+ * up (the production update-path is `PipelineRecovery` at boot + the
+ * legacy `SessionManager.finalizeXxx` writes that the IME path triggers).
+ * A future B-phase can add `Room`'s `Flow<List<SessionEntity>>` if the
+ * pending list needs live-updates outside of the boot pass. For now,
+ * `emptyFlow` is the correct conservative wiring — it keeps the
+ * `PendingSessionsModule` happy without claiming behaviour we don't
+ * deliver yet.
+ *
+ * @property sessionDao the Room DAO supplied by `DictateDatabase.sessionDao()`.
+ *
+ * @see net.devemperor.dictate.state.PipelineRecovery
+ * @see net.devemperor.dictate.state.PendingSessionsModule
+ * @see net.devemperor.dictate.database.dao.SessionDao
+ * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §6.3 §6.4
+ */
+class PipelineSessionRepoAdapter(
+    private val sessionDao: SessionDao,
+) : PipelineSessionRepoSubsystem {
+
+    /**
+     * Read the post-recovery "pending" set from the DB.
+     *
+     * Returns the union of two queries (Spec 1 §11.6.2):
+     *
+     *  1. **`RECORDED` rows with an existing audio file** — sessions that
+     *     were recorded but never piped through transcription (User-cancel
+     *     before clicking Send, or a crash mid-Stop). The audio file must
+     *     still exist on disk; otherwise the row is a ghost and gets
+     *     filtered.
+     *  2. **`COMPLETED` rows with `final_output_text != NULL AND
+     *     inserted_at IS NULL`** — the pipeline produced text but the
+     *     user hasn't seen it yet (IME-service-death window or a manual
+     *     dismiss-without-insert).
+     *
+     * Both sets are surfaced in the UI as "Resume" entries. The user
+     * either clicks Resend (RECORDED → retry pipeline) or taps the
+     * pending-text affordance (COMPLETED → insert from clipboard /
+     * paste-hint per F-1).
+     */
+    override suspend fun loadPending(): List<PendingSession> = withContext(Dispatchers.IO) {
+        // RECORDED rows with existing audio
+        val recordedWithAudio = sessionDao.getSessionsByStatuses(listOf(SessionStatus.RECORDED.name))
+            .filter { entity ->
+                entity.audioFilePath?.let { File(it).exists() } == true
+            }
+
+        // COMPLETED rows with pending insertion — uses dedicated DAO query
+        val pendingInsertion = sessionDao.findPendingInsertion()
+
+        (recordedWithAudio + pendingInsertion).map { it.toPendingSession() }
+    }
+
+    override suspend fun markInserted(sessionId: String, at: Long) {
+        withContext(Dispatchers.IO) { sessionDao.markInserted(sessionId, at) }
+    }
+
+    /**
+     * Promote a session to terminal-FAILED with the given reason.
+     *
+     * Implementation note: per Spec 1 §6.3 the `markFailed(id, reason)`
+     * call collapses into the existing `updateStatus + updateError` pair —
+     * we don't add a dedicated DAO method (DRY). The reason string lands
+     * in `last_error_message`; `last_error_type` is set to
+     * `AIProviderException.ErrorType.UNKNOWN.name` because the
+     * `PipelineSessionRepo` surface doesn't carry a structured ErrorType
+     * (callers that need a typed error use the DAO directly).
+     */
+    override suspend fun markFailed(sessionId: String, reason: String) {
+        withContext(Dispatchers.IO) {
+            sessionDao.updateStatus(sessionId, SessionStatus.FAILED.name)
+            sessionDao.updateError(
+                sessionId,
+                net.devemperor.dictate.ai.AIProviderException.ErrorType.UNKNOWN.name,
+                reason,
+            )
+        }
+    }
+
+    /**
+     * Phase-1 — no live flow. See class KDoc for rationale.
+     *
+     * The `PendingSessionsModule` is a passive sink: it copies whatever
+     * the boot-time [PipelineRecovery] writes via
+     * [Action.PendingSessionsAction.Refresh]. A live Flow would require
+     * Room's `@Query` return-type change (`List<SessionEntity>` →
+     * `Flow<List<SessionEntity>>`) plus a `services.scope.launch`
+     * collector — both deferrable until a use-case demands it.
+     */
+    override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
+
+    private companion object {
+        private const val TAG = "PipelineSessionRepoAdapter"
+    }
+}
+
+/**
+ * Boundary mapper: [SessionEntity] (DB row) → [PendingSession] (UI model).
+ *
+ * Lives at the adapter layer because [PipelineSessionRepoSubsystem]'s
+ * contract is in terms of [PendingSession] (the state-side type), but
+ * the DAO returns full [SessionEntity] rows. The mapper drops the DB-
+ * only fields (origin, queued_prompt_ids, last_error_*, target_app_package,
+ * inserted_at, …) — the UI doesn't need them for the pending-list
+ * affordance.
+ *
+ * **`statusEnum` is the boundary** — see [SessionEntity.statusEnum]: a
+ * row with a status string unknown to this build (downgrade scenario)
+ * falls back to `SessionStatus.RECORDED` rather than crashing. The
+ * mapper inherits that behaviour.
+ */
+internal fun SessionEntity.toPendingSession(): PendingSession = PendingSession(
+    sessionId = id,
+    status = statusEnum,
+    transcribedText = finalOutputText,
+    createdAt = createdAt,
+)

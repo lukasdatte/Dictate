@@ -213,16 +213,25 @@ internal fun realToastSink(applicationContext: android.content.Context): ToastSi
     }
 
 /**
- * Build a [PipelineSessionRepoSubsystem] for the C7 baseline.
+ * **C10 — deprecated (kept for compile-compat only).** Build a stub
+ * [PipelineSessionRepoSubsystem] that returns empty for every query.
  *
- * Currently delegates to [PipelineServiceStubSubsystems.sessionRepo]
- * (empty-list `loadPending`). Block 3 / chunks C9+C10 replace this
- * with a real DAO-backed adapter that reads from
- * `DictateDatabase.sessionDao()` and applies the §6.3 recovery rules.
+ * Was the C7 wiring; the production
+ * [net.devemperor.dictate.core.DictatePipelineService.onCreate] no
+ * longer calls this — it constructs a real
+ * [net.devemperor.dictate.state.PipelineSessionRepoAdapter] backed by
+ * `DictateDatabase.sessionDao()` (Spec 1 §6.3 + §6.4 + KG-SST-2).
  *
- * @param sharedPrefs unused today; the parameter exists so B3 can
- *   inline-fix a smaller diff if it needs the prefs for session
- *   migration on the first read.
+ * Retained for two reasons:
+ *
+ *  1. Test code that wants a "no-database" baseline can import this
+ *     function instead of constructing the underlying object directly.
+ *  2. Fallback wiring during a future B5+ refactor if the DAO surface
+ *     changes again — the type-stable function name reduces touch
+ *     surface.
+ *
+ * @param sharedPrefs unused; preserved as a no-op signature parameter
+ *   so callers that previously passed prefs don't break.
  */
 @Suppress("UNUSED_PARAMETER")
 internal fun stubSessionRepo(sharedPrefs: SharedPreferences): PipelineSessionRepoSubsystem =

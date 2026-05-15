@@ -35,11 +35,15 @@ import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.DictateUiStateStore
 import net.devemperor.dictate.state.DispatchOutcome
 import net.devemperor.dictate.state.ModuleServices
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.state.PipelineOrphanCleaner
 import net.devemperor.dictate.state.PipelinePrefMirror
 import net.devemperor.dictate.state.PipelineRecovery
 import net.devemperor.dictate.state.PipelineServiceStubSubsystems
+import net.devemperor.dictate.state.PipelineSessionRepoAdapter
 import net.devemperor.dictate.state.realToastSink
-import net.devemperor.dictate.state.stubSessionRepo
+import kotlinx.coroutines.launch
 
 /**
  * Foreground Service that hosts the Dictate pipeline state container.
@@ -106,6 +110,16 @@ class DictatePipelineService : Service() {
 
     private lateinit var orchestrator: DictateOrchestrator
     private lateinit var prefMirror: PipelinePrefMirror
+
+    // ── C10 — DB-persistence recovery + orphan cleanup ─────────────────
+    //
+    // [orphanCleaner] runs the dual cleanup pass (deleteInsertedOlderThan +
+    // KG-SST-2 orphan-audio) when the service reaches an all-terminal state
+    // before stopSelf — see [triggerOrphanCleanupAsync]. [sessionRepoAdapterRef]
+    // is held for diagnostic + test-injection paths.
+    private var orphanCleaner: PipelineOrphanCleaner? = null
+    @Volatile
+    private var sessionRepoAdapterRef: PipelineSessionRepoAdapter? = null
 
     // ── C8 — AI infrastructure (IMPL-1 closure) ────────────────────────
     //
@@ -270,6 +284,15 @@ class DictatePipelineService : Service() {
         // adapter set is the orchestrator-side parallel path that
         // future blocks (B5/B6 LayoutCatalog) will route through.
         // ──────────────────────────────────────────────────────────────
+        // C10 — real DB-backed PipelineSessionRepoAdapter (replaces the C7
+        // stubSessionRepo). Adapter is constructed first so it can be wired
+        // into both ModuleServices.sessionRepo AND PipelineRecovery (the
+        // recovery class reads via the same Adapter so the §6.3 algorithm
+        // and the steady-state pendingFlow share a single DAO instance).
+        val sessionRepoAdapterImpl = PipelineSessionRepoAdapter(database.sessionDao())
+        sessionRepoAdapterRef = sessionRepoAdapterImpl
+        orphanCleaner = PipelineOrphanCleaner(database.sessionDao())
+
         val services = ModuleServices(
             recordingHardware = recordingHardware,
             bluetoothSco = bluetoothSco,
@@ -278,7 +301,7 @@ class DictatePipelineService : Service() {
             amplitudeStream = amplitudeStream,
             borderGlow = borderGlow,
             pipelineRunner = PipelineServiceStubSubsystems.pipelineRunner,
-            sessionRepo = stubSessionRepo(sharedPrefs),
+            sessionRepo = sessionRepoAdapterImpl,
             notificationCoordinator = PipelineServiceStubSubsystems.notificationCoordinator,
             inputConnectionProvider = { binder.delegateInputConnectionProvider?.invoke() },
             clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager,
@@ -290,7 +313,16 @@ class DictatePipelineService : Service() {
         )
 
         prefMirror = PipelinePrefMirror(sharedPrefs)
-        val recovery = PipelineRecovery(services.sessionRepo)
+        // C10 — Recovery now drives the full §6.3 algorithm via the DAO and
+        // dispatches `ResendAction.NotifyManualPasteNeeded` for SF-4 (the
+        // post-extraction manual-paste hint). emitAction is captured by-value
+        // here so the orchestrator-init's `recovery.recover(store)` launches
+        // with the correct sink.
+        val recovery = PipelineRecovery(
+            sessionDao = database.sessionDao(),
+            sessionRepo = sessionRepoAdapterImpl,
+            emitAction = { action -> orchestrator.emitAction(action) },
+        )
 
         orchestrator = DictateOrchestrator(
             scope = serviceScope,
@@ -306,6 +338,47 @@ class DictatePipelineService : Service() {
         } catch (t: IllegalStateException) {
             Log.e(TAG, "Registry coverage assertion failed — module(s) missing", t)
             throw t
+        }
+    }
+
+    /**
+     * Kick off the dual cleanup pass (Spec 1 §6.2 R.17 + §6.3.1):
+     *
+     *  1. `deleteInsertedOlderThan(cutoff)` — drop COMPLETED rows whose
+     *     `inserted_at` is older than `now − Pref.SessionCleanupGracePeriodMs`.
+     *  2. `cleanupOrphanedTerminalAudio(cutoff)` — drop audio files for
+     *     FAILED/CANCELLED rows older than the same cutoff; bulk-clear
+     *     `audio_file_path` in DB.
+     *
+     * Launches into [serviceScope] so the cleanup doesn't block
+     * `onDestroy` (Android can SIGKILL the service mid-flight; every step
+     * is idempotent and will retry on next boot via [PipelineRecovery] +
+     * the boot-time orphan scan).
+     *
+     * Visibility: `internal` so test-only callers can invoke the cleanup
+     * directly without simulating an `onDestroy` round-trip.
+     */
+    internal fun triggerOrphanCleanupAsync() {
+        val cleaner = orphanCleaner ?: return
+        val sharedPrefs = try {
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        } catch (t: Throwable) {
+            Log.w(TAG, "orphan-cleanup: shared-prefs lookup failed", t)
+            return
+        }
+        val gracePeriodMs = sharedPrefs.get(Pref.SessionCleanupGracePeriodMs)
+        serviceScope.launch {
+            try {
+                val result = cleaner.cleanup(gracePeriodMs)
+                Log.i(
+                    TAG,
+                    "orphan-cleanup: deletedCompletedRows=${result.deletedCompletedRows}, " +
+                        "deletedAudioFiles=${result.deletedAudioFiles}, " +
+                        "clearedAudioPathRows=${result.clearedAudioPathRows}",
+                )
+            } catch (t: Throwable) {
+                Log.w(TAG, "orphan-cleanup failed", t)
+            }
         }
     }
 
@@ -362,6 +435,14 @@ class DictatePipelineService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        // C10 — Service-idle cleanup slot (Spec 1 §6.2 R.17 + §6.3.1).
+        // When the service is reaching its terminal state (onDestroy =
+        // Android-side decision to stop), kick off the dual cleanup pass.
+        // The pass runs best-effort in the background; the service may be
+        // killed mid-flight (acceptable — every cleanup step is idempotent
+        // and re-runnable on the next boot's recovery pass).
+        triggerOrphanCleanupAsync()
+
         // Spec 1 §4.3: orchestrator.shutdown() BEFORE serviceScope.cancel().
         if (::orchestrator.isInitialized) {
             try {

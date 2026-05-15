@@ -115,6 +115,21 @@ sealed class Pref<T>(val key: String, val default: T) {
     object OverlayPositionLandscapeY : Pref<Float>("overlay_pos_landscape_y", 0.1f)
     object OverlayOnboardingShown : Pref<Boolean>("overlay_onboarding_shown", false)
     object OverlayOnboardingDismissed : Pref<Boolean>("overlay_onboarding_dismissed", false)
+
+    // ── Session-Cleanup-Policy (B3 §6.2 R.17 + §6.3.1 KG-SST-2) ──
+    //
+    // Grace-period for the idle-stop session cleanup: COMPLETED sessions whose
+    // `inserted_at` timestamp is older than `now - SessionCleanupGracePeriodMs`
+    // are eligible for `deleteInsertedOlderThan`, and FAILED/CANCELLED sessions
+    // whose `created_at` is older than the same cutoff are eligible for
+    // orphan-audio cleanup (KG-SST-2). Default: 7d + 1h safety buffer
+    // = 7 * 24 * 3600 * 1000 + 3600 * 1000 = 608_400_000 ms.
+    //
+    // Stored as Long. The "safety hour" prevents a clean session that was just
+    // inserted (`inserted_at = now`) from being deleted on the same idle-stop
+    // cycle by a small clock skew.
+    object SessionCleanupGracePeriodMs :
+        Pref<Long>("net.devemperor.dictate.session_cleanup_grace_period_ms", 608_400_000L)
 }
 
 // ── Extension Functions ──

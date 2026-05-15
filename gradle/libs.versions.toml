@@ -50,6 +50,10 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 preference = { group = "androidx.preference", name = "preference", version.ref = "preference" }
 emoji2-emojipicker = { module = "androidx.emoji2:emoji2-emojipicker", version.ref = "emojiPicker" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+# kotlinx-coroutines-test — TestScope / UnconfinedTestDispatcher /
+# advanceUntilIdle for orchestrator-init order tests added in C7.
+# Test-scope only.
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
 # kotlin-reflect — required by DictateOrchestrator.collectLeaves +
 # DictateModuleRegistry.validate, both of which iterate
 # `KClass.sealedSubclasses` to build the routing map at init

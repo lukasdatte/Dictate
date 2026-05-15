@@ -57,6 +57,60 @@ open class DictateModuleRegistry(
     }
 
     /**
+     * Strict invariant check: **every direct sealed subclass of [Action]
+     * (except [Action.EffectFailure] — routed via `originModuleId`, not
+     * KClass) is claimed by exactly one module in [all]**.
+     *
+     * **Why not in [validate]?** Test registries deliberately ship with
+     * a subset of modules (e.g. just `RecordingModule`) to exercise
+     * specific dispatch paths. Running the coverage check on those
+     * registries would crash test construction. This stricter check is
+     * called separately from production wiring at service-bind time
+     * (Spec 1 §4.8 invariant 3, deferred to chunk C7 per the registry's
+     * `validate` KDoc).
+     *
+     * **What it catches:** a new Action sealed-subclass added in code
+     * without a corresponding module registration — the orchestrator
+     * would silently route to `DispatchOutcome.Unrouted` at runtime
+     * (drop) instead of failing fast at startup. This guard turns the
+     * runtime silent-drop into an init-time `IllegalStateException`
+     * that the host service can surface in logcat before
+     * `startForeground` ever runs.
+     *
+     * **ProGuard dependency:** uses `Action::class.sealedSubclasses`.
+     * The keep rule in `app/proguard-rules.pro` (added in C4) is
+     * non-negotiable. Without it, `sealedSubclasses` returns an empty
+     * list in release builds and **the check passes vacuously** —
+     * masking the bug-class it is supposed to catch.
+     *
+     * @throws IllegalStateException if any direct Action sealed
+     *   subclass is unclaimed.
+     *
+     * @see net.devemperor.dictate.state.Action.EffectFailure
+     * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §4.8
+     */
+    fun assertCompleteCoverage() {
+        // Test-side modules (TestOnlyModules.kt) re-use the production
+        // Action sealed-subtypes — they don't introduce new top-level
+        // sealed children. So the check below is stable across test
+        // registries that include them.
+        val specialCaseSubtypes: Set<kotlin.reflect.KClass<out Action>> =
+            setOf(Action.EffectFailure::class)
+        val claimed: Set<kotlin.reflect.KClass<out Action>> =
+            all.map { it.actionClass }.toSet()
+        @Suppress("UNCHECKED_CAST")
+        val allDirectSubtypes: Set<kotlin.reflect.KClass<out Action>> =
+            (Action::class.sealedSubclasses as List<kotlin.reflect.KClass<out Action>>).toSet()
+        val missing = allDirectSubtypes - claimed - specialCaseSubtypes
+        check(missing.isEmpty()) {
+            "Missing module-routing for Action sealed subtypes: " +
+                missing.joinToString { it.simpleName ?: "<anon>" } +
+                ". Every direct sealed subclass of Action::class must be claimed by " +
+                "exactly one module (except special-cases like EffectFailure)."
+        }
+    }
+
+    /**
      * Production singleton. Populated incrementally as C5 + C6 land:
      *
      * - **C5** adds the 5 core modules: `RecordingModule`, `PipelineModule`,
@@ -123,8 +177,10 @@ open class DictateModuleRegistry(
  * The check that "every direct sealed subclass of `Action` is owned by
  * exactly one module" is **not** enforced here — it would require the
  * full production registry, which is built incrementally in C5/C6.
- * Chunk C7 adds that strict check via an `assertCompleteCoverage()`
- * call at service-bind time (after all modules are registered).
+ * It is exposed as a separate method
+ * [DictateModuleRegistry.assertCompleteCoverage] that the host service
+ * calls at service-bind time (after all modules are registered);
+ * test registries with a subset of modules skip the check.
  *
  * @param modules the candidate registry's module list.
  * @throws IllegalArgumentException with a precise message if any

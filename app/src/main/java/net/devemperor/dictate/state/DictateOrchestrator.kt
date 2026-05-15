@@ -127,10 +127,39 @@ class DictateOrchestrator(
     private val store: DictateUiStateStore,
     private val services: ModuleServices,
     private val registry: DictateModuleRegistry = DictateModuleRegistry,
+    private val prefMirror: PipelinePrefMirror? = null,
+    private val recovery: PipelineRecovery? = null,
 ) {
 
     /** Read-only view of the state for subscribers (IME / UI / notification coord.). */
     val state: StateFlow<DictateUiState> = store.state
+
+    /**
+     * Construction-time wiring of the Pref-mirror and DB-recovery side
+     * inputs to the store.
+     *
+     * **Order matters (Spec 1 §4.3 + §11.2.2 Block-1b step 7-8):**
+     *
+     *  1. `prefMirror.attach(store)` runs **synchronously** — when the
+     *     IME-side `bindService` returns the LocalBinder and the IME
+     *     first reads `state.value`, the 19 mirrored prefs are already
+     *     applied. Without this, the IME would briefly see
+     *     `DictateUiState.initial()` defaults (Phase-B S-1 boot-race).
+     *  2. `recovery.recover(store)` is launched **asynchronously** into
+     *     [scope] — it does DB IO and must not block the 5-second FGS
+     *     startForeground budget (Spec 1 §11.6.1).
+     *
+     * Both [prefMirror] and [recovery] are nullable so unit tests that
+     * exercise the dispatch loop in isolation can construct an
+     * orchestrator without Android-backed plumbing. Production wiring
+     * always supplies both.
+     */
+    init {
+        prefMirror?.attach(store)
+        if (recovery != null) {
+            scope.launch { recovery.recover(store) }
+        }
+    }
 
     /**
      * `KClass → module` routing map for **non-failure** actions. Built at
@@ -209,10 +238,12 @@ class DictateOrchestrator(
     }
 
     /**
-     * Terminal cleanup. Iterates [DictateModuleRegistry.all] and calls
-     * each module's [DictateModule.terminate]. Per Spec 1 §4.3 the host
-     * service MUST call this **before** cancelling [scope] — synchronous
-     * hardware-releases inside `terminate` need a live scope (some
+     * Terminal cleanup. Detaches the [PipelinePrefMirror] first (so a
+     * late SP-listener-fire cannot write into the dying store), then
+     * iterates [DictateModuleRegistry.all] and calls each module's
+     * [DictateModule.terminate]. Per Spec 1 §4.3 the host service MUST
+     * call this **before** cancelling [scope] — synchronous hardware-
+     * releases inside `terminate` need a live scope (some
      * implementations may launch a final `serviceScope.launch` to
      * commit DB writes).
      *
@@ -220,6 +251,7 @@ class DictateOrchestrator(
      * logged at WARN and the loop continues.
      */
     fun shutdown() {
+        prefMirror?.detach()
         registry.all.forEach { module ->
             try {
                 @Suppress("UNCHECKED_CAST")

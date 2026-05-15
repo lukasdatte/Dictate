@@ -43,8 +43,14 @@ import net.devemperor.dictate.state.RecordingState
  *   caller; the slot just consumes it.
  * @property sending literal for `R.string.dictate_sending` ("Sending …").
  * @property dictateButtonText label provider for the idle record-button
- *   text (e.g. "Dictate (en)" — picks up the current language). Called
- *   lazily per render-tick.
+ *   text (e.g. "Dictate (en)"). **F-15 (Epic §4 Block A2):** receives
+ *   the effective language code (`DictateUiState.language.effective`,
+ *   owned by `LanguageModule`) so the label reflects the current
+ *   language without the resolver reading a static string or the legacy
+ *   `LanguageController`. Read-only: this consumes `LanguageState`, it
+ *   does not write it (D-13 — the legacy *writer* is removed in a later
+ *   Theme-C block; the *read* has no D-13 dependency). Called lazily
+ *   per render-tick with the live effective-language value.
  * @property formatStagingLabel mapper producing the
  *   `"Audio 0:23 · Send"` label for the reprocess-staging record button.
  *   Receives the staging audio duration in seconds.
@@ -61,7 +67,7 @@ data class LayoutStrings(
     val record: String,
     val send: CharSequence,
     val sending: String,
-    val dictateButtonText: () -> CharSequence,
+    val dictateButtonText: (effectiveLanguage: String) -> CharSequence,
     val formatStagingLabel: (audioDurationSeconds: Int) -> CharSequence,
     val formatPipelineLabel: (
         completedSteps: Int,
@@ -75,19 +81,25 @@ data class LayoutStrings(
 /**
  * Record-button text in standard (non-SEND-MODE) keyboard layouts.
  *
- * | RecordingState  | Text                                  |
- * |-----------------|---------------------------------------|
- * | `Active`        | [LayoutStrings.send]                  |
- * | `Paused`        | [LayoutStrings.send]                  |
- * | `Preparing`     | [LayoutStrings.record]                |
- * | `Idle`          | [LayoutStrings.dictateButtonText] ()  |
+ * | RecordingState  | Text                                            |
+ * |-----------------|-------------------------------------------------|
+ * | `Active`        | [LayoutStrings.send]                            |
+ * | `Paused`        | [LayoutStrings.send]                            |
+ * | `Preparing`     | [LayoutStrings.record]                          |
+ * | `Idle`          | [LayoutStrings.dictateButtonText] (effective)   |
+ *
+ * **F-15 (Epic §4 Block A2):** in the `Idle` branch the label is
+ * resolved against `state.language.effective` (the `LanguageModule`
+ * effective-language axis) so it differs across languages — e.g.
+ * `"Dictate (en)"` vs `"Dictate (de)"`. Read-only consumption of
+ * `LanguageState`; no legacy writer is introduced (D-13 scope).
  */
 fun resolveRecordButtonText(state: DictateUiState, strings: LayoutStrings): CharSequence =
     when (state.recording) {
         is RecordingState.Active -> strings.send
         is RecordingState.Paused -> strings.send
         is RecordingState.Preparing -> strings.record
-        RecordingState.Idle -> strings.dictateButtonText()
+        RecordingState.Idle -> strings.dictateButtonText(state.language.effective)
     }
 
 /**

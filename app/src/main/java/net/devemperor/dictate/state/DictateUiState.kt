@@ -110,6 +110,19 @@ data class DictateUiState(
  * **`useBluetooth` invariant:** captured at `Preparing` time and
  * propagated through `Active`/`Paused` — Cross-Module-Invariant-Sicherung
  * for the Bluetooth-SCO pause-resume cycle (Issue 2.1.8 / Option C).
+ *
+ * **`sessionId` source (F-10, Epic §4 Block A2):** the session UUID is
+ * minted by the click resolver (`StartRecording.sessionId`), carried
+ * verbatim through `Preparing → Active → Paused`, and read back on
+ * `StopRecordingAndSend` so the pipeline trigger gets the *same* id the
+ * recording was started with. This replaces the earlier empty-string
+ * sentinel that `StopRecordingAndSend` carried as a payload (the payload
+ * is gone — the id lives in the FSM, the single source). Same
+ * propagation invariant as `useBluetooth`/`audioFile`: the value is
+ * captured once at `Preparing` and never re-derived. Spec 1 §15.2/§3
+ * predate F-10 and show these variants without `sessionId`; Epic §4
+ * Block A2 explicitly authorises adding it here as the clean source.
+ * The FSM transition graph is unchanged — only the payload widens.
  */
 sealed interface RecordingState {
     /** No recording in progress. */
@@ -120,16 +133,28 @@ sealed interface RecordingState {
      * `prepare()` to complete and report ready via
      * `Action.RecordingAction.MediaRecorderReady`.
      */
-    data class Preparing(val useBluetooth: Boolean, val audioFile: File) : RecordingState
+    data class Preparing(
+        val useBluetooth: Boolean,
+        val audioFile: File,
+        val sessionId: String,
+    ) : RecordingState
 
     /** Recording actively writing to [audioFile]. */
-    data class Active(val useBluetooth: Boolean, val audioFile: File) : RecordingState
+    data class Active(
+        val useBluetooth: Boolean,
+        val audioFile: File,
+        val sessionId: String,
+    ) : RecordingState
 
     /**
      * Recording paused (resumable). The same [audioFile] is reused on
      * resume — `MediaRecorder.pause()` keeps the file handle alive.
      */
-    data class Paused(val useBluetooth: Boolean, val audioFile: File) : RecordingState
+    data class Paused(
+        val useBluetooth: Boolean,
+        val audioFile: File,
+        val sessionId: String,
+    ) : RecordingState
 }
 
 /**

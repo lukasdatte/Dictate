@@ -145,21 +145,29 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
         data object StopBorderGlow : Effect
 
         /**
-         * F-2 fix — re-entrant trigger of the pipeline after `StopRecordingAndSend`.
+         * F-2 + F-10 — re-entrant trigger of the pipeline after
+         * `StopRecordingAndSend`.
          *
          * Emitted on the `Active/Paused → Idle` reducer arm for
-         * `StopRecordingAndSend(sessionId)`. The effect handler calls
+         * `StopRecordingAndSend` (which carries no payload). The
+         * `sessionId` is read off the live FSM
+         * (`Active.sessionId` / `Paused.sessionId`) — the same id minted
+         * at `StartRecording` (F-10, Epic §4 Block A2). The effect
+         * handler calls
          * `services.emitAction(Action.PipelineAction.TriggerPipeline(sessionId, audioFile))`
          * — re-entering the dispatch loop asynchronously via [emitAction]
          * (which posts to the orchestrator's scope, not synchronously
          * re-entering the current dispatch).
          *
          * This replaces the documented-but-never-wired cross-module
-         * cascade-via-observer pattern (the observer can't access the
-         * `sessionId` without polluting `RecordingState` with a transient
-         * `pendingSessionId` field; the Effect+emitAction route is the
-         * documented async re-entry mechanism per ADR-0001 §"Required
-         * mechanics" #6).
+         * cascade-via-observer pattern. The observer route was rejected
+         * because an `onCrossModuleStateChange` hook only sees prev/next
+         * state, not the triggering action — fine now that the sessionId
+         * lives in `RecordingState` (F-10), but the Effect+emitAction
+         * route is still the documented async re-entry mechanism per
+         * ADR-0001 §"Required mechanics" #6 (it also carries the
+         * `audioFile`, which a pure prev/next observer would have to
+         * re-derive).
          */
         data class EmitPipelineTrigger(
             val sessionId: String,
@@ -177,6 +185,9 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 nextState = RecordingState.Preparing(
                     useBluetooth = ctx.global.audio.useBluetoothMic,
                     audioFile = action.audioFile,
+                    // F-10 — the FSM is the single source of the session
+                    // id; carry the caller-minted UUID verbatim.
+                    sessionId = action.sessionId,
                 ),
                 sideEffects = listOf(
                     Effect.AllocateMediaRecorder(
@@ -199,6 +210,7 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 nextState = RecordingState.Active(
                     useBluetooth = state.useBluetooth,
                     audioFile = state.audioFile,
+                    sessionId = state.sessionId,
                 ),
                 sideEffects = listOf(
                     // B3-VAL-W1 F-10 — start MediaRecorder before
@@ -226,6 +238,7 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 nextState = RecordingState.Paused(
                     useBluetooth = state.useBluetooth,
                     audioFile = state.audioFile,
+                    sessionId = state.sessionId,
                 ),
                 sideEffects = listOf(
                     Effect.PauseMediaRecorder,
@@ -243,17 +256,19 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StopAmplitudeStream,
                 ),
             )
-            is Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
+            Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
                 nextState = RecordingState.Idle,
                 sideEffects = listOf(
                     Effect.StopMediaRecorder,
                     Effect.StopTimer,
                     Effect.StopBorderGlow,
                     Effect.StopAmplitudeStream,
-                    // F-2 — emit TriggerPipeline async so the pipeline
-                    // takes over once recording is stopped.
+                    // F-2 + F-10 — emit TriggerPipeline async so the
+                    // pipeline takes over once recording is stopped. The
+                    // sessionId comes from the live FSM (the same id
+                    // minted at StartRecording), not an action payload.
                     Effect.EmitPipelineTrigger(
-                        sessionId = action.sessionId,
+                        sessionId = state.sessionId,
                         audioFile = state.audioFile,
                     ),
                 ),
@@ -276,6 +291,7 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 nextState = RecordingState.Active(
                     useBluetooth = state.useBluetooth,
                     audioFile = state.audioFile,
+                    sessionId = state.sessionId,
                 ),
                 sideEffects = listOf(
                     Effect.ResumeMediaRecorder,
@@ -295,16 +311,16 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StopBorderGlow,
                 ),
             )
-            is Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
+            Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
                 nextState = RecordingState.Idle,
                 sideEffects = listOf(
                     Effect.StopMediaRecorder,
                     Effect.StopTimer,
                     Effect.StopBorderGlow,
-                    // F-2 — emit TriggerPipeline async so the pipeline
-                    // takes over once recording is stopped (Paused path).
+                    // F-2 + F-10 — emit TriggerPipeline async (Paused
+                    // path). The sessionId comes from the live FSM.
                     Effect.EmitPipelineTrigger(
-                        sessionId = action.sessionId,
+                        sessionId = state.sessionId,
                         audioFile = state.audioFile,
                     ),
                 ),

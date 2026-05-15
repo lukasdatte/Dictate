@@ -97,11 +97,28 @@ sealed class Action {
     /** Lifecycle actions for the [RecordingState] FSM. */
     sealed class RecordingAction : Action() {
         /**
-         * Begin a new recording session. The `audioFile` is pre-allocated
-         * by the caller (Pre-Dispatch-Allocator pattern, Spec 1 §4.11) so
-         * the reducer stays pure (no `cacheDir`-IO from inside `reduce`).
+         * Begin a new recording session.
+         *
+         * - `audioFile` is pre-allocated by the caller (Pre-Dispatch-
+         *   Allocator pattern, Spec 1 §4.11) so the reducer stays pure
+         *   (no `cacheDir`-IO from inside `reduce`).
+         * - `sessionId` is the caller-minted UUID (R.15 — strings
+         *   throughout) for this recording. **F-10 (Epic §4 Block A2):**
+         *   the reducer carries it into [RecordingState.Preparing] and it
+         *   propagates through `Active`/`Paused`; on
+         *   [StopRecordingAndSend] the reducer reads `state.sessionId`
+         *   and hands it to the pipeline trigger. This makes the
+         *   recording FSM the single source of the session id — no
+         *   empty-string sentinel anywhere. The IME's pre-allocated
+         *   `JobExecutor.register()` UUID is routed in here once B3 flips
+         *   the recording trigger to dispatch (until then the click
+         *   resolver mints a fresh UUID).
          */
-        data class StartRecording(val target: InsertionTarget, val audioFile: File) : RecordingAction()
+        data class StartRecording(
+            val target: InsertionTarget,
+            val audioFile: File,
+            val sessionId: String,
+        ) : RecordingAction()
 
         /**
          * Hardware callback — `MediaRecorder.prepare()` returned. Drives
@@ -128,13 +145,16 @@ sealed class Action {
          * `services.emitAction(Action.PipelineAction.TriggerPipeline(...))`
          * to re-enter the dispatch loop with a fresh action.
          *
-         * The dedicated `sessionId` payload is required because
-         * `PipelineAction.TriggerPipeline(sessionId, audioFile)` needs a
-         * caller-supplied UUID (R.15 — strings throughout). The audio
-         * file path comes from `RecordingState.Active.audioFile` (or
-         * `Paused.audioFile`) at the time the reducer fires.
+         * **F-10 (Epic §4 Block A2):** this action carries **no payload**.
+         * The `sessionId` for the pipeline trigger is read off the live
+         * `RecordingState` (`Active.sessionId` / `Paused.sessionId`) — the
+         * same id minted at [StartRecording]. The audio file likewise
+         * comes from `RecordingState.Active.audioFile` (or
+         * `Paused.audioFile`) at the time the reducer fires. The earlier
+         * empty-string-sentinel payload is removed entirely — the FSM is
+         * the single source of the session id.
          */
-        data class StopRecordingAndSend(val sessionId: String) : RecordingAction()
+        data object StopRecordingAndSend : RecordingAction()
     }
 
     // ════════════════════════════════════════════════════════════════

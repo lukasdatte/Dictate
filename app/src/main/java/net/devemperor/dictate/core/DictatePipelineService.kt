@@ -690,23 +690,33 @@ class DictatePipelineService : Service() {
      * IME goes through `onCreateInputView` which re-attaches the
      * backend; the strings themselves stay stable.
      *
-     * `dictateButtonText` reads the legacy `LanguageController` flow
-     * via the IME-supplied label provider — for C15 we resolve to
-     * the localised "Record" string as a baseline. Once D-13
-     * (LanguageController removal) lands, the resolver chains
-     * through [LanguageModule] directly.
+     * **F-15 (Epic §4 Block A2):** `dictateButtonText` now receives the
+     * effective-language code (`DictateUiState.language.effective`,
+     * threaded by [resolveRecordButtonText]) and produces a
+     * language-suffixed label (e.g. `"Record (en)"`). This is a
+     * **read-only** consumption of the `LanguageModule` state axis — no
+     * legacy writer is introduced; D-13 (LanguageController removal) is
+     * a later Theme-C block and only removes the legacy *writer*, not
+     * this read.
      */
     private fun buildLayoutStrings(): LayoutStrings = LayoutStrings(
         record = getString(R.string.dictate_record),
         send = getString(R.string.dictate_send, getString(R.string.dictate_record)),
         sending = getString(R.string.dictate_sending),
-        // Baseline label provider — points at the "Record" resource. The
-        // legacy IME-side `getDictateButtonText()` (effective-language-
-        // aware) keeps owning the live label until D-13 lands and the
-        // LanguageController is fully migrated. The new render path
-        // uses this default; the legacy path still updates the button
-        // text directly through `MainButtonsController.updateRecordButtonText`.
-        dictateButtonText = { getString(R.string.dictate_record) },
+        // F-15 — language-aware label. `effectiveLanguage` is
+        // `DictateUiState.language.effective` (LanguageModule axis). The
+        // `"system"` sentinel (boot default before the pref resolves)
+        // renders the plain "Record" label; any concrete language code
+        // is suffixed so the button reflects the current language. The
+        // legacy `MainButtonsController.updateRecordButtonText` path
+        // still runs in Phase 1; this is the new render path's source.
+        dictateButtonText = { effectiveLanguage ->
+            if (effectiveLanguage.isEmpty() || effectiveLanguage == "system") {
+                getString(R.string.dictate_record)
+            } else {
+                "${getString(R.string.dictate_record)} ($effectiveLanguage)"
+            }
+        },
         formatStagingLabel = { audioDurationSeconds ->
             // Defensive default — Spec 1 §3 `ReprocessStaging` will
             // grow `audioDurationSeconds`; format as MM:SS.

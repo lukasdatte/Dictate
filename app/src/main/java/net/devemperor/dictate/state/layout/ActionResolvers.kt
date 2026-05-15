@@ -46,22 +46,39 @@ import net.devemperor.dictate.state.ViewMode
 private const val TAG: String = "LayoutResolver"
 
 /**
+ * Mint a fresh session UUID for a new recording (F-10, Epic §4 Block A2).
+ *
+ * Both keyboard-surface and overlay-surface record resolvers start a
+ * recording and must supply a `sessionId` for the FSM to carry through
+ * to the pipeline trigger. Centralised here so the two call-sites stay
+ * identical (R.15 — UUID strings throughout, matching the IME's
+ * `UUID.randomUUID().toString()` in `DictateInputMethodService` and
+ * `PipelineOrchestrator`). B3 will replace the *origin* (the IME's
+ * pre-allocated `JobExecutor.register()` id flows in instead) without
+ * touching the resolver shape.
+ */
+private fun newSessionId(): String = java.util.UUID.randomUUID().toString()
+
+/**
  * Record-button click resolver in standard (non-SEND-MODE) layouts.
  *
  * | RecordingState | Action returned                                      |
  * |----------------|------------------------------------------------------|
- * | `Idle`         | `StartRecording(MainInputConnection, allocatedFile)` |
- * | `Active`       | `StopRecordingAndSend(sessionId = "")`               |
- * | `Paused`       | `StopRecordingAndSend(sessionId = "")`               |
+ * | `Idle`         | `StartRecording(target, allocatedFile, sessionId)`   |
+ * | `Active`       | `StopRecordingAndSend`                               |
+ * | `Paused`       | `StopRecordingAndSend`                               |
  * | `Preparing`    | `null` (click is a no-op while the recorder warms up)|
  *
- * **sessionId placeholder (B4/C12 scope).** The
- * [Action.RecordingAction.StopRecordingAndSend] carries a `sessionId`
- * payload that the IME-side click handler does NOT yet know — sessionId
- * generation happens in the recording-→-pipeline cross-module cascade
- * (Spec 1 §15.2 / F-2). For C12 we pass an empty string; the receiving
- * module overrides it via the cascade. This will be revisited when
- * C14/C15 wires the click-action into the orchestrator.
+ * **sessionId source (F-10, Epic §4 Block A2).** The resolver mints a
+ * fresh UUID and threads it into
+ * [Action.RecordingAction.StartRecording]; the RecordingModule FSM
+ * carries it through `Preparing → Active → Paused` and the
+ * `StopRecordingAndSend` reducer arm reads it back off the live state.
+ * The earlier empty-string-payload sentinel on `StopRecordingAndSend`
+ * is gone — the FSM is the single source of the id. When B3
+ * flips the IME recording trigger to dispatch, the IME's pre-allocated
+ * `JobExecutor.register()` UUID is routed in here instead of a fresh
+ * mint (the seam is the same; only the id origin moves).
  *
  * **IOException side-channel.** `audioFileFactory.allocate()` may fail;
  * the resolver fires a toast on `services.toastSink` and returns `null`.
@@ -81,11 +98,12 @@ fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action
             Action.RecordingAction.StartRecording(
                 target = InsertionTarget.INPUT_CONNECTION,
                 audioFile = file,
+                sessionId = newSessionId(),
             )
         }
 
-        is RecordingState.Active -> Action.RecordingAction.StopRecordingAndSend(sessionId = "")
-        is RecordingState.Paused -> Action.RecordingAction.StopRecordingAndSend(sessionId = "")
+        is RecordingState.Active -> Action.RecordingAction.StopRecordingAndSend
+        is RecordingState.Paused -> Action.RecordingAction.StopRecordingAndSend
         is RecordingState.Preparing -> null
     }
 
@@ -204,6 +222,7 @@ fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices):
     return Action.RecordingAction.StartRecording(
         target = InsertionTarget.INPUT_CONNECTION,
         audioFile = file,
+        sessionId = newSessionId(),
     )
 }
 

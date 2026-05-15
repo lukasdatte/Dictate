@@ -444,7 +444,8 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         }
 
         // ─── Send-trigger: stop the recording when Pipeline enters Preparing ─
-        // The "Send" button dispatches `RecordingAction.StopRecordingAndSend(sessionId)`
+        // The "Send" button dispatches `RecordingAction.StopRecordingAndSend`
+        // (no payload — the sessionId lives in the RecordingState FSM, F-10)
         // which the RecordingModule reduces to `Idle` + stop effects, plus a
         // `RecordingModule.Effect.EmitPipelineTrigger(sessionId, audioFile)` that
         // re-enters the dispatch loop with `Action.PipelineAction.TriggerPipeline`

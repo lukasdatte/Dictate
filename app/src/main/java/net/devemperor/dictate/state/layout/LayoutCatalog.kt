@@ -515,12 +515,13 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                             ) 1f else 0.4f
                         },
                         textResolver = { strings.overlaySend },
-                        // sessionId placeholder: the recording-→-pipeline
-                        // cross-module cascade fills it in (Spec 1 §15.2 /
-                        // F-2). Same placeholder convention as the
-                        // keyboard-surface SEND in `resolveRecordAction`.
+                        // F-10 — StopRecordingAndSend carries no payload;
+                        // the RecordingModule reducer reads the sessionId
+                        // off the live FSM (the id minted at
+                        // StartRecording). Same as the keyboard-surface
+                        // SEND in `resolveRecordAction`.
                         actionResolver = { _, _ ->
-                            Action.RecordingAction.StopRecordingAndSend(sessionId = "")
+                            Action.RecordingAction.StopRecordingAndSend
                         },
                     ),
                     ButtonSlot(

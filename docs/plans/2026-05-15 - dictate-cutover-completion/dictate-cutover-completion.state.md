@@ -150,6 +150,24 @@ coverage_threshold_branches: 70                # provisional; AUDIT-TEST refines
 | 4 | git-state | working tree clean OR user-acknowledged | `git status --porcelain` | Clean block-end-commits |
 | 5 | parent-baseline | parent plan's 946-test baseline green | `./gradlew test` green at HEAD 65bb303 | AC-9 regression invariant baseline |
 
+**E2E-specific Pre-Flight (Phase 1b — B0-E2E-STRATEGY, 2026-05-15).** Reuses
+the parent runbook's 9 E2E items, **adjusted for the Epic**: the parent's
+DB-migration-consent + Room-v3→v4-backup items are DROPPED (this Epic adds no
+schema change — invariant E-7 enforces it); items E-8/E-9 are Epic-new.
+Manual-TC items gate the manual run only; E-6/E-7/E-8 are hard invariants.
+
+| # | Kind | Target | Programmatic check | Blocking | Profile |
+|---|------|--------|--------------------|----------|---------|
+| E-1 | device | Android device/emulator API 26-35 via ADB | `adb devices` shows ≥1 in state `device` | manual-TCs | both |
+| E-2 | adb-connection | **USB cable — NOT Wireless** (`user_dev_setup.md`) | `adb shell ip route` ok 5× in 60 s no disconnect | manual-TCs | both |
+| E-3 | apk-installed | APK from `./gradlew assembleDebug` at the profile's HEAD | `adb shell pm list packages \| grep net.devemperor.dictate` | manual-TCs | both |
+| E-4 | ime-selected | Dictate IME enabled + currently selected | `adb shell settings get secure default_input_method` = `net.devemperor.dictate/...` | manual-TCs | both |
+| E-5 | mic+notif-perm | `RECORD_AUDIO` granted; `POST_NOTIFICATIONS` granted on API ≥ 33 (Epic-new FGS action-buttons, R-2) | `adb shell dumpsys package net.devemperor.dictate \| grep -E "RECORD_AUDIO\|POST_NOTIFICATIONS"` granted | manual-TCs | both |
+| E-6 | parent-baseline | parent ≥946-test baseline green at Epic-start | `./gradlew test` green at HEAD `65bb303` (= Pre-Flight #5) | yes | both |
+| E-7 | room-no-migration | NO `@Database(version=…)` bump — schema stays v4 (blast-radius is code-only; this is WHY the parent's DB-consent items are dropped) | `grep -rn "version = 5\|version=5" app/src/main/java/.../database/` → zero | yes (safety invariant) | both |
+| E-8 | guard-state | C6-SUBSET: `USE_LEGACY_RECORDING_DRIVE` present + default-new. C12-FULL: boolean + legacy IME call-site deleted (C7 done) | `grep -rn "USE_LEGACY_RECORDING_DRIVE" app/src/main/` — C6: ≥1 default-new; C12: zero | yes | both (profile-dependent) |
+| E-9 | recording-path-consent | If personal device: user OK that recording-trigger is the new path + new FGS notification appears. Blast-radius LOWER than parent (no DB migration). | manual: User-Question Q2 (recommended default = Yes) | manual-TCs | both |
+
 (Phase 1b appends E2E-specific items before Phase 4.5.)
 
 ### Test-Strategy-Completeness
@@ -170,9 +188,27 @@ Theme D = Espresso + Robolectric mirror.)
 
 ### End-to-End-Test-Plan
 
-(Populated by Phase 1b. The parent plan's runbook in the sibling folder's
-`reports/e2e-runbook.md` is the reuse base — the Epic's E2E is the same
-two-keyboard survival + Triangle-FSM trace, now on the LIVE path.)
+(Populated by Phase 1b — agent B0-E2E-STRATEGY, 2026-05-15. The parent plan's
+runbook in the sibling folder's `reports/e2e-runbook.md` was the reuse base;
+the Epic runbook inherits the relevant parent TCs and adds cutover-specific +
+auto-tier invariant TCs, re-traced on the LIVE path.)
+
+```yaml
+scope: "Staged destructive recording-drive cutover: new DictateOrchestrator drives production recording + real FGS notification; legacy LanguageController/audioFile-field/dead-controllers retired. Same two-keyboard survival + Triangle-FSM trace as parent, now on the LIVE path, plus cutover-specific (guarded-fallback mutual-exclusion, full JobRequest config survival, notification action-button round-trip) + grep/regression invariants."
+runbook: ./reports/e2e-runbook.md
+relevant_knowledge:
+  - test-orchestrator        # auto-tier: ./gradlew test / assembleDebug / connectedAndroidTest, grep invariants
+  # knowledge-gap (carried from parent): NO test-knowledge-android/-mobile/-ime skill — runbook is hand-rolled self-contained adb (matches parent runbook style)
+test_case_count: 28          # 4 auto (AC-1/5/6/7/9 grep+regression) + 24 manual
+auto_count: 4                # TC-A1..TC-A4 (headless grep + ./gradlew test ≥946 + assembleDebug)
+manual_count: 24             # TC-1..TC-24 (device-attached IME flows)
+prerequisites_count: 19      # parent's 17 adapted: dropped DB-migration-consent (#14/#15), added notif-perm (#10), guard-state (#17), room-no-migration (#18), recording-path consent (#19)
+blocking_user_questions: 0   # "ohne Walkthrough" — orchestrator applies the Recommended-default column; Q1-Q7 parent-answered, Q8 (OQ-2 guard-lifetime) Epic-new but non-blocking (Epic §7: surfaces at B3 mid-Epic with documented fallback)
+fresh_fallback_used: true    # Phase-1b ran as a fresh-spawn (not a Phase-1a resume — SendMessage/resume unavailable in this environment)
+two_profile_structure: true  # runbook is structured for C6-SUBSET (in-plan D2-pre gate, authorises C7+Theme-C) + C12-FULL (final gate) + post-all-blocks Phase-4.5 (= C12-FULL)
+c6_subset_gate: "TC-1,TC-2,TC-C1,TC-C2,TC-C3,TC-C4,TC-6,TC-10,TC-11,TC-22 + 3 cutover Periodic-Visits — PASS authorises C7 legacy-deletion + Theme C (C8/C9/C10); FAIL keeps them gated (guarded fallback keeps app shippable on legacy)"
+skip_recommendation: "NOT skip — staged destructive cutover on the product's core feature (recording) with major user-visible behaviour impact; the C6 gate is an in-plan BLOCKING authorisation, not optional"
+```
 
 ### Plan-Consistency-Check
 
@@ -223,6 +259,14 @@ Block B3 (C8/C9/C10 — Theme C, point of no return) are **hard-gated on a green
 C6 (D2-pre)**. C5 lands the flip behind `USE_LEGACY_RECORDING_DRIVE`; the
 legacy call-site is only deleted in C7 after C6 proves the new path. mid-chunk-
 triage armed for C3/C4/C5 (architecture-conflict / blocks-following-chunks).
+
+### Orchestrator Forwarding Notes (inject into the relevant chunk-IMPL prompts)
+
+| Note-ID | For chunk(s) | Finding (Phase-1b research) | Action required |
+|---------|--------------|------------------------------|-----------------|
+| FN-1 | C5-B3, C7-B3, C6-D2pre | **AC-10 scope is wider than Epic §4 states.** Epic §4-B3 names only `JobExecutor.INSTANCE.start` at `:2236` + standalone path `:2251-2290`. Phase-1b verified **3** call-sites: `DictateInputMethodService.java:2236`, `:2897`, `:3053`. | C5 must guard **all three** behind `USE_LEGACY_RECORDING_DRIVE`; C7 deletes all three; C6 double-dispatch grep-audit (TC-C1) covers all three. Treat as a documented plan-deviation (mid-size, solution clear → inline per D22), not an architecture-conflict. |
+| FN-2 | C4-B2 | **OQ-3 confirmed:** `values/strings.xml` has `dictate_history_pause` but NO dedicated `[Pause][Stopp][Senden]` pipeline-notification-action strings. | C4 adds them (de/en locales) mirroring parent F-5's locale-file discipline. Additive — not a blocker (Epic §7 OQ-3 default). |
+| FN-3 | C5-B3 / C7-B3 | **OQ-2 default applied** (Phase-1b Q8, "ohne Walkthrough"): `USE_LEGACY_RECORDING_DRIVE` is removed **immediately after C6 green** (in C7), per D7 — no lingering dead switch. No one-dogfood-release hold. | C7 = the switch+legacy-call-site deletion chunk, gated on green C6. |
 
 ---
 
@@ -275,3 +319,4 @@ verification GATE — Phase 4.5 is the post-all-blocks holistic re-run.)
 |-----------|-------|--------|---------|
 | 2026-05-15 | Phase 0 | Epic state-file created in worktree feature/dictate-keyboard-layout-refactor; reports/ dir created; Epic file committed (65bb303). Plan in-place (no mv). Doc-landscape probed: docs/decisions/ (5 ADRs) + docs/architecture/state-architecture/ exist (parent plan B0). Phase-4.6 activation `full` (skill-default, "ohne Walkthrough"). | ✅ |
 | 2026-05-15 | Phase 1a | B0-PLAN-ANALYSIS agent created dictate-cutover-completion.chunks.json: 12 chunks, 4 skill-blocks (B1=Theme A 2ch, B2=Theme B+D2pre-gate 5ch, B3=Theme C 3ch, B4=Theme D 2ch), aggregate Impl-Score ≈9900. Modular-pattern: each chunk carries spec_references + targeted_sub_sections pointing at parent plan's 3 specs (NOT re-chunked). D2-pre gate (C6) modelled as atomic verification-chunk between C5(guarded flip) + C7(legacy deletion); C7 + all B3 hard-gated on green C6. Epic author's EXECUTION-PLAN breakdown adopted in full (no defect). Off-by-one "9 vs 10 blocks" prose noted (no chunking impact). Spec heading-refs all validated via plan-reader. | ✅ |
+| 2026-05-15 | Phase 1b | B0-E2E-STRATEGY agent (fresh-spawn, not Phase-1a resume — SendMessage unavailable; `fresh_fallback_used: true`). Wrote `reports/e2e-runbook.md` (28 TCs: 4 auto AC-1/5/6/7/9 grep+regression, 24 manual), structured for two profiles — C6-SUBSET (in-plan D2-pre gate, authorises C7+Theme-C) + C12-FULL/Phase-4.5 (full set). Reuse-base = parent runbook (24 TCs inherited/adapted). Code seams verified: stubs at DictatePipelineService.kt:419/421, audioFile field :222, 3 JobExecutor.start sites (:2236/:2897/:3053 — AC-10 audit must cover all 3, not only :2236), no notification-action strings yet (confirms OQ-3). State-file End-to-End-Test-Plan + E2E Pre-Flight (E-1..E-9, parent DB-consent items dropped — no schema change) populated. Skip-recommendation: NOT skip (destructive core-feature cutover). 0 blocking user-questions (Q1-Q7 parent-answered, Q8/OQ-2 Epic-new non-blocking). | ✅ |

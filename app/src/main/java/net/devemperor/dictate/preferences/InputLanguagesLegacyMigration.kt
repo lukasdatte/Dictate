@@ -66,8 +66,8 @@ object InputLanguagesLegacyMigration {
 
         // Step 4 — drop the legacy entry, then delegate save+pos-resync to
         // the shared helper [persistInputLanguagesAndPos] so this migration
-        // and LanguageController.persistCuratedAndPos stay in lock-step on
-        // sanitize behaviour and pos handling (Quality-Gate W3 / DRY).
+        // and the LanguageResolver permanent-write paths stay in lock-step
+        // on sanitize behaviour and pos handling (Quality-Gate W3 / DRY).
         prefs.edit().remove(KEY).apply()
         persistInputLanguagesAndPos(prefs, legacySet.toList(), oldActive)
 

@@ -46,11 +46,15 @@ import net.devemperor.dictate.state.RecordingState
  *   text (e.g. "Dictate (en)"). **F-15 (Epic §4 Block A2):** receives
  *   the effective language code (`DictateUiState.language.effective`,
  *   owned by `LanguageModule`) so the label reflects the current
- *   language without the resolver reading a static string or the legacy
- *   `LanguageController`. Read-only: this consumes `LanguageState`, it
- *   does not write it (D-13 — the legacy *writer* is removed in a later
- *   Theme-C block; the *read* has no D-13 dependency). Called lazily
- *   per render-tick with the live effective-language value.
+ *   language without the resolver reading a static string or any legacy
+ *   controller. Read-only: this consumes `LanguageState`, it does not
+ *   write it. **D-13 closed (Epic §4 Block C1):** the legacy
+ *   effective-language writer is now deleted; `LanguageState.effective`
+ *   is fed by the IME's payload-bearing `LanguageAction.RefreshFromPref`
+ *   dispatch (resolved from prefs via
+ *   `preferences.LanguageResolver`), so this read now reflects a live
+ *   value instead of the boot `"system"` sentinel. Called lazily per
+ *   render-tick with the live effective-language value.
  * @property formatStagingLabel mapper producing the
  *   `"Audio 0:23 · Send"` label for the reprocess-staging record button.
  *   Receives the staging audio duration in seconds.

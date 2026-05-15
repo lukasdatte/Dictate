@@ -25,12 +25,11 @@ import androidx.preference.SwitchPreference;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import net.devemperor.dictate.BuildConfig;
-import net.devemperor.dictate.DictateApplication;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.core.DictatePipelineService;
-import net.devemperor.dictate.core.LanguageController;
 import net.devemperor.dictate.preferences.DictatePrefsKt;
+import net.devemperor.dictate.preferences.LanguageResolver;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
@@ -99,15 +98,15 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
             // Phase 3 §3.1 (Quality-Gate K-5/K-6): the preference is marked
             // app:persistent="false" in XML so MultiSelectListPreference.setValues
             // does not call persistStringSet() and overwrite the JSON envelope.
-            // The on-disk source-of-truth is read via the LanguageController
-            // (which delegates to VersionedPrefs internally) and writes are
-            // routed through LanguageController.setCuratedLanguages so the
-            // pos-resync algorithm lives in exactly one place.
-            LanguageController controller =
-                    ((DictateApplication) requireActivity().getApplicationContext())
-                            .getOrCreateLanguageController();
-
-            List<String> curated = controller.getCuratedLanguages();
+            // D-13 (Epic §4 Block C1): the on-disk source-of-truth is read /
+            // written via LanguageResolver (the unbound-path SoT — the
+            // Settings UI has no bound DictateOrchestrator). It delegates to
+            // VersionedPrefs internally, and the pos-resync algorithm lives
+            // in exactly one place (persistInputLanguagesAndPos). No stale
+            // in-memory cache: every read re-reads SharedPreferences, so an
+            // IME-side write between fragment-create and listener-fire is
+            // immediately visible (R-3 cross-instance staleness is gone).
+            List<String> curated = LanguageResolver.INSTANCE.curatedLanguages(sp);
 
             // Order matters: setSummaryProvider must run BEFORE setValues, because
             // setValues() fires notifyChanged() and the framework rebuilds the summary
@@ -129,19 +128,19 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
                 }
 
                 // Determine the currently-active code (pos-anchor). Reading
-                // the persisted list through the controller mirrors the Service
-                // path and avoids a stale in-memory copy if another component
-                // (the IME) wrote between fragment creation and this listener
-                // firing.
-                List<String> oldList = controller.getCuratedLanguages();
+                // the persisted list freshly mirrors the IME path and avoids
+                // a stale in-memory copy if another component (the IME) wrote
+                // between fragment creation and this listener firing.
+                List<String> oldList = LanguageResolver.INSTANCE.curatedLanguages(sp);
                 int oldPos = DictatePrefsKt.get(sp, Pref.InputLanguagePos.INSTANCE);
                 String oldActive = (oldPos >= 0 && oldPos < oldList.size())
                         ? oldList.get(oldPos)
                         : null;
 
-                // Persist via the controller — sanitize (dedupe + allowlist
+                // Persist via the resolver — sanitize (dedupe + allowlist
                 // filter + label sort) and pos-resync are centralized there.
-                controller.setCuratedLanguages(new ArrayList<>(selectedLanguages), oldActive);
+                LanguageResolver.INSTANCE.setCuratedLanguages(
+                        sp, new ArrayList<>(selectedLanguages), oldActive);
 
                 // app:persistent="false" already prevents the framework from
                 // writing a StringSet to the same key. Returning true here

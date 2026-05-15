@@ -69,8 +69,9 @@ object InputLanguagesPlugin : VersionedPlugin<List<String>>(
  * the curated set.
  *
  * Used by:
- *  - `LanguageController.persistCuratedAndPos` (Quality-Gate K-3 — keep pos
- *    in lock-step with curated list across writePermanent / setCuratedLanguages).
+ *  - [LanguageResolver.setLanguage] / [LanguageResolver.setCuratedLanguages]
+ *    (Quality-Gate K-3 — keep pos in lock-step with the curated list
+ *    across both permanent-write paths).
  *  - [InputLanguagesLegacyMigration.migrateFromLegacyStringSet] for the
  *    `Set<String>` → versioned-envelope bootstrap (re-anchor old pos to the
  *    code that was active before migration).

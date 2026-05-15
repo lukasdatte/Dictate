@@ -3,8 +3,6 @@ package net.devemperor.dictate;
 import android.app.Application;
 import android.content.SharedPreferences;
 
-import net.devemperor.dictate.core.LanguageController;
-import net.devemperor.dictate.core.PipelineUiStateReader;
 import net.devemperor.dictate.core.RecordingRepository;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.DurationHealingJob;
@@ -18,16 +16,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class DictateApplication extends Application {
-
-    /**
-     * Lazily-built process-wide {@link LanguageController}, cached for use
-     * by the Settings UI in Phase 3 ({@code DictateApplication.getOrCreateLanguageController}).
-     * The IME service builds its own per-view controller in
-     * {@code onCreateInputView()} — this field is solely for hosts that do
-     * not own a {@link PipelineUiStateReader} of their own (e.g. the Settings
-     * Activity).
-     */
-    private LanguageController settingsScopeLanguageController;
 
     @Override
     public void onCreate() {
@@ -82,48 +70,14 @@ public class DictateApplication extends Application {
         executor.shutdown();
     }
 
-    /**
-     * Lazy accessor for a process-scope {@link LanguageController}, intended
-     * for callers that have no {@link PipelineUiStateReader} of their own
-     * (the Settings UI in Phase 3). The provided reader is a no-op stand-in
-     * (always reports {@code Idle}; {@code addCallback}/{@code removeCallback}
-     * are silently dropped) — suitable for write-only callers that never
-     * need to observe pipeline-state transitions.
-     *
-     * <p><b>Not</b> suitable for callers that need the controller's
-     * effective-language callback to fire on pipeline transitions: those
-     * callers must build their own controller instance via
-     * {@code new LanguageController(sp, reader)} with a real
-     * {@link PipelineUiStateReader} (the IME's {@code KeyboardUiController})
-     * and dispose it on view recreate.</p>
-     */
-    public synchronized LanguageController getOrCreateLanguageController() {
-        if (settingsScopeLanguageController == null) {
-            SharedPreferences sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE);
-            settingsScopeLanguageController = new LanguageController(sp, NO_OP_PIPELINE_READER);
-        }
-        return settingsScopeLanguageController;
-    }
-
-    /**
-     * No-op {@link PipelineUiStateReader} for the settings-scope controller.
-     * Always reports Idle state; calls to {@code addCallback}/{@code removeCallback}
-     * are silently dropped. The settings UI does not observe pipeline-state
-     * transitions, so no callback delivery is required.
-     */
-    private static final PipelineUiStateReader NO_OP_PIPELINE_READER = new PipelineUiStateReader() {
-        @Override
-        public net.devemperor.dictate.core.PipelineUiState getState() {
-            return net.devemperor.dictate.core.PipelineUiState.Idle.INSTANCE;
-        }
-
-        @Override
-        public void updateReprocessLanguage(String code) { /* no-op: not in staging */ }
-
-        @Override
-        public void addCallback(net.devemperor.dictate.core.PipelineUiCallback callback) { /* no-op */ }
-
-        @Override
-        public void removeCallback(net.devemperor.dictate.core.PipelineUiCallback callback) { /* no-op */ }
-    };
+    // D-13 (Epic §4 Block C1): the process-scope legacy language-controller
+    // singleton (and its no-op `PipelineUiStateReader`) was removed. The
+    // permanent language SoT is now `preferences.LanguageResolver`, which
+    // reads/writes the same `SharedPreferences` keys directly — callers
+    // without a bound orchestrator (the Settings UI's `PreferencesFragment`)
+    // use it statically, so no Application-held instance is required.
+    // Because the SoT is the prefs file (not an object tied to either the
+    // Application or the IME-service lifetime), the boot-before-bind path
+    // (R-3) is safe by construction: a pre-bind read returns the persisted
+    // value, never a stale cache or an NPE.
 }

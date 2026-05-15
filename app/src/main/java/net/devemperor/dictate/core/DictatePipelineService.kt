@@ -760,10 +760,12 @@ class DictatePipelineService : Service() {
      * effective-language code (`DictateUiState.language.effective`,
      * threaded by [resolveRecordButtonText]) and produces a
      * language-suffixed label (e.g. `"Record (en)"`). This is a
-     * **read-only** consumption of the `LanguageModule` state axis — no
-     * legacy writer is introduced; D-13 (LanguageController removal) is
-     * a later Theme-C block and only removes the legacy *writer*, not
-     * this read.
+     * **read-only** consumption of the `LanguageModule` state axis. D-13
+     * (Epic §4 Block C1) is now closed: the legacy effective-language
+     * writer is deleted and `LanguageState.effective` is fed by the IME's
+     * payload-bearing `LanguageAction.RefreshFromPref` dispatch (resolved
+     * from prefs via `preferences.LanguageResolver`), so this read now
+     * reflects a live value rather than the `"system"` boot sentinel.
      */
     private fun buildLayoutStrings(): LayoutStrings = LayoutStrings(
         record = getString(R.string.dictate_record),

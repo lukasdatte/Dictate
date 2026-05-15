@@ -431,15 +431,21 @@ sealed class Action {
         data class SetOverride(val code: String?) : LanguageAction()
 
         /**
-         * Phase-1 stub: the reducer returns `null` because the legacy
-         * `LanguageController` still owns the SP read surface (curated
-         * list + position) and this action is just an acknowledgement
-         * signal. B3 promotes it to a payload-bearing
-         * `SetEffective(code)` (or similar) once the controller migration
-         * lands; see `FeatureToggleModule` KDoc for the parallel
-         * migration plan.
+         * Payload-bearing pref-refresh (D-13 / Epic §4 Block C1). The
+         * caller resolves the permanent effective language from
+         * `SharedPreferences` via
+         * [net.devemperor.dictate.preferences.LanguageResolver.effectiveLanguage]
+         * **before** dispatch (Pre-Dispatch-Resolution, Spec 1 §4.11) and
+         * passes it as [effective]; the reducer writes it into
+         * `LanguageState.effective`. This replaces the Phase-1 no-op
+         * acknowledgement now that the legacy language controller (which
+         * previously owned the SP read surface) is deleted.
+         *
+         * @property effective the resolved permanent language code (e.g.
+         *   `"en"`, `"detect"`); never the `"system"` boot sentinel once
+         *   the IME has resolved prefs.
          */
-        data object RefreshFromPref : LanguageAction()
+        data class RefreshFromPref(val effective: String) : LanguageAction()
     }
 
     // ════════════════════════════════════════════════════════════════

@@ -10,36 +10,34 @@ import kotlin.reflect.KClass
  * Owns the [LanguageState] axis — the effective transcription language
  * plus an optional ReprocessStaging override.
  *
- * **Migration from the legacy `LanguageController` (Spec 1 §15.1):**
+ * **Migration from the legacy language controller (Spec 1 §15.1,
+ * D-13 / Epic §4 Block C1):**
  *
- * The previous `core.LanguageController` resolved the effective
+ * The previous `core` language controller resolved the effective
  * language from two sources (curated-list + pref-pos for permanent,
  * `PipelineUiState.ReprocessStaging.selectedLanguage` for the
- * transient override) and pushed callbacks to the IME. LanguageModule
- * subsumes that responsibility — the `language` axis carries both
- * fields and the IME observes the state directly via
- * [DictateUiStateStore.state].
- *
- * In Phase 1, the controller code is left in place; the module is the
- * state-owner for the new state pipeline. B3
- * (Subsystem-Adapter-Migration) wires the legacy controller through to
- * dispatch [Action.LanguageAction] for state updates; later phases
- * delete the controller entirely.
+ * transient override) and pushed callbacks to the IME. It has been
+ * **deleted**. LanguageModule is now the sole language SoT — the
+ * `language` axis carries both fields and the IME observes the state
+ * directly via [DictateUiStateStore.state]. The permanent SP read /
+ * write surface moved to
+ * [net.devemperor.dictate.preferences.LanguageResolver] (the
+ * unbound-path SoT, used by the Settings UI and the pre-bind IME).
  *
  * **`effective` vs `override`:**
  *
- * - `effective` — the permanent pref-resolved language (read from
- *   `Pref.InputLanguagePos` + curated list at boot, refreshed via
- *   [Action.LanguageAction.RefreshFromPref]).
+ * - `effective` — the permanent pref-resolved language. The IME
+ *   resolves it from `SharedPreferences` via
+ *   [net.devemperor.dictate.preferences.LanguageResolver.effectiveLanguage]
+ *   and dispatches [Action.LanguageAction.RefreshFromPref] carrying the
+ *   code; the reducer writes it here.
  * - `override` — set per Reprocess-Staging session via
  *   [Action.LanguageAction.SetOverride]; null clears the override and
  *   falls back to `effective`. **Never persisted.**
  *
- * The reducer is intentionally trivial — pref reads happen in B3 (the
- * IME caller resolves and dispatches `RefreshFromPref(value)` style;
- * for Phase 1, the reducer just acknowledges the action without an
- * I/O-bound payload). The actual SP-read happens before dispatch — see
- * Spec 1 §4.11 Pre-Dispatch-Resolution pattern.
+ * The reducer stays I/O-free: the SP read happens **before** dispatch
+ * (Spec 1 §4.11 Pre-Dispatch-Resolution pattern) so the module remains
+ * a pure state-transition function.
  *
  * **No cross-module observer:** the only inbound cascade is
  * `LivePrompt → Language` (`LanguageAction.SetOverride` from a
@@ -62,11 +60,10 @@ object LanguageModule : DictateModule<LanguageState, Action.LanguageAction, Lang
     override fun initialState(): LanguageState = LanguageState(effective = "system")
 
     /**
-     * No effects in Phase 1. The legacy `LanguageController` still owns
-     * the SharedPreferences read/write surface (curated-list + pos); B3
-     * wires the controller to dispatch [Action.LanguageAction] after
-     * its own writes settle, so the state mirror updates without a
-     * round-trip through this module's effect channel.
+     * No effects. The SharedPreferences read/write surface lives in
+     * [net.devemperor.dictate.preferences.LanguageResolver]; the caller
+     * resolves before dispatch and this module only mutates state, so no
+     * effect channel is needed.
      */
     sealed interface Effect : SideEffect
 
@@ -84,15 +81,19 @@ object LanguageModule : DictateModule<LanguageState, Action.LanguageAction, Lang
                 )
             } else null
 
-        // Pref-refresh acknowledgement — the caller (legacy controller
-        // path in B3) computes the new effective language from
-        // SharedPreferences before dispatching. Phase 1 keeps the
-        // mutation in `effective` an explicit no-op-or-update pattern
-        // by re-reading from ctx.global (already mirrored) — the
-        // refresh trigger is consumed as a re-emit signal. Once B3
-        // wires the dispatcher to carry the resolved code, this will
-        // become a typed-payload action.
-        Action.LanguageAction.RefreshFromPref -> null
+        // Payload-bearing pref-refresh (D-13). The caller resolved the
+        // permanent effective language from SharedPreferences via
+        // LanguageResolver before dispatch (Spec 1 §4.11
+        // Pre-Dispatch-Resolution); the reducer writes it. Idempotent —
+        // a refresh that does not change the value reduces to null so the
+        // store does not emit a no-op state.
+        is Action.LanguageAction.RefreshFromPref ->
+            if (action.effective != state.effective) {
+                TransitionResult(
+                    nextState = state.copy(effective = action.effective),
+                    sideEffects = emptyList(),
+                )
+            } else null
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices) {

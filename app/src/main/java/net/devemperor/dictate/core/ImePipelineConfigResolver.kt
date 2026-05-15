@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
  * `(sessionId, audioFile)` — but the legacy
  * `DictateInputMethodService.java:2214-2230` `JobRequest.TranscriptionPipeline`
  * threads **15 fields**, 8 of which come from IME-runtime sources not on
- * the orchestrator path (`LanguageController`, `PromptService`,
+ * the orchestrator path (`LanguageResolver`, `PromptService`,
  * `PromptQueueManager`, `AutoFormattingService`, the `EditorInfo` target
  * package, the IME's `livePrompt` / `autoSwitchKeyboard` instance flags).
  * A dropped field → recordings transcribe with the wrong language / no

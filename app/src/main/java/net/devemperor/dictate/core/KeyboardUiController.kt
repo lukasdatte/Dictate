@@ -94,9 +94,11 @@ class KeyboardUiController(
 
     /**
      * Registers a callback for pipeline state changes and timer ticks.
-     * Multiple callbacks coexist (e.g. Service for chip-refresh +
-     * `LanguageController` for effective-language sync). Idempotent —
-     * registering the same instance twice is a no-op.
+     * Multiple callbacks coexist (e.g. the Service's chip-refresh +
+     * pipeline observers). Idempotent — registering the same instance
+     * twice is a no-op. (D-13: the legacy effective-language consumer was
+     * removed; the chip refresh now runs inside the Service's own
+     * pipeline callback.)
      */
     override fun addCallback(callback: PipelineUiCallback) {
         callbacks.addIfAbsent(callback)
@@ -104,8 +106,8 @@ class KeyboardUiController(
 
     /**
      * Deregister [callback]. Safe when [callback] was never registered.
-     * Required from `LanguageController.dispose()` and from the Service's
-     * view-recreate path so callback list does not leak across view life.
+     * Required from the Service's view-recreate path so the callback list
+     * does not leak across view life.
      */
     override fun removeCallback(callback: PipelineUiCallback) {
         callbacks.remove(callback)

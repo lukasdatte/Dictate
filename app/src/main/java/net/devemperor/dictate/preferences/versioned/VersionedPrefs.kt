@@ -40,7 +40,8 @@ import android.util.Log
  * inherit that. They may be called from any thread, including worker pools,
  * **for read access**. Write access is allowed from any thread but the
  * overall preference change should be coordinated by a domain owner (see
- * `LanguageController` in Phase 1) to avoid stale-derived-state bugs.
+ * `LanguageResolver` for the input-languages envelope) to avoid
+ * stale-derived-state bugs.
  */
 object VersionedPrefs {
     private const val TAG = "VersionedPrefs"

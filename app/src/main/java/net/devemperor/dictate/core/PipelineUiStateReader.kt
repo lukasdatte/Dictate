@@ -1,22 +1,30 @@
 package net.devemperor.dictate.core
 
 /**
- * Narrow read/observe surface of [KeyboardUiController] that
- * [LanguageController] depends on.
+ * Narrow read/observe surface of [KeyboardUiController] for the
+ * ReprocessStaging language-override carrier.
  *
- * Pulled out as a separate interface so the language-domain code does not
- * import the concrete UI class — that would force the Service-/Controller-
- * Layer to know about [android.view.View] / [Handler] / Material widgets,
- * inverting the intended dependency direction.
+ * Pulled out as a separate interface so consumers do not import the
+ * concrete UI class — that would force callers to know about
+ * [android.view.View] / [Handler] / Material widgets, inverting the
+ * intended dependency direction.
  *
- * The four operations are exactly what `LanguageController` needs:
+ * The legacy effective-language controller that originally drove this
+ * surface was removed in D-13 (Epic §4 Block C1); the permanent language
+ * SoT is now [net.devemperor.dictate.preferences.LanguageResolver] and
+ * the override axis is `LanguageState.override`. This interface remains
+ * the carrier for the still-legacy
+ * [PipelineUiState.ReprocessStaging.selectedLanguage] until
+ * `KeyboardUiController` itself is retired (Epic §4 Block C3).
+ *
  *  - [state] — read the current pipeline UI state (Idle, Running,
- *    ReprocessStaging, Preparing) to decide whether a write is permanent or
- *    transient.
- *  - [updateReprocessLanguage] — temporary, transcript-only override during
- *    `ReprocessStaging`.
+ *    ReprocessStaging, Preparing) to decide whether a write is permanent
+ *    or transient.
+ *  - [updateReprocessLanguage] — temporary, transcript-only override
+ *    during `ReprocessStaging`.
  *  - [addCallback] / [removeCallback] — observe state changes so the
- *    "effective language" derived value can be re-evaluated and dispatched.
+ *    "effective language" derived value can be re-evaluated and
+ *    dispatched.
  *
  * Quality-Gate W-4 (DIP) and K-2 (multi-callback support).
  */

@@ -30,7 +30,7 @@ import java.io.File
  * origin, kind, showResendButton, etc. The new orchestrator path's
  * submit Effect ([net.devemperor.dictate.state.modules.PipelineModule.Effect.SubmitPipeline])
  * carries **only** `sessionId` + `audioFile` — the remaining ~13 fields
- * are IME-runtime context (LanguageController, PromptQueueManager,
+ * are IME-runtime context (LanguageResolver, PromptQueueManager,
  * AutoFormattingService, EditorInfo, the IME's `livePrompt` /
  * `autoSwitchKeyboard` instance flags) that is **not yet threaded onto
  * the orchestrator path**. Threading it is C5's job (the IME-trigger
@@ -126,7 +126,7 @@ class PipelineRunnerSubsystemAdapter(
  * R-1 seam: builds the [JobRequest.TranscriptionPipeline] for a
  * pipeline submit. Split out so C5 can inject an implementation backed
  * by `DictateInputMethodService`'s exact construction sources
- * (LanguageController, PromptQueueManager, AutoFormattingService, the
+ * (LanguageResolver, PromptQueueManager, AutoFormattingService, the
  * `EditorInfo` target package, the `livePrompt` / `autoSwitchKeyboard`
  * instance flags) without `PipelineRunnerSubsystemAdapter` taking a
  * dependency on the IME service.
@@ -180,7 +180,7 @@ interface PipelineConfigResolver {
  * IME-runtime-only fields** — `totalSteps`, `language`, `stylePrompt`,
  * `queuedPromptIds`, `targetAppPackage`, `livePrompt`,
  * `autoSwitchKeyboard`, `showResendButton`. These come from the IME's
- * `LanguageController` / `PromptService` / `PromptQueueManager` /
+ * `LanguageResolver` / `PromptService` / `PromptQueueManager` /
  * `AutoFormattingService` / `EditorInfo` / instance flags
  * (`DictateInputMethodService.java:2187-2206, :2227-2229`) which are
  * **not on the orchestrator path until C5**. A new-path fresh submit
@@ -263,7 +263,7 @@ class DefaultPipelineConfigResolver(
  * `queuedPromptIds`, `targetAppPackage`, `livePrompt`,
  * `autoSwitchKeyboard`, `totalSteps`, `showResendButton`) because they
  * are not reachable from the service-side composition root — they live
- * in `DictateInputMethodService`'s `LanguageController` / `PromptService`
+ * in `DictateInputMethodService`'s `LanguageResolver` / `PromptService`
  * / `PromptQueueManager` / `AutoFormattingService` / `EditorInfo` /
  * instance flags. C5 flips the IME recording-trigger to `dispatch(...)`,
  * so the IME now needs a typed insertion point to thread those fields

@@ -129,9 +129,9 @@ public class DictateInputMethodService extends InputMethodService
     // Block 3b: the audio-focus flag is no longer cached as a service field.
     // The single persistent source of truth is Pref.AudioFocus; the per-session
     // controller field in RecordingStateController owns runtime state.
-    // Language state moved into LanguageController (Phase 2 Quality-Gate W-7).
-    // Read effective language via languageController.getEffectiveLanguage();
-    // mutate via languageController.setLanguage(code).
+    // D-13: language state SoT is preferences.LanguageResolver (permanent)
+    // + LanguageState.override (transient). Read the IME-effective value
+    // via resolveEffectiveLanguage(); mutate via setLanguageFromPicker(code).
     private boolean autoSwitchKeyboard = false;
 
     // ── New-path recording-drive state (orchestrator is the sole driver) ──
@@ -184,37 +184,28 @@ public class DictateInputMethodService extends InputMethodService
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private PipelineOrchestrator pipelineOrchestrator;
     private KeyboardUiController uiController;
-    /**
-     * Service-Layer language controller (Phase 1 of language-chip-curation).
-     *
-     * Instantiated in {@link #onCreateInputView()} once {@link #uiController}
-     * exists; disposed in {@link #cleanupOldControllers()} so the
-     * {@link KeyboardUiController}'s callback list does not accumulate stale
-     * entries across view re-creates.
-     *
-     * <p>Phase 1 only wires the controller — Phase 2 will hook
-     * {@link LanguageController.Callback} into the chip-refresh path. Until
-     * then the controller runs silently in the background; its only visible
-     * effect is the SharedPreferences migration that already ran in
-     * {@link DictateApplication#onCreate()}.</p>
-     */
-    private LanguageController languageController;
 
     /**
-     * Phase 3 cross-instance bridge: invalidates the IME's per-view
-     * {@link LanguageController}'s {@code lastEffective} cache when an
-     * external writer (the Settings activity's Application-singleton
-     * controller) mutates the {@code input_languages} or
-     * {@code input_language_pos} keys.
+     * D-13 (Epic §4 Block C1): the per-view legacy language-controller
+     * field was deleted. The permanent language SoT is the static
+     * {@link net.devemperor.dictate.preferences.LanguageResolver}
+     * (reads/writes the same SharedPreferences keys, no cache); the
+     * ReprocessStaging override is the {@code LanguageState.override}
+     * axis, written via {@code LanguageAction.SetOverride}. The IME
+     * resolves the effective code via {@link #resolveEffectiveLanguage()}
+     * and pushes it to the bound orchestrator via
+     * {@link #pushPermanentLanguageToOrchestrator()}
+     * (Pre-Dispatch-Resolution, Spec 1 §4.11).
      *
-     * <p>Without this listener, returning from Settings to the IME shows a
-     * stale chip until the next pipeline-state transition retriggers the
-     * controller's {@code notifyIfChanged()} path.</p>
+     * <p>Cross-instance refresh: when the Settings activity writes the
+     * {@code input_languages} / {@code input_language_pos} keys, the IME
+     * listener below re-resolves freshly from prefs and re-pushes — no
+     * stale-cache invalidation needed (the old {@code lastEffective}
+     * cross-instance bug is gone because there is no cache; R-3).</p>
      *
-     * <p>Registered in {@link #onCreateInputView()} after
-     * {@link #languageController} construction; deregistered in
-     * {@link #cleanupOldControllers()} so the listener does not survive
-     * view-recreate alongside the discarded controller.</p>
+     * <p>Registered in {@link #onCreateInputView()}; deregistered in
+     * {@link #cleanupOldControllers()} (view-recreate) and
+     * {@link #onDestroy()} (process tear-down).</p>
      */
     private SharedPreferences.OnSharedPreferenceChangeListener inputLanguagesListener;
 
@@ -241,8 +232,9 @@ public class DictateInputMethodService extends InputMethodService
      * via {@link KeyboardUiController#removeCallback(PipelineUiCallback)} on
      * view recreate. Phase 1 cross-phase refactor (Quality-Gate K-2): the
      * Service registers via {@code addCallback}, not the deprecated
-     * single-slot {@code setCallback}, so multiple consumers (Service +
-     * {@link LanguageController}) coexist without a Composite-Wrapper.
+     * single-slot {@code setCallback}, so multiple {@code PipelineUiCallback}
+     * consumers can coexist without a Composite-Wrapper (D-13: the legacy
+     * effective-language controller consumer was removed).
      */
     private PipelineUiCallback servicePipelineCallback;
     private File audioFile;
@@ -391,6 +383,19 @@ public class DictateInputMethodService extends InputMethodService
                     DictateInputMethodService.this, R.style.Theme_Dictate);
                 attachImeViewBackendIfReady(themedContext);
             }
+            // D-13 / R-3 boot-before-bind closure: onCreateInputView's
+            // pushPermanentLanguageToOrchestrator() ran BEFORE this binder
+            // arrived (bindService is async — the common race), so the
+            // RefreshFromPref dispatch was skipped by the
+            // `pipelineBinder != null` guard and the orchestrator's
+            // `state.language.effective` is still the `"system"` boot
+            // sentinel. Re-push now that the binder exists so the F-15
+            // RenderBackend label and the transcription-config snapshot
+            // see the resolved language. Idempotent — the reducer reduces
+            // a no-change refresh to null. The unbound→bound transition
+            // is the ONLY place this matters; subsequent pref changes
+            // already re-push via inputLanguagesListener.
+            pushPermanentLanguageToOrchestrator();
         }
 
         // ── onServiceDisconnected ──
@@ -620,8 +625,9 @@ public class DictateInputMethodService extends InputMethodService
 
         // ── 2. Preferences that may change between rotations ──
         vibrationEnabled = DictatePrefsKt.get(sp, Pref.Vibration.INSTANCE);
-        // Phase 2 Quality-Gate W-7: language state lives in LanguageController.
-        // Pos preference is managed exclusively through the controller's
+        // D-13: language state lives in the LanguageState orchestrator axis
+        // + the static preferences.LanguageResolver (no service field).
+        // Pos preference is managed exclusively through the resolver's
         // persistInputLanguagesAndPos pathway.
 
         // ── 3. View inflation + findViewByIds ──
@@ -788,7 +794,7 @@ public class DictateInputMethodService extends InputMethodService
         // record-button-appearance resolver for the recording axis. The dictate-button
         // label provider is wired here so the Idle branch in
         // KeyboardUiController.applyRecordButtonForRecording can read it without
-        // taking a dependency on the LanguageController / SharedPreferences plumbing.
+        // taking a dependency on the LanguageResolver / SharedPreferences plumbing.
         uiController = new KeyboardUiController(new KeyboardUiController.PipelineViews(
             dictateKeyboardView.findViewById(R.id.pipeline_steps_container),
             dictateKeyboardView.findViewById(R.id.pipeline_scroll_view),
@@ -884,55 +890,25 @@ public class DictateInputMethodService extends InputMethodService
             () -> { vibrate(); stopRecording(); return kotlin.Unit.INSTANCE; }
         );
 
-        // ── 4a. LanguageController (Phase 1 + Phase 2 wiring) ──
-        // Built AFTER uiController exists because it depends on the
-        // PipelineUiStateReader implemented by KeyboardUiController. Self-
-        // registers as a PipelineUiCallback inside its constructor; the
-        // matching dispose() in cleanupOldControllers() removes it before
-        // the next view-recreate so the callback list does not leak.
-        //
-        // Phase 2: the Callback drives the chip refresh + record-button
-        // label update on every effective-language change (auto-curation
-        // in idle-mode, transient override during ReprocessStaging).
-        //
-        // Quality-Gate W-12: languageController zuerst, damit lastEffective
-        // vor servicePipelineCallback aktualisiert wird (callbacks-Index 0).
-        languageController = new LanguageController(sp, uiController);
-        languageController.setCallback((oldCode, newCode) -> {
-            refreshLanguageChip();
-            if (mainButtonsController != null) {
-                mainButtonsController.updateRecordButtonText(getDictateButtonText());
-            }
-            // C8 — bridge LanguageController → LanguageModule (Spec 1 §15.x).
-            // The LanguageController is the SoT for the IME-side language
-            // resolver; the orchestrator's `state.language` mirrors via the
-            // RefreshFromPref action. SetOverride paths during
-            // ReprocessStaging are routed via the PipelineUiState callback
-            // and stay in LanguageController for now (full migration is
-            // post-C8 per §9.6 "Final gelöscht in Block 1").
-            if (pipelineBinder != null) {
-                try {
-                    pipelineBinder.dispatch(net.devemperor.dictate.state.Action.LanguageAction.RefreshFromPref.INSTANCE);
-                } catch (Throwable t) {
-                    Log.w("DictateIME", "languageController bridge dispatch failed", t);
-                }
-            }
-        });
+        // ── 4a. Language wiring (D-13 — legacy language-controller gone) ──
+        // The permanent SoT is the static LanguageResolver; the
+        // orchestrator's `state.language.effective` is fed via the
+        // payload-bearing RefreshFromPref dispatch (Pre-Dispatch-
+        // Resolution, Spec 1 §4.11). Push once now so the first frame
+        // (chip + record-button label + RenderBackend F-15 read) shows
+        // the resolved language rather than the "system" boot sentinel.
+        pushPermanentLanguageToOrchestrator();
 
-        // Phase 3 cross-instance bridge: the Settings activity owns a separate
-        // Application-singleton LanguageController. When the user edits the
-        // curated list there, both controllers' SharedPreferences-backed reads
-        // see the new value, but only the writing controller's lastEffective
-        // cache is up-to-date. Without an explicit invalidation, returning
-        // to the IME shows a stale chip until the next pipeline state change.
-        // Listening on the two relevant keys plugs that gap with a single
-        // refreshFromPrefs() call (idempotent through the lastEffective guard).
+        // Cross-instance refresh: when the Settings activity writes the
+        // input-languages keys, re-resolve freshly from prefs and re-push.
+        // No stale-cache invalidation is needed — LanguageResolver holds
+        // no cache, so a fresh read already reflects the external write
+        // (the old per-instance lastEffective cross-instance staleness bug
+        // is structurally gone — R-3).
         inputLanguagesListener = (changedPrefs, key) -> {
             if (Pref.InputLanguages.INSTANCE.getKey().equals(key)
                     || Pref.InputLanguagePos.INSTANCE.getKey().equals(key)) {
-                if (languageController != null) {
-                    languageController.refreshFromPrefs();
-                }
+                pushPermanentLanguageToOrchestrator();
             }
         };
         sp.registerOnSharedPreferenceChangeListener(inputLanguagesListener);
@@ -953,11 +929,12 @@ public class DictateInputMethodService extends InputMethodService
         sp.registerOnSharedPreferenceChangeListener(audioFocusListener);
 
         // Pipeline UI callbacks: QWERTZ button updates from pipeline state.
-        // Phase 1 cross-phase refactor: Service now uses addCallback() rather than the
-        // deprecated setCallback() so multiple consumers (Service + LanguageController)
-        // coexist on the same KeyboardUiController without a Composite-Wrapper.
-        // Registered AFTER languageController so it sits at callbacks-Index 1
-        // (W-12: language state must update before any UI consumer reads it).
+        // Phase 1 cross-phase refactor: Service uses addCallback() rather than
+        // the deprecated setCallback() so multiple PipelineUiCallback consumers
+        // can coexist on the same KeyboardUiController without a
+        // Composite-Wrapper (D-13: the legacy language-controller consumer
+        // is gone; the chip/label refresh on staging-override change now
+        // runs inside this servicePipelineCallback's onPipelineUiStateChanged).
         servicePipelineCallback = new PipelineUiCallback() {
             @Override
             public void onPipelineTimerTick(@NonNull PipelineUiState.Running state, long elapsedMs) {
@@ -980,6 +957,15 @@ public class DictateInputMethodService extends InputMethodService
                                           || newState instanceof PipelineUiState.Preparing;
                     promptsAdapter.setLanguageChipEnabled(!pipelineRunning);
                 }
+
+                // D-13: the deleted legacy language-controller used to
+                // refresh the chip label on every pipeline-state change
+                // (so the chip shows the ReprocessStaging override vs the
+                // permanent language). That responsibility moved here —
+                // entering / leaving staging, or a staging override write,
+                // flips what resolveEffectiveLanguage() returns, so the
+                // label must re-resolve. Idempotent (same code → same label).
+                refreshLanguageChip();
 
                 if (recordingUiController == null) return;
                 if (newState instanceof PipelineUiState.Idle) {
@@ -1256,17 +1242,12 @@ public class DictateInputMethodService extends InputMethodService
             dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
         }
         if (bluetoothScoManager != null) bluetoothScoManager.unregisterReceiver();
-        // Phase 4 follow-up: dispose the language controller and its prefs listener.
-        // The Service may be destroyed without a preceding view-recreate (the IME
-        // process can be torn down by the OS while a view is still attached), in
-        // which case cleanupOldControllers() is never called and the listener +
-        // controller would leak through the SharedPreferences and the
-        // PipelineUiStateReader callback list. Disposing here is idempotent with
-        // cleanupOldControllers() because both null out the references afterwards.
-        if (languageController != null) {
-            languageController.dispose();
-            languageController = null;
-        }
+        // D-13: deregister the input-languages prefs listener. The Service
+        // may be destroyed without a preceding view-recreate (the IME
+        // process can be torn down by the OS while a view is still
+        // attached), in which case cleanupOldControllers() is never called
+        // and the listener would leak through the SharedPreferences.
+        // Idempotent with cleanupOldControllers() (both null the field).
         if (inputLanguagesListener != null && sp != null) {
             sp.unregisterOnSharedPreferenceChangeListener(inputLanguagesListener);
             inputLanguagesListener = null;
@@ -1336,18 +1317,10 @@ public class DictateInputMethodService extends InputMethodService
 
             uiController.stopActiveTimer();
         }
-        // Phase 1 cross-phase: dispose the language controller bound to the old
-        // uiController so its self-registration is reverted before the new
-        // controller is constructed in onCreateInputView. Without this the old
-        // controller would keep observing a discarded view's state.
-        if (languageController != null) {
-            languageController.dispose();
-            languageController = null;
-        }
-        // Phase 3 cross-instance bridge: deregister the prefs listener that was
-        // forwarding external Settings-writes into the (now disposed) language
-        // controller. The fresh controller in the upcoming onCreateInputView
-        // will register a new listener bound to the new instance.
+        // D-13: deregister the input-languages prefs listener bound to the
+        // old view. The fresh onCreateInputView re-registers a new one.
+        // (No legacy controller to dispose — the resolver is stateless and
+        // the orchestrator state survives the view-recreate.)
         if (inputLanguagesListener != null) {
             sp.unregisterOnSharedPreferenceChangeListener(inputLanguagesListener);
             inputLanguagesListener = null;
@@ -1624,15 +1597,75 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
+     * The IME-side effective language: the transient ReprocessStaging
+     * override (when in staging) takes precedence over the permanent
+     * pref-resolved language, mirroring the deleted legacy
+     * language-controller's effective-resolution semantics (D-13).
+     *
+     * <p>The ReprocessStaging override is still carried on the legacy
+     * {@link PipelineUiState.ReprocessStaging#getSelectedLanguage()}
+     * (owned by {@link KeyboardUiController} until C10 retires it); the
+     * permanent value comes from the static
+     * {@link net.devemperor.dictate.preferences.LanguageResolver}. Both
+     * are framework-light reads — safe to call on every render-tick and
+     * before the orchestrator binds (R-3 boot-before-bind: the permanent
+     * read returns the persisted value, never a stale cache or NPE).</p>
+     */
+    private String resolveEffectiveLanguage() {
+        if (uiController != null
+                && uiController.getState() instanceof PipelineUiState.ReprocessStaging) {
+            String override =
+                    ((PipelineUiState.ReprocessStaging) uiController.getState())
+                            .getSelectedLanguage();
+            if (override != null && !override.trim().isEmpty()) return override;
+        }
+        return net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
+                .effectiveLanguage(sp);
+    }
+
+    /**
+     * Resolve the **permanent** effective language from prefs and push it
+     * into the bound orchestrator via the payload-bearing
+     * {@code LanguageAction.RefreshFromPref} (Pre-Dispatch-Resolution,
+     * Spec 1 §4.11), then refresh the chip + record-button label.
+     *
+     * <p>R-3 boot-before-bind: the dispatch is guarded by
+     * {@code pipelineBinder != null} (the parent plan's guard
+     * discipline). When unbound, the UI still refreshes from the resolver
+     * directly; the next {@code RefreshFromPref} after bind reconciles
+     * {@code state.language.effective}. This is dispatched on every
+     * permanent-language change (initial render, picker write, external
+     * Settings write) so the RenderBackend F-15 read
+     * ({@code state.language.effective}) and the transcription-config
+     * snapshot stay in lock-step with the prefs.</p>
+     */
+    private void pushPermanentLanguageToOrchestrator() {
+        String code = net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
+                .effectiveLanguage(sp);
+        if (pipelineBinder != null) {
+            try {
+                pipelineBinder.dispatch(
+                        new net.devemperor.dictate.state.Action.LanguageAction.RefreshFromPref(code));
+            } catch (Throwable t) {
+                Log.w("DictateIME", "RefreshFromPref dispatch failed", t);
+            }
+        }
+        refreshLanguageChip();
+        if (mainButtonsController != null) {
+            mainButtonsController.updateRecordButtonText(getDictateButtonText());
+        }
+    }
+
+    /**
      * Phase 2 §2.1: refreshes the always-visible language chip's label
      * from the current effective language. Called on initial render, on
-     * every {@link LanguageController.Callback#onEffectiveLanguageChanged}
-     * fire, and any place the service explicitly wants the chip in lock-
-     * step with the controller's view of "current language".
+     * every permanent-language change (via
+     * {@link #pushPermanentLanguageToOrchestrator()}), and any place the
+     * service wants the chip in lock-step with the resolved language.
      */
     private void refreshLanguageChip() {
-        if (promptsAdapter == null || languageController == null) return;
-        String code = languageController.getEffectiveLanguage();
+        if (promptsAdapter == null) return;
+        String code = resolveEffectiveLanguage();
         // The chip uses the compact 2-letter form (e.g. "DE", "EN") so it
         // matches the size and styling of regular prompt pills. The full
         // language name is shown when the user opens the popup picker.
@@ -1665,9 +1698,9 @@ public class DictateInputMethodService extends InputMethodService
     /**
      * Phase 2 §2.2: opens a grouped PopupMenu listing all transcription
      * languages. The chip is always-visible, so this method runs in both
-     * the idle and the ReprocessStaging modes; the {@link LanguageController}
+     * the idle and the ReprocessStaging modes; {@link #setLanguageFromPicker}
      * decides whether the click results in a permanent write (with auto-
-     * curation) or a transient ReprocessStaging override.
+     * curation) or a transient ReprocessStaging override (D-13).
      *
      * <p>Layout:
      * <ol>
@@ -1685,12 +1718,12 @@ public class DictateInputMethodService extends InputMethodService
      * IME's window context correctly.</p>
      */
     private void showLanguagePicker(View anchor) {
-        if (languageController == null) return;
-
-        // Quality-Gate N-6: getCuratedLanguages() returns the list already
+        // Quality-Gate N-6: curatedLanguages() returns the list already
         // label-sorted and free of duplicates / unknown codes (plugin
         // sanitize contract). Just compute "others" for the lower block.
-        List<String> curatedOrdered = languageController.getCuratedLanguages();
+        List<String> curatedOrdered =
+                net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
+                        .curatedLanguages(sp);
         List<String> othersOrdered = LanguageLabelResolver.INSTANCE.othersThan(curatedOrdered);
 
         android.widget.PopupMenu popup = new android.widget.PopupMenu(
@@ -1738,12 +1771,53 @@ public class DictateInputMethodService extends InputMethodService
             }
             String code = codeForStableId(id);
             if (code != null) {
-                languageController.setLanguage(code);
+                setLanguageFromPicker(code);
                 return true;
             }
             return false;
         });
         popup.show();
+    }
+
+    /**
+     * Picker click handler — routes the chosen language to the right
+     * target based on the pipeline state, replicating the deleted legacy
+     * language-controller's set-language routing (D-13):
+     *
+     * <ul>
+     *   <li><b>ReprocessStaging</b> → a <i>transient</i> override. Written
+     *       to the legacy {@link PipelineUiState.ReprocessStaging}
+     *       (via {@link KeyboardUiController#updateReprocessLanguage(String)},
+     *       still the carrier until C10) <i>and</i> dispatched as
+     *       {@code LanguageAction.SetOverride(code)} so the orchestrator's
+     *       {@code LanguageState.override} (the new SoT) tracks it. The
+     *       state-change callback refreshes the chip; never persisted.</li>
+     *   <li><b>any other state</b> → a <i>permanent</i> write with
+     *       auto-curation via the static
+     *       {@link net.devemperor.dictate.preferences.LanguageResolver},
+     *       followed by {@link #pushPermanentLanguageToOrchestrator()}
+     *       (refreshes chip + label + dispatches RefreshFromPref).</li>
+     * </ul>
+     */
+    private void setLanguageFromPicker(String code) {
+        if (uiController != null
+                && uiController.getState() instanceof PipelineUiState.ReprocessStaging) {
+            uiController.updateReprocessLanguage(code);
+            if (pipelineBinder != null) {
+                try {
+                    pipelineBinder.dispatch(
+                            new net.devemperor.dictate.state.Action.LanguageAction.SetOverride(code));
+                } catch (Throwable t) {
+                    Log.w("DictateIME", "SetOverride dispatch failed", t);
+                }
+            }
+            // The KeyboardUiController state-change callback path refreshes
+            // the chip; nothing persisted for a transient override.
+        } else {
+            net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
+                    .setLanguage(sp, code);
+            pushPermanentLanguageToOrchestrator();
+        }
     }
 
     /**
@@ -2383,14 +2457,14 @@ public class DictateInputMethodService extends InputMethodService
         if (autoFormattingService.isEnabled()) totalSteps++;
         totalSteps += promptQueueManager.getQueuedIds().size();
 
-        // Phase 2 §2.6: language source is the LanguageController (SoT
-        // across normal mode + ReprocessStaging override). "detect"
-        // remains the explicit "let Whisper detect" sentinel — null on
-        // the wire. (D-13/C8 removes LanguageController later; C5 only
-        // READs it — see Epic §4 Block B3 / the C3-IMPL-1 directive.)
-        String effectiveLanguage = languageController != null
-                ? languageController.getEffectiveLanguage()
-                : "detect";
+        // D-13: language source is resolveEffectiveLanguage() — the
+        // ReprocessStaging override (when staging) over the permanent
+        // pref-resolved language (preferences.LanguageResolver). Exactly
+        // the deleted legacy language-controller's effective-resolution
+        // semantics, so R-1 transcription-config fidelity is preserved.
+        // "detect" remains
+        // the explicit "let Whisper detect" sentinel — null on the wire.
+        String effectiveLanguage = resolveEffectiveLanguage();
         String language = !"detect".equals(effectiveLanguage) ? effectiveLanguage : null;
         String stylePrompt = promptService.resolveWhisperStylePrompt(effectiveLanguage);
 
@@ -3010,22 +3084,22 @@ public class DictateInputMethodService extends InputMethodService
 
     /**
      * Phase 2 §2.5b: record-button label for the current effective
-     * language. The full self-heal + StringSet sanitisation block has
-     * moved into {@link InputLanguagesPlugin#sanitize} and the
-     * {@link LanguageController} pos resync; this method is now a pure
-     * lookup.
+     * language. The self-heal + StringSet sanitisation lives in
+     * {@link InputLanguagesPlugin#sanitize} + the
+     * {@link net.devemperor.dictate.preferences.LanguageResolver} pos
+     * resync (D-13); this method is now a pure lookup.
      */
     private String getDictateButtonText() {
-        if (languageController == null) {
-            // Defensive: only happens during the brief window before
-            // onCreateInputView wires the controller. Fall back to the
-            // first entry of InputLanguagesPlugin.defaultValue so there is
-            // a single source of truth for the default code (avoids a
-            // hard-coded "detect" drifting out of sync with the plugin).
+        if (sp == null) {
+            // Defensive: only reachable in the brief window before sp is
+            // assigned in onCreate(). Fall back to the first entry of
+            // InputLanguagesPlugin.defaultValue so there is a single
+            // source of truth for the default code (avoids a hard-coded
+            // "detect" drifting out of sync with the plugin).
             String defaultCode = InputLanguagesPlugin.INSTANCE.getDefaultValue().get(0);
             return LanguageLabelResolver.INSTANCE.recordLabelFor(defaultCode);
         }
-        String code = languageController.getEffectiveLanguage();
+        String code = resolveEffectiveLanguage();
         return LanguageLabelResolver.INSTANCE.recordLabelFor(code);
     }
 

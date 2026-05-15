@@ -300,7 +300,7 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 | B1 | Pre-Architecture and Service-Skeleton | C1+C2 (2) | 1250 | 650 | 1 | ✅ (commits bd8f1e6 → 7a5afd1, 23 fixes 1 wave; 198 tests pass) |
 | B2 | Modular-Orchestrator-Implementation | C3+C4+C5+C6+C7 (5) | 4350 | 3100 | 3 | ✅ (commits d0dffd9 → 6c16951; 14 modules + Orchestrator + Registry + PrefMirror + Recovery + Service-wiring; 22 fixes 1 wave; 536 tests pass) |
 | B3 | Migration-Persistence-AudioFactory | C8+C9+C10+C11 (4) | 3150 | 1900 | 2 | ✅ (commits b97e09a → 676a62f; 2 Crit data-loss fixed in W1; IMPL-1 + SF-4 closed; 679 tests pass) |
-| B4 | Keyboard-Layout-Catalog | C12+C13+C14+C15 (4) | 2500 | 1510 | 2 | ⏳ pending |
+| B4 | Keyboard-Layout-Catalog | C12+C13+C14+C15 (4) | 2500 | 1510 | 2 | ✅ (commits f8ba56a → 307b4e6; 4 Crit dual-render-path fixed in W1; 843 tests pass) |
 | B5 | Floating-Overlay | C16+C17+C18 (3) | 2000 | 1250 | 2 | ⏳ pending |
 
 **Per-chunk overview (plan-level IDs; spec-level mapping in spec chunks.json):**
@@ -319,10 +319,10 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 | C9-block3-db-persistence-schema-m4 | Block 3b: DB-Persistence — Schema-Migration M3→M4 | Block 3 (spec1) | 850 | M | ✅ (d78984c prod + 02124ba tests; first androidTest infra; MigrationTo4 7 cases) |
 | C10-block3-db-persistence-recovery | Block 3c: DB-Persistence — Recovery + Cleanup | Block 3 (spec1) | 600 | M | ✅ (eea6f6e prod + 9666c93 tests; SF-4 closed; 6 KG-SST-2 cases) |
 | C11-block4-audio-file-factory | Block 4: AudioFileFactory + Pre-Dispatch | Block 4 | 1000 | L | ✅ (3c28d48 prod + 38f28a0 tests; KG-AFF-1..5 all implemented; LegacyMigration + CacheDirFactory) |
-| C12-block5-layout-catalog-and-render-backend | Block 5/1: LayoutCatalog + RenderBackend + helpers | Block 5 | 800 | M | ⏳ |
-| C13-block5-motionscene-xml | Block 5/2: MotionScene XML + layout-XML refactor | Block 5 | 500 | M | ⏳ |
-| C14-block5-ime-view-backend | Block 5/3: ImeViewBackend + Controllers + Animation | Block 5 | 750 | M | ⏳ |
-| C15-block5-service-wiring-and-cleanup | Block 5/4: Service wiring (5c) + Cleanup (5d destructive) | Block 5 | 450 | M | ⏳ |
+| C12-block5-layout-catalog-and-render-backend | Block 5/1: LayoutCatalog + RenderBackend + helpers | Block 5 | 800 | M | ✅ (47a5c3c prod + e548d5a tests; 11 production files; 92 tests incl. 25-case VisibilityMatrixTest) |
+| C13-block5-motionscene-xml | Block 5/2: MotionScene XML + layout-XML refactor | Block 5 | 500 | M | ✅ (832d912 prod + c988135 tests; 5 ConstraintSets + 5 Transitions; visibilityMode="ignore" on all 9 buttons) |
+| C14-block5-ime-view-backend | Block 5/3: ImeViewBackend + Controllers + Animation | Block 5 | 750 | M | ✅ (aa3b229 prod + 5870740 tests; 7 production files; 52 unit + 10 Espresso skeletons) |
+| C15-block5-service-wiring-and-cleanup | Block 5/4: Service wiring (5c) + Cleanup (5d destructive) | Block 5 | 450 | M | ✅ (d198d19 prod + a956274 tests; KeyboardLayoutModeController deleted; 5 new wiring tests; D-13 re-deferred to B7) |
 | C16-block6-overlay-backend-and-window | Block 6/1: OverlayBackend + Window-wrapper + XML | Block 6 | 800 | M | ⏳ |
 | C17-block6-permission-onboarding | Block 6/2: Permission-Observer + Gate + Onboarding-UI | Block 6 | 550 | M | ⏳ |
 | C18-block6-mode-transitions-and-drag | Block 6/3: Mode-transitions T1-T7 + Drag + OverlayModule | Block 6 | 650 | M | ⏳ |
@@ -378,6 +378,7 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 | B1 | bd8f1e6 | 7a5afd1 | ✅ |
 | B2 | d0dffd9 | 6c16951 | ✅ |
 | B3 | b97e09a | 676a62f | ✅ |
+| B4 | f8ba56a | 307b4e6 | ✅ |
 
 ---
 

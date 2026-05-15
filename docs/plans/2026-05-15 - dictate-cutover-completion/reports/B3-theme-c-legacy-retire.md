@@ -30,11 +30,13 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 0 · Important: 1 · Nice-to-have: 0 · Postponed: 0
+**Severity counts:** Critical: 1 · Important: 1 · Nice-to-have: 1 · Postponed: 0
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
 | C8-IMPL-1 | B3-C8-C1-IMPL | Important | delegated-to-orchestrator → **B3 AUDIT-TEST** | R-7-variant: `LegacyAudioFileMigrationTest` flakes non-deterministically in the full `testReleaseUnitTest` run only (passes isolated + full testDebugUnitTest). DB-singleton / `DurationHealingJob` test-pollution axis (C9-C2 / audioFile territory) — DIFFERENT shared-state axis than B2-VAL-W1's `ActiveJobRegistry.resetForTest()`. Zero code-path overlap with C8 (not a regression). B3 AUDIT-TEST must add a `DurationHealingJob`/DB-singleton `tearDown` for the `migration/` Robolectric tests. | step-1-impl (C8-C1) |
+| C10-IMPL-2 | B3-C10-C3-IMPL | **Critical** | delegated-to-orchestrator → **mid-chunk-triage / Epic re-scope** | **Architecture-conflict: the render-path cutover block does not exist.** C10-C3's premise ("Theme B + the parent RenderBackend path made the 4 controllers dead") is false — Theme B was recording-drive only; `ImeViewBackend` runs *parallel* to the legacy controllers (`staticHandlerInstaller=null`, new render controllers not IME-attached); RECORD/BACKSPACE long-press + touch handlers + theming + key-press-anim + QWERTZ + pipeline-progress UI have no ported owner (parent B4-VAL F-1/F-2/F-33 deferred the IME render-attach to a never-created follow-up). Per-class responsibility-trace caught it before any deletion (R-mitigation). Needs a new render-path-cutover block before the 4 deletions are safe. Subsumes C5-IMPL-2. Blocks D1/D2. | step-1-impl (C10-C3) |
+| C10-IMPL-3 | B3-C10-C3-IMPL | Nice-to-have | open | Optional architecture-test guarding the AC-10 "PipelineOrchestrator has no caller outside {adapter, JobExecutor, standalone/cancel/RESUME}" invariant. Noted for D1/D2 or follow-up; not done this (blocked) chunk. | step-1-impl (C10-C3) |
 
 ---
 
@@ -441,8 +443,197 @@ weak assertions. No quality issues; no fixes needed.
 
 ### Chunk C10-C3 — dead-controller retire + PipelineOrchestrator disposition
 
-**Agent-IDs:** `B3-C10-C3-IMPL` · **Status:** ⏳ pending · **Risk:** MED
-(subsections filled when chunk runs)
+**Agent-IDs:** `B3-C10-C3-IMPL` (fresh, combined Steps 1-5).
+**Status:** ⚠️ **BLOCKED — Critical architecture-conflict (IMPL-2, → mid-chunk-triage)**. OQ-1 done; KeyboardLayoutModeController already-gone confirmed; the 4 controller deletions **NOT performed** (premise false — see trace). · **Risk:** MED → **the subtle R-risk materialised: the controllers' behaviour is NOT ported. Per-class responsibility-trace (R-mitigation) caught it before any deletion (D4 correctness over speed).**
+**Implementation-Commit (Commit 1):** ⏳ (orchestrator) · **Test-Commit (Commit 2):** ⏳ (n/a — no test-bearing change this chunk; see below)
+
+#### What was done (Steps 1-5, combined)
+
+1. **OQ-1 — `PipelineOrchestrator` disposition: CONFIRMED + annotated (no deletion).**
+   The C3-B1 `PipelineRunnerSubsystemAdapter` provably **delegates** (does
+   not reimplement): `PipelineRunnerSubsystemAdapter.submit/cancel` →
+   `JobExecutor.INSTANCE.start/cancel` → `JobExecutor.initialize(orchestrator)`
+   → `PipelineOrchestratorRunner(orchestrator)` → `PipelineOrchestrator`
+   (the unchanged 1383-LOC runner body). `grep` of every non-doc
+   `PipelineOrchestrator` reference: the only direct callers besides the
+   adapter chain are the standalone-prompt path (`StandaloneConfig`,
+   IME `:2720`), the cancel path (`CancelInfo`, IME `:3587/:3591/:3598`),
+   and the RESUME carve-out (C6-IMPL-2) — **no second state-router, no
+   double-dispatch (AC-10 holds)**. A KDoc boundary header was added to
+   `core/PipelineOrchestrator.kt` stating it is the `PipelineRunnerSubsystem`
+   adaptee with the full delegation chain + the Spec 1 §9.6 / §1.x "never
+   deleted" citation. **`PipelineOrchestrator` NOT deleted/rewritten** (per
+   Spec 1 §9.6 + Epic OQ-1).
+2. **`KeyboardLayoutModeController` — already deleted (Spec 2 §9.1 / parent
+   C15): CONFIRMED.** No `.kt` source exists (`find` empty). The 5 residual
+   refs are comment/KDoc-only anchors documenting the C15 removal (IME
+   `:835/:3657`, KSM `:63/:105`, layout XML `:153`) — not code. Spec 2 §9.1
+   "entfällt vollständig" already satisfied; nothing to delete.
+3. **The 4 controller deletions (`MainButtonsController`,
+   `RecordingUiController`, `KeyboardStateManager`, `KeyboardUiController`)
+   — NOT performed.** The chunk premise ("Theme B + the parent RenderBackend
+   path made these dead") is **false**. The per-class responsibility-trace
+   (mandatory R-mitigation, below) proves every one of these controllers is
+   still the **sole production owner** of behaviour with **no ported new
+   owner**. Deleting them would erase core user features (RECORD long-press
+   2-mode handler, BACKSPACE accelerated-delete, SPACE cursor-swipe, ENTER
+   overlay, all keyboard visibility logic, the entire pipeline-progress UI).
+   Flagged as **Critical `architecture-conflict` (IMPL-2)** → mid-chunk-triage.
+
+#### MANDATORY per-class responsibility-trace (AC-7 evidence + R-mitigation)
+
+The architecture reality (verified by reading every controller + the new
+render path + the IME wiring + parent-plan B4-VAL findings F-6/F-33/F-1/F-2):
+
+> **The render-path cutover never happened.** Theme B of this Epic was the
+> *recording-drive* cutover (JobExecutor → PipelineRunnerSubsystem); it did
+> **not** wire the IME render path onto `RenderBackend`. `ImeViewBackend` is
+> attached in *parallel* to the legacy controllers (IME `:1023`
+> `attachImeViewBackendIfReady`), explicitly documented at IME `:1014-1017`:
+> *"the record path still works through the legacy MainButtonsController +
+> KeyboardUiController + RecordingUiController flow"*. `ImeViewBackend` is
+> only 287 LOC, wires **plain click + the RESEND long-press only**, and its
+> `staticHandlerInstaller` is wired **`null`** at IME `:1113`. The new
+> `ContentAreaController`/`PromptVisibilityController`/`OverlayResetHandler`
+> are **not attached in the IME** (`grep` empty). Parent-plan B4-VAL F-33 +
+> F-1/F-2 explicitly deferred the IME-side render-path attach + the
+> RECORD/BACKSPACE long-press port to a "D-13 / B5/B7 follow-up" — **a block
+> that never existed** (the exact INT-1 pattern this Epic was created to
+> fix, recurring at the render layer).
+
+| Class | Spec disposition (§ref) | Per-responsibility → new owner (verified present?) | Safe to delete? |
+|---|---|---|---|
+| `KeyboardLayoutModeController` | Spec 2 §9.1 "entfällt vollständig" | Already gone (parent C15 → MotionScene XML + `ImeViewBackend.render` transitionToState). VERIFIED present (declarative scene-states). | ✅ already deleted — confirmed, no action |
+| `MainButtonsController` | Spec 2 §9.2 → `ImeViewBackend.wireStaticHandlers` + `staticHandlerInstaller` | `registerMainButtonListeners` (9 click/long/touch handlers) → `ImeViewBackend.wireStaticHandlers` wires plain clicks only; **RECORD long-press** (Idle→Settings+file-picker / Active→autoSwitch+stop) **NOT ported** — `ImeViewBackend` KDoc `:233-242` explicitly says wiring it "would silently overwrite the legacy listener… erasing both user features", deferred to "B5/B7 follow-up". **BACKSPACE long-press** (accel-delete cascade) **NOT ported** (KDoc `:243-246`, "F-1 drop the wire"). `BackspaceSwipeHandler`/`CursorSwipeTouchHandler`/`EnterOverlayHandler` → `staticHandlerInstaller` hook, but it is **`null`** at IME `:1113` → **NOT installed on the new path**. `applyTheme`/`initializeKeyPressAnimations`/`initializeOverlayCharacters`/`updateOverlayCharacters`/`animateSmallModeToggle`/`animateEditNumbersBounce`/`refreshAudioFocusIcon`/`updateRecordButtonText`/`setResendEnabled` → **no new owner exists** (Spec 2 §9.2 maps them to ImeViewBackend methods that were never written). | ❌ **NO — STOP.** Multiple side-effecting responsibilities with zero ported owner. Deleting strands RECORD/BACKSPACE long-press, all touch handlers, theming, all key-press animation, overlay chars. |
+| `KeyboardStateManager` | Spec 2 §9.3 → `ContentAreaController` + `PromptVisibilityController` + `OverlayResetHandler` (R.10 split) | `applyContentAreaVisibility` → `ContentAreaController` (class exists, **not IME-attached** — KSM KDoc `:149-159` *"TODO(D-13 follow-up): delete … once ContentAreaController attaches in production (B4-VAL F-33)"*; the new path is "a parallel RenderBackend ready to take over once the IME-side attach lands"). `applyPromptsVisibility`/`applyPromptsLayout` → `PromptVisibilityController` (same — not attached). `overlayCharactersLl.visibility=GONE` reset → `OverlayResetHandler` (not attached). `contentArea`/`isSmallMode` state + `setContentArea`/`setSmallMode`/`refresh` → `LayoutModule`/`LayoutState` (state ported; **but the IME still calls `stateManager.setContentArea(...)`/`refresh()` directly** at `:1169/:1172/:1184/:1185` — the dispatch-side migration was not done). | ❌ **NO — STOP.** The new owner classes exist but are **not wired into production**; KSM is the sole live visibility owner. Deleting blanks every keyboard visibility axis. |
+| `RecordingUiController` | Spec 2 §9.4 → `KeyboardUiController.applyRecordButtonForRecording` + `RecordingAnimationController` + LayoutCatalog predicates | Main-button mutations → already moved to `KeyboardUiController.applyRecordButtonForRecording` (but that class is *also* on the kill-list — see next row). `recordingAnimation` lifecycle → `RecordingAnimationController` (exists; wired into `ImeViewBackend` `recordingAnimationCtrlForBackend`) — **but the IME also still drives `recordingUiController.onStateChanged/onAmplitudeUpdate/onTimerTick`** at `:1369/:1376/:1381/:1437`. `updateQwertzRecButton`/`enterPipelineDisplay`/`updatePipelineTimer` (QWERTZ rec-button) + `setupPromptsVisualizer`/prompt-rec/prompt-pause buttons → **no new owner** (Spec 2 §9.4 says "bleibt — QWERTZ-spezifisch"; never migrated). IME `servicePipelineCallback` `:940/:979/:981/:986` calls these live. | ❌ **NO — STOP.** QWERTZ rec-button + prompts visualizer + prompt-bar controls have no ported owner; the IME drives the controller on every recording state change. |
+| `KeyboardUiController` | Spec 2 §9.5 (state+view → record_btn-Resolver) / Spec 1 §9.2 (state-Teil → PipelineModule) | `PipelineUiState` state + `preparePipeline`/`startPipeline`/`stopPipeline`/`toggleAutoEnter`/`enterReprocessStaging`/`cancelReprocessStaging`/`updateReprocessQueue`/`updateReprocessLanguage` → Spec says → `PipelineModule.reduce` via `Action.PipelineAction.*`; **the IME still calls `uiController.startPipeline/addRunningStep/completeStep/failStep/stopPipeline/enterReprocessStaging/getAutoEnterConfig/getState` directly** (`:1295/:1301/:1450/:1470/:1476/:2559/:2713/:2717/:3528` + KSM/RecordingUiController lambdas `:786/:788/:878/:881`). `refreshRecordButtonFromState`/`applyRecordButtonForRecording` (Spec 2 §9.5 → record_btn resolver) — resolver exists in LayoutCatalog but the IME-side flip never happened. `stepRows` pipeline-progress view rendering (inflates `item_pipeline_step_row`, live per-step timers) → **no new owner** (Spec 1 §9.2 says "stepRows bleibt im KeyboardUiController View-side"). It is still a `PipelineUiStateReader` consumed by `PipelineUiStateReader.kt` + `FakePipelineUiStateReader`. | ❌ **NO — STOP.** Pipeline-progress UI + step-row rendering + the entire IME pipeline-UI driver path is unported. `PipelineUiStateReader` consumers would dangle. |
+
+**Verdict:** `KeyboardLayoutModeController` deletion = already done (confirmed,
+no-op). The **4 remaining controllers cannot be deleted** — every one is the
+sole production owner of behaviour the spec maps to new owners that **were
+never wired into the IME** (the render-path cutover block the Epic does not
+contain). This is the exact subtle R-risk the prompt + plan §4 Block C3
+"Risk" warned about ("a controller method with a side-effect not yet ported");
+the mandatory per-class trace caught it **before** any deletion. **Zero
+controllers deleted; zero residual-ref edits made** (none are needed — no
+deletion). AC-7 cleanup-grep deliberately **not** run for the 4 classes
+(they still exist by design; running it would falsely "fail").
+
+#### Spec 1 §9.6 End-of-Block-Cleanup-Check (AC-7)
+
+| Class (Spec 1 §9.6 / Spec 2 §9.x) | "Final gelöscht" target | grep `app/src` result | Verdict |
+|---|---|---|---|
+| `KeyboardLayoutModeController` | Spec 2 §9.1 (parent C15) | source absent; 5 comment-only anchors remain | ✅ PASS (already deleted; anchors are intentional C15 doc-trail, not code) |
+| `MainButtonsController` | Spec 2 §9.2 (this block, intended) | source present + ~12 live IME/render refs | ⛔ **cannot run as PASS** — class must survive (architecture-conflict) |
+| `KeyboardStateManager` | Spec 2 §9.3 (this block, intended) | source present + ~15 live refs | ⛔ same |
+| `RecordingUiController` | Spec 2 §9.4 (this block, intended) | source present + ~20 live refs | ⛔ same |
+| `KeyboardUiController` | Spec 2 §9.5 / Spec 1 §9.2 (this block, intended) | source present + ~25 live refs | ⛔ same |
+| `PipelineOrchestrator` | Spec 1 §9.6 **NEVER deleted** | present, reachable only via adapter+carve-out, KDoc-annotated | ✅ PASS (OQ-1 — correctly kept) |
+
+#### OQ-1 PipelineOrchestrator boundary confirmation + KDoc
+
+- **Delegation proven (not reimplementation):**
+  `PipelineRunnerSubsystemAdapter` (`core/PipelineRunnerSubsystemAdapter.kt:82-118`)
+  → `JobExecutor.INSTANCE.start/cancel` + `ActiveJobRegistry`. `JobExecutor`
+  bound to the body via `JobExecutor.initialize(orchestrator: PipelineOrchestrator)`
+  → `PipelineOrchestratorRunner(orchestrator)` (`core/JobExecutor.kt:56-57,347-348`).
+- **Sole-caller grep:** no state-router other than `DictateOrchestrator`
+  reaches `PipelineOrchestrator`; the direct IME callers are only
+  standalone-prompt + cancel + RESUME carve-out. AC-10 (no double-dispatch)
+  holds.
+- **KDoc added:** `core/PipelineOrchestrator.kt` class header now carries the
+  "Cutover boundary — `PipelineRunnerSubsystem` adaptee (OQ-1, Spec 1 §9.6)"
+  section with the full delegation diagram + `@see` anchors.
+
+#### C5-IMPL-2 resolution note
+
+C5-IMPL-2 (B2, Important, deferred to Theme-C): *"legacy recording-UI /
+animation sites read Idle on the new path — C10's RenderBackend-sole-render-
+path scope addresses the controller side."* **Resolution: NOT resolvable in
+this chunk — it is a symptom of the same root cause as IMPL-2.** The legacy
+recording-UI/animation sites (`RecordingUiController` / `KeyboardUiController`)
+still *exist and are still IME-driven* precisely because the render path is
+**not** solely RenderBackend (the controllers were never retired — premise
+false). C5-IMPL-2 cannot close until the render-path cutover (the missing
+block) wires the new render controllers into the IME and removes the legacy
+driver calls. It is **folded into IMPL-2** (same architecture-conflict; same
+mid-chunk-triage). It is **not** independently fixable here without the
+controller deletions, which are blocked.
+
+#### Disjoint commit-boundary lists
+
+**=== COMMIT 1 BOUNDARY === production files:**
+- `app/src/main/java/net/devemperor/dictate/core/PipelineOrchestrator.kt` (OQ-1 KDoc boundary annotation only — additive doc, no behaviour change)
+
+**=== COMMIT 2 BOUNDARY === test files:**
+- (none — no production behaviour changed, so no test added/changed. The 4 controller deletions that would have driven test changes are blocked.)
+
+(lists are disjoint — production vs test; test list intentionally empty)
+
+#### Deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Dev-1 (chunk-local) | Epic §4 Block C3 / chunks.json `id: C10-C3` ("Delete … MainButtonsController, RecordingUiController, KeyboardUiController, KeyboardStateManager") | The 4 controller deletions were **not performed**; only OQ-1 (KDoc) + the already-gone confirmation done | The chunk's stated precondition ("Theme B + the parent RenderBackend path made these dead") is factually false: the render-path cutover never happened (Theme B = recording-drive only); the new render owners exist but are **not IME-wired** (`staticHandlerInstaller=null`, no `ContentAreaController`/`PromptVisibilityController` attach); RECORD/BACKSPACE long-press explicitly deferred by parent B4-VAL F-1/F-2 to a never-created follow-up. Deleting now erases unported core features (subtle R-risk). D4 correctness-over-speed + the prompt's explicit "do NOT delete a class whose behaviour isn't provably ported". | **All of D1, D2** (Espresso UI-tests + integration E2E assume the render path is solely RenderBackend post-C3 — e2e-runbook TC-21 explicitly states "C3 deleted the legacy controllers"; that assumption is now invalid until the render-path cutover lands). Block-validate + Phase-4 must treat the render-path-cutover as missing scope. | **delegated — flagged Critical `architecture-conflict` (IMPL-2)**; NOT inline-fixed (larger + needs new module work, not research) |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| IMPL-2 | **Critical** | **Architecture-conflict: the render-path cutover block does not exist.** Chunk C10-C3 requires deleting `MainButtonsController`/`RecordingUiController`/`KeyboardStateManager`/`KeyboardUiController` on the premise that Theme B + the parent RenderBackend path made them dead. Per-class responsibility-trace (this report) proves the premise false: `ImeViewBackend` is attached *in parallel* to the legacy controllers (IME `:1023`), wires plain-click + RESEND-long-press only, `staticHandlerInstaller=null` (IME `:1113`); the new `ContentAreaController`/`PromptVisibilityController`/`OverlayResetHandler` are **not IME-attached**; RECORD long-press (2-mode) + BACKSPACE accel-delete + SPACE/ENTER touch handlers + theming + key-press-anim + QWERTZ rec-button + prompts-visualizer + the entire pipeline-progress/step-row UI have **no ported new owner** (parent B4-VAL F-1/F-2/F-33 deferred the IME-side render attach + long-press port to a "B5/B7 / D-13 follow-up" that was never created — the exact INT-1 pattern, recurring at the render layer). Deleting strands core user features. **Needs a new render-path-cutover block** (wire `ImeViewBackend.staticHandlerInstaller`, model RECORD/BACKSPACE long-press as Actions, attach `ContentAreaController`/`PromptVisibilityController`/`OverlayResetHandler`, port QWERTZ + pipeline-progress + prompts-visualizer, then remove the IME legacy-driver calls) **before** C10-C3's deletions are safe. Subsumes C5-IMPL-2 (same root cause). | delegated-to-orchestrator | `architecture-conflict`, blocks-following-chunks (D1/D2 assume sole-RenderBackend post-C3). New module work, not research → mid-chunk-triage / Epic re-scope decision required (mirrors INT-1's "the cutover was forwarded to a block that never existed"). Not inline-fixed (D7: architecture conflict → delegate Critical; the prompt's R-mitigation explicitly forbids deleting unported behaviour). |
+| IMPL-3 | Nice-to-have | OQ-1 KDoc boundary added to `PipelineOrchestrator.kt`; consider a lightweight architecture-test asserting `PipelineOrchestrator` has no caller outside `{PipelineRunnerSubsystemAdapter, JobExecutor, standalone/cancel/RESUME carve-out}` so the AC-10 "no second state-router" invariant is regression-guarded. Not done here (no test commit this chunk); noted for D1/D2 or a follow-up. | open | Documentation/guard nicety; AC-10 currently holds by inspection. Out of this (blocked) chunk's deliverable scope. |
+
+#### Code-Bugs Found While Writing Tests (Step 4)
+
+(none — no tests written. No production behaviour changed: the only edit is
+the additive OQ-1 KDoc on `PipelineOrchestrator.kt`. The 4 controller
+deletions that would have necessitated test changes are blocked by IMPL-2.)
+
+#### Test-Review (Step 5)
+
+(n/a — no test diff. The OQ-1 KDoc is a non-behavioural doc annotation;
+existing `PipelineOrchestrator`/adapter/JobExecutor tests already cover the
+delegation chain it documents. No coverage gap introduced.)
+
+#### Files modified — drift classification
+
+- **In plan-prescribed scope:** `core/PipelineOrchestrator.kt` (Epic §4
+  Block C3 + chunks.json: "keep `core/PipelineOrchestrator.kt` (annotate it
+  as the `PipelineRunnerSubsystem` adaptee per Spec 1 §9.6)" — the KDoc
+  annotation is exactly the prescribed OQ-1 deliverable).
+- **Files in plan-prescribed scope NOT modified (blocked):**
+  `core/MainButtonsController.kt`, `core/RecordingUiController.kt`,
+  `core/KeyboardUiController.kt`, `core/KeyboardStateManager.kt` (+ their
+  tests + residual IME refs) — deletion blocked by IMPL-2 (architecture-
+  conflict; premise false).
+- **Files outside plan-prescribed scope (drift):** none.
+
+#### Overlooked points / known gaps
+
+- **Block-Validate / Phase-4 must re-scope.** The Epic's dependency graph
+  (§4.1) and e2e-runbook (TC-21 "C3 deleted the legacy controllers") assume
+  C10-C3 retires the render controllers. That assumption is invalid. D1
+  (Espresso UI-tests "test the real path not the dead one") and D2
+  (integration E2E "render path solely RenderBackend") inherit the blocker.
+  Recommend the orchestrator treat IMPL-2 like INT-1: a missing-block
+  escalation, not a chunk-local fix. The honest options are (a) author the
+  render-path-cutover block and run it before C10-C3's deletions, or
+  (b) accept the legacy render path as the permanent render owner and
+  rewrite AC-7 + the e2e-runbook to match (the D7 anti-pattern — flagged,
+  not chosen by me).
+- **OQ-1 is fully closed** independently of IMPL-2 — it was a confirmation
+  + annotation, not a deletion, so it is unaffected by the controller
+  blocker. `PipelineOrchestrator` correctly survives as the adaptee.
+- **C8-IMPL-1** (`LegacyAudioFileMigrationTest` release-suite flake) remains
+  delegated to B3 AUDIT-TEST — untouched by this chunk (no test/DB-axis
+  edit; only an additive KDoc).
+- I did **not** run `./gradlew assembleDebug` / `test` as a chunk gate: the
+  only change is an additive KDoc comment on `PipelineOrchestrator.kt`
+  (cannot affect compilation or tests). The build/test acceptance (AC-7/AC-9
+  baseline ~1048) is unmet *by design* this chunk because the deletions that
+  would exercise it are blocked; Block-Validate / the re-scoped block owns
+  the green-build gate once the render-path cutover lands.
 
 ---
 
@@ -474,6 +665,7 @@ weak assertions. No quality issues; no fixes needed.
 | Dev-1 | Epic §4 Block C1 (RefreshFromPref dispatch pattern) | `RefreshFromPref` `data object` → `data class(effective)`; reducer writes `effective` | Phase-1 reducer was a no-op + PrefMirror does not mirror language ⇒ `LanguageState.effective` would stay `"system"` (latent F-15 bug); Spec 1 §4.11 + module KDoc anticipated the payload promotion | Any future LanguageAction consumer; placeholder test usages updated; F-15 now live | yes (`plan-deviation-resolved`) | `B3-C8-C1-IMPL` | Step 2 |
 | Dev-2 | Epic §4 Block C1 (caller graph / R-3) | `onServiceConnected` re-pushes `pushPermanentLanguageToOrchestrator()` | Boot-before-bind race: onCreateInputView push runs before binder arrives → `effective` stays `"system"`; plan mandates documenting the ordering + `pipelineBinder != null` discipline | IME-internal, idempotent; closes R-3 silent-stale risk | yes | `B3-C8-C1-IMPL` | Step 2 |
 | Dev-3 (chunk-local Dev-1) | Epic §4 Block C2 ("Files: `DictateInputMethodService.java` only") | Added `RecordingState.audioFileOrNull` extension to `state/DictateUiState.kt` | The plan also mandates "recording-active reads → orchestrator state (`state.recording`)"; sourcing the sealed-`RecordingState` `audioFile` from Java needs a canonical accessor — project convention is a centralised extension next to the FSM def (`isActiveOrPaused` sibling). Most plan-compatible/DRY. Additive, no behaviour change. | C10-C3 may consume the same canonical accessor when collapsing legacy recording-UI reads | yes (small + locally decidable — plan's own state-source mandate forces it) | `B3-C9-C2-IMPL` | Step 2 |
+| Dev-4 (chunk-local Dev-1) | Epic §4 Block C3 / chunks.json `C10-C3` ("Delete MainButtonsController/RecordingUiController/KeyboardUiController/KeyboardStateManager") | The 4 controller deletions **not performed**; only OQ-1 KDoc + already-gone confirmation done | Chunk premise false — render-path cutover never happened (Theme B = recording-drive only); new render owners exist but are not IME-wired; RECORD/BACKSPACE long-press deferred by parent B4-VAL F-1/F-2 to a never-created block. Deleting strands unported core features (subtle R-risk; prompt forbids deleting unported behaviour; D4). | All of D1/D2 (assume sole-RenderBackend post-C3 — e2e-runbook TC-21). Render-path cutover is missing scope. | **delegated — Critical `architecture-conflict` (C10-IMPL-2)**; NOT inline-fixed (needs new module work) | `B3-C10-C3-IMPL` | Step 1 |
 
 ---
 

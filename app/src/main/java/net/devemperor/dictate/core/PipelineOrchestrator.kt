@@ -28,6 +28,39 @@ import java.util.concurrent.Executors
  * background executor thread. Replaces the previous multi-thread-pool approach
  * (speechApiThread + rewordingApiThread per prompt) with one shared executor.
  *
+ * # Cutover boundary — `PipelineRunnerSubsystem` adaptee (OQ-1, Spec 1 §9.6)
+ *
+ * This class is the **runner body**, and is **never deleted** (Spec 1 §9.6
+ * "Lösch-/Adapter-/Erhalt-Tabelle": *`JobExecutor` nie gelöscht —
+ * implementiert das `PipelineRunner`-Interface*; Spec 1 §1.x naming block:
+ * `PipelineOrchestrator` *"bleibt unverändert … implementiert
+ * `PipelineRunner`-Interface"*). The new state-architecture reaches it
+ * through a **delegation** chain — it is **not** reimplemented:
+ *
+ * ```
+ * DictateOrchestrator → PipelineModule.runEffect
+ *   → ModuleServices.pipelineRunner (PipelineRunnerSubsystem)
+ *     = PipelineRunnerSubsystemAdapter            (C3-B1 — thin wrapper)
+ *       → JobExecutor.INSTANCE.start/cancel        (process-global single-job lock)
+ *         → PipelineOrchestratorRunner             (JobExecutor inner runner)
+ *           → PipelineOrchestrator  ◄── THIS CLASS (unchanged runner body)
+ * ```
+ *
+ * [net.devemperor.dictate.core.PipelineRunnerSubsystemAdapter] delegates to
+ * `JobExecutor.INSTANCE`; `JobExecutor` was bound to this body via
+ * `JobExecutor.initialize(pipelineOrchestrator)` →
+ * `PipelineOrchestratorRunner(orchestrator)`. The only **other** legitimate
+ * direct callers are the standalone-prompt path
+ * ([PipelineOrchestrator.StandaloneConfig]), the cancel path
+ * ([PipelineOrchestrator.CancelInfo]), and the RESUME carve-out
+ * (C6-IMPL-2) — none of which is a second state-router. No double-dispatch
+ * (AC-10): every recording/pipeline user action routes through
+ * `DictateOrchestrator` and reaches this body only via the adapter.
+ *
+ * @see net.devemperor.dictate.core.PipelineRunnerSubsystemAdapter
+ * @see net.devemperor.dictate.core.JobExecutor
+ * @see net.devemperor.dictate.state.modules.PipelineModule
+ *
  * Threading contract:
  * - [runTranscriptionPipeline] and [runStandalonePrompt] are called from the main thread.
  *   They submit work to the internal executor.

@@ -78,9 +78,17 @@ class PipelineRecoveryTest {
     }
 
     @Test
-    fun `recover overwrites previously-written pendingSessions on re-run`() {
-        // First run inserts 2 sessions; second-run repo now returns 1 — the
-        // store reflects the SECOND read, not the union.
+    fun `recover merges new repo entries on re-run without dropping prior in-memory sessions`() {
+        // Per Spec 1 §6.3 Z. 3433-3437 the recovery uses **MERGE**, not
+        // override — a parallel recording that started during recovery
+        // must not be erased. The C10 refactor changed the C7 baseline
+        // (which used override) to the spec-conform merge semantics.
+        //
+        // This test verifies the merge contract: first recover()
+        // hydrates with [first, second]. The repo then "rotates" to
+        // [third] (simulating a follow-up boot where 'first'/'second'
+        // were dismissed). A second recover() does NOT erase the
+        // already-loaded sessions; it adds 'third' if it wasn't seen.
         var emit = listOf(session("first"), session("second"))
         val repo = object : PipelineSessionRepoSubsystem {
             override suspend fun loadPending(): List<PendingSession> = emit
@@ -97,7 +105,10 @@ class PipelineRecoveryTest {
             recovery.recover(store)
         }
 
-        assertEquals(listOf("third"), store.snapshot.pendingSessions.map { it.sessionId })
+        // After both runs: in-memory still has 'first' and 'second', and
+        // 'third' was appended on the merge.
+        val ids = store.snapshot.pendingSessions.map { it.sessionId }
+        assertEquals(listOf("first", "second", "third"), ids)
     }
 
     @Test

@@ -27,7 +27,7 @@
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
 | IMPL-1 (B1→B2→B3 carry-over) | B1-C2-IMPL-FULL | Important | fixed | Spec 1 §11.2.2 Block-2 sub-step 7: JobExecutor-Init move from IME `onCreate` to Service `onCreate` — closed in C8 (JobExecutor.initialize + AI infrastructure construction moved to DictatePipelineService.onCreate; IME pulls references via LocalBinder in onServiceConnected) | C8 scope |
-| SF-4 (B2 carry-over) | B2-VAL-RES-1 | NTH | open (delegated-to-orchestrator) | Post-extraction-failure manual-paste-flag wiring — recovery-path responsibility | C10 scope |
+| SF-4 (B2 carry-over) | B2-VAL-RES-1 | NTH | fixed | Post-extraction-failure manual-paste-flag wiring — closed in C10 (`PipelineRecovery.recover()` dispatches `Action.ResendAction.NotifyManualPasteNeeded(sessionId)` per row in `findPendingInsertion()`; ResendModule reducer flips `state.resend.lastResultNeedsManualPaste = true` per existing reducer arm; IME UI consumes via existing `ResendState` observer) | C10 scope |
 
 ---
 
@@ -317,10 +317,80 @@ Room without running the instrumented suite.
 
 **Agent-IDs:** Steps 1-5: `B3-C10-IMPL-FULL`
 
-**Status:** ⏳ pending (depends on C9)
+**Status:** ✅ complete
 **Chunks file:** `../dictate-keyboard-layout-refactor.reviewed.chunks.json` chunk index 11 (C10-block3-db-persistence-recovery)
 
-⏳
+#### Implementation (B3-C10-IMPL-FULL)
+
+**What was done:**
+
+Wired the real DB-persistence recovery path on top of C9's `SessionDao`
++ M4-migration. Replaces C7's stub `PipelineSessionRepoSubsystem` with a
+production adapter, fleshes out the §6.3 recovery algorithm with full
+status-promotion + ghost-cleanup, adds the KG-SST-2 orphan-audio cleaner,
+and closes SF-4 by wiring `Action.ResendAction.NotifyManualPasteNeeded`
+from the recovery path.
+
+**Files created (production):**
+
+| File | Role |
+|------|------|
+| `app/src/main/java/net/devemperor/dictate/state/PipelineSessionRepoAdapter.kt` | Real `PipelineSessionRepoSubsystem` over `SessionDao`. `loadPending` returns RECORDED-with-file + COMPLETED-pending-insertion sets. `markInserted`/`markFailed` are `Dispatchers.IO` DAO wrappers. `pendingFlow()` is `emptyFlow` (Phase-1 contract, future addition). Also carries the `SessionEntity.toPendingSession()` boundary mapper. |
+| `app/src/main/java/net/devemperor/dictate/state/PipelineOrphanCleaner.kt` | KG-SST-2 cleanup pass — `deleteInsertedOlderThan` for old COMPLETED-inserted rows + `findOrphanedTerminalAudio` for old FAILED/CANCELLED rows with audio files. Returns `CleanupResult` with counts for diagnostics. Best-effort with try/catch absorption around every DAO call so cleanup never crashes the service. Injectable `nowProvider` lambda for test-determinism. |
+
+**Files modified (production):**
+
+| File | Change |
+|------|--------|
+| `app/src/main/java/net/devemperor/dictate/state/PipelineRecovery.kt` | Replaced the C7 stub-only implementation with the full Spec 1 §6.3 algorithm: status-promotion (RECORDING → FAILED, TRANSCRIBING → RECORDED-or-FAILED, ghost RECORDED → FAILED) + post-cleanup pending-list hydration with **MERGE** semantics (preserves parallel sessions per Spec 1 §6.3 Z. 3433) + SF-4 wiring (`emitAction(NotifyManualPasteNeeded(id))` per `findPendingInsertion()` row). Adds `ioContext: CoroutineContext` constructor param (default `Dispatchers.IO`, tests inject `EmptyCoroutineContext`) so `runTest` schedulers stay in sync. Retains the legacy single-arg constructor (`sessionRepo` only) for backward compatibility with C7-era tests. |
+| `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt` | Swap `stubSessionRepo(...)` for `PipelineSessionRepoAdapter(database.sessionDao())` in `ModuleServices.sessionRepo`. Construct `PipelineRecovery(dao, adapter, emitAction)` with the real DAO + SF-4 action sink. Add `orphanCleaner: PipelineOrphanCleaner?` field; new `triggerOrphanCleanupAsync()` helper launches the dual cleanup into `serviceScope`; called from `onDestroy` before `orchestrator.shutdown()` so the idle-stop slot runs every time the service stops. |
+| `app/src/main/java/net/devemperor/dictate/state/PipelineServiceStubSubsystems.kt` | Updated KDoc on `stubSessionRepo()` — marked "deprecated (kept for compile-compat)" since production wiring no longer calls it. Still useful as a no-DB baseline for tests that don't want to spin up a fake DAO. |
+| `app/src/main/java/net/devemperor/dictate/preferences/DictatePrefs.kt` | Added `Pref.SessionCleanupGracePeriodMs : Pref<Long>` with default 608_400_000 (7 days + 1 hour safety buffer) per Spec 1 §6.2 R.17 + §6.3.1. |
+
+**Files created (tests):**
+
+| File | Coverage |
+|------|----------|
+| `app/src/test/java/net/devemperor/dictate/state/PipelineSessionRepoAdapterTest.kt` | 10 tests — empty repo, RECORDED-with-file, COMPLETED-with-pending, combined set, FAILED/CANCELLED/RECORDING/TRANSCRIBING exclusion, `markInserted`, `markFailed`, `pendingFlow`-emptyFlow contract, `toPendingSession` boundary mapping (success + unknown-status fallback). |
+| `app/src/test/java/net/devemperor/dictate/state/PipelineRecoveryFullTest.kt` | 12 tests — happy boot, RECORDING→FAILED (with-file + null-path), TRANSCRIBING→RECORDED (audio ok), TRANSCRIBING→FAILED (audio missing), ghost RECORDED→FAILED, SF-4 dispatch (pending vs already-inserted COMPLETED), mixed-orphan recovery (all 4 statuses in one pass), merge contract (preserve in-memory + dedup), idempotence, DAO-failure-graceful-degradation. |
+| `app/src/test/java/net/devemperor/dictate/state/PipelineOrphanCleanerTest.kt` | 11 tests — empty DB no-op, COMPLETED-old-inserted deleted, COMPLETED-with-NULL-insertedAt kept, KG-SST-2 orphan-audio deletion for FAILED + CANCELLED, RECORDED/COMPLETED audio NOT touched, fresh FAILED NOT touched, idempotent ghost-file cleanup, twice-run idempotence, `deleteInsertedOlderThan`-failure absorbed, `findOrphanedTerminalAudio`-failure absorbed. |
+
+**Pre-existing test updated (semantic change per spec):**
+
+| File | Change |
+|------|--------|
+| `app/src/test/java/net/devemperor/dictate/state/PipelineRecoveryTest.kt` | The `recover overwrites previously-written pendingSessions on re-run` test was renamed to `recover merges new repo entries on re-run without dropping prior in-memory sessions` and updated to assert merge semantics. The C7 baseline used override; Spec 1 §6.3 Z. 3433 mandates **MERGE** to preserve parallel sessions. The behavior change is intentional and documented in the new test KDoc. |
+
+**Plan deviations:**
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Pre-existing `PipelineRecoveryTest` override-test rewritten to merge-test | Spec 1 §6.3 Z. 3433-3437 | Test renamed + assertions flipped from override→merge | Spec 1 §6.3 mandates merge (parallel-session safety); the old test was C7-baseline behavior, not spec-conform | None — Recovery-Test extension was already planned in C10 scope | inline-fixed |
+| `ioContext` parameter on `PipelineRecovery` constructor | not in spec | New constructor parameter (default `Dispatchers.IO`) | Tests using `runTest { testScheduler.advanceUntilIdle() }` need a way to synchronously join the IO block; without injection, `withContext(Dispatchers.IO)` desyncs from the test scheduler | None — production passes `Dispatchers.IO` (the default) | inline-fixed |
+| `Pref.SessionCleanupGracePeriodMs` default = 608_400_000ms (7d + 1h) | Spec 1 §6.2 R.17 | Pref added with documented default | Spec defined the cutoff symbolically (`now - 7d - 1h`); the Pref makes it a tunable + test-injectable value | None | inline-fixed |
+| `triggerOrphanCleanupAsync` invoked from `onDestroy` (not from a dedicated `stopSelfWhenTerminal` callback) | Spec 1 §6.3.1 line 3567 | Cleanup runs on service stop; the spec's "stopSelfWhenTerminal" slot is a B5+ refinement not yet wired | The Phase-1 service doesn't yet have a state-driven `stopSelf` trigger — calling cleanup from `onDestroy` is the closest analog; idempotent + best-effort so multiple invocations are safe | B5+ may wire stopSelfWhenTerminal → reuse same `triggerOrphanCleanupAsync` helper | inline-fixed |
+
+**Issues:**
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| SF-4 (B2 carry-over) | NTH | Post-extraction-failure manual-paste-flag wiring | fixed | `PipelineRecovery.recover()` dispatches `Action.ResendAction.NotifyManualPasteNeeded(sessionId)` per row from `findPendingInsertion()`; `PipelineRecoveryFullTest.recover dispatches NotifyManualPasteNeeded ...` asserts the wiring contract |
+
+**Inline-fixed items:**
+
+- `Pref.SessionCleanupGracePeriodMs` added (see deviations table).
+- Pre-existing `PipelineRecoveryTest` merge-semantics update (see deviations table).
+- Production `PipelineRecovery` now takes `(sessionDao, sessionRepo, emitAction, ioContext)` — backward-compat preserved via secondary constructor `PipelineRecovery(sessionRepo)`.
+
+**Overlooked points / known gaps:**
+
+- The full `Pref.OverlayPositionXKey(aspectBucket, orientation)` aspect-bucket-aware key scheme from Spec 1 §6.4 is **not implemented** in this chunk — the existing flat `OverlayPositionPortraitX/Y/LandscapeX/Y` Prefs from C7 stay. Spec 1 §6.4 calls out the bucket scheme as an Issue 3.1.6 follow-up; full B6 OverlayBackend scope.
+- `pendingFlow()` returns `emptyFlow` — Room's `@Query` could return `Flow<List<SessionEntity>>` if we want live updates, but no current consumer requires it. Phase-1 wiring complete; future enhancement.
+- `onDestroy`-triggered cleanup runs asynchronously; if Android SIGKILLs the service mid-cleanup, the next boot's recovery will surface (and re-attempt cleanup of) the same orphans. Idempotence + try/catch absorption handles this gracefully.
+
+#### Test-run
+
+`./gradlew test` — 654 tests, all green. Coverage: 33 new tests (10 adapter + 12 recovery-full + 11 cleaner) plus 1 modified pre-existing test (merge-semantics).
 
 ---
 

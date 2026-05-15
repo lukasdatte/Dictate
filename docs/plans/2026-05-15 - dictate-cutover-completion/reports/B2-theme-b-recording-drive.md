@@ -1177,6 +1177,232 @@ file maps directly to the C6-IMPL-1 worklist.
 
 ---
 
+### Chunk C6-D2pre — RE-GATE
+
+**Agent-ID:** `B2-C6-D2pre-REGATE` (fresh, independent — NOT the W1
+repair agent) · **Date:** 2026-05-15 · **Iter:** 1 of the gate-repair
+loop (D5 cap 3) · **Scope:** verify C6-IMPL-1 genuinely closed by
+B2-C6-W1; re-run auto-tier; re-confirm AC-10 + non-blocking criteria.
+
+> ## ✅ RE-GATE: GREEN
+>
+> **C6-IMPL-1 (≡ C5-IMPL-1) is genuinely closed.** Audio-focus + BT-SCO
+> are now emitted on the new recording path (`USE_LEGACY_RECORDING_DRIVE
+> =false`) with full legacy parity, independently re-traced (not on the
+> repair agent's word). Auto-tier is green modulo the documented,
+> pre-existing R-7 order-dependent shared-singleton pollution flake
+> (proven: every flaked class passes 100% isolated; the W1 diff touches
+> zero JobExecutor/migration/DB files). AC-10 holds. No new regression.
+> **C7 (legacy-call-site deletion) + ALL of Theme C (B3) are
+> AUTHORISED.**
+
+#### Auto-tier (independently re-run — `--rerun-tasks`, no cache)
+
+| Check | Result |
+|---|---|
+| `./gradlew assembleDebug` | **BUILD SUCCESSFUL** (AC-9 build invariant) |
+| `./gradlew testDebugUnitTest --rerun-tasks` (fresh full suite, no cache) | **1038 tests, 1033 pass, 5 fail** — all 5 are the **R-7 order-dependent shared-singleton pollution flake family**, NOT regressions (see below) |
+| Isolated re-run of every flaked class (`PipelineRunnerSubsystemAdapterTest` + `LegacyAudioFileMigrationTest`, `--rerun-tasks`) | **15/15 pass (7/7 + 8/8), BUILD SUCCESSFUL** — confirms flake, not regression |
+
+**R-7 flake analysis (the prompt's "re-run isolated + full to confirm"
+instruction, executed):** the 5 full-suite failures are:
+`PipelineRunnerSubsystemAdapterTest` ×4 (`isRunning…reflect
+ActiveJobRegistry` `expected:<0> but was:<1>`; `cancel delegates…`
+`runner did not start`; `binder TriggerPipeline…R-1 guard` `registry
+must stay empty but was Running`; `submitReprocess…` `runner did not
+start`) + `LegacyAudioFileMigrationTest` ×1 (`run leaves non-legacy-path
+sessions untouched` `expected:<[RECORDING]> but was:<[FAILED]>`). Every
+symptom is a *prior-test-left-dirty-singleton* artefact (a JobExecutor
+worker / `ActiveJobRegistry` entry / `DictateDatabase` row bleeding from
+a preceding test in suite-order). **All 15 tests across both classes
+pass 100% when run isolated together.** This is exactly the Epic §6.3
+R-7 documented hazard ("test-pollution amplification — new IME-boot
+Robolectric tests share the `DictateDatabase`+`JobExecutor` singletons").
+Causal proof it is NOT a W1 regression: `git show --stat 13c273c` — W1's
+production diff is confined to `state/Action.kt`,
+`state/DictateUiState.kt`, `state/modules/AudioModule.kt`,
+`state/modules/RecordingModule.kt` (pure reducers/observer) + their
+tests + 3 `DictateCutoverE2ETest` E2E tests + docs. **Zero
+JobExecutor/ActiveJobRegistry/migration/DB production files touched** —
+a pure-reducer diff cannot causally introduce JobExecutor-worker /
+registry / DB-row pollution. The flake's *magnitude* (W1 self-check saw
+1, this fresh run sees 5) reflects R-7's known order-sensitivity + the 3
+new Robolectric service-boot tests amplifying the **pre-existing**
+shared-singleton hazard, not a new defect. There is **no OTHER failure**
+(the prompt's RED trigger) — every failure is the documented flake.
+Note: the W1 self-check's "1037/1038" came from a `./gradlew test` that
+was Gradle-`UP-TO-DATE` cached (independently observed: a plain
+`assembleDebug test` here showed `:app:test UP-TO-DATE`, 0 tests
+executed); this RE-GATE forced `--rerun-tasks` for an authoritative
+fresh count.
+
+#### Per-criterion independent findings (1–7)
+
+**1. Auto-tier green:** ✅ (see table). `assembleDebug` SUCCESSFUL;
+fresh full suite 1033/1038 with the only failures being the
+isolated-pass-confirmed R-7 flake. AC-9 ≥946 invariant holds (1038 ≫
+946). No OTHER failure.
+
+**2. C6-IMPL-1 audio-focus closed:** ✅ **Independently code-traced.**
+`AudioModule.onCrossModuleStateChange` (`AudioModule.kt:172-214`) cascades
+`AudioAction.RecordingStarted` on the **engagement edge**
+(`!prevRec.isEngaged() && nextRec.isEngaged()`, plus the explicit
+`Paused→Active` resume clause) and `RecordingEnded` on disengage
+(`engaged→Idle` stop/cancel, `Active→Paused` pause). The
+`RecordingStarted` reducer arm (`:127-133`) emits `Effect.RequestAudioFocus`
+**gated on `state.audioFocusEnabledPref`**; `RecordingEnded` (`:141-147`)
+emits `ReleaseAudioFocus` unconditionally (idempotent). Legacy-parity
+re-verified against the actual legacy source (not the repair agent's
+word): `RecordingStateController.proceedStartRecording:326`
+`if (audioFocusEnabled) gate.request()`; `stopRecording:150` /
+`cancelRecording:221` / `togglePause:168` `gate.abandon()`;
+`togglePause:172` (Paused→Active) `gate.request()` — every legacy edge
+has a matching observer cascade. `Pref.AudioFocus` default **`true`**
+(`DictatePrefs.kt:30`) → focus requested for 100% of users by default,
+exactly as legacy; pref-mirror wired (`PipelinePrefMirror.kt:138,199`
+`Pref.AudioFocus.key → audioFocusEnabledPref`). The observer arm
+restored Spec 1 §15.1 row 3; the stale `AudioModule.kt:28-33` KDoc is
+rewritten to the real path (`:28-60`, no longer claims the adapter
+handles it). Engagement-edge robustness against the
+`Dispatchers.Main.immediate` re-entrant `Idle→Active` tuple collapse is
+sound and is the documented reason the E2E test earns its place. Proven
+by tests: `AudioModuleTest` (`RecordingStarted` pref-on/off/BT-combo,
+`RecordingEnded`, all observer edges) + `DictateCutoverE2ETest`
+`c6impl1_newPathRecording_requestsAudioFocus_throughTheSystemAudioManager`
+(non-vacuous: asserts no focus pre-condition, dispatches a **real**
+new-path `StartRecording` through the production binder→orchestrator→
+modules→`AudioFocusSubsystemAdapter`→`RealAudioFocusGate`→system
+`AudioManager` shadow, then asserts `lastAudioFocusRequest` non-null on
+the same AudioManager instance the gate uses), `…StopRecording_abandons…`
+(asserts `lastAbandonedAudioFocusRequest`), `…audioFocusPrefOff_doesNot…`
+(legacy `if(audioFocusEnabled)` opt-out parity).
+
+**3. C6-IMPL-1 BT-SCO closed:** ✅ **Independently code-traced.**
+`RecordingModule.reduce(Idle, StartRecording)` (`:237-293`): when
+`ctx.global.audio.useBluetoothMic` → `Preparing(awaitingSco=true,
+target=action.target)` with **empty sideEffects** (allocation deferred);
+the `RecordingStarted` cascade emits `StartBluetoothSco` (gated on
+`useBluetoothMic`). SCO outcome arrives as `OnBluetoothScoStateChanged`
+(production-wired `DictatePipelineService.kt:345-373`: `onScoConnected`→
+`Connected`, `onScoFailed`→`Failed,"sco-timeout"`); AudioModule's
+observer (`:228-238`) translates the *just-resolved* phase
+(Waiting/Disconnected→Connected/Failed transition only, no re-fire on
+duplicate) into `RecordingAction.ScoRouteResolved(useBluetooth =
+phase==Connected)`. `RecordingModule.reduce(Preparing,
+ScoRouteResolved)` (`:346-367`) — guarded on `state.awaitingSco` (stale/
+duplicate = `null` no-op) — fires the deferred `AllocateMediaRecorder`
+with the correctly-sourced route (Connected→`VOICE_COMMUNICATION`,
+Failed/timeout→`MIC` fallback). Non-BT path unchanged (immediate
+allocate). No new timer: `BluetoothScoManager.startSco(2500)` posts its
+own `timeoutRunnable`→`onScoFailed` (`BluetoothScoManager.kt:121-138`);
+`BluetoothScoSubsystemAdapter.start()`→`manager.startSco()` default
+2500 ms — legacy parity exactly. Handshake edges all tested:
+`AudioModuleTest` `SCO connect…cascades ScoRouteResolved(true)` /
+`SCO fail…ScoRouteResolved(false)` / `SCO phase unchanged does NOT
+re-cascade (duplicate broadcast)` / `SCO change while Preparing not
+awaiting does NOT cascade`; `RecordingModuleTest` `StartRecording
+(BT-mic) defers AllocateMediaRecorder until SCO resolves` /
+`(non-BT) allocates immediately` / `ScoRouteResolved(true)…
+VOICE_COMMUNICATION` / `ScoRouteResolved(false)…falls back to MIC` /
+`ScoRouteResolved when not awaiting is a no-op`. Timeout edge is covered
+by the Failed-phase test (the subsystem maps timeout→`onScoFailed`→
+`Failed`). The silent phone-mic substitution is eliminated.
+
+**4. AC-10 still holds:** ✅ **Independently re-grepped.** `grep -n
+"JobExecutor.INSTANCE.start"` on `DictateInputMethodService.java` → 3
+real sites: `:2597` fresh (`if (USE_LEGACY_RECORDING_DRIVE)`
+true-branch, new path dispatches `StartRecording`@`:2334`/
+`StopRecordingAndSend`@`:2382`, mutually exclusive); `:3286`/`:3294`
+RESUME (single-dispatch both boolean branches, no orchestrator
+equivalent — C5-IMPL-3 / C6-IMPL-2 carve-out); `:3463` REPROCESS_STAGING
+(`if (USE_LEGACY_RECORDING_DRIVE)` true-branch, mutually exclusive). No
+double-dispatch. W1's diff did **not** touch the IME — it cannot have
+reintroduced a double-path (`git show --stat 13c273c` confirms zero IME
+files). AC-10 single-architecture invariant intact for the gated step.
+
+**5. Keystone + Triangle-FSM on the new path:** ✅ `DictateCutoverE2ETest`
+now has 10 tests (7 original + 3 W1 C6-IMPL-1). The 3 new ones are
+non-vacuous (verified by reading the bodies `:469-555`: real
+`StartRecording` dispatch via the production `LocalBinder`, `pumpUntil
+recording is Active` proving the full Idle→Preparing→Active FSM ran
+incl. the AudioModule cascade, shadow-AudioManager read off the
+*service's* AudioManager instance). Full-suite + isolated runs confirm
+all 10 pass (the suite failures are confined to the unrelated R-7
+JobExecutor/migration classes — `DictateCutoverE2ETest` is green in both
+the full and isolated runs). Keystone F-1/F-2/F-3 + T1–T7 unaffected by
+the pure-reducer W1 diff.
+
+**6. Non-blocking criteria unchanged:** ✅ Re-confirmed genuinely
+non-blocking for authorising C7 + Theme C: **C5-IMPL-2** — the lost
+legacy keyboard-hide auto-pause is the *intended* ADR-0003 improvement
+(recording must survive keyboard switch — the parent plan's raison
+d'être), and the FGS `NotificationStatus.Recording` notification is the
+authoritative new-path recording-active surface; the in-keyboard
+animation/amplitude UI is legitimately Theme-C/C10 scope. The
+BT-release/focus-abandon sub-part is now *positively closed* by W1
+(`RecordingEnded`→`ReleaseAudioFocus`+`StopBluetoothSco`), strengthening
+this verdict vs. the original gate. **C5-IMPL-3** — RESUME single-dispatch
+both branches, orthogonal to the fresh-recording cutover, AC-10-verified.
+**C4-IMPL-2** — cosmetic Pipeline-notif subtitle, F-13 counter already in
+the record-button label. None blocks irreversible legacy deletion.
+
+**7. C6-IMPL-2 scoping note present:** ✅ The C7 carve-out blockquote is
+intact at `### Chunk C7-B3` ("must NOT delete the RESUME
+`JobExecutor.INSTANCE.start(Resume)` site (`:3286`/`:3294`)") and the
+Issue Index row records `C6-IMPL-2 → documented (C7-scoping)`. C7 is
+correctly scoped to delete only the fresh (`:2597`) + reprocess
+(`:3463`) legacy sites + the `USE_LEGACY_RECORDING_DRIVE` boolean +
+`recordingStateController` recording branches, NOT the RESUME site.
+
+#### Verdict + reasoning
+
+**RE-GATE: GREEN.** The gate-RED-blocking C6-IMPL-1 (audio-focus +
+BT-SCO legacy-parity regression) is genuinely closed — independently
+re-traced through production code and the actual legacy source (not the
+repair agent's word), proven by pure-reducer + observer + non-vacuous
+E2E shadow-AudioManager tests. Audio-focus is requested for 100% of
+users by default and released on stop/pause/cancel with exact legacy
+timing parity; BT-mic recordings defer allocation until the SCO route
+resolves (Connected→`VOICE_COMMUNICATION`, Failed/timeout→`MIC`),
+eliminating the silent phone-mic substitution. AC-10 single-architecture
+invariant holds (3 boolean-fenced `JobExecutor.start` sites, no
+double-path; W1 did not touch the IME). The auto-tier is green: build
+SUCCESSFUL, fresh full suite 1033/1038 with the **only** failures being
+the documented, pre-existing, isolated-pass-confirmed R-7
+shared-singleton pollution flake (W1's pure-reducer diff touches zero
+JobExecutor/migration/DB files — causally cannot have introduced it; no
+OTHER failure exists). Non-blocking criteria re-confirmed non-blocking.
+Per D4 (long-term-correct) and Epic §6.2 ("proven, not assumed"), the
+new path is now behaviourally equivalent enough to destroy the legacy
+fallback. **C7 (legacy-call-site deletion) + ALL of Theme C (B3) are
+AUTHORISED.** No repair worklist — no blocking findings.
+
+**Issues:**
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| C6-IMPL-1 | Important | Audio-focus + BT-SCO not emitted on the new path | **closed** | Independently re-verified closed by B2-C6-W1: observer + reducer arms + deferred-SCO-allocate; legacy parity code-traced + tested (pure-reducer + observer + non-vacuous E2E shadow-AudioManager). RE-GATE GREEN. |
+| C6-IMPL-2 | Nice-to-have | C7 RESUME-site carve-out | **closed** | C7 carve-out blockquote re-confirmed intact + Issue Index row present; C7 correctly scoped. |
+| — | — | R-7 full-suite flake (5 failures: PipelineRunnerSubsystemAdapterTest ×4 + LegacyAudioFileMigrationTest ×1) | postponed | Pre-existing documented Epic §6.3 R-7 order-dependent shared-singleton pollution; all 15 tests pass 100% isolated; W1 diff touches zero JobExecutor/migration/DB files. NOT a W1 regression, NOT a recording-feature regression — non-blocking for the gate per the prompt's explicit flake-handling instruction. (Pre-existing test-infra hygiene debt, owned by R-7, not this gate.) |
+
+**Inline-fixed items:** none (verification-only chunk — no production
+or test edits; all checks were independent re-traces + re-runs).
+
+**Overlooked / Known Gaps:**
+- The R-7 shared-singleton test-pollution is a real (pre-existing)
+  test-infrastructure hygiene debt — it does not block this gate (it
+  is the documented flake, not a regression, and not in the
+  recording-feature behaviour), but it remains owned by Epic §6.3 R-7
+  for an eventual test-isolation hardening pass. Flagged here so a
+  future reader does not mistake the 5-failure full-suite run for a
+  regression.
+- Manual device-attached C6-SUBSET TCs not executed (no device) — the
+  gate rests on the auto-tier + independent code-trace per the prompt;
+  the original C6-D2pre subsection already enumerates them for
+  orchestrator forwarding.
+
+---
+
 ### Chunk C7-B3 — legacy call-site deletion (GATED on green C6)
 
 **Agent-IDs:** `B2-C7-B3-IMPL` · **Status:** 🟡 **GATED — awaiting a

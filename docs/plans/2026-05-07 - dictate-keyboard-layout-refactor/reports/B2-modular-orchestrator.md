@@ -28,7 +28,7 @@ Single overview of every issue in this block — populated as the block progress
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
-| IMPL-1 (B1 carry-over) | B1-C2-IMPL-FULL | Important | delegated-to-orchestrator (re-deferred to Block 3 / C8) | Spec 1 §11.2.2 Block-2 sub-step 7: JobExecutor-Init move from IME `onCreate` to Service `onCreate` — **NOT moved in C7 per D5**: the move requires the Service to construct the legacy `PipelineOrchestrator` (12-arg constructor with `AIOrchestrator`, `AutoFormattingService`, `PromptQueueManager`, `SessionManager`, `SessionTracker`, IME-implemented `PipelineCallback`, …). Those subsystems are IME-scoped today; rewriting their construction into the service is Block 3 (subsystem-adapter migration, chunk C8) scope. C7 wires the **new** `DictateOrchestrator` into the service — the LEGACY `PipelineOrchestrator` stays IME-owned until C8. | C7 scope per IMPL-1 brief; re-deferred per D5 (subsystem-impls not in C7 scope) |
+| IMPL-1 (B1 carry-over) | B1-C2-IMPL-FULL | Important | delegated-to-orchestrator (re-deferred to Block 3 / C8) | Spec 1 §11.2.2 Block-2 sub-step 7: JobExecutor-Init move from IME `onCreate` to Service `onCreate`. **Consolidated rationale (F-12 2026-05-15):** unblocked by C4 (the new `DictateOrchestrator` exists at the service composition root); re-deferred at C7 per D5 because the actual JobExecutor move requires the Service to construct the **legacy** `PipelineOrchestrator` (12-arg constructor with `AIOrchestrator`, `AutoFormattingService`, `PromptQueueManager`, `SessionManager`, `SessionTracker`, IME-implemented `PipelineCallback`, …) — those subsystems are IME-scoped today and rewriting their construction into the service is Block 3 (subsystem-adapter migration, chunk C8) scope. C7 wires the **new** `DictateOrchestrator` into the service; the legacy `PipelineOrchestrator` stays IME-owned until C8 absorbs it as a `PipelineRunnerSubsystem` adapter. Local C4 + C7 sub-sections ("IMPL-1 status update") below point back to this Index entry for the canonical rationale. | C7 scope per IMPL-1 brief; re-deferred per D5 (subsystem-impls not in C7 scope). Sub-section pointers preserved for blame-trail. |
 | IMPL-2 | B2-C5-IMPL-FULL | Nice-to-have | open | `OverlayModule.Effect.DeleteAudioFile` is defined but never emitted (cancel-cascade routes file-delete through RecordingModule). | C5-modules-core |
 | IMPL-3 | B2-C5-IMPL-FULL | Nice-to-have | open | `PipelineModule.runEffect` uses `services.scope.launch` for the suspend `sessionRepo.markInserted/markFailed` DB call (per `ModuleServices.scope` KDoc — acceptable fire-and-forget pattern). | C5-modules-core |
 
@@ -301,6 +301,7 @@ Edits to existing files:
 | `DictateModuleRegistry` is `open class` (not `object`) | Spec 1 §4.8 (`object DictateModuleRegistry`) | Class form with `companion object Default : DictateModuleRegistry(emptyList())` | Tests need to construct ad-hoc registries with fake modules. Singleton-only would require monkey-patching or test-side-effects. The `Default` companion preserves Spec 1's "single production registry" intent (production code references `DictateModuleRegistry.Default` or its `companion`-resolved name `DictateModuleRegistry`). | C5/C6 populate `Default.all` by editing the companion-construction; semantically identical to editing an `object`'s `val`. | inline-fixed |
 | Init-time "complete coverage" check (every Action subtype is claimed) NOT enforced in C4 | Spec 1 §4.8 invariant #3 | The check is deferred to C7 wiring — at C4 the production registry's `all` is `emptyList()`, so requiring full coverage would crash boot. | C7 adds `DictateModuleRegistry.Default.assertCompleteCoverage()` (or similar) at service-bind time, after C5/C6 modules are registered. The duplicate-id + duplicate-actionClass + leaf-overlap checks DO run in C4 — they tolerate empty lists. | flagged-for-validate |
 | `emitAction` does NOT override the dispatcher | Spec 1 §4.7 KDoc (Standard MVI "async via scope") | Removed `Dispatchers.Main.immediate` from `scope.launch { ... }` inside `emitAction` | Forcing Main dispatcher inside the orchestrator would break unit tests (Main not available in JVM); the host service already constructs `scope` with `Dispatchers.Main.immediate` (see `DictatePipelineService.serviceScope`). Inheriting from the scope is the correct contract. | None — production wiring still gets main-thread re-entry. | inline-fixed |
+| `ModuleServicesFactory` collapsed into direct `ModuleServices` constructor argument (F-13 — documented post-hoc) | Spec 1 §4.3 / §4.7 / §7.3 prescribe a two-class pattern: `ModuleServices` (data) + `ModuleServicesFactory(provider: () -> ModuleServices)` (lazy provider) | Implementation passes `services: ModuleServices` directly to the `DictateOrchestrator` constructor. | Only one construction point per service lifetime (`Service.onCreate`); the factory's lazy-provider indirection is unused in Phase 1. Adding it for spec-conformance alone would be ceremony without observable benefit. | B3 wiring uses `ModuleServices(...)` directly in `onCreate`; no factory bootstrap step. If multi-construction (e.g. for test-side scope cycling) becomes necessary later, the factory can be re-introduced without changing the orchestrator surface — `services` is still the only ctor input. | inline-fixed (F-13 documentation pass) |
 
 **Issues:**
 
@@ -525,6 +526,7 @@ in the `modules/` sub-directory for file-tree grouping.
 | `PipelineModule` does NOT cascade `RecordingAction.StopRecording` on its own state transitions | Coupling-matrix row `Pipeline → Recording = R(state.pipeline) C(RecordingAction.StopRecording)` | The matrix predicts a reverse cascade; the actual "Send" flow goes Recording→Pipeline (user-click dispatches StopRecordingAndSend, RecordingModule cascades to TriggerPipeline) | The matrix entry is forward-compat for a future flow; Phase 1 only exercises the Recording→Pipeline direction | None for Phase 1 | flagged-for-validate |
 | `PipelineModule.PipelineDone` reducer arm collapses directly to `PipelineUiState.Idle` (no explicit `Done` state) | Spec 3 §7.3 T7 mentions `prev.pipeline !is Done && next.pipeline is Done` | `PipelineUiState` (C3) only has `Idle/Preparing/Running/ReprocessStaging` — no `Done` | Cascade trigger uses the equivalent boundary `prev != Idle && next is Idle` | The T7 cascade still fires correctly; verified by `PipelineModuleTest.cross-module Running to Idle cascades OnPipelineDone` | inline-fixed |
 | `OverlayModule.Effect.OpenOverlayPermissionSettings` is a no-op in `runEffect` (logs the limit) | Spec 3 §4.8 `services.activityLauncher.openOverlayPermissionSettings()` | `ActivityLauncher` subsystem lands in B5 (OverlayBackend block); not in C4's `ModuleServices` | UI side currently triggers the Settings-intent directly in response to `RequestOverlayPermission` (Spec 3 §5.3 Phase-1 placeholder) | B5 wires the real activityLauncher; the Effect becomes active there | inline-fixed |
+| `OverlayModule.Effect.NotifyOverlayPermissionRequired` + `services.notifications.showPermissionRequired()` runEffect arm OMITTED (F-10 — documented post-hoc) | Spec 3 §4.8 prescribes the Effect | Phase-1 simplification: the permission-loss cross-module observer emits `Action.ViewModeAction.SetViewMode(KEYBOARD)` only — no separate notification path. B5 (Overlay subsystem) is the natural home for the dedicated permission-required notification because the user-visible UX (banner / toast / status-bar entry) needs the notification channel architecture that ships with B5. | None for Phase 1. B5 adds the Effect + a `NotificationStatus.PermissionRequired` variant (or a dedicated `permissionNotifier` subsystem) and the Overlay sub-state-change observer routes through it. | inline-fixed (F-10 documentation pass) |
 
 **Issues:**
 
@@ -672,6 +674,7 @@ A new sealed `Action.ThemingAction` was added (with `SetTheme` / `SetAccentColor
 | `LanguageAction.RefreshFromPref` reducer returns `null` (no state-change) | Spec 1 §15.1 row 9 (Language) | The plan describes LanguageModule as "subsumes today's LanguageController — direct migration". The legacy `core.LanguageController` still owns the SharedPreferences read surface (curated list + pos); Phase 1 keeps the controller and only mirrors `language.effective` from the dispatch path. `RefreshFromPref` carries no payload yet — it's an acknowledgement signal. | Adding the payload now (e.g. `RefreshFromPref(effective: String)`) would force the action's data shape before B3 has wired the resolver. Conservative Phase-1 stub. | B3 wires the legacy controller through `Action.LanguageAction.SetEffective(code)` (or similar) after `RefreshFromPref` becomes payload-bearing. Documented in `LanguageModule` KDoc. | inline-fixed (small); flagged for B3 attention |
 | `PendingSessionsModule.Effect.PersistDismissal` routes through `sessionRepo.markInserted` | Spec 1 §15.1 row 12 (PendingSessions) | The repo subsystem interface (from C4) has `markInserted` / `markFailed`; there's no dedicated `markDismissed` channel. "User acknowledged this session" maps closest to `markInserted` semantics ("the session has been handled by the user"). | A dedicated dismissal channel would require extending `PipelineSessionRepoSubsystem` — that's B3 surface, not C6. | B3 may add `markDismissed` to the subsystem; the module is one-line-swap to use it. Documented in `PendingSessionsModule.runEffect`. | inline-fixed (small + locally decidable) |
 | `ResendModule` cooldown timer driven by externally-dispatched `ResendCooldownExpired` action | Spec 1 §15.1 row 7 (Resend) | The cooldown mechanism is Phase-1 placeholder — a dedicated cooldown subsystem is a Phase-2 nicety. The UI side scheduling `Handler.postDelayed { dispatch(ResendCooldownExpired) }` is the simplest correct mechanism. | The reducer is pure and tests are deterministic (no real timer). | B3/B4 may add a `CooldownTimerSubsystem` to `ModuleServices` if the UI side becomes inconvenient. Documented in `ResendModule` KDoc. | inline-fixed (small) |
+| `InterruptionModule` registered as a stub despite Spec §4.8 "auskommentiert bis aktiv" (F-3 — documented post-hoc) | Spec 1 §4.8 | `InterruptionModule` IS registered in `DictateModuleRegistry.Default.all` (necessarily — `assertCompleteCoverage()` would throw otherwise since the IME-side listeners already dispatch the three `InterruptionAction` leaves). The reducer rejects all 3 actions; the sub-state is `null` in Phase 1. This is the **canonical example** of the F-3 "Phase-stub pattern (I) — nullable-state, reducer rejects-all" documented in `docs/architecture/state-architecture/adding-a-module.md` §7.1. | Spec 1 §4.8 prose needs updating ("auskommentiert" → "Phase-1 stub-registered to satisfy `assertCompleteCoverage`"); pinned here so the audit-trail survives the spec edit. | inline-fixed (F-3 documentation pass; adding-a-module.md §7.1 added the pattern explanation; InterruptionModule KDoc cross-links) |
 
 #### Inline-fixed items
 
@@ -1045,7 +1048,7 @@ clear target.
 
 ## Block-Validate (Phase 3.2)
 
-**Status:** ⏳ pending (run after all 5 chunks)
+**Status:** ✅ converged through Repair Wave 1
 **Pre-Validate Commit:** ⏳
 **Validate-Pass Commit:** ⏳
 
@@ -1053,19 +1056,130 @@ clear target.
 
 | Topic | Agent-ID | Status | Output File | Findings (counts) |
 |-------|----------|--------|-------------|-------------------|
-| plan-and-api | `B2-AUDIT-PLAN-AND-API` | ⏳ | `./reports/audit-plan-and-api-B2.md` | — |
-| convention | `B2-AUDIT-CONVENTION` | ⏳ | `./reports/audit-convention-B2.md` | — |
-| logic | `B2-AUDIT-LOGIC` | ⏳ | `./reports/audit-logic-B2.md` | — |
-| test | `B2-AUDIT-TEST` | ⏳ | `./reports/audit-test-B2.md` | — |
-
-3 test-agents per state-file (the block's diff will be large — modular-orchestrator core).
+| plan-and-api | `B2-AUDIT-PLAN-AND-API` | ✅ | `./reports/audit-plan-and-api-B2.md` | 9 (0 Crit / 3 Imp / 6 NTH) |
+| convention | `B2-AUDIT-CONVENTION` | ✅ | `./reports/audit-convention-B2.md` | 6 (0 Crit / 2 Imp / 4 NTH) |
+| logic | `B2-AUDIT-LOGIC` | ✅ | `./reports/audit-logic-B2.md` | 8 (1 Crit / 3 Imp / 4 NTH) |
+| test | `B2-AUDIT-TEST` | ✅ | `./reports/audit-test-B2.md` | 4 (0 Crit / 1 Imp / 3 NTH) |
 
 ### Sanity-Check Consolidator
 
 **Agent-ID:** `B2-VAL-SANITY`
 **Output file:** `./reports/validated-findings-B2.md`
+**Result:** 🟢 23 + 🟡 1 (F-1 manual-paste), 0 eliminated.
 
-⏳
+### Block-Validate Repair Wave 1 (B2-VAL-REPAIR)
+
+**Date:** 2026-05-15
+**Agent-ID:** `B2-VAL-REPAIR` (fresh-mode)
+**Scope:** `all-validated` (1 🟡 with research + 23 🟢)
+**Findings addressed:** 24 of 24 + 1 sub-finding (SF-1 ADR-0001 Decision-History) applied; SF-2 + SF-3 folded into F-1 implementation; SF-4 left as Phase-2 / B3-wiring note (PersistenceError manual-paste signalling is recovery-path responsibility, not pipeline-reducer).
+
+| Finding ID | Severity | File(s) | Status | Fix description |
+|------------|----------|---------|--------|-----------------|
+| F-1 | Critical (🟡 → fixed) | `DictateUiState.kt`, `Action.kt`, `modules/PipelineModule.kt`, `modules/ResendModule.kt` + 5 test files + ADR-0001 | fixed | **Option D from `research/manual-paste-field-architecture.md`**: top-level `lastResultNeedsManualPaste` field removed; relocated as `ResendState.lastResultNeedsManualPaste`; `Action.PipelineAction.NotifyResultNeedsManualPaste/ClearManualPasteFlag` moved to `Action.ResendAction.NotifyManualPasteNeeded/ClearManualPasteFlag`; ResendModule reduces both (same-axis Mode-1, idempotent). Dead reducer arms removed from PipelineModule. ADR-0001 Decision-History entry appended (SF-1). |
+| F-2 | Important | `Action.kt`, `modules/RecordingModule.kt` + 1 test addition | fixed | `Action.RecordingAction.StopRecordingAndSend` → `data class StopRecordingAndSend(val sessionId: String)`. Reducer for Active+Paused emits a new `Effect.EmitPipelineTrigger(sessionId, audioFile)`; `runEffect` calls `services.emitAction(Action.PipelineAction.TriggerPipeline(...))`. **Deviation from suggested fix:** chose the Effect+emitAction async re-entry pattern over the suggested `sendOnStop: Boolean` intermediate-state pattern because (a) it avoids polluting `RecordingState.Active/Paused` with a transient field, (b) mirrors the existing documented `emitAction` async-re-entry pattern (ADR-0001 §"Required mechanics" #6), (c) less test churn. PipelineModule's stale "Pipeline → Recording cascade" KDoc updated to point at the F-2 fix. |
+| F-3 | Important | `modules/InterruptionModule.kt` (KDoc), `adding-a-module.md` (new §7.1), block-report C6 Deviations | fixed | Phase-stub-pattern section added to `adding-a-module.md` §7.1 documenting the two options (nullable-state for unknown-shape modules; non-nullable + reducer-returns-null for known-shape deferred modules). InterruptionModule KDoc cross-links the new section as canonical example of shape (I). C6 Deviations table row added (F-3) calling out the "registered despite Spec §4.8 auskommentiert" mismatch with reasoning + spec-edit note. |
+| F-4 | Important | `DictatePrefs.kt`, `modules/OverlayModule.kt`, `PipelinePrefMirror.kt` (+ test impact none — `OVERLAY_POS_*_KEY` constants retained as backward-compat aliases) | fixed | 6 new typed `Pref` entries in `DictatePrefs.kt` (`OverlayPositionPortraitX/Y`, `OverlayPositionLandscapeX/Y`, `OverlayOnboardingShown`, `OverlayOnboardingDismissed`). `OverlayModule.runEffect` routes all 6 SP writes through `editor.put(Pref.OverlayXxx, value)`. `PipelinePrefMirror.applyChange` + `initialMirror` read via `sp.get(Pref.OverlayXxx)`. The legacy `OVERLAY_POS_*_KEY` constants stay as forwarders to preserve any external test imports — they now resolve to the same key strings as the new Pref entries. |
+| F-5 | Important | `PipelinePrefMirror.kt` | fixed | `@Volatile` annotation added to `private var store` field with anchored KDoc explaining the cross-thread `attach`/`detach` (Main) vs `sync` (background) publication-barrier requirement. |
+| F-6 | Important | `PipelineRecovery.kt` | fixed | `try/catch (Throwable)` wraps the suspend `sessionRepo.loadPending()` body inside `PipelineRecovery.recover`. On failure: `Log.e("PipelineRecovery", "Recovery failed", t)`. Store stays unchanged on failure (acceptable Phase-1 UX). Matches `DictateOrchestrator.dispatchInternal` step-4 `runEffect`-throw convention. |
+| F-7 | Important | `modules/OverlayModule.kt` + 1 test addition | fixed | HOVER→KEYBOARD cancel-cascade rewritten from `when { … }` priority-chain to **additive `if` blocks**. Both Recording and Pipeline are cancelled when both are in-flight; Spec 3 C-3 "Recording > Pipeline" priority preserved by list order (CancelRecording first). New test `F-7 — cascade HOVER to KEYBOARD with BOTH recording and pipeline in-flight emits BOTH cancels` pins the both-in-flight ordering. |
+| F-8 | Important | `DictateOrchestrator.kt` (KDoc), `state-architecture/README.md` | fixed | `DictateOrchestrator` class-KDoc gains an explicit "Note on naming" block disambiguating from legacy `core.PipelineOrchestrator`. Same content added to state-architecture `README.md` before "## High-level architecture in 60 seconds" so reviewers landing on the README see the distinction upfront. |
+| F-9 | Important | `DictatePipelineServiceTest.kt` (`onDestroy_runsOrchestratorShutdown_beforeScopeCancellation`) | fixed | Test upgraded from non-throw smoke-check to a behavioural assertion via the PrefMirror lifecycle: write a mirrored SP value before destroy → snapshot reflects it → destroy → flip SP value → snapshot remains unchanged. Proves `prefMirror.detach()` ran during destroy (it's the first step of `orchestrator.shutdown()`), which in turn proves `orchestrator.shutdown()` was called before `serviceScope.cancel()`. |
+| F-10 | NTH | block-report C5 Deviations | fixed | New row documenting `Effect.NotifyOverlayPermissionRequired` Phase-1 omission with B5 forward-link. |
+| F-11 | NTH | (Spec 1 §15.1.x matrix — **deferred**) | not-fixed (postponed) | The spec-file is the working-language German plan file `dictate-keyboard-layout-refactor.reviewed.md`; the matrix is embedded deep in the file and the §15.1 column referenced doesn't map cleanly to current section IDs. Documentation-only NTH; B0/B1 spec-review revisits matrix consistency. Marked **postponed** for Phase 4.6 doc-pass. |
+| F-12 | NTH | block-report Issue Index | fixed | IMPL-1 Index entry consolidated to a single paragraph naming both unblock + re-defer rationale. Local C4 + C7 sub-sections preserved as audit-trail pointers. |
+| F-13 | NTH | block-report C4 Deviations | fixed | New row documenting `ModuleServicesFactory` collapse with Phase-1 justification + B3 re-introduction option. |
+| F-14 | NTH | (Spec 1 §15.1.x matrix `Submit` → `TriggerPipeline` — **deferred**) | not-fixed (postponed) | Same rationale as F-11 (spec-file edit deferred to Phase 4.6 doc-pass). The action name is `TriggerPipeline` everywhere in the production code; the matrix uses stale `Submit` naming. |
+| F-15 | NTH | `PipelineServiceStubSubsystems.kt` (file-level KDoc) | fixed | File-level KDoc explicitly acknowledges mixed-concern nature: `stub*` properties (B3 placeholders) + `realToastSink` (production binding shipped in Phase 1 because user-visible error toasts can't wait for B3). Splitting deferred to B3+ when more production bindings accumulate. |
+| F-16 | NTH | `modules/PipelineModule.kt`, `modules/PendingSessionsModule.kt`, `modules/LayoutModule.kt`, `adding-a-module.md` §7.1 | fixed | Import order alphabetised across the three flagged modules (single block per file, `java` → `kotlin` → `kotlinx` → project). Convention codified in `adding-a-module.md` §7.1. |
+| F-17 | NTH | `modules/KeyboardInputModule.kt` (added 2 @see anchors), `adding-a-module.md` §7.1 | fixed | Minimum `@see` anchor set documented in `adding-a-module.md` §7.1 as a 4-row table. KeyboardInputModule (the leanest at 2 anchors) bumped to the minimum 4 (sub-state-axis is `Unit` so the (a) anchor is the action sealed, plus added orchestrator + ADR-0001). Richer modules (RecordingModule with 7 anchors etc.) stay — the convention is a floor. PipelineModule already cites `PipelineUiState`. |
+| F-18 | NTH | `Action.kt` | fixed | KDocs added to `FeatureToggleAction.ToggleVibration` (deviation note), `LanguageAction.RefreshFromPref` (Phase-1 stub note), `ResendAction.ResendCooldownExpired` (internal-scheduler note). `ResendAction.MarkLastAudio` and `ViewModeAction.OnPipelineDone` already had cross-module-cascade-target KDocs. |
+| F-19 | NTH | `modules/PipelineModule.kt`, `ModuleServices.kt`, `PipelineServiceStubSubsystems.kt`, `FakeModuleServices.kt` | fixed | `Effect.SubmitReprocess.audioFile: File` → `audioFile: File?`. `PipelineRunnerSubsystem.submitReprocess(audioFile: File?)`. The `SendStaging` reducer now passes `audioFile = null` (was `File("")`). KDoc on both sides documents the "null = runner resolves path by sessionId-lookup in the DB session record" contract. |
+| F-20 | NTH | `modules/LayoutModule.kt` | fixed | `SetContentArea` rejection in small-mode now logs `Log.w(TAG, "SetContentArea(${action.area}) rejected in small-mode — resolver MUST gate on state.smallMode before dispatch (KSM-bug structural-rejection, Issue 1.1.5).")` so a resolver-author bug surfaces in logcat instead of being silently absorbed. |
+| F-21 | NTH | `modules/PipelineModule.kt` (KDoc only) | fixed | Class-KDoc now lists `Pipeline → Recording` cascade as "Phase-2 (deferred no-op)" (matches the inline-body F-2 fix) and documents `MarkLastAudio(exists = true)` Phase-1 success-path assumption with the Phase-2 plan: when the cancel-path gains a "file deleted" signal, the observer emits `MarkLastAudio(exists = false)`. No behaviour change. |
+| F-22 | NTH | `testutil/FakePipelineSessionRepo.kt` (new), `PipelineRecoveryTest.kt`, `DictateOrchestratorInitOrderTest.kt` | fixed | Shared `FakePipelineSessionRepo(pending = …)` lifted to `testutil/`. PipelineRecoveryTest's inline `FakeSessionRepo` removed (one anonymous inline kept for the test that mutates `emit` between calls — the shared fake is constructor-frozen, not suitable). DictateOrchestratorInitOrderTest's three duplicate inline objects replaced with `FakePipelineSessionRepo()`. |
+| F-23 | NTH | `DictatePipelineServiceTest.kt` (`localBinderState_exposesOrchestratorStateFlow`) | fixed | Smoke `assertNotNull(snapshot)` upgraded to substantive `assertEquals(DictateUiState.initial(), snapshot)` (with `sp.edit().clear().commit()` precondition for determinism). |
+| F-24 | NTH | `PipelineModuleTest.kt` | fixed | New test `F-24 — cross-module Preparing to Running does NOT cascade OnPipelineDone` pins the Preparing→Running boundary as a non-cascade case (the matrix tests previously covered Idle→Idle and Idle→Preparing but not this boundary). |
+
+**Sub-findings:**
+
+| Sub-finding | Status | Note |
+|---|---|---|
+| SF-1 — ADR-0001 Decision-History entry | fixed | Append-only entry added before `### 2026-05-14 — Accepted` with full Before/After/Reasoning per `knowledge-adr-format` §"Decision History". |
+| SF-2 — F-18 rename target | fixed | F-1's Option D implementation already moved `ClearManualPasteFlag` to `ResendAction`; F-18's KDoc references the leaf in its new location. |
+| SF-3 — PipelineModule class-KDoc cleanup | fixed | PipelineModule class-KDoc no longer claims ownership of the flag; explicit F-1 cross-link added pointing to ResendState + the research file. |
+| SF-4 — `PersistenceError` post-text-extraction manual-paste signalling | postponed (B3-deferred) | Recovery-path responsibility, not pipeline-reducer. Phase-1 acceptable to leave un-flagged; B3 may add a recovery-path dispatch in the PersistenceError path. |
+
+**Cross-fix conflicts:** none. F-1's action-tree restructuring is independent of F-2's `StopRecordingAndSend` payload change (different action subtrees). F-4's typed-Pref overlay-position constants are shared between `OverlayModule.runEffect` (write site) and `PipelinePrefMirror` (mirror site); both use the same `Pref.OverlayPositionXxx` entries so a future rename in `Pref` propagates atomically.
+
+**Files modified (32 production + test files):**
+
+Production:
+- `app/src/main/java/net/devemperor/dictate/preferences/DictatePrefs.kt` (F-4: 6 new Pref entries)
+- `app/src/main/java/net/devemperor/dictate/state/DictateUiState.kt` (F-1: top-level field removed, ResendState.lastResultNeedsManualPaste added)
+- `app/src/main/java/net/devemperor/dictate/state/Action.kt` (F-1: action-tree restructure; F-2: StopRecordingAndSend payload; F-18: KDocs)
+- `app/src/main/java/net/devemperor/dictate/state/DictateOrchestrator.kt` (F-8: KDoc disambiguation)
+- `app/src/main/java/net/devemperor/dictate/state/ModuleServices.kt` (F-19: nullable audioFile)
+- `app/src/main/java/net/devemperor/dictate/state/PipelinePrefMirror.kt` (F-4 + F-5)
+- `app/src/main/java/net/devemperor/dictate/state/PipelineRecovery.kt` (F-6)
+- `app/src/main/java/net/devemperor/dictate/state/PipelineServiceStubSubsystems.kt` (F-15: file-KDoc; F-19: nullable signature)
+- `app/src/main/java/net/devemperor/dictate/state/modules/InterruptionModule.kt` (F-3: KDoc)
+- `app/src/main/java/net/devemperor/dictate/state/modules/KeyboardInputModule.kt` (F-17: +2 @see anchors)
+- `app/src/main/java/net/devemperor/dictate/state/modules/LayoutModule.kt` (F-16; F-20)
+- `app/src/main/java/net/devemperor/dictate/state/modules/OverlayModule.kt` (F-4; F-7)
+- `app/src/main/java/net/devemperor/dictate/state/modules/PendingSessionsModule.kt` (F-16)
+- `app/src/main/java/net/devemperor/dictate/state/modules/PipelineModule.kt` (F-1: dead arms removed; F-2: comment update; F-16; F-19; F-21)
+- `app/src/main/java/net/devemperor/dictate/state/modules/RecordingModule.kt` (F-2)
+- `app/src/main/java/net/devemperor/dictate/state/modules/ResendModule.kt` (F-1: new reducer arms)
+
+Tests:
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceTest.kt` (F-9; F-23)
+- `app/src/test/java/net/devemperor/dictate/state/ActionHierarchyTest.kt` (F-1)
+- `app/src/test/java/net/devemperor/dictate/state/DictateOrchestratorInitOrderTest.kt` (F-22)
+- `app/src/test/java/net/devemperor/dictate/state/DictateUiStateTest.kt` (F-1)
+- `app/src/test/java/net/devemperor/dictate/state/ModuleServicesTest.kt` (F-1)
+- `app/src/test/java/net/devemperor/dictate/state/OverlayModuleTest.kt` (F-7)
+- `app/src/test/java/net/devemperor/dictate/state/PipelineModuleTest.kt` (F-24)
+- `app/src/test/java/net/devemperor/dictate/state/PipelinePrefMirrorTest.kt` (F-1)
+- `app/src/test/java/net/devemperor/dictate/state/PipelineRecoveryTest.kt` (F-22)
+- `app/src/test/java/net/devemperor/dictate/state/RecordingModuleTest.kt` (F-2)
+- `app/src/test/java/net/devemperor/dictate/state/ResendModuleTest.kt` (F-1: 4 new tests)
+- `app/src/test/java/net/devemperor/dictate/testutil/FakeModuleServices.kt` (F-19)
+- `app/src/test/java/net/devemperor/dictate/testutil/FakePipelineSessionRepo.kt` (F-22, new)
+
+Docs:
+- `docs/architecture/state-architecture/README.md` (F-8)
+- `docs/architecture/state-architecture/adding-a-module.md` (F-16 + F-17 + F-3 — new §7.1)
+- `docs/decisions/0001-state-modular-orchestrator-pattern.md` (SF-1 — F-1 Decision-History entry)
+
+**Files in findings-scope:** all of the above are explicitly named in one or more findings or the F-1 research doc's §5 implementation hints.
+
+**Files outside findings-scope (drift):** none.
+
+**Test result:** `./gradlew test` → BUILD SUCCESSFUL, **536 tests, 0 failures** (debug + release variants; was 529 pre-Repair-Wave-1 — +7 new tests from F-1 (4 ResendModule arms) + F-2 (2 RecordingModule arms) + F-7 (1 both-in-flight) + F-24 (1 Preparing→Running) − 1 test removed/renamed in F-1 cleanup).
+
+**Build result:** `./gradlew assembleDebug` → BUILD SUCCESSFUL.
+
+### Validate-Fixes Self-Check (B2-VAL-W1)
+
+**Date:** 2026-05-15
+**Agent-ID:** `B2-VAL-REPAIR` (fresh-mode, integrated self-check per `prompts/validate-fixes.resume.md`)
+
+- ✅ Build green (`./gradlew assembleDebug`).
+- ✅ Tests green (536, 0 failures, 0 errors; debug + release both pass).
+- ✅ F-1 (Critical): re-read `DictateUiState.kt` — no top-level field; `ResendState` has the field. Re-read `Action.kt` — `PipelineAction` has no manual-paste leaves; `ResendAction` has them with proper KDoc. Re-read `PipelineModule.kt` — no dead reducer arms; class-KDoc mentions F-1. Re-read `ResendModule.kt` — both reducer arms present, idempotent. ADR-0001 has the Decision-History entry.
+- ✅ F-2 (Imp): `RecordingModule.Effect.EmitPipelineTrigger` defined; reducer arms emit it; `runEffect` routes to `services.emitAction(TriggerPipeline)`. Action carries sessionId. Tests verify both Active and Paused paths.
+- ✅ F-4 (Imp): 6 typed Pref entries in `DictatePrefs.kt`; `OverlayModule.runEffect` uses `editor.put(Pref.OverlayXxx, ...)`; PipelinePrefMirror uses `sp.get(Pref.OverlayXxx)`. Backward-compat `OVERLAY_POS_*_KEY` constants preserved.
+- ✅ F-5 / F-6 / F-7 / F-8: all verified via re-read.
+- ✅ F-3 / F-15 / F-16 / F-17 / F-18 / F-21: documentation + KDoc edits visible via re-read.
+- ✅ F-19: `audioFile: File?` propagated through Effect + Subsystem interface + production stubs + test fakes.
+- ✅ F-20: `Log.w` diagnostic visible.
+- ✅ F-22: shared fake exists at `testutil/FakePipelineSessionRepo.kt`; both consuming tests compile + green.
+- ✅ F-9 / F-23 / F-24: improved tests green and assert the documented behaviour.
+- ⚠ F-11 / F-14 (NTH, postponed): spec-file edits deferred to Phase 4.6 doc-pass. No code regression — documentation drift only.
+- ⚠ SF-4 (NTH, B3-deferred): PersistenceError recovery-path manual-paste signalling postponed to B3 — recovery-path responsibility, not pipeline-reducer.
+
+**Self-check result:** ✅ Phase complete — all 24 findings + 4 sub-findings closed (22 fixed, 2 postponed with B3/Phase-4.6 rationale).
 
 ---
 

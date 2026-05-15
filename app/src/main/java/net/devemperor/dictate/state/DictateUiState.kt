@@ -23,7 +23,7 @@ import java.io.File
  * `toMutableList()` is forbidden pattern (e) — see
  * `docs/architecture/state-architecture/forbidden-patterns.md`.
  *
- * **Axes (13 sub-state fields + 1 top-level flag):**
+ * **Axes (13 sub-state fields, single-owner-per-axis throughout):**
  *
  * | # | Field | Owner module | Notes |
  * |---|-------|--------------|-------|
@@ -33,14 +33,13 @@ import java.io.File
  * | 4 | [layout] | LayoutModule | contentArea + 3 booleans (Pref-mirror) |
  * | 5 | [overlay] | OverlayModule | 4 floats (positions) + 4 booleans (perm / pref / suppress / onboarding) |
  * | 6 | [audio] | AudioModule | AudioFocus + BluetoothSco + vibration |
- * | 7 | [resend] | ResendModule | lastAudioExists + enabled + cooldown |
+ * | 7 | [resend] | ResendModule | lastAudioExists + enabled + cooldown + manual-paste hint (IME-service-death recovery, F-1) |
  * | 8 | [livePrompt] | LivePromptModule | chain state |
  * | 9 | [language] | LanguageModule | effective + override |
  * | 10 | [features] | FeatureToggleModule | 5 user-toggles |
  * | 11 | [theming] | ThemingModule | theme + accent + overlay-chars + speed |
  * | 12 | [pendingSessions] | PendingSessionsModule | PersistentList, DB-subscriber-driven |
  * | 13 | [interruption] | InterruptionModule (Phase 2) | null in Phase 1 |
- * | top | [lastResultNeedsManualPaste] | PipelineModule | IME-service-death recovery flag |
  *
  * @see net.devemperor.dictate.state.DictateModule
  * @see docs/decisions/0001-state-modular-orchestrator-pattern.md §"Module inventory"
@@ -70,15 +69,6 @@ data class DictateUiState(
     // ─── DB-subscriber-driven ───
     val pendingSessions: PersistentList<PendingSession>,
 
-    /**
-     * Set after IME-Service death + recovery when a pipeline-done notification
-     * told the user to manually paste from the system clipboard. Acts as a
-     * UI hint in the keyboard header. Cleared by
-     * `Action.PipelineAction.ClearManualPasteFlag` after the user pastes
-     * (Issue 2.1.9 / Option C).
-     */
-    val lastResultNeedsManualPaste: Boolean = false,
-
     // ─── Phase 2 stub (default null = not modelled) ───
     val interruption: InterruptionState? = null,
 ) {
@@ -100,7 +90,6 @@ data class DictateUiState(
             features = FeatureToggles(),
             theming = ThemingState(),
             pendingSessions = persistentListOf(),
-            lastResultNeedsManualPaste = false,
             interruption = null,
         )
     }
@@ -286,18 +275,29 @@ enum class ScoPhase {
 }
 
 /**
- * Resend-button visibility + cooldown. Owned by `ResendModule`.
+ * Resend-button visibility + cooldown + post-pipeline UI affordances.
+ * Owned by `ResendModule`.
  *
  * @property lastAudioExists set by `ResendAction.MarkLastAudio` after the
  *   pipeline completes successfully and the audio file is still readable.
  * @property resendEnabled mirrored from `Pref.ResendButton`.
  * @property resendCooldown 500 ms window after a resend-click to prevent
  *   double-fire.
+ * @property lastResultNeedsManualPaste set after IME-service-death recovery
+ *   when the pipeline completed but no `InputConnection` was available to
+ *   insert the result; the recovery path copied the result to the system
+ *   clipboard and the IME header must hint "tap to paste". Cleared by
+ *   `Action.ResendAction.ClearManualPasteFlag` after the user pastes
+ *   (Issue 2.1.9 Option C; F-1 fix per
+ *   `research/manual-paste-field-architecture.md`). Sibling to
+ *   [lastAudioExists] — both are post-pipeline UI affordances surviving
+ *   the pipeline-FSM's return to Idle.
  */
 data class ResendState(
     val lastAudioExists: Boolean = false,
     val resendEnabled: Boolean = false,
     val resendCooldown: Boolean = false,
+    val lastResultNeedsManualPaste: Boolean = false,
 )
 
 /**

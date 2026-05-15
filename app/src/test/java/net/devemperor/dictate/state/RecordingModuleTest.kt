@@ -147,10 +147,46 @@ class RecordingModuleTest {
     }
 
     @Test
-    fun `StopRecordingAndSend from Active also drops to Idle`() {
+    fun `StopRecordingAndSend from Active drops to Idle and emits EmitPipelineTrigger`() {
         val state = RecordingState.Active(useBluetooth = false, audioFile = testFile)
-        val result = module.reduce(state, Action.RecordingAction.StopRecordingAndSend, ctx())
+        val result = module.reduce(
+            state,
+            Action.RecordingAction.StopRecordingAndSend(sessionId = "sid-42"),
+            ctx(),
+        )
         assertEquals(RecordingState.Idle, result!!.nextState)
+        // F-2 — the "Send" semantic produces an EmitPipelineTrigger effect
+        // on top of the StopRecording effects so the pipeline takes over
+        // once recording is stopped.
+        assertTrue(
+            result.sideEffects.contains(
+                RecordingModule.Effect.EmitPipelineTrigger(
+                    sessionId = "sid-42",
+                    audioFile = testFile,
+                ),
+            ),
+        )
+        // Plain stop effects still fire.
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.StopMediaRecorder))
+    }
+
+    @Test
+    fun `StopRecordingAndSend from Paused drops to Idle and emits EmitPipelineTrigger`() {
+        val state = RecordingState.Paused(useBluetooth = false, audioFile = testFile)
+        val result = module.reduce(
+            state,
+            Action.RecordingAction.StopRecordingAndSend(sessionId = "sid-99"),
+            ctx(),
+        )
+        assertEquals(RecordingState.Idle, result!!.nextState)
+        assertTrue(
+            result.sideEffects.contains(
+                RecordingModule.Effect.EmitPipelineTrigger(
+                    sessionId = "sid-99",
+                    audioFile = testFile,
+                ),
+            ),
+        )
     }
 
     @Test

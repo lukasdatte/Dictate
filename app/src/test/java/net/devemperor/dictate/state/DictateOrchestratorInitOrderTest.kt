@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.put
+import net.devemperor.dictate.testutil.FakePipelineSessionRepo
 import net.devemperor.dictate.testutil.FakeSharedPreferences
 import net.devemperor.dictate.testutil.fakeModuleServices
 import org.junit.Assert.assertEquals
@@ -54,12 +55,8 @@ class DictateOrchestratorInitOrderTest {
 
         val store = DictateUiStateStore(DictateUiState.initial())
         val prefMirror = PipelinePrefMirror(sp)
-        val recovery = PipelineRecovery(object : PipelineSessionRepoSubsystem {
-            override suspend fun loadPending(): List<PendingSession> = emptyList()
-            override suspend fun markInserted(sessionId: String, at: Long) = Unit
-            override suspend fun markFailed(sessionId: String, reason: String) = Unit
-            override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
-        })
+        // F-22 — shared fake (testutil/FakePipelineSessionRepo).
+        val recovery = PipelineRecovery(FakePipelineSessionRepo())
 
         // Construct the orchestrator. Pref-mirror attaches in init {}.
         DictateOrchestrator(
@@ -140,14 +137,8 @@ class DictateOrchestratorInitOrderTest {
             services = fakeModuleServices(),
             registry = DictateModuleRegistry(emptyList()),
             prefMirror = PipelinePrefMirror(sp),
-            recovery = PipelineRecovery(
-                object : PipelineSessionRepoSubsystem {
-                    override suspend fun loadPending(): List<PendingSession> = pending
-                    override suspend fun markInserted(sessionId: String, at: Long) = Unit
-                    override suspend fun markFailed(sessionId: String, reason: String) = Unit
-                    override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
-                }
-            ),
+            // F-22 — shared fake (testutil/FakePipelineSessionRepo).
+            recovery = PipelineRecovery(FakePipelineSessionRepo(pending = pending)),
         )
 
         testScheduler.advanceUntilIdle()
@@ -167,14 +158,8 @@ class DictateOrchestratorInitOrderTest {
             services = fakeModuleServices(),
             registry = DictateModuleRegistry(emptyList()),
             prefMirror = prefMirror,
-            recovery = PipelineRecovery(
-                object : PipelineSessionRepoSubsystem {
-                    override suspend fun loadPending(): List<PendingSession> = emptyList()
-                    override suspend fun markInserted(sessionId: String, at: Long) = Unit
-                    override suspend fun markFailed(sessionId: String, reason: String) = Unit
-                    override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
-                }
-            ),
+            // F-22 — shared fake (testutil/FakePipelineSessionRepo).
+            recovery = PipelineRecovery(FakePipelineSessionRepo()),
         )
 
         // Sanity: SP write before shutdown DOES reach the store via the listener.

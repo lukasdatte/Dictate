@@ -4,8 +4,9 @@
 // to the same package.
 package net.devemperor.dictate.state
 
-import net.devemperor.dictate.core.ContentArea
+import android.util.Log
 import kotlin.reflect.KClass
+import net.devemperor.dictate.core.ContentArea
 
 /**
  * Owns the [LayoutState] axis — `contentArea` (MAIN_BUTTONS / QWERTZ /
@@ -116,9 +117,18 @@ object LayoutModule : DictateModule<LayoutState, Action.LayoutAction, LayoutModu
         is Action.LayoutAction.SetContentArea ->
             // Setting the content-area while in small-mode is a no-op —
             // the structural rule is "small + non-MAIN_BUTTONS" is
-            // forbidden, so we silently reject. The UI side won't
-            // surface non-MAIN_BUTTONS targets in small mode anyway.
+            // forbidden (KSM-bug fix, Issue 1.1.5). The UI side won't
+            // surface non-MAIN_BUTTONS targets in small-mode anyway.
+            // F-20 (2026-05-15) — emit a `Log.w` diagnostic so a
+            // resolver-author bug that forgets the small-mode gate
+            // surfaces in logcat instead of being silently absorbed.
             if (state.smallMode && action.area != ContentArea.MAIN_BUTTONS) {
+                Log.w(
+                    TAG,
+                    "SetContentArea(${action.area}) rejected in small-mode — " +
+                        "resolver MUST gate on state.smallMode before dispatch " +
+                        "(KSM-bug structural-rejection, Issue 1.1.5).",
+                )
                 null
             } else if (action.area != state.contentArea) {
                 TransitionResult(
@@ -131,4 +141,6 @@ object LayoutModule : DictateModule<LayoutState, Action.LayoutAction, LayoutModu
     override fun runEffect(effect: Effect, services: ModuleServices) {
         // No effects — see [Effect] KDoc. Empty sealed interface.
     }
+
+    private const val TAG: String = "LayoutModule"
 }

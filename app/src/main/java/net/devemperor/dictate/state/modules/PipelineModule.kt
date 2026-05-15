@@ -5,14 +5,20 @@
 // in the file tree without paying the per-file package cost.
 package net.devemperor.dictate.state
 
-import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.reflect.KClass
+import kotlinx.coroutines.launch
 
 /**
  * Owns the [PipelineUiState] FSM (Idle / Preparing / Running /
- * ReprocessStaging) plus the `lastResultNeedsManualPaste`-flag for IME-
- * service-death recovery.
+ * ReprocessStaging).
+ *
+ * **Manual-paste flag relocated (F-1, 2026-05-15):** the IME-service-death
+ * recovery `lastResultNeedsManualPaste` flag was previously declared as a
+ * top-level [DictateUiState] field nominally attributed to PipelineModule.
+ * It now lives on [ResendState] as a sibling of `lastAudioExists`; the
+ * `NotifyManualPasteNeeded` / `ClearManualPasteFlag` actions are owned by
+ * [Action.ResendAction]. See `research/manual-paste-field-architecture.md`.
  *
  * Side-effects delegate to the [ModuleServices.pipelineRunner] (AI-call
  * submission), [ModuleServices.sessionRepo] (DB persistence), and
@@ -21,10 +27,13 @@ import kotlin.reflect.KClass
  *
  * **Cross-module cascades (Coupling-Matrix §15.1.x row "Pipeline"):**
  *
- * - `Pipeline → Recording`: when Pipeline transitions to `Preparing`
- *   from a state where Recording is still `Active`/`Paused`, cascade
- *   [Action.RecordingAction.StopRecording] (the "Send" trigger pattern,
- *   Spec 1 §4.0.1.4).
+ * - `Pipeline → Recording`: **Phase-2 (deferred no-op).** The matrix
+ *   reserves this direction but the observer body emits no cascade —
+ *   the actual "Send" flow is Recording→Pipeline via the
+ *   [RecordingModule.Effect.EmitPipelineTrigger] async re-entry
+ *   (F-2 fix, 2026-05-15). See the inline comment in
+ *   [onCrossModuleStateChange] below; Phase 2 may reintroduce the
+ *   reverse cascade if a future flow inverts the trigger order.
  * - `Pipeline → ViewMode`: when Pipeline transitions to a
  *   [PipelineUiState.Idle]-equivalent state (Done / Failed / Cancelled)
  *   from a non-Idle state, cascade
@@ -32,6 +41,13 @@ import kotlin.reflect.KClass
  *   "Geist-Widget"-bug structural protection (Spec 3 §7.3 T7).
  * - `Pipeline → Resend`: cascade [Action.ResendAction.MarkLastAudio]
  *   so the Resend button knows there's a fresh audio file to retry.
+ *   **F-21 (2026-05-15):** the cascade hard-codes `exists = true`
+ *   regardless of whether PipelineDone was success vs cancel. The
+ *   cancel-path audio-file deletion is not yet implemented (Phase-2
+ *   cancel-cascade); when it lands, the observer should emit
+ *   `MarkLastAudio(exists = false)` on the cancel-path branch
+ *   instead. Phase-1 acceptable — the success-path is the only one
+ *   that produces a fresh audio file the user might want to resend.
  * - `Pipeline → LivePrompt`: cascade [Action.LivePromptAction.ChainNext]
  *   when LivePrompt is enabled + has a pending chain (Spec 1
  *   §15.1 + §15.x LivePromptModule).
@@ -71,10 +87,23 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         /** Submit a fresh pipeline job (transcription + optional rewording). */
         data class SubmitPipeline(val sessionId: String, val audioFile: File) : Effect
 
-        /** Submit a re-processing job with a custom prompt queue + language override. */
+        /**
+         * Submit a re-processing job with a custom prompt queue + language override.
+         *
+         * **F-19 (2026-05-15) — explicit nullable contract.** `audioFile`
+         * is nullable to encode the "runner resolves the path by
+         * `sessionId`-lookup in the DB session record" semantics
+         * unambiguously at the type level. Earlier prose used the
+         * `File("")` empty-path convention, but a future B3
+         * implementer could easily miss the comment and treat the
+         * empty path as a real file path. Pass `null` when the staging
+         * record is the authoritative path source (the Phase-1
+         * SendStaging case). Passing `File("")` is forbidden — use
+         * `null` instead.
+         */
         data class SubmitReprocess(
             val sessionId: String,
-            val audioFile: File,
+            val audioFile: File?,
             val queue: List<Int>,
             val language: String?,
         ) : Effect
@@ -237,12 +266,11 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                     sideEffects = listOf(
                         Effect.SubmitReprocess(
                             sessionId = action.sessionId,
-                            // Audio file is resolved by the runner from the DB
-                            // session record — we pass a placeholder; the runner
-                            // overwrites with the real path. Spec 1 §15.x notes
-                            // this is acceptable because the staging-FSM is
-                            // pure-state-only (no file in the state).
-                            audioFile = File(""),
+                            // F-19 — null means "runner resolves path by
+                            // sessionId-lookup in the DB session record"
+                            // (Phase-1 staging-FSM is pure-state-only,
+                            // no file in the state).
+                            audioFile = null,
                             queue = emptyList(),
                             language = ctx.global.language.override,
                         ),
@@ -288,27 +316,6 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                 } else null
                 else -> null
             }
-
-        is Action.PipelineAction.NotifyResultNeedsManualPaste ->
-            // Sets the top-level flag; doesn't change the PipelineUiState
-            // axis. Reducer returns the same axis-state to signal "no
-            // state change" — but a cross-axis write isn't allowed here.
-            // The flag is set via the lens-write below since this module
-            // owns it (lens encompasses the flag conceptually). Pragmatic
-            // approach: return null and have a dedicated cascade or a
-            // lifted reducer handle the flag. For Phase 1 we elevate the
-            // flag-write to the lens by routing through a no-op state-
-            // change with a side-effect that re-dispatches a flag-set.
-            //
-            // Simplest correct form: return null (no PipelineUiState
-            // mutation). The flag is read directly from the global state
-            // — its mutation is performed by C7 wiring via a separate
-            // (out-of-band) `_state.update` on PrefMirror init. This
-            // matches Spec 1 §15.x note that the flag is "lifted-pref"
-            // semantics, not an in-pipeline-FSM event.
-            null
-
-        is Action.PipelineAction.ClearManualPasteFlag -> null
     }
 
     /**
@@ -387,14 +394,15 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         }
 
         // ─── Send-trigger: stop the recording when Pipeline enters Preparing ─
-        // The "Send" button dispatches `RecordingAction.StopRecordingAndSend`
-        // which the RecordingModule reduces to `Idle` + stop effects. The
-        // pipeline-trigger comes via a separate `TriggerPipeline` action.
-        // No cascade needed here — the cascade direction is Recording →
-        // Pipeline, not Pipeline → Recording — but the Coupling-Matrix row
-        // marks `R(state.pipeline) C(RecordingAction.StopRecording)` in case
-        // the trigger sequence is inverted in a future flow. Phase 1 keeps
-        // the cascade as a no-op (`emptyList()` contribution).
+        // The "Send" button dispatches `RecordingAction.StopRecordingAndSend(sessionId)`
+        // which the RecordingModule reduces to `Idle` + stop effects, plus a
+        // `RecordingModule.Effect.EmitPipelineTrigger(sessionId, audioFile)` that
+        // re-enters the dispatch loop with `Action.PipelineAction.TriggerPipeline`
+        // (F-2 fix, 2026-05-15). The Coupling-Matrix row
+        // `R(state.pipeline) C(RecordingAction.StopRecording)` is documented as
+        // **Phase-2 deferred no-op** — the actual Recording → Pipeline direction
+        // is the async re-entry above, not a cross-module observer cascade.
+        // No cascade emission needed here in PipelineModule.
 
         return cascade
     }

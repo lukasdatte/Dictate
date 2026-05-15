@@ -83,7 +83,9 @@ class ActionHierarchyTest {
     fun `data object actions are equal by reference and by content`() {
         // data object has both === and == returning true (the latter via auto-generated equals)
         assertEquals(Action.RecordingAction.StopRecording, Action.RecordingAction.StopRecording)
-        assertEquals(Action.PipelineAction.ClearManualPasteFlag, Action.PipelineAction.ClearManualPasteFlag)
+        // F-1 — `ClearManualPasteFlag` moved from `PipelineAction` to
+        // `ResendAction` because the flag lives on `ResendState`.
+        assertEquals(Action.ResendAction.ClearManualPasteFlag, Action.ResendAction.ClearManualPasteFlag)
     }
 
     // ────────────────────────────────────────────────────────────────

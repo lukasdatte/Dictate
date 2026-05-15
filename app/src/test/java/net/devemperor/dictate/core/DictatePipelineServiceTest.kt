@@ -276,19 +276,33 @@ class DictatePipelineServiceTest {
     @Test
     fun localBinderState_exposesOrchestratorStateFlow() {
         // C7 added `LocalBinder.state` so the IME can subscribe via
-        // `binder.state.collect { … }`. The flow must be non-null and
-        // hand out a snapshot equal to the initial state — pref-mirror
-        // ran during onCreate; with an empty SP the defaults match
-        // [DictateUiState.initial].
+        // `binder.state.collect { … }`. The flow must hand out the
+        // initial state — pref-mirror ran during onCreate; with an
+        // empty SP the defaults match [DictateUiState.initial].
+        //
+        // F-23 (2026-05-15) — tightened from `assertNotNull(snapshot)`
+        // (weak smoke check) to substantive equality against
+        // `DictateUiState.initial()`. An empty SharedPreferences
+        // makes the expected state deterministic — every Pref's
+        // default matches the corresponding sub-state default.
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val sp = context.getSharedPreferences(
+            "net.devemperor.dictate",
+            Context.MODE_PRIVATE,
+        )
+        sp.edit().clear().commit()    // Ensure empty SP.
+
         controller.create()
         val binder = controller.get().onBind(Intent()) as DictatePipelineService.LocalBinder
 
         val snapshot = binder.state.value
-        // After PrefMirror.attach with empty prefs, the initial state's
-        // sub-state defaults match the pref-defaults (Pref.<Bool>.default,
-        // etc.). Any sub-state field that differs would indicate either
-        // a pref-default mismatch or the orchestrator was not wired.
-        assertNotNull("Binder.state must hand out a DictateUiState snapshot", snapshot)
+        assertEquals(
+            "Empty SP + PrefMirror.attach must yield a snapshot equal to " +
+                "DictateUiState.initial() — any sub-state delta indicates either " +
+                "a pref-default mismatch or the orchestrator was not wired.",
+            net.devemperor.dictate.state.DictateUiState.initial(),
+            snapshot,
+        )
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -352,15 +366,53 @@ class DictatePipelineServiceTest {
         // `terminate(services)` calls would launch async cleanup on a
         // cancelled scope.
         //
-        // We can't intercept the order from the outside, but we CAN
-        // assert that destroy() does not throw even when an orchestrator
-        // has been wired (a regression in the order would surface as a
-        // CancellationException from the shutdown coroutines).
+        // F-9 (2026-05-15) — improved from a non-throw smoke check to
+        // a behavioural assertion via the PrefMirror lifecycle: write a
+        // mirrored SP value AFTER destroy, then verify the store stays
+        // at its pre-destroy snapshot. PrefMirror.detach() runs as the
+        // first step inside orchestrator.shutdown() (see
+        // [DictateOrchestrator.shutdown]), so a post-destroy SP write
+        // failing to propagate proves that detach ran during destroy.
+        // The chain is: destroy → orchestrator.shutdown() →
+        // prefMirror.detach() → SP listener unregistered → post-destroy
+        // SP writes invisible to the store. Plus the original no-throw
+        // check (a CancellationException from shutting down on a
+        // cancelled scope would surface here).
+
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val sp = context.getSharedPreferences(
+            "net.devemperor.dictate",
+            Context.MODE_PRIVATE,
+        )
+
+        // Pre-condition: SingleRowMode = true so the mirrored axis has a
+        // distinguishable value.
+        sp.edit().putBoolean("net.devemperor.dictate.single_row_mode", true).commit()
+
         controller.create()
-        controller.get().onBind(Intent())
+        val binder = controller.get().onBind(Intent()) as DictatePipelineService.LocalBinder
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(
+            "Pre-destroy: PrefMirror snapshot reflects the SP value",
+            binder.state.value.layout.singleRowMode,
+        )
 
         controller.destroy()
-        // No exception => no regression.
+        // No exception => no regression in the no-throw acceptance.
+
+        // Now flip the SP. If PrefMirror is still attached, the listener
+        // would propagate the change into the store. If detach ran
+        // during shutdown, the store stays put.
+        sp.edit().putBoolean("net.devemperor.dictate.single_row_mode", false).commit()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertTrue(
+            "PrefMirror must be detached by destroy — post-destroy SP writes " +
+                "must not mutate the snapshot. A regression in the shutdown order " +
+                "(scope.cancel before orchestrator.shutdown) would manifest as the " +
+                "SP-listener still registered, flipping this snapshot to false.",
+            binder.state.value.layout.singleRowMode,
+        )
     }
 
     @Test

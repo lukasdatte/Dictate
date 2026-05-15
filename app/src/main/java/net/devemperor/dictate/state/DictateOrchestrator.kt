@@ -48,6 +48,19 @@ sealed interface DispatchOutcome {
 /**
  * Composition root of the state-mutation pipeline.
  *
+ * **Note on naming (F-8 — disambiguation).** `DictateOrchestrator` is
+ * the **state-action-router** introduced by ADR-0001 — it owns the
+ * registry-driven `Action → reducer → state-write → effects → cascade`
+ * dispatch loop. The legacy
+ * [net.devemperor.dictate.core.PipelineOrchestrator] is the
+ * **audio-pipeline runner** (transcription/completion + DAO writes);
+ * the two classes are unrelated and **co-exist during the Block 2 →
+ * Block 3 migration window**. B3 absorbs the legacy
+ * `PipelineOrchestrator` into the new architecture as a
+ * `PipelineRunnerSubsystem` adapter behind the modular orchestrator.
+ * Tests + reviewers should keep the distinction in mind when reading
+ * stack traces and KDoc references.
+ *
  * The orchestrator is the **only** mutator of [DictateUiStateStore]. It
  * routes every dispatched [Action] to exactly one [DictateModule], runs
  * that module's pure reducer, writes the new sub-state back into the

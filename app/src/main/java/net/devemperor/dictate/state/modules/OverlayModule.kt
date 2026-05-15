@@ -4,6 +4,8 @@
 // to the same package.
 package net.devemperor.dictate.state
 
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.put
 import java.io.File
 import kotlin.reflect.KClass
 
@@ -149,26 +151,37 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
 
     override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
         is Effect.PersistOverlayPosition -> {
-            // SharedPreferences are the canonical persistence mirror
-            // (`Pref.OverlayPositionPortraitX` / `…Y` / landscape). Phase-1
-            // wires this directly here — the C7 PrefMirror watches for
-            // state changes and writes back too, so this Effect is a
-            // belt-and-suspenders write that survives a service restart
-            // before PrefMirror's first sync.
-            val key = if (effect.portrait) "overlay_pos_portrait" else "overlay_pos_landscape"
-            services.sharedPrefs.edit()
-                .putFloat("${key}_x", effect.x)
-                .putFloat("${key}_y", effect.y)
-                .apply()
+            // SharedPreferences are the canonical persistence mirror. The
+            // C7 PrefMirror watches for SP changes and pushes them back
+            // into the store, so this Effect is a belt-and-suspenders
+            // write that survives a service restart before PrefMirror's
+            // first sync.
+            //
+            // F-4 (2026-05-15) — typed [Pref] entries
+            // (`Pref.OverlayPositionPortraitX/Y`, landscape) replace the
+            // earlier raw-string accesses per the project convention
+            // (`CLAUDE.md`: "Preferences are always accessed through
+            // `DictatePrefs.kt` sealed class").
+            val editor = services.sharedPrefs.edit()
+            if (effect.portrait) {
+                editor.put(Pref.OverlayPositionPortraitX, effect.x)
+                editor.put(Pref.OverlayPositionPortraitY, effect.y)
+            } else {
+                editor.put(Pref.OverlayPositionLandscapeX, effect.x)
+                editor.put(Pref.OverlayPositionLandscapeY, effect.y)
+            }
+            editor.apply()
         }
         Effect.MarkOnboardingShown -> {
+            // F-4 — typed Pref entry.
             services.sharedPrefs.edit()
-                .putBoolean("overlay_onboarding_shown", true)
+                .put(Pref.OverlayOnboardingShown, true)
                 .apply()
         }
         Effect.MarkOnboardingPermanentlyDismissed -> {
+            // F-4 — typed Pref entry.
             services.sharedPrefs.edit()
-                .putBoolean("overlay_onboarding_dismissed", true)
+                .put(Pref.OverlayOnboardingDismissed, true)
                 .apply()
         }
         is Effect.DeleteAudioFile -> {
@@ -193,11 +206,18 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
      *  - HOVER → KEYBOARD ⇒ SuppressAutoOverlay + Cancel cascade
      *  - permission-loss ⇒ SetViewMode(KEYBOARD)
      *
-     * **C-3-Disambiguation (HOVER→KEYBOARD cancel cascade):** if a
-     * recording is currently Active/Paused/Preparing, cancel the
-     * recording (the cancel flow handles its own MediaRecorder release
-     * + audio-file delete). Otherwise if a pipeline is running, cancel
-     * the pipeline. If neither, no cancel cascade is needed.
+     * **C-3-Disambiguation (HOVER→KEYBOARD cancel cascade, F-7
+     * 2026-05-15):** both Recording AND Pipeline are cancelled
+     * additively if both are in-flight (rare: HOVER closed during the
+     * brief Send-cascade window — Recording stopping while Pipeline
+     * already preparing). The orchestrator dispatches the list
+     * serially at `depth+1` with re-snapshotting, so each cancellation
+     * sees the previous one's effect. Spec 3 C-3 priority
+     * "Recording > Pipeline" is preserved by **list order**
+     * (Recording first), so a single-in-flight case still emits only
+     * one cancel — but the both-in-flight case no longer leaves the
+     * pipeline running and producing a transcript the user opted out
+     * of (earlier `if/else` priority skipped the pipeline cancel).
      */
     override fun onCrossModuleStateChange(
         prev: DictateUiState,
@@ -218,12 +238,15 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
         // ─── HOVER → KEYBOARD (CloseOverlay-cascade, Spec 3 §6.2 + §4.8) ─
         if (prev.viewMode == ViewMode.HOVER && next.viewMode == ViewMode.KEYBOARD) {
             cascade += Action.OverlayAction.SuppressAutoOverlayUntilNextSession
-            when {
-                next.recording.isActiveOrPaused || next.recording is RecordingState.Preparing ->
-                    cascade += Action.RecordingAction.CancelRecording
-                next.pipeline !is PipelineUiState.Idle ->
-                    cascade += Action.PipelineAction.CancelPipeline(sessionId = null)
-                // else: nothing to cancel.
+            // F-7 — additive list (was `when { … }` priority-chain).
+            // Both Recording and Pipeline can be cancelled in the same
+            // pass when both are in-flight. Recording-first is the C-3
+            // priority preserved by list order.
+            if (next.recording.isActiveOrPaused || next.recording is RecordingState.Preparing) {
+                cascade += Action.RecordingAction.CancelRecording
+            }
+            if (next.pipeline !is PipelineUiState.Idle) {
+                cascade += Action.PipelineAction.CancelPipeline(sessionId = null)
             }
         }
 

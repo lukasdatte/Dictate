@@ -358,6 +358,83 @@ Before submitting the PR:
 - [ ] Inline anchor in the module file:
       `@see docs/decisions/0001-state-modular-orchestrator-pattern.md`
 
+## 7.1 Conventions (F-16 / F-17 / F-3 — codified post-Block-2)
+
+Three small conventions emerged during Block-2 module validation;
+new modules MUST follow them and the existing 14 should be aligned
+on next-touch.
+
+### Import order (F-16)
+
+Imports sorted alphabetically as a single block — IDE default
+("Optimize Imports") is the source of truth. Mixed `java.` /
+`kotlin.` / `kotlinx.` / project imports are all merged into one
+sorted block. No blank lines between sections.
+
+```kotlin
+package net.devemperor.dictate.state
+
+import java.io.File
+import kotlin.reflect.KClass
+import kotlinx.collections.immutable.PersistentList
+import kotlinx.coroutines.launch
+import net.devemperor.dictate.preferences.Pref
+```
+
+### Minimum `@see` anchor set (F-17)
+
+Every module's class KDoc carries **at minimum**:
+
+| Anchor | Target |
+|---|---|
+| (a) sub-state type | `@see net.devemperor.dictate.state.XxxState` (the data class owned by this module) |
+| (b) action sealed | `@see net.devemperor.dictate.state.Action.XxxAction` |
+| (c) spec section | `@see docs/plans/.../research/{topic}/{topic}.reviewed.md §15.x` (or the equivalent post-archive path) |
+| (d) binding ADRs | `@see docs/decisions/0001-state-modular-orchestrator-pattern.md`; plus `0002-state-cross-module-cascade.md` **if** the module emits cross-module cascades; plus any module-specific ADR (e.g. `0005-triangle-fsm.md` for ViewModeModule) |
+
+Modules with richer KDoc (RecordingModule has 7 anchors) are fine
+— this is a **floor**, not a ceiling. The minimum set guarantees
+that the SSoT-anchor (Inline-Anchor convention,
+`knowledge-doc-format` §"Inline anchors") survives any rename.
+
+### Phase-stub patterns (F-3)
+
+Two valid shapes for a module whose behaviour is not yet active
+(Phase-2 deferred / future-Block-owned):
+
+**(I) Nullable sub-state, reducer rejects-all.** Use when the
+sub-state shape is itself uncertain. The sub-state defaults to
+`null` and the reducer returns `null` for every action.
+
+```kotlin
+object InterruptionModule : DictateModule<InterruptionState?, ...> {
+    override fun initialState(): InterruptionState? = null
+    override fun reduce(...): TransitionResult<...>? = null
+}
+```
+
+The downside: every reader of `state.interruption` must handle
+the nullable. Use when the future shape might add fields and the
+default values can't yet be chosen.
+
+**(II) Non-nullable sub-state with default, reducer rejects-all.**
+Use when the sub-state shape is known and a sane default exists,
+but reducer logic isn't wired yet.
+
+```kotlin
+object LanguageModule : DictateModule<LanguageState, ...> {
+    override fun initialState(): LanguageState =
+        LanguageState(effective = "system")
+    override fun reduce(state, action: Action.LanguageAction.RefreshFromPref, ctx): ... = null
+}
+```
+
+Both shapes preserve the `assertCompleteCoverage()` invariant
+(the action sealed class IS owned by a module). The key contract:
+**stub-registered ≠ removed**. The C6 deviations table records
+which modules use which shape; the canonical example for shape (I)
+is `InterruptionModule`.
+
 ## 8. Information Gaps
 
 (no gaps known at this time — the walkthrough is end-to-end runnable from the plan §4.0.6.3)

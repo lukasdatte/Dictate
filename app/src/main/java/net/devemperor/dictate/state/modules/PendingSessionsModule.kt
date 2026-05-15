@@ -4,11 +4,11 @@
 // to the same package.
 package net.devemperor.dictate.state
 
+import kotlin.reflect.KClass
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toPersistentList
 import kotlinx.coroutines.launch
-import kotlin.reflect.KClass
 
 /**
  * Owns the `pendingSessions` axis — a [PersistentList] of

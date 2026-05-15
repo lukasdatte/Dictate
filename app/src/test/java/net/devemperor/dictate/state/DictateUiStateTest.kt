@@ -41,7 +41,8 @@ class DictateUiStateTest {
 
         assertTrue(s.pendingSessions.isEmpty())
         assertNull(s.interruption)
-        assertFalse(s.lastResultNeedsManualPaste)
+        // F-1 — flag now lives on ResendState (was top-level pre-F-1).
+        assertFalse(s.resend.lastResultNeedsManualPaste)
     }
 
     @Test
@@ -266,20 +267,26 @@ class DictateUiStateTest {
     }
 
     // ────────────────────────────────────────────────────────────────
-    // Top-level flag
+    // ResendState.lastResultNeedsManualPaste (F-1 relocation)
+    //
+    // The flag used to live as a top-level `DictateUiState` field. Per
+    // F-1 + `research/manual-paste-field-architecture.md` it's now a
+    // sibling of `lastAudioExists` on `ResendState`. ResendModule owns
+    // both the field and the two action leaves
+    // (`NotifyManualPasteNeeded` / `ClearManualPasteFlag`).
     // ────────────────────────────────────────────────────────────────
 
     @Test
-    fun `lastResultNeedsManualPaste defaults to false`() {
-        assertFalse(DictateUiState.initial().lastResultNeedsManualPaste)
+    fun `resend lastResultNeedsManualPaste defaults to false`() {
+        assertFalse(DictateUiState.initial().resend.lastResultNeedsManualPaste)
     }
 
     @Test
-    fun `lastResultNeedsManualPaste can be set via copy without touching other axes`() {
+    fun `resend lastResultNeedsManualPaste can be set via copy without touching other axes`() {
         val a = DictateUiState.initial()
-        val b = a.copy(lastResultNeedsManualPaste = true)
+        val b = a.copy(resend = a.resend.copy(lastResultNeedsManualPaste = true))
 
-        assertTrue(b.lastResultNeedsManualPaste)
+        assertTrue(b.resend.lastResultNeedsManualPaste)
         assertSame(a.recording, b.recording)
         assertSame(a.pipeline, b.pipeline)
     }

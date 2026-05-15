@@ -130,6 +130,28 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
         data object PauseBorderGlow : Effect
         data object ResumeBorderGlow : Effect
         data object StopBorderGlow : Effect
+
+        /**
+         * F-2 fix — re-entrant trigger of the pipeline after `StopRecordingAndSend`.
+         *
+         * Emitted on the `Active/Paused → Idle` reducer arm for
+         * `StopRecordingAndSend(sessionId)`. The effect handler calls
+         * `services.emitAction(Action.PipelineAction.TriggerPipeline(sessionId, audioFile))`
+         * — re-entering the dispatch loop asynchronously via [emitAction]
+         * (which posts to the orchestrator's scope, not synchronously
+         * re-entering the current dispatch).
+         *
+         * This replaces the documented-but-never-wired cross-module
+         * cascade-via-observer pattern (the observer can't access the
+         * `sessionId` without polluting `RecordingState` with a transient
+         * `pendingSessionId` field; the Effect+emitAction route is the
+         * documented async re-entry mechanism per ADR-0001 §"Required
+         * mechanics" #6).
+         */
+        data class EmitPipelineTrigger(
+            val sessionId: String,
+            val audioFile: File,
+        ) : Effect
     }
 
     override fun reduce(
@@ -194,13 +216,28 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StopAmplitudeStream,
                 ),
             )
-            Action.RecordingAction.StopRecording, Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
+            Action.RecordingAction.StopRecording -> TransitionResult(
                 nextState = RecordingState.Idle,
                 sideEffects = listOf(
                     Effect.StopMediaRecorder,
                     Effect.StopTimer,
                     Effect.StopBorderGlow,
                     Effect.StopAmplitudeStream,
+                ),
+            )
+            is Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
+                nextState = RecordingState.Idle,
+                sideEffects = listOf(
+                    Effect.StopMediaRecorder,
+                    Effect.StopTimer,
+                    Effect.StopBorderGlow,
+                    Effect.StopAmplitudeStream,
+                    // F-2 — emit TriggerPipeline async so the pipeline
+                    // takes over once recording is stopped.
+                    Effect.EmitPipelineTrigger(
+                        sessionId = action.sessionId,
+                        audioFile = state.audioFile,
+                    ),
                 ),
             )
             Action.RecordingAction.CancelRecording -> TransitionResult(
@@ -232,12 +269,26 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
             // Issue 2.0.8 — Paused.Stop / Paused.Cancel are real reducer arms,
             // not TODO stubs. Both transition through `MediaRecorder.stop()`
             // (paused recorders still need stop + release before reuse).
-            Action.RecordingAction.StopRecording, Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
+            Action.RecordingAction.StopRecording -> TransitionResult(
                 nextState = RecordingState.Idle,
                 sideEffects = listOf(
                     Effect.StopMediaRecorder,
                     Effect.StopTimer,
                     Effect.StopBorderGlow,
+                ),
+            )
+            is Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
+                nextState = RecordingState.Idle,
+                sideEffects = listOf(
+                    Effect.StopMediaRecorder,
+                    Effect.StopTimer,
+                    Effect.StopBorderGlow,
+                    // F-2 — emit TriggerPipeline async so the pipeline
+                    // takes over once recording is stopped (Paused path).
+                    Effect.EmitPipelineTrigger(
+                        sessionId = action.sessionId,
+                        audioFile = state.audioFile,
+                    ),
                 ),
             )
             Action.RecordingAction.CancelRecording -> TransitionResult(
@@ -278,6 +329,14 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
         Effect.PauseBorderGlow -> services.borderGlow.stop()
         Effect.ResumeBorderGlow -> services.borderGlow.start()
         Effect.StopBorderGlow -> services.borderGlow.stop()
+        // F-2 — async re-entry; orchestrator dispatches TriggerPipeline
+        // on the orchestrator's scope (Main.immediate in production).
+        is Effect.EmitPipelineTrigger -> services.emitAction(
+            Action.PipelineAction.TriggerPipeline(
+                sessionId = effect.sessionId,
+                audioFile = effect.audioFile,
+            ),
+        )
     }
 
     /**

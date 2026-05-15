@@ -9,8 +9,9 @@ import kotlin.reflect.KClass
 /**
  * Owns the [ResendState] axis — `lastAudioExists` (audio file from the
  * last successful pipeline is on disk), `resendEnabled` (user pref
- * mirror for the Resend-button), and the short `resendCooldown` window
- * after a click.
+ * mirror for the Resend-button), the short `resendCooldown` window
+ * after a click, and `lastResultNeedsManualPaste` (IME-service-death
+ * recovery UI hint, F-1).
  *
  * **Cross-module cascade (Coupling-Matrix §15.1.x):**
  *
@@ -18,6 +19,12 @@ import kotlin.reflect.KClass
  *   [Action.ResendAction.MarkLastAudio]`(exists = true)` after a
  *   successful `PipelineDone`. The cascade lives in PipelineModule, not
  *   here — ResendModule only **owns** the resulting state mutation.
+ * - `Recovery → Resend` (B3, planned): B3's recovery path dispatches
+ *   [Action.ResendAction.NotifyManualPasteNeeded] directly when a
+ *   completed session's result couldn't be inserted via InputConnection
+ *   (service-death window). The flag is cleared by
+ *   [Action.ResendAction.ClearManualPasteFlag] when the user pastes
+ *   (or dismisses). See `research/manual-paste-field-architecture.md`.
  * - `Resend → Pipeline`: clicking Resend (or long-press) dispatches
  *   [Action.PipelineAction.TriggerPipeline] / `StartReprocessStaging`
  *   from the UI resolver path. ResendModule itself emits no Pipeline
@@ -100,6 +107,29 @@ object ResendModule : DictateModule<ResendState, Action.ResendAction, ResendModu
             if (action.exists != state.lastAudioExists) {
                 TransitionResult(
                     nextState = state.copy(lastAudioExists = action.exists),
+                    sideEffects = emptyList(),
+                )
+            } else null
+
+        // F-1 — IME-service-death recovery hint. Dispatched by B3's
+        // recovery path when a completed session's result couldn't be
+        // inserted via InputConnection (the result is on the clipboard;
+        // the user must tap to paste). Idempotent — re-dispatch is a
+        // no-op once the flag is already set.
+        is Action.ResendAction.NotifyManualPasteNeeded ->
+            if (!state.lastResultNeedsManualPaste) {
+                TransitionResult(
+                    nextState = state.copy(lastResultNeedsManualPaste = true),
+                    sideEffects = emptyList(),
+                )
+            } else null
+
+        // F-1 — user pasted (or dismissed). Idempotent — re-dispatch is
+        // a no-op once the flag is already cleared.
+        Action.ResendAction.ClearManualPasteFlag ->
+            if (state.lastResultNeedsManualPaste) {
+                TransitionResult(
+                    nextState = state.copy(lastResultNeedsManualPaste = false),
                     sideEffects = emptyList(),
                 )
             } else null

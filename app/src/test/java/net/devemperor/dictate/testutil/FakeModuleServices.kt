@@ -119,7 +119,7 @@ object NoopPipelineRunner : PipelineRunnerSubsystem {
     override fun submit(sessionId: String, audioFile: File) = Unit
     override fun submitReprocess(
         sessionId: String,
-        audioFile: File,
+        audioFile: File?,
         queue: List<Int>,
         language: String?,
     ) = Unit

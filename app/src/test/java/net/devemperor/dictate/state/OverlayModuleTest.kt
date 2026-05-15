@@ -172,8 +172,37 @@ class OverlayModuleTest {
         val cascade = module.onCrossModuleStateChange(prev, next)
         assertTrue(cascade.contains(Action.OverlayAction.SuppressAutoOverlayUntilNextSession))
         assertTrue(cascade.contains(Action.RecordingAction.CancelRecording))
-        // Pipeline-cancel must NOT also fire (priority: Recording > Pipeline)
+        // Pipeline-cancel must NOT also fire here — pipeline is Idle.
+        // (F-7: both-in-flight case is covered separately below.)
         assertTrue(cascade.none { it is Action.PipelineAction.CancelPipeline })
+    }
+
+    @Test
+    fun `F-7 — cascade HOVER to KEYBOARD with BOTH recording and pipeline in-flight emits BOTH cancels`() {
+        // The both-in-flight case: HOVER closed during the brief Send-
+        // cascade window (recording stopping while pipeline already
+        // preparing). The earlier `if/else if/else` chain dropped the
+        // pipeline cancel silently, leaving the pipeline running and
+        // producing a transcript the user opted out of. The F-7
+        // additive list emits both cancels; the orchestrator dispatches
+        // them serially at depth+1 with re-snapshotting.
+        val prev = DictateUiState.initial().copy(
+            viewMode = ViewMode.HOVER,
+            recording = RecordingState.Active(false, testFile),
+            pipeline = PipelineUiState.Preparing("sid"),
+        )
+        val next = prev.copy(viewMode = ViewMode.KEYBOARD)
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertTrue(cascade.contains(Action.OverlayAction.SuppressAutoOverlayUntilNextSession))
+        assertTrue(cascade.contains(Action.RecordingAction.CancelRecording))
+        assertTrue(cascade.any { it is Action.PipelineAction.CancelPipeline })
+        // C-3 priority preserved by list order: Recording before Pipeline.
+        val recordingIdx = cascade.indexOf(Action.RecordingAction.CancelRecording)
+        val pipelineIdx = cascade.indexOfFirst { it is Action.PipelineAction.CancelPipeline }
+        assertTrue(
+            "C-3 ordering: CancelRecording must precede CancelPipeline",
+            recordingIdx in 0..<pipelineIdx,
+        )
     }
 
     @Test

@@ -117,12 +117,24 @@ sealed class Action {
         data object CancelRecording : RecordingAction()
 
         /**
-         * "Send" click — stop recording AND trigger the pipeline. The
-         * `PipelineAction.Submit` is emitted by `RecordingModule`'s
-         * cross-module cascade on `Active/Paused → Idle` transitions
-         * where the trigger was this action.
+         * "Send" click — stop recording AND trigger the pipeline.
+         *
+         * **F-2 fix (2026-05-15):** the cascade-via-observer pattern hinted
+         * by the earlier KDoc was never implemented — `StopRecording` and
+         * `StopRecordingAndSend` collapsed into the same reducer arm with
+         * no Active/Paused → Idle observer firing `TriggerPipeline`. The
+         * fix routes the trigger through a [Effect.EmitPipelineTrigger]
+         * side-effect on the same reducer arm; the effect calls
+         * `services.emitAction(Action.PipelineAction.TriggerPipeline(...))`
+         * to re-enter the dispatch loop with a fresh action.
+         *
+         * The dedicated `sessionId` payload is required because
+         * `PipelineAction.TriggerPipeline(sessionId, audioFile)` needs a
+         * caller-supplied UUID (R.15 — strings throughout). The audio
+         * file path comes from `RecordingState.Active.audioFile` (or
+         * `Paused.audioFile`) at the time the reducer fires.
          */
-        data object StopRecordingAndSend : RecordingAction()
+        data class StopRecordingAndSend(val sessionId: String) : RecordingAction()
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -173,12 +185,6 @@ sealed class Action {
          * mitigation, R.17).
          */
         data class RejectedJobAlreadyActive(val sessionId: String) : PipelineAction()
-
-        /** Service-death recovery — tell the user to paste from clipboard. */
-        data class NotifyResultNeedsManualPaste(val sessionId: String) : PipelineAction()
-
-        /** User pasted — clear the recovery flag. */
-        data object ClearManualPasteFlag : PipelineAction()
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -242,10 +248,38 @@ sealed class Action {
         /** Long-press → ReprocessStaging entry. */
         data object ResendLastAudioLong : ResendAction()
 
+        /**
+         * Internal scheduler-fired action (UI side schedules it via
+         * `Handler.postDelayed` in Phase 1). Clears the cooldown bit on
+         * `ResendState.resendCooldown` so the Resend button becomes
+         * clickable again.
+         */
         data object ResendCooldownExpired : ResendAction()
 
         /** Cross-module cascade target — emitted after PipelineDone. */
         data class MarkLastAudio(val exists: Boolean) : ResendAction()
+
+        /**
+         * Service-death recovery — tell the user to paste from clipboard.
+         * Dispatched by B3's recovery path when the pipeline completed but
+         * no `InputConnection` was available; the result was copied to the
+         * system clipboard and the keyboard header should hint "tap to
+         * paste". Flips `ResendState.lastResultNeedsManualPaste = true`.
+         *
+         * (Issue 2.1.9 Option C; F-1 fix per
+         *  `research/manual-paste-field-architecture.md` — moved from
+         *  `PipelineAction.NotifyResultNeedsManualPaste` because the flag
+         *  is a post-pipeline UI affordance, not pipeline-FSM state.)
+         */
+        data class NotifyManualPasteNeeded(val sessionId: String) : ResendAction()
+
+        /**
+         * User pasted (or dismissed) — clear the manual-paste hint. Flips
+         * `ResendState.lastResultNeedsManualPaste = false`. Idempotent.
+         *
+         * (F-1 fix — moved from `PipelineAction.ClearManualPasteFlag`.)
+         */
+        data object ClearManualPasteFlag : ResendAction()
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -265,6 +299,16 @@ sealed class Action {
     sealed class LanguageAction : Action() {
         /** Reprocess-Staging override; `null` clears the override. */
         data class SetOverride(val code: String?) : LanguageAction()
+
+        /**
+         * Phase-1 stub: the reducer returns `null` because the legacy
+         * `LanguageController` still owns the SP read surface (curated
+         * list + position) and this action is just an acknowledgement
+         * signal. B3 promotes it to a payload-bearing
+         * `SetEffective(code)` (or similar) once the controller migration
+         * lands; see `FeatureToggleModule` KDoc for the parallel
+         * migration plan.
+         */
         data object RefreshFromPref : LanguageAction()
     }
 
@@ -319,6 +363,15 @@ sealed class Action {
         data object ToggleAutoFormatting : FeatureToggleAction()
         data object ToggleInstantOutput : FeatureToggleAction()
         data object ToggleAutoEnter : FeatureToggleAction()
+
+        /**
+         * **Deviation note:** `vibrationEnabled` lives on `AudioState`,
+         * not `FeatureToggles`, so the reducer in `FeatureToggleModule`
+         * returns `null` (cross-axis writes are forbidden by the lens,
+         * ADR-0001). The legacy UI's SP-write path still works in
+         * Phase 1; B3 may re-route this leaf to `Action.AudioAction`
+         * when it migrates the click resolver.
+         */
         data object ToggleVibration : FeatureToggleAction()
     }
 

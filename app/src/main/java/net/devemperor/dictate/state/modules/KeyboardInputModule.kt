@@ -41,6 +41,8 @@ import kotlin.reflect.KClass
  * from the Cross-Module-Coupling-Matrix.
  *
  * @see net.devemperor.dictate.state.Action.KeyboardInputAction
+ * @see net.devemperor.dictate.state.DictateOrchestrator
+ * @see docs/decisions/0001-state-modular-orchestrator-pattern.md
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §15.6
  */
 object KeyboardInputModule : DictateModule<Unit, Action.KeyboardInputAction, KeyboardInputModule.Effect> {

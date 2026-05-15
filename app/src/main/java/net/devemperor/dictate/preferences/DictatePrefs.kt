@@ -103,6 +103,18 @@ sealed class Pref<T>(val key: String, val default: T) {
 
     // ── Input Languages (Set<String>, separate access) ──
     object InputLanguages : Pref<String>("net.devemperor.dictate.input_languages", "")  // Sentinel, actually Set<String>
+
+    // ── Overlay (F-4 — typed entries previously accessed via raw strings) ──
+    // These keys keep the legacy (non-namespaced) names because
+    // `OverlayModule.Effect.PersistOverlayPosition` and the C7
+    // `PipelinePrefMirror` constants already shipped with the
+    // un-namespaced names; renaming would invalidate user data.
+    object OverlayPositionPortraitX : Pref<Float>("overlay_pos_portrait_x", 1.0f)
+    object OverlayPositionPortraitY : Pref<Float>("overlay_pos_portrait_y", 0.1f)
+    object OverlayPositionLandscapeX : Pref<Float>("overlay_pos_landscape_x", 1.0f)
+    object OverlayPositionLandscapeY : Pref<Float>("overlay_pos_landscape_y", 0.1f)
+    object OverlayOnboardingShown : Pref<Boolean>("overlay_onboarding_shown", false)
+    object OverlayOnboardingDismissed : Pref<Boolean>("overlay_onboarding_dismissed", false)
 }
 
 // ── Extension Functions ──

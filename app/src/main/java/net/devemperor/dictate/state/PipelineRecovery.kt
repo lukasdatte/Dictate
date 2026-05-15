@@ -1,5 +1,6 @@
 package net.devemperor.dictate.state
 
+import android.util.Log
 import kotlinx.collections.immutable.toPersistentList
 
 /**
@@ -53,9 +54,28 @@ class PipelineRecovery(
      * (typically Main.immediate per [ModuleServices.scope]) so
      * subscribers see the change on the main thread without an extra
      * coroutine hop.
+     *
+     * **F-6 (2026-05-15) — try/catch around the IO call.** The host
+     * service launches this on a `SupervisorJob` with no
+     * `CoroutineExceptionHandler`; without a guard, an `SQLiteException`
+     * or `IOException` from `loadPending()` would be silently swallowed,
+     * leaving `pendingSessions` empty with no diagnostic. The catch
+     * logs at `Log.e` so the failure surfaces in logcat. The store
+     * stays unchanged on failure — Phase 1 acceptable (the user sees
+     * an empty pending-list, which is the same UX as "no pending
+     * sessions"). B3 may extend the catch to emit a structured
+     * failure action for UI signalling.
      */
     suspend fun recover(store: DictateUiStateStore) {
-        val pending = sessionRepo.loadPending()
-        store.update { it.copy(pendingSessions = pending.toPersistentList()) }
+        try {
+            val pending = sessionRepo.loadPending()
+            store.update { it.copy(pendingSessions = pending.toPersistentList()) }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Recovery failed — loadPending() threw", t)
+        }
+    }
+
+    private companion object {
+        private const val TAG = "PipelineRecovery"
     }
 }

@@ -11,6 +11,18 @@ import kotlin.reflect.KClass
  * `null` in Phase 1, populated in Phase 2 by call-state, headset-plug,
  * and screen-state listeners).
  *
+ * **Phase-stub pattern (F-3 — nullable-state shape):** this module is
+ * the canonical example of pattern (I) in
+ * `docs/architecture/state-architecture/adding-a-module.md` §7.1
+ * "Phase-stub patterns": nullable sub-state (`InterruptionState?`)
+ * with the reducer returning `null` for every action. The pattern
+ * fits modules whose Phase-2 sub-state shape is still uncertain —
+ * choosing a non-null default today would commit to fields that may
+ * change. Spec 1 §4.8's note that this module is "auskommentiert bis
+ * aktiv" is **stale**: registration is required (the action sealed
+ * leaves are dispatched by the IME-side listeners today, and
+ * `assertCompleteCoverage()` would throw if no module claimed them).
+ *
  * **Why register the stub at all (Spec 1 §15.1, ADR-0001):**
  *
  * - The [Action.InterruptionAction] sealed leaves

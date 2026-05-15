@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 import net.devemperor.dictate.database.entity.SessionStatus
+import net.devemperor.dictate.testutil.FakePipelineSessionRepo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,23 +17,21 @@ import org.junit.Test
  * recovery algorithm (status promotion, ghost-session cleanup) is
  * Block 3 scope; those tests will extend this class.
  *
+ * **F-22 (2026-05-15):** the inline `FakeSessionRepo` was lifted to
+ * `testutil/FakePipelineSessionRepo.kt` (shared with
+ * `DictateOrchestratorInitOrderTest`).
+ *
  * @see net.devemperor.dictate.state.PipelineRecovery
+ * @see net.devemperor.dictate.testutil.FakePipelineSessionRepo
  */
 class PipelineRecoveryTest {
-
-    private class FakeSessionRepo(private val pending: List<PendingSession>) : PipelineSessionRepoSubsystem {
-        override suspend fun loadPending(): List<PendingSession> = pending
-        override suspend fun markInserted(sessionId: String, at: Long) = Unit
-        override suspend fun markFailed(sessionId: String, reason: String) = Unit
-        override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
-    }
 
     private fun session(id: String, status: SessionStatus = SessionStatus.RECORDED) =
         PendingSession(sessionId = id, status = status, transcribedText = null, createdAt = 0L)
 
     @Test
     fun `recover with empty repo leaves pendingSessions empty`() {
-        val repo = FakeSessionRepo(emptyList())
+        val repo = FakePipelineSessionRepo(emptyList())
         val store = DictateUiStateStore(DictateUiState.initial())
 
         runBlocking { PipelineRecovery(repo).recover(store) }
@@ -42,7 +41,7 @@ class PipelineRecoveryTest {
 
     @Test
     fun `recover writes loadPending result into store as a PersistentList`() {
-        val repo = FakeSessionRepo(listOf(session("a"), session("b"), session("c")))
+        val repo = FakePipelineSessionRepo(listOf(session("a"), session("b"), session("c")))
         val store = DictateUiStateStore(DictateUiState.initial())
 
         runBlocking { PipelineRecovery(repo).recover(store) }
@@ -53,7 +52,7 @@ class PipelineRecoveryTest {
 
     @Test
     fun `recover preserves order from the repo`() {
-        val repo = FakeSessionRepo(listOf(session("z"), session("a"), session("m")))
+        val repo = FakePipelineSessionRepo(listOf(session("z"), session("a"), session("m")))
         val store = DictateUiStateStore(DictateUiState.initial())
 
         runBlocking { PipelineRecovery(repo).recover(store) }
@@ -64,7 +63,7 @@ class PipelineRecoveryTest {
 
     @Test
     fun `recover is idempotent across repeated calls`() {
-        val repo = FakeSessionRepo(listOf(session("only")))
+        val repo = FakePipelineSessionRepo(listOf(session("only")))
         val store = DictateUiStateStore(DictateUiState.initial())
         val recovery = PipelineRecovery(repo)
 
@@ -103,7 +102,7 @@ class PipelineRecoveryTest {
 
     @Test
     fun `recover does not mutate other sub-states`() {
-        val repo = FakeSessionRepo(listOf(session("x")))
+        val repo = FakePipelineSessionRepo(listOf(session("x")))
         val initial = DictateUiState.initial()
         val store = DictateUiStateStore(initial)
 

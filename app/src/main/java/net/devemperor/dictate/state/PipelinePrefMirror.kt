@@ -24,7 +24,7 @@ import net.devemperor.dictate.preferences.get
  * | [ResendState] | 1 | `ResendButton` (→ `resendEnabled`) |
  * | [FeatureToggles] | 4 | `RewordingEnabled`, `AutoFormattingEnabled`, `InstantOutput`, `AutoEnter` |
  * | [ThemingState] | 4 | `Theme`, `AccentColor`, `OverlayCharacters`, `OutputSpeed` |
- * | [OverlayState] | 4 | `overlay_pos_portrait_x/y`, `overlay_pos_landscape_x/y` (raw keys — no [Pref] entry today, owned by [OverlayModule.Effect.PersistOverlayPosition]) |
+ * | [OverlayState] | 4 | `Pref.OverlayPositionPortraitX/Y`, `Pref.OverlayPositionLandscapeX/Y` (typed since F-4; mirrors [OverlayModule.Effect.PersistOverlayPosition] write site) |
  *
  * **Lifecycle contract:** [attach] is called from
  * [DictateOrchestrator]'s `init { … }` block **synchronously**, before
@@ -63,8 +63,22 @@ class PipelinePrefMirror(
     private val sp: SharedPreferences,
 ) {
 
-    /** Set inside [attach]; cleared inside [detach]. `null` outside the lifecycle. */
-    private var store: DictateUiStateStore? = null
+    /**
+     * Set inside [attach]; cleared inside [detach]. `null` outside the lifecycle.
+     *
+     * **`@Volatile` (F-5):** `attach`/`detach` are called from the Main
+     * thread (per [DictateOrchestrator.shutdown]'s contract), but
+     * [sync] reads this field from arbitrary threads — Android's
+     * `OnSharedPreferenceChangeListener` fires on the thread that
+     * called `apply()`/`commit()`, typically a background disk
+     * thread for `apply()`. Without a publication barrier the JVM
+     * memory model doesn't guarantee `detach()`'s `null` write is
+     * visible to a concurrent reader, which could let a late
+     * listener-fire mutate a logically-dead store. The
+     * `targetStore = store ?: return` read-once-into-local pattern
+     * in [sync] is already correct under the `@Volatile` guarantee.
+     */
+    @Volatile private var store: DictateUiStateStore? = null
 
     /**
      * Listener instance — stored as a field so [detach] can unregister
@@ -141,10 +155,10 @@ class PipelinePrefMirror(
             outputSpeed = sp.get(Pref.OutputSpeed),
         ),
         overlay = current.overlay.copy(
-            positionPortraitX = sp.getFloat(OVERLAY_POS_PORTRAIT_X_KEY, current.overlay.positionPortraitX),
-            positionPortraitY = sp.getFloat(OVERLAY_POS_PORTRAIT_Y_KEY, current.overlay.positionPortraitY),
-            positionLandscapeX = sp.getFloat(OVERLAY_POS_LANDSCAPE_X_KEY, current.overlay.positionLandscapeX),
-            positionLandscapeY = sp.getFloat(OVERLAY_POS_LANDSCAPE_Y_KEY, current.overlay.positionLandscapeY),
+            positionPortraitX = sp.get(Pref.OverlayPositionPortraitX),
+            positionPortraitY = sp.get(Pref.OverlayPositionPortraitY),
+            positionLandscapeX = sp.get(Pref.OverlayPositionLandscapeX),
+            positionLandscapeY = sp.get(Pref.OverlayPositionLandscapeY),
         ),
     )
 
@@ -210,24 +224,24 @@ class PipelinePrefMirror(
         Pref.OutputSpeed.key ->
             current.copy(theming = current.theming.copy(outputSpeed = sp.get(Pref.OutputSpeed)))
 
-        OVERLAY_POS_PORTRAIT_X_KEY -> current.copy(
+        Pref.OverlayPositionPortraitX.key -> current.copy(
             overlay = current.overlay.copy(
-                positionPortraitX = sp.getFloat(OVERLAY_POS_PORTRAIT_X_KEY, current.overlay.positionPortraitX),
+                positionPortraitX = sp.get(Pref.OverlayPositionPortraitX),
             ),
         )
-        OVERLAY_POS_PORTRAIT_Y_KEY -> current.copy(
+        Pref.OverlayPositionPortraitY.key -> current.copy(
             overlay = current.overlay.copy(
-                positionPortraitY = sp.getFloat(OVERLAY_POS_PORTRAIT_Y_KEY, current.overlay.positionPortraitY),
+                positionPortraitY = sp.get(Pref.OverlayPositionPortraitY),
             ),
         )
-        OVERLAY_POS_LANDSCAPE_X_KEY -> current.copy(
+        Pref.OverlayPositionLandscapeX.key -> current.copy(
             overlay = current.overlay.copy(
-                positionLandscapeX = sp.getFloat(OVERLAY_POS_LANDSCAPE_X_KEY, current.overlay.positionLandscapeX),
+                positionLandscapeX = sp.get(Pref.OverlayPositionLandscapeX),
             ),
         )
-        OVERLAY_POS_LANDSCAPE_Y_KEY -> current.copy(
+        Pref.OverlayPositionLandscapeY.key -> current.copy(
             overlay = current.overlay.copy(
-                positionLandscapeY = sp.getFloat(OVERLAY_POS_LANDSCAPE_Y_KEY, current.overlay.positionLandscapeY),
+                positionLandscapeY = sp.get(Pref.OverlayPositionLandscapeY),
             ),
         )
 
@@ -236,13 +250,13 @@ class PipelinePrefMirror(
 
     companion object {
         /**
-         * Overlay-position pref keys — raw strings because
-         * [net.devemperor.dictate.preferences.Pref] does not (yet)
-         * have entries for them. The canonical write site is
-         * [net.devemperor.dictate.state.modules.OverlayModule]
-         * `Effect.PersistOverlayPosition`, which uses the same raw
-         * strings. Promoting them into [Pref] is a Phase-2 cleanup
-         * not in C7 scope.
+         * Overlay-position pref keys — legacy aliases retained for
+         * backward compatibility with any test that imported the
+         * raw-string constants before F-4. New code should access
+         * the typed [Pref.OverlayPositionPortraitX] / `…Y` /
+         * `Landscape*` entries directly. The constants forward to
+         * the same key strings; SharedPreferences storage shape is
+         * unchanged.
          */
         const val OVERLAY_POS_PORTRAIT_X_KEY: String = "overlay_pos_portrait_x"
         const val OVERLAY_POS_PORTRAIT_Y_KEY: String = "overlay_pos_portrait_y"

@@ -346,7 +346,12 @@ class PipelinePrefMirrorTest {
         assertSame(before.language, after.language)
         assertSame(before.livePrompt, after.livePrompt)
         assertSame(before.pendingSessions, after.pendingSessions)
-        assertEquals(before.lastResultNeedsManualPaste, after.lastResultNeedsManualPaste)
+        // F-1 — `lastResultNeedsManualPaste` moved from a top-level
+        // field to `ResendState.lastResultNeedsManualPaste`. PrefMirror
+        // does not touch this field; the resend axis as a whole is
+        // mirrored (resendEnabled), so we compare the manual-paste flag
+        // explicitly to confirm PrefMirror leaves it alone.
+        assertEquals(before.resend.lastResultNeedsManualPaste, after.resend.lastResultNeedsManualPaste)
     }
 
     @Test

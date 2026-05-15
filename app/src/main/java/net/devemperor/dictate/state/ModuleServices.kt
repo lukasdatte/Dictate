@@ -258,9 +258,18 @@ interface BorderGlowSubsystem {
  */
 interface PipelineRunnerSubsystem {
     fun submit(sessionId: String, audioFile: java.io.File)
+
+    /**
+     * Re-run a pipeline against a session's already-recorded audio.
+     *
+     * **F-19 (2026-05-15) — `audioFile` is nullable.** When `null`, the
+     * runner resolves the path from the DB session record (the
+     * staging-FSM is pure-state-only and doesn't carry the file). When
+     * non-null, the runner uses the supplied file directly.
+     */
     fun submitReprocess(
         sessionId: String,
-        audioFile: java.io.File,
+        audioFile: java.io.File?,
         queue: List<Int>,
         language: String?,
     )

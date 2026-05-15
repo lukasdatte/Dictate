@@ -93,4 +93,59 @@ class ResendModuleTest {
     fun `initial state is default ResendState`() {
         assertEquals(ResendState(), module.initialState())
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // F-1 — NotifyManualPasteNeeded + ClearManualPasteFlag
+    //
+    // The flag lives on ResendState (relocated from a top-level
+    // DictateUiState field per `research/manual-paste-field-architecture.md`).
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `NotifyManualPasteNeeded flips lastResultNeedsManualPaste from false to true`() {
+        val state = ResendState(lastResultNeedsManualPaste = false)
+        val result = module.reduce(
+            state,
+            Action.ResendAction.NotifyManualPasteNeeded(sessionId = "sid-1"),
+            ctx(),
+        )
+        assertEquals(true, result!!.nextState.lastResultNeedsManualPaste)
+        assertTrue(result.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `NotifyManualPasteNeeded is idempotent when already set`() {
+        val state = ResendState(lastResultNeedsManualPaste = true)
+        assertNull(
+            module.reduce(
+                state,
+                Action.ResendAction.NotifyManualPasteNeeded(sessionId = "sid-1"),
+                ctx(),
+            ),
+        )
+    }
+
+    @Test
+    fun `ClearManualPasteFlag flips lastResultNeedsManualPaste from true to false`() {
+        val state = ResendState(lastResultNeedsManualPaste = true)
+        val result = module.reduce(
+            state,
+            Action.ResendAction.ClearManualPasteFlag,
+            ctx(),
+        )
+        assertEquals(false, result!!.nextState.lastResultNeedsManualPaste)
+        assertTrue(result.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `ClearManualPasteFlag is idempotent when already clear`() {
+        val state = ResendState(lastResultNeedsManualPaste = false)
+        assertNull(
+            module.reduce(
+                state,
+                Action.ResendAction.ClearManualPasteFlag,
+                ctx(),
+            ),
+        )
+    }
 }

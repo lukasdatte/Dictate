@@ -51,6 +51,19 @@ to fix this directory.
 | [`adding-a-sub-keyboard.md`](adding-a-sub-keyboard.md) | Walkthrough: two variants (A: new ContentArea, B: new RenderBackend window) | ADR-0004 §"Required mechanics" |
 | [`forbidden-patterns.md`](forbidden-patterns.md) | The 14 hard-forbidden patterns (a–n) with example, rationale, correct alternative | ADRs 0001 + 0002 + 0004 (forbidden-pattern subset per §"Failure Modes") |
 
+## Note on naming — DictateOrchestrator vs PipelineOrchestrator
+
+The state architecture introduces `DictateOrchestrator` — the
+**state-action-router** that owns the registry-driven dispatch loop
+(`Action → reducer → state-write → effects → cascade`). It is unrelated
+to the **legacy** `net.devemperor.dictate.core.PipelineOrchestrator`,
+which is the **audio-pipeline runner** (transcription/completion +
+DAO writes). The two co-exist during the Block 2 → Block 3 migration
+window; B3 absorbs the legacy `PipelineOrchestrator` into the new
+architecture as a `PipelineRunnerSubsystem` adapter behind the modular
+orchestrator (Spec 1 §11.2.2). Keep the distinction in mind when
+reading stack traces, KDoc references, and PR diffs.
+
 ## High-level architecture in 60 seconds
 
 ```

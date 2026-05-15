@@ -356,6 +356,18 @@ append-only Decision-History entries:
 
 ## Decision History
 
+### 2026-05-15 — F-1 manual-paste field relocation (B2-VAL-REPAIR)
+
+**Trigger:** Validated finding F-1 from `reports/validated-findings-B2.md` (Block-2 audit) — the top-level `DictateUiState.lastResultNeedsManualPaste: Boolean` field had no module owning its mutation; `PipelineAction.NotifyResultNeedsManualPaste` + `ClearManualPasteFlag` reducer arms returned `null` (dead code). See `research/manual-paste-field-architecture.md` for the three options analysed and the recommendation.
+
+**Before:** `DictateUiState` declared a top-level `lastResultNeedsManualPaste: Boolean` field nominally attributed to `PipelineModule` per the axes-table (this ADR §"Module inventory" + Spec 1 §3 axes-table). No module's lens covered the field — `PipelineModule.lens` writes `pipeline = sub` only. The two `PipelineAction` leaves for setting/clearing the flag explicitly returned `null` in the reducer, with a KDoc comment referring to an "out-of-band write via `_state.update` on PrefMirror init" that was never implemented. Result: the field was permanently `false` and the IME-service-death recovery user-affordance (Spec 1 §11.6 / R.18) was non-functional.
+
+**After:** Field moved into `ResendState` as `ResendState.lastResultNeedsManualPaste: Boolean` (sibling to the existing `lastAudioExists` post-pipeline UI flag). Two action leaves moved from `PipelineAction` to `ResendAction`: `Action.ResendAction.NotifyManualPasteNeeded(sessionId)` + `Action.ResendAction.ClearManualPasteFlag`. ResendModule reduces both with same-axis Mode-1 writes — its existing lens covers the field. The top-level `lastResultNeedsManualPaste` field is removed from `DictateUiState`; the axes-count goes from "13 + 1 top-level Boolean" to "13 sub-state axes, no top-level". Module inventory unchanged (still 13 active + 1 Phase-2 stub).
+
+**Reasoning:** ADR-0001's single-axis-per-module discipline was nominally violated by the top-level field — it had a nominal owner (`PipelineModule`) but no actual lens covered it, so the reducer-arms could not implement the mutation without a Mode-3 cross-axis write (forbidden per ADR-0002). The three architectural options evaluated (relocate into `PipelineUiState`, extend lens to tuple, introduce dedicated `ManualPasteModule` — see `research/manual-paste-field-architecture.md` §3) all had higher costs and worse architectural fits than folding the flag into `ResendState`. `ResendState` already holds `lastAudioExists` — both fields are post-pipeline UI affordances with parallel cascade structure; making them siblings is the natural taxonomic placement. ADR-0002 is untouched (this fix is a Mode-1 same-axis write inside ResendModule; the recovery-path cascade is a normal Mode-2 cascade per the existing matrix).
+
+**Reference:** `docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/manual-paste-field-architecture.md` (research doc); `reports/validated-findings-B2.md` §F-1.
+
 ### 2026-05-14 — Accepted
 
 **Trigger:** Block-0 audit-consolidation pass (B0-VAL-SANITY) — plan §4.0 binding-pre-code-contract closeout.

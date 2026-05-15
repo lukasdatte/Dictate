@@ -8,9 +8,25 @@ import kotlinx.coroutines.flow.emptyFlow
 import java.io.File
 
 /**
- * Production-side **no-op stub subsystems** that the
- * [net.devemperor.dictate.core.DictatePipelineService] uses to
- * construct a [ModuleServices] instance in chunk C7.
+ * Production-side bindings used by the
+ * [net.devemperor.dictate.core.DictatePipelineService] to construct a
+ * [ModuleServices] instance in chunk C7.
+ *
+ * **Note (F-15 2026-05-15) — file contains both stub and production
+ * bindings:**
+ *
+ *  - The `stub*` / inline `object : XxxSubsystem` properties below are
+ *    **no-op placeholders** that B3 replaces with real Android-backed
+ *    adapters. They log each call at WARN with a "B3 fills this"
+ *    marker so the production cost surfaces in logcat until the real
+ *    adapter swap.
+ *  - [realToastSink] is a **production-quality binding** to the
+ *    Android Toast system that ships in Phase 1 because user-visible
+ *    error toasts are needed **before** B3's full adapter swap (a
+ *    silent toast-channel during the migration window would mask real
+ *    errors). Keep `realToastSink` here for now; when more production
+ *    bindings join it (B3+), consider splitting into a separate
+ *    `PipelineServiceProductionSubsystems.kt`.
  *
  * **Why these exist:** the [ModuleServices] DI container (Spec 1 §4.7)
  * lists 14 subsystem interfaces (`RecordingHardwareSubsystem`,
@@ -100,7 +116,7 @@ internal object PipelineServiceStubSubsystems {
         override fun submit(sessionId: String, audioFile: File) {
             Log.w(TAG, "pipelineRunner.submit($sessionId, $audioFile): $MESSAGE")
         }
-        override fun submitReprocess(sessionId: String, audioFile: File, queue: List<Int>, language: String?) {
+        override fun submitReprocess(sessionId: String, audioFile: File?, queue: List<Int>, language: String?) {
             Log.w(TAG, "pipelineRunner.submitReprocess($sessionId, …): $MESSAGE")
         }
         override fun cancel(sessionId: String) {

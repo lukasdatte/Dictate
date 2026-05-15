@@ -72,12 +72,14 @@ class ModuleServicesTest {
             emitAction = { action -> captured += action },
         )
         services.emitAction(Action.LanguageAction.RefreshFromPref)
-        services.emitAction(Action.PipelineAction.ClearManualPasteFlag)
+        // F-1 — `ClearManualPasteFlag` moved from `PipelineAction` to
+        // `ResendAction` because the flag lives on `ResendState`.
+        services.emitAction(Action.ResendAction.ClearManualPasteFlag)
 
         assertEquals(
             listOf<Action>(
                 Action.LanguageAction.RefreshFromPref,
-                Action.PipelineAction.ClearManualPasteFlag,
+                Action.ResendAction.ClearManualPasteFlag,
             ),
             captured,
         )

@@ -209,6 +209,28 @@ class PipelineModuleTest {
     }
 
     @Test
+    fun `F-24 — cross-module Preparing to Running does NOT cascade OnPipelineDone`() {
+        // Preparing → Running is an internal pipeline-FSM transition, NOT
+        // a session-end boundary. The boundary is `prev != Idle && next is
+        // Idle`. F-24 pinned because the existing matrix tests covered
+        // Idle→Idle (no cascade) and Idle→Preparing (no cascade) but not
+        // the Preparing→Running boundary which also must NOT emit.
+        val prev = DictateUiState.initial().copy(pipeline = PipelineUiState.Preparing(sid))
+        val next = prev.copy(
+            pipeline = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION),
+        )
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertTrue(
+            "OnPipelineDone must not cascade on Preparing→Running",
+            cascade.none { it is Action.ViewModeAction.OnPipelineDone },
+        )
+        assertTrue(
+            "MarkLastAudio must not cascade on Preparing→Running",
+            cascade.none { it is Action.ResendAction.MarkLastAudio },
+        )
+    }
+
+    @Test
     fun `cross-module Pipeline-Done with livePrompt-pending cascades ChainNext`() {
         val prev = DictateUiState.initial().copy(
             pipeline = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION),

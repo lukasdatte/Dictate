@@ -39,22 +39,27 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 0 · Important: 2 (resolved by C5) · Nice-to-have: 2 (1 resolved, 1 still-deferred) · Postponed: 0 · New from C5: Important: 2 (delegated), Nice-to-have: 1 (postponed) · **From C6 gate: Important: 1 (C6-IMPL-1, GATE-RED-BLOCKING), Nice-to-have: 1 (C6-IMPL-2, C7-scoping)**
+**Severity counts:** Critical: 0 · Important: 2 (resolved by C5) · Nice-to-have: 2 (1 resolved, 1 still-deferred) · From C5: Important: 1 fixed (C5-IMPL-1 via C6-W1) + 1 delegated (C5-IMPL-2 documented Known-Gap), Nice-to-have: 1 postponed (C5-IMPL-3) · **From C6 gate: Important: 1 (C6-IMPL-1) → FIXED (C6-W1); Nice-to-have: 1 (C6-IMPL-2) → documented C7-scoping**
 
-> **🔴 C6-D2pre GATE VERDICT: RED.** Auto-tier fully green (1016 tests,
-> assembleDebug, AC-10, keystone+T1-T7 on the new live path). But
-> C5-IMPL-1 (consolidated as **C6-IMPL-1**) is a gate-RED-blocking
-> legacy-parity regression: the new recording path requests **no
-> AudioFocus** (legacy did; `Pref.AudioFocus` default true → 100% of
-> users) and **starts no Bluetooth-SCO** (BT-mic users silently record
-> from the phone mic). C7 deletes the legacy fallback that masks this →
-> shipped regression. **C7 + ALL of Theme C (C8/C9/C10) REMAIN GATED /
-> NOT authorised.** Route C6-IMPL-1 via repair-sub-phase (audio-focus =
-> small/near-mechanical; BT-SCO handshake = research-needed), then
-> **re-run C6-D2pre**. Only a GREEN re-gate authorises C7/Theme-C
-> (Epic §6.2: "proven, not assumed"). The guarded fallback keeps the
-> app shippable on legacy meanwhile — the RED is not catastrophic, it
-> is the gate doing its job before irreversible deletion.
+> **🟢 C6-IMPL-1 CLOSED by repair-wave B2-C6-W1 — C6-D2pre may RE-GATE.**
+> The gate-RED-blocking legacy-parity regression is repaired:
+> audio-focus + Bluetooth-SCO are now emitted on the new recording path
+> (`USE_LEGACY_RECORDING_DRIVE=false`) with legacy parity — AudioModule
+> observes the RecordingState FSM (ADR-0002 Mode-2 cascade → Mode-1
+> effect, restoring Spec 1 §15.1 row-3) and emits
+> `RequestAudioFocus`/`ReleaseAudioFocus` (gated on `Pref.AudioFocus`
+> default-true) + `StartBluetoothSco`/`StopBluetoothSco` (gated on
+> `Pref.UseBluetoothMic`); BT-mic recordings defer `AllocateMediaRecorder`
+> until the SCO handshake resolves (SCO-ready → `VOICE_COMMUNICATION`,
+> SCO-fail/timeout → `MIC` fallback). Build green; full suite
+> 1037/1038 (the only failure is the documented R-7 order-dependent
+> `LegacyAudioFileMigrationTest` pollution flake — passes isolated, not
+> a C6-W1 regression; no migration/DB files touched by this wave).
+> New-path audio-focus proven end-to-end (`DictateCutoverE2ETest`
+> shadow-AudioManager assertions) + pure-reducer/observer coverage.
+> **A fresh C6-D2pre re-gate (re-trace audio-focus/BT-SCO on the new
+> path + re-run the auto-tier) can now go GREEN, authorising C7 +
+> Theme C.** See `### Gate-Repair Wave B2-C6-W1`.
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
@@ -62,11 +67,11 @@
 | C3-IMPL-2 | B2-C3-B1-IMPL | Nice-to-have | **fixed (C5)** | Reprocess modelOverride/targetAppPackage null + AutoFormatting +1. **C5 closed it**: `ImePipelineConfigResolver.snapshotReprocess` threads selectedModel/targetAppPackage/totalSteps; the new-path reprocess branch in `handleReprocessSend` routes via the C3 adapter with the snapshot. | step-1-impl (C3-B1) → fixed C5 |
 | C4-IMPL-1 | B2-C4-B2-IMPL | Important | **fixed (C5)** | `NotificationStatus.Recording` had no emitter + no `Paused` variant. **C5 closed it**: added `NotificationStatus.Paused`, the coordinator `Paused` arm (`[Resume][Stopp][Senden]` + recording_paused subtitle), and `RecordingModule.Effect.UpdateNotification`/`DismissNotification` emitted across the FSM (Active→Recording, Paused→Paused, Resume→Recording, Stop/Cancel→Dismiss; StopRecordingAndSend deliberately NO dismiss for a seamless Recording→Pipeline hand-off). | step-1/2 (C4-B2) → fixed C5 |
 | C4-IMPL-2 | B2-C4-B2-IMPL | Nice-to-have | postponed | `Pipeline` notif subtitle generic, no F-13 counters in `NotificationStatus.Pipeline`. Still-deferred (cosmetic; live counter already in record-button label; needs a `NotificationStatus.Pipeline` payload change across PipelineModule emit-sites — out of C5 recording-trigger scope). | step-1/2 (C4-B2) |
-| C5-IMPL-1 | B2-C5-B3-IMPL | Important | delegated-to-orchestrator | New-path **AudioFocus not requested** + **Bluetooth SCO route not established**. Pre-existing dormant-layer gap (AudioModule `RequestAudioFocus` never emitted on recording start; `RecordingHardwareAdapter` sets the MediaRecorder source but does not start the BT SCO connection). Surfaced (not caused) by C5 making the path live. Guarded fallback (`USE_LEGACY_RECORDING_DRIVE=true`) restores full legacy BT/audio-focus. Owner: a follow-up audio-subsystem-wiring block / C6-D2pre will surface it. NOT a fresh-recording R-1 silent-config-loss (the JobRequest is field-faithful) and NOT an architecture-conflict blocking C6/C7. | C5 step-1/3 |
+| C5-IMPL-1 | B2-C5-B3-IMPL | Important | **fixed (C6-W1)** | New-path **AudioFocus not requested** + **Bluetooth SCO route not established**. **Closed by repair-wave B2-C6-W1** (consolidated as C6-IMPL-1): AudioModule now emits `RequestAudioFocus`/`ReleaseAudioFocus`/`StartBluetoothSco`/`StopBluetoothSco` in reaction to RecordingState FSM transitions (ADR-0002 Mode-2 cascade → Mode-1 effect, restoring Spec 1 §15.1 row-3); BT-mic recordings defer `AllocateMediaRecorder` until the SCO handshake resolves so the recorder source matches the actual route. See `### Gate-Repair Wave B2-C6-W1`. | C5 step-1/3 → fixed C6-W1 |
 | C5-IMPL-2 | B2-C5-B3-IMPL | Important | delegated-to-orchestrator | Legacy recording **UI/animation/keyboard-hide-pause** sites (~12 `recordingStateController.getState()` reads outside the record-button gate: `:730`/`:1215`/`:1855`/amplitude/timer/onKeyboardHidden) stay legacy-driven; on the new path the legacy controller is never started so they read Idle (no legacy recording animation, no legacy keyboard-hide auto-pause). The FGS notification (AC-2) is the authoritative new-path recording-active surface. The RenderBackend recording-UI migration is Theme-C/C3, out of C5's recording-trigger scope. Documented Known-Gap. | C5 step-2 |
 | C5-IMPL-3 | B2-C5-B3-IMPL | Nice-to-have | postponed | RESUME (`startResumeJob`, JobExecutor.start #2) has no orchestrator equivalent (`PipelineRunnerSubsystem` has no `resume`); both boolean branches keep legacy `JobExecutor.start` (single-dispatch, orthogonal to the fresh-recording cutover). Adding a resume subsystem action is an architecture change beyond C5 (prompt forbids a fragile flip). C7/later owns retiring it. | C5 step-1 |
-| C6-IMPL-1 | B2-C6-D2pre-IMPL | Important | **delegated-to-orchestrator (GATE-RED-BLOCKING)** | Consolidated gate-validated form of C5-IMPL-1. New recording path requests **no AudioFocus** (`RecordingHardwareAdapter.kt:54-92`; `RecordingModule.reduce` emits no Audio effect; `AudioModule.reduce` has no `RequestAudioFocus`/`StartBluetoothSco` arm — those effects are defined-but-never-emitted; stale incorrect KDoc `AudioModule.kt:28-33`). Legacy DID (`RecordingStateController:326` `gate.request()`; `Pref.AudioFocus` default **true** → 100% users). Also no Bluetooth-SCO start (legacy `:134-136` `startSco`; BT-mic users on the new path silently record from phone mic via `VOICE_COMMUNICATION` w/o SCO). **C7 deletes the legacy fallback that masks this → shipped regression. BLOCKS C7 + Theme C until repaired.** Repair worklist: see C6-D2pre subsection #1 (audio-focus, small) + #2 (BT-SCO handshake, research-needed). | C6 gate |
-| C6-IMPL-2 | B2-C6-D2pre-IMPL | Nice-to-have | delegated-to-orchestrator | C7 must carve out the RESUME `JobExecutor.start` site (`:3286`/`:3294`, C5-IMPL-3) from its deletion scope — no orchestrator resume equivalent exists. C7-scoping note, not a C6 blocker. | C6 gate |
+| C6-IMPL-1 | B2-C6-D2pre-IMPL | Important | **fixed (C6-W1)** | Consolidated gate-validated form of C5-IMPL-1. **Closed by repair-wave B2-C6-W1.** Audio-focus + BT-SCO are now emitted on the new path with legacy parity: `AudioModule.onCrossModuleStateChange` observes the RecordingState FSM (recording-engaged → `RecordingStarted` → `RequestAudioFocus` gated on `audioFocusEnabledPref` default-true + `StartBluetoothSco` gated on `useBluetoothMic`; disengaged → `RecordingEnded` → `ReleaseAudioFocus`+`StopBluetoothSco`). BT-mic recordings defer `AllocateMediaRecorder` until `ScoRouteResolved` (SCO-Connected→`VOICE_COMMUNICATION`, SCO-Failed/timeout→`MIC`, subsystem-owned 2500 ms timeout), eliminating the silent phone-mic substitution. Stale `AudioModule.kt` KDoc rewritten to describe the real path. ADR-0002 Mode-1/2 only; no Mode-3. New-path audio-focus proven E2E (`DictateCutoverE2ETest` shadow-AudioManager assertions) + pure-reducer/observer tests. **C7 + Theme C may now re-gate via a fresh C6-D2pre run.** | C6 gate → fixed C6-W1 |
+| C6-IMPL-2 | B2-C6-D2pre-IMPL | Nice-to-have | **documented (C7-scoping)** | C7 must carve out the RESUME `JobExecutor.start` site (`:3286`/`:3294`, C5-IMPL-3) from its deletion scope — no orchestrator resume equivalent exists. The C7 carve-out blockquote (`### Chunk C7-B3`) records this; B2-C6-W1 confirmed it intact. Re-affirmed C7-scoping note, not a code change. | C6 gate → documented C6-W1 |
 
 ---
 
@@ -759,6 +764,16 @@ boolean fallback covers, not silent config loss).
 ### Chunk C6-D2pre — VERIFICATION GATE (authorises C7 + Theme C)
 
 **Agent-IDs:** `B2-C6-D2pre-IMPL` · **Status:** ✅ complete · **Risk:** Gate
+
+> **➡ REPAIR-RESOLUTION (2026-05-15):** the RED verdict below is the
+> gate's *original* judgement, kept verbatim for audit-trail. The
+> blocking finding **C6-IMPL-1 is now fixed by repair-wave B2-C6-W1**
+> (see `### Gate-Repair Wave B2-C6-W1`). A fresh orchestrator C6-D2pre
+> re-run (re-trace audio-focus/BT-SCO on the new path + re-run the
+> auto-tier) is the authorising step for C7/Theme-C — the repair makes
+> that re-gate able to go GREEN; it does not retroactively flip this
+> historical verdict.
+
 **GATE OUTPUT:** **🔴 GATE: RED** — C7 (legacy-call-site deletion) + ALL of
 Theme C (C8/C9/C10) remain **GATED / NOT authorised**. The auto-tier is
 fully green and the new path is structurally proven, but a real
@@ -1044,13 +1059,132 @@ new `DictateCutoverE2ETest.kt`).
 
 ---
 
+### Gate-Repair Wave B2-C6-W1
+
+**Agent-IDs:** `B2-C6-RES-1` (research) → `B2-C6-REPAIR-1` (repair) →
+`B2-C6-REPAIR-1-VERIFY` (self-check) · **Date:** 2026-05-15 ·
+**Scope:** C6-IMPL-1 (audio-focus + BT-SCO, both parts) + C6-IMPL-2
+doc-note · **Convergence:** ✓ converged
+
+#### What was done
+
+Closed the C6-D2pre gate-RED-blocking finding C6-IMPL-1 (≡ C5-IMPL-1):
+the new orchestrator recording path now requests audio-focus and
+establishes the Bluetooth-SCO route with legacy parity, so deleting
+the legacy fallback in C7 no longer ships a regression.
+
+#### BT-SCO design decision + rationale
+
+**Spec-faithful, ADR-0002 Mode-2 cascade → Mode-1 effect; one new
+Effect/edge added, justified (D22).** Spec 1 §15.1 row 3 explicitly
+prescribes an AudioModule cross-module observer arm
+`Recording.Preparing → AudioFocus-Request`; the Phase-B S-4 §15.3
+KDoc had removed it under the *false premise* that
+`RecordingHardwareAdapter.allocate` requests focus (it provably does
+not — the same stale-comment class the gate flagged). The repair
+**restores that observer arm**: `AudioModule.onCrossModuleStateChange`
+observes the RecordingState FSM and cascades AudioModule-owned actions;
+the AudioModule reducer turns them into its own
+`RequestAudioFocus`/`ReleaseAudioFocus`/`StartBluetoothSco`/`StopBluetoothSco`
+effects (Mode-1). This keeps the audio-focus + SCO lifecycle entirely
+in AudioModule (the `audio` axis owner) — the SRP rationale the S-4
+note correctly stated but mis-applied. No Mode-3 (no cross-axis
+write).
+
+For BT-SCO, the legacy `onScoConnected/onScoFailed` wait was never
+ported to the FSM. Rather than a heavy Preparing sub-FSM rewrite
+(high blast radius, weak spec grounding, fragile under the gate's
+"proven not assumed" bar), the repair adds **one new RecordingAction
+(`ScoRouteResolved`) + one `Preparing` reducer arm + an `awaitingSco`
+discriminator (and a carried `target`) on `RecordingState.Preparing`**:
+BT-mic recordings *defer* `AllocateMediaRecorder` at `StartRecording`;
+the existing production wiring already feeds the SCO outcome back as
+`OnBluetoothScoStateChanged` (subsystem-owned 2500 ms timeout — no new
+timer); AudioModule's observer translates the just-settled phase into
+`ScoRouteResolved(useBluetooth = phase==Connected)`, whose `Preparing`
+arm fires the now-correctly-sourced allocate (SCO-Connected →
+`VOICE_COMMUNICATION`, SCO-Failed/timeout → `MIC` fallback). Non-BT
+path is unchanged (immediate allocate). New Effect/edge documented as
+a D22 deviation below. Research: `../research/recording-audiofocus-btsco-handshake.md`.
+
+A second, non-obvious correctness fix surfaced during self-check: the
+recording-engaged predicate had to be detected on the *engagement
+edge* (`!engaged → engaged`), not the named `Idle → Preparing`
+transition, because `Dispatchers.Main.immediate` lets the
+`AllocateMediaRecorder` effect's re-entrant `MediaRecorderReady`
+collapse the observer's frozen tuple to `Idle → Active` — the
+single-named-transition form silently dropped the audio-focus request
+on the live path (caught by the new E2E shadow-AudioManager test, not
+the pure-reducer tests).
+
+#### Deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Dev-W1-1 | Spec 1 §15.3 Phase-B S-4 KDoc | Restored the §15.1 row-3 AudioModule observer arm the S-4 note removed; rewrote the stale `AudioModule.kt` KDoc | S-4 premise (adapter requests focus) is factually wrong vs. the shipped adapter; §15.1 is the spec-faithful source | C7 may now delete legacy without the audio-focus/SCO regression | inline-fixed |
+| Dev-W1-2 | Spec 1 §15.2 (RecordingModule reducer) | New `Action.RecordingAction.ScoRouteResolved` + `Preparing.awaitingSco`/`target` + a `Preparing` reducer arm; BT-mic path defers `AllocateMediaRecorder` | Spec never ported the legacy SCO-wait; this is the minimal spec-faithful realisation of legacy parity within ADR-0002 Mode-1/2 (no Mode-3, no sub-FSM rewrite) | C7/Theme-C: `Preparing` now has two extra default-valued fields (backward-compatible) + one extra action leaf | inline-fixed |
+| Dev-W1-3 | Spec 1 §15.1.x Coupling-Matrix | AudioModule now reads `state.recording` + cascades `RecordingAction.ScoRouteResolved`; matrix `Audio` row should gain `R(state.recording)` + the new cascade cell | A new observer-read without a matrix entry is a §15.1.x SRP-review violation | Doc-only; matrix update is a follow-up doc task (flagged, not code-blocking) | flagged-for-validate |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| C6-IMPL-1 | Important | Audio-focus + BT-SCO not emitted on the new path (gate-RED) | fixed | AudioModule observer + reducer arms + deferred-SCO-allocate; legacy parity proven (pure-reducer + observer + E2E shadow-AudioManager) |
+| C5-IMPL-1 | Important | Consolidated into C6-IMPL-1 | fixed | fixed-via-C6-W1 (same root cause) |
+| C6-IMPL-2 | Nice-to-have | C7 RESUME-site carve-out | documented | C7 carve-out blockquote confirmed intact; no code change |
+
+#### Files changed (DISJOINT — for the orchestrator wave-commit)
+
+**Production:**
+- `app/src/main/java/net/devemperor/dictate/state/Action.kt` (added `RecordingAction.ScoRouteResolved`, `AudioAction.RecordingStarted`, `AudioAction.RecordingEnded`)
+- `app/src/main/java/net/devemperor/dictate/state/DictateUiState.kt` (`RecordingState.Preparing.awaitingSco` + `.target`, default-valued)
+- `app/src/main/java/net/devemperor/dictate/state/modules/RecordingModule.kt` (BT-mic deferred-allocate at `StartRecording`; new `Preparing + ScoRouteResolved` arm)
+- `app/src/main/java/net/devemperor/dictate/state/modules/AudioModule.kt` (`RecordingStarted`/`RecordingEnded` reducer arms; observer extension for recording-lifecycle + SCO-resolution; KDoc rewrite)
+
+**Test:**
+- `app/src/test/java/net/devemperor/dictate/state/RecordingModuleTest.kt` (updated BT/non-BT StartRecording expectations; new ScoRouteResolved arm tests)
+- `app/src/test/java/net/devemperor/dictate/state/AudioModuleTest.kt` (RecordingStarted/Ended reducer + cross-module observer + SCO-handshake-resolution tests)
+- `app/src/test/java/net/devemperor/dictate/core/DictateCutoverE2ETest.kt` (3 new C6-IMPL-1 E2E tests: new-path focus-request, stop abandons focus, pref-off does not request — via service-AudioManager shadow)
+
+**Doc:** `docs/plans/2026-05-15 - dictate-cutover-completion/research/recording-audiofocus-btsco-handshake.md` (new, append-only D20)
+
+**Files outside findings-scope (drift):** none — every production/test
+file maps directly to the C6-IMPL-1 worklist.
+
+#### Self-check (B2-C6-REPAIR-1-VERIFY)
+
+- `./gradlew assembleDebug`: **BUILD SUCCESSFUL**.
+- `./gradlew test`: **1037/1038 pass**. The single failure is
+  `LegacyAudioFileMigrationTest > run leaves non-legacy-path sessions
+  untouched` — the **known R-7 order-dependent DB/JobExecutor
+  pollution flake** (`expected:<[RECORDING]> but was:<[FAILED]>`).
+  Confirmed the flake, not a regression: the class passes **8/8 when
+  run isolated**; no migration/session-DB files are in this wave's
+  diff (production diff is confined to state/audio/recording modules).
+- New + updated unit tests prove: `RequestAudioFocus` emitted on
+  recording-start, gated off when `audioFocusEnabledPref=false`,
+  released on stop/pause/cancel; BT-SCO handshake — SCO-ready →
+  `VOICE_COMMUNICATION`, SCO-fail → `MIC` fallback, duplicate-resolve
+  no-op; K-1 handwritten fakes only; K-4 pure-reducer JVM tests
+  (Robolectric only for the 3 service-level E2E focus assertions,
+  justified — they prove the full dispatch→cascade→effect→adapter→gate
+  →AudioManager wiring end-to-end, which a pure-JVM test cannot).
+- `DictateCutoverE2ETest` still green (all 10 tests incl. the 3 new
+  C6-IMPL-1 ones) — extends the gate's keystone suite to assert
+  audio-focus IS requested on the new path so a C6-D2pre re-gate can
+  prove GREEN.
+- Convergence: **✓ converged** — no new issues forwarded.
+
+---
+
 ### Chunk C7-B3 — legacy call-site deletion (GATED on green C6)
 
-**Agent-IDs:** `B2-C7-B3-IMPL` · **Status:** 🔴 **BLOCKED — C6 gate RED**
-(C6-IMPL-1 must be repaired + C6 re-gated GREEN first) · **Risk:** Med
-(pure delete of proven-dead code — but proven-dead is NOT yet true:
-C6-IMPL-1 shows the legacy audio-focus/BT-SCO path is still
-functionally load-bearing)
+**Agent-IDs:** `B2-C7-B3-IMPL` · **Status:** 🟡 **GATED — awaiting a
+fresh C6-D2pre re-gate** (C6-IMPL-1 is now **fixed via B2-C6-W1**; C7
+unblocks once an orchestrator C6-D2pre re-run confirms GREEN on the
+repaired path) · **Risk:** Med (pure delete of now-proven-dead code:
+post-C6-W1 the legacy audio-focus/BT-SCO path has a behaviourally-
+equivalent new-path replacement — the re-gate proves it)
 (subsections filled when chunk runs — separately committed for git-revert isolation, Epic §6.2)
 
 > **C7 carve-out note (C6-IMPL-2):** when C7 eventually runs, it must NOT

@@ -49,7 +49,13 @@ class RecordingModuleTest {
     // ─── Idle → Preparing ────────────────────────────────────────────────
 
     @Test
-    fun `StartRecording from Idle emits Preparing + AllocateMediaRecorder`() {
+    fun `StartRecording from Idle (BT-mic) defers AllocateMediaRecorder until SCO resolves`() {
+        // C6-IMPL-1 / B2-C6-W1 — with useBluetoothMic=true the recorder
+        // allocation is DEFERRED (no AllocateMediaRecorder yet): allocating
+        // VOICE_COMMUNICATION before SCO is connected silently records the
+        // phone mic (gate-RED silent-quality-loss). The SCO handshake is
+        // kicked by AudioModule's RecordingStarted cascade; the deferred
+        // allocate fires on ScoRouteResolved.
         val global = DictateUiState.initial()
             .copy(audio = AudioState(useBluetoothMic = true))
         val result = module.reduce(
@@ -67,10 +73,38 @@ class RecordingModuleTest {
         assertEquals(testFile, next.audioFile)
         // F-10 — the caller-minted sessionId is carried into the FSM.
         assertEquals("sid-start-42", next.sessionId)
-        // Allocate effect carries the same 3 args
+        // awaitingSco set; target carried for the deferred allocate.
+        assertEquals(true, next.awaitingSco)
+        assertEquals(InsertionTarget.INPUT_CONNECTION, next.target)
+        // No AllocateMediaRecorder yet — it fires on ScoRouteResolved.
+        assertTrue(result.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `StartRecording from Idle (non-BT) allocates immediately, no SCO wait`() {
+        // Non-BT path unchanged: immediate AllocateMediaRecorder(MIC),
+        // awaitingSco=false, target consumed by the synchronous effect.
+        val global = DictateUiState.initial()
+            .copy(audio = AudioState(useBluetoothMic = false))
+        val result = module.reduce(
+            state = RecordingState.Idle,
+            action = Action.RecordingAction.StartRecording(
+                target = InsertionTarget.INPUT_CONNECTION,
+                audioFile = testFile,
+                sessionId = "sid-start-42",
+            ),
+            ctx = ctx(global),
+        )
+        assertNotNull(result)
+        val next = result!!.nextState as RecordingState.Preparing
+        assertEquals(false, next.useBluetooth)
+        assertEquals(testFile, next.audioFile)
+        assertEquals("sid-start-42", next.sessionId)
+        assertEquals(false, next.awaitingSco)
+        assertNull(next.target)
         val effect = result.sideEffects.single() as RecordingModule.Effect.AllocateMediaRecorder
         assertEquals(InsertionTarget.INPUT_CONNECTION, effect.target)
-        assertEquals(true, effect.useBluetooth)
+        assertEquals(false, effect.useBluetooth)
         assertEquals(testFile, effect.audioFile)
     }
 
@@ -84,6 +118,74 @@ class RecordingModuleTest {
         )
         val next = result!!.nextState as RecordingState.Preparing
         assertEquals(false, next.useBluetooth)
+    }
+
+    // ─── BT-SCO Preparing handshake (C6-IMPL-1 / B2-C6-W1) ──────────────
+
+    @Test
+    fun `ScoRouteResolved(true) from awaiting Preparing allocates VOICE_COMMUNICATION`() {
+        val state = RecordingState.Preparing(
+            useBluetooth = true,
+            audioFile = testFile,
+            sessionId = "sid-sco",
+            awaitingSco = true,
+            target = InsertionTarget.INPUT_CONNECTION,
+        )
+        val result = module.reduce(
+            state = state,
+            action = Action.RecordingAction.ScoRouteResolved(useBluetooth = true),
+            ctx = ctx(),
+        )
+        assertNotNull(result)
+        val next = result!!.nextState as RecordingState.Preparing
+        assertEquals(true, next.useBluetooth)
+        // awaitingSco cleared so a duplicate resolve is a no-op.
+        assertEquals(false, next.awaitingSco)
+        val effect = result.sideEffects.single() as RecordingModule.Effect.AllocateMediaRecorder
+        assertEquals(true, effect.useBluetooth)
+        assertEquals(InsertionTarget.INPUT_CONNECTION, effect.target)
+        assertEquals(testFile, effect.audioFile)
+    }
+
+    @Test
+    fun `ScoRouteResolved(false) from awaiting Preparing falls back to MIC`() {
+        // SCO fail / timeout → MIC fallback (legacy onScoFailed parity).
+        val state = RecordingState.Preparing(
+            useBluetooth = true,
+            audioFile = testFile,
+            sessionId = "sid-sco",
+            awaitingSco = true,
+            target = InsertionTarget.INPUT_CONNECTION,
+        )
+        val result = module.reduce(
+            state = state,
+            action = Action.RecordingAction.ScoRouteResolved(useBluetooth = false),
+            ctx = ctx(),
+        )
+        val next = result!!.nextState as RecordingState.Preparing
+        assertEquals(false, next.useBluetooth)
+        assertEquals(false, next.awaitingSco)
+        val effect = result.sideEffects.single() as RecordingModule.Effect.AllocateMediaRecorder
+        assertEquals(false, effect.useBluetooth)
+    }
+
+    @Test
+    fun `ScoRouteResolved when not awaiting is a no-op (duplicate broadcast guard)`() {
+        // A late/duplicate SCO broadcast after we already allocated must
+        // NOT fire a second AllocateMediaRecorder.
+        val state = RecordingState.Preparing(
+            useBluetooth = true,
+            audioFile = testFile,
+            sessionId = "sid-sco",
+            awaitingSco = false,
+            target = null,
+        )
+        val result = module.reduce(
+            state = state,
+            action = Action.RecordingAction.ScoRouteResolved(useBluetooth = true),
+            ctx = ctx(),
+        )
+        assertNull(result)
     }
 
     @Test

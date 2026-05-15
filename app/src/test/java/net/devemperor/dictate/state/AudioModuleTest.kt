@@ -133,6 +133,191 @@ class AudioModuleTest {
         assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))
     }
 
+    // ─── C6-IMPL-1 / B2-C6-W1: audio-focus + SCO emission ───────────────
+
+    @Test
+    fun `RecordingStarted with audioFocus pref on emits RequestAudioFocus`() {
+        val state = AudioState(audioFocusEnabledPref = true, useBluetoothMic = false)
+        val result = module.reduce(state, Action.AudioAction.RecordingStarted, ctx())
+        assertNotNull(result)
+        assertEquals(
+            listOf<AudioModule.Effect>(AudioModule.Effect.RequestAudioFocus),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `RecordingStarted with audioFocus pref OFF does NOT request focus`() {
+        // Legacy parity: `if (audioFocusEnabled) gate.request()`.
+        val state = AudioState(audioFocusEnabledPref = false, useBluetoothMic = false)
+        val result = module.reduce(state, Action.AudioAction.RecordingStarted, ctx())
+        assertNotNull(result)
+        assertTrue(result!!.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `RecordingStarted with BT-mic pref on also starts SCO`() {
+        val state = AudioState(audioFocusEnabledPref = true, useBluetoothMic = true)
+        val result = module.reduce(state, Action.AudioAction.RecordingStarted, ctx())
+        assertEquals(
+            listOf<AudioModule.Effect>(
+                AudioModule.Effect.RequestAudioFocus,
+                AudioModule.Effect.StartBluetoothSco,
+            ),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `RecordingStarted BT-mic on but focus pref off starts SCO only`() {
+        val state = AudioState(audioFocusEnabledPref = false, useBluetoothMic = true)
+        val result = module.reduce(state, Action.AudioAction.RecordingStarted, ctx())
+        assertEquals(
+            listOf<AudioModule.Effect>(AudioModule.Effect.StartBluetoothSco),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `RecordingEnded releases focus and stops SCO (idempotent, unconditional)`() {
+        val state = AudioState(audioFocusEnabledPref = false, useBluetoothMic = false)
+        val result = module.reduce(state, Action.AudioAction.RecordingEnded, ctx())
+        assertEquals(
+            listOf<AudioModule.Effect>(
+                AudioModule.Effect.ReleaseAudioFocus,
+                AudioModule.Effect.StopBluetoothSco,
+            ),
+            result!!.sideEffects,
+        )
+    }
+
+    // ─── Cross-module observer: recording-lifecycle → audio ─────────────
+
+    @Test
+    fun `Idle to Preparing cascades RecordingStarted`() {
+        val prev = DictateUiState.initial()
+        val next = prev.copy(
+            recording = RecordingState.Preparing(false, testFile, "sid-test"),
+        )
+        assertEquals(
+            listOf<Action>(Action.AudioAction.RecordingStarted),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `Paused to Active (resume) cascades RecordingStarted (re-acquire focus)`() {
+        val prev = DictateUiState.initial()
+            .copy(recording = RecordingState.Paused(false, testFile, "sid-test"))
+        val next = prev.copy(
+            recording = RecordingState.Active(false, testFile, "sid-test"),
+        )
+        assertEquals(
+            listOf<Action>(Action.AudioAction.RecordingStarted),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `Active to Idle (stop) cascades RecordingEnded`() {
+        val prev = DictateUiState.initial()
+            .copy(recording = RecordingState.Active(false, testFile, "sid-test"))
+        val next = prev.copy(recording = RecordingState.Idle)
+        assertEquals(
+            listOf<Action>(Action.AudioAction.RecordingEnded),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `Preparing to Idle (cancel mid-prepare) cascades RecordingEnded`() {
+        val prev = DictateUiState.initial()
+            .copy(recording = RecordingState.Preparing(true, testFile, "sid-test", awaitingSco = true))
+        val next = prev.copy(recording = RecordingState.Idle)
+        assertEquals(
+            listOf<Action>(Action.AudioAction.RecordingEnded),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `Active to Paused (pause) cascades RecordingEnded (abandon focus)`() {
+        val prev = DictateUiState.initial()
+            .copy(recording = RecordingState.Active(false, testFile, "sid-test"))
+        val next = prev.copy(recording = RecordingState.Paused(false, testFile, "sid-test"))
+        assertEquals(
+            listOf<Action>(Action.AudioAction.RecordingEnded),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `no recording transition cascades no recording-lifecycle action`() {
+        val prev = DictateUiState.initial()
+            .copy(recording = RecordingState.Active(false, testFile, "sid-test"))
+        // identical recording state — only an unrelated change
+        val next = prev.copy(audio = prev.audio.copy(vibrationEnabled = false))
+        assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))
+    }
+
+    // ─── BT-SCO Preparing handshake resolution ──────────────────────────
+
+    @Test
+    fun `SCO connect during awaiting Preparing cascades ScoRouteResolved(true)`() {
+        val prep = RecordingState.Preparing(true, testFile, "sid-sco", awaitingSco = true, target = InsertionTarget.INPUT_CONNECTION)
+        val prev = DictateUiState.initial().copy(
+            recording = prep,
+            audio = AudioState(bluetoothSco = BluetoothScoPublicState(ScoPhase.Waiting)),
+        )
+        val next = prev.copy(
+            audio = prev.audio.copy(bluetoothSco = BluetoothScoPublicState(ScoPhase.Connected)),
+        )
+        assertEquals(
+            listOf<Action>(Action.RecordingAction.ScoRouteResolved(useBluetooth = true)),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `SCO fail during awaiting Preparing cascades ScoRouteResolved(false)`() {
+        val prep = RecordingState.Preparing(true, testFile, "sid-sco", awaitingSco = true, target = InsertionTarget.INPUT_CONNECTION)
+        val prev = DictateUiState.initial().copy(
+            recording = prep,
+            audio = AudioState(bluetoothSco = BluetoothScoPublicState(ScoPhase.Waiting)),
+        )
+        val next = prev.copy(
+            audio = prev.audio.copy(bluetoothSco = BluetoothScoPublicState(ScoPhase.Failed, "sco-timeout")),
+        )
+        assertEquals(
+            listOf<Action>(Action.RecordingAction.ScoRouteResolved(useBluetooth = false)),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `SCO phase unchanged does NOT re-cascade ScoRouteResolved (duplicate broadcast)`() {
+        val prep = RecordingState.Preparing(true, testFile, "sid-sco", awaitingSco = true, target = InsertionTarget.INPUT_CONNECTION)
+        val prev = DictateUiState.initial().copy(
+            recording = prep,
+            audio = AudioState(bluetoothSco = BluetoothScoPublicState(ScoPhase.Connected)),
+        )
+        val next = prev // identical — no phase transition
+        assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))
+    }
+
+    @Test
+    fun `SCO change while Preparing not awaiting does NOT cascade ScoRouteResolved`() {
+        val prep = RecordingState.Preparing(false, testFile, "sid-sco", awaitingSco = false)
+        val prev = DictateUiState.initial().copy(
+            recording = prep,
+            audio = AudioState(bluetoothSco = BluetoothScoPublicState(ScoPhase.Waiting)),
+        )
+        val next = prev.copy(
+            audio = prev.audio.copy(bluetoothSco = BluetoothScoPublicState(ScoPhase.Connected)),
+        )
+        assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))
+    }
+
     // ─── Lens / IDs ─────────────────────────────────────────────────────
 
     @Test

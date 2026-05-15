@@ -456,4 +456,101 @@ class DictateCutoverE2ETest {
             b.state.value.recording is RecordingState.Idle,
         )
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    // C6-IMPL-1 / B2-C6-W1 — audio-focus is requested ON THE NEW PATH
+    // (legacy parity; the C6-D2pre gate-RED-blocking finding). Proven
+    // end-to-end: dispatch → AudioModule cascade → Effect.RequestAudioFocus
+    // → AudioFocusSubsystemAdapter → RealAudioFocusGate → AudioManager
+    // (Robolectric ShadowAudioManager records the focus request). This
+    // is the assertion a C6-D2pre re-gate reads to prove GREEN.
+    // ──────────────────────────────────────────────────────────────────
+
+    @Test
+    fun c6impl1_newPathRecording_requestsAudioFocus_throughTheSystemAudioManager() {
+        val b = boot()
+        idle()
+        // The service's RealAudioFocusGate is built from the *service's*
+        // AudioManager (`DictatePipelineService.getSystemService`), which
+        // in Robolectric is a distinct shadow from the application's.
+        // Read the focus state off the same instance the gate uses.
+        val am = controller.get()
+            .getSystemService(android.media.AudioManager::class.java)
+        val shadowAm = shadowOf(am)
+        assertNull(
+            "pre-condition: no focus request before recording starts",
+            shadowAm.lastAudioFocusRequest,
+        )
+
+        // Non-BT new-path recording (useBluetoothMic defaults false →
+        // Pref.AudioFocus default true → focus IS requested for ~100%
+        // of users, exactly what legacy did and C7-deleted-legacy would
+        // otherwise regress).
+        startRecordingActive(b, "e2e-focus")
+        assertTrue(b.state.value.recording is RecordingState.Active)
+
+        assertNotNull(
+            "C6-IMPL-1: the new recording path MUST request audio-focus " +
+                "(legacy parity — gate-RED-blocking if absent)",
+            shadowAm.lastAudioFocusRequest,
+        )
+    }
+
+    @Test
+    fun c6impl1_newPathStopRecording_abandonsAudioFocus() {
+        val b = boot()
+        idle()
+        // The service's RealAudioFocusGate is built from the *service's*
+        // AudioManager (`DictatePipelineService.getSystemService`), which
+        // in Robolectric is a distinct shadow from the application's.
+        // Read the focus state off the same instance the gate uses.
+        val am = controller.get()
+            .getSystemService(android.media.AudioManager::class.java)
+        val shadowAm = shadowOf(am)
+
+        startRecordingActive(b, "e2e-focus-stop")
+        assertNotNull(shadowAm.lastAudioFocusRequest)
+
+        b.dispatch(Action.RecordingAction.StopRecording)
+        idle()
+
+        assertNotNull(
+            "C6-IMPL-1: stop must abandon audio-focus (legacy " +
+                "gate.abandon() parity)",
+            shadowAm.lastAbandonedAudioFocusRequest,
+        )
+        assertTrue(b.state.value.recording is RecordingState.Idle)
+    }
+
+    @Test
+    fun c6impl1_audioFocusPrefOff_doesNotRequestFocus_onTheNewPath() {
+        // Legacy parity for the opt-out: `if (audioFocusEnabled)
+        // gate.request()`. With Pref.AudioFocus off the new path must
+        // NOT request focus (matches legacy behaviour for that subset).
+        val b = boot()
+        idle()
+        // Flip the audio-focus pref off via the audio axis.
+        b.dispatch(Action.AudioAction.ToggleAudioFocusPref)
+        idle()
+        assertFalse(
+            "pre-condition: audioFocusEnabledPref is now off",
+            b.state.value.audio.audioFocusEnabledPref,
+        )
+        // The service's RealAudioFocusGate is built from the *service's*
+        // AudioManager (`DictatePipelineService.getSystemService`), which
+        // in Robolectric is a distinct shadow from the application's.
+        // Read the focus state off the same instance the gate uses.
+        val am = controller.get()
+            .getSystemService(android.media.AudioManager::class.java)
+        val shadowAm = shadowOf(am)
+
+        startRecordingActive(b, "e2e-focus-off")
+        assertTrue(b.state.value.recording is RecordingState.Active)
+
+        assertNull(
+            "C6-IMPL-1: with Pref.AudioFocus off the new path must NOT " +
+                "request focus (legacy `if (audioFocusEnabled)` parity)",
+            shadowAm.lastAudioFocusRequest,
+        )
+    }
 }

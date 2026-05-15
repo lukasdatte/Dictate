@@ -234,22 +234,63 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 require(action.sessionId.isNotBlank()) {
                     "F-10: StartRecording.sessionId must be non-blank"
                 }
-                TransitionResult(
-                    nextState = RecordingState.Preparing(
-                        useBluetooth = ctx.global.audio.useBluetoothMic,
-                        audioFile = action.audioFile,
-                        // F-10 — the FSM is the single source of the session
-                        // id; carry the caller-minted UUID verbatim.
-                        sessionId = action.sessionId,
-                    ),
-                    sideEffects = listOf(
-                        Effect.AllocateMediaRecorder(
-                            target = action.target,
-                            useBluetooth = ctx.global.audio.useBluetoothMic,
+                if (ctx.global.audio.useBluetoothMic) {
+                    // C6-IMPL-1 / B2-C6-W1 — BT-mic path: DEFER the
+                    // MediaRecorder allocation until the SCO route
+                    // resolves. Allocating with `useBluetooth=true`
+                    // (→ VOICE_COMMUNICATION) before SCO is connected
+                    // silently records the *phone* mic, not the BT
+                    // headset (gate-RED silent-quality-loss). The SCO
+                    // handshake is kicked by AudioModule's observer
+                    // (it emits Effect.StartBluetoothSco on this
+                    // Idle → Preparing transition); when SCO connects
+                    // or fails/times-out, AudioModule cascades
+                    // Action.RecordingAction.ScoRouteResolved, whose
+                    // Preparing arm fires the now-correctly-sourced
+                    // AllocateMediaRecorder. Mirrors legacy
+                    // RecordingStateController.startRecording:134-139 →
+                    // onScoConnected/onScoFailed:300-321.
+                    TransitionResult(
+                        nextState = RecordingState.Preparing(
+                            useBluetooth = true,
                             audioFile = action.audioFile,
+                            // F-10 — FSM is the single source of the id.
+                            sessionId = action.sessionId,
+                            awaitingSco = true,
+                            // Carried through the SCO wait for the
+                            // deferred AllocateMediaRecorder.
+                            target = action.target,
                         ),
-                    ),
-                )
+                        // No AllocateMediaRecorder yet — it fires on
+                        // ScoRouteResolved. AudioModule's RecordingStarted
+                        // cascade emits Effect.StartBluetoothSco +
+                        // Effect.RequestAudioFocus.
+                        sideEffects = emptyList(),
+                    )
+                } else {
+                    // Non-BT path — unchanged: allocate immediately
+                    // (MIC source), no SCO wait. Audio-focus is still
+                    // requested via AudioModule's RecordingStarted
+                    // cascade on this Idle → Preparing transition.
+                    TransitionResult(
+                        nextState = RecordingState.Preparing(
+                            useBluetooth = false,
+                            audioFile = action.audioFile,
+                            // F-10 — the FSM is the single source of the
+                            // session id; carry the caller-minted UUID.
+                            sessionId = action.sessionId,
+                            awaitingSco = false,
+                            target = null,
+                        ),
+                        sideEffects = listOf(
+                            Effect.AllocateMediaRecorder(
+                                target = action.target,
+                                useBluetooth = false,
+                                audioFile = action.audioFile,
+                            ),
+                        ),
+                    )
+                }
             }
             // F1 / ADR-0001 §"Pure-Reducer Invariant": other actions are
             // not meaningful when no recording is in flight (e.g. user
@@ -287,6 +328,43 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     ),
                 ),
             )
+            // C6-IMPL-1 / B2-C6-W1 — the SCO route resolved while we
+            // were waiting (BT-mic path only). Fire the deferred
+            // MediaRecorder allocation with the source that matches the
+            // actual SCO outcome: VOICE_COMMUNICATION iff SCO connected
+            // (`action.useBluetooth == true`), MIC fallback on
+            // SCO-fail/timeout. Mirrors legacy
+            // RecordingStateController.onScoConnected/onScoFailed →
+            // proceedStartRecording(VOICE_COMMUNICATION | MIC).
+            //
+            // Guard `awaitingSco`: a stale/duplicate ScoRouteResolved
+            // (e.g. a late SCO broadcast after we already allocated)
+            // must be a no-op, not a second AllocateMediaRecorder.
+            // `target` is non-null exactly on the awaitingSco path
+            // (set at StartRecording); the `?:` is a defensive
+            // fallback that cannot fire under the FSM contract.
+            is Action.RecordingAction.ScoRouteResolved ->
+                if (state.awaitingSco) {
+                    TransitionResult(
+                        nextState = RecordingState.Preparing(
+                            useBluetooth = action.useBluetooth,
+                            audioFile = state.audioFile,
+                            sessionId = state.sessionId,
+                            awaitingSco = false,
+                            target = null,
+                        ),
+                        sideEffects = listOf(
+                            Effect.AllocateMediaRecorder(
+                                target = state.target
+                                    ?: InsertionTarget.INPUT_CONNECTION,
+                                useBluetooth = action.useBluetooth,
+                                audioFile = state.audioFile,
+                            ),
+                        ),
+                    )
+                } else {
+                    null
+                }
             Action.RecordingAction.CancelRecording -> TransitionResult(
                 nextState = RecordingState.Idle,
                 sideEffects = listOf(

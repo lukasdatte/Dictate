@@ -137,6 +137,33 @@ sealed interface RecordingState {
         val useBluetooth: Boolean,
         val audioFile: File,
         val sessionId: String,
+        /**
+         * `true` while a BT-mic recording is waiting for the
+         * Bluetooth-SCO handshake to resolve before the
+         * `MediaRecorder` is allocated (C6-IMPL-1 / B2-C6-W1). The
+         * deferred `AllocateMediaRecorder` fires only once
+         * `Action.RecordingAction.ScoRouteResolved` arrives — so the
+         * recorder source matches the actual SCO outcome
+         * (`VOICE_COMMUNICATION` iff SCO connected, `MIC` on
+         * fail/timeout). Mirrors the legacy
+         * `RecordingStateController` `Preparing → onScoConnected /
+         * onScoFailed → proceedStartRecording` wait
+         * (`RecordingStateController.kt:135-139,:300-321`).
+         *
+         * `false` (default) for the non-BT path — allocation happens
+         * immediately at `StartRecording`, unchanged from before.
+         */
+        val awaitingSco: Boolean = false,
+        /**
+         * The insertion target captured at `StartRecording`, carried
+         * through the SCO wait so the deferred `AllocateMediaRecorder`
+         * (fired on `ScoRouteResolved`) has it without re-reading. Only
+         * non-null when [awaitingSco] is `true` (the deferred-allocate
+         * path); `null` on the immediate-allocate path where the target
+         * was already consumed by the synchronous
+         * `Effect.AllocateMediaRecorder`.
+         */
+        val target: InsertionTarget? = null,
     ) : RecordingState
 
     /** Recording actively writing to [audioFile]. */

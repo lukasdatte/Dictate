@@ -134,6 +134,28 @@ sealed class Action {
         data object CancelRecording : RecordingAction()
 
         /**
+         * Bluetooth-SCO route resolved during a BT-mic `Preparing` wait
+         * (C6-IMPL-1 / B2-C6-W1). Cascaded by [AudioModule]'s
+         * cross-module observer once the SCO connection either connects
+         * (`useBluetooth = true` → `VOICE_COMMUNICATION`) or
+         * fails/times-out (`useBluetooth = false` → `MIC` fallback),
+         * mirroring the legacy `RecordingStateController.onScoConnected`
+         * / `onScoFailed` callbacks (`:300-321`).
+         *
+         * Consumed **only** by the `Preparing` reducer arm while
+         * [RecordingState.Preparing.awaitingSco] is `true` — it carries
+         * the deferred `AllocateMediaRecorder` that was withheld at
+         * `StartRecording` so the recorder source matches the actual
+         * SCO outcome (gate-RED-blocking silent-quality-loss fix:
+         * allocating `VOICE_COMMUNICATION` without a live SCO route
+         * silently records the phone mic).
+         *
+         * @see net.devemperor.dictate.state.RecordingState.Preparing.awaitingSco
+         * @see docs/plans/2026-05-15 - dictate-cutover-completion/research/recording-audiofocus-btsco-handshake.md
+         */
+        data class ScoRouteResolved(val useBluetooth: Boolean) : RecordingAction()
+
+        /**
          * "Send" click — stop recording AND trigger the pipeline.
          *
          * **F-2 fix (2026-05-15):** the cascade-via-observer pattern hinted
@@ -256,6 +278,44 @@ sealed class Action {
         data object ToggleAudioFocusPref : AudioAction()
         data class OnAudioFocusGrantChanged(val granted: Boolean) : AudioAction()
         data class OnBluetoothScoStateChanged(val phase: ScoPhase, val reason: String? = null) : AudioAction()
+
+        /**
+         * Recording entered an audio-capturing phase (`Idle → Preparing`,
+         * or `Paused → Active` on resume). Cascaded by [AudioModule]'s
+         * own cross-module observer in reaction to the [RecordingState]
+         * FSM transition (ADR-0002 Mode-2 cascade → Mode-1 effect). The
+         * [AudioModule] reducer emits `Effect.RequestAudioFocus` (gated
+         * on `audioFocusEnabledPref`, mirroring legacy
+         * `RecordingStateController.proceedStartRecording:326`
+         * `if (audioFocusEnabled) gate.request()`, `Pref.AudioFocus`
+         * default `true`) and, when `useBluetoothMic`, kicks the SCO
+         * handshake via `Effect.StartBluetoothSco`.
+         *
+         * **Why an AudioModule-owned action (not a RecordingModule
+         * effect)?** Audio-focus + SCO are the `audio` axis — SRP keeps
+         * their lifecycle in one module (Spec 1 §15.3 rationale). This
+         * restores the Spec 1 §15.1 row-3 observer arm
+         * (`Recording.Preparing → AudioFocus-Request`) that the
+         * Phase-B S-4 KDoc removed under the false premise that
+         * `RecordingHardwareAdapter.allocate` requests focus (it does
+         * not — C6-IMPL-1 gate-RED).
+         *
+         * @see docs/plans/2026-05-15 - dictate-cutover-completion/research/recording-audiofocus-btsco-handshake.md
+         */
+        data object RecordingStarted : AudioAction()
+
+        /**
+         * Recording left an audio-capturing phase (`* → Idle` stop /
+         * cancel, or `Active → Paused`). The [AudioModule] reducer emits
+         * `Effect.ReleaseAudioFocus` + `Effect.StopBluetoothSco`,
+         * mirroring legacy `stopRecording:150` / `cancelRecording:221`
+         * `gate.abandon()` + `bluetoothScoManager.release()` and
+         * `togglePause:168` (pause abandons focus). Idempotent at the
+         * subsystem level (release/stop are no-ops if never acquired).
+         *
+         * @see net.devemperor.dictate.state.Action.AudioAction.RecordingStarted
+         */
+        data object RecordingEnded : AudioAction()
     }
 
     // ════════════════════════════════════════════════════════════════

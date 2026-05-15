@@ -166,21 +166,63 @@ sealed interface PipelineUiState {
     /** Audio uploaded, waiting for the first `StepStarted`. */
     data class Preparing(val sessionId: String) : PipelineUiState
 
-    /** Pipeline running; progress UI is active. */
+    /**
+     * Pipeline running; progress UI is active.
+     *
+     * **F-13 progress counters (2026-05-15):** [completedSteps] /
+     * [totalSteps] / [elapsedMs] feed the live record-button label
+     * (e.g. `"2/3 ↵  0:08"`, see
+     * [net.devemperor.dictate.state.layout.resolveRecordButtonTextPipeline])
+     * and the FGS progress notification (Epic §4 Block A1, AC-4). They
+     * are additive defaulted fields — every existing `Running(...)`
+     * construction site stays source-compatible.
+     *
+     * @property completedSteps number of pipeline steps finished so far
+     *   (incremented by `StepCompleted`). `0` until the first step
+     *   completes.
+     * @property totalSteps total pipeline steps for this run, set from
+     *   `StartPipeline.totalSteps` on `Preparing → Running` and refreshed
+     *   by `StepStarted` (defensive — keeps the label sane if the runner
+     *   re-reports a different total mid-run). `0` means "unknown" and the
+     *   label formatter renders it as such.
+     * @property startedAtMs wall-clock ms (from [ReducerContext.now]) at
+     *   the `Preparing → Running` transition. The basis for [elapsedMs];
+     *   not rendered directly. `0L` only in the defaulted (test) case
+     *   where the reducer did not set it.
+     * @property elapsedMs ms elapsed since [startedAtMs], stamped on every
+     *   counter-affecting transition (`StepStarted` / `StepCompleted`)
+     *   from [ReducerContext.now]. The reducer is the only legal time
+     *   source (R.2 / pure-reducer invariant), so the UI reads this
+     *   field rather than computing `now - startedAtMs` itself.
+     */
     data class Running(
         val sessionId: String,
         val target: InsertionTarget,
         val autoEnterActive: Boolean = false,
+        val completedSteps: Int = 0,
+        val totalSteps: Int = 0,
+        val startedAtMs: Long = 0L,
+        val elapsedMs: Long = 0L,
     ) : PipelineUiState
 
     /**
      * Resend-long-press: the user is editing the prompt queue and language
      * before re-submitting. The large record button acts as a Send trigger
      * in this state.
+     *
+     * @property isStarting **F-12 double-click guard (2026-05-15).** Set
+     *   to `true` by the first `SendStaging` action; a second `SendStaging`
+     *   while `isStarting` is already `true` is a no-op (the reducer
+     *   returns `null`). Prevents a double-tap on the large record button
+     *   from submitting the reprocess job twice before the FSM leaves
+     *   `ReprocessStaging` (Epic §4 Block A1, AC-4). Additive defaulted
+     *   field — source-compatible with every existing
+     *   `ReprocessStaging(...)` construction site.
      */
     data class ReprocessStaging(
         val sessionId: String,
         val transcript: String,
+        val isStarting: Boolean = false,
     ) : PipelineUiState
 }
 

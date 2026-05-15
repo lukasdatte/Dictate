@@ -148,10 +148,18 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         is Action.PipelineAction.StartPipeline -> when (state) {
             is PipelineUiState.Preparing -> if (state.sessionId == action.sessionId) {
                 TransitionResult(
+                    // F-13: stamp the progress baseline. `startedAtMs` is the
+                    // elapsed-timer origin; `totalSteps` comes from the runner
+                    // via the action payload (the only place the total is
+                    // known). `completedSteps`/`elapsedMs` start at zero.
                     nextState = PipelineUiState.Running(
                         sessionId = action.sessionId,
                         target = InsertionTarget.INPUT_CONNECTION,
                         autoEnterActive = action.autoEnterActive,
+                        completedSteps = 0,
+                        totalSteps = action.totalSteps,
+                        startedAtMs = ctx.now,
+                        elapsedMs = 0L,
                     ),
                     sideEffects = listOf(
                         Effect.UpdateNotification(
@@ -166,7 +174,13 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         is Action.PipelineAction.StepStarted -> when (state) {
             is PipelineUiState.Running -> if (state.sessionId == action.sessionId) {
                 TransitionResult(
-                    nextState = state,
+                    // F-13: a step boundary is a progress tick — restamp the
+                    // elapsed timer so the live label advances even between
+                    // step completions. `totalSteps` is NOT touched here:
+                    // `StepStarted` carries no total in its payload, and the
+                    // authoritative total was already set by `StartPipeline`
+                    // (see ### Deviations Dev-1).
+                    nextState = state.copy(elapsedMs = elapsedSince(state.startedAtMs, ctx.now)),
                     sideEffects = listOf(
                         Effect.UpdateNotification(
                             NotificationStatus.Pipeline(action.sessionId, step = action.stepName),
@@ -177,7 +191,20 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
             else -> null
         }
 
-        is Action.PipelineAction.StepCompleted -> null   // progress-only, no state change
+        is Action.PipelineAction.StepCompleted -> when (state) {
+            // F-13: count the finished step and restamp the elapsed timer.
+            // The live record-button label + FGS notification read
+            // `completedSteps`/`totalSteps`/`elapsedMs` off `Running`.
+            is PipelineUiState.Running -> if (state.sessionId == action.sessionId) {
+                TransitionResult(
+                    nextState = state.copy(
+                        completedSteps = state.completedSteps + 1,
+                        elapsedMs = elapsedSince(state.startedAtMs, ctx.now),
+                    ),
+                )
+            } else null
+            else -> null
+        }
 
         is Action.PipelineAction.StepFailed -> when (state) {
             is PipelineUiState.Running, is PipelineUiState.Preparing ->
@@ -260,7 +287,16 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         // signals "no state change needed in PipelineModule".
 
         is Action.PipelineAction.SendStaging -> when (state) {
-            is PipelineUiState.ReprocessStaging -> if (state.sessionId == action.sessionId) {
+            is PipelineUiState.ReprocessStaging -> if (state.sessionId != action.sessionId) {
+                null
+            } else if (state.isStarting) {
+                // F-12 double-click guard: the first SendStaging flips
+                // `isStarting`; a second tap on the large record button
+                // before the FSM leaves ReprocessStaging is a no-op
+                // (returning `null` = "action not relevant in this state",
+                // so the reprocess job is submitted exactly once).
+                null
+            } else {
                 TransitionResult(
                     nextState = PipelineUiState.Preparing(sessionId = action.sessionId),
                     sideEffects = listOf(
@@ -279,7 +315,7 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                         ),
                     ),
                 )
-            } else null
+            }
             else -> null
         }
 
@@ -317,6 +353,20 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                 else -> null
             }
     }
+
+    /**
+     * Elapsed-ms since the [PipelineUiState.Running.startedAtMs] baseline,
+     * floored at zero.
+     *
+     * F-13: the reducer is the only legal time source (R.2 pure-reducer
+     * invariant), so every counter-affecting transition restamps
+     * `elapsedMs` from this. Coerced non-negative so a test-constructed
+     * `Running` with the defaulted `startedAtMs = 0L` (or an injected
+     * `ctx.now` earlier than the baseline) can't surface a nonsensical
+     * negative timer in the live label.
+     */
+    private fun elapsedSince(startedAtMs: Long, now: Long): Long =
+        (now - startedAtMs).coerceAtLeast(0L)
 
     /**
      * Look up the current sessionId (or `null` for [PipelineUiState.Idle]).

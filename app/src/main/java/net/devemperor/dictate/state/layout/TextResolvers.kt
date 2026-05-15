@@ -97,17 +97,22 @@ fun resolveRecordButtonText(state: DictateUiState, strings: LayoutStrings): Char
  * - `Running` → "[counter]↵ [timer]" via [LayoutStrings.formatPipelineLabel]
  * - otherwise → "Record" (defensive — visibility hides this label)
  *
- * Note: the [PipelineUiState.Running] data class doesn't yet carry
- * `completedSteps`, `totalSteps`, `elapsedMs` — those fields will land in
- * the next chunk's pipeline-state extension. For now, the resolver
- * picks default `0`s; C14 wires the live values once the state shape
- * settles.
+ * **F-13 (2026-05-15):** the live `completedSteps` / `totalSteps` /
+ * `elapsedMs` are now read off [PipelineUiState.Running] (Epic §4 Block
+ * A1, AC-4). The earlier hard-coded `0, 0, …, 0L` placeholders are gone;
+ * the reducer maintains these counters
+ * ([net.devemperor.dictate.state.modules.PipelineModule]).
  */
 fun resolveRecordButtonTextPipeline(state: DictateUiState, strings: LayoutStrings): CharSequence =
     when (val pipe = state.pipeline) {
         is PipelineUiState.Preparing -> strings.sending
         is PipelineUiState.Running ->
-            strings.formatPipelineLabel(0, 0, pipe.autoEnterActive, 0L)
+            strings.formatPipelineLabel(
+                pipe.completedSteps,
+                pipe.totalSteps,
+                pipe.autoEnterActive,
+                pipe.elapsedMs,
+            )
         else -> strings.record
     }
 

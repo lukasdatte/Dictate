@@ -129,5 +129,24 @@ private class FakeSessionDao : SessionDao {
     override fun clearAudioFilePath(id: String) = notUsed()
     override fun updateAudioFilePath(id: String, path: String) = notUsed()
 
+    // M4 additions (Spec 1 §6.1) — none of these are exercised by
+    // SessionTracker.getLastKeyboardSession(), but the interface
+    // contract demands an implementation. Throwing keeps the fake's
+    // "fail loud" intent intact.
+    override fun markInserted(id: String, timestamp: Long) = notUsed()
+    override fun findPendingInsertion(): List<SessionEntity> = notUsed()
+    override fun deleteInsertedOlderThan(cutoff: Long): Int = notUsed()
+    override fun findOrphanedTerminalAudio(
+        cutoff: Long
+    ): List<net.devemperor.dictate.database.dao.OrphanedAudioRow> = notUsed()
+    override fun clearAudioFilePathBulk(ids: List<String>) = notUsed()
+    override fun getSessionsByStatuses(statuses: List<String>): List<SessionEntity> = notUsed()
+    override fun findAllAudioFilePaths(): List<String?> = notUsed()
+    override fun markLegacyAudioSessionsFailed(
+        legacyPath: String,
+        reason: String,
+        failedStatus: String
+    ): Int = notUsed()
+
     private fun notUsed(): Nothing = error("FakeSessionDao: method not expected in these tests")
 }

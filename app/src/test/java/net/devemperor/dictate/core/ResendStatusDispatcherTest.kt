@@ -141,4 +141,38 @@ class ResendStatusDispatcherTest {
         action as ResendAction.Resume
         assertEquals("concrete-last-session-id", action.sessionId)
     }
+
+    // ── M4 (Spec 1 §6.1.3): live-state branches ──
+    // RECORDING / TRANSCRIBING should never reach the short-press
+    // dispatcher in practice — the recovery path promotes them
+    // BEFORE history loads — but if they did, the dispatcher must
+    // return NoOp so the keyboard does not double-start a job.
+
+    @Test
+    fun `RECORDING returns NoOp regardless of output - live-state guard`() {
+        val withNull = ResendStatusDispatcher.decide(
+            SessionStatus.RECORDING, null, sessionId)
+        val withEmpty = ResendStatusDispatcher.decide(
+            SessionStatus.RECORDING, "", sessionId)
+        val withText = ResendStatusDispatcher.decide(
+            SessionStatus.RECORDING, "should be ignored", sessionId)
+
+        assertTrue(withNull === ResendAction.NoOp)
+        assertTrue(withEmpty === ResendAction.NoOp)
+        assertTrue(withText === ResendAction.NoOp)
+    }
+
+    @Test
+    fun `TRANSCRIBING returns NoOp regardless of output - live-state guard`() {
+        val withNull = ResendStatusDispatcher.decide(
+            SessionStatus.TRANSCRIBING, null, sessionId)
+        val withEmpty = ResendStatusDispatcher.decide(
+            SessionStatus.TRANSCRIBING, "", sessionId)
+        val withText = ResendStatusDispatcher.decide(
+            SessionStatus.TRANSCRIBING, "should be ignored", sessionId)
+
+        assertTrue(withNull === ResendAction.NoOp)
+        assertTrue(withEmpty === ResendAction.NoOp)
+        assertTrue(withText === ResendAction.NoOp)
+    }
 }

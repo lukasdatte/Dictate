@@ -1,5 +1,6 @@
 package net.devemperor.dictate.state.layout
 
+import net.devemperor.dictate.R
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.PipelineUiState
@@ -63,6 +64,7 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         LayoutMode(
             id = LayoutModeId.KEYBOARD_TWO_ROW,
             backend = BackendType.IME_VIEW,
+            sceneStateId = R.id.two_row_state,
             rows = listOf(
                 // Row 1 — action_row: record / resend / backspace / audio-focus (gone) / widget-toggle
                 RowDescriptor(slots = listOf(
@@ -145,6 +147,7 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         LayoutMode(
             id = LayoutModeId.KEYBOARD_SINGLE_ROW,
             backend = BackendType.IME_VIEW,
+            sceneStateId = R.id.single_row_state,
             rows = listOf(RowDescriptor(slots = listOf(
                 ButtonSlot(
                     logicalId = LogicalButtonId.TRASH,
@@ -225,6 +228,7 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         LayoutMode(
             id = LayoutModeId.KEYBOARD_TWO_ROW_SEND_MODE,
             backend = BackendType.IME_VIEW,
+            sceneStateId = R.id.two_row_send_mode_state,
             rows = listOf(
                 RowDescriptor(slots = listOf(
                     ButtonSlot(
@@ -301,6 +305,7 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         LayoutMode(
             id = LayoutModeId.KEYBOARD_SINGLE_ROW_SEND_MODE,
             backend = BackendType.IME_VIEW,
+            sceneStateId = R.id.single_row_send_mode_state,
             rows = listOf(RowDescriptor(slots = listOf(
                 ButtonSlot(
                     logicalId = LogicalButtonId.TRASH,
@@ -371,6 +376,7 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         LayoutMode(
             id = LayoutModeId.KEYBOARD_REPROCESS_STAGING,
             backend = BackendType.IME_VIEW,
+            sceneStateId = R.id.reprocess_staging_state,
             rows = listOf(
                 RowDescriptor(slots = listOf(
                     ButtonSlot(

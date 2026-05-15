@@ -39,11 +39,12 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 0 · Important: 0 · Nice-to-have: 0 · Postponed: 0
+**Severity counts:** Critical: 0 · Important: 1 · Nice-to-have: 1 · Postponed: 0
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
-| — | — | — | — | — | — |
+| C3-IMPL-1 | B2-C3-B1-IMPL | Important | delegated-to-orchestrator → **C5 owns** | Fresh-recording config resolver: 8 IME-runtime fields (language/stylePrompt/queuedPromptIds/livePrompt/autoSwitch/targetApp/totalSteps/showResend) not on orchestrator path; DefaultPipelineConfigResolver throws (fail-loud). C5 must thread these from the IME when it flips the trigger. marker `plan-deviation-resolved`. | step-1-impl (C3-B1) |
+| C3-IMPL-2 | B2-C3-B1-IMPL | Nice-to-have | delegated-to-orchestrator → **C5 owns** | Reprocess minor fields: modelOverride/targetAppPackage null + AutoFormatting +1 step on new path. Resolve when C5 threads IME context. | step-1-impl (C3-B1) |
 
 ---
 

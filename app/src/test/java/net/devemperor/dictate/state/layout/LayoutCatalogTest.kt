@@ -52,18 +52,34 @@ class LayoutCatalogTest {
     }
 
     @Test
-    fun `OVERLAY_5BUTTON is still the empty B5 placeholder`() {
-        // B4-VAL F-31: structural reminder that the OVERLAY_5BUTTON body
-        // is a placeholder until B5/C16 ships the 5-button layout
-        // (Record / Send / Pause / Trash / Close). When B5 supplies the
-        // body, this assertion flips from pass to fail — that's the
-        // trigger to delete this test and exercise OVERLAY_5BUTTON for
-        // real.
+    fun `OVERLAY_5BUTTON has all five overlay slots in row order`() {
+        // Spec 3 §3.1: two rows × (3, 2) buttons.
+        //   Row 1: RECORD / SEND / PAUSE
+        //   Row 2: TRASH / CLOSE
+        val rows = catalog.OVERLAY_5BUTTON.rows
+        assertEquals("OVERLAY_5BUTTON must have exactly two rows.", 2, rows.size)
         assertEquals(
-            "OVERLAY_5BUTTON.rows must remain empty until B5/C16 ships the body.",
-            emptyList<RowDescriptor>(),
-            catalog.OVERLAY_5BUTTON.rows,
+            listOf(
+                LogicalButtonId.OVERLAY_RECORD,
+                LogicalButtonId.OVERLAY_SEND,
+                LogicalButtonId.OVERLAY_PAUSE,
+            ),
+            rows[0].slots.map { it.logicalId },
         )
+        assertEquals(
+            listOf(
+                LogicalButtonId.OVERLAY_TRASH,
+                LogicalButtonId.OVERLAY_CLOSE,
+            ),
+            rows[1].slots.map { it.logicalId },
+        )
+    }
+
+    @Test
+    fun `OVERLAY_5BUTTON has no MotionScene transition (sceneStateId is null)`() {
+        // Spec 3 §3.1 + LayoutMode KDoc — the overlay surface is a flat
+        // WindowManager-attached layout, not a MotionLayout target.
+        assertEquals(null, catalog.OVERLAY_5BUTTON.sceneStateId)
     }
 
     @Test

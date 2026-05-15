@@ -323,6 +323,23 @@ sealed class Action {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // Theming-axis actions (ThemingModule)
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Theme, accent-colour, overlay-characters, output-speed setters.
+     * All four mirror `Pref.Theme` / `Pref.AccentColor` /
+     * `Pref.OverlayCharacters` / `Pref.OutputSpeed`; SP writes are
+     * performed by `PipelinePrefMirror` (C7) on state changes.
+     */
+    sealed class ThemingAction : Action() {
+        data class SetTheme(val theme: String) : ThemingAction()
+        data class SetAccentColor(val color: Int) : ThemingAction()
+        data class SetOverlayCharacters(val chars: String) : ThemingAction()
+        data class SetOutputSpeed(val speed: Int) : ThemingAction()
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // PendingSessions-axis actions (PendingSessionsModule)
     // ════════════════════════════════════════════════════════════════
 

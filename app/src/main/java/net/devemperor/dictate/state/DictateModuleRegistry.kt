@@ -76,14 +76,25 @@ open class DictateModuleRegistry(
      */
     companion object Default : DictateModuleRegistry(
         listOf(
+            // ─── Core (C5) — hot-path FSMs and observer-rich modules ───
             RecordingModule,
             PipelineModule,
             AudioModule,
             ViewModeModule,
             OverlayModule,
-            // C6 will append: ResendModule, LivePromptModule, LanguageModule,
-            // LayoutModule, FeatureToggleModule, ThemingModule,
-            // PendingSessionsModule, KeyboardInputModule, InterruptionModule.
+            // ─── Aux (C6) — simpler axes ───
+            ResendModule,
+            LivePromptModule,
+            LanguageModule,
+            LayoutModule,
+            FeatureToggleModule,
+            ThemingModule,
+            PendingSessionsModule,
+            KeyboardInputModule,
+            // ─── Phase-2 stub (C6) ────────────────────────────────────
+            // Registered now to keep the action-coverage invariant
+            // intact — see InterruptionModule KDoc.
+            InterruptionModule,
         ),
     )
 }

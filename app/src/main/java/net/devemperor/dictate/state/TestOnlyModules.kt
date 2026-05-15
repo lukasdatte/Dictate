@@ -21,10 +21,11 @@ import kotlin.reflect.KClass
 // (which would break `ActionHierarchyTest`'s contract that the
 // hierarchy has exactly N production children), the fixtures **reuse
 // production Action subtypes** (e.g. `Action.LanguageAction`,
-// `Action.InterruptionAction`). C4 ships before any production module
-// is registered, so claiming `Action.X::class` from a test fixture is
-// safe — Phase 1 production code does NOT route those actions from
-// tests.
+// `Action.InterruptionAction`). Tests construct **ad-hoc registries**
+// via `DictateModuleRegistry(listOf(testModuleA, …))`, not the
+// production `Default` singleton — so reusing the production
+// `actionClass` does not collide with C6's production registry.
+// Phase 1 production code does NOT route those actions from tests.
 //
 // **Action-class collision constraint for tests.** Two test modules
 // must claim disjoint Action subtypes (the registry validator will

@@ -16,11 +16,11 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 0 · Important: 0 · Nice-to-have: 0 · Postponed: 0
+**Severity counts:** Critical: 0 · Important: 1 · Nice-to-have: 0 · Postponed: 0
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
-| — | — | — | — | — | — |
+| IMPL-PLAN-FIX-1 | B1-C1-A1-IMPL | Important | delegated-to-orchestrator | Dev-2: SendStaging keeps existing →Preparing edge instead of literal `copy(isStarting=true)` (literal would break runner handshake); guard satisfied via isStarting→null branch. Block-Validate (AUDIT-PLAN-AND-API/LOGIC) must confirm this reading vs Epic §4-A1 + Spec 1 §3/§15.2 | step-2-plan-fix |
 
 ---
 

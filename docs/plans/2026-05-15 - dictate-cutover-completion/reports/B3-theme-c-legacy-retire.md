@@ -30,11 +30,11 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 0 · Important: 0 · Nice-to-have: 0 · Postponed: 0
+**Severity counts:** Critical: 0 · Important: 1 · Nice-to-have: 0 · Postponed: 0
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
-| — | — | — | — | — | — |
+| C8-IMPL-1 | B3-C8-C1-IMPL | Important | delegated-to-orchestrator → **B3 AUDIT-TEST** | R-7-variant: `LegacyAudioFileMigrationTest` flakes non-deterministically in the full `testReleaseUnitTest` run only (passes isolated + full testDebugUnitTest). DB-singleton / `DurationHealingJob` test-pollution axis (C9-C2 / audioFile territory) — DIFFERENT shared-state axis than B2-VAL-W1's `ActiveJobRegistry.resetForTest()`. Zero code-path overlap with C8 (not a regression). B3 AUDIT-TEST must add a `DurationHealingJob`/DB-singleton `tearDown` for the `migration/` Robolectric tests. | step-1-impl (C8-C1) |
 
 ---
 

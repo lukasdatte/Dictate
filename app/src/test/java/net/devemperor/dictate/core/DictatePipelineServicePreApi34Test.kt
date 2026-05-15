@@ -70,7 +70,9 @@ class DictatePipelineServicePreApi34Test {
         )
         assertEquals(
             "startForeground must use the documented NOTIF_ID even on pre-API-34",
-            DictatePipelineService.NOTIF_ID,
+            // C4-B2: NOTIF_ID moved to PipelineNotificationCoordinator
+            // (Spec 1 §10 NOTIF_ID-Konsistenz SoT).
+            PipelineNotificationCoordinator.NOTIF_ID,
             shadow.lastForegroundNotificationId,
         )
         assertEquals(

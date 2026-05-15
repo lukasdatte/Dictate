@@ -237,7 +237,6 @@ public class DictateInputMethodService extends InputMethodService
      * effective-language controller consumer was removed).
      */
     private PipelineUiCallback servicePipelineCallback;
-    private File audioFile;
     private Vibrator vibrator;
     private SharedPreferences sp;
     private AudioManager am;
@@ -1393,10 +1392,8 @@ public class DictateInputMethodService extends InputMethodService
                 // equivalence should any future legacy caller reach it
                 // (the legacy-controller retire is Theme-C/C3 scope —
                 // C5-IMPL-2, not this mid-chunk-triage wave).
-                mainHandler.post(() -> {
-                    audioFile = file;
-                    transcribeImportedAudioFileViaOrchestrator();
-                });
+                mainHandler.post(() ->
+                        transcribeImportedAudioFileViaOrchestrator(file));
             }
 
             @Override
@@ -2000,11 +1997,15 @@ public class DictateInputMethodService extends InputMethodService
             // once transcription starts, and the pre-refactor leak
             // (file in cacheDir root falling outside the factory's
             // cleanupOrphans scope) is closed.
-            audioFile = new File(new File(getCacheDir(), "audio"), DictatePrefsKt.get(sp, Pref.TranscriptionAudioFile.INSTANCE));
-            DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, audioFile.getName()).apply();
+            // D-14 (C9-C2): the imported file is a scratch handle local to
+            // this import flow — there is no orchestrator recording session
+            // for an import, so it is not sourced from RecordingState. It
+            // is threaded explicitly into the transcribe entry-point.
+            File importedAudio = new File(new File(getCacheDir(), "audio"), DictatePrefsKt.get(sp, Pref.TranscriptionAudioFile.INSTANCE));
+            DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, importedAudio.getName()).apply();
 
             sp.edit().remove(Pref.TranscriptionAudioFile.INSTANCE.getKey()).apply();
-            transcribeImportedAudioFileViaOrchestrator();
+            transcribeImportedAudioFileViaOrchestrator(importedAudio);
 
         } else if (DictatePrefsKt.get(sp, Pref.InstantRecording.INSTANCE)) {
             recordButton.performClick();
@@ -2341,6 +2342,12 @@ public class DictateInputMethodService extends InputMethodService
                     android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
+        // D-14 (C9-C2): the allocated file is handed to the orchestrator
+        // via StartRecording and becomes RecordingState's authoritative
+        // payload (Spec 1 §15.2). The IME keeps only this method-local
+        // reference (LastFileName mirror + the action arg); the
+        // send-tap reads it back from state.recording, not an IME field.
+        File audioFile;
         try {
             audioFile = pipelineBinder.getAudioFileFactory().allocate();
         } catch (java.io.IOException e) {
@@ -2419,7 +2426,21 @@ public class DictateInputMethodService extends InputMethodService
             return;
         }
 
-        captureFreshConfigSnapshot(sessionId);
+        // D-14 (C9-C2): the recording's audio file is sourced from the
+        // orchestrator's authoritative state.recording payload (Spec 1
+        // §15.2), not a removed IME field. The Active/Paused guard above
+        // guarantees a non-null handle; bail defensively if state raced
+        // away (binder dropped) — nothing destructive has run yet.
+        File recordingAudioFile = net.devemperor.dictate.state.DictateUiStateKt
+                .getAudioFileOrNull(pipelineBinder.getState().getValue().getRecording());
+        if (recordingAudioFile == null) {
+            Log.w("DictateIME",
+                    "stopRecording (new path): no audioFile in state.recording "
+                            + "— skipping send, recording preserved");
+            return;
+        }
+
+        captureFreshConfigSnapshot(sessionId, recordingAudioFile);
         // Drive the legacy keyboard pipeline UI (KeyboardUiController is
         // still the render path until Theme-C/C3 retires it) so the
         // keyboard shows "Sending…"/progress exactly as the legacy
@@ -2451,8 +2472,17 @@ public class DictateInputMethodService extends InputMethodService
      * field — including the {@code livePrompt}/{@code autoSwitchKeyboard}
      * instance flags that are reset right after — is captured with the
      * same timing the legacy path used.</p>
+     *
+     * <p>D-14 (C9-C2): {@code audioFile} is passed in rather than read
+     * from a removed IME field. The fresh-recording caller
+     * ({@link #stopRecording()}) sources it from the orchestrator's
+     * {@code state.recording} (the post-cutover authoritative payload,
+     * Spec 1 §15.2); the imported-audio caller
+     * ({@link #transcribeImportedAudioFileViaOrchestrator(File)}) passes
+     * the imported scratch file (no recording session exists for an
+     * import).</p>
      */
-    private void captureFreshConfigSnapshot(String sessionId) {
+    private void captureFreshConfigSnapshot(String sessionId, File audioFile) {
         int totalSteps = 1; // transcription always
         if (autoFormattingService.isEnabled()) totalSteps++;
         totalSteps += promptQueueManager.getQueuedIds().size();
@@ -2610,7 +2640,7 @@ public class DictateInputMethodService extends InputMethodService
      * legacy busy-toast user feedback (mirrors the new-path reprocess
      * route in {@link #handleReprocessSend}).</p>
      */
-    private void transcribeImportedAudioFileViaOrchestrator() {
+    private void transcribeImportedAudioFileViaOrchestrator(File audioFile) {
         // Service not yet bound: the orchestrator route is unavailable.
         // Surface a not-ready toast and bail (mirror handleReprocessSend).
         if (pipelineBinder == null || imePipelineConfigResolver == null) {
@@ -2638,13 +2668,13 @@ public class DictateInputMethodService extends InputMethodService
 
         // Mint the sessionId (was preAllocatedId pre-C7) and snapshot the
         // IME-runtime config field-for-field via the shared C5 helper —
-        // it reads the IME `audioFile` field (set to the imported file by
-        // onStartInputView), computes all 8 IME-runtime fields exactly as
-        // the deleted legacy construction did, snapshots them into
-        // imePipelineConfigResolver, and performs the
-        // pendingLivePromptChain / one-shot-flag reset (legacy parity).
+        // it takes the imported {@code audioFile} (passed in by the
+        // caller; D-14/C9-C2 removed the IME field), computes all 8
+        // IME-runtime fields exactly as the deleted legacy construction
+        // did, snapshots them into imePipelineConfigResolver, and performs
+        // the pendingLivePromptChain / one-shot-flag reset (legacy parity).
         String sessionId = java.util.UUID.randomUUID().toString();
-        captureFreshConfigSnapshot(sessionId);
+        captureFreshConfigSnapshot(sessionId, audioFile);
 
         // Dispatch the documented pipeline entry-point. No recording FSM:
         // TriggerPipeline goes straight Idle → Preparing → SubmitPipeline →

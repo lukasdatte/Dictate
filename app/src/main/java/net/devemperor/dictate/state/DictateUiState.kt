@@ -205,6 +205,31 @@ val RecordingState.isActiveOrPaused: Boolean
     get() = this is RecordingState.Active || this is RecordingState.Paused
 
 /**
+ * The audio file the current recording session writes to, or `null` when
+ * no session is in flight ([RecordingState.Idle]).
+ *
+ * Post-cutover (Epic `dictate-cutover-completion` D-14, C9-C2) the
+ * orchestrator's [RecordingState] is the **single authoritative source**
+ * for the in-flight recording's audio file — the legacy
+ * `DictateInputMethodService.audioFile` IME field was deleted. All three
+ * non-idle FSM states ([Preparing]/[Active]/[Paused]) carry the same
+ * `audioFile` handle (minted once at `StartRecording`, Spec 1 §15.2), so
+ * this canonical accessor is the read path the IME's
+ * `captureFreshConfigSnapshot` uses on the fresh-recording send-tap.
+ *
+ * Centralised here next to [isActiveOrPaused] for the same DRY reason:
+ * the sealed-interface payload extraction would otherwise be spelled out
+ * with an `is`-cascade at every IME read site.
+ */
+val RecordingState.audioFileOrNull: File?
+    get() = when (this) {
+        is RecordingState.Preparing -> audioFile
+        is RecordingState.Active -> audioFile
+        is RecordingState.Paused -> audioFile
+        RecordingState.Idle -> null
+    }
+
+/**
  * Pipeline progress FSM. Owned by `PipelineModule`.
  *
  * Each non-idle state carries the `sessionId` (UUID string per R.15)

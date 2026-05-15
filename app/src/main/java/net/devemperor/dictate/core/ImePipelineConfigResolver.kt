@@ -149,8 +149,7 @@ class ImePipelineConfigResolver(
                 "ImePipelineConfigResolver: no fresh-recording snapshot for sessionId=" +
                     "$sessionId. The IME must call snapshotFresh(...) at the send-tap " +
                     "before dispatching StopRecordingAndSend (R-1: surfacing beats a " +
-                    "silently-wrong JobRequest). The legacy path stays authoritative " +
-                    "behind USE_LEGACY_RECORDING_DRIVE (Epic §6.2).",
+                    "silently-wrong JobRequest).",
             )
         // Field-for-field identical to DictateInputMethodService.java:2214-2230.
         return JobRequest.TranscriptionPipeline(

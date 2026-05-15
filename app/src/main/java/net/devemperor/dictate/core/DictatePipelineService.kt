@@ -446,8 +446,7 @@ class DictatePipelineService : Service() {
         // the IME's live recording config field-for-field per R-1) and
         // falls back to the C3 DefaultPipelineConfigResolver (which
         // throws for the fresh IME-runtime-only fields) when no IME is
-        // bound. The legacy IME path stays authoritative behind
-        // USE_LEGACY_RECORDING_DRIVE until C6 (Epic §6.2).
+        // bound.
         pipelineRunnerSubsystemAdapterImpl = PipelineRunnerSubsystemAdapter(
             context = applicationContext,
             configResolver = DelegatingPipelineConfigResolver(

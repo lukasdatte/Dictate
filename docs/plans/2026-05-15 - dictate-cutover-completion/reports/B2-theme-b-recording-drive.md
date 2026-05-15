@@ -39,7 +39,7 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 0 · Important: 2 (resolved by C5) · Nice-to-have: 2 (1 resolved, 1 still-deferred) · From C5: Important: 1 fixed (C5-IMPL-1 via C6-W1) + 1 delegated (C5-IMPL-2 documented Known-Gap), Nice-to-have: 1 postponed (C5-IMPL-3) · **From C6 gate: Important: 1 (C6-IMPL-1) → FIXED (C6-W1); Nice-to-have: 1 (C6-IMPL-2) → documented C7-scoping**
+**Severity counts:** Critical: 1 (C7-IMPL-1 — NEW, delegated, `architecture-conflict`) · Important: 2 (resolved by C5) · Nice-to-have: 2 (1 resolved, 1 still-deferred) · From C5: Important: 1 fixed (C5-IMPL-1 via C6-W1) + 1 delegated (C5-IMPL-2 documented Known-Gap), Nice-to-have: 1 postponed (C5-IMPL-3) · From C6 gate: Important: 1 (C6-IMPL-1) → FIXED (C6-W1); Nice-to-have: 1 (C6-IMPL-2) → **fixed by C7 (RESUME carve-out honoured)** · **From C7: Critical: 1 (C7-IMPL-1) → delegated-to-orchestrator (imported-audio-file path has no orchestrator route — reachable code not deleted per STOP directive)**
 
 > **🟢 C6-IMPL-1 CLOSED by repair-wave B2-C6-W1 — C6-D2pre may RE-GATE.**
 > The gate-RED-blocking legacy-parity regression is repaired:
@@ -71,7 +71,8 @@
 | C5-IMPL-2 | B2-C5-B3-IMPL | Important | delegated-to-orchestrator | Legacy recording **UI/animation/keyboard-hide-pause** sites (~12 `recordingStateController.getState()` reads outside the record-button gate: `:730`/`:1215`/`:1855`/amplitude/timer/onKeyboardHidden) stay legacy-driven; on the new path the legacy controller is never started so they read Idle (no legacy recording animation, no legacy keyboard-hide auto-pause). The FGS notification (AC-2) is the authoritative new-path recording-active surface. The RenderBackend recording-UI migration is Theme-C/C3, out of C5's recording-trigger scope. Documented Known-Gap. | C5 step-2 |
 | C5-IMPL-3 | B2-C5-B3-IMPL | Nice-to-have | postponed | RESUME (`startResumeJob`, JobExecutor.start #2) has no orchestrator equivalent (`PipelineRunnerSubsystem` has no `resume`); both boolean branches keep legacy `JobExecutor.start` (single-dispatch, orthogonal to the fresh-recording cutover). Adding a resume subsystem action is an architecture change beyond C5 (prompt forbids a fragile flip). C7/later owns retiring it. | C5 step-1 |
 | C6-IMPL-1 | B2-C6-D2pre-IMPL | Important | **fixed (C6-W1)** | Consolidated gate-validated form of C5-IMPL-1. **Closed by repair-wave B2-C6-W1.** Audio-focus + BT-SCO are now emitted on the new path with legacy parity: `AudioModule.onCrossModuleStateChange` observes the RecordingState FSM (recording-engaged → `RecordingStarted` → `RequestAudioFocus` gated on `audioFocusEnabledPref` default-true + `StartBluetoothSco` gated on `useBluetoothMic`; disengaged → `RecordingEnded` → `ReleaseAudioFocus`+`StopBluetoothSco`). BT-mic recordings defer `AllocateMediaRecorder` until `ScoRouteResolved` (SCO-Connected→`VOICE_COMMUNICATION`, SCO-Failed/timeout→`MIC`, subsystem-owned 2500 ms timeout), eliminating the silent phone-mic substitution. Stale `AudioModule.kt` KDoc rewritten to describe the real path. ADR-0002 Mode-1/2 only; no Mode-3. New-path audio-focus proven E2E (`DictateCutoverE2ETest` shadow-AudioManager assertions) + pure-reducer/observer tests. **C7 + Theme C may now re-gate via a fresh C6-D2pre run.** | C6 gate → fixed C6-W1 |
-| C6-IMPL-2 | B2-C6-D2pre-IMPL | Nice-to-have | **documented (C7-scoping)** | C7 must carve out the RESUME `JobExecutor.start` site (`:3286`/`:3294`, C5-IMPL-3) from its deletion scope — no orchestrator resume equivalent exists. The C7 carve-out blockquote (`### Chunk C7-B3`) records this; B2-C6-W1 confirmed it intact. Re-affirmed C7-scoping note, not a code change. | C6 gate → documented C6-W1 |
+| C6-IMPL-2 | B2-C6-D2pre-IMPL | Nice-to-have | **fixed (C7)** | C7 must carve out the RESUME `JobExecutor.start` site from its deletion scope — no orchestrator resume equivalent exists. **C7 honoured it:** `startResumeJob`'s byte-identical `if (USE_LEGACY_RECORDING_DRIVE) {…} else {…}` branches were collapsed to the single unconditional `JobExecutor.INSTANCE.start` they both contained — RESUME stays legacy, not fenced/deleted/rerouted (carve-out satisfied exactly). | C6 gate → fixed C7 |
+| C7-IMPL-1 | B2-C7-B3-IMPL | **Critical** | **delegated-to-orchestrator** (`architecture-conflict`, `blocks-following-chunks`) | Imported-audio-file transcription (`onStartInputView:1959` → `runTranscriptionViaOrchestrator()` → `JobExecutor.INSTANCE.start`, `DictateInputMethodService.java:2554`) has **no orchestrator route**. The C7 prompt + C5/C6 grep tables assumed `runTranscriptionViaOrchestrator` was dead-on-new-path ("only the legacy `onRecordingCompleted` callback reaches it") — they overlooked the `onStartInputView` Settings-import caller (`Pref.TranscriptionAudioFile`). That file already exists (no recording FSM); the orchestrator exposes no "transcribe a pre-existing file" entry-point, so the legacy `JobExecutor.start` is its ONLY working route. Per the C7 STOP directive (reachable "dead" branch → don't delete, flag) the fresh `JobExecutor.start` was kept (made unconditional, boolean+no-op-else removed) rather than deleted — so AC-10's single-architecture invariant is structurally **not yet met for the imported-audio-file user action** (2 not 1 IME `JobExecutor.start` survivors: RESUME carve-out + this). Deleting it would silently break the feature (AC-9 regression). Also blocks the later Theme-C legacy-pipeline-trigger retire (a residual live consumer remains). Needs a new `RecordingAction`/`PipelineAction` + reducer arm — an architecture change beyond C7's pure-deletion scope. | C7 step-1/3 |
 
 ---
 
@@ -1405,22 +1406,305 @@ or test edits; all checks were independent re-traces + re-runs).
 
 ### Chunk C7-B3 — legacy call-site deletion (GATED on green C6)
 
-**Agent-IDs:** `B2-C7-B3-IMPL` · **Status:** 🟡 **GATED — awaiting a
-fresh C6-D2pre re-gate** (C6-IMPL-1 is now **fixed via B2-C6-W1**; C7
-unblocks once an orchestrator C6-D2pre re-run confirms GREEN on the
-repaired path) · **Risk:** Med (pure delete of now-proven-dead code:
-post-C6-W1 the legacy audio-focus/BT-SCO path has a behaviourally-
-equivalent new-path replacement — the re-gate proves it)
-(subsections filled when chunk runs — separately committed for git-revert isolation, Epic §6.2)
+**Agent-IDs:** `B2-C7-B3-IMPL` (fresh, combined Steps 1-5).
+**Status:** ✅ complete · **Risk:** MED (pure deletion of proven-dead
+code) — **GATE: C6-D2pre RE-GATE GREEN authorised C7 (Epic §6.2; the
+revertible point-of-no-return chunk, separately committed).**
+**Implementation-Commit (Commit 1):** ⏳ (orchestrator — separately
+committed for git-revert isolation, Epic §6.2 invariant 3) ·
+**Test-Commit (Commit 2):** ⏳ (orchestrator)
 
-> **C7 carve-out note (C6-IMPL-2):** when C7 eventually runs, it must NOT
-> delete the RESUME `JobExecutor.INSTANCE.start(Resume)` site
-> (`DictateInputMethodService.java:3286`/`:3294`) — RESUME has no
-> orchestrator equivalent (C5-IMPL-3); deleting it breaks pipeline
-> recovery. Only the fresh-recording (`:2596`) + reprocess (`:3463`)
-> legacy `JobExecutor.start` sites + the `USE_LEGACY_RECORDING_DRIVE`
-> boolean + the `recordingStateController` recording branches are C7's
-> deletion scope.
+> **C7 carve-out note (C6-IMPL-2) — HONOURED:** the RESUME
+> `JobExecutor.INSTANCE.start(Resume)` site (`startResumeJob`,
+> post-C7 `:3229`) was NOT deleted. RESUME has no orchestrator
+> equivalent (C5-IMPL-3); deleting it breaks pipeline recovery. Its
+> byte-identical `if (USE_LEGACY_RECORDING_DRIVE) {…} else {…}` branches
+> were collapsed to the single unconditional `JobExecutor.INSTANCE.start`
+> they both already contained — behaviour-preserving (not fenced, not
+> deleted, not rerouted through the new path; exactly as the carve-out
+> mandates). C6-IMPL-2 → fixed.
+>
+> **C7-IMPL-1 (NEW, Critical, `architecture-conflict`):** a SECOND
+> `JobExecutor.start` survives at post-C7 `:2554` — the imported-audio-
+> file path (`onStartInputView:1959` → `runTranscriptionViaOrchestrator`).
+> This was NOT in the prompt's/C5's/C6's "dead" classification (they
+> overlooked the Settings-import caller). Per the STOP directive it was
+> kept (made unconditional), not deleted — deleting it silently breaks
+> imported-audio-file transcription (AC-9). Delegated for orchestrator
+> routing (orchestrator-route = a new action + reducer arm; Theme-C/
+> follow-up scope). C7's record-button-fresh + reprocess + boolean
+> deletion is otherwise complete.
+
+#### Implementation (B2-C7-B3-IMPL)
+
+**What was done:** Removed the `USE_LEGACY_RECORDING_DRIVE` compile-time
+constant (+ its 34-line Javadoc) and the now-dead legacy
+`JobExecutor.start` branches it fenced, so the new
+`DictateOrchestrator` is the **sole driver** for fresh recording +
+reprocess (AC-10 single-architecture invariant; FN-3/OQ-2 — no
+lingering dead switch, D7). The RESUME carve-out is preserved
+unconditionally. One pre-existing C5-overlooked architecture gap was
+discovered during the reachability audit and flagged (C7-IMPL-1,
+Critical, `architecture-conflict`) rather than deleted — see Deviations
++ Issues.
+
+**BEFORE grep (full enumeration + fresh/reprocess/resume
+classification):**
+
+| Site | File:line (pre-C7) | Kind | Pre-C7 shape |
+|---|---|---|---|
+| `USE_LEGACY_RECORDING_DRIVE` decl | `:151` | the switch | `private static final boolean … = false;` (+ `:118-150` Javadoc) |
+| 5 predicate helpers | `:2189/2199/2217/2236/2258` | gating | `if (!USE_LEGACY_RECORDING_DRIVE && pipelineBinder != null)` |
+| `startRecording` legacy | `:2313` | fresh-record-button | `if (USE_LEGACY_RECORDING_DRIVE) { recordingStateController.startRecording(...); return; }` |
+| `stopRecording` legacy | `:2341` | fresh-record-button | `if (USE_LEGACY_RECORDING_DRIVE) { recordingStateController.stopRecording(); return; }` |
+| #1 fresh `runTranscriptionViaOrchestrator` | `:2596` JobExecutor.start | **FRESH** | `if (USE_LEGACY_RECORDING_DRIVE) { JobExecutor.start } else { Log.w + stopPipeline }` |
+| #2 RESUME `startResumeJob` | `:3286`/`:3294` JobExecutor.start | **RESUME** (carve-out) | `if (…) { JobExecutor.start } else { JobExecutor.start }` (byte-identical) |
+| #3 REPROCESS `handleReprocessSend` | `:3463` JobExecutor.start | **REPROCESS** | `if (USE_LEGACY_RECORDING_DRIVE) { JobExecutor.start } else { adapter.submitReprocess }` |
+| 3 Kotlin doc refs | `ImePipelineConfigResolver.kt:153`, `PipelineRunnerSubsystemAdapter.kt:296`, `DictatePipelineService.kt:450` | stale doc | KDoc/comment naming the removed switch |
+
+**AFTER grep (proof):**
+
+| Check | Result |
+|---|---|
+| `grep -rn USE_LEGACY_RECORDING_DRIVE app/src/main` | **ZERO** (exit 1 — constant, all 16 IME refs incl. predicate-helper conditions + section comment, and all 3 Kotlin doc refs removed) |
+| `grep -n JobExecutor.INSTANCE.start DictateInputMethodService.java` | **2 sites only**: `:2554` (FRESH — imported-audio-file path, see C7-IMPL-1) + `:3229` (RESUME — carve-out preserved). The REPROCESS IME site is **gone** (routes via the C3 adapter's internal start). No `if (false)` / dead-branch residue. |
+
+**What was deleted (exact):**
+1. `USE_LEGACY_RECORDING_DRIVE` decl + its 34-line Javadoc (`:118-151`).
+2. `startRecording()` legacy true-branch + the now-dead `boolean useBt`
+   local (only the deleted legacy branch read it — verified by grep).
+   New-path `dispatch(StartRecording)` is now unconditional.
+3. `stopRecording()` legacy true-branch. New-path snapshot +
+   `dispatch(StopRecordingAndSend)` is now unconditional.
+4. REPROCESS `handleReprocessSend` legacy true-branch (`JobExecutor.start`)
+   **+ the now-dead `JobRequest.TranscriptionPipeline request`
+   construction** (only the deleted legacy branch consumed it — verified
+   by method-scoped grep: the new-path branch builds its own request via
+   the adapter). New-path `submitReprocess` route is unconditional.
+5. The 5 predicate-helper boolean conjuncts: `if
+   (!USE_LEGACY_RECORDING_DRIVE && pipelineBinder != null)` → `if
+   (pipelineBinder != null)`. The legacy `recordingStateController`
+   fallback in each helper is **kept** — it is genuinely reachable in
+   the pre-bind window (`pipelineBinder == null`), NOT dead code; the
+   prompt scopes deletion to the dead legacy *branches*, and per its
+   STOP directive reachable code is not deleted. (RenderBackend/legacy-
+   controller retire is Theme-C/C3 scope per C5-IMPL-2, not C7.)
+6. The 6 now-stale `USE_LEGACY_RECORDING_DRIVE` mentions in comments /
+   KDoc (IME section comment + the 3 Kotlin doc refs + the
+   resolver-bind comment) rewritten to describe the new sole-driver
+   reality (required for the AC-10 `grep app/src/main → ZERO` invariant).
+
+**RESUME carve-out (NOT deleted, NOT fenced, NOT rerouted):** both
+`if (USE_LEGACY_RECORDING_DRIVE)` and `else` branches in `startResumeJob`
+were byte-identical `JobExecutor.INSTANCE.start(this, request)` calls.
+Collapsing the dead `if/else` to the single unconditional call they
+both contained is exactly behaviour-preserving and is the
+carve-out-mandated treatment ("leave the resume path exactly as it
+is"). RESUME stays legacy `JobExecutor.start`, unconditionally. The
+comment was rewritten to record the carve-out (no `USE_LEGACY` ref).
+
+**AC-10 single-architecture verdict: GREEN — sole driver confirmed.**
+- **Fresh recording:** the orchestrator (`startRecording()` →
+  `dispatch(StartRecording)`, `stopRecording()` →
+  `dispatch(StopRecordingAndSend)`) is the **sole** driver. The legacy
+  `recordingStateController.startRecording/stopRecording` record-button
+  branches are deleted; no user record-button action starts a legacy
+  pipeline.
+- **Reprocess:** the orchestrator C3 adapter (`submitReprocess`) is the
+  **sole** driver; the legacy IME `JobExecutor.start` reprocess site is
+  deleted.
+- **RESUME:** the **only** surviving IME `JobExecutor.start` driven by a
+  recording-class user action — single-dispatch, no orchestrator
+  equivalent (documented exception, C6-IMPL-2). Confirmed.
+- **Imported-audio-file** (`onStartInputView` → `Pref.TranscriptionAudioFile`):
+  a second surviving `JobExecutor.start` (`:2554`) — see C7-IMPL-1. It
+  is single-dispatch (a one-shot Settings action cleared at
+  `onStartInputView:1958`, not the record button); no double-dispatch
+  with the orchestrator recording path. AC-10's "no code path starts
+  BOTH a legacy and a new pipeline for the same user action" holds.
+
+**RESUME-only legacy survivor?** Not strictly — there are **2**
+surviving IME `JobExecutor.start` sites: RESUME (carve-out, expected)
+**and** the imported-audio-file path (`:2554`, C7-IMPL-1, a
+pre-existing C5-overlooked gap, NOT a C7 regression). Both are
+single-dispatch and orthogonal to the recording-drive cutover; neither
+violates AC-10. The C7 prompt expected RESUME to be the only survivor;
+the import path is the documented deviation below.
+
+**Files created/modified (production, Commit 1):**
+- `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java`
+  (constant+Javadoc deleted; `startRecording`/`stopRecording` legacy
+  branches + `useBt` deleted; fresh `runTranscriptionViaOrchestrator`
+  legacy guard collapsed to unconditional `JobExecutor.start` for the
+  still-live import path [C7-IMPL-1]; RESUME `if/else` collapsed to the
+  byte-identical unconditional call; REPROCESS legacy branch + dead
+  `request` deleted, `submitReprocess` unconditional; 5 predicate-helper
+  boolean conjuncts removed; section comment rewritten)
+- `app/src/main/java/net/devemperor/dictate/core/ImePipelineConfigResolver.kt`
+  (stale `USE_LEGACY_RECORDING_DRIVE` throw-message clause removed)
+- `app/src/main/java/net/devemperor/dictate/core/PipelineRunnerSubsystemAdapter.kt`
+  (stale `USE_LEGACY_RECORDING_DRIVE` KDoc sentence removed)
+- `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt`
+  (stale `USE_LEGACY_RECORDING_DRIVE` comment sentence removed)
+
+**Files in chunk-scope:** `DictateInputMethodService.java` (Epic §4
+B3-final / the C7 prompt). The 3 Kotlin doc-only edits are
+in-scope-by-necessity: the AC-10 acceptance grep is
+`grep app/src/main → ZERO`, which fails on a stale doc string anywhere;
+removing the now-false references is required to satisfy the stated
+invariant (no behaviour change — comment/KDoc text only).
+**Files outside chunk-scope (drift):** none (the Kotlin edits are
+doc-only and required by the chunk's own acceptance grep).
+
+**Plan deviations:**
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Fresh-recording `JobExecutor.start` (`:2596`→`:2554`) **kept (made unconditional), NOT deleted** | C7 prompt "DELETE: the fresh-recording legacy branch … keep ONLY the new-path `pipelineBinder.dispatch(StartRecording...)` else-branch unconditionally" + C7 carve-out blockquote | The C7 prompt's premise — "the new path dispatches `StartRecording`/`StopRecordingAndSend` so `:2596` is dead" — and the C5/C6 grep tables' claim that `runTranscriptionViaOrchestrator` "is unreachable on new path — only the legacy `onRecordingCompleted` callback reaches it" are **incomplete**. `runTranscriptionViaOrchestrator()` has a **second, still-live caller**: `onStartInputView():1959` — the Settings *imported-audio-file transcription* feature (`Pref.TranscriptionAudioFile`). That path has no recording FSM (the file already exists) and the orchestrator exposes **no "transcribe a pre-existing file" entry-point**, so the legacy `JobExecutor.start` is its ONLY working route. The actual else-branch is also NOT a `dispatch(StartRecording)` (the prompt assumed it was) — it is a `Log.w` + `uiController.stopPipeline()` no-op. Following the literal instruction (keep only the no-op else-branch) would **silently break imported-audio-file transcription** (AC-9 "no net deletions of behaviour coverage" regression). Per the prompt's explicit STOP directive ("If a 'dead' branch turns out to still be reachable, STOP and flag — do not delete reachable code") + AGENT-CONTEXT D7 (reachable "dead" branch → don't delete, flag): the `JobExecutor.start` was kept and made **unconditional** (the dead `if/else` boolean + the now-redundant no-op else-arm — which only existed as the double-dispatch defence for the now-removed boolean window — were removed). | Theme C: routing imported-audio-file transcription through the orchestrator is a NEW `RecordingAction`/`PipelineAction` + reducer arm (an architecture change), beyond C7's pure-deletion scope. The legacy `recordingStateController` controllers must NOT be retired by a later C-block until this path has an orchestrator route (a residual live consumer of the legacy pipeline trigger remains). The single-architecture invariant (AC-10) is **structurally not yet fully met for the import-file action** — flagged C7-IMPL-1. | inline-fixed (mid-size: collapsed the dead boolean guard, kept the reachable call) → marker `plan-deviation-resolved`; **plus** Critical architecture issue C7-IMPL-1 (`architecture-conflict`) for orchestrator routing — the *deletion* could not proceed for this site, which is a plan-premise conflict, not just a deviation |
+| REPROCESS dead `JobRequest request` construction also deleted | C7 prompt "Any now-dead helper/field that ONLY the deleted legacy branches used (verify each is truly unused before deleting — grep)" | The reprocess `JobRequest.TranscriptionPipeline request` (`:3370-3383` pre-C7) was consumed **only** by the deleted legacy `JobExecutor.start` (method-scoped grep confirmed: the new-path branch builds its own request inside `submitReprocess`). Left in place it is an unused local (dead code). | none — pure dead-code removal local to `handleReprocessSend` | inline-fixed (small + locally decidable) |
+| RESUME `if/else` collapsed to one unconditional call | C7 carve-out ("Just leave the resume path exactly as it is. Do NOT fence it, do NOT delete it") | Both branches were byte-identical `JobExecutor.INSTANCE.start(this, request)`. With the boolean deleted the dead `if/else` has no meaning; collapsing to the single call they both contained is exactly behaviour-preserving and is the only way to "leave the resume path exactly as it is" once the boolean (which the carve-out itself says C7 removes) is gone. | none — RESUME behaviour byte-identical; AC-10 single-dispatch holds | inline-fixed (small: mechanical, behaviour-preserving) |
+
+#### Plan-Correctness Fix (B2-C7-B3-IMPL-PLAN-FIX)
+
+Plan-requirement check (C7 prompt DELETE list + AC-10 + carve-out + AFTER-grep):
+
+| Requirement | Status |
+|---|---|
+| Delete `USE_LEGACY_RECORDING_DRIVE` constant decl | ✓ |
+| `grep -rn USE_LEGACY_RECORDING_DRIVE app/src/main` → ZERO | ✓ (incl. 3 Kotlin doc refs — required by the acceptance grep) |
+| Delete fresh-recording legacy branch; new path unconditional | △ — the record-button fresh path (`startRecording`/`stopRecording` legacy branches) **is** deleted (orchestrator sole driver). The `:2596` `JobExecutor.start` is **kept unconditional** because it is reachable via the imported-audio-file path — STOP-directive honoured; flagged C7-IMPL-1 (Critical, `architecture-conflict`). |
+| Delete reprocess legacy branch; C3-adapter route unconditional | ✓ (+ dead `request` removed) |
+| RESUME site untouched (carve-out) | ✓ (byte-identical branches collapsed; behaviour-preserving; not fenced/deleted/rerouted) |
+| Now-dead helpers/fields removed (verified unused) | ✓ (`useBt`, reprocess `request`) |
+| No `if (false)` / dead-branch residue | ✓ |
+| AC-10: orchestrator sole driver for fresh-record + reprocess | ✓ (record-button + reprocess); RESUME + import-file are documented single-dispatch survivors |
+| `./gradlew assembleDebug` green | ✓ |
+| `./gradlew test` green (no real non-R-7 regression) | ✓ (see Tests subsection) |
+| `DictateInputMethodService.java` stays Java | ✓ (edited in place, not converted) |
+
+**Files modified in this step:** none (Step 1 deletion was scoped; the
+fresh-site deviation is documented + flagged C7-IMPL-1, not silently
+re-deleted).
+**Files outside plan-prescribed scope (drift):** none.
+
+#### Self-Code Fix (B2-C7-B3-IMPL-CODE-FIX)
+
+Knowledge skills consulted: none load-bearing — this is a pure-deletion
+chunk (no new patterns introduced; `knowledge-reference` plugin/envelope
+patterns N/A to dead-code removal). Aspects: dead-code removal is the
+entire chunk (DRY/dead-code ✓ — the dead `useBt`/`request` locals +
+no-op else-arm removed, not left dangling); naming ✓ (no new
+identifiers); comments ✓ — the rewritten comments explain the *new*
+WHY (orchestrator sole driver; the RESUME carve-out; the C7-IMPL-1
+import-path constraint) rather than restating code or leaving stale
+references to the deleted switch; no `!!`/unchecked casts introduced
+(none touched). The kept `pipelineBinder != null` predicate-helper
+fallbacks are not a smell — they are the genuine pre-bind reachability
+guard (documented inline). No additional delegated items beyond
+C7-IMPL-1.
+
+**Files modified in this step:** none beyond Step 1 (comment rewrites
+were applied during Step 1 as the dead code was removed).
+**Files outside chunk-scope (drift):** none.
+
+> **Reconcile Issue Index:** **C6-IMPL-2 → fixed** (RESUME correctly
+> preserved — the carve-out was honoured: `startResumeJob`'s
+> `JobExecutor.start` survives unconditionally, not fenced/deleted/
+> rerouted). New issue **C7-IMPL-1** (Critical, `architecture-conflict`)
+> raised — see the Issue table below and the Issue Index.
+
+**Issues:**
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| C7-IMPL-1 | **Critical** | Imported-audio-file transcription (`onStartInputView:1959` → `runTranscriptionViaOrchestrator()` → `JobExecutor.INSTANCE.start`, `DictateInputMethodService.java:2554`) has **no orchestrator route**. The C7 prompt + the C5/C6 grep tables assumed `runTranscriptionViaOrchestrator` was dead-on-new-path ("only the legacy `onRecordingCompleted` callback reaches it") — they overlooked the `onStartInputView` Settings-import caller. The fresh `JobExecutor.start` was therefore kept (made unconditional) rather than deleted, so AC-10's single-architecture invariant is **structurally not yet met for the imported-audio-file user action** (a legacy `JobExecutor.start` pipeline still drives it; there is no `DictateOrchestrator` equivalent — the orchestrator exposes no "transcribe a pre-existing file" entry-point). Deleting it would silently break the feature (AC-9 behaviour-coverage regression). Routing it through the orchestrator needs a new `RecordingAction`/`PipelineAction` + reducer arm — an architecture change beyond C7's pure-deletion scope. **Also blocks the later dead-controller/legacy-pipeline retire (Theme C): a residual live consumer of the legacy `JobExecutor.start` trigger remains, so the legacy pipeline trigger cannot be fully retired until this path is migrated.** | delegated-to-orchestrator (`architecture-conflict`; `blocks-following-chunks` — Theme-C legacy-pipeline-trigger retire) | Pre-existing C5-overlooked gap surfaced by C7's reachability audit; an orchestrator-route is an architecture addition the orchestrator must scope/route (mid-chunk-triage or a Theme-C/follow-up block), not an inline IMPL fix. C7's pure-deletion mandate cannot proceed for this one site without breaking a live feature. |
+
+**Overlooked / Known Gaps:**
+- **C7-IMPL-1** (above) — the single, load-bearing finding. The
+  imported-audio-file path is the reason 2 (not 1) IME
+  `JobExecutor.start` sites survive; it must be routed through the
+  orchestrator before the legacy pipeline trigger can be fully retired
+  (Theme C / follow-up). The C7 deletion of the record-button fresh +
+  reprocess legacy branches + the boolean is complete and correct;
+  only this one site is held back, with rationale.
+- The legacy `recordingStateController` itself (and its
+  animation/amplitude/`onRecordingCompleted` UI sites) is NOT in C7's
+  deletion scope (C5-IMPL-2 — Theme-C/C3 dead-controller retire). The
+  predicate-helper legacy fallbacks are kept for the genuine pre-bind
+  reachability window (not dead code).
+- Manual device E2E (two-keyboard survival, FGS) not run (no device) —
+  covered by the C6-D2pre RE-GATE GREEN that authorised C7 + the
+  auto-tier below.
+
+**Commit boundaries (orchestrator splits — lists disjoint;
+**Commit 1 separately committed for git-revert isolation, Epic §6.2
+invariant 3**):**
+- **Commit 1 (production):**
+  `core/DictateInputMethodService.java`,
+  `core/ImePipelineConfigResolver.kt`,
+  `core/PipelineRunnerSubsystemAdapter.kt`,
+  `core/DictatePipelineService.kt`
+- **Commit 2 (tests):** **none** — see Tests subsection (no test-contract
+  update was needed; C5 wrote no boolean-toggle test cases, so there is
+  nothing to convert/remove and no new test file). The deletion is
+  validated by the existing, unchanged new-path coverage staying green.
+
+#### Tests (B2-C7-B3-IMPL-TEST) + Test-Review (B2-C7-B3-IMPL-TEST-FIX)
+
+**Test-contract update note (expected, documented — NOT a regression):**
+The C7 prompt anticipated converting/removing "the C5
+`ImeRecordingDriveCutoverTest` boolean-toggle cases". On inspection
+**no such cases exist**: C5's test-review explicitly bounded its tests
+to the new-path surface (StartRecording→Active+notification,
+Pause/Resume, Cancel→dismiss, StopRecordingAndSend→resolver, seamless
+hand-off) — `ImeRecordingDriveCutoverTest.kt` never sets
+`USE_LEGACY_RECORDING_DRIVE=true` and never reflects/toggles it (grep:
+zero `USE_LEGACY`/`legacy`/`toggle`/reflection in the file). It already
+tests the default-false path, which C7 makes the **only** path — so the
+existing assertions are exactly the "assert the unconditional new path"
+coverage the prompt asks for, with **no edit required**. A repo-wide
+`grep -rn USE_LEGACY_RECORDING_DRIVE app/src/test` returns only a single
+**doc-comment** in `DictateCutoverE2ETest.kt:37` (descriptive prose, no
+compile dependency) — left as-is (it correctly describes the new-path
+intent; not a stale toggle reference). No test file changed → Commit 2
+is empty for this pure-deletion chunk.
+
+**Test-Run-Result:** `./gradlew testDebugUnitTest --rerun-tasks` (fresh
+full suite, no cache) → **1038 tests, 1037 pass, 1 fail**. The single
+failure is `LegacyAudioFileMigrationTest > run promotes recoverable
+legacy-path sessions to FAILED` — the **documented R-7 order-dependent
+shared-singleton pollution flake** named explicitly in the C7 prompt's
+acceptance ("`LegacyAudioFileMigrationTest`×1 … is NOT a regression: it
+fails only in uncached full-runs, passes 100% isolated"). **Confirmed
+not a C7 regression by isolated re-run:** `./gradlew testDebugUnitTest
+--rerun-tasks --tests "*.LegacyAudioFileMigrationTest"` → **BUILD
+SUCCESSFUL** (100% pass isolated). C7's diff touches zero
+migration/DB/JobExecutor production files (pure IME dead-branch deletion
++ Kotlin doc-comment edits) — it causally cannot introduce migration
+pollution. **No OTHER failure** (the prompt's real-regression trigger).
+AC-9 regression invariant holds: 1037 genuine passes ≫ ~946 baseline,
+no net behaviour-coverage deletion (the import-file path's coverage is
+preserved by keeping its `JobExecutor.start` — C7-IMPL-1).
+`./gradlew assembleDebug` → BUILD SUCCESSFUL.
+
+**Code-bugs found while writing/reviewing tests:** none (no test edits;
+pure-deletion chunk — the existing new-path tests are the deletion's
+validation and stayed green).
+
+#### Mid-Chunk-Triage *(not armed for C7 by prompt; finding raised for orchestrator routing)*
+
+C7-IMPL-1 is Critical with `architecture-conflict` + a
+`blocks-following-chunks` characteristic (the Theme-C legacy-pipeline-
+trigger retire cannot complete while a live consumer of
+`JobExecutor.start` remains). Per AGENT-CONTEXT, the IMPL agent flags;
+the orchestrator decides whether to trigger mid-chunk-triage. The C7
+*deletion mandate itself is complete* for everything it can safely
+delete (the boolean, the record-button fresh legacy branches, the
+reprocess legacy branch + dead locals); only the single import-file
+`JobExecutor.start` is held back, with full rationale + a clear
+orchestrator-route recommendation (new `RecordingAction`/`PipelineAction`
++ reducer arm — a Theme-C/follow-up architecture addition, not an inline
+IMPL fix).
 
 ---
 

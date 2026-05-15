@@ -291,9 +291,7 @@ class DefaultPipelineConfigResolver(
  * **Fallback safety (Epic §6.2).** When no IME resolver is registered
  * (service running headless, IME not yet bound, or a future caller),
  * `resolveFresh` falls through to [DefaultPipelineConfigResolver] which
- * **throws** — surfacing beats a silently-wrong `JobRequest` (R-1). The
- * legacy IME path stays authoritative behind
- * `USE_LEGACY_RECORDING_DRIVE` until C6 signs the new path green.
+ * **throws** — surfacing beats a silently-wrong `JobRequest` (R-1).
  *
  * @param fallback the C3 baseline resolver used when no IME resolver is
  *   registered.

@@ -205,6 +205,18 @@ class DictatePipelineService : Service() {
     private lateinit var overlayPermissionObserverImpl: OverlayPermissionObserver
 
     /**
+     * Tracks whether [overlayBackendImpl] is currently registered with
+     * the [KeyboardLayoutManager]. The collector below flips this on
+     * the Triangle-FSM transitions (T1–T7); the boolean prevents a
+     * duplicate `attachBackend` (which raises `IllegalStateException`)
+     * and a no-op `detachBackend` per state-emit.
+     *
+     * Accessed only from the single state-collect coroutine
+     * (`Dispatchers.Main.immediate`), so no synchronisation is needed.
+     */
+    private var overlayBackendAttached: Boolean = false
+
+    /**
      * Service-owned [ModuleServices] DI container. Promoted from a
      * local `val` to a field in C15 so the IME can hand the same
      * reference to `ImeViewBackend` (its `actionResolver`s need
@@ -504,7 +516,29 @@ class DictatePipelineService : Service() {
         )
         serviceScope.launch {
             orchestrator.state.collect { state ->
-                keyboardLayoutManagerImpl.onStateChanged(state)
+                // C18 — Triangle-FSM ↔ OverlayBackend attach/detach
+                // (Spec 3 §6 + §7.2 + ADR-0005). The manager owns the
+                // backend list; we toggle the OverlayBackend membership
+                // on viewMode-axis transitions BEFORE forwarding the
+                // state so the freshly-attached backend sees its first
+                // render with the correct snapshot.
+                //
+                // The whole body is wrapped: a render exception in ONE
+                // backend (e.g. a transient inflate failure on the
+                // overlay window) must not cancel the state-collect
+                // coroutine — that would silently freeze the
+                // notification, DB, and every other state subscriber
+                // for the rest of the process lifetime. C18 is the
+                // first chunk that attaches the OverlayBackend to the
+                // live manager, so this guard lands here. Per-emit
+                // isolation keeps the pipeline alive; the next emit
+                // re-attempts the render via the manager's fan-out.
+                try {
+                    syncOverlayBackendAttachment(state.viewMode)
+                    keyboardLayoutManagerImpl.onStateChanged(state)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "state-collect render pass failed (isolated, pipeline continues)", t)
+                }
             }
         }
 
@@ -514,10 +548,13 @@ class DictatePipelineService : Service() {
         //
         // The Service owns the WindowManager reference so the same
         // OverlayBackend instance survives IME-View recreation
-        // (rotation, theme switch). NOT attached to the manager yet —
-        // C18 wires the attach into the ViewMode-transition logic so
-        // the window only appears on user-toggle (WIDGET) or auto
-        // (HOVER, ADR-0005).
+        // (rotation, theme switch). The backend is attached/detached
+        // reactively by [syncOverlayBackendAttachment] in the
+        // state-collect coroutine above (C18, Spec 3 §6 + §7.2,
+        // ADR-0005) — the window only appears on user-toggle (WIDGET)
+        // or auto (HOVER). The default constructor wires
+        // DefaultOverlayPositionMapper + DefaultOverlayDragControllerFactory
+        // (both `ctx`-bound, Spec 3 §4.6 + §4.7).
         //
         // The permission gate + observer are constructed **before** the
         // backend so the backend's `permissions` parameter wires through
@@ -562,6 +599,77 @@ class DictatePipelineService : Service() {
         // so a repeat boot with the same value produces a Rejected
         // outcome rather than a cascade.
         overlayPermissionObserverImpl.init()
+    }
+
+    /**
+     * Wire the Triangle-FSM (ADR-0005) into the [OverlayBackend]'s
+     * attach/detach lifecycle (Spec 3 §6 + §7.2).
+     *
+     * The [KeyboardLayoutManager] already picks `OVERLAY_5BUTTON` for
+     * WIDGET / HOVER and routes the render-tick to backends whose
+     * [net.devemperor.dictate.state.layout.RenderBackend.backendType]
+     * matches. But the manager only renders to **attached** backends —
+     * a permanently-attached OverlayBackend would keep a
+     * `WindowManager` view alive in KEYBOARD mode. So the backend's
+     * membership is toggled per viewMode-axis transition:
+     *
+     * | Transition | Action |
+     * |------------|--------|
+     * | T1 KEYBOARD → WIDGET | attach (permission-gated by the backend's own render guard) |
+     * | T2 WIDGET → KEYBOARD | detach |
+     * | T3 KEYBOARD → HOVER  | attach |
+     * | T4 WIDGET → HOVER    | no-op (already attached) |
+     * | T5 HOVER → KEYBOARD  | detach |
+     * | T6 HOVER → WIDGET    | no-op (already attached) |
+     * | T7 HOVER → KEYBOARD (pipeline-done cascade) | detach (T5-equivalent) |
+     *
+     * The classification collapses to a single rule: **attach iff
+     * `viewMode != KEYBOARD`**. The overlay window is the union of
+     * WIDGET + HOVER (Spec 3 §3.1 — both render `OVERLAY_5BUTTON`);
+     * KEYBOARD is the only mode that needs the overlay torn down. T4
+     * and T6 stay in the overlay union so no churn happens; T7 is
+     * structurally identical to T5 (both land on KEYBOARD) so it needs
+     * no special arm — the "Geist-Widget" structural protection is
+     * already in `ViewModeModule.reduce` (the cascade settles
+     * `viewMode = KEYBOARD`, this collector then detaches).
+     *
+     * **Permission gate (T1 / T3):** attaching does **not** force the
+     * window open — [OverlayBackend.render] bails at its
+     * `state.overlay.hasPermission == false` guard (Spec 3 §5.4). So a
+     * permission-less attach is a cheap no-op; the backend simply never
+     * inflates. This keeps the permission check single-sourced in the
+     * backend's render path (no duplicate `Settings.canDrawOverlays`
+     * read here).
+     *
+     * No-op when the overlay backend is unavailable (a Service without
+     * a `WindowManager`, e.g. Robolectric isolated process — see
+     * [onCreate] Step 8).
+     *
+     * @see docs/decisions/0005-ui-triangle-fsm-keyboard-widget-hover.md
+     * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §6 §7.2
+     */
+    private fun syncOverlayBackendAttachment(viewMode: net.devemperor.dictate.state.ViewMode) {
+        val backend = overlayBackendImpl ?: return
+        val shouldBeAttached = viewMode != net.devemperor.dictate.state.ViewMode.KEYBOARD
+        if (shouldBeAttached == overlayBackendAttached) return
+
+        if (shouldBeAttached) {
+            // Flip the bookkeeping bit FIRST: `attachBackend` performs
+            // an immediate first-render, and a backend whose first
+            // render throws (e.g. a transient inflate failure) must
+            // still count as attached so the matching detach fires on
+            // the next KEYBOARD transition. Without this ordering a
+            // render-exception (re-thrown out of `attachBackend`,
+            // isolated by the collector's catch) would strand the
+            // backend in the manager's list with
+            // `overlayBackendAttached == false`, and the cleanup
+            // detach would never run (window leak).
+            overlayBackendAttached = true
+            keyboardLayoutManagerImpl.attachBackend(backend)
+        } else {
+            overlayBackendAttached = false
+            keyboardLayoutManagerImpl.detachBackend(backend)
+        }
     }
 
     /**
@@ -957,12 +1065,11 @@ class DictatePipelineService : Service() {
 
         /**
          * Service-owned [OverlayBackend] (Spec 3 §4.2). Constructed in
-         * [onCreate] but NOT attached to the
-         * [keyboardLayoutManager] — C18 wires the attach into the
-         * ViewMode-transition logic (KEYBOARD ↔ WIDGET / HOVER per
-         * ADR-0005). `null` when the Service runs in an environment
-         * without a `WindowManager` (e.g. Robolectric isolated
-         * process).
+         * [onCreate]; attached/detached reactively by
+         * [syncOverlayBackendAttachment] on the Triangle-FSM
+         * transitions (KEYBOARD ↔ WIDGET / HOVER per ADR-0005). `null`
+         * when the Service runs in an environment without a
+         * `WindowManager` (e.g. Robolectric isolated process).
          */
         val overlayBackend: OverlayBackend?
             get() = overlayBackendImpl

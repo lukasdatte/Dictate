@@ -1,6 +1,7 @@
 package net.devemperor.dictate.state.render.overlay
 
 import android.content.Context
+import android.content.res.Configuration
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -9,6 +10,7 @@ import net.devemperor.dictate.R
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.ModuleServices
+import net.devemperor.dictate.state.OverlayState
 import net.devemperor.dictate.state.layout.BackendType
 import net.devemperor.dictate.state.layout.ButtonSlot
 import net.devemperor.dictate.state.layout.LayoutMode
@@ -38,10 +40,21 @@ import net.devemperor.dictate.state.render.applySlotToView
  *  3. **Attach** — inflate + `WindowManager.addView` on first render.
  *  4. **Apply slots** — walk every slot in `mode.rows` and call
  *     [applySlotToView] (visibility / icon / text / enabled / alpha).
- *  5. **Apply position** — write the position-axis (
- *     `state.overlay.position{Portrait,Landscape}{X,Y}`) into the
- *     `WindowManager.LayoutParams`. Today (C16) this is a no-op
- *     placeholder; the live drag-and-position mapping lands in C18.
+ *  5. **Apply position** — de-normalise the position-axis (
+ *     `state.overlay.position{Portrait,Landscape}{X,Y}`) via the
+ *     [OverlayPositionMapper] and write the pixel result into the
+ *     `WindowManager.LayoutParams` (C18). Short-circuits during an
+ *     active user drag so the finger position wins (Spec 3 §4.6).
+ *
+ * # Drag-lifecycle (C18, Spec 3 §4.6 + §11.5)
+ *
+ * The root view carries an [OverlayDragController] (wired once per
+ * inflate). Touches below the drag threshold propagate to the button
+ * children (clicks fire); above it the controller takes over,
+ * `WindowManager.update`s the params per `ACTION_MOVE`, and on drag-end
+ * dispatches `Action.OverlayAction.UpdateOverlayPosition` (normalised
+ * `[0..1]`, single-dispatch F-8). A mid-drag [detach] persists the
+ * final position before releasing the listener (R.18).
  *
  * # Click-listener single-wire (L8, Spec 3 §4.2)
  *
@@ -55,10 +68,10 @@ import net.devemperor.dictate.state.render.applySlotToView
  *
  * - **DIP**: `WindowManager` is wrapped in [OverlayWindow] for JVM
  *   testability. The factory pattern is used for the layout-params
- *   builder ([OverlayLayoutParamsFactory]) so flag combinations can be
- *   asserted in isolation. The drag-handler and position-mapper
- *   (Spec 3 §4.6 + §4.7) are deferred to C18 — their factories live
- *   in their own files there.
+ *   builder ([OverlayLayoutParamsFactory]), the position-mapper
+ *   ([OverlayPositionMapper]) and the drag controller
+ *   ([OverlayDragControllerFactory]) so each can be asserted in
+ *   isolation or faked in tests (Spec 3 §4.6 + §4.7).
  *
  * - **SRP**: Backend handles render-loop orchestration only. Window
  *   lifecycle idempotency lives in [OverlayWindow]; layout params live
@@ -80,9 +93,14 @@ import net.devemperor.dictate.state.render.applySlotToView
  * @property overlayWindow `WindowManager` indirection — production
  *   wires [AndroidOverlayWindow]; tests wire a fake.
  * @property permissions permission + onboarding gate (Spec 3 §5.1).
- *   Reserved for the C17 wire-up; the C16 render path reads
- *   `state.overlay.hasPermission` directly per Issue 3.1.3.
+ *   The render path reads the mirrored `state.overlay.hasPermission`
+ *   axis directly (Issue 3.1.3); the gate is held for non-reducer
+ *   surfaces (kept as a constructor dependency for the C17 wiring).
  * @property layoutParamsFactory builds [WindowManager.LayoutParams].
+ * @property positionMapper de-/normalises `[0..1]` ↔ pixel position;
+ *   the single SoT for the conversion (Spec 3 §4.7).
+ * @property dragControllerFactory builds the per-inflate
+ *   [OverlayDragController] (Spec 3 §4.6) — fakeable for K-1 tests.
  *
  * @see net.devemperor.dictate.state.layout.RenderBackend
  * @see net.devemperor.dictate.state.render.overlay.OverlayWindow
@@ -97,6 +115,23 @@ class OverlayBackend(
     @Suppress("unused") private val permissions: OverlayPermissionGate,
     private val layoutParamsFactory: OverlayLayoutParamsFactory =
         DefaultOverlayLayoutParamsFactory(ctx),
+    private val positionMapper: OverlayPositionMapper =
+        DefaultOverlayPositionMapper(ctx),
+    /**
+     * Factory for the drag controller — receives the inflated root
+     * view, the [OverlayWindow] wrapper, a holder for the current
+     * [WindowManager.LayoutParams], the [OverlayPositionMapper], and a
+     * persist sink. Tests inject a fake to assert on drag events;
+     * production wires [DefaultOverlayDragController].
+     *
+     * The factory's `paramsHolder` lambda must return the backend's
+     * current [WindowManager.LayoutParams] reference (not a copy) —
+     * the controller mutates `.x` / `.y` in place per `ACTION_MOVE` so
+     * the next render's `applyPosition` reads the post-drag pixels
+     * before normalising.
+     */
+    private val dragControllerFactory: OverlayDragControllerFactory =
+        DefaultOverlayDragControllerFactory(ctx),
 ) : RenderBackend {
 
     override val backendType: BackendType = BackendType.OVERLAY_WINDOW
@@ -128,6 +163,22 @@ class OverlayBackend(
 
     /** Active [LayoutMode] — looked up by [currentSlot]. */
     private var modeRef: LayoutMode? = null
+
+    /**
+     * Active drag controller — `null` outside an attached lifecycle.
+     * Created in [inflateAndAttach] once the root view exists.
+     */
+    private var dragController: OverlayDragController? = null
+
+    /**
+     * The last normalised position (`(portrait?, normX, normY)`) the
+     * backend pushed through [overlayWindow.update]. Used to dedup
+     * `applyPosition` calls per render — comparing against
+     * [WindowManager.LayoutParams.x] / `y` directly would force a
+     * re-emit every time the drag controller had moved the params
+     * mid-drag.
+     */
+    private var lastAppliedPosition: AppliedPosition? = null
 
     // ─── RenderBackend implementation ────────────────────────────────
 
@@ -184,12 +235,12 @@ class OverlayBackend(
         // 4 — Slot apply.
         applySlots(state, mode)
 
-        // 5 — Position apply (placeholder for C18). Today this is a
-        //     no-op — the WindowManager LayoutParams keep `x=0, y=0`
-        //     and the overlay docks to the top-left corner. C18 wires
-        //     the position mapper + drag handler that translate
-        //     normalised [0..1] state into pixels.
-        applyPositionPlaceholder()
+        // 5 — Position apply — de-normalises the persisted [0..1]
+        //     coordinates from `state.overlay.position{Portrait,Landscape}{X,Y}`
+        //     into pixels and writes them into the WindowManager params.
+        //     Short-circuits during an active drag so the user's finger
+        //     position wins over the (stale) normalised state axis.
+        applyPosition(state.overlay)
     }
 
     // ─── Internal — render helpers ───────────────────────────────────
@@ -247,6 +298,39 @@ class OverlayBackend(
         buttonViews = views
 
         wireStaticOverlayHandlers()
+        wireDragController(view)
+    }
+
+    /**
+     * Attach the drag controller to the overlay root. Per Spec 3 §4.6
+     * the listener lives on the **root view** so the entire window is
+     * draggable; button-clicks still propagate by the controller's
+     * threshold-based touch-routing (Spec 3 §11.5.2).
+     */
+    private fun wireDragController(view: View) {
+        val controller = dragControllerFactory.create(
+            view = view,
+            window = overlayWindow,
+            paramsHolder = { currentParams },
+            positionMapper = positionMapper,
+            onPositionPersist = { normX, normY ->
+                val portrait = isPortraitOrientation()
+                onAction?.invoke(
+                    Action.OverlayAction.UpdateOverlayPosition(
+                        portrait = portrait,
+                        x = normX,
+                        y = normY,
+                    ),
+                )
+                // Update the cache so the next render's `applyPosition`
+                // recognises the new persisted value as already-applied
+                // and skips a redundant `window.update` (Spec 3 §11.5.5
+                // idempotency note).
+                lastAppliedPosition = AppliedPosition(portrait, normX, normY)
+            },
+        )
+        controller.attach()
+        dragController = controller
     }
 
     /**
@@ -277,30 +361,114 @@ class OverlayBackend(
             ?.firstOrNull { it.logicalId == id }
 
     /**
-     * C16 placeholder — actual position-mapping lands in C18.
+     * Resolve the persisted normalised position from [overlay] for the
+     * current orientation, de-normalise via [positionMapper], and push
+     * the result into [overlayWindow.update]. Cached so re-renders for
+     * the same `(orientation, normX, normY)` triple short-circuit
+     * (Spec 3 §11.5.5).
      *
-     * Reads the persisted position from `state.overlay` and (in C18)
-     * will translate it into pixel `x`/`y` via the
-     * `OverlayPositionMapper`. For now, the params hold the factory's
-     * `0, 0` defaults (top-left dock). Documented as a clearly-named
-     * placeholder so the C18 implementer has a single edit site.
+     * Three short-circuits:
+     *
+     *  1. **Active drag** — when the user's finger owns the position,
+     *     state-driven updates would yank the overlay back (Spec 3
+     *     §4.6 Issue 3.1.5).
+     *  2. **No params / no view** — defensive; should never happen
+     *     after `inflateAndAttach` because both fields land in the same
+     *     block, but the type system can't prove it.
+     *  3. **View not measured** — the mapper returns `null` while
+     *     `width == 0`. `view.post { … }` schedules a retry so the
+     *     position lands after the first layout pass (R.19 / R.20 /
+     *     Spec 3 §11.5.5).
      */
-    @Suppress("UnusedPrivateMember")
-    private fun applyPositionPlaceholder() {
-        // No-op in C16. C18 will:
-        //   1. Read state.overlay.position{Portrait,Landscape}{X,Y}.
-        //   2. Map to pixels via OverlayPositionMapper.
-        //   3. Mutate currentParams.x/y/gravity.
-        //   4. overlayWindow.update(view, currentParams).
-        // The drag handler also lives in C18; until it exists the
-        // overlay docks to the top-left corner of the screen.
+    private fun applyPosition(overlay: OverlayState) {
+        if (dragController?.isDragging() == true) return
+
+        val view = overlayView ?: return
+        val params = currentParams ?: return
+
+        val portrait = isPortraitOrientation()
+        val (normX, normY) = if (portrait) {
+            overlay.positionPortraitX to overlay.positionPortraitY
+        } else {
+            overlay.positionLandscapeX to overlay.positionLandscapeY
+        }
+
+        val cached = lastAppliedPosition
+        if (cached != null &&
+            cached.portrait == portrait &&
+            cached.normX == normX &&
+            cached.normY == normY
+        ) {
+            return
+        }
+
+        val pixels = positionMapper.normalizedToPixels(normX, normY, view)
+        if (pixels == null) {
+            // First render — view hasn't been measured yet. Retry once
+            // the first layout pass lands so the position is applied
+            // before the user notices the top-left dock (Spec 3 §4.7).
+            view.post { retryApplyPositionAfterLayout(overlay) }
+            return
+        }
+
+        val (px, py) = pixels
+        if (params.x == px && params.y == py) {
+            // No-op — params already match; just refresh the cache so
+            // a subsequent state change with the same numerics doesn't
+            // re-walk the mapper.
+            lastAppliedPosition = AppliedPosition(portrait, normX, normY)
+            return
+        }
+
+        params.x = px
+        params.y = py
+        overlayWindow.update(view, params)
+        lastAppliedPosition = AppliedPosition(portrait, normX, normY)
     }
+
+    /**
+     * `view.post` callback used by [applyPosition] when the first
+     * render runs before the view has been measured. Reads the latest
+     * snapshot from [stateRef] (in case the state moved on between the
+     * `post` and its execution) and re-routes through [applyPosition].
+     */
+    private fun retryApplyPositionAfterLayout(initialOverlay: OverlayState) {
+        val state = stateRef
+        val overlay = state?.overlay ?: initialOverlay
+        if (overlayView != null && currentParams != null) {
+            applyPosition(overlay)
+        }
+    }
+
+    /**
+     * Read the current device orientation from the bound [Context].
+     * Centralised so the drag controller and render path agree on
+     * which pref bucket to read/write (Spec 3 §11.5.6).
+     */
+    private fun isPortraitOrientation(): Boolean =
+        ctx.resources.configuration.orientation != Configuration.ORIENTATION_LANDSCAPE
 
     /**
      * Detach the overlay window + release every View reference.
      * Idempotent — calling on an already-torn-down backend is safe.
+     *
+     * The drag controller's [OverlayDragController.detach] runs
+     * **before** the window's `detach` so a mid-drag tear-down can
+     * still persist the final pixel position via [onAction] (Spec 3
+     * §4.6 Issue 3.1.5 / R.18). After the controller has flushed, the
+     * view's touch listener is cleared, the window is removed, and
+     * every cached reference is dropped.
      */
     private fun teardownOverlay() {
+        try {
+            dragController?.detach()
+        } catch (t: Throwable) {
+            // Touch-listener detach is reflective inside the View; an
+            // unexpected throw here must not block the window cleanup.
+            Log.w(TAG, "dragController.detach threw", t)
+        }
+        dragController = null
+
         val view = overlayView
         if (view != null) {
             try {
@@ -318,7 +486,20 @@ class OverlayBackend(
         buttonViews = emptyMap()
         stateRef = null
         modeRef = null
+        lastAppliedPosition = null
     }
+
+    /**
+     * Cache key for the last `applyPosition` call. `portrait` is part
+     * of the tuple because rotating the device changes which pref
+     * bucket feeds the position — the same `(normX, normY)` pair on
+     * a different orientation is a different render outcome.
+     */
+    private data class AppliedPosition(
+        val portrait: Boolean,
+        val normX: Float,
+        val normY: Float,
+    )
 
     private companion object {
         const val TAG: String = "OverlayBackend"

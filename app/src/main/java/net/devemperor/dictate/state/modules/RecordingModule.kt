@@ -173,6 +173,44 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
             val sessionId: String,
             val audioFile: File,
         ) : Effect
+
+        /**
+         * Drive the persistent FGS notification for the **recording**
+         * phase (Spec 1 §7.6 Recording-Active / Recording-Paused rows;
+         * C5 / B2-block-report C4-IMPL-1).
+         *
+         * **Why RecordingModule emits notification effects at all.**
+         * Before C5 only [PipelineModule] drove the FGS notification
+         * (it owned the only on-path lifecycle). C4 built the coordinator
+         * to render `NotificationStatus.Recording`, but no module emitted
+         * it — the recording-phase notification only existed on the
+         * legacy path. C5 flips the IME recording trigger to dispatch, so
+         * the recording FSM is now the on-path owner of the
+         * recording-phase notification and must drive the coordinator
+         * directly (the same `notificationCoordinator` subsystem
+         * [PipelineModule] uses — single coordinator, two FSM owners for
+         * their respective phases). The Recording→Pipeline hand-off is
+         * seamless: `StopRecordingAndSend` does NOT dismiss; the
+         * `EmitPipelineTrigger → TriggerPipeline` cascade has
+         * [PipelineModule] immediately re-`show()` a `Pipeline` status on
+         * the same NOTIF_ID (no dismiss/re-post flicker).
+         *
+         * `data class` — its `toString()` includes the status arg; no
+         * `reduceFailure` arm matches it (notification updates are
+         * best-effort and the coordinator already swallows `notify`
+         * failures, C4-B2).
+         */
+        data class UpdateNotification(val status: NotificationStatus) : Effect
+
+        /**
+         * Dismiss the FGS recording notification — emitted when the
+         * recording ends **without** handing off to the pipeline
+         * (`StopRecording` discard, `CancelRecording`). The
+         * `StopRecordingAndSend` arm deliberately does NOT emit this:
+         * the pipeline trigger re-`show()`s on the same id (see
+         * [UpdateNotification] KDoc).
+         */
+        data object DismissNotification : Effect
     }
 
     override fun reduce(
@@ -237,6 +275,16 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StartTimer,
                     Effect.StartAmplitudeStream,
                     Effect.StartBorderGlow,
+                    // C5 / C4-IMPL-1 — recording is now actually
+                    // capturing audio; surface the §7.6 Recording-Active
+                    // FGS notification. Emitted on Preparing → Active (not
+                    // on StartRecording → Preparing) so the notification
+                    // appears only once the recorder is confirmed alive
+                    // (a prepare failure rolls back to Idle via
+                    // reduceFailure before this fires).
+                    Effect.UpdateNotification(
+                        NotificationStatus.Recording(state.sessionId),
+                    ),
                 ),
             )
             Action.RecordingAction.CancelRecording -> TransitionResult(
@@ -244,6 +292,11 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 sideEffects = listOf(
                     Effect.ReleaseMediaRecorder,
                     Effect.DeleteAudioFile(state.audioFile),
+                    // Idempotent — Preparing never showed the recording
+                    // notification (it appears on Preparing → Active), but
+                    // cancelling mid-prepare must leave no orphan FGS
+                    // notification if a prior cycle's one lingered.
+                    Effect.DismissNotification,
                 ),
             )
             else -> null
@@ -261,6 +314,12 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.PauseTimer,
                     Effect.PauseBorderGlow,
                     Effect.StopAmplitudeStream,
+                    // C5 — §7.6 Recording-Paused row: swap the action set
+                    // to [Resume][Stopp][Senden] (same NOTIF_ID, no
+                    // dismiss/re-post).
+                    Effect.UpdateNotification(
+                        NotificationStatus.Paused(state.sessionId),
+                    ),
                 ),
             )
             Action.RecordingAction.StopRecording -> TransitionResult(
@@ -270,6 +329,9 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StopTimer,
                     Effect.StopBorderGlow,
                     Effect.StopAmplitudeStream,
+                    // Stop-without-send: recording discarded, no pipeline
+                    // hand-off — tear the notification down.
+                    Effect.DismissNotification,
                 ),
             )
             Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
@@ -297,6 +359,8 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StopBorderGlow,
                     Effect.StopAmplitudeStream,
                     Effect.DeleteAudioFile(state.audioFile),
+                    // Cancel from Active: discard + remove the notification.
+                    Effect.DismissNotification,
                 ),
             )
             else -> null
@@ -314,6 +378,11 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.ResumeTimer,
                     Effect.ResumeBorderGlow,
                     Effect.StartAmplitudeStream,
+                    // C5 — back to §7.6 Recording-Active ([Pause]…) on
+                    // resume.
+                    Effect.UpdateNotification(
+                        NotificationStatus.Recording(state.sessionId),
+                    ),
                 ),
             )
             // Issue 2.0.8 — Paused.Stop / Paused.Cancel are real reducer arms,
@@ -325,6 +394,8 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StopMediaRecorder,
                     Effect.StopTimer,
                     Effect.StopBorderGlow,
+                    // Stop-without-send from Paused: discard + dismiss.
+                    Effect.DismissNotification,
                 ),
             )
             Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
@@ -348,6 +419,8 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StopTimer,
                     Effect.StopBorderGlow,
                     Effect.DeleteAudioFile(state.audioFile),
+                    // Cancel from Paused: discard + remove the notification.
+                    Effect.DismissNotification,
                 ),
             )
             else -> null
@@ -389,6 +462,13 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 audioFile = effect.audioFile,
             ),
         )
+        // C5 — recording-phase FGS notification (Spec 1 §7.6). Same
+        // coordinator subsystem PipelineModule drives for the pipeline
+        // phase; the coordinator swallows `notify` failures (C4-B2) so a
+        // missing POST_NOTIFICATIONS grant cannot surface as an
+        // EffectFailure that cascade-cancels an active recording.
+        is Effect.UpdateNotification -> services.notificationCoordinator.show(effect.status)
+        Effect.DismissNotification -> services.notificationCoordinator.dismiss()
     }
 
     /**

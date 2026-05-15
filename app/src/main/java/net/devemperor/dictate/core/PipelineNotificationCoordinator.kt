@@ -168,6 +168,12 @@ class PipelineNotificationCoordinator(
                 .addAction(action(R.drawable.ic_baseline_pause_24, R.string.dictate_action_pause, PipelineActionRouter.ACTION_PAUSE))
                 .addAction(action(R.drawable.ic_baseline_stop_24, R.string.dictate_action_stop, PipelineActionRouter.ACTION_STOP))
                 .addAction(action(R.drawable.ic_baseline_send_24, R.string.dictate_action_send, PipelineActionRouter.ACTION_SEND))
+            // Spec 1 §7.6 Recording-Paused: the Pause button becomes
+            // Resume; Stopp/Senden stay (C5 / C4-IMPL-1).
+            is NotificationStatus.Paused -> builder
+                .addAction(action(R.drawable.ic_baseline_play_arrow_24, R.string.dictate_action_resume, PipelineActionRouter.ACTION_RESUME))
+                .addAction(action(R.drawable.ic_baseline_stop_24, R.string.dictate_action_stop, PipelineActionRouter.ACTION_STOP))
+                .addAction(action(R.drawable.ic_baseline_send_24, R.string.dictate_action_send, PipelineActionRouter.ACTION_SEND))
             is NotificationStatus.Pipeline -> builder
                 .addAction(action(R.drawable.ic_baseline_cancel_24, R.string.dictate_action_cancel, PipelineActionRouter.ACTION_CANCEL))
             NotificationStatus.OverlayPermissionRequired -> builder
@@ -181,6 +187,8 @@ class PipelineNotificationCoordinator(
             context.getString(R.string.dictate_pipeline_notif_idle)
         is NotificationStatus.Recording ->
             context.getString(R.string.dictate_notif_recording_active)
+        is NotificationStatus.Paused ->
+            context.getString(R.string.dictate_notif_recording_paused)
         is NotificationStatus.Pipeline ->
             context.getString(R.string.dictate_notif_processing)
         NotificationStatus.OverlayPermissionRequired ->

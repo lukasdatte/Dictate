@@ -310,6 +310,26 @@ interface PipelineNotificationCoordinatorSubsystem {
 sealed interface NotificationStatus {
     data object Idle : NotificationStatus
     data class Recording(val sessionId: String) : NotificationStatus
+
+    /**
+     * Recording is paused (Spec 1 §7.6 "Recording-Paused" row —
+     * `[Resume][Stopp][Senden]`). Emitted by [RecordingModule] on the
+     * `Active → Paused` FSM edge once C5 routes the IME recording-trigger
+     * through `dispatch(...)`.
+     *
+     * **Why a distinct variant (not reuse [Recording]):** §7.6 maps
+     * Recording-Active to `[Pause]…` and Recording-Paused to `[Resume]…`
+     * — the action-button set differs, so the coordinator's `when`
+     * must distinguish them. Mirrors the [Recording] shape (carries the
+     * FSM `sessionId`) so the back-channel `[Stopp]`/`[Senden]` buttons
+     * resolve identically (the reducer reads the id off `state.recording`
+     * per F-10, the buttons stay payload-less).
+     *
+     * **C4-IMPL-1 (B2 block-report):** added in C5. C4's coordinator
+     * already renders `Recording`; this completes §7.6 by adding the
+     * paused row + its emitter (the `Active → Paused` reducer arm).
+     */
+    data class Paused(val sessionId: String) : NotificationStatus
     data class Pipeline(val sessionId: String, val step: String) : NotificationStatus
 
     /**

@@ -220,6 +220,13 @@ class DefaultPipelineConfigResolver(
         audioFile: File?,
         queue: List<Int>,
         language: String?,
+    ): JobRequest.TranscriptionPipeline = buildReprocess(sessionId, audioFile, queue, language)
+
+    private fun buildReprocess(
+        sessionId: String,
+        audioFile: File?,
+        queue: List<Int>,
+        language: String?,
     ): JobRequest.TranscriptionPipeline {
         // Reprocess-staging carries its config in the action payload
         // (the staging FSM already threaded selectedLanguage /
@@ -245,4 +252,68 @@ class DefaultPipelineConfigResolver(
             /* origin */ SessionOrigin.KEYBOARD,
         )
     }
+}
+
+/**
+ * C5 — IME-faithful [PipelineConfigResolver] delegation.
+ *
+ * **The R-1 closure (C3-IMPL-1 / C3-IMPL-2, B2 block-report).** C3
+ * shipped [DefaultPipelineConfigResolver], which **throws** for the 8
+ * IME-runtime-only fresh-recording fields (`language`, `stylePrompt`,
+ * `queuedPromptIds`, `targetAppPackage`, `livePrompt`,
+ * `autoSwitchKeyboard`, `totalSteps`, `showResendButton`) because they
+ * are not reachable from the service-side composition root — they live
+ * in `DictateInputMethodService`'s `LanguageController` / `PromptService`
+ * / `PromptQueueManager` / `AutoFormattingService` / `EditorInfo` /
+ * instance flags. C5 flips the IME recording-trigger to `dispatch(...)`,
+ * so the IME now needs a typed insertion point to thread those fields
+ * onto the orchestrator path **field-for-field identical** to the
+ * legacy `DictateInputMethodService.java:2214-2230` construction
+ * (R-1: field-by-field fidelity — a dropped field silently transcribes
+ * with the wrong language / no prompts).
+ *
+ * This resolver delegates to an IME-registered [PipelineConfigResolver]
+ * when one is present (the IME installs it from `onServiceConnected`
+ * via `LocalBinder.registerPipelineConfigResolver`, snapshotting its
+ * live config at recording-trigger time), and falls back to [fallback]
+ * (the C3 [DefaultPipelineConfigResolver]) when no IME is bound.
+ *
+ * **Why a delegate and not "rebuild the adapter".** The adapter is
+ * constructed in `DictatePipelineService.onCreate` (before any IME
+ * binds) and `PipelineRunnerSubsystemAdapter.configResolver` is
+ * `private val` — immutable by design. A late-bound delegate (the same
+ * `@Volatile` provider-lambda pattern the `LocalBinder.delegate*` fields
+ * use) lets the IME supply the faithful resolver after bind without
+ * reconstructing the adapter or widening the action payload with
+ * IME-runtime config the reducer must not carry (ADR-0001 — actions are
+ * pure data, no IME-view runtime state).
+ *
+ * **Fallback safety (Epic §6.2).** When no IME resolver is registered
+ * (service running headless, IME not yet bound, or a future caller),
+ * `resolveFresh` falls through to [DefaultPipelineConfigResolver] which
+ * **throws** — surfacing beats a silently-wrong `JobRequest` (R-1). The
+ * legacy IME path stays authoritative behind
+ * `USE_LEGACY_RECORDING_DRIVE` until C6 signs the new path green.
+ *
+ * @param fallback the C3 baseline resolver used when no IME resolver is
+ *   registered.
+ * @param imeResolverProvider supplies the IME-registered resolver (or
+ *   `null` when no IME is bound). A provider-lambda so the binding stays
+ *   `@Volatile`-late-bound (mirrors `LocalBinder.delegateInputConnectionProvider`).
+ */
+class DelegatingPipelineConfigResolver(
+    private val fallback: PipelineConfigResolver,
+    private val imeResolverProvider: () -> PipelineConfigResolver?,
+) : PipelineConfigResolver {
+
+    override fun resolveFresh(sessionId: String, audioFile: File): JobRequest.TranscriptionPipeline =
+        (imeResolverProvider() ?: fallback).resolveFresh(sessionId, audioFile)
+
+    override fun resolveReprocess(
+        sessionId: String,
+        audioFile: File?,
+        queue: List<Int>,
+        language: String?,
+    ): JobRequest.TranscriptionPipeline =
+        (imeResolverProvider() ?: fallback).resolveReprocess(sessionId, audioFile, queue, language)
 }

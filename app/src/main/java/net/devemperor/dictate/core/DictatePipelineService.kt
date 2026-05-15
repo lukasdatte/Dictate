@@ -439,10 +439,22 @@ class DictatePipelineService : Service() {
         // rather than silently defaulting them (silent data loss is the
         // R-1 failure mode). applicationContext is used for
         // JobExecutor.start's Room failure-path (outlives any IME view).
+        // C5 — the resolver is a DelegatingPipelineConfigResolver: it
+        // forwards to the IME-registered resolver (installed from
+        // `onServiceConnected` via
+        // `LocalBinder.registerPipelineConfigResolver`, which snapshots
+        // the IME's live recording config field-for-field per R-1) and
+        // falls back to the C3 DefaultPipelineConfigResolver (which
+        // throws for the fresh IME-runtime-only fields) when no IME is
+        // bound. The legacy IME path stays authoritative behind
+        // USE_LEGACY_RECORDING_DRIVE until C6 (Epic §6.2).
         pipelineRunnerSubsystemAdapterImpl = PipelineRunnerSubsystemAdapter(
             context = applicationContext,
-            configResolver = DefaultPipelineConfigResolver(
-                filesDirProvider = { filesDir },
+            configResolver = DelegatingPipelineConfigResolver(
+                fallback = DefaultPipelineConfigResolver(
+                    filesDirProvider = { filesDir },
+                ),
+                imeResolverProvider = { binder.delegatePipelineConfigResolver },
             ),
         )
 
@@ -1206,6 +1218,20 @@ class DictatePipelineService : Service() {
         internal var delegateInputConnectionProvider: (() -> android.view.inputmethod.InputConnection?)? = null
 
         /**
+         * C5 — the IME-registered [PipelineConfigResolver]. Read by the
+         * [DelegatingPipelineConfigResolver] wrapping the
+         * [PipelineRunnerSubsystemAdapter]: when non-null the fresh /
+         * reprocess `JobRequest` is built from the IME's snapshotted
+         * recording config (R-1 field fidelity, C3-IMPL-1/-2); when
+         * null the C3 [DefaultPipelineConfigResolver] fallback applies
+         * (throws for fresh — surfacing beats silent data loss).
+         * `@Volatile` — set on `onServiceConnected`, cleared on unbind,
+         * read on the orchestrator dispatch thread.
+         */
+        @Volatile
+        internal var delegatePipelineConfigResolver: PipelineConfigResolver? = null
+
+        /**
          * Register the IME's [PipelineOrchestrator.PipelineCallback] as the
          * active delegate. Called from `onServiceConnected`. Pass `null` on
          * unbind to clear.
@@ -1230,6 +1256,20 @@ class DictatePipelineService : Service() {
          */
         fun registerInputConnectionProvider(provider: (() -> android.view.inputmethod.InputConnection?)?) {
             delegateInputConnectionProvider = provider
+        }
+
+        /**
+         * C5 — register the IME's [PipelineConfigResolver] so the new
+         * recording-drive path builds a `JobRequest` field-for-field
+         * identical to the legacy `DictateInputMethodService.java:2214-2230`
+         * construction (R-1 mitigation, closes C3-IMPL-1/-2). Called from
+         * `onServiceConnected`; pass `null` on unbind so the
+         * [DelegatingPipelineConfigResolver] falls back to the C3
+         * [DefaultPipelineConfigResolver] (which throws for fresh — the
+         * R-1 surfacing guard).
+         */
+        fun registerPipelineConfigResolver(resolver: PipelineConfigResolver?) {
+            delegatePipelineConfigResolver = resolver
         }
     }
 

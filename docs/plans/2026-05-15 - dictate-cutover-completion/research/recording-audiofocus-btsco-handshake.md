@@ -147,9 +147,235 @@ re-entrancy is itself an ADR-0001 §"Main-Thread Confined Dispatch"
 consequence; documented here so a future observer author does not
 re-introduce the named-transition form.
 
+## Findings (Update 2026-05-15 — Block-Validate B2-VAL-W1, F-1 + F-2)
+
+**Triggered by:** F-1 (Critical, blocks-following — BT-SCO already-connected
+hang) + F-2 (Important — audio-focus lost during `Preparing(awaitingSco)`
+never re-acquired). One topic, one coherent redesign (consolidated by
+`B2-VAL-SANITY`). **Agent-ID:** `B2-VAL-RES-1` → `B2-VAL-REPAIR-1`.
+
+This **refines, does not contradict**, the C6-W1 design above. The
+`awaitingSco` Preparing-window + the `ScoRouteResolved` edge-trigger + the
+engagement-edge detection all stay. Two precise gaps are closed.
+
+### F-1 — root cause (verified against code)
+
+`StopBluetoothSco` → `BluetoothScoManager.release()` (`:147-154`) flips the
+internal `_isScoStarted=false` but emits **no**
+`OnBluetoothScoStateChanged(Disconnected)` synchronously — the
+`SCO_AUDIO_STATE_DISCONNECTED` system broadcast is async and frequently
+never arrives in the recording's lifetime (and never in unit/Robolectric
+tests). So `audio.bluetoothSco.phase` is left **stale at `Connected`**
+from the prior BT session.
+
+Next BT recording: `RecordingStarted` → `StartBluetoothSco` →
+`BluetoothScoManager.startSco()`. If `audioManager.isBluetoothScoOn==true`
+(realistic: back-to-back BT dictations — the most common BT pattern — or
+another app/the system already holds SCO), the early-return at
+`BluetoothScoManager.kt:122-126` fires `onScoConnected()` **synchronously**
+→ `emitAction(OnBluetoothScoStateChanged(Connected))` and `return true`
+**without** arming the `postDelayed(timeoutRunnable, 2500)` (lines 131-138
+are unreachable on that branch — no timeout-recovery).
+
+`AudioModule.reduce(OnBluetoothScoStateChanged(Connected))` then hits the
+`if (newSco != state.bluetoothSco)` guard (`:104`): the phase is **already
+stale-`Connected`** ⇒ `newSco == state.bluetoothSco` ⇒ reducer returns
+`null` (Rejected) ⇒ no state write ⇒ `prev == next` ⇒ the observer's
+`justResolved = prevPhase != nextPhase` edge (`AudioModule.kt:231`) is
+`Connected == Connected` ⇒ `false` ⇒ `ScoRouteResolved` **never
+cascaded** ⇒ the deferred `AllocateMediaRecorder` never fires ⇒ recording
+silently dead in `Preparing(awaitingSco=true)`, no audio, no error, no
+timeout recovery.
+
+### F-1 — design decision: prime the SCO phase to `Waiting` on handshake start (option ii)
+
+Three options were on the table (per the consolidator):
+(i) level-trigger the deferred allocate; (ii) synchronously reset/prime
+the SCO phase on `StartBluetoothSco` so the connected broadcast is always
+a real edge; (iii) a distinct SCO-settled signal.
+
+**Chosen: (ii).** Rationale (D4 — fewest special-cases, most
+maintainable, most spec-faithful):
+
+- (iii) adds a new action/signal surface — more special-cases, rejected.
+- (i) makes the observer fire `ScoRouteResolved` on *every* dispatch
+  cycle while `Preparing && awaitingSco && phase∈{Connected,Failed}`;
+  the reducer-arm `awaitingSco` guard idempotently absorbs the
+  duplicates, but it turns a clean edge-triggered cascade into a
+  level-triggered one — noisier, and it does **not** make the SCO phase
+  a coherent state machine (the stale-`Connected`-after-stop hazard
+  remains for any *other* future SCO-phase observer).
+- (ii) makes `ScoPhase` a genuine state machine:
+  `Disconnected → Waiting → (Connected | Failed) → …`. **Every** SCO
+  handshake provably starts from `Waiting`, so
+  `OnBluetoothScoStateChanged(Connected|Failed)` is *always* a real
+  `Waiting → terminal` edge — the existing edge-trigger
+  (`prevPhase != nextPhase`) keeps working unmodified, including the
+  re-fire / duplicate-broadcast defence. One write, zero new actions,
+  zero new FSM states.
+
+**Where the prime happens:** in `AudioModule.reduce` on the
+`RecordingStarted` arm, **only when `state.useBluetoothMic`** — the same
+reducer arm that already emits `Effect.StartBluetoothSco`. The reducer
+writes `bluetoothSco = BluetoothScoPublicState(phase = ScoPhase.Waiting,
+failureReason = null)` in the *same* `TransitionResult.nextState`. This
+is:
+
+- **Pure** — a state write on the `audio` axis AudioModule owns
+  (ADR-0001 pure-reducer clean; no hardware touched in `reduce`).
+- **ADR-0002 Mode-1** — AudioModule's own reducer writing its own axis +
+  emitting its own effect. No cross-axis write (no Mode-3).
+- **Synchronous-before-effect** — the store write completes in dispatch
+  Step 4 *before* Step 7 runs `runEffect(StartBluetoothSco)` →
+  `services.bluetoothSco.start()` → `manager.startSco()`. So even when
+  `startSco()` early-returns and re-enters dispatch synchronously
+  (`Main.immediate`) with `OnBluetoothScoStateChanged(Connected)`, the
+  phase is *already* `Waiting` ⇒ `Connected != Waiting` ⇒ real state
+  write ⇒ observer sees `Waiting → Connected` ⇒ `justResolved` true ⇒
+  `ScoRouteResolved(true)` cascades ⇒ recording proceeds. **Hang fixed.**
+
+The `RecordingStarted` arm is also fired (per the C6-W1 observer) on the
+`Paused → Active` resume edge — priming to `Waiting` there is correct too
+(`BluetoothScoManager.reconnect` re-runs `startSco`, the resume genuinely
+re-handshakes; legacy `togglePause` reconnected SCO on resume).
+
+### Edge / failure matrix re-verification (F-1 fix)
+
+| Case | Behaviour with the prime |
+|---|---|
+| **Already-connected** (the F-1 hang) | phase primed `→ Waiting`; sync `onScoConnected` → `Connected` is a real `Waiting→Connected` edge → `ScoRouteResolved(true)` → `VOICE_COMMUNICATION`. **Fixed.** |
+| **Fresh-connect** (≤2500 ms) | phase `Waiting`; broadcast `Connected` is `Waiting→Connected` edge → `ScoRouteResolved(true)`. Unchanged-correct. |
+| **Fail / timeout** | phase `Waiting`; subsystem `onScoFailed` → `Failed`, `Waiting→Failed` edge → `ScoRouteResolved(false)` → `MIC`. Unchanged-correct (subsystem-owned 2500 ms timeout on the *not-connected* branch still arms). |
+| **Cancel-while-awaiting** | `CancelRecording`: `Preparing→Idle` + `RecordingEnded`→`StopBluetoothSco`. A *late* `OnBluetoothScoStateChanged(Connected)` now **does** write phase (`Waiting→Connected` real edge), but the observer guard `nextRec is Preparing && nextRec.awaitingSco` is `false` (recording is `Idle`) ⇒ `ScoRouteResolved` **not** cascaded. **Stale-resolve-after-cancel still defeated** — the guard is on the *recording* axis, untouched by the phase prime. |
+| **Duplicate-resolve** | second `OnBluetoothScoStateChanged(Connected)` while phase already `Connected` ⇒ reducer-null ⇒ no edge ⇒ no re-cascade. Plus the reducer-arm `awaitingSco=false` second-guard. Unchanged-correct. |
+| **Stale-resolve-after-cancel** | as Cancel-while-awaiting row — defeated by the unchanged `awaitingSco` recording-axis guard. |
+| **SCO held by other app** | `isBluetoothScoOn==true` at start → same as already-connected row → resolves to `VOICE_COMMUNICATION`. (Legacy parity: legacy also `proceedStartRecording(VOICE_COMMUNICATION)` on the synchronous already-connected `onScoConnected`.) |
+
+### F-2 — root cause + coherent fix (same Preparing redesign)
+
+Audio-focus is requested on the `Idle→Preparing` engagement edge
+(`RecordingStarted` → `RequestAudioFocus`). The F-2 gap: if focus is
+**lost during the `Preparing(awaitingSco)` SCO wait**, (a) the
+focus-loss→pause cascade is gated on `next.recording.isActiveOrPaused`
+which excludes `Preparing` (correct — there is no recorder to pause yet,
+and `PauseRecording` has no `Preparing` arm), and (b) the later
+`Preparing→Active` is engaged→engaged so `RecordingStarted` does not
+re-fire ⇒ the recording goes Active having lost focus, other apps duck
+over it. **Legacy did not have this window** — legacy requested focus
+in `proceedStartRecording`, i.e. *after* the SCO wait, right before
+`MediaRecorder.start()`.
+
+**Coherent fix (same observer, same Preparing redesign):** cascade
+`RecordingStarted` **again** on the SCO-wait-resolved edge —
+`prev.recording is Preparing && prev.recording.awaitingSco &&
+next.recording is Preparing && !next.recording.awaitingSco` (the
+deferred-allocate transition `ScoRouteResolved` produces). At that point
+the reducer re-emits `RequestAudioFocus` (idempotent — `request()`
+delegates to `AudioManager.requestAudioFocus`, re-requesting the same
+`AudioFocusRequest` is a safe Android no-op / re-grant). This restores
+**exact legacy timing**: focus is (re-)asserted after the SCO wait, right
+before allocate — so a BT recording can never reach Active without focus
+having been requested at the legacy point. The early `Idle→Preparing`
+request is kept (harmless, strictly safer than legacy for the non-BT
+path and the BT happy path).
+
+This is **one coherent state-machine shape**, not two: the AudioModule
+observer gains exactly one extra `RecordingStarted` trigger clause (the
+SCO-wait-resolved edge), and the `RecordingStarted` reducer arm gains the
+phase-prime write. No new actions, no new FSM states, no Mode-3, no
+RecordingModule change, no IME change. SRP intact (focus + SCO lifecycle
+stays AudioModule-owned, the `audio`-axis owner — Spec 1 §15.3
+constraint). Spec 1 §15.1 row 3 (`Recording.Preparing →
+AudioFocus-Request`) is *more* faithfully realised: focus is now tied to
+the Preparing→capture boundary on the BT path exactly as the row
+prescribes.
+
+### Implementation Hints (F-1 + F-2)
+
+- **`AudioModule.reduce`, `RecordingStarted` arm:** when
+  `state.useBluetoothMic`, set
+  `nextState = state.copy(bluetoothSco = BluetoothScoPublicState(phase =
+  ScoPhase.Waiting, failureReason = null))`; keep the existing effect
+  list (`RequestAudioFocus` gated on pref + `StartBluetoothSco`). When
+  `!useBluetoothMic`, `nextState = state` unchanged (non-BT path emits
+  no SCO effect, must not touch the phase). Update the arm KDoc.
+- **`AudioModule.onCrossModuleStateChange`:** add a second
+  `RecordingStarted` trigger clause for the SCO-wait-resolved edge:
+  `prevRec is Preparing && prevRec.awaitingSco && nextRec is Preparing &&
+  !nextRec.awaitingSco`. Order it so the existing engagement-edge clause
+  and this one don't both append (they're mutually exclusive — one is
+  `!engaged→engaged`, this one is `Preparing→Preparing`). The
+  `ScoRouteResolved` cascade clause is unchanged.
+- **No `BluetoothScoManager` / `RecordingModule` / IME change** for
+  F-1/F-2. The fix is entirely AudioModule-local (axis owner) — minimal
+  blast radius, maximal SRP.
+- **Tests (extend `AudioModuleTest`):** (1) `RecordingStarted` with
+  `useBluetoothMic` primes `bluetoothSco.phase = Waiting` in
+  `nextState`; (2) `RecordingStarted` without BT does **not** touch the
+  phase; (3) already-connected hang: `prev` phase `Connected` (stale),
+  `RecordingStarted` resets to `Waiting`, then a subsequent
+  `OnBluetoothScoStateChanged(Connected)` is a real edge → observer
+  cascades `ScoRouteResolved(true)` (the end-to-end no-hang proof);
+  (4) the genuine-wait timeout path still produces `Failed → MIC`;
+  (5) stale-resolve-after-cancel still defeated (cancel → `Idle`, late
+  `Connected` writes phase but no `ScoRouteResolved`); (6) F-2: the
+  SCO-wait-resolved edge (`Preparing awaitingSco → Preparing
+  !awaitingSco`) cascades `RecordingStarted` again (focus re-requested);
+  (7) F-2 reducer: that re-fired `RecordingStarted` re-emits
+  `RequestAudioFocus`.
+
+## Findings (Update 2026-05-15 — F-4 PipelineActionRouter post-strip re-audit)
+
+**Triggered by:** F-4 routing rider (mandatory post-NUL-strip
+logic/plan-conformance re-audit — the binary flag excluded the file from
+the grep-based plan-and-api + logic audits).
+
+**The NUL is load-bearing, not stray file-hygiene.** `grep -aPn "\x00"`
+locates the single NUL **inside a character literal** on line 133:
+`(action + '<NUL>' + sessionId).hashCode()` — a raw NUL char used as the
+separator between `action` and `sessionId` when composing the
+per-(action,sessionId) PendingIntent request-code. A blind `tr -d '\000'`
+would turn `'<NUL>'` into `''` — an **empty char literal, which does not
+compile** in Kotlin. The correct byte-clean fix is the explicit Unicode
+escape `' '`: same runtime value (NUL separator → identical
+`hashCode()`), valid source text, normal git diff. **This corrects the
+F-4 "byte-identical content" suggested-fix** — content is *behaviourally*
+identical, not byte-identical (the raw NUL becomes a 6-char escape).
+
+**Logic / plan-conformance re-audit outcome (the 2-of-4 unreviewed
+topics): CLEAN — no residual bug.**
+
+- `dispatch()` mapping `ACTION_SEND → StopRecordingAndSend`: the §7.5
+  spec sketch (`1-pipeline-service.reviewed.md:3999`) wrote
+  `ACTION_SEND → StopRecording`; the implementation is the **correct
+  FN-4 update** (the sketch predates FN-4 — `StopRecordingAndSend` is the
+  payload-less data object whose reducer reads `state.recording`
+  sessionId, B1-C2-A2 F-10). Recorded as **intentional supersession**,
+  not a bug. The inline KDoc (`:67-71`) already documents this exactly.
+- `ACTION_INSERT`/`ACTION_DISMISS` → `ConfirmInsertion(sessionId)` /
+  `DismissResult(sessionId)` with `EXTRA_SESSION_ID`: the actions exist
+  and decode correctly; no current `NotificationStatus` arm emits the
+  Insert/Discard buttons. Confirmed **intentional half-wiring for a
+  later result-stage block** (the buttons + their `pendingIntentFor`
+  call-sites land when the result-stage notification is wired — out of
+  B2 recording-drive scope). The `requestCodeFor` per-session distinct
+  request-code (the line carrying the NUL) is *defensive correctness for
+  that future*: it prevents a `FLAG_UPDATE_CURRENT` collision silently
+  re-targeting `[Einfügen]` for session A onto session B. Not a B2
+  defect.
+- `pendingIntentFor` → `PendingIntent.getService(... FLAG_IMMUTABLE)` is
+  §7.5-faithful (FGS survives keyboard switch; immutable PendingIntent
+  mandatory API 31+). `dispatchAction` lambda seam mirrors the
+  established `emitAction` adapter pattern (KDoc `:24-32`) — correct,
+  unit-testable, no construction-order coupling.
+
+**Conclusion:** PipelineActionRouter.kt is logic- and plan-conformant
+once grep-visible. The only change required is the NUL→`' '`
+escape (file-hygiene + compileability). No behavioural fix.
+
 ## References
 
-- Block-report: `../reports/B2-theme-b-recording-drive.md#chunk-c6-d2pre` (gate verdict + worklist #1/#2) + `#gate-repair-wave-b2-c6-w1` (as-built)
+- Block-report: `../reports/B2-theme-b-recording-drive.md#chunk-c6-d2pre` (gate verdict + worklist #1/#2) + `#gate-repair-wave-b2-c6-w1` (as-built) + `#block-validate-repair-wave-1-b2-val-repair-1` (F-1..F-9)
 - Plan: `../dictate-cutover-completion.md` §4 Block B3, §6.1 R-1
 - ADR-0002 §"The two allowed modes", §"Self-cascade", §"Frozen snapshot"
 - ADR-0001 §"Main-Thread Confined Dispatch" (the re-entrancy that motivated the engagement-edge fix)

@@ -185,7 +185,25 @@ sealed class Action {
 
     /** Lifecycle + progress actions for the [PipelineUiState] FSM. */
     sealed class PipelineAction : Action() {
-        /** Initiate a pipeline run for the just-recorded audio. */
+        /**
+         * Source-agnostic pipeline entry-point `(sessionId, audioFile)`.
+         *
+         * Two valid callers:
+         *  1. **Post-record** — emitted by
+         *     [net.devemperor.dictate.state.modules.RecordingModule.Effect.EmitPipelineTrigger]
+         *     on the `Active/Paused → Idle` `StopRecordingAndSend` arm
+         *     (the recording FSM hands its just-recorded audio off).
+         *  2. **Imported-audio-file (no recording FSM)** — dispatched
+         *     directly by the IME's
+         *     `transcribeImportedAudioFileViaOrchestrator()`
+         *     (B2-C7-MID-W1): an externally-supplied audio file is
+         *     transcribed without ever entering the recording FSM.
+         *
+         * The action carries everything the pipeline needs
+         * (`sessionId` + `audioFile`); it does not assume the audio came
+         * from a recording. See
+         * `research/imported-audiofile-orchestrator-route.md`.
+         */
         data class TriggerPipeline(val sessionId: String, val audioFile: File) : PipelineAction()
 
         /** Pipeline runner reports start — sets `Preparing → Running`. */
@@ -316,6 +334,38 @@ sealed class Action {
          * @see net.devemperor.dictate.state.Action.AudioAction.RecordingStarted
          */
         data object RecordingEnded : AudioAction()
+
+        /**
+         * **B2-VAL-W1 F-2 — re-assert audio-focus on the BT-mic
+         * SCO-wait-resolved edge** (`Preparing.awaitingSco true → false`,
+         * the deferred-allocate transition produced by
+         * [RecordingAction.ScoRouteResolved]).
+         *
+         * The [AudioModule] reducer emits **only** `Effect.RequestAudioFocus`
+         * (gated on `audioFocusEnabledPref`). Unlike [RecordingStarted]
+         * it does **not** re-emit `Effect.StartBluetoothSco` and does
+         * **not** re-prime `bluetoothSco.phase` — the SCO handshake has
+         * just *resolved* on this edge; re-kicking it or resetting the
+         * `Connected`/`Failed` phase back to `Waiting` would be wrong.
+         *
+         * **Why a distinct action (not reuse [RecordingStarted])?**
+         * Focus-(re)acquire and SCO-handshake-start are separate
+         * concerns that only coincide at genuine recording-start. The
+         * BT-mic path requests focus early (`Idle → Preparing`) then
+         * *waits* for SCO; if focus is lost during that wait, legacy
+         * re-acquired it in `proceedStartRecording` *after* the SCO wait
+         * (right before `MediaRecorder.start()`). This action restores
+         * that exact legacy timing without the SCO side-effects. One
+         * tiny focus-only leaf is fewer special-cases (and SRP-cleaner)
+         * than disambiguating the two concerns via cross-axis reads
+         * inside the [RecordingStarted] reducer arm. `request()` is
+         * idempotent, so the kept early request is harmless.
+         *
+         * @see net.devemperor.dictate.state.Action.AudioAction.RecordingStarted
+         * @see net.devemperor.dictate.state.Action.RecordingAction.ScoRouteResolved
+         * @see docs/plans/2026-05-15 - dictate-cutover-completion/research/recording-audiofocus-btsco-handshake.md
+         */
+        data object ReacquireAudioFocus : AudioAction()
     }
 
     // ════════════════════════════════════════════════════════════════

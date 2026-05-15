@@ -47,6 +47,36 @@ import kotlin.reflect.KClass
  *   [Action.RecordingAction.ScoRouteResolved] cascade so RecordingModule
  *   fires its deferred `AllocateMediaRecorder` with the correct source.
  *
+ * **B2-VAL-W1 F-1/F-2 refinement (the BT-mic Preparing-SCO-focus
+ * lifecycle).** Two precise gaps in the C6-W1 BT path were closed
+ * (refines, does not contradict, the above):
+ *
+ * - **F-1 (Critical) — SCO phase is primed to [ScoPhase.Waiting] on the
+ *   `RecordingStarted` reducer arm when `useBluetoothMic`.**
+ *   `StopBluetoothSco` → `BluetoothScoManager.release()` does not emit
+ *   `OnBluetoothScoStateChanged(Disconnected)` synchronously, so the
+ *   phase is left stale at `Connected`. Without the prime, a back-to-back
+ *   BT recording whose `startSco()` takes the already-connected
+ *   early-return re-emits `Connected`, which `reduce` rejects as a no-op
+ *   ⇒ the observer's `prevPhase != nextPhase` edge never fires ⇒
+ *   `ScoRouteResolved` never cascades ⇒ recording hangs forever in
+ *   `Preparing(awaitingSco)`. Priming makes `ScoPhase` a real state
+ *   machine — every handshake starts from `Waiting`, so the terminal
+ *   broadcast is always a genuine edge and the existing
+ *   duplicate-broadcast / stale-resolve-after-cancel defences keep
+ *   working unchanged.
+ * - **F-2 (Important) — audio-focus is re-asserted on the SCO-wait-
+ *   resolved edge via [Action.AudioAction.ReacquireAudioFocus].** Focus
+ *   is requested early (`Idle → Preparing`); if it is *lost* during the
+ *   SCO wait nothing re-acquired it (Preparing is excluded from the
+ *   focus-loss → pause cascade, and `Preparing → Active` is
+ *   engaged → engaged). Re-asserting focus on the `awaitingSco
+ *   true → false` deferred-allocate edge restores the exact legacy
+ *   timing (focus held right before `MediaRecorder.start()`).
+ *
+ * See `research/recording-audiofocus-btsco-handshake.md` §"Update
+ * 2026-05-15 — Block-Validate B2-VAL-W1, F-1 + F-2".
+ *
  * This restores the Spec 1 §15.1 row-3 observer arm
  * (`Recording.Preparing → AudioFocus-Request`). The earlier Phase-B S-4
  * KDoc claimed AudioFocus "is requested as part of
@@ -115,17 +145,52 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
         )
 
         // C6-IMPL-1 / B2-C6-W1 — recording entered an audio-capturing
-        // phase. State is unchanged (the audio axis carries no
-        // recording-derived field); the transition is the *effects*:
-        // request audio-focus iff the user pref is on (legacy parity:
-        // `Pref.AudioFocus` default true → 100% of users) and kick the
-        // SCO handshake iff the BT-mic pref is on. Returning the same
-        // `state` with a non-empty effect list is correct here — the
-        // `null` (reducer-null → Rejected) contract is for "action not
-        // relevant in this state", which is not the case: this action
-        // is *always* relevant and its whole purpose is the side-effect.
+        // phase. The transition is the *effects*: request audio-focus
+        // iff the user pref is on (legacy parity: `Pref.AudioFocus`
+        // default true → 100% of users) and kick the SCO handshake iff
+        // the BT-mic pref is on. Returning a non-`null` result is
+        // correct here even though it is "effects only" for the non-BT
+        // path — the `null` (reducer-null → Rejected) contract is for
+        // "action not relevant in this state", which is not the case:
+        // this action is *always* relevant and its whole purpose is the
+        // side-effect.
+        //
+        // **B2-VAL-W1 F-1 — prime the SCO phase to `Waiting` on the
+        // BT-mic path.** `StopBluetoothSco` → `BluetoothScoManager.
+        // release()` does NOT synchronously emit
+        // `OnBluetoothScoStateChanged(Disconnected)` (the system
+        // broadcast is async and often never arrives in the recording's
+        // lifetime / never in tests), so `bluetoothSco.phase` is left
+        // **stale at `Connected`** from the prior BT session. Without
+        // this prime, a back-to-back BT recording whose `startSco()`
+        // takes the already-connected early-return
+        // (`BluetoothScoManager.kt:122-126`, also skipping the 2500 ms
+        // timeout) re-emits `OnBluetoothScoStateChanged(Connected)`,
+        // which `reduce` rejects as a no-op (`Connected == Connected`)
+        // ⇒ `prevPhase == nextPhase` ⇒ the observer's edge-trigger never
+        // fires ⇒ `ScoRouteResolved` never cascades ⇒ recording hangs
+        // forever in `Preparing(awaitingSco=true)` with no audio, no
+        // error, no timeout recovery. Resetting the phase to `Waiting`
+        // in this *same* reducer pass (synchronous, completes before
+        // `runEffect(StartBluetoothSco)` runs) makes `ScoPhase` a
+        // genuine state machine: every handshake provably starts from
+        // `Waiting`, so the subsequent terminal broadcast is *always* a
+        // real `Waiting → Connected|Failed` edge and the existing
+        // edge-trigger (and its duplicate-broadcast /
+        // stale-resolve-after-cancel defences) keep working unchanged.
+        // Mode-1 (own-axis write + own effect); no Mode-3. The non-BT
+        // path emits no SCO effect and must NOT touch the phase.
         Action.AudioAction.RecordingStarted -> TransitionResult(
-            nextState = state,
+            nextState = if (state.useBluetoothMic) {
+                state.copy(
+                    bluetoothSco = BluetoothScoPublicState(
+                        phase = ScoPhase.Waiting,
+                        failureReason = null,
+                    ),
+                )
+            } else {
+                state
+            },
             sideEffects = buildList {
                 if (state.audioFocusEnabledPref) add(Effect.RequestAudioFocus)
                 if (state.useBluetoothMic) add(Effect.StartBluetoothSco)
@@ -144,6 +209,19 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
                 Effect.ReleaseAudioFocus,
                 Effect.StopBluetoothSco,
             ),
+        )
+
+        // B2-VAL-W1 F-2 — re-assert audio-focus on the BT-mic
+        // SCO-wait-resolved edge. Focus-only: NO StartBluetoothSco (the
+        // handshake just resolved), NO phase prime (would corrupt the
+        // resolved Connected/Failed phase). Gated on the pref exactly
+        // like RecordingStarted (legacy `if (audioFocusEnabled)
+        // gate.request()`). State unchanged — effect is the point.
+        Action.AudioAction.ReacquireAudioFocus -> TransitionResult(
+            nextState = state,
+            sideEffects = buildList {
+                if (state.audioFocusEnabledPref) add(Effect.RequestAudioFocus)
+            },
         )
     }
 
@@ -199,6 +277,38 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
                 (prevRec is RecordingState.Paused && nextRec is RecordingState.Active)
         if (recordingStarted) {
             cascade += Action.AudioAction.RecordingStarted
+        }
+
+        // B2-VAL-W1 F-2 — the SCO-wait-resolved edge. A BT-mic recording
+        // requests focus on `Idle → Preparing(awaitingSco=true)`, then
+        // *waits* (up to 2500 ms) for the SCO handshake. If audio-focus
+        // is LOST during that wait, nothing re-acquires it: the
+        // focus-loss → pause cascade is (correctly) gated on
+        // `isActiveOrPaused` which excludes `Preparing`, and the later
+        // `Preparing → Active` is engaged → engaged so the
+        // `recordingStarted` engagement-edge clause does not re-fire.
+        // Net (pre-fix): a BT recording could reach Active having lost
+        // focus — other apps duck over it. Legacy did NOT have this
+        // window: it requested focus in `proceedStartRecording`, i.e.
+        // *after* the SCO wait, right before `MediaRecorder.start()`.
+        // On the `awaitingSco true → false` deferred-allocate transition
+        // (the SCO-wait-resolved edge that `ScoRouteResolved` produces)
+        // we re-assert focus via the focus-only
+        // [Action.AudioAction.ReacquireAudioFocus] — restoring the exact
+        // legacy timing (focus held right before capture) while NOT
+        // re-kicking the SCO handshake or re-priming the SCO phase
+        // (which `RecordingStarted` does and which would corrupt the
+        // just-resolved `Connected`/`Failed` phase). `request()` is
+        // idempotent (delegates to `AudioManager.requestAudioFocus` —
+        // re-requesting the same `AudioFocusRequest` is a safe Android
+        // no-op / re-grant), so the kept early `Idle → Preparing`
+        // request is harmless. Mutually exclusive with `recordingStarted`
+        // (`Preparing → Preparing` vs `!engaged → engaged`).
+        val scoWaitResolved =
+            prevRec is RecordingState.Preparing && prevRec.awaitingSco &&
+                nextRec is RecordingState.Preparing && !nextRec.awaitingSco
+        if (scoWaitResolved) {
+            cascade += Action.AudioAction.ReacquireAudioFocus
         }
 
         // Recording disengaged: was engaged (Active/Paused/Preparing)

@@ -6249,7 +6249,7 @@ verworfen — zusätzlicher Notations-Lärm ohne Informationsgewinn.
 |----------------------|-----------|----------|-------|----------|---------|--------|------------|----------|--------|---------------|---------|-----------------|--------------|
 | **Recording**        | —         | R(state.recording) C(PipelineAction.Submit) | R(state.recording) | R(state.recording) C(ViewModeAction.OnRecordingActive) | C(OverlayAction.ResetSuppressBit) <!-- FIX: Issue PENDING-3 / Spec-3 Reducer Simplified – OverlayAction.ResetSuppressBit (Recording-Read war pre-PENDING-3; Reset läuft jetzt rein als Cascade ohne dass Overlay den Recording-State lesen muss) --> | R(state.recording) C(ResendAction.MarkAvailable) | | | | | | R(state.recording) C(PendingSessionsAction.Insert) | R(state.recording) C(InterruptionAction.OnRecordingActive) |
 | **Pipeline**         | R(state.pipeline) C(RecordingAction.StopRecording) | — | | R(state.pipeline) C(ViewModeAction.OnPipelineDone) | R(state.pipeline) C(OverlayAction.OnPipelineDone) | R(state.pipeline) | R(state.pipeline) C(LivePromptAction.ChainNext) | | | | | R(state.pipeline) | |
-| **Audio**            | R(state.audio.audioFocusGranted) C(RecordingAction.PauseRecording) | | — | | | | | | | | | | |
+| **Audio**            | R(state.audio.audioFocusGranted) R(state.recording) R(state.audio.bluetoothSco) C(RecordingAction.PauseRecording) C(AudioAction.RecordingStarted) C(AudioAction.RecordingEnded) C(AudioAction.ReacquireAudioFocus) C(RecordingAction.ScoRouteResolved) | | — | | | | | | | | | | |
 | **ViewMode**         | | | | — | R(state.viewMode) C(OverlayAction.OnViewModeChanged) | | | | R(state.viewMode) C(LayoutAction.OnViewModeChanged) | | | | |
 | **Overlay**          | | | | R(state.overlay.userPrefersWidget / hasPermission) C(ViewModeAction.SetViewMode) | — | | | | | | | | |
 | **Resend**           | | R(state.resend) C(PipelineAction.SubmitReprocess) | | | | — | | | | | | | |
@@ -6808,13 +6808,42 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
      * die einen Hardware-Call brauchen, werden als Action emittiert (Cascade); der
      * Empfänger-Modul-Reducer setzt sie in seinen eigenen Effect um.
      *
-     * **AudioFocus-Request beim Recording-Start (Phase-B S-4):** Der vorher hier
-     * gezeigte `if (Idle → Preparing) { ... }`-Block war Dead-Code (leerer Body).
-     * AudioFocus-Request läuft als Effect direkt im RecordingModule beim
-     * Preparing-Übergang (Effect.AllocateMediaRecorder kapselt das im
-     * RecordingHardwareSubsystem.allocate-Pfad — kein Cross-Module-Cascade nötig).
-     * Würde AudioModule den Request hier triggern, wäre AudioFocus-Lifecycle in
-     * zwei Modulen verteilt — SRP-Verstoß.
+     * **AudioFocus-Request beim Recording-Start (Phase-B S-4 → revidiert
+     * B2-C6-W1 + B2-VAL-W1):** Die Phase-B-S-4-Annahme — "AudioFocus-Request
+     * läuft als Effect direkt im RecordingModule beim Preparing-Übergang
+     * (Effect.AllocateMediaRecorder kapselt das im
+     * RecordingHardwareSubsystem.allocate-Pfad — kein Cross-Module-Cascade
+     * nötig)" — war **faktisch falsch gegen den ausgelieferten Adapter**:
+     * `RecordingHardwareAdapter.allocate` setzt nur die MediaRecorder-Source
+     * + `prepare()`, fordert WEDER AudioFocus AN NOCH startet es SCO
+     * (C6-IMPL-1 gate-RED-blocking). Die *Begründung* der S-4-Note
+     * (AudioFocus-Lifecycle in einem Modul = SRP) ist korrekt und bleibt
+     * die bindende Constraint — sie wird durch den **wiederhergestellten
+     * §15.1-Zeile-3-Observer-Arm** erfüllt, NICHT durch einen
+     * RecordingModule-Effect:
+     *
+     * AudioModule beobachtet die RecordingState-FSM via diesem Hook
+     * (ADR-0002 Mode-2-Cascade → Mode-1 eigener Effect) und cascadiert
+     * AudioModule-eigene Actions:
+     *  - `Idle → Preparing` / `Paused → Active` → `AudioAction.RecordingStarted`
+     *    (Reducer emittiert `RequestAudioFocus` gated auf `Pref.AudioFocus`,
+     *    + `StartBluetoothSco` gated auf `useBluetoothMic`; auf dem BT-Pfad
+     *    wird zusätzlich `bluetoothSco.phase` auf `Waiting` geprimt —
+     *    B2-VAL-W1 F-1).
+     *  - `* → Idle` / `Active → Paused` → `AudioAction.RecordingEnded`
+     *    (`ReleaseAudioFocus` + `StopBluetoothSco`).
+     *  - BT-mic SCO-Outcome (`OnBluetoothScoStateChanged`) →
+     *    `RecordingAction.ScoRouteResolved` (RecordingModule feuert seinen
+     *    deferred `AllocateMediaRecorder` mit der korrekten Source).
+     *  - SCO-Wait-resolved-Edge (`Preparing.awaitingSco true → false`) →
+     *    `AudioAction.ReacquireAudioFocus` (Focus-only Re-Request, legacy
+     *    Timing-Parität: Focus direkt vor Capture — B2-VAL-W1 F-2).
+     *
+     * Damit bleibt der AudioFocus+SCO-Lifecycle vollständig in AudioModule
+     * (dem `audio`-Achsen-Owner) — exakt die SRP-Aussage der S-4-Note,
+     * nur korrekt angewandt. Kein Mode-3 (kein Cross-Achsen-Write).
+     *
+     * @see ../../../2026-05-15 - dictate-cutover-completion/research/recording-audiofocus-btsco-handshake.md
      */
     override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> {
         val cascade = mutableListOf<Action>()

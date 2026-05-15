@@ -63,6 +63,13 @@ class DictatePipelineServiceOverlayTransitionTest {
         } catch (ignored: Throwable) {
         }
         JobExecutor.resetForTest()
+        // B2-VAL-W1 F-6 / Epic R-7 — drain the process-wide
+        // ActiveJobRegistry single-job lock. The new B2 boot-tests
+        // faithfully copied this reference test's tearDown discipline,
+        // but the reference itself never drained ActiveJobRegistry
+        // (inherited-incomplete-discipline — the actual R-7 root cause).
+        // Fixed here too so the discipline is complete at the source.
+        ActiveJobRegistry.resetForTest()
         // F-9 (B5): this test is the amplifier — it boots the full
         // DictatePipelineService many times, each `onCreate` running
         // LegacyAudioFileMigration + creating session rows against the

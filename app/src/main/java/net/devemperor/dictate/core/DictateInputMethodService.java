@@ -2322,6 +2322,29 @@ public class DictateInputMethodService extends InputMethodService
             return;
         }
 
+        // B2-VAL-W1 F-3 — sendable-state guard BEFORE the destructive
+        // pre-dispatch. `StopRecordingAndSend` from a non-bearing
+        // recording state (still `Preparing` — BT-SCO wait unresolved,
+        // or a slow `MediaRecorder.prepare()`) is a reducer no-op
+        // (RecordingModule has no `Preparing + StopRecordingAndSend`
+        // arm → Rejected). But the trio below is irreversible *before*
+        // any FSM check: `captureFreshConfigSnapshot` consumes/resets
+        // the one-shot flags (livePrompt / autoSwitchKeyboard /
+        // pendingLivePromptChain), `primePipelineUiForNewPath` shows the
+        // "Sending…" keyboard, and `newPathRecordingSessionId=null`
+        // orphans the recording. The F-1/F-2 Preparing-SCO redesign
+        // *widens* the Preparing window (a BT-mic recording can stay
+        // `Preparing(awaitingSco)` for up to 2500 ms), so a
+        // Send-while-Preparing race is materially more likely. Bail
+        // cleanly here — nothing destructive has run yet — exactly like
+        // the existing defensive null-guard above.
+        if (!isEffectiveRecordingActiveOrPaused()) {
+            Log.w("DictateIME",
+                    "stopRecording (new path): recording not Active/Paused "
+                            + "(still Preparing?) — skipping send, recording preserved");
+            return;
+        }
+
         captureFreshConfigSnapshot(sessionId);
         // Drive the legacy keyboard pipeline UI (KeyboardUiController is
         // still the render path until Theme-C/C3 retires it) so the
@@ -3368,8 +3391,16 @@ public class DictateInputMethodService extends InputMethodService
                 // ImePipelineConfigResolver reprocess snapshot so the
                 // adapter's resolver rebuilds the JobRequest faithfully
                 // (C3-IMPL-2). Single-dispatch — no double-run.
+                // B2-VAL-W1 F-9 — the not-bound condition is "service not
+                // yet ready", NOT "a job is already active". Surface the
+                // correct message, consistent with the sibling
+                // transcribeImportedAudioFileViaOrchestrator() not-bound
+                // bail. showJobBusyToast() stays for the genuine
+                // ActiveJobRegistry busy branch below.
                 if (pipelineBinder == null || imePipelineConfigResolver == null) {
-                    showJobBusyToast();
+                    android.widget.Toast.makeText(
+                            this, R.string.dictate_service_not_ready,
+                            android.widget.Toast.LENGTH_SHORT).show();
                     return;
                 }
                 if (ActiveJobRegistry.INSTANCE.isAnyActive()) {

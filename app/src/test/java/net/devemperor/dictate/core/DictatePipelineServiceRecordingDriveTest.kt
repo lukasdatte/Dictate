@@ -59,6 +59,11 @@ class DictatePipelineServiceRecordingDriveTest {
         }
         nm.cancelAll()
         JobExecutor.resetForTest()
+        // B2-VAL-W1 F-6 / Epic R-7 — drain the process-wide
+        // ActiveJobRegistry single-job lock (a still-registered job from
+        // a prior test whose async unregister had not completed would
+        // make this boot-test's job silently never start).
+        ActiveJobRegistry.resetForTest()
         // Epic R-7 / b5-ime-activation-wiring §8: drop the shared
         // DictateDatabase singleton + file so the next boot-test starts
         // clean (this class boots the full Service repeatedly).

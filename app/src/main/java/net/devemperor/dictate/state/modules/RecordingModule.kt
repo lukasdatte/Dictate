@@ -340,9 +340,17 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
             // Guard `awaitingSco`: a stale/duplicate ScoRouteResolved
             // (e.g. a late SCO broadcast after we already allocated)
             // must be a no-op, not a second AllocateMediaRecorder.
-            // `target` is non-null exactly on the awaitingSco path
-            // (set at StartRecording); the `?:` is a defensive
-            // fallback that cannot fire under the FSM contract.
+            //
+            // B2-VAL-W1 F-7 — `target` is non-null exactly on the
+            // awaitingSco path (set at StartRecording's BT-mic branch;
+            // see DictateUiState.Preparing.target KDoc). The earlier
+            // `?: InsertionTarget.INPUT_CONNECTION` silently masked any
+            // future regression that reaches this arm with
+            // `awaitingSco=true && target==null` — a convention-only
+            // invariant. Make it load-bearing with `requireNotNull`,
+            // consistent with this file's established F-7 fail-fast
+            // philosophy on the analogous `sessionId` invariant
+            // (StartRecording `require(sessionId.isNotBlank())`).
             is Action.RecordingAction.ScoRouteResolved ->
                 if (state.awaitingSco) {
                     TransitionResult(
@@ -355,8 +363,10 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                         ),
                         sideEffects = listOf(
                             Effect.AllocateMediaRecorder(
-                                target = state.target
-                                    ?: InsertionTarget.INPUT_CONNECTION,
+                                target = requireNotNull(state.target) {
+                                    "ScoRouteResolved on awaitingSco " +
+                                        "Preparing requires non-null target"
+                                },
                                 useBluetooth = action.useBluetooth,
                                 audioFile = state.audioFile,
                             ),

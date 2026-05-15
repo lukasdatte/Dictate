@@ -110,6 +110,9 @@ class DictateCutoverE2ETest {
         }
         nm.cancelAll()
         JobExecutor.resetForTest()
+        // B2-VAL-W1 F-6 / Epic R-7 — drain the process-wide
+        // ActiveJobRegistry single-job lock between tests.
+        ActiveJobRegistry.resetForTest()
         net.devemperor.dictate.database.DictateDatabase.resetForTest(
             ApplicationProvider.getApplicationContext(),
         )

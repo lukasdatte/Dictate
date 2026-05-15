@@ -39,7 +39,7 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 1 (C7-IMPL-1 — **FIXED by mid-chunk-triage wave B2-C7-MID-W1**) · Important: 2 (resolved by C5) · Nice-to-have: 2 (1 resolved, 1 still-deferred) · From C5: Important: 1 fixed (C5-IMPL-1 via C6-W1) + 1 delegated (C5-IMPL-2 documented Known-Gap), Nice-to-have: 1 postponed (C5-IMPL-3) · From C6 gate: Important: 1 (C6-IMPL-1) → FIXED (C6-W1); Nice-to-have: 1 (C6-IMPL-2) → **fixed by C7 (RESUME carve-out honoured)** · **From C7: Critical: 1 (C7-IMPL-1) → FIXED (B2-C7-MID-W1: imported-audio-file path now orchestrator-routed via `PipelineAction.TriggerPipeline`; AC-10 fully GREEN modulo the documented RESUME exception)**
+**Severity counts:** Critical: 1 (C7-IMPL-1 — **FIXED by mid-chunk-triage wave B2-C7-MID-W1**) · Important: 2 (resolved by C5) · Nice-to-have: 2 (1 resolved, 1 still-deferred) · From C5: Important: 1 fixed (C5-IMPL-1 via C6-W1) + 1 delegated (C5-IMPL-2 documented Known-Gap), Nice-to-have: 1 postponed (C5-IMPL-3) · From C6 gate: Important: 1 (C6-IMPL-1) → FIXED (C6-W1); Nice-to-have: 1 (C6-IMPL-2) → **fixed by C7 (RESUME carve-out honoured)** · **From C7: Critical: 1 (C7-IMPL-1) → FIXED (B2-C7-MID-W1: imported-audio-file path now orchestrator-routed via `PipelineAction.TriggerPipeline`; AC-10 fully GREEN modulo the documented RESUME exception)** · **From Block-Validate B2-VAL-W1: F-1 (Critical, blocks-following) + F-2..F-9 → ALL FIXED (one repair wave, B2-VAL-REPAIR-1; the Postponed R-7 item closed via F-6 — flake GONE across 2 uncached runs). No issues forwarded. ✓ converged.**
 
 > **🟢 C6-IMPL-1 CLOSED by repair-wave B2-C6-W1 — C6-D2pre may RE-GATE.**
 > The gate-RED-blocking legacy-parity regression is repaired:
@@ -1829,18 +1829,243 @@ no new issues, no forwarded issues.
 
 | Topic | Agent-ID | Status | Output File | Findings |
 |-------|----------|--------|-------------|----------|
-| plan-and-api | `B2-AUDIT-PLAN-AND-API` | ⏳ | `./reports/audit-plan-and-api-B2.md` | — |
-| convention | `B2-AUDIT-CONVENTION` | ⏳ | `./reports/audit-convention-B2.md` | — |
-| logic | `B2-AUDIT-LOGIC` | ⏳ | `./reports/audit-logic-B2.md` | — |
-| test | `B2-AUDIT-TEST` | ⏳ | `./reports/audit-test-B2.md` | — |
+| plan-and-api | `B2-AUDIT-PLAN-AND-API` | ✅ | `./reports/audit-plan-and-api-B2.md` | 0 Crit / 1 Imp / 3 NTH (AC-1/2/3/10 all GREEN) |
+| convention | `B2-AUDIT-CONVENTION` | ✅ | `./reports/audit-convention-B2.md` | 0 Crit / 1 Imp / 1 NTH (checkpoint table all PASS bar B2-1) |
+| logic | `B2-AUDIT-LOGIC` | ✅ | `./reports/audit-logic-B2.md` | 1 Crit / 2 Imp / 3 NTH (deviation re-scrutiny all GREEN) |
+| test | `B2-AUDIT-TEST` | ✅ | `./reports/audit-test-B2.md` | 0 Crit / 2 Imp / 0 NTH (suite 1041/1041 ×2 green; R-7 latent) |
 
-### Sanity-Check Consolidator
+### Block-Validate Sanity-Check (B2-VAL-SANITY)
 
 **Agent-ID:** `B2-VAL-SANITY` · **Output:** `./reports/validated-findings-B2.md`
+
+**What was done:** Read all 4 audit outputs in full, deduplicated, validated
+each finding against the actual code (verified the BT-SCO hang trace in
+`BluetoothScoManager.kt:122-126` + `AudioModule.kt:228-238`/`:104`; the
+`stopRecording()` missing FSM-guard in `DictateInputMethodService.java:2301-2336`;
+the NUL byte via `grep -aPc`/`file`/`git diff --numstat`; the missing
+`ActiveJobRegistry.resetForTest` + the 2 existing seam files), classified
+🟢/🟡/❌, wrote `validated-findings-B2.md`.
+
+**Validated counts:** 🟢 6 (Imp 3, NTH 3) · 🟡 2 (Crit 1, Imp 1 — 1 research
+topic) · ❌/no-residual 5. Net 8 actionable + 5 eliminated. Raw
+1 Crit / 6 Imp / 7 NTH deduped to 9 unique findings (F-1…F-9).
+
+**Issues (validated findings — full detail in `validated-findings-B2.md`):**
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|-------------|--------|--------|
+| F-1 | Critical | BT-SCO already-connected hang — `startSco` early-return skips the 2500ms timeout; stale-`Connected` phase defeats the `prevPhase != nextPhase` edge guard → `ScoRouteResolved` never cascaded → recording dead in `Preparing(awaitingSco)`. `AudioModule.kt:228-238`/`:104`, `BluetoothScoManager.kt:122-126` | **fixed** (B2-VAL-W1) | Option (ii): `RecordingStarted` reducer arm primes `bluetoothSco.phase` to `Waiting` when `useBluetoothMic` — every handshake starts from `Waiting` so the terminal broadcast is always a real edge. Stale-resolve-after-cancel still defeated (recording-axis guard unchanged). Spec 1 §15.2/§15.3-faithful, ADR-0002 Mode-1, no new FSM state. Proven by `AudioModuleTest` `F-1 *` tests. |
+| F-2 | Important | Audio-focus dropped when focus lost during BT `Preparing(awaitingSco)` (never re-acquired; `Preparing` excluded from `isActiveOrPaused` + engagement-edge). `AudioModule.kt:165-170`/`:195-211` | **fixed** (B2-VAL-W1) | New focus-only `AudioAction.ReacquireAudioFocus` cascaded on the `awaitingSco true→false` SCO-wait-resolved observer edge; reducer emits `RequestAudioFocus` (pref-gated) only. Legacy focus-after-SCO-wait timing parity. Coherent single redesign with F-1. Proven by `AudioModuleTest` `F-2 *` tests. |
+| F-3 | Important | `stopRecording()` runs destructive snapshot/prime/flag-reset before any FSM sendable-state check → Send-while-Preparing loses recording + stuck "Sending…" + consumed one-shots. `DictateInputMethodService.java:2301-2336` | **fixed** (B2-VAL-W1) | Sendable-state guard `if (!isEffectiveRecordingActiveOrPaused()) { log; return; }` added after the null-guard, before the destructive trio. Consistent with the F-1/F-2 widened Preparing window. |
+| F-4 | Important | NUL byte in `core/PipelineActionRouter.kt` → git-binary, evaded grep-based plan-and-api/logic audits. | **fixed** (B2-VAL-W1) | NUL char-literal → `' '` escape (behaviour-identical, compileable, byte-clean text). Mandatory post-strip logic/plan re-audit done → CLEAN, no behavioural bug (`ACTION_SEND` = correct FN-4 supersession; INSERT/DISMISS = intentional half-wiring). See research §"F-4 post-strip re-audit". |
+| F-5 | Important | Spec §15.1.x Coupling-Matrix `Audio` row + §15.3 KDoc not reconciled with C6-W1 (= block-report self-flagged Dev-W1-3). | **fixed** (B2-VAL-W1) | §15.1.x `Audio` row + §15.3 S-4 KDoc reconciled with the C6-W1 + B2-VAL-W1 design. Promotes Dev-W1-3 → resolved. |
+| F-6 | Important | R-7 test-pollution — root cause is `ActiveJobRegistry` (process-wide object, hard single-job lock, no reset) never drained, even by the reference test. Merges F-TEST-B2-1+2. | **fixed** (B2-VAL-W1) | Added `ActiveJobRegistry.resetForTest()` (mirrors 2 seams) + called in the 4 B2 boot-tests + the reference test. R-7 flake GONE across 2 uncached different-order runs (1050/1050 both variants ×2). D3 Postponed R-7 closed, NOT re-postponed. |
+| F-7 | Nice-to-have | `RecordingModule.kt:358-362` silent `?:` default on `awaitingSco` target — convention-only invariant; file's own F-7 fail-fast precedent argues `requireNotNull`. | **fixed** (B2-VAL-W1) | `?: InsertionTarget.INPUT_CONNECTION` → `requireNotNull(state.target) { … }`. `RecordingModuleTest` 36/36. |
+| F-8 | Nice-to-have | `TriggerPipeline` KDoc (`Action.kt:189`) names only the recording-FSM caller, not the MID-W1 imported-file caller. | **fixed** (B2-VAL-W1) | KDoc documents both callers (post-record `EmitPipelineTrigger` + imported-audio-file MID-W1). |
+| F-9 | Nice-to-have | `handleReprocessSend` not-bound branch shows misleading `showJobBusyToast()` vs the correct `dictate_service_not_ready` the sibling import path uses. `DictateInputMethodService.java:3371-3374` | **fixed** (B2-VAL-W1) | Not-bound branch → `R.string.dictate_service_not_ready` (sibling import-path parity); `showJobBusyToast()` kept for the genuine `isAnyActive()` branch. |
+
+**Eliminated / no-residual (5):** AUDIT-PLAN-AND-API-B2-4 (C4-IMPL-2 §7.6
+counter — genuine intentional-deferred, postponement stands per D3);
+AUDIT-CONVENTION-B2-2 (stub-header wording — cosmetic, not misleading, no
+dedicated repair); AUDIT-LOGIC-B2-5 (audio-focus release asymmetry — no bug,
+the unconditional release is the *safer* design + already KDoc-documented);
+AUDIT-LOGIC-B2-6 (failed-hand-off notification dismiss — PipelineModule
+failure-arm scope, **forward-note** to the PipelineModule-owning block, not a
+B2 defect); deviation re-scrutiny C5/C6-W1/C7/MID-W1 + **AC-1/AC-2/AC-3/AC-10
+all GREEN** → validated-no-residual-finding (only residuals are F-3 + F-5,
+carried as their own findings).
+
+**Cross-cut patterns:** (1) Preparing-window lifecycle cluster F-1+F-2+F-3
+(F-1+F-2 = ONE 🟡 topic; F-3 = separate 🟢 but Preparing-adjacent ordering);
+(2) PipelineActionRouter.kt grep-blind spot → mandatory re-audit rider on F-4;
+(3) §15.1.x doc drift → F-5 promotes Dev-W1-3; (4) R-7 root cause refined →
+F-6 actioned (not re-postponed).
+
+**Routing:** 🟡 wave (F-1+F-2, research topic
+`recording-preparing-sco-focus-lifecycle`, **gating for block close** —
+F-1 blocks-following) → research-agent → resume-chain implementer. 🟢 waves
+(F-3/F-7/F-9 IME+logic; F-4 file-hygiene+re-audit; F-5/F-8 doc; F-6 test-infra)
+→ VAL-REPAIR resume-chain.
+
+**Overlooked / known gaps:** Did not independently re-run the test suite (relied
+on AUDIT-TEST's 2 uncached full-run evidence + the R-7 causal analysis already
+in the block-report RE-GATE). PipelineModule failure-arm (AUDIT-LOGIC-B2-6) not
+audited — out of B2 primary diff, forwarded. The F-4 post-strip re-audit is
+specified as a rider but not performed by this consolidator (it requires the
+file to be grep-visible first — it is the repair-wave's responsibility).
+
+**No fixes applied** (sanity mode only — may be resumed as `B2-VAL-REPAIR` via
+`implement-fixes.md` for the 🟢 waves).
 
 ### Mini-Triage + Repair-Wave(s)
 
 (Per iteration, max 3 per D5 soft-cap.)
+
+### Block-Validate Repair Wave 1 (B2-VAL-REPAIR-1)
+
+**Agent-IDs:** `B2-VAL-RES-1` (research) → `B2-VAL-REPAIR-1` (repair) →
+`B2-VAL-REPAIR-1-VERIFY` (self-check) · **Date:** 2026-05-15 ·
+**Scope:** all-validated (F-1…F-9, one wave) · **Wave:** B2-VAL-W1 iter 1
+
+#### Preparing-SCO-focus lifecycle design (F-1 + F-2)
+
+**Research:** `../research/recording-audiofocus-btsco-handshake.md`
+§"Update 2026-05-15 — Block-Validate B2-VAL-W1, F-1 + F-2" (appended,
+D20 — refines, does not contradict, the C6-W1 design).
+
+- **F-1 (Critical) — design: option (ii), prime the SCO phase to
+  `Waiting` on the BT-mic handshake start.** `StopBluetoothSco` →
+  `BluetoothScoManager.release()` does not emit
+  `OnBluetoothScoStateChanged(Disconnected)` synchronously, so the phase
+  is left stale at `Connected`. The `AudioModule.reduce(RecordingStarted)`
+  arm, when `useBluetoothMic`, now writes
+  `bluetoothSco = BluetoothScoPublicState(Waiting, null)` in the same
+  (pure, own-axis, ADR-0002 Mode-1) `nextState`. The write completes
+  before `runEffect(StartBluetoothSco)`, so even when `startSco()` takes
+  the already-connected synchronous early-return and re-emits
+  `Connected`, it is now a genuine `Waiting → Connected` edge — the
+  existing `prevPhase != nextPhase` edge-trigger fires `ScoRouteResolved`
+  and the recording proceeds. **Spec-faithful** (Spec 1 §15.2/§15.3 SRP:
+  the focus+SCO lifecycle stays AudioModule-owned; no Mode-3, no new FSM
+  state, no `BluetoothScoManager`/`RecordingModule`/IME change).
+  **Stale-resolve-after-cancel still defeated:** the
+  `nextRec is Preparing && awaitingSco` observer guard is on the
+  *recording* axis, untouched by the phase prime — a late `Connected`
+  after cancel writes the phase but the guard is false (recording Idle)
+  so `ScoRouteResolved` is NOT cascaded.
+- **F-2 (Important) — design: focus-only re-acquire on the SCO-wait-
+  resolved edge via a new `AudioAction.ReacquireAudioFocus`.** Focus is
+  requested early (`Idle → Preparing`); if lost during the SCO wait
+  nothing re-acquired it (Preparing excluded from focus-loss→pause;
+  `Preparing → Active` is engaged→engaged). The observer now cascades
+  `ReacquireAudioFocus` on the `awaitingSco true → false` deferred-
+  allocate edge; its reducer emits **only** `RequestAudioFocus` (gated
+  on pref) — NO `StartBluetoothSco`, NO phase prime (the handshake just
+  resolved; re-priming would corrupt the `Connected`/`Failed` phase). A
+  distinct one-leaf action is fewer special-cases + SRP-cleaner than
+  cross-axis reducer disambiguation. Restores exact legacy timing
+  (focus held right before capture). **Coherent single redesign** with
+  F-1 — one observer (two new mutually-exclusive trigger considerations
+  + the unchanged `ScoRouteResolved` clause), one reducer-arm prime, one
+  new focus-only action. No two incompatible state-machine shapes.
+
+#### F-4 PipelineActionRouter.kt — post-strip re-audit outcome
+
+**The NUL was load-bearing, not stray hygiene.** It sat *inside a char
+literal* on line 133: `(action + '<NUL>' + sessionId).hashCode()` — a
+NUL used as the request-code separator. A blind `tr -d '\000'` would
+have produced `''` (empty char literal — does not compile). Fixed as
+the explicit escape `' '`: behaviourally identical (same
+`hashCode()`), valid compileable text, normal git diff. (Corrects the
+F-4 "byte-identical content" suggestion — content is *behaviourally*
+identical, not byte-identical.) **Logic/plan-conformance re-audit (the
+2-of-4 grep-blind topics): CLEAN — no residual bug.** `ACTION_SEND →
+StopRecordingAndSend` is the correct FN-4 supersession of the §7.5
+sketch (already KDoc-documented); `ACTION_INSERT`/`ACTION_DISMISS` is
+intentional half-wiring for a later result-stage block;
+`pendingIntentFor` is §7.5-faithful. Full write-up in the research file
+§"Update 2026-05-15 — F-4 PipelineActionRouter post-strip re-audit".
+
+#### Findings addressed
+
+| Finding | Sev | File(s) | Status | Fix |
+|---------|-----|---------|--------|-----|
+| F-1 | Critical | `state/modules/AudioModule.kt`, `state/Action.kt` (no API change for F-1) | fixed | SCO phase primed to `Waiting` on `RecordingStarted` reducer arm when `useBluetoothMic` (option ii). Already-connected hang defeated; timeout path + duplicate-broadcast + stale-resolve-after-cancel all re-verified. |
+| F-2 | Important | `state/modules/AudioModule.kt`, `state/Action.kt` | fixed | New `AudioAction.ReacquireAudioFocus` (focus-only) cascaded on the `awaitingSco true→false` SCO-wait-resolved observer edge; reducer emits `RequestAudioFocus` gated on pref. Legacy focus-after-SCO-wait timing parity. |
+| F-3 | Important | `core/DictateInputMethodService.java:2301-2336` | fixed | Sendable-state guard `if (!isEffectiveRecordingActiveOrPaused()) { log; return; }` added after the null-guard and BEFORE `captureFreshConfigSnapshot`/`primePipelineUiForNewPath`/`newPathRecordingSessionId=null`. Send-while-Preparing no longer loses the recording / sticks "Sending…" / consumes one-shots. Consistent with the F-1/F-2 widened Preparing window. |
+| F-4 | Important | `core/PipelineActionRouter.kt` | fixed | NUL char-literal → `' '` escape (byte-clean text, behaviour-identical). Mandatory post-strip logic/plan re-audit done → CLEAN, no behavioural fix needed (see research). |
+| F-5 | Important | `1-pipeline-service.reviewed.md` §15.1.x + §15.3 | fixed | §15.1.x matrix `Audio` row gained `R(state.recording) R(state.audio.bluetoothSco)` + `C(AudioAction.RecordingStarted/RecordingEnded/ReacquireAudioFocus) C(RecordingAction.ScoRouteResolved)`. §15.3 S-4 KDoc block replaced (disproven dead-code premise → restored §15.1-row-3 observer-arm reality, incl. F-1 prime + F-2 reacquire). Promotes block-report `Dev-W1-3`. |
+| F-6 | Important | `core/ActiveJobRegistry.kt` + 5 test tearDowns | fixed | Added `ActiveJobRegistry.resetForTest()` production seam (mirrors `JobExecutor`/`DictateDatabase` seams, K-1). Called in the 4 B2 boot-tests + the reference `DictatePipelineServiceOverlayTransitionTest` tearDown (the inherited-incomplete-discipline root cause). R-7 closed (D3 — not re-postponed). |
+| F-7 | NTH | `state/modules/RecordingModule.kt` | fixed | `?: InsertionTarget.INPUT_CONNECTION` → `requireNotNull(state.target) { … }` on the `awaitingSco` deferred-allocate arm (file's F-7 fail-fast precedent). |
+| F-8 | NTH | `state/Action.kt` `TriggerPipeline` KDoc | fixed | KDoc documents both callers: post-record (`EmitPipelineTrigger`) + imported-audio-file (MID-W1, no recording FSM). |
+| F-9 | NTH | `core/DictateInputMethodService.java:3371-3374` | fixed | Not-bound branch of `handleReprocessSend` now shows `R.string.dictate_service_not_ready` (sibling import path parity); `showJobBusyToast()` kept only for the genuine `ActiveJobRegistry.isAnyActive()` branch. |
+
+**Cross-fix conflicts:** none. F-3 applied consistent with the F-1/F-2
+Preparing redesign (the guard's `isEffectiveRecordingActiveOrPaused()`
+deliberately excludes the now-wider `Preparing(awaitingSco)` window —
+that is exactly the intent: a send while still Preparing must bail, not
+destroy state).
+
+**Tests added/updated:** `state/AudioModuleTest.kt` — 9 new tests
+(F-1: phase-prime BT vs non-BT, already-connected-hang-defeated end-to-
+end, genuine-wait timeout→MIC, stale-resolve-after-cancel still
+defeated; F-2: SCO-wait-resolved cascades `ReacquireAudioFocus`,
+reducer focus-only, pref-off no-op, mutual-exclusion with
+`RecordingStarted`). Existing `RecordingStarted`/observer tests
+unaffected (assert sideEffects, not state identity).
+
+**Files modified (production vs test — DISJOINT for wave-commit):**
+
+**Production:**
+- `app/src/main/java/net/devemperor/dictate/state/modules/AudioModule.kt` (F-1 phase-prime arm; F-2 `ReacquireAudioFocus` reducer arm + observer edge; KDoc)
+- `app/src/main/java/net/devemperor/dictate/state/Action.kt` (F-2 `AudioAction.ReacquireAudioFocus` leaf; F-8 `TriggerPipeline` KDoc)
+- `app/src/main/java/net/devemperor/dictate/state/modules/RecordingModule.kt` (F-7 `requireNotNull`)
+- `app/src/main/java/net/devemperor/dictate/core/ActiveJobRegistry.kt` (F-6 `resetForTest()` seam)
+- `app/src/main/java/net/devemperor/dictate/core/PipelineActionRouter.kt` (F-4 NUL→`' '`)
+- `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java` (F-3 sendable-state guard; F-9 not-ready toast)
+
+**Test:**
+- `app/src/test/java/net/devemperor/dictate/state/AudioModuleTest.kt` (9 new F-1/F-2 tests)
+- `app/src/test/java/net/devemperor/dictate/core/PipelineRunnerSubsystemAdapterTest.kt` (F-6 tearDown)
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceRecordingDriveTest.kt` (F-6 tearDown)
+- `app/src/test/java/net/devemperor/dictate/core/ImeRecordingDriveCutoverTest.kt` (F-6 tearDown)
+- `app/src/test/java/net/devemperor/dictate/core/DictateCutoverE2ETest.kt` (F-6 tearDown)
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceOverlayTransitionTest.kt` (F-6 tearDown — the reference test's inherited-incomplete-discipline root cause)
+
+**Doc:**
+- `docs/plans/2026-05-15 - dictate-cutover-completion/research/recording-audiofocus-btsco-handshake.md` (append-only D20: F-1/F-2 design + F-4 re-audit)
+- `docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md` (F-5 §15.1.x + §15.3)
+
+**Files outside findings-scope (drift):** none — every production/test
+file maps directly to an F-1…F-9 finding.
+
+#### Deviations (D22)
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Dev-W1-4 | F-4 suggested fix ("strip NUL, byte-identical content") | NUL→`' '` escape, not raw strip | The NUL was a char-literal value (request-code separator); a raw strip yields `''` which does not compile. Behaviour-identical, compileable. | none — file is now byte-clean text; PendingIntent request-codes unchanged | inline-fixed |
+| Dev-W1-5 | F-2 (consolidator hinted "re-fire RecordingStarted or move RequestAudioFocus") | New focus-only `AudioAction.ReacquireAudioFocus` instead of re-firing `RecordingStarted` | Re-firing `RecordingStarted` on the SCO-wait-resolved edge would also re-emit `StartBluetoothSco` (re-kick a just-resolved handshake) and re-prime the phase to `Waiting` (corrupt the resolved `Connected`/`Failed`). A distinct focus-only leaf is the minimal SRP-clean realisation. | one new `AudioAction` leaf (default-safe; no existing call-site changes) | inline-fixed |
+| Dev-W1-3 | Spec 1 §15.1.x Coupling-Matrix | **Resolved** by F-5: matrix `Audio` row + §15.3 KDoc reconciled with the C6-W1 + B2-VAL-W1 design | settled-decision re-litigation risk closed | none (doc) | resolved (was `flagged-for-validate`) |
+
+#### Self-check (B2-VAL-REPAIR-1-VERIFY)
+
+- `./gradlew assembleDebug`: **BUILD SUCCESSFUL** (only standard Java-8
+  deprecation warnings).
+- `./gradlew test --rerun-tasks` (uncached, authoritative XML counts) —
+  **run 1: 1050/1050 Debug + 1050/1050 Release, 0 failures, 0 errors**;
+  **run 2 (different fork ordering): 1050/1050 + 1050/1050, 0/0**.
+  Baseline ~1041 + 9 new F-1/F-2 tests = 1050 (AC-9 ≥946 holds).
+- **R-7 flake GONE.** Pre-fix the R-7 family
+  (`PipelineRunnerSubsystemAdapterTest` ×4 +
+  `LegacyAudioFileMigrationTest` ×1) manifested 1-5 failures on uncached
+  runs (block-report RE-GATE: "1038 tests, 1033 pass, 5 fail"). Across
+  **2 uncached different-order runs post-F-6** both classes are
+  100% green (`PipelineRunnerSubsystemAdapterTest` 7/7,
+  `LegacyAudioFileMigrationTest` 8/8,
+  `DictatePipelineServiceOverlayTransitionTest` 12/12). F-6 complete —
+  the Postponed R-7 item is closed (D3, not re-postponed).
+- New/updated tests prove: BT-SCO already-connected case now resolves
+  (no hang — `F-1 already-connected hang is defeated`), timeout still
+  works on the genuine-wait path (`F-1 genuine-wait timeout path still
+  resolves to MIC`), stale-resolve-after-cancel still defeated
+  (`F-1 stale-resolve-after-cancel still defeated despite phase prime`),
+  focus held across Preparing for BT (`F-2 SCO-wait-resolved edge
+  cascades ReacquireAudioFocus` + reducer focus-only). `AudioModuleTest`
+  36/36. `RecordingModuleTest` 36/36 (F-7 `requireNotNull` did not
+  break the awaitingSco arm).
+- F-3 Send-while-Preparing guard: verified the guard is IME-internal
+  (`stopRecording()` private method) — the binder-level
+  `ImeRecordingDriveCutoverTest` dispatches reach Active before sending
+  so they are unaffected (no regression); `ImeRecordingDriveCutoverTest`
+  + `DictatePipelineServiceRecordingDriveTest` green.
+- F-4 `PipelineActionRouter.kt`: now UTF-8 text (`file` → "Unicode
+  text"), 0 NUL bytes, normal git text diff (single line
+  `'^@'` → `' '`). Round-trip semantics asserted unchanged
+  (existing `PipelineActionRouter` tests green).
+- `DictateCutoverE2ETest` still green: 10/10.
+- **Convergence: ✓ converged** — all F-1…F-9 resolved, 0 new issues
+  forwarded, no self-corrections needed beyond the documented
+  Dev-W1-4/Dev-W1-5 design deviations (both inline-resolved).
 
 ---
 
@@ -1848,7 +2073,11 @@ no new issues, no forwarded issues.
 
 | # | Plan Location | What changed | Why | Impact | Inline-fixed | Source-Agent | Source-Step |
 |---|---------------|--------------|-----|--------|--------------|--------------|--------------|
-| — | — | — | — | — | — | — | — |
+| Dev-W1-1 | Spec 1 §15.3 Phase-B S-4 KDoc | Restored §15.1 row-3 AudioModule observer arm; rewrote stale KDoc | S-4 premise factually wrong vs shipped adapter | C7 may delete legacy w/o regression | yes | B2-C6-REPAIR-1 | Gate-Repair W1 |
+| Dev-W1-2 | Spec 1 §15.2 | New `ScoRouteResolved` + `Preparing.awaitingSco`/`target` + Preparing arm; BT defers allocate | Spec never ported legacy SCO-wait | `Preparing` +2 default fields, +1 action leaf | yes | B2-C6-REPAIR-1 | Gate-Repair W1 |
+| Dev-W1-3 | Spec 1 §15.1.x Coupling-Matrix | **Resolved** by F-5 (matrix `Audio` row + §15.3 KDoc reconciled with C6-W1 + B2-VAL-W1) | settled-decision re-litigation risk closed | none (doc) | yes (was `flagged-for-validate`) | B2-VAL-REPAIR-1 | Block-Validate W1 |
+| Dev-W1-4 | F-4 suggested fix ("strip NUL, byte-identical") | NUL→`' '` escape, not raw strip | NUL was a char-literal value; raw strip → `''` won't compile. Behaviour-identical, compileable | none (file now byte-clean text; request-codes unchanged) | yes | B2-VAL-REPAIR-1 | Block-Validate W1 |
+| Dev-W1-5 | F-2 consolidator hint ("re-fire RecordingStarted or move RequestAudioFocus") | New focus-only `AudioAction.ReacquireAudioFocus` instead of re-firing `RecordingStarted` | Re-firing `RecordingStarted` on the SCO-wait-resolved edge would re-kick the just-resolved SCO handshake + corrupt the resolved phase. A distinct focus-only leaf is the minimal SRP-clean realisation | +1 `AudioAction` leaf (default-safe; no call-site change) | yes | B2-VAL-REPAIR-1 | Block-Validate W1 |
 
 ---
 

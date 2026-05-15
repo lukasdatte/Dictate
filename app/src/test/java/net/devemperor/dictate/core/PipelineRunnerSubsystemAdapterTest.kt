@@ -81,6 +81,11 @@ class PipelineRunnerSubsystemAdapterTest {
         } catch (ignored: Throwable) {
         }
         JobExecutor.resetForTest()
+        // B2-VAL-W1 F-6 / Epic R-7 — drain the process-wide
+        // ActiveJobRegistry single-job lock so a sibling test in the
+        // same Robolectric fork is not blocked by a still-registered job
+        // whose async unregister had not completed.
+        ActiveJobRegistry.resetForTest()
         net.devemperor.dictate.database.DictateDatabase.resetForTest(
             ApplicationProvider.getApplicationContext(),
         )

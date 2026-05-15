@@ -178,6 +178,192 @@ class AudioModuleTest {
         )
     }
 
+    // ─── B2-VAL-W1 F-1: SCO phase prime on the BT-mic path ──────────────
+
+    @Test
+    fun `RecordingStarted with BT-mic primes the SCO phase to Waiting`() {
+        // F-1 core: a stale `Connected` phase (StopBluetoothSco→release()
+        // does not emit Disconnected synchronously) is reset so the next
+        // SCO broadcast is always a real edge.
+        val state = AudioState(
+            audioFocusEnabledPref = true,
+            useBluetoothMic = true,
+            bluetoothSco = BluetoothScoPublicState(ScoPhase.Connected, null),
+        )
+        val result = module.reduce(state, Action.AudioAction.RecordingStarted, ctx())
+        assertNotNull(result)
+        assertEquals(ScoPhase.Waiting, result!!.nextState.bluetoothSco.phase)
+        assertNull(result.nextState.bluetoothSco.failureReason)
+    }
+
+    @Test
+    fun `RecordingStarted without BT-mic does NOT touch the SCO phase`() {
+        // Non-BT path emits no SCO effect — must not corrupt the phase.
+        val state = AudioState(
+            useBluetoothMic = false,
+            bluetoothSco = BluetoothScoPublicState(ScoPhase.Connected, null),
+        )
+        val result = module.reduce(state, Action.AudioAction.RecordingStarted, ctx())
+        assertNotNull(result)
+        assertEquals(ScoPhase.Connected, result!!.nextState.bluetoothSco.phase)
+    }
+
+    @Test
+    fun `F-1 already-connected hang is defeated - primed Waiting makes Connected a real edge`() {
+        // End-to-end no-hang proof. Prior session left phase stale at
+        // Connected. RecordingStarted (BT) primes it to Waiting; the
+        // subsequent OnBluetoothScoStateChanged(Connected) from the
+        // startSco() already-connected early-return is now a genuine
+        // Waiting→Connected edge → observer cascades ScoRouteResolved.
+        val staleState = AudioState(
+            useBluetoothMic = true,
+            bluetoothSco = BluetoothScoPublicState(ScoPhase.Connected, null),
+        )
+        val primed = module.reduce(
+            staleState, Action.AudioAction.RecordingStarted, ctx(),
+        )!!.nextState
+        assertEquals(ScoPhase.Waiting, primed.bluetoothSco.phase)
+
+        // The Connected broadcast is now NOT a reducer no-op.
+        val afterBroadcast = module.reduce(
+            primed,
+            Action.AudioAction.OnBluetoothScoStateChanged(ScoPhase.Connected, null),
+            ctx(),
+        )
+        assertNotNull(afterBroadcast)
+        assertEquals(ScoPhase.Connected, afterBroadcast!!.nextState.bluetoothSco.phase)
+
+        // And the observer sees the real Waiting→Connected edge while
+        // the recording is Preparing(awaitingSco) → ScoRouteResolved.
+        val prep = RecordingState.Preparing(
+            true, testFile, "sid-sco", awaitingSco = true,
+            target = InsertionTarget.INPUT_CONNECTION,
+        )
+        val prev = DictateUiState.initial().copy(recording = prep, audio = primed)
+        val next = prev.copy(audio = afterBroadcast.nextState)
+        assertEquals(
+            listOf<Action>(Action.RecordingAction.ScoRouteResolved(useBluetooth = true)),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `F-1 genuine-wait timeout path still resolves to MIC fallback`() {
+        // After the prime to Waiting, a Failed broadcast (subsystem
+        // 2500ms timeout on the not-connected branch) is a real
+        // Waiting→Failed edge → ScoRouteResolved(false) → MIC.
+        val primed = AudioState(
+            useBluetoothMic = true,
+            bluetoothSco = BluetoothScoPublicState(ScoPhase.Waiting, null),
+        )
+        val prep = RecordingState.Preparing(
+            true, testFile, "sid-sco", awaitingSco = true,
+            target = InsertionTarget.INPUT_CONNECTION,
+        )
+        val prev = DictateUiState.initial().copy(recording = prep, audio = primed)
+        val next = prev.copy(
+            audio = primed.copy(
+                bluetoothSco = BluetoothScoPublicState(ScoPhase.Failed, "sco-timeout"),
+            ),
+        )
+        assertEquals(
+            listOf<Action>(Action.RecordingAction.ScoRouteResolved(useBluetooth = false)),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `F-1 stale-resolve-after-cancel still defeated despite phase prime`() {
+        // Cancel mid-wait → recording Idle. A late Connected broadcast
+        // now DOES write the phase (Waiting→Connected real edge), but
+        // the observer's `nextRec is Preparing && awaitingSco` guard is
+        // false (recording Idle) → NO ScoRouteResolved cascade.
+        val primed = AudioState(
+            useBluetoothMic = true,
+            bluetoothSco = BluetoothScoPublicState(ScoPhase.Waiting, null),
+        )
+        // recording was cancelled → Idle
+        val prev = DictateUiState.initial().copy(
+            recording = RecordingState.Idle, audio = primed,
+        )
+        val next = prev.copy(
+            audio = primed.copy(
+                bluetoothSco = BluetoothScoPublicState(ScoPhase.Connected, null),
+            ),
+        )
+        assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))
+    }
+
+    // ─── B2-VAL-W1 F-2: focus re-acquire on SCO-wait-resolved edge ──────
+
+    @Test
+    fun `F-2 SCO-wait-resolved edge cascades ReacquireAudioFocus`() {
+        // awaitingSco true→false (the deferred-allocate transition
+        // ScoRouteResolved produces) — focus must be re-asserted so a
+        // BT recording cannot reach Active having lost focus mid-wait.
+        val prevPrep = RecordingState.Preparing(
+            true, testFile, "sid-sco", awaitingSco = true,
+            target = InsertionTarget.INPUT_CONNECTION,
+        )
+        val nextPrep = RecordingState.Preparing(
+            true, testFile, "sid-sco", awaitingSco = false, target = null,
+        )
+        val prev = DictateUiState.initial().copy(recording = prevPrep)
+        val next = prev.copy(recording = nextPrep)
+        assertEquals(
+            listOf<Action>(Action.AudioAction.ReacquireAudioFocus),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `F-2 ReacquireAudioFocus reducer re-requests focus (pref on), focus-only`() {
+        // Focus-only: NO StartBluetoothSco (handshake already resolved),
+        // NO phase prime (would corrupt the resolved Connected phase).
+        val state = AudioState(
+            audioFocusEnabledPref = true,
+            useBluetoothMic = true,
+            bluetoothSco = BluetoothScoPublicState(ScoPhase.Connected, null),
+        )
+        val result = module.reduce(state, Action.AudioAction.ReacquireAudioFocus, ctx())
+        assertNotNull(result)
+        assertEquals(
+            listOf<AudioModule.Effect>(AudioModule.Effect.RequestAudioFocus),
+            result!!.sideEffects,
+        )
+        // phase untouched
+        assertEquals(ScoPhase.Connected, result.nextState.bluetoothSco.phase)
+    }
+
+    @Test
+    fun `F-2 ReacquireAudioFocus with focus pref off emits nothing`() {
+        val state = AudioState(audioFocusEnabledPref = false, useBluetoothMic = true)
+        val result = module.reduce(state, Action.AudioAction.ReacquireAudioFocus, ctx())
+        assertNotNull(result)
+        assertTrue(result!!.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `F-2 SCO-wait-resolved does NOT also cascade RecordingStarted (mutually exclusive)`() {
+        // The engagement-edge clause must NOT fire on Preparing→Preparing
+        // (prev already engaged) — only ReacquireAudioFocus.
+        val prevPrep = RecordingState.Preparing(
+            true, testFile, "s", awaitingSco = true,
+            target = InsertionTarget.INPUT_CONNECTION,
+        )
+        val nextPrep = RecordingState.Preparing(true, testFile, "s", awaitingSco = false)
+        val prev = DictateUiState.initial().copy(recording = prevPrep)
+        val next = prev.copy(recording = nextPrep)
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertTrue(
+            "must not contain RecordingStarted",
+            !cascade.contains(Action.AudioAction.RecordingStarted),
+        )
+        assertEquals(
+            listOf<Action>(Action.AudioAction.ReacquireAudioFocus), cascade,
+        )
+    }
+
     @Test
     fun `RecordingEnded releases focus and stops SCO (idempotent, unconditional)`() {
         val state = AudioState(audioFocusEnabledPref = false, useBluetoothMic = false)

@@ -93,4 +93,160 @@ interface SessionDao {
      */
     @Query("UPDATE sessions SET audio_file_path = :path WHERE id = :id")
     fun updateAudioFilePath(id: String, path: String)
+
+    // ── NEW (M4 pipeline-service refactor, Spec 1 §6.1) ────────────────────
+
+    /**
+     * Atomic INSERTED-transition for COMPLETED sessions — sets the
+     * `inserted_at` timestamp once the result text has been pushed into
+     * the editor. Idempotent (a later replay with a fresh timestamp
+     * just shifts the value forward; the cleanup policy still picks it
+     * up).
+     *
+     * Called from `PipelineModule.runEffect(Effect.ConfirmInsertion)`
+     * (Spec 1 §6.2). The companion `SessionEntity.insertedAt` accessor
+     * is `null` until this method runs.
+     */
+    @Query("UPDATE sessions SET inserted_at = :timestamp WHERE id = :id")
+    fun markInserted(id: String, timestamp: Long)
+
+    /**
+     * Pending-insertion query for the recovery pass — returns the
+     * sessions whose pipeline completed but whose result has not yet
+     * been surfaced to the user. Drives the restart-button + recovery
+     * UI on cold-start (Spec 1 §6.3, consumed by `PipelineRecovery.recover()`).
+     *
+     * Ordered newest-first so the UI shows the most recent pending
+     * result at the top.
+     */
+    @Query(
+        """
+        SELECT * FROM sessions
+        WHERE status = 'COMPLETED'
+          AND final_output_text IS NOT NULL
+          AND inserted_at IS NULL
+        ORDER BY created_at DESC
+        """
+    )
+    fun findPendingInsertion(): List<SessionEntity>
+
+    /**
+     * Cleanup query for the idle-stop slot — deletes COMPLETED sessions
+     * whose result has been inserted long enough ago that we no longer
+     * need it (default cutoff: now − 7 days − 1 hour safety buffer,
+     * see `Pref.SessionCleanupGracePeriodMs` + Spec 1 §6.2 R.17).
+     *
+     * Returns the row count for diagnostics. CASCADE deletes the
+     * matching `transcriptions` + `processing_steps` rows (declared
+     * `ON DELETE CASCADE` in MIGRATION_1_2).
+     */
+    @Query("DELETE FROM sessions WHERE inserted_at IS NOT NULL AND inserted_at < :cutoff")
+    fun deleteInsertedOlderThan(cutoff: Long): Int
+
+    /**
+     * Orphan-audio cleanup helper (KG-SST-2, Spec 1 §11.7.0 + §6.3.1).
+     * Returns `(id, audio_file_path)` pairs for sessions stuck in a
+     * terminal failure-state (FAILED or CANCELLED) older than [cutoff]
+     * whose audio file is still on disk.
+     *
+     * Layer separation: this DAO returns the data only — the caller
+     * (typically `DictatePipelineService.cleanupOrphanedAudio()` in
+     * the idle-stop slot) is responsible for the `File.delete()` and
+     * the follow-up [clearAudioFilePathBulk] call. Keeping File-IO out
+     * of the DAO mirrors `RecordingRepository.deleteBySessionId()`.
+     */
+    @Query(
+        """
+        SELECT id, audio_file_path FROM sessions
+        WHERE status IN ('FAILED', 'CANCELLED')
+          AND audio_file_path IS NOT NULL
+          AND created_at < :cutoff
+        """
+    )
+    fun findOrphanedTerminalAudio(cutoff: Long): List<OrphanedAudioRow>
+
+    /**
+     * Bulk-clear `audio_file_path` for the supplied session IDs. Used
+     * by `DictatePipelineService.cleanupOrphanedAudio()` after the
+     * File.delete() pass succeeded (Spec 1 §6.3.1). Idempotent —
+     * additive across retries.
+     */
+    @Query("UPDATE sessions SET audio_file_path = NULL WHERE id IN (:ids)")
+    fun clearAudioFilePathBulk(ids: List<String>)
+
+    /**
+     * Recovery-bulk-read: returns every session whose `status` matches
+     * one of [statuses] (Double-Enum: callers pass
+     * `SessionStatus.X.name` strings — Room has no built-in converter
+     * for `List<SessionStatus>` in a CHECK column, and the project
+     * keeps the boundary at the call site by convention; see
+     * Spec 1 §6.3).
+     *
+     * Used by `PipelineRecovery.recover()` to find half-written
+     * `RECORDING`/`TRANSCRIBING` rows that need promotion after a
+     * process death.
+     */
+    @Query("SELECT * FROM sessions WHERE status IN (:statuses)")
+    fun getSessionsByStatuses(statuses: List<String>): List<SessionEntity>
+
+    /**
+     * Returns every non-null `audio_file_path` in the table. Used by
+     * `AudioFileFactory.cleanupOrphans()` (Spec 1 §4.11.5.1 step 8)
+     * to compute the "still-referenced" set during the boot-time
+     * orphan cleanup. The result is read-only and the order is not
+     * guaranteed — callers convert to a `Set<String>` before doing
+     * set-difference against the on-disk inventory.
+     */
+    @Query("SELECT audio_file_path FROM sessions WHERE audio_file_path IS NOT NULL")
+    fun findAllAudioFilePaths(): List<String?>
+
+    /**
+     * Legacy-audio-file migration (Spec 1 §4.11.6.2 KG-AFF-2) — promotes
+     * any session that points at the historical fixed-name audio file
+     * (`cacheDir/audio.m4a`) to `status = FAILED` so the file can be
+     * deleted without losing the user-facing entry. Runs once at
+     * service boot, gated by a SharedPreferences flag.
+     *
+     * **Idempotence (Phase-B S-7):** the `WHERE status NOT IN (...)`
+     * filter preserves the original `last_error_message` on rows that
+     * have already failed (or completed / been cancelled) — without
+     * it, a second run after a pref-wipe would clobber historical
+     * error context. Sessions that reach this method in
+     * `RECORDING`/`RECORDED`/`TRANSCRIBING` are the only ones that
+     * can be safely promoted to FAILED with the legacy-migration
+     * reason.
+     *
+     * @return the number of rows updated (diagnostic).
+     */
+    @Query(
+        """
+        UPDATE sessions
+        SET status = :failedStatus,
+            last_error_type = 'UNKNOWN',
+            last_error_message = :reason
+        WHERE audio_file_path = :legacyPath
+          AND status NOT IN ('FAILED', 'CANCELLED', 'COMPLETED')
+        """
+    )
+    fun markLegacyAudioSessionsFailed(
+        legacyPath: String,
+        reason: String,
+        failedStatus: String
+    ): Int
 }
+
+/**
+ * Projection row for [SessionDao.findOrphanedTerminalAudio]. Carries
+ * just the session ID + audio file path so the caller can both
+ * delete the file and zero out the DB column in a follow-up bulk
+ * update (`clearAudioFilePathBulk`).
+ *
+ * The class lives next to `SessionDao` because it is purely a DAO
+ * projection — Room synthesises the column mapping at compile time
+ * (`id` → `id`, `audio_file_path` → `audioFilePath`). Promoting it to
+ * a top-level type elsewhere would obscure that relationship.
+ */
+data class OrphanedAudioRow(
+    @androidx.room.ColumnInfo(name = "id") val id: String,
+    @androidx.room.ColumnInfo(name = "audio_file_path") val audioFilePath: String
+)

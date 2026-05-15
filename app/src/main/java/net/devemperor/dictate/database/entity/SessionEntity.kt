@@ -48,7 +48,23 @@ data class SessionEntity(
     // Denormalized fields — cache for fast search/display in HistoryActivity
     // Updated after each pipeline step
     @ColumnInfo(name = "final_output_text") val finalOutputText: String? = null,
-    @ColumnInfo(name = "input_text") val inputText: String? = null
+    @ColumnInfo(name = "input_text") val inputText: String? = null,
+
+    /**
+     * Milliseconds-since-epoch when the COMPLETED result was inserted
+     * into the editor. `NULL` means "result available but not yet
+     * surfaced to the user" — drives the pending-insertion query
+     * (see [net.devemperor.dictate.database.dao.SessionDao.findPendingInsertion])
+     * and the 7-day cleanup window (Spec 1 §6.2 R.17,
+     * [net.devemperor.dictate.database.dao.SessionDao.deleteInsertedOlderThan]).
+     *
+     * Backfilled in MIGRATION_3_4 with `created_at` for pre-existing
+     * COMPLETED rows (best-effort; the exact insertion timestamp is not
+     * reconstructable, but the cutoff-based cleanup tolerates the
+     * approximation). Intentionally NOT indexed — see §6.1 "Warum kein
+     * `index_sessions_inserted_at`?" for the cost/benefit reasoning.
+     */
+    @ColumnInfo(name = "inserted_at") val insertedAt: Long? = null
 ) {
     // Convenience enum accessors (boundary conversion — handles DB values unknown to this build)
     val statusEnum: SessionStatus

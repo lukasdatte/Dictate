@@ -68,6 +68,16 @@ object ResendStatusDispatcher {
 
             SessionStatus.FAILED ->
                 ResendAction.NoOp
+
+            // M4 (Spec 1 §6.1.3): the pipeline is already running for
+            // this session — the resend short-press is a no-op so we
+            // don't double-start. The single-job-lock in
+            // ActiveJobRegistry would catch a doubled `Resume` anyway,
+            // but returning NoOp keeps the contract crisp (no spurious
+            // toast, no race).
+            SessionStatus.RECORDING,
+            SessionStatus.TRANSCRIBING ->
+                ResendAction.NoOp
         }
     }
 }

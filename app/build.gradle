@@ -58,6 +58,27 @@ android {
         // in Block 1 chunk C2 — Spec 1 §10 Phase-B S-5 acceptance).
         unitTests.includeAndroidResources = true
     }
+
+    lint {
+        // KG-SST-4 (Spec 1 §6.1.3): promote EnumSwitch from Warning to
+        // Error. Java's switch on a Kotlin enum is not exhaustive — a
+        // missing `case` after a new enum variant lands would silently
+        // render no badge. The HistoryAdapter switch on SessionStatus
+        // is the motivating example. Lint reports the missing case as
+        // an Error in `./gradlew lintDebug`. The defensive `default:`
+        // branch in HistoryAdapter is the belt-and-suspenders defence.
+        //
+        // Intentional deviation from the spec snippet: `abortOnError`
+        // stays at its default (true, see lint-docs) but the build is
+        // NOT promoted via `warningsAsErrors`, AND a baseline is NOT
+        // generated for the 65 pre-existing lint errors (out-of-scope
+        // for C9). Net effect: new EnumSwitch errors will fail
+        // `./gradlew lintDebug` once the existing inventory is cleaned
+        // up in a separate pass; `./gradlew test` and
+        // `./gradlew assembleDebug` are unaffected because they do
+        // not run lint.
+        error += "EnumSwitch"
+    }
 }
 
 ksp {
@@ -91,6 +112,14 @@ dependencies {
     testImplementation libs.kotlinx.coroutines.test
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core
+    // Room migration test helper + JUnit4 rules — required by
+    // MigrationTo4Test (Spec 1 §11.4.2). androidTest-scope only;
+    // instrumented tests are local-only — no CI invocation today
+    // (Spec 1 §11.7.0a "CI-Integration": connectedDebugAndroidTest
+    // runs locally on a device/emulator before PR merge).
+    androidTestImplementation libs.room.testing
+    androidTestImplementation libs.androidx.test.runner
+    androidTestImplementation libs.androidx.test.rules
 
     implementation libs.openai.java
     implementation libs.anthropic.java

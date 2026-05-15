@@ -30,6 +30,11 @@ lifecycle = "2.7.0"
 # supports compile/target sdk 35 (4.13+ for SDK 34+; 4.14 for SDK 35).
 robolectric = "4.14.1"
 androidxTestCore = "1.6.1"
+# androidx.test runner + rules — required for instrumented tests
+# (Block 3 introduces the first androidTest source set; see Spec 1
+# §11.7.0a "androidTest-Setup"). Test-scope only.
+androidxTestRunner = "1.5.2"
+androidxTestRules = "1.5.0"
 
 [libraries]
 colorpicker = { module = "com.github.QuadFlask:colorpicker", version.ref = "colorpicker" }
@@ -66,6 +71,12 @@ lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", v
 lifecycle-livedata-ktx = { module = "androidx.lifecycle:lifecycle-livedata-ktx", version.ref = "lifecycle" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTestCore" }
+# Room migration-test helper (MigrationTestHelper rule) — needed by
+# MigrationTo4Test (instrumented). Test-scope only.
+room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
+# Instrumented-test runner + JUnit4 rules. Test-scope only.
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
+androidx-test-rules = { module = "androidx.test:rules", version.ref = "androidxTestRules" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

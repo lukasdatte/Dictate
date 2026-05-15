@@ -335,6 +335,12 @@
     <string name="dictate_status_failed">Failed</string>
     <string name="dictate_status_cancelled">Cancelled</string>
     <string name="dictate_status_running">Processing…</string>
+    <!-- M4 (Spec 1 §6.1.3): defensive badges for the OOM-death window —
+         should never actually surface, because PipelineRecovery promotes
+         RECORDING→FAILED and TRANSCRIBING→RECORDED before the history
+         list reads from the DB. Kept as a belt-and-suspenders fallback. -->
+    <string name="dictate_status_recording">Recording…</string>
+    <string name="dictate_status_transcribing">Transcribing…</string>
 
     <!-- History detail actions -->
     <string name="dictate_history_direct_reprocess">Run directly</string>

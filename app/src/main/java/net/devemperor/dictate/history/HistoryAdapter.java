@@ -138,6 +138,25 @@ public class HistoryAdapter extends RecyclerView.Adapter<HistoryAdapter.ViewHold
                 holder.statusIcon.setVisibility(View.GONE);
                 holder.statusTv.setVisibility(View.GONE);
                 break;
+            // M4 (Spec 1 §6.1.3): RECORDING/TRANSCRIBING are defensive
+            // UI for the OOM-death window — they should never actually
+            // surface, because PipelineRecovery.recover() promotes
+            // RECORDING→FAILED and TRANSCRIBING→RECORDED BEFORE
+            // HistoryActivity loads the list. We still render a
+            // spinner-style badge so the list does not silently render
+            // an empty row if recovery has not run yet.
+            case RECORDING:
+                holder.statusIcon.setVisibility(View.VISIBLE);
+                holder.statusIcon.setImageResource(R.drawable.ic_baseline_sync_24);
+                holder.statusTv.setVisibility(View.VISIBLE);
+                holder.statusTv.setText(R.string.dictate_status_recording);
+                break;
+            case TRANSCRIBING:
+                holder.statusIcon.setVisibility(View.VISIBLE);
+                holder.statusIcon.setImageResource(R.drawable.ic_baseline_sync_24);
+                holder.statusTv.setVisibility(View.VISIBLE);
+                holder.statusTv.setText(R.string.dictate_status_transcribing);
+                break;
             case RECORDED:
                 holder.statusIcon.setVisibility(View.VISIBLE);
                 holder.statusIcon.setImageResource(R.drawable.ic_baseline_pending_24);
@@ -155,6 +174,23 @@ public class HistoryAdapter extends RecyclerView.Adapter<HistoryAdapter.ViewHold
                 holder.statusIcon.setImageResource(R.drawable.ic_baseline_cancel_24);
                 holder.statusTv.setVisibility(View.VISIBLE);
                 holder.statusTv.setText(R.string.dictate_status_cancelled);
+                break;
+            default:
+                // KG-SST-4 (Spec 1 §6.1.3): Java switch is not
+                // exhaustive — a new SessionStatus variant added
+                // without updating this switch would silently render
+                // an empty badge. Log.wtf surfaces the gap in
+                // Crashlytics; GONE prevents a RecyclerView-bind crash.
+                // The companion try/catch above (line ~131) handles
+                // the orthogonal "DB string unknown to this build"
+                // failure mode — both layers are kept (disjoint
+                // failure modes, see Spec 1 §6.1.3 Doppel-Sicherung).
+                android.util.Log.wtf(
+                    "HistoryAdapter",
+                    "Unknown SessionStatus in applyStatusBadge: " + status
+                );
+                holder.statusIcon.setVisibility(View.GONE);
+                holder.statusTv.setVisibility(View.GONE);
                 break;
         }
     }

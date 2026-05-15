@@ -24,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import net.devemperor.dictate.R
@@ -47,6 +48,9 @@ import net.devemperor.dictate.state.PipelinePrefMirror
 import net.devemperor.dictate.state.PipelineRecovery
 import net.devemperor.dictate.state.PipelineServiceStubSubsystems
 import net.devemperor.dictate.state.PipelineSessionRepoAdapter
+import net.devemperor.dictate.state.layout.KeyboardLayoutManager
+import net.devemperor.dictate.state.layout.LayoutCatalog
+import net.devemperor.dictate.state.layout.LayoutStrings
 import net.devemperor.dictate.state.realToastSink
 import kotlinx.coroutines.launch
 
@@ -155,6 +159,30 @@ class DictatePipelineService : Service() {
     // for its pre-dispatch resolver (`startRecording → allocate()`),
     // while `runEffect`-callers consume it via [ModuleServices].
     private lateinit var audioFileFactoryImpl: AudioFileFactory
+
+    // ── C15 — Keyboard layout render orchestration (Spec 2 §11.8 5c) ───
+    //
+    // The catalog + manager live in the Service so they survive
+    // IME-View recreation (rotation, theme switch). The IME constructs
+    // an `ImeViewBackend` per `onCreateInputView` and attaches it to
+    // the manager via the LocalBinder. The state-collect coroutine
+    // below forwards every `DictateUiState` emit into
+    // `manager.onStateChanged(...)` so attached backends re-render
+    // reactively.
+    //
+    // `lateinit` because both depend on [Context.getString] (LayoutStrings)
+    // and on the orchestrator's onAction sink.
+    private lateinit var layoutCatalogImpl: LayoutCatalog
+    private lateinit var keyboardLayoutManagerImpl: KeyboardLayoutManager
+
+    /**
+     * Service-owned [ModuleServices] DI container. Promoted from a
+     * local `val` to a field in C15 so the IME can hand the same
+     * reference to `ImeViewBackend` (its `actionResolver`s need
+     * `audioFileFactory.allocate()` at click time — Spec 1 §4.11 +
+     * Spec 2 §6 `services` parameter).
+     */
+    private lateinit var moduleServicesImpl: ModuleServices
 
     /** Single binder instance — Spec 1 §11.3.4 Multi-Bind. */
     private val binder: LocalBinder = LocalBinder()
@@ -340,7 +368,7 @@ class DictatePipelineService : Service() {
             cacheDirProvider = { applicationContext.cacheDir },
         )
 
-        val services = ModuleServices(
+        moduleServicesImpl = ModuleServices(
             recordingHardware = recordingHardware,
             bluetoothSco = bluetoothSco,
             audioFocus = audioFocus,
@@ -380,7 +408,7 @@ class DictatePipelineService : Service() {
         orchestrator = DictateOrchestrator(
             scope = serviceScope,
             store = store,
-            services = services,
+            services = moduleServicesImpl,
             registry = DictateModuleRegistry,
             prefMirror = prefMirror,
             recovery = recovery,
@@ -422,7 +450,82 @@ class DictatePipelineService : Service() {
                 Log.w(TAG, "audio-file orphan cleanup failed at boot", t)
             }
         }
+
+        // ──────────────────────────────────────────────────────────────
+        // Step 7 — Keyboard layout render-orchestrator wiring (C15 / Spec 2 §11.8 5c).
+        //
+        // The catalog + manager are constructed here so they survive
+        // IME-View recreation. The IME's `onCreateInputView` later
+        // builds an `ImeViewBackend` and attaches it via the
+        // LocalBinder. The state-collect below forwards every
+        // `DictateUiState` emit into `manager.onStateChanged(...)`;
+        // attached backends re-render reactively without the IME
+        // needing its own collect.
+        // ──────────────────────────────────────────────────────────────
+        layoutCatalogImpl = LayoutCatalog(buildLayoutStrings())
+        keyboardLayoutManagerImpl = KeyboardLayoutManager(
+            catalog = layoutCatalogImpl,
+            onAction = { action ->
+                // Backend click → orchestrator dispatch. The manager
+                // owns the single click-sink; backends turn user
+                // clicks into Actions and push them through this
+                // pipe (F-8 Single-Dispatch).
+                orchestrator.dispatch(action)
+            },
+        )
+        serviceScope.launch {
+            orchestrator.state.collect { state ->
+                keyboardLayoutManagerImpl.onStateChanged(state)
+            }
+        }
     }
+
+    /**
+     * Build the [LayoutStrings] bundle from the service's Android
+     * Context. Captured at service-construction time (Android string
+     * resources don't change at runtime within a process). Re-built
+     * if the IME re-attaches (e.g. theme switch) — but for that the
+     * IME goes through `onCreateInputView` which re-attaches the
+     * backend; the strings themselves stay stable.
+     *
+     * `dictateButtonText` reads the legacy `LanguageController` flow
+     * via the IME-supplied label provider — for C15 we resolve to
+     * the localised "Record" string as a baseline. Once D-13
+     * (LanguageController removal) lands, the resolver chains
+     * through [LanguageModule] directly.
+     */
+    private fun buildLayoutStrings(): LayoutStrings = LayoutStrings(
+        record = getString(R.string.dictate_record),
+        send = getString(R.string.dictate_send, getString(R.string.dictate_record)),
+        sending = getString(R.string.dictate_sending),
+        // Baseline label provider — points at the "Record" resource. The
+        // legacy IME-side `getDictateButtonText()` (effective-language-
+        // aware) keeps owning the live label until D-13 lands and the
+        // LanguageController is fully migrated. The new render path
+        // uses this default; the legacy path still updates the button
+        // text directly through `MainButtonsController.updateRecordButtonText`.
+        dictateButtonText = { getString(R.string.dictate_record) },
+        formatStagingLabel = { audioDurationSeconds ->
+            // Defensive default — Spec 1 §3 `ReprocessStaging` will
+            // grow `audioDurationSeconds`; format as MM:SS.
+            val minutes = audioDurationSeconds / 60
+            val seconds = audioDurationSeconds % 60
+            String.format("Audio %d:%02d · Send", minutes, seconds)
+        },
+        formatPipelineLabel = { completedSteps, totalSteps, autoEnterActive, elapsedMs ->
+            // Live values come from `PipelineUiState.Running`. The
+            // resolver currently passes 0s pending pipeline-state
+            // extension (Spec 2 C12/C14 follow-up).
+            val seconds = (elapsedMs / 1000L).toInt()
+            val mm = seconds / 60
+            val ss = seconds % 60
+            if (autoEnterActive) {
+                String.format("%d/%d ↵ %d:%02d", completedSteps, totalSteps, mm, ss)
+            } else {
+                String.format("%d/%d %d:%02d", completedSteps, totalSteps, mm, ss)
+            }
+        },
+    )
 
     /**
      * Kick off the dual cleanup pass (Spec 1 §6.2 R.17 + §6.3.1):
@@ -518,6 +621,19 @@ class DictatePipelineService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        // C15 — Detach any backends that the IME left attached. The
+        // KeyboardLayoutManager owns the View references, so a clean
+        // detach here prevents leaks (the IME's `onDestroy` runs in
+        // parallel; whichever fires first wins, both paths are
+        // idempotent via KeyboardLayoutManager.detachAll).
+        if (::keyboardLayoutManagerImpl.isInitialized) {
+            try {
+                keyboardLayoutManagerImpl.detachAll()
+            } catch (t: Throwable) {
+                Log.w(TAG, "keyboardLayoutManager.detachAll failed", t)
+            }
+        }
+
         // C10 — Service-idle cleanup slot (Spec 1 §6.2 R.17 + §6.3.1).
         // When the service is reaching its terminal state (onDestroy =
         // Android-side decision to stop), kick off the dual cleanup pass.
@@ -721,6 +837,37 @@ class DictatePipelineService : Service() {
          */
         val audioFileFactory: AudioFileFactory
             get() = audioFileFactoryImpl
+
+        // ── C15 — Keyboard layout render orchestration (Spec 2 §11.8 5c) ─
+
+        /**
+         * The service-owned [LayoutCatalog]. Exposed so the IME can
+         * construct an `ImeViewBackend` against the same catalog the
+         * manager uses. Catalog itself is immutable; safe to share.
+         */
+        val layoutCatalog: LayoutCatalog
+            get() = layoutCatalogImpl
+
+        /**
+         * The service-owned [KeyboardLayoutManager]. The IME calls
+         * [KeyboardLayoutManager.attachBackend] in `onCreateInputView`
+         * and [KeyboardLayoutManager.detachBackend] (or
+         * [KeyboardLayoutManager.detachAll]) when the view is torn
+         * down. The manager re-renders on every state emit via the
+         * service-side collector.
+         */
+        val keyboardLayoutManager: KeyboardLayoutManager
+            get() = keyboardLayoutManagerImpl
+
+        /**
+         * Service-owned [ModuleServices] container — exposed so the IME
+         * can hand the same `services` reference to `ImeViewBackend`
+         * (its `actionResolver`s need `audioFileFactory.allocate()` at
+         * click time, Spec 1 §4.11). The IME does NOT mutate the
+         * container; the LocalBinder field is read-only access.
+         */
+        val moduleServices: ModuleServices
+            get() = moduleServicesImpl
 
         // ── Callback registration (IME → Service direction) ──────────
         //

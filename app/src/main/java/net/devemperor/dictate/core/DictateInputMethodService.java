@@ -82,7 +82,16 @@ import net.devemperor.dictate.rewording.PromptsKeyboardAdapter;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
 import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
+import net.devemperor.dictate.state.layout.KeyboardLayoutManager;
+import net.devemperor.dictate.state.layout.LogicalButtonId;
+import net.devemperor.dictate.state.render.ImeViewBackend;
+import net.devemperor.dictate.state.render.RealMotionSurface;
+import net.devemperor.dictate.state.render.RecordingAnimationController;
 import net.devemperor.dictate.widget.PulseLayout;
+
+import androidx.constraintlayout.motion.widget.MotionLayout;
+import java.util.HashMap;
+import java.util.Map;
 
 import androidx.room.InvalidationTracker;
 
@@ -221,10 +230,13 @@ public class DictateInputMethodService extends InputMethodService
     private KeyboardStateManager stateManager;
     private InfoBarController infoBarController;
     private MainButtonsController mainButtonsController;
-    // Block 1 / Chunk 3: owns the two-row vs. single-row layout switch on the
-    // main button area. Constructed in onCreateInputView() once all the
-    // action_row / input_row child views are resolved.
-    private KeyboardLayoutModeController layoutModeController;
+
+    // C15 — New keyboard-layout render path (Spec 2 §11.8 5c). Constructed in
+    // onCreateInputView() once the View tree is inflated; attached to the
+    // service-side KeyboardLayoutManager via the LocalBinder. Detached in
+    // onDestroyInputView() / onDestroy().
+    private ImeViewBackend imeViewBackend;
+    private KeyboardLayoutManager keyboardLayoutManager; // copy of the service-side instance, for detach
 
     // Recording controllers (extracted from God-Class)
     private RecordingStateController recordingStateController;
@@ -237,18 +249,12 @@ public class DictateInputMethodService extends InputMethodService
 
     // define views
     private ConstraintLayout dictateKeyboardView;
-    // Block 1 / Chunk 3: parent of the action_row + input_row (XML id
-    // `main_buttons_cl`). Typed as `ViewGroup` because it serves as the
-    // [TransitionManager] scene root in the [KeyboardLayoutModeController];
-    // every `View.visibility =` call site works through inheritance.
-    // Consolidated from a former dual `View mainButtonsCl` /
-    // `ViewGroup mainButtonsClGroup` pair (2026-05-06) — two fields for the
-    // same XML id were a maintenance trap.
+    // C15 — `main_buttons_cl` is now an `androidx.constraintlayout.motion.widget.MotionLayout`
+    // (Spec 2 §7 / §11.1). Typed as `ViewGroup` because callers only need
+    // basic visibility / parent semantics; the [ImeViewBackend] resolves
+    // the concrete MotionLayout via a dedicated findViewById on the same
+    // id when constructing its [RealMotionSurface] wrapper.
     private ViewGroup mainButtonsClGroup;
-    // Block 1 / Chunk 3: the two row containers re-parented by the layout
-    // controller. Same `findViewById` pattern as their siblings.
-    private ConstraintLayout actionRow;
-    private ConstraintLayout inputRow;
     private MaterialButton editSettingsButton;
     private ConstraintLayout editButtonsKeyboardLl;
     private MaterialButton recordButton;
@@ -337,6 +343,16 @@ public class DictateInputMethodService extends InputMethodService
             // into the IME's fields so existing call sites (record-button,
             // pipeline-progress, etc.) work without rewriting.
             bindAiInfrastructureFromService(localBinder);
+            // C15 — If the view tree is already inflated (race between
+            // bindService callback and onCreateInputView), wire the new
+            // render path now. Otherwise the next onCreateInputView pass
+            // (which always runs while the user has the keyboard open)
+            // will pick it up.
+            if (dictateKeyboardView != null && imeViewBackend == null) {
+                Context themedContext = new ContextThemeWrapper(
+                    DictateInputMethodService.this, R.style.Theme_Dictate);
+                attachImeViewBackendIfReady(themedContext);
+            }
         }
 
         // ── onServiceDisconnected ──
@@ -565,11 +581,6 @@ public class DictateInputMethodService extends InputMethodService
         });
 
         mainButtonsClGroup = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
-        // Block 1 / Chunk 3: the two row containers consumed by
-        // KeyboardLayoutModeController for re-parenting + ConstraintSet
-        // capture.
-        actionRow = dictateKeyboardView.findViewById(R.id.action_row);
-        inputRow = dictateKeyboardView.findViewById(R.id.input_row);
         editSettingsButton = dictateKeyboardView.findViewById(R.id.edit_settings_btn);
         editButtonsKeyboardLl = dictateKeyboardView.findViewById(R.id.edit_buttons_keyboard_ll);
         recordPulseLayout = dictateKeyboardView.findViewById(R.id.record_pulse_layout);
@@ -660,16 +671,14 @@ public class DictateInputMethodService extends InputMethodService
 
         // KeyboardStateManager (deterministic visibility calculator)
         // Note: recordingStateController and uiController are initialized after stateManager,
-        // but lambdas are evaluated lazily, so this is safe
-        // Block 1 / Chunk 3: layout-mode wiring (Plan-Z. 437-438).
-        // mainButtonsClGroup is the parent of action_row + input_row and
-        // doubles as the ContentArea visibility target.
+        // but lambdas are evaluated lazily, so this is safe.
+        // C15: action_row + input_row are gone (MotionLayout owns the layout
+        // switch); KeyboardViews no longer carries them.
         KeyboardViews keyboardViews = new KeyboardViews(
             mainButtonsClGroup, editButtonsKeyboardLl, promptsCl, emojiPickerCl,
             qwertzContainer, overlayCharactersLl, pauseButton, trashButton,
             promptRecordingControlsLl, promptTrashBtn,
             promptsRv, pipelineProgressLl,
-            actionRow, inputRow,
             recordPulseLayout, spaceButton, backspaceButton,
             enterButton, resendButton, audioFocusButton);
         stateManager = new KeyboardStateManager(
@@ -729,14 +738,13 @@ public class DictateInputMethodService extends InputMethodService
         // even when the user disabled AudioFocus across a previous session.
         mainButtonsController.refreshAudioFocusIcon(DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE));
 
-        // Block 1 / Chunk 3: layout-mode controller. Constructed AFTER the
-        // KeyboardViews DTO is built and AFTER MainButtonsController has
-        // attached its listeners — the controller's init {} captures the
-        // freshly inflated default ConstraintSets and applies the persisted
-        // SingleRowMode without animation. Subsequent setSmallMode /
-        // applyVisibility cycles re-route through KeyboardStateManager.
-        layoutModeController = new KeyboardLayoutModeController(keyboardViews, sp);
-        stateManager.setLayoutModeController(layoutModeController);
+        // C15 — KeyboardLayoutModeController + KSM.setLayoutModeController
+        // are gone (Spec 2 §11.8 5d). MotionLayout + LayoutCatalog now own
+        // the two-row vs. single-row switch. The handler invoked when the
+        // edit_numbers_btn is long-pressed (`onSingleRowModeToggled`) now
+        // writes Pref.SingleRowMode and triggers a state re-emit; the
+        // attached ImeViewBackend re-renders against the updated state
+        // and asks MotionLayout to transition to the new scene-id.
 
         // Prompt trash control: delegate to same action as main trash
         promptTrashBtn.setOnClickListener(v -> {
@@ -925,7 +933,115 @@ public class DictateInputMethodService extends InputMethodService
         // before the user interacts with anything.
         refreshLanguageChip();
 
+        // ── 9. C15 — Attach ImeViewBackend to the service-side
+        //       KeyboardLayoutManager (Spec 2 §11.8 5c). The service-side
+        //       state-collect coroutine fans every emit into the
+        //       attached backend; click → onAction → orchestrator.dispatch.
+        //
+        //       Skipped silently when the service isn't bound yet (the
+        //       record path still works through the legacy MainButtonsController
+        //       + KeyboardUiController + RecordingUiController flow). Once
+        //       the binder arrives in onServiceConnected the new path
+        //       comes online on the NEXT view-recreate (a bound service
+        //       is also a precondition for the attach because we need
+        //       its ModuleServices reference for the resolvers' audio-file
+        //       factory access).
+        attachImeViewBackendIfReady(context);
+
         return dictateKeyboardView;
+    }
+
+    /**
+     * Construct an {@link ImeViewBackend} for the freshly inflated view
+     * tree and attach it to the service-side {@link KeyboardLayoutManager}.
+     *
+     * Called at the tail of {@link #onCreateInputView()}; the matching
+     * detach lives in {@link #cleanupOldControllers()} (view-recreate)
+     * and {@link #onDestroy()} (process tear-down).
+     *
+     * Idempotent — a second call without a preceding detach raises in
+     * {@link KeyboardLayoutManager#attachBackend(net.devemperor.dictate.state.layout.RenderBackend)}.
+     * The caller is expected to detach first (which is what
+     * cleanupOldControllers does on view-recreate).
+     */
+    private void attachImeViewBackendIfReady(Context context) {
+        if (pipelineBinder == null) {
+            // Service not bound yet. The onServiceConnected callback
+            // will re-attempt the wiring once the binder arrives; in
+            // the meantime the legacy controllers still drive the UI.
+            return;
+        }
+        MotionLayout motionLayout = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
+        if (motionLayout == null) {
+            Log.w("DictateIME", "main_buttons_cl is not a MotionLayout — ImeViewBackend not attached");
+            return;
+        }
+        // Build the LogicalButtonId → View map. All nine state-driven
+        // buttons resolve from the inflated tree; WIDGET_TOGGLE was
+        // added in C13 (placeholder icon, B5 supplies the real
+        // implementation).
+        Map<LogicalButtonId, View> buttonViews = new HashMap<>();
+        buttonViews.put(LogicalButtonId.RECORD, recordButton);
+        buttonViews.put(LogicalButtonId.RESEND, resendButton);
+        buttonViews.put(LogicalButtonId.BACKSPACE, backspaceButton);
+        buttonViews.put(LogicalButtonId.AUDIO_FOCUS, audioFocusButton);
+        buttonViews.put(LogicalButtonId.TRASH, trashButton);
+        buttonViews.put(LogicalButtonId.SPACE, spaceButton);
+        buttonViews.put(LogicalButtonId.PAUSE, pauseButton);
+        buttonViews.put(LogicalButtonId.ENTER, enterButton);
+        View widgetToggleBtn = dictateKeyboardView.findViewById(R.id.widget_toggle_btn);
+        if (widgetToggleBtn != null) {
+            buttonViews.put(LogicalButtonId.WIDGET_TOGGLE, widgetToggleBtn);
+        }
+
+        keyboardLayoutManager = pipelineBinder.getKeyboardLayoutManager();
+
+        // RecordingAnimationController: drive BorderGlow + PulseLayout from
+        // state.recording transitions. Spec 2 §11.5 keeps the animation
+        // outside the pure-resolver model — the controller is forwarded
+        // from ImeViewBackend.render. animationsEnabled is read live
+        // from Pref.Animations so a settings flip is reflected on the
+        // next state emit.
+        float displayDensity = recordButton.getResources().getDisplayMetrics().density;
+        net.devemperor.dictate.widget.RecordingAnimation recordingAnimationForBackend =
+            new net.devemperor.dictate.widget.BorderGlowAnimation(
+                DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE),
+                androidx.appcompat.content.res.AppCompatResources.getDrawable(
+                    context, R.drawable.ic_baseline_send_20),
+                new net.devemperor.dictate.widget.AmplitudeVisualizerDrawable.BarCountMode.Fixed(30),
+                0.35f,
+                displayDensity
+            );
+        recordingAnimationForBackend.prepare(recordButton);
+        kotlin.jvm.functions.Function0<Boolean> animationsEnabledLambda =
+            () -> DictatePrefsKt.get(sp, Pref.Animations.INSTANCE);
+        RecordingAnimationController recordingAnimationCtrlForBackend =
+            new RecordingAnimationController(
+                recordingAnimationForBackend,
+                recordPulseLayout,
+                animationsEnabledLambda
+            );
+
+        kotlin.jvm.functions.Function0<kotlin.Unit> vibrateLambda = () -> {
+            vibrate();
+            return kotlin.Unit.INSTANCE;
+        };
+        imeViewBackend = new ImeViewBackend(
+            new RealMotionSurface(motionLayout),
+            buttonViews,
+            context,
+            pipelineBinder.getModuleServices(),
+            recordingAnimationCtrlForBackend,
+            /* staticHandlerInstaller */ null,
+            vibrateLambda
+        );
+
+        try {
+            keyboardLayoutManager.attachBackend(imeViewBackend);
+        } catch (Throwable t) {
+            Log.w("DictateIME", "KeyboardLayoutManager.attachBackend failed", t);
+            imeViewBackend = null;
+        }
     }
 
     // method is called if the user closed the keyboard
@@ -969,6 +1085,20 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onDestroy() {
+        // C15 — Detach the ImeViewBackend so the KeyboardLayoutManager
+        // drops its View references. Calling detach via the cached
+        // manager (the binder may have already been nulled in
+        // onServiceDisconnected) is safe — detach is idempotent.
+        if (imeViewBackend != null && keyboardLayoutManager != null) {
+            try {
+                keyboardLayoutManager.detachBackend(imeViewBackend);
+            } catch (Throwable t) {
+                Log.w("DictateIME", "ImeViewBackend detach in onDestroy failed", t);
+            }
+        }
+        imeViewBackend = null;
+        keyboardLayoutManager = null;
+
         // Clean up long-lived objects
         if (mainHandler != null) {
             mainHandler.removeCallbacks(reloadPromptsRunnable);
@@ -1088,16 +1218,19 @@ public class DictateInputMethodService extends InputMethodService
             sp.unregisterOnSharedPreferenceChangeListener(audioFocusListener);
             audioFocusListener = null;
         }
-        // Block 1 / Chunk 3: drop the previous layout-mode controller — it
-        // holds direct references to the old action_row / input_row views
-        // which become invalid after the imminent re-inflate. Also clear
-        // the StateManager's reference so a stray applyVisibility() in the
-        // gap between cleanup and re-wiring cannot reach into the stale
-        // controller (defensive — same null-out, two consumers).
-        layoutModeController = null;
-        if (stateManager != null) {
-            stateManager.clearLayoutModeController();
+        // C15 — detach the previous ImeViewBackend before the upcoming
+        // re-inflate. The backend holds direct View references that
+        // become invalid the moment LayoutInflater produces a new tree.
+        // Detach is idempotent — calling on a stale or already-detached
+        // backend is safe.
+        if (imeViewBackend != null && keyboardLayoutManager != null) {
+            try {
+                keyboardLayoutManager.detachBackend(imeViewBackend);
+            } catch (Throwable t) {
+                Log.w("DictateIME", "ImeViewBackend detach during cleanupOldControllers failed", t);
+            }
         }
+        imeViewBackend = null;
         // Remove old InvalidationTracker observer (will be re-added in setupPromptsAdapter)
         if (promptsInvalidationObserver != null && dictateDb != null) {
             dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
@@ -2934,9 +3067,10 @@ public class DictateInputMethodService extends InputMethodService
         boolean current = DictatePrefsKt.get(sp, Pref.SingleRowMode.INSTANCE);
         boolean next = !current;
         DictatePrefsKt.put(sp.edit(), Pref.SingleRowMode.INSTANCE, next).apply();
-        if (layoutModeController != null) {
-            layoutModeController.setSingleRowMode(next, /* animate */ true);
-        }
+        // C15 — KeyboardLayoutModeController is gone. The Pref-write above
+        // is mirrored into the orchestrator state via PipelinePrefMirror;
+        // the attached ImeViewBackend re-renders and asks MotionLayout to
+        // transition to the new scene-id. No direct controller call needed.
         if (mainButtonsController != null) {
             mainButtonsController.animateEditNumbersBounce();
         }

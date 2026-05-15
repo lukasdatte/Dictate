@@ -142,40 +142,10 @@
 
     </androidx.constraintlayout.motion.widget.MotionLayout>
 
-    <!-- ════════════════════════════════════════════════════════════
-         Legacy `action_row` / `input_row` scaffold stubs (C13 deviation).
-
-         The MotionLayout refactor (Spec 2 §7 / §11.1) flattens all nine
-         buttons into direct MotionLayout children — the two wrapper
-         ConstraintLayouts are conceptually gone. The legacy controllers
-         (`KeyboardLayoutModeController`, `KeyboardStateManager.KeyboardViews`,
-         `DictateInputMethodService.actionRow/inputRow`) still resolve these
-         IDs and would fail to compile / NPE without them.
-
-         These two stubs exist ONLY so the legacy resolution chain stays
-         compile-green between C13 and C15. C15 deletes the controllers
-         and these stubs in one step (Spec 2 §11.8 5d). They live OUTSIDE
-         the MotionLayout (siblings within the root ConstraintLayout) so
-         the scene's flat-hierarchy guarantee holds, with
-         android:visibility="gone" + zero size so they don't influence
-         layout at runtime.
-         ════════════════════════════════════════════════════════════ -->
-    <androidx.constraintlayout.widget.ConstraintLayout
-        android:id="@+id/action_row"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:visibility="gone"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <androidx.constraintlayout.widget.ConstraintLayout
-        android:id="@+id/input_row"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:visibility="gone"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
+    <!-- C15 — Removed `action_row` / `input_row` scaffold stubs
+         (C13 deviation). The KeyboardLayoutModeController + all
+         remaining legacy `findViewById(R.id.action_row|input_row)`
+         resolution sites were deleted in Spec 2 §11.8 5d. -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/info_cl"
         android:layout_width="match_parent"

@@ -398,10 +398,101 @@ from the recovery path.
 
 **Agent-IDs:** Steps 1-5: `B3-C11-IMPL-FULL`
 
-**Status:** ⏳ pending (depends on C10)
+**Status:** ✅ done (production + tests landed; ./gradlew test green at 677 tests)
 **Chunks file:** `../dictate-keyboard-layout-refactor.reviewed.chunks.json` chunk index 12 (C11-block4-audio-file-factory)
 
-⏳
+#### Implementation (B3-C11-IMPL-FULL)
+
+**What was done.** Implemented the Pre-Dispatch-Allocation pipeline end-to-end (Spec 1 §4.11):
+real `CacheDirAudioFileFactory` (replacing the C7 stub), `LegacyAudioFileMigration` (KG-AFF-2),
+service-side wiring (`onCreate` builds the factory, runs the one-shot legacy migration,
+launches the async orphan-cleanup with the 60 s freshness cut-off KG-AFF-4), IME-side
+Pre-Dispatch (`startRecording` calls `binder.audioFileFactory.allocate()` and bails out on
+`IOException` with a user-visible toast), `PipelineOrchestrator.persistNewSession` KG-AFF-1
+sofort-delete patch, and `PreferencesFragment.clearCacheRecursively` (KG-AFF-3) so the
+"Cache leeren" preference reaches the new sub-directory layout.
+
+**Files created (production for Commit 1):**
+
+  - `app/src/main/java/net/devemperor/dictate/core/CacheDirAudioFileFactory.kt` (~100 LoC,
+    KG-AFF-4 cutoff + KG-AFF-5 `requireNotNull`).
+  - `app/src/main/java/net/devemperor/dictate/migration/LegacyAudioFileMigration.kt` (~95 LoC,
+    pref-flag idempotence + DAO `WHERE status NOT IN (…)` secondary guard).
+
+**Files modified (production):**
+
+  - `app/src/main/java/net/devemperor/dictate/state/ModuleServices.kt` — extended the
+    `AudioFileFactory` interface with `cleanupOrphans(referencedPaths)` (default no-op for
+    test doubles) + `@Throws(IOException::class)` on `allocate` so Java callers can catch.
+  - `app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt` — constructed
+    `CacheDirAudioFileFactory` (replaces the `PipelineServiceStubSubsystems.audioFileFactory`
+    reference), invoked `LegacyAudioFileMigration.run` sync after orchestrator-construct,
+    launched async orphan-cleanup with the referenced-paths set from
+    `findAllAudioFilePaths()`, exposed the factory via `LocalBinder.audioFileFactory` so
+    the IME can read it for Pre-Dispatch.
+  - `app/src/main/java/net/devemperor/dictate/state/PipelineServiceStubSubsystems.kt` —
+    re-documented the `audioFileFactory` stub as deprecated/test-only (production swap
+    landed; field retained for test doubles).
+  - `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java` —
+    `startRecording` now allocates via the binder's factory and gracefully degrades on
+    `IOException` (toast `dictate_storage_full`) or `pipelineBinder == null` (toast
+    `dictate_service_not_ready`).
+  - `app/src/main/java/net/devemperor/dictate/core/PipelineOrchestrator.kt` —
+    `persistNewSession` now `runCatching { audioFile.delete() }` after `persistFromCache`
+    (KG-AFF-1 — explicit cache cleanup once the file is in `filesDir/recordings/`).
+  - `app/src/main/java/net/devemperor/dictate/settings/PreferencesFragment.java` —
+    added `computeCacheSizeRecursive`, `countCacheFilesRecursive`, `clearCacheRecursively`,
+    `deleteRecursively` helpers; cache preference summary and click handler use them.
+  - `app/src/main/res/values/strings.xml` (+`values-de`, `values-es`, `values-pt`) —
+    new `dictate_storage_full` string with localized variants.
+
+**Files created (tests for Commit 2):**
+
+  - `app/src/test/java/net/devemperor/dictate/core/CacheDirAudioFileFactoryTest.kt` —
+    13 JVM unit tests: allocate naming, idempotence per-ms, no-create-on-allocate,
+    IOException paths (occupied subdir + uncreatable parent), cleanupOrphans 60 s cutoff,
+    DB-referenced paths, non-factory name skip, fresh-boot no-op, KG-AFF-5 null-cacheDir.
+  - `app/src/test/java/net/devemperor/dictate/migration/LegacyAudioFileMigrationTest.kt` —
+    8 Robolectric tests: pref-flag short-circuit, legacy-file delete, recoverable-status
+    promotion, terminal-status preservation (Phase-B S-7 idempotence), non-legacy untouched,
+    second-run no-op, flag flip-on-completion.
+  - `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceAudioFileFactoryWiringTest.kt` —
+    2 Robolectric wiring tests: real `CacheDirAudioFileFactory` exposed via binder, allocate
+    returns path under cacheDir (regression catcher for the C7 stub swap).
+
+**Build/test result.** `./gradlew test` → **677 tests, 0 failures** (654 baseline + 23 new).
+`./gradlew assembleDebug` → **BUILD SUCCESSFUL**.
+
+##### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| `audioFile` field in `DictateInputMethodService` not yet removed (plan step 13, §4.11.5.4 step 1) | §11.2.2 Block 4 step 13 + §4.11.5.4 | Field stays; only the allocation site (`new File(getCacheDir(), "audio.m4a")`) is replaced with the factory call. | The field is read from ~5 unrelated sites (RecordingStateController, transcription, resend, onAudioPersisted) that are still IME-side, not module-side. Full removal requires the orchestrator-side path to be primary, which lands in B5/B6 (LayoutCatalog + module-driven recording). Removing the field now would break ~5 reads with no compensating module-side replacement. | B5/B6 LayoutCatalog must remove the field when the module-side path takes over recording. | inline-decided (D22 mid-size, locally rationalized) |
+| `IsDirectory` guard added to `CacheDirAudioFileFactory.allocate()` | §4.11.3 default-impl | Added explicit `audioCacheDir.exists() && !audioCacheDir.isDirectory` check before the `mkdirs` branch. | Spec uses `audioCacheDir.exists() && audioCacheDir.mkdirs()` which short-circuits when `exists()` returns `true` on a regular file — silently returns a path with a file-parent, MediaRecorder fails later with a confusing IOException. Explicit guard fails fast with a clear message. | None — local hardening only. | inline-fixed (D7 code-quality) |
+
+##### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| (none) | — | All KG-AFF-1 through KG-AFF-5 already resolved in §4.11; implemented 1:1. | — | — |
+
+##### Overlooked points / known gaps
+
+  - **PipelineOrchestrator KG-AFF-1 patch has no unit-test.** The class is Android-bound
+    (`MediaMetadataRetriever`, `Context`, real `RecordingRepository.persistFromCache`) and
+    has no existing test harness. The patch is a tiny `runCatching { delete() }` with a
+    log on failure — the behavior is observable via integration on a real device. Flagged
+    for B4 AUDIT-TEST if coverage policy demands it.
+  - **RecordingHardwareAdapter and the `Effect.AllocateMediaRecorder` 3-arg signature** were
+    already verified consistent in C5 (Phase-B S-4 fix is in the spec). No changes needed
+    in C11; only verified the signature flow `StartRecording.audioFile →
+    Preparing.audioFile → Effect.AllocateMediaRecorder.audioFile → adapter.allocate(...)`
+    is intact via the existing `RecordingModuleTest` + `RecordingHardwareAdapterTest`
+    coverage.
+  - **60 s race-handling on RECORDING → FAILED is NOT in scope here.** The 60 s mentioned
+    in the chunk prompt is the `CUTOFF_GRACE_MS` for `cleanupOrphans` (allocate → prepare
+    race window, KG-AFF-4), not a recording-duration cap. The spec does not request a
+    recording-duration cap in this chunk.
 
 ---
 

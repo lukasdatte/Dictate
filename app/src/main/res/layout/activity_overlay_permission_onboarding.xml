@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Spec 3 §5.2 + §5.3 — onboarding rationale + "open Settings" button
+    for the floating-overlay (SYSTEM_ALERT_WINDOW) permission.
+
+    The primary onboarding surface is the in-IME info-bar (§5.3) — this
+    Activity is a complementary entry-point for users who reach
+    onboarding outside the keyboard view (deep-link, settings shortcut).
+-->
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/activity_overlay_permission_onboarding"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/overlay_perm_onboarding_title_tv"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="@string/overlay_perm_onboarding_title"
+        android:textAppearance="?attr/textAppearanceHeadlineSmall"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/overlay_perm_onboarding_explainer_tv"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="@string/overlay_perm_explainer"
+        android:textAppearance="?attr/textAppearanceBodyMedium"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/overlay_perm_onboarding_title_tv" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/overlay_perm_onboarding_grant_btn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="@string/overlay_perm_grant"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/overlay_perm_onboarding_explainer_tv" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/overlay_perm_onboarding_dismiss_btn"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/overlay_perm_later"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/overlay_perm_onboarding_grant_btn" />
+
+    <TextView
+        android:id="@+id/overlay_perm_onboarding_status_tv"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:textAppearance="?attr/textAppearanceBodySmall"
+        android:textStyle="italic"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/overlay_perm_onboarding_dismiss_btn"
+        tools:ignore="MissingPrefix"
+        xmlns:tools="http://schemas.android.com/tools" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

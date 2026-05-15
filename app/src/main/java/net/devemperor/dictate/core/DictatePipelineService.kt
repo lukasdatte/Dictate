@@ -55,8 +55,10 @@ import net.devemperor.dictate.state.layout.LayoutStrings
 import net.devemperor.dictate.state.realToastSink
 import net.devemperor.dictate.state.render.overlay.AndroidOverlayWindow
 import net.devemperor.dictate.state.render.overlay.DefaultOverlayLayoutParamsFactory
-import net.devemperor.dictate.state.render.overlay.NoOverlayPermissionGate
+import net.devemperor.dictate.state.render.overlay.DefaultOverlayPermissionGate
 import net.devemperor.dictate.state.render.overlay.OverlayBackend
+import net.devemperor.dictate.state.render.overlay.OverlayPermissionGate
+import net.devemperor.dictate.state.render.overlay.OverlayPermissionObserver
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -191,9 +193,16 @@ class DictatePipelineService : Service() {
     // ADR-0005), so the overlay only appears on the user's explicit
     // toggle or the auto-HOVER trigger.
     //
-    // `permissions` is wired to [NoOverlayPermissionGate] until C17
-    // contributes `DefaultOverlayPermissionGate` (Spec 3 §5.1).
+    // C17 wires the real [DefaultOverlayPermissionGate] (Settings.canDrawOverlays
+    // + persisted onboarding flags per Spec 3 §5.1) into the backend
+    // **and** constructs the [OverlayPermissionObserver] (Spec 3 §5.0)
+    // — the single live source for the `state.overlay.hasPermission`
+    // axis. The observer is exposed to the IME via [LocalBinder] so
+    // IME-lifecycle hooks can call `refresh()` after a user returns
+    // from System Settings.
     private var overlayBackendImpl: OverlayBackend? = null
+    private lateinit var overlayPermissionGateImpl: OverlayPermissionGate
+    private lateinit var overlayPermissionObserverImpl: OverlayPermissionObserver
 
     /**
      * Service-owned [ModuleServices] DI container. Promoted from a
@@ -500,7 +509,8 @@ class DictatePipelineService : Service() {
         }
 
         // ──────────────────────────────────────────────────────────────
-        // Step 8 — Floating-overlay backend construction (C16, Spec 3 §4.2).
+        // Step 8 — Floating-overlay backend construction (C16, Spec 3 §4.2)
+        //          + Permission gate / observer (C17, Spec 3 §5.0 + §5.1).
         //
         // The Service owns the WindowManager reference so the same
         // OverlayBackend instance survives IME-View recreation
@@ -508,7 +518,25 @@ class DictatePipelineService : Service() {
         // C18 wires the attach into the ViewMode-transition logic so
         // the window only appears on user-toggle (WIDGET) or auto
         // (HOVER, ADR-0005).
+        //
+        // The permission gate + observer are constructed **before** the
+        // backend so the backend's `permissions` parameter wires through
+        // the production gate. `observer.init()` is called below — that
+        // dispatch sets `state.overlay.hasPermission` to the live system
+        // value before any subscriber collects the first emission.
         // ──────────────────────────────────────────────────────────────
+        overlayPermissionGateImpl = DefaultOverlayPermissionGate(
+            ctx = this,
+            prefs = sharedPrefs,
+        )
+        overlayPermissionObserverImpl = OverlayPermissionObserver(
+            gate = overlayPermissionGateImpl,
+            // The dispatch sink is captured by-reference (orchestrator
+            // is `lateinit val`-initialised above); the lambda survives
+            // the entire observer lifetime.
+            dispatch = { action -> orchestrator.dispatch(action) },
+        )
+
         val windowManager: WindowManager? =
             getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         if (windowManager != null) {
@@ -516,7 +544,7 @@ class DictatePipelineService : Service() {
                 ctx = this,
                 services = moduleServicesImpl,
                 overlayWindow = AndroidOverlayWindow(windowManager),
-                permissions = NoOverlayPermissionGate,
+                permissions = overlayPermissionGateImpl,
                 layoutParamsFactory = DefaultOverlayLayoutParamsFactory(this),
             )
         } else {
@@ -526,6 +554,14 @@ class DictatePipelineService : Service() {
             // render anything until a real WindowManager is available.
             Log.w(TAG, "WindowManager service unavailable — overlay backend disabled")
         }
+
+        // Initial one-shot permission dispatch (Spec 3 §5.0). The
+        // observer reads `Settings.canDrawOverlays` via the gate and
+        // dispatches the boolean through the orchestrator — the
+        // OverlayModule reducer arm filters the no-op case by equality
+        // so a repeat boot with the same value produces a Rejected
+        // outcome rather than a cascade.
+        overlayPermissionObserverImpl.init()
     }
 
     /**
@@ -930,6 +966,27 @@ class DictatePipelineService : Service() {
          */
         val overlayBackend: OverlayBackend?
             get() = overlayBackendImpl
+
+        /**
+         * Service-owned [OverlayPermissionObserver] (Spec 3 §5.0). The
+         * IME calls [OverlayPermissionObserver.refresh] from
+         * `onCreateInputView` / `onStartInputView` so the
+         * `state.overlay.hasPermission` axis catches users who toggle
+         * the permission in System Settings without going through the
+         * in-IME info-bar flow.
+         */
+        val overlayPermissionObserver: OverlayPermissionObserver
+            get() = overlayPermissionObserverImpl
+
+        /**
+         * Service-owned production [OverlayPermissionGate] (Spec 3
+         * §5.1). Exposed so non-reducer surfaces (in-IME info-bar
+         * click-handler, future Activity-result hand-offs) can query
+         * `shouldShowOnboarding` / write the permanently-denied bit
+         * without re-instantiating the gate.
+         */
+        val overlayPermissionGate: OverlayPermissionGate
+            get() = overlayPermissionGateImpl
 
         // ── Callback registration (IME → Service direction) ──────────
         //

@@ -85,6 +85,16 @@
             android:name=".onboarding.OnboardingActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
+        <!--
+            Block 5 / Spec 3 §5.2 — standalone onboarding screen for the
+            floating-overlay (SYSTEM_ALERT_WINDOW) permission. Primary
+            onboarding surface is the in-IME info-bar (§5.3); this
+            Activity covers secondary entry-points (deep-link,
+            notification action, manual launch for tests).
+        -->
+        <activity
+            android:name=".onboarding.OverlayPermissionOnboardingActivity"
+            android:exported="false" />
         <activity
             android:name=".rewording.PromptEditActivity"
             android:exported="false"

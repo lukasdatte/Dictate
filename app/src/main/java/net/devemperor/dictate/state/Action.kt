@@ -331,6 +331,31 @@ sealed class Action {
         data object MarkOverlayOnboardingShown : OverlayAction()
         data object DismissOverlayOnboarding : OverlayAction()
 
+        /**
+         * Surface the in-IME permission-onboarding info-bar (Spec 3
+         * §5.3 / §5.4). Dispatched by the permission-aware
+         * WIDGET-toggle resolver
+         * ([net.devemperor.dictate.state.layout.resolveWidgetToggleAction])
+         * when the user taps the widget toggle without
+         * `SYSTEM_ALERT_WINDOW` permission. The reducer sets
+         * `onboardingPending = true`; the IME service renders the
+         * info-bar off that flag.
+         *
+         * **SRP — why a dedicated arm (not overloading
+         * [RequestOverlayPermission]).** "Show the explainer bar" and
+         * "launch System Settings" are two distinct UX steps (Spec 3
+         * §5.3 wants the explainer *before* the context-switch). A
+         * single-purpose action keeps each step independently
+         * dispatchable and the §5.4 reducer snippets coherent. It is
+         * symmetric with [MarkOverlayOnboardingShown] /
+         * [DismissOverlayOnboarding] / [RequestOverlayPermission].
+         *
+         * Spec 3 §5.4 left the trigger-arm explicitly "Auslöser TBD";
+         * this resolves it. @see ADR-0005 Decision-History
+         * 2026-05-15 entry.
+         */
+        data object ShowOverlayOnboarding : OverlayAction()
+
         /** User toggled the widget preference (T1/T2). */
         data class SetUserPrefersWidget(val prefers: Boolean) : OverlayAction()
 
@@ -352,6 +377,17 @@ sealed class Action {
         // ─── Permission axis (Issue 3.1.3) ───
         data class OnOverlayPermissionChanged(val granted: Boolean) : OverlayAction()
         data object RequestOverlayPermission : OverlayAction()
+
+        /**
+         * Permission-free notification fallback trigger (Spec 3 §9, O7).
+         * Emitted by [net.devemperor.dictate.state.OverlayModule]'s
+         * runtime-permission-loss cascade. The reducer emits
+         * [net.devemperor.dictate.state.OverlayModule.Effect.NotifyOverlayPermissionRequired]
+         * (no state change) so the FGS notification surfaces the
+         * revoke reason when the user is outside the keyboard and no
+         * in-IME info-bar can render.
+         */
+        data object RequestOverlayPermissionNotification : OverlayAction()
     }
 
     // ════════════════════════════════════════════════════════════════

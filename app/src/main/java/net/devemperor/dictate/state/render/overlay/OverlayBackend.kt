@@ -313,8 +313,12 @@ class OverlayBackend(
             window = overlayWindow,
             paramsHolder = { currentParams },
             positionMapper = positionMapper,
-            onPositionPersist = { normX, normY ->
-                val portrait = isPortraitOrientation()
+            // F-7: the backend stays the single orientation SoT; the
+            // controller captures this snapshot ONCE at ACTION_DOWN and
+            // hands it back through onPositionPersist so the bucket and
+            // the geometry come from the same configuration.
+            orientationProvider = { isPortraitOrientation() },
+            onPositionPersist = { portrait, normX, normY ->
                 onAction?.invoke(
                     Action.OverlayAction.UpdateOverlayPosition(
                         portrait = portrait,

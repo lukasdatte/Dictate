@@ -244,3 +244,33 @@ fun resolveOverlayCloseAction(
     ViewMode.HOVER -> Action.ViewModeAction.CloseOverlay
     ViewMode.KEYBOARD -> null
 }
+
+/**
+ * WIDGET_TOGGLE click resolver — permission-aware (Spec 3 §8 /
+ * ADR-0005 §"Required mechanics" #3, B5 repair-wave F-2).
+ *
+ * | `state.overlay.hasPermission` | Action emitted                              |
+ * |-------------------------------|---------------------------------------------|
+ * | `true`                        | `Action.ViewModeAction.ToggleViewModeWidget`|
+ * | `false`                       | `Action.OverlayAction.ShowOverlayOnboarding`|
+ *
+ * `hasPermission` is the **mirrored axis** kept fresh by
+ * `OverlayPermissionObserver` (the IME calls `refresh()` in
+ * `onStartInputView`, B5 F-3) — this resolver reads *state*, never
+ * `Settings.canDrawOverlays`, so it stays R.2-pure.
+ *
+ * Defence-in-depth: even when permission is present and this resolver
+ * emits `ToggleViewModeWidget`, `ViewModeModule.reduce`'s
+ * `!hasPermission ⇒ null` guard still refuses a widget switch if the
+ * axis is stale (ADR-0005 §8 "the reducer still refuses"). The two
+ * checks are intentionally redundant.
+ */
+fun resolveWidgetToggleAction(
+    state: DictateUiState,
+    @Suppress("UNUSED_PARAMETER") services: ModuleServices,
+): Action =
+    if (state.overlay.hasPermission) {
+        Action.ViewModeAction.ToggleViewModeWidget
+    } else {
+        Action.OverlayAction.ShowOverlayOnboarding
+    }

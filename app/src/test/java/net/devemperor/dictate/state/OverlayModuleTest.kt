@@ -79,6 +79,25 @@ class OverlayModuleTest {
     }
 
     @Test
+    fun `F-2 ShowOverlayOnboarding sets onboardingPending, no effect`() {
+        val state = OverlayState(onboardingPending = false)
+        val result = module.reduce(state, Action.OverlayAction.ShowOverlayOnboarding, ctx())
+        assertEquals(true, result!!.nextState.onboardingPending)
+        assertTrue("ShowOverlayOnboarding is a pure flag-set, no Settings launch.",
+            result.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `F-4 RequestOverlayPermissionNotification emits NotifyOverlayPermissionRequired, no state change`() {
+        val state = OverlayState(hasPermission = false)
+        val result = module.reduce(
+            state, Action.OverlayAction.RequestOverlayPermissionNotification, ctx())
+        assertEquals(state, result!!.nextState)
+        assertTrue(result.sideEffects.contains(
+            OverlayModule.Effect.NotifyOverlayPermissionRequired))
+    }
+
+    @Test
     fun `SuppressAutoOverlayUntilNextSession sets the bit`() {
         val state = OverlayState(suppressAutoOverlayUntilNextSession = false)
         val result = module.reduce(state, Action.OverlayAction.SuppressAutoOverlayUntilNextSession, ctx())
@@ -261,6 +280,45 @@ class OverlayModuleTest {
         val next = prev.copy(overlay = prev.overlay.copy(hasPermission = false))
         val cascade = module.onCrossModuleStateChange(prev, next)
         assertTrue(cascade.contains(Action.ViewModeAction.SetViewMode(ViewMode.KEYBOARD)))
+    }
+
+    @Test
+    fun `F-4 cascade permission-loss also emits RequestOverlayPermissionNotification`() {
+        val prev = DictateUiState.initial().copy(
+            viewMode = ViewMode.WIDGET,
+            overlay = OverlayState(hasPermission = true),
+        )
+        val next = prev.copy(overlay = prev.overlay.copy(hasPermission = false))
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        // Spec 3 §9 O7 — the FGS notification surfaces the revoke reason
+        // when the user is in another app (no in-IME info-bar reachable).
+        assertTrue(cascade.contains(
+            Action.OverlayAction.RequestOverlayPermissionNotification))
+    }
+
+    @Test
+    fun `F-2 cascade non-WIDGET to WIDGET while onboardingPending emits MarkOverlayOnboardingShown`() {
+        // User granted the permission, returned, and toggled the widget
+        // again — Spec 3 §5.4 auto-cleanup so the stale explainer bar
+        // does not linger.
+        val prev = DictateUiState.initial().copy(
+            viewMode = ViewMode.KEYBOARD,
+            overlay = OverlayState(hasPermission = true, onboardingPending = true),
+        )
+        val next = prev.copy(viewMode = ViewMode.WIDGET)
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertTrue(cascade.contains(Action.OverlayAction.MarkOverlayOnboardingShown))
+    }
+
+    @Test
+    fun `F-2 cascade to WIDGET without onboardingPending does NOT emit MarkOverlayOnboardingShown`() {
+        val prev = DictateUiState.initial().copy(
+            viewMode = ViewMode.KEYBOARD,
+            overlay = OverlayState(hasPermission = true, onboardingPending = false),
+        )
+        val next = prev.copy(viewMode = ViewMode.WIDGET)
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertTrue(cascade.none { it == Action.OverlayAction.MarkOverlayOnboardingShown })
     }
 
     @Test

@@ -349,6 +349,66 @@ entries with a new T-ID. The truth table form is stable.
 
 ## Decision History
 
+### 2026-05-15 — IME-activation contract pinned (B5 repair-wave, F-1/F-2/F-3)
+
+**Trigger:** B5-VAL-SANITY validated-findings F-1 (IME never dispatches
+`OnImeViewShown/Hidden`), F-2 (permission-onboarding unreachable), F-3
+(`observer.refresh()` not wired). The Triangle-FSM, OverlayModule,
+ViewModeModule arms, and the attach/detach collapse were implemented +
+unit-green but inert in production because
+`DictateInputMethodService.java` was never wired to drive them.
+
+**Before:** ADR-0005 §"Required mechanics" + the Decision T-table
+*named* `onFinishInputView`/`onStartInputView` as the T3/T4/T5/T6
+triggers, but no production code produced `OnImeViewShown/Hidden`; the
+WIDGET-toggle `actionResolver` was permission-blind; the onboarding
+info-bar + Settings-launch path was undelivered (C17→C18 forward-drop);
+`observer.refresh()` had no IME call site.
+
+**After:** The IME-activation contract is now production-binding and
+explicit: `onStartInputView` dispatches `OnImeViewShown` + calls
+`overlayPermissionObserver.refresh()` (refresh BEFORE the dispatch so
+the FSM sees fresh `hasPermission`); `onFinishInputView` dispatches
+`OnImeViewHidden` on **all** paths — the legacy 3-state early-returns
+were refactored to a single tail so the recording-active /
+pipeline-running branches (the *primary* HOVER use-case) also fire it.
+The WIDGET-toggle `actionResolver` is permission-aware
+(`resolveWidgetToggleAction`: `hasPermission ? ToggleViewModeWidget :
+ShowOverlayOnboarding`); a new `Action.OverlayAction.ShowOverlayOnboarding`
+arm sets `onboardingPending`; a Spec 3 §5.4 auto-cleanup cascade arm
+clears it on the (prev≠WIDGET)→WIDGET edge. The in-IME info-bar is
+owned by the IME service (a documented deviation from the Spec 3 §5.3
+sketch which put it in `ImeViewBackend` — justified by the B4
+`ImeViewBackend` button-map-only contract; the IME already owns the
+symmetric `InfoBarController` surface). The IME observes
+`state.overlay.onboardingPending` via a dedicated
+`OverlayOnboardingObserver` bridge (the IME is a Java
+`InputMethodService`, not a `LifecycleOwner`, and the production render
+path is service-side — the bridge gives the IME the single sub-axis it
+needs without widening `ImeViewBackend`). The Grant button launches
+`ACTION_MANAGE_OVERLAY_PERMISSION` with `FLAG_ACTIVITY_NEW_TASK`
+(mandatory from a non-Activity Context).
+`Effect.OpenOverlayPermissionSettings` remains a structural placeholder
+(launch owned by the IME-side handler per Spec 3 §5.2); a new
+`Effect.NotifyOverlayPermissionRequired` + `NotificationStatus.OverlayPermissionRequired`
+implements the Spec 3 §9 O7 permission-free notification fallback,
+emitted by the runtime-permission-loss cascade.
+
+**Reasoning:** The hook choice was not a free decision — ADR-0005's own
+T-table, Spec 1 §11 (lines 2672-2676), and the architecture-doc
+`triangle-fsm.md` §5 independently dictate
+`onStartInputView`/`onFinishInputView`. The trigger-arm
+(`ShowOverlayOnboarding`) resolves Spec 3 §5.4's explicitly-open
+"Auslöser TBD" toward a dedicated single-purpose action (SRP) over
+overloading `RequestOverlayPermission` (the explainer bar must appear
+*before* the user decides to context-switch to Settings). The
+`restarting` flag is deliberately ignored at the `OnImeViewShown`
+dispatch — the reducer is idempotent (no-ops when `computeViewMode ==
+current`), and suppressing on `restarting=true` would break T6
+(rotation while in HOVER must recompute when the view returns). This
+entry pins the contract so a future reader knows the FSM's *production*
+trigger surface, not just the reducer arms.
+
 ### 2026-05-14 — Accepted
 
 **Trigger:** Block-0 audit-consolidation pass (B0-VAL-SANITY) — plan §4.0 binding-pre-code-contract closeout.

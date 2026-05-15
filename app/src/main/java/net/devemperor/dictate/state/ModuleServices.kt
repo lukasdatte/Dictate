@@ -311,6 +311,16 @@ sealed interface NotificationStatus {
     data object Idle : NotificationStatus
     data class Recording(val sessionId: String) : NotificationStatus
     data class Pipeline(val sessionId: String, val step: String) : NotificationStatus
+
+    /**
+     * Runtime overlay-permission-revoke fallback (Spec 3 §9, O7).
+     * Emitted via [OverlayModule.Effect.NotifyOverlayPermissionRequired]
+     * when `SYSTEM_ALERT_WINDOW` is revoked while WIDGET/HOVER is
+     * active — the overlay falls back to in-IME rendering and this is
+     * the only surface that can tell a user (potentially in another
+     * app) why the floating widget disappeared.
+     */
+    data object OverlayPermissionRequired : NotificationStatus
 }
 
 /**

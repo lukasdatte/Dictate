@@ -127,14 +127,34 @@ class DefaultOverlayPositionMapperTest {
 
     @Test
     fun `zero-free-area view does not divide by zero`() {
-        // view == screen → free area 0; mapper must still return a value.
+        // view == screen → free area 0; mapper must still return a
+        // value. F-6 (B5): both directions now share the SAME zero-
+        // guard (`freeArea = (screen-view).coerceAtLeast(1)`), so the
+        // mapper never divides by zero AND the round-trip is identity
+        // at this degenerate boundary.
         val full = measuredView(w = 1000, h = 2000)
         val (px, py) = mapper.normalizedToPixels(1f, 1f, full)!!
-        assertEquals(0, px) // maxX coerced to 0
-        assertEquals(0, py)
-        // Inverse: denominator coerced to 1, result clamped to [0,1].
-        val (nx, ny) = mapper.pixelsToNormalized(0, 0, full)!!
-        assertEquals(0f, nx)
-        assertEquals(0f, ny)
+        // F-6: symmetric denominator → 1.0 maps to px=1 (was 0 under
+        // the old asymmetric `coerceAtLeast(0)` floor).
+        assertEquals(1, px)
+        assertEquals(1, py)
+        // Inverse with the SAME denominator: px=1 → 1.0 (round-trip
+        // identity; previously px=0 → 0.0 silently rewrote a right-edge
+        // anchor to the left edge — the F-6 bug).
+        val (nx, ny) = mapper.pixelsToNormalized(px, py, full)!!
+        assertEquals(1f, nx)
+        assertEquals(1f, ny)
+    }
+
+    @Test
+    fun `F-6 round-trip identity at the zero-free-area right-edge anchor`() {
+        // Regression guard for F-6: the OverlayState default anchor is
+        // 1.0f (right edge). A drag ending with a screen-filling view
+        // must NOT silently rewrite that anchor to 0.0 (left edge).
+        val full = measuredView(w = 1000, h = 2000)
+        val (px, py) = mapper.normalizedToPixels(1.0f, 1.0f, full)!!
+        val (nx, ny) = mapper.pixelsToNormalized(px, py, full)!!
+        assertEquals("right-edge anchor must survive the round-trip", 1.0f, nx)
+        assertEquals(1.0f, ny)
     }
 }

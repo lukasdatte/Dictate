@@ -89,8 +89,18 @@ class DefaultOverlayPositionMapper(
         val viewW = view.effectiveWidth() ?: return null
         val viewH = view.effectiveHeight() ?: return null
         val (screenW, screenH) = displaySize()
-        val maxX = (screenW - viewW).coerceAtLeast(0)
-        val maxY = (screenH - viewH).coerceAtLeast(0)
+        // F-6 (B5): use the SHARED [freeArea] helper with the SAME
+        // zero-guard (`coerceAtLeast(1)`) as [pixelsToNormalized].
+        // Previously this path floored at `coerceAtLeast(0)` while the
+        // inverse floored at `1`, so a screen-filling view broke
+        // round-trip identity: `normalizedToPixels(1.0) → px=0` but
+        // `pixelsToNormalized(0) → 0.0`, silently rewriting the
+        // persisted right-edge anchor (default `1.0f`) to the left
+        // edge. With the symmetric denominator the boundary is
+        // identity: `normalizedToPixels(1.0) → px=1` ⇒
+        // `pixelsToNormalized(1) → 1.0`.
+        val maxX = freeArea(screenW, viewW)
+        val maxY = freeArea(screenH, viewH)
         val px = (normX.coerceIn(0f, 1f) * maxX).toInt()
         val py = (normY.coerceIn(0f, 1f) * maxY).toInt()
         return px to py
@@ -104,17 +114,28 @@ class DefaultOverlayPositionMapper(
         val viewW = view.effectiveWidth() ?: return null
         val viewH = view.effectiveHeight() ?: return null
         val (screenW, screenH) = displaySize()
-        // `coerceAtLeast(1)` keeps the denominator positive when the
-        // view is exactly the screen size (zero-free-area edge case).
         // Clamping the result into `[0..1]` keeps the persisted axis
         // structurally valid even when the system clamped the
         // pre-update params off-screen (Spec 3 §11.5.3).
-        val maxX = (screenW - viewW).coerceAtLeast(1)
-        val maxY = (screenH - viewH).coerceAtLeast(1)
+        val maxX = freeArea(screenW, viewW)
+        val maxY = freeArea(screenH, viewH)
         val nx = (px.toFloat() / maxX).coerceIn(0f, 1f)
         val ny = (py.toFloat() / maxY).coerceIn(0f, 1f)
         return nx to ny
     }
+
+    /**
+     * The free travel area (`screen − view`) for one axis, with the
+     * **single** zero-guard policy shared by both conversion
+     * directions (F-6). `coerceAtLeast(1)` keeps the denominator
+     * positive in the degenerate zero-free-area case (view exactly the
+     * screen size) AND makes the round-trip identity at that boundary —
+     * the two call-sites must use the *same* floor or the mapper's
+     * "single SoT keeps the call-sites in sync" KDoc contract is
+     * violated.
+     */
+    private fun freeArea(screen: Int, view: Int): Int =
+        (screen - view).coerceAtLeast(1)
 
     private fun displaySize(): Pair<Int, Int> {
         val metrics: DisplayMetrics = ctx.resources.displayMetrics

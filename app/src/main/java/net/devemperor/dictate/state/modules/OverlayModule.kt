@@ -37,10 +37,18 @@ import kotlin.reflect.KClass
  *   (if recording active) [Action.RecordingAction.CancelRecording] /
  *   (else if pipeline running) [Action.PipelineAction.CancelPipeline]
  *   (Spec 3 §6.2 + §4.8 closeOverlay-cascade).
+ * - On `prev.viewMode != WIDGET && next.viewMode == WIDGET &&
+ *   onboardingPending` (user granted the permission and reached
+ *   WIDGET, Spec 3 §5.4): emit
+ *   [Action.OverlayAction.MarkOverlayOnboardingShown] so the stale
+ *   explainer info-bar is cleared.
  * - On `prev.hasPermission == true && next.hasPermission == false`
- *   (permission-loss at runtime, Spec 3 §3.1.3): emit
+ *   (permission-loss at runtime, Spec 3 §3.1.3 + §9): emit
  *   [Action.ViewModeAction.SetViewMode]`(KEYBOARD)` so the overlay
- *   immediately falls back to in-IME rendering.
+ *   immediately falls back to in-IME rendering, **plus**
+ *   [Action.OverlayAction.RequestOverlayPermissionNotification] (F-4)
+ *   so the FGS notification surfaces the revoke reason (the user may
+ *   be in another app — no in-IME info-bar reachable, Spec 3 §9 O7).
  *
  * **No [reduceFailure] override** (Phase-C C-5 design decision): every
  * Overlay effect is either an idempotent pref-write or a UI-trigger.
@@ -80,6 +88,20 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
         data class DeleteAudioFile(val file: File) : Effect
 
         data object OpenOverlayPermissionSettings : Effect
+
+        /**
+         * Permission-free notification fallback (Spec 3 §4.8 + §9 —
+         * deliberate O7 architecture decision). Emitted by the
+         * runtime-permission-loss cascade alongside
+         * [Action.ViewModeAction.SetViewMode]`(KEYBOARD)`: when the
+         * user revokes `SYSTEM_ALERT_WINDOW` while WIDGET/HOVER is
+         * live, the overlay silently falls back to in-IME rendering —
+         * the FGS notification is the only surface that can tell the
+         * user *why* (they may be in another app, no info-bar
+         * reachable). `runEffect` routes this to
+         * [ModuleServices.notificationCoordinator].
+         */
+        data object NotifyOverlayPermissionRequired : Effect
     }
 
     override fun reduce(
@@ -101,6 +123,18 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
                 ),
             )
         }
+
+        Action.OverlayAction.ShowOverlayOnboarding -> TransitionResult(
+            // Spec 3 §5.4 — surface the in-IME info-bar. No effect: the
+            // explainer bar is rendered off `onboardingPending` by the
+            // IME service; the Settings-launch is a *separate* step
+            // (the info-bar's Grant button dispatches
+            // RequestOverlayPermission). Idempotent — re-dispatch on an
+            // already-pending state is suppressed by the StateFlow
+            // distinct contract.
+            nextState = state.copy(onboardingPending = true),
+            sideEffects = emptyList(),
+        )
 
         Action.OverlayAction.MarkOverlayOnboardingShown -> TransitionResult(
             nextState = state.copy(onboardingPending = false),
@@ -147,6 +181,13 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             nextState = state,
             sideEffects = listOf(Effect.OpenOverlayPermissionSettings),
         )
+
+        Action.OverlayAction.RequestOverlayPermissionNotification -> TransitionResult(
+            // F-4 — no state change; the FGS notification is a pure
+            // side-effect surface (Spec 3 §9, O7).
+            nextState = state,
+            sideEffects = listOf(Effect.NotifyOverlayPermissionRequired),
+        )
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
@@ -189,12 +230,31 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             Unit
         }
         Effect.OpenOverlayPermissionSettings -> {
-            // Phase-1: the activityLauncher subsystem lands in B5 (the
-            // OverlayBackend block). For now we emit no-op — the UI side
-            // launches the Settings intent directly in response to the
-            // RequestOverlayPermission action (the resolver path).
-            // Documented in Spec 3 §5.3 as the Phase-1 placeholder.
+            // Structural placeholder — NOT a Phase-1 TODO. The Settings
+            // launch is owned by the IME-side info-bar Grant handler
+            // (Spec 3 §5.2/§5.3): `ModuleServices` carries no Android
+            // `Context`/activity-launcher, so a reducer-side
+            // `startActivity` is impossible without a new subsystem.
+            // The IME *is* a Context and launches
+            // `ACTION_MANAGE_OVERLAY_PERMISSION` with
+            // `FLAG_ACTIVITY_NEW_TASK` directly from the info-bar click
+            // handler. This Effect is kept (still emitted by
+            // RequestOverlayPermission) as the seam for a future
+            // activity-launcher subsystem; the *effective* launch is
+            // the IME-side handler. See ADR-0005 Decision-History
+            // 2026-05-15 (B5 repair-wave, F-1/F-2/F-3).
             Unit
+        }
+        Effect.NotifyOverlayPermissionRequired -> {
+            // Spec 3 §9 permission-free fallback. The user revoked
+            // SYSTEM_ALERT_WINDOW at runtime; the overlay collapsed to
+            // in-IME rendering (the cascade also emitted
+            // SetViewMode(KEYBOARD)). Surface the reason via the FGS
+            // notification — the only channel reachable when the user
+            // is in another app and no in-IME info-bar can render.
+            services.notificationCoordinator.show(
+                NotificationStatus.OverlayPermissionRequired,
+            )
         }
     }
 
@@ -203,8 +263,11 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
      *
      *  - KEYBOARD → WIDGET ⇒ SetUserPrefersWidget(true)
      *  - WIDGET → KEYBOARD ⇒ SetUserPrefersWidget(false)
+     *  - (prev≠WIDGET) → WIDGET while onboardingPending ⇒
+     *    MarkOverlayOnboardingShown (Spec 3 §5.4 auto-cleanup)
      *  - HOVER → KEYBOARD ⇒ SuppressAutoOverlay + Cancel cascade
-     *  - permission-loss ⇒ SetViewMode(KEYBOARD)
+     *  - permission-loss ⇒ SetViewMode(KEYBOARD) +
+     *    RequestOverlayPermissionNotification (Spec 3 §9 O7 fallback)
      *
      * **C-3-Disambiguation (HOVER→KEYBOARD cancel cascade, F-7
      * 2026-05-15):** both Recording AND Pipeline are cancelled
@@ -230,6 +293,20 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             cascade += Action.OverlayAction.SetUserPrefersWidget(prefers = true)
         }
 
+        // ─── Onboarding auto-cleanup (Spec 3 §5.4) ──────────────────────
+        // Once the user successfully reaches WIDGET while the explainer
+        // bar is still pending (they granted the permission and toggled
+        // again), clear `onboardingPending` so a stale info-bar does not
+        // linger. `prev != WIDGET` (Spec 3 §5.4 form) also covers a
+        // hypothetical HOVER→WIDGET-with-pending; onboardingPending can
+        // only be set in KEYBOARD so either predicate is correct.
+        if (prev.viewMode != ViewMode.WIDGET &&
+            next.viewMode == ViewMode.WIDGET &&
+            next.overlay.onboardingPending
+        ) {
+            cascade += Action.OverlayAction.MarkOverlayOnboardingShown
+        }
+
         // ─── T2: WIDGET → KEYBOARD ──────────────────────────────────────
         if (prev.viewMode == ViewMode.WIDGET && next.viewMode == ViewMode.KEYBOARD) {
             cascade += Action.OverlayAction.SetUserPrefersWidget(prefers = false)
@@ -250,12 +327,17 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             }
         }
 
-        // ─── Permission revoked at runtime (Issue 3.1.3) ────────────────
+        // ─── Permission revoked at runtime (Issue 3.1.3 / Spec 3 §9) ────
         if (prev.overlay.hasPermission &&
             !next.overlay.hasPermission &&
             next.viewMode != ViewMode.KEYBOARD
         ) {
             cascade += Action.ViewModeAction.SetViewMode(ViewMode.KEYBOARD)
+            // F-4 — permission-free notification fallback (Spec 3 §4.8
+            // + §9, O7). The overlay just collapsed to in-IME render;
+            // the user may be in another app where no info-bar can
+            // appear, so the FGS notification is the only "why" surface.
+            cascade += Action.OverlayAction.RequestOverlayPermissionNotification
         }
 
         return cascade

@@ -301,6 +301,26 @@ class ActionResolversTest {
         val s = state.copy(pipeline = PipelineUiState.Idle)
         assertEquals("", resolveRecordButtonTextStaging(s, strings))
     }
+
+    // ─── F-2 WIDGET_TOGGLE permission-aware resolver ─────────────────
+
+    @Test
+    fun `resolveWidgetToggleAction with permission returns ToggleViewModeWidget`() {
+        val s = state.copy(overlay = state.overlay.copy(hasPermission = true))
+        assertEquals(
+            Action.ViewModeAction.ToggleViewModeWidget,
+            resolveWidgetToggleAction(s, fakeModuleServices()),
+        )
+    }
+
+    @Test
+    fun `resolveWidgetToggleAction without permission returns ShowOverlayOnboarding`() {
+        val s = state.copy(overlay = state.overlay.copy(hasPermission = false))
+        assertEquals(
+            Action.OverlayAction.ShowOverlayOnboarding,
+            resolveWidgetToggleAction(s, fakeModuleServices()),
+        )
+    }
 }
 
 // ─── Hand-rolled fakes (K-1) ─────────────────────────────────────────

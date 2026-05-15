@@ -47,29 +47,40 @@ class LegacyAudioFileMigrationTest {
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
-        // Clear any pref-flag from previous tests (Robolectric isolates
-        // SharedPreferences per test, but defensive reset costs nothing).
+        // F-9 (B5) — deterministic pre-state regardless of Robolectric
+        // fork co-location. The earlier `deleteAll()`-only reset was
+        // fragile: a sibling test that boots `DictatePipelineService`
+        // (8× in `DictatePipelineServiceOverlayTransitionTest`) runs
+        // `LegacyAudioFileMigration` + creates session rows against the
+        // SHARED `DictateDatabase` singleton on every `onCreate`, and
+        // non-deterministic fork co-location occasionally left the
+        // `LegacyAudioPurgedV4` flag / session rows in a state a
+        // table-truncate did not neutralise. We now: (1) drop the
+        // singleton entirely so the next getInstance builds a fresh DB
+        // (no carried-over migration flag or rows), and (2) clear the
+        // entire default SharedPreferences (not just the one flag key).
+        DictateDatabase.resetForTest(context)
         PreferenceManager.getDefaultSharedPreferences(context)
             .edit()
-            .remove(LegacyAudioFileMigration.flagPrefKey())
+            .clear()
             .apply()
-        // The DictateDatabase singleton may carry rows across tests
-        // (Robolectric reuses application state across the JVM). Clear
-        // the sessions table at setup so each test starts with an empty
-        // DB without resetting the singleton (no test-only reset method
-        // exists, and the underlying SQLite file is short-lived enough
-        // to make table-truncate the right granularity).
         db = DictateDatabase.getInstance(context)
+        // Defensive truncate (the fresh build is already empty; this
+        // also covers the unlikely case the singleton survived).
         db.sessionDao().deleteAll()
     }
 
     @After
     fun tearDown() {
         db.sessionDao().deleteAll()
+        // F-9 — symmetric teardown: drop the singleton + clear default
+        // prefs so this test does not pollute a sibling that
+        // co-locates after it in the same fork.
         PreferenceManager.getDefaultSharedPreferences(context)
             .edit()
-            .remove(LegacyAudioFileMigration.flagPrefKey())
+            .clear()
             .apply()
+        DictateDatabase.resetForTest(context)
         // Delete any stray legacy file we might have created.
         File(context.cacheDir, LegacyAudioFileMigration.LEGACY_NAME).delete()
     }

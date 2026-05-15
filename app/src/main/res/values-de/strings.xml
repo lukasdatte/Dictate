@@ -335,4 +335,20 @@
     <string name="dictate_pipeline_notif_idle">Bereit</string>
     <string name="dictate_service_not_ready">Service startet noch — bitte kurz warten.</string>
     <string name="dictate_storage_full">Cache voll — Aufnahme kann nicht starten.</string>
+
+    <!-- Block 5 / Spec 3 (Floating-Overlay): Inhaltsbeschreibungen für das 5-Tasten-Overlay. -->
+    <string name="overlay_record_cd">Aufnahme starten</string>
+    <string name="overlay_send">Senden</string>
+    <string name="overlay_send_cd">Aufnahme senden</string>
+    <string name="overlay_pause_cd">Aufnahme pausieren oder fortsetzen</string>
+    <string name="overlay_trash_cd">Aufnahme abbrechen</string>
+    <string name="overlay_close_cd">Overlay schließen</string>
+
+    <!-- Block 5 / Spec 3 §5.2-§5.3 — Onboarding-Texte für die Overlay-Berechtigung. -->
+    <string name="overlay_perm_onboarding_title">Berechtigung für schwebendes Overlay</string>
+    <string name="overlay_perm_explainer">Um das schwebende Widget über anderen Apps anzuzeigen, benötigt Dictate die Berechtigung „Über anderen Apps anzeigen“.</string>
+    <string name="overlay_perm_later">Später</string>
+    <string name="overlay_perm_grant">Erlauben</string>
+    <string name="overlay_perm_onboarding_granted">Berechtigung erteilt.</string>
+    <string name="overlay_perm_onboarding_pending">Berechtigung weiterhin erforderlich — tippe auf „Erlauben“, um die Systemeinstellungen zu öffnen.</string>
 </resources>

@@ -22,6 +22,8 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.net.Uri;
+import android.provider.Settings;
 import android.text.InputType;
 import android.util.Log;
 import android.widget.Toast;
@@ -230,6 +232,16 @@ public class DictateInputMethodService extends InputMethodService
     private KeyboardStateManager stateManager;
     private InfoBarController infoBarController;
     private MainButtonsController mainButtonsController;
+
+    // B5 F-2 — in-IME overlay-permission onboarding info-bar (Spec 3
+    // §5.3). The IME owns this view surface (co-located with
+    // infoBarController) rather than ImeViewBackend (documented
+    // deviation, ADR-0005 Decision-History 2026-05-15). The observer
+    // bridges the pipeline StateFlow's onboardingPending axis to the
+    // view's visibility; it is (re)started in onCreateInputView once
+    // the views + binder exist and stopped in onDestroyInputView.
+    private View overlayPermissionInfobar;
+    private OverlayOnboardingObserver overlayOnboardingObserver;
 
     // C15 — New keyboard-layout render path (Spec 2 §11.8 5c). Constructed in
     // onCreateInputView() once the View tree is inflated; attached to the
@@ -660,6 +672,42 @@ public class DictateInputMethodService extends InputMethodService
             sp, getResources(), () -> getTheme()
         );
 
+        // B5 F-2 — in-IME overlay-permission onboarding info-bar
+        // (Spec 3 §5.3). The IME owns this surface (research §4.3 /
+        // ADR-0005 Decision-History 2026-05-15 deviation: NOT in
+        // ImeViewBackend, which has a button-map-only contract). Grant
+        // launches the System Settings deep-link (the IME is a Context;
+        // FLAG_ACTIVITY_NEW_TASK is mandatory from a non-Activity) and
+        // dispatches RequestOverlayPermission; the permission result is
+        // picked up by F-3's onStartInputView refresh() on return.
+        // "Later" permanently dismisses via DismissOverlayOnboarding.
+        overlayPermissionInfobar = dictateKeyboardView.findViewById(R.id.overlay_permission_infobar);
+        View overlayPermGrantBtn = dictateKeyboardView.findViewById(R.id.overlay_perm_grant_btn);
+        View overlayPermDismissBtn = dictateKeyboardView.findViewById(R.id.overlay_perm_dismiss_btn);
+        overlayPermGrantBtn.setOnClickListener(v -> {
+            try {
+                Intent intent = new Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            } catch (Exception e) {
+                Log.w("DictateIME", "Failed to launch overlay-permission settings", e);
+            }
+            if (pipelineBinder != null) {
+                pipelineBinder.dispatch(
+                        net.devemperor.dictate.state.Action.OverlayAction.RequestOverlayPermission.INSTANCE);
+            }
+            overlayPermissionInfobar.setVisibility(View.GONE);
+        });
+        overlayPermDismissBtn.setOnClickListener(v -> {
+            if (pipelineBinder != null) {
+                pipelineBinder.dispatch(
+                        net.devemperor.dictate.state.Action.OverlayAction.DismissOverlayOnboarding.INSTANCE);
+            }
+            overlayPermissionInfobar.setVisibility(View.GONE);
+        });
+
         // History button
         editHistoryButton = dictateKeyboardView.findViewById(R.id.edit_history_btn);
 
@@ -1046,6 +1094,27 @@ public class DictateInputMethodService extends InputMethodService
             Log.w("DictateIME", "KeyboardLayoutManager.attachBackend failed", t);
             imeViewBackend = null;
         }
+
+        // B5 F-2 — (re)start the onboarding info-bar observer now that
+        // both the binder and the inflated info-bar view exist. This is
+        // the single consolidation point (called from both
+        // onCreateInputView and onServiceConnected), so the observer is
+        // wired regardless of the bind↔inflate race. stop() the prior
+        // observer first so a view-recreate doesn't leak the old
+        // collector scope.
+        if (overlayOnboardingObserver != null) {
+            overlayOnboardingObserver.stop();
+        }
+        if (overlayPermissionInfobar != null) {
+            overlayOnboardingObserver = new OverlayOnboardingObserver(
+                pipelineBinder.getState(),
+                pending -> {
+                    if (overlayPermissionInfobar != null) {
+                        overlayPermissionInfobar.setVisibility(pending ? View.VISIBLE : View.GONE);
+                    }
+                });
+            overlayOnboardingObserver.start();
+        }
     }
 
     // method is called if the user closed the keyboard
@@ -1056,35 +1125,55 @@ public class DictateInputMethodService extends InputMethodService
         // Hide QWERTZ keyboard when the input view is finishing (app switch, background, etc.)
         hideQwertzKeyboard();
 
-        // State (A): Recording is active or paused -> delegate to controller (pause + timeout)
+        // B5 F-1: the three legacy states (recording-pause /
+        // pipeline-continue / idle-cleanup) used to early-`return`.
+        // They are now restructured into an if/else-if/else with a
+        // single tail so the OnImeViewHidden FSM dispatch below fires
+        // on ALL paths. This is load-bearing: T3/T4 (KEYBOARD/WIDGET →
+        // HOVER) only matter when recording or the pipeline is in
+        // flight — i.e. exactly the State (A)/(B) paths that used to
+        // `return` early. Missing the dispatch there would make HOVER
+        // unreachable in the *primary* use-case (dictation continues
+        // after the user switches the keyboard away). See ADR-0005
+        // Decision-History 2026-05-15 + research §6.1.
         if (recordingStateController.getState().isRecordingOrPaused()
                 || recordingStateController.getState() instanceof RecordingState.Preparing) {
+            // State (A): Recording is active or paused -> delegate to controller (pause + timeout)
             recordingStateController.onKeyboardHidden();
             stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
-            return;
-        }
-
-        // State (B): API request is running -> let it continue, just hide content panels
-        if (pipelineOrchestrator != null && pipelineOrchestrator.isRunning()) {
+        } else if (pipelineOrchestrator != null && pipelineOrchestrator.isRunning()) {
+            // State (B): API request is running -> let it continue, just hide content panels
             stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
-            return;
+        } else {
+            // State (C): Idle -> full cleanup
+            if (pipelineOrchestrator != null) {
+                pipelineOrchestrator.cancel();
+            }
+            pendingLivePromptChain = false;
+            // Note: PipelineConfig is owned by uiController; stopPipeline() nulls it below.
+
+            bluetoothScoManager.unregisterReceiver();
+
+            infoBarController.dismiss();
+            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
+            stateManager.refresh();
+            uiController.stopPipeline();
+            livePrompt = false;
+            updatePromptButtonsEnabledState();
         }
 
-        // State (C): Idle -> full cleanup
-        if (pipelineOrchestrator != null) {
-            pipelineOrchestrator.cancel();
+        // B5 F-1 (T3/T4): IME view hidden. Dispatched on EVERY path
+        // (including the recording-active / pipeline-running branches
+        // above — the primary HOVER trigger). The legacy 3-state block
+        // is unchanged in behaviour; this only adds the Triangle-FSM
+        // boundary dispatch. The ImeViewBackend is intentionally NOT
+        // detached here (research §C-5) — HOVER renders via the
+        // service-owned OverlayBackend. Guarded on pipelineBinder !=
+        // null (the established pre-bind pattern, mirrors line ~828).
+        if (pipelineBinder != null) {
+            pipelineBinder.dispatch(
+                    net.devemperor.dictate.state.Action.ViewModeAction.OnImeViewHidden.INSTANCE);
         }
-        pendingLivePromptChain = false;
-        // Note: PipelineConfig is owned by uiController; stopPipeline() nulls it below.
-
-        bluetoothScoManager.unregisterReceiver();
-
-        infoBarController.dismiss();
-        stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
-        stateManager.refresh();
-        uiController.stopPipeline();
-        livePrompt = false;
-        updatePromptButtonsEnabledState();
     }
 
     @Override
@@ -1102,6 +1191,13 @@ public class DictateInputMethodService extends InputMethodService
         }
         imeViewBackend = null;
         keyboardLayoutManager = null;
+
+        // B5 F-2 — cancel the onboarding info-bar collector scope so
+        // the SupervisorJob does not outlive the service.
+        if (overlayOnboardingObserver != null) {
+            overlayOnboardingObserver.stop();
+            overlayOnboardingObserver = null;
+        }
 
         // Clean up long-lived objects
         if (mainHandler != null) {
@@ -1654,6 +1750,29 @@ public class DictateInputMethodService extends InputMethodService
 
         // If recording was paused (by onFinishInputView), cancel timeout and restore UI
         recordingStateController.onKeyboardShown();
+
+        // B5 F-3 + F-1 — IME-activation wiring (the Triangle-FSM
+        // production trigger surface, ADR-0005 Decision-History
+        // 2026-05-15 / research §3+§5). Grouped here so the activation
+        // wiring stays in one place. Guarded on pipelineBinder != null
+        // (pre-bind no-op; the observer's cold-start init() covers the
+        // initial hasPermission).
+        if (pipelineBinder != null) {
+            // F-3: pick up an overlay permission the user toggled in
+            // System Settings while the IME view was gone (Spec 3
+            // §5.0). MUST run BEFORE the OnImeViewShown dispatch so the
+            // FSM sees the fresh hasPermission axis (closes the
+            // grant-pickup latency + the revoke busy-retry loop).
+            pipelineBinder.getOverlayPermissionObserver().refresh();
+            // F-1 (T5/T6): IME view shown. Unconditional — the reducer
+            // no-ops when computeViewMode == current (idempotent). The
+            // `restarting` flag is intentionally IGNORED: suppressing
+            // on restart would break T6 (rotation while in HOVER must
+            // recompute to WIDGET/KEYBOARD when the view returns). See
+            // research §3 view-recreation handling.
+            pipelineBinder.dispatch(
+                    net.devemperor.dictate.state.Action.ViewModeAction.OnImeViewShown.INSTANCE);
+        }
 
         // Determine if we are truly idle (no recording, no pipeline running).
         // When not idle, skip UI resets that would overwrite state restored by restoreUiState().

@@ -107,7 +107,10 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         // structurally-always-true predicate is the honest
                         // value here.
                         visibilityPredicate = { true },
-                        actionResolver = { _, _ -> Action.ViewModeAction.ToggleViewModeWidget },
+                        // B5 F-2: permission-aware — emits
+                        // ShowOverlayOnboarding when overlay permission
+                        // is missing instead of a silent reducer no-op.
+                        actionResolver = ::resolveWidgetToggleAction,
                     ),
                 )),
                 // Row 2 (formerly input_row): trash / space / pause / enter
@@ -214,7 +217,9 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     widthPolicy = WidthPolicy.WrapContent,
                     // B4-VAL F-18: see KEYBOARD_TWO_ROW WIDGET_TOGGLE slot.
                     visibilityPredicate = { true },
-                    actionResolver = { _, _ -> Action.ViewModeAction.ToggleViewModeWidget },
+                    // B5 F-2: permission-aware resolver (see the
+                    // KEYBOARD_TWO_ROW WIDGET_TOGGLE slot).
+                    actionResolver = ::resolveWidgetToggleAction,
                 ),
             ))),
         )

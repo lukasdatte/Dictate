@@ -317,4 +317,20 @@
     <string name="dictate_pipeline_notif_idle">Pronto</string>
     <string name="dictate_service_not_ready">O serviço está iniciando — aguarde um momento, por favor.</string>
     <string name="dictate_storage_full">Cache cheio — não é possível iniciar a gravação.</string>
+
+    <!-- Block 5 / Spec 3 (Floating-Overlay): descrições de conteúdo para o overlay de 5 botões. -->
+    <string name="overlay_record_cd">Iniciar gravação</string>
+    <string name="overlay_send">Enviar</string>
+    <string name="overlay_send_cd">Enviar gravação</string>
+    <string name="overlay_pause_cd">Pausar ou retomar a gravação</string>
+    <string name="overlay_trash_cd">Cancelar gravação</string>
+    <string name="overlay_close_cd">Fechar overlay</string>
+
+    <!-- Block 5 / Spec 3 §5.2-§5.3 — textos de integração para a permissão do overlay. -->
+    <string name="overlay_perm_onboarding_title">Permissão de overlay flutuante</string>
+    <string name="overlay_perm_explainer">Para exibir o widget flutuante sobre outros apps, o Dictate precisa da permissão «Sobrepor a outros apps».</string>
+    <string name="overlay_perm_later">Mais tarde</string>
+    <string name="overlay_perm_grant">Permitir</string>
+    <string name="overlay_perm_onboarding_granted">Permissão concedida.</string>
+    <string name="overlay_perm_onboarding_pending">A permissão ainda é necessária — toque em «Permitir» para abrir as configurações do sistema.</string>
 </resources>

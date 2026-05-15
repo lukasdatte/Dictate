@@ -44,8 +44,12 @@ class OverlayDragControllerTest {
     private lateinit var view: View
     private lateinit var window: FakeOverlayWindow
     private lateinit var mapper: RecordingPositionMapper
-    private val persisted: MutableList<Pair<Float, Float>> = mutableListOf()
+    // F-7: persist now carries the orientation snapshot captured at
+    // ACTION_DOWN. Triple is (portrait, normX, normY).
+    private val persisted: MutableList<Triple<Boolean, Float, Float>> = mutableListOf()
     private var params: WindowManager.LayoutParams? = WindowManager.LayoutParams()
+    // F-7: orientation source the controller snapshots at ACTION_DOWN.
+    private var portraitNow: Boolean = true
 
     @Before
     fun setUp() {
@@ -60,6 +64,7 @@ class OverlayDragControllerTest {
         window = FakeOverlayWindow()
         mapper = RecordingPositionMapper()
         persisted.clear()
+        portraitNow = true
         params = WindowManager.LayoutParams().apply { x = 0; y = 0 }
     }
 
@@ -69,7 +74,8 @@ class OverlayDragControllerTest {
         window = window,
         paramsHolder = { params },
         positionMapper = mapper,
-        onPositionPersist = { nx, ny -> persisted += nx to ny },
+        orientationProvider = { portraitNow },
+        onPositionPersist = { portrait, nx, ny -> persisted += Triple(portrait, nx, ny) },
     )
 
     private fun event(action: Int, x: Float, y: Float): MotionEvent =
@@ -110,6 +116,30 @@ class OverlayDragControllerTest {
         assertEquals(1, persisted.size)
         // Mapper records what it was asked to convert.
         assertEquals(300 to 400, mapper.lastPixelsIn)
+    }
+
+    @Test
+    fun `F-7 orientation is snapshotted at ACTION_DOWN, not at persist`() {
+        // Gesture starts in portrait; a config-change flips the
+        // orientation source mid-drag (before UP). The persisted
+        // bucket must reflect the ACTION_DOWN snapshot (portrait=true),
+        // not the post-flip value — otherwise the normalised geometry
+        // (computed against the pre-rotation metrics) would land in
+        // the wrong bucket.
+        portraitNow = true
+        val c = newController()
+        c.attach()
+        view.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, 100f, 100f))
+        view.dispatchTouchEvent(event(MotionEvent.ACTION_MOVE, 400f, 500f))
+        // Orientation flips between MOVE and UP (config-change race).
+        portraitNow = false
+        view.dispatchTouchEvent(event(MotionEvent.ACTION_UP, 400f, 500f))
+
+        assertEquals(1, persisted.size)
+        assertTrue(
+            "Persisted orientation must be the ACTION_DOWN snapshot (portrait), not the flipped value.",
+            persisted[0].first,
+        )
     }
 
     @Test

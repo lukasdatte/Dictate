@@ -63,6 +63,17 @@ class DictatePipelineServiceOverlayTransitionTest {
         } catch (ignored: Throwable) {
         }
         JobExecutor.resetForTest()
+        // F-9 (B5): this test is the amplifier — it boots the full
+        // DictatePipelineService many times, each `onCreate` running
+        // LegacyAudioFileMigration + creating session rows against the
+        // shared DictateDatabase singleton. Drop the singleton AND
+        // delete the file-backed DB on teardown so a sibling test
+        // (notably LegacyAudioFileMigrationTest) co-locating after this
+        // one in the same Robolectric fork starts from a clean DB
+        // rather than this test's accumulated rows / migration flag.
+        net.devemperor.dictate.database.DictateDatabase.resetForTest(
+            androidx.test.core.app.ApplicationProvider.getApplicationContext(),
+        )
     }
 
     /**
@@ -242,6 +253,131 @@ class DictatePipelineServiceOverlayTransitionTest {
         assertEquals(ViewMode.KEYBOARD, b.state.value.viewMode)
         assertFalse(
             "T7 must detach the overlay (no Geist-Widget)",
+            b.keyboardLayoutManager.overlayAttached(),
+        )
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // B5 F-1 — IME-activation production-trigger regression guards.
+    // The IME drives T3/T4/T5/T6 via OnImeViewHidden/OnImeViewShown;
+    // these exercise the action surface the new IME hooks dispatch.
+    // ════════════════════════════════════════════════════════════════
+
+    @Test
+    fun `F-1 recording-active + OnImeViewHidden enters HOVER (primary use-case)`() {
+        // The headline HOVER use-case: dictation continues after the
+        // user switches the keyboard away (Spec 3 §1.1). Drives the
+        // recording axis active, then the IME-hide boundary.
+        val b = binder()
+        idle()
+        b.dispatch(
+            Action.RecordingAction.StartRecording(
+                target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+                audioFile = java.io.File("/tmp/a.m4a"),
+            ),
+        )
+        idle()
+        b.dispatch(Action.RecordingAction.MediaRecorderReady(java.io.File("/tmp/a.m4a")))
+        idle()
+
+        b.dispatch(Action.ViewModeAction.OnImeViewHidden) // F-1 T3
+        idle()
+
+        assertEquals(
+            "Recording-active + IME hidden ⇒ HOVER (the primary F-1 trigger)",
+            ViewMode.HOVER, b.state.value.viewMode,
+        )
+        assertTrue(b.keyboardLayoutManager.overlayAttached())
+    }
+
+    @Test
+    fun `F-1 T6 HOVER to WIDGET on OnImeViewShown when userPrefersWidget`() {
+        val b = binder()
+        idle()
+        b.dispatch(Action.ViewModeAction.ToggleViewModeWidget) // → WIDGET (sets userPrefersWidget)
+        idle()
+        b.dispatch(
+            Action.PipelineAction.TriggerPipeline(
+                sessionId = "s1",
+                audioFile = java.io.File("/tmp/a.m4a"),
+            ),
+        )
+        idle()
+        b.dispatch(Action.ViewModeAction.OnImeViewHidden) // WIDGET → HOVER (T4)
+        idle()
+        assertEquals(ViewMode.HOVER, b.state.value.viewMode)
+
+        b.dispatch(Action.ViewModeAction.OnImeViewShown) // T6 → WIDGET (persist bit)
+        idle()
+
+        assertEquals(
+            "userPrefersWidget persists ⇒ HOVER→WIDGET on view-shown (T6)",
+            ViewMode.WIDGET, b.state.value.viewMode,
+        )
+    }
+
+    @Test
+    fun `F-1 OnImeViewShown with no mode change is idempotent (no spurious cascade)`() {
+        val b = binder()
+        idle()
+        assertEquals(ViewMode.KEYBOARD, b.state.value.viewMode)
+        // Already KEYBOARD, not pipeline-active — OnImeViewShown
+        // recomputes to KEYBOARD == current; reducer must no-op.
+        b.dispatch(Action.ViewModeAction.OnImeViewShown)
+        idle()
+        assertEquals(ViewMode.KEYBOARD, b.state.value.viewMode)
+        assertFalse(b.keyboardLayoutManager.overlayAttached())
+    }
+
+    @Test
+    fun `F-8 both-in-flight HOVER-close-from-pipeline-done stays within MAX_CASCADE_DEPTH`() {
+        // Worst-case cascade: recording AND pipeline both in flight,
+        // HOVER active, pipeline settles → OnPipelineDone cascade →
+        // (state != HOVER recompute) → HOVER→KEYBOARD cancel-cascade
+        // (SuppressBit + CancelRecording + CancelPipeline, each
+        // re-snapshotted at depth+1, CancelRecording further fanning
+        // RecordingModule's cross-module observer). At MAX_CASCADE_DEPTH
+        // (8) the orchestrator error()s in DEBUG. This test proves the
+        // budget holds: the dispatch completes WITHOUT an
+        // IllegalStateException and the FSM settles on KEYBOARD with the
+        // overlay detached (the F-7-internal opt-out is honoured).
+        val b = binder()
+        idle()
+        // Recording active.
+        b.dispatch(
+            Action.RecordingAction.StartRecording(
+                target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+                audioFile = java.io.File("/tmp/a.m4a"),
+            ),
+        )
+        idle()
+        b.dispatch(Action.RecordingAction.MediaRecorderReady(java.io.File("/tmp/a.m4a")))
+        idle()
+        // Pipeline also in flight (both-in-flight precondition).
+        b.dispatch(
+            Action.PipelineAction.TriggerPipeline(
+                sessionId = "s1",
+                audioFile = java.io.File("/tmp/a.m4a"),
+            ),
+        )
+        idle()
+        // IME hidden → HOVER.
+        b.dispatch(Action.ViewModeAction.OnImeViewHidden)
+        idle()
+        assertEquals(ViewMode.HOVER, b.state.value.viewMode)
+
+        // Pipeline settles while in HOVER with recording still active —
+        // the deepest cascade path. Must not throw (cascade-cap) in
+        // DEBUG and must settle to KEYBOARD.
+        b.dispatch(Action.PipelineAction.PipelineDone(sessionId = "s1", finalText = "hi"))
+        idle()
+
+        assertEquals(
+            "F-8: both-in-flight HOVER-close cascade must settle on KEYBOARD without tripping MAX_CASCADE_DEPTH",
+            ViewMode.KEYBOARD, b.state.value.viewMode,
+        )
+        assertFalse(
+            "F-8: overlay must be detached after the cancel-cascade",
             b.keyboardLayoutManager.overlayAttached(),
         )
     }

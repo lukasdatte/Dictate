@@ -667,6 +667,16 @@ class DictatePipelineService : Service() {
             overlayBackendAttached = true
             keyboardLayoutManagerImpl.attachBackend(backend)
         } else {
+            // F-13 (B5) — symmetric to the attach-path flag-first
+            // ordering above. Clearing `overlayBackendAttached = false`
+            // BEFORE `detachBackend(backend)` is correct only because
+            // `KeyboardLayoutManager.detachBackend` removes the backend
+            // from `activeBackends` *before* calling `backend.detach()`:
+            // so even a throwing `detach()` leaves a consistent state
+            // (the backend is already out of the list, and a later
+            // re-attach's `check(backend !in activeBackends)` passes).
+            // This is a cross-class ordering guarantee — do not reorder
+            // either side without revisiting both.
             overlayBackendAttached = false
             keyboardLayoutManagerImpl.detachBackend(backend)
         }

@@ -397,20 +397,24 @@ class OverlayBackendTest {
     fun `drag-controller persist dispatches UpdateOverlayPosition`() {
         // The fake drag-controller factory captures the persist sink so
         // the test can fire it directly (no MotionEvent simulation).
-        var persistSink: ((Float, Float) -> Unit)? = null
+        // F-7: the sink now carries the orientation snapshot
+        // (portrait, normX, normY).
+        var persistSink: ((Boolean, Float, Float) -> Unit)? = null
         val factory = object : OverlayDragControllerFactory {
             override fun create(
                 view: View,
                 window: OverlayWindow,
                 paramsHolder: () -> android.view.WindowManager.LayoutParams?,
                 positionMapper: OverlayPositionMapper,
-                onPositionPersist: (Float, Float) -> Unit,
+                orientationProvider: () -> Boolean,
+                onPositionPersist: (Boolean, Float, Float) -> Unit,
             ): OverlayDragController {
                 persistSink = onPositionPersist
                 // Return a real controller; the test never feeds it
                 // touch events, it invokes the captured sink directly.
                 return OverlayDragController(
-                    ctx, view, window, paramsHolder, positionMapper, onPositionPersist,
+                    ctx, view, window, paramsHolder, positionMapper,
+                    orientationProvider, onPositionPersist,
                 )
             }
         }
@@ -425,13 +429,19 @@ class OverlayBackendTest {
         backend.attach { captured += it }
         backend.render(stateWithPermission(), catalog.OVERLAY_5BUTTON)
 
-        persistSink!!.invoke(0.25f, 0.75f)
+        // F-7: the controller now passes the orientation snapshot
+        // through. Simulate a portrait drag-end.
+        persistSink!!.invoke(true, 0.25f, 0.75f)
 
         val posAction = captured
             .filterIsInstance<Action.OverlayAction.UpdateOverlayPosition>()
             .single()
         assertEquals(0.25f, posAction.x)
         assertEquals(0.75f, posAction.y)
+        assertTrue(
+            "F-7: the orientation snapshot threaded through onPositionPersist must reach the action.",
+            posAction.portrait,
+        )
     }
 
     @Test

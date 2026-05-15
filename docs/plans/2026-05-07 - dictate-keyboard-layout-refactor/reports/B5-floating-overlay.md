@@ -16,16 +16,22 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:**
-- Critical: 0
-- Important: 0
-- Nice-to-have: 0
+**Severity counts (B5-VAL findings, post-repair):**
+- Critical: 0 open (2 fixed: F-1, F-2)
+- Important: 0 open (7 fixed: F-3…F-9)
+- Nice-to-have: 0 open (4 fixed: F-10…F-13)
 - Postponed: 0
+
+All 13 B5-VAL distinct findings **fixed** in B5-VAL-REPAIR Wave 1
+(2026-05-15). 2 ❌ informational findings left as-is per consolidator
+disposition (carry-over Issue Index items below are unaffected —
+B5 did not regress them).
 
 **By status:**
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
+| F-1…F-13 | B5-VAL-SANITY | Crit/Imp/NTH | fixed (B5-VAL-REPAIR W1) | IME-activation wiring + overlay coordinate/doc/test cluster — see `### Block-Validate Repair Wave 1` | B5 |
 | D-13 (B3 → B4 carry-over) | B3-C8-IMPL | Important | open (re-deferred from C15) | LanguageController full removal — ~30 caller-graph sites; deferred to B7 follow-up block | B7 |
 | D-14 (B3 → B4 carry-over) | B3-C11-IMPL | Important | open (deferred) | DictateInputMethodService.audioFile field removal — 5 unrelated IME-side reads still need it | B5/B6 (deferred to B7 since B5 scope is overlay) |
 | F-10 (B4 carry-over) | B4-VAL-W1 | Important | open (delegated-to-orchestrator) | Action.RecordingAction.StopRecordingAndSend(sessionId="") empty-string sentinel | B5-pre |
@@ -403,13 +409,140 @@ Implemented the permission infrastructure layer per Spec 3 §5.0–§5.7:
 **Agent-ID:** `B5-VAL-SANITY`
 **Output file:** `./reports/validated-findings-B5.md`
 
-⏳
+13 distinct findings: 2 🟡 Critical (F-1/F-2, research-resolved via
+`../research/b5-ime-activation-wiring.md`), 1 🟢 Important folded into
+the same surface (F-3), 4 🟢 Important + 4 🟢 NTH, 2 ❌ informational.
+Repair-wave recommendation: 1 research-step + 1 all-validated wave.
+
+### Block-Validate Repair Wave 1 (B5-VAL-REPAIR)
+
+**Date:** 2026-05-15
+**Scope:** all-validated (2 🟡 Critical research-resolved + 5 🟢 Imp +
+4 🟢 NTH)
+**Findings addressed:** 11 fixed (F-1…F-13; F-12/F-13 NTH; the 2 ❌
+informational left as-is per the consolidator disposition)
+
+| Finding ID | Severity | File(s) | Status | Fix description |
+|------------|----------|---------|--------|-----------------|
+| F-1 | Critical | `core/DictateInputMethodService.java` | fixed | `onStartInputView`→`OnImeViewShown`; `onFinishInputView` 3-state early-`return`s refactored to a single if/else-if/else + tail dispatch so `OnImeViewHidden` fires on the recording-active/pipeline-running paths (the primary HOVER trigger). `restarting` deliberately ignored (idempotent reducer; suppressing would break T6). |
+| F-2 | Critical | `state/Action.kt`, `state/modules/OverlayModule.kt`, `state/layout/ActionResolvers.kt`, `state/layout/LayoutCatalog.kt`, `res/layout/activity_dictate_keyboard_view.xml`, `core/DictateInputMethodService.java`, `core/OverlayOnboardingObserver.kt` (new) | fixed | New `ShowOverlayOnboarding` action + reduce-arm + Spec 3 §5.4 auto-cleanup cascade; permission-aware `resolveWidgetToggleAction` wired at the 2 `ToggleViewModeWidget` WIDGET_TOGGLE slots; IME-owned info-bar (XML sibling above the buttons, mirroring `info_cl`) bound via the new `OverlayOnboardingObserver` StateFlow bridge; Grant launches `ACTION_MANAGE_OVERLAY_PERMISSION` + `FLAG_ACTIVITY_NEW_TASK` + dispatches `RequestOverlayPermission`; Later dispatches `DismissOverlayOnboarding`. `OpenOverlayPermissionSettings` KDoc updated (structural placeholder, not Phase-1 TODO). |
+| F-3 | Important | `core/DictateInputMethodService.java` | fixed | `pipelineBinder.getOverlayPermissionObserver().refresh()` in `onStartInputView`, BEFORE the `OnImeViewShown` dispatch. |
+| F-4 | Important | `state/modules/OverlayModule.kt`, `state/Action.kt`, `state/ModuleServices.kt` | fixed | `Effect.NotifyOverlayPermissionRequired` + `NotificationStatus.OverlayPermissionRequired` + `RequestOverlayPermissionNotification` action; permission-loss cascade now emits it alongside `SetViewMode(KEYBOARD)`. |
+| F-5 | Important | `res/values-de/-es/-pt/strings.xml` | fixed | 12 overlay strings (6 content-descriptions + 6 onboarding) added to all 3 locale files. |
+| F-6 | Important | `state/render/overlay/OverlayPositionMapper.kt` | fixed | Shared `freeArea(screen,view)=(screen-view).coerceAtLeast(1)`; both directions use the identical floor → round-trip identity at the zero-free-area boundary (no more right→left anchor rewrite). |
+| F-7 | Important | `state/render/overlay/OverlayDragController.kt`, `OverlayBackend.kt` | fixed | `orientationProvider` injected; orientation snapshotted once at `ACTION_DOWN`, threaded through `onPositionPersist(portrait,…)`; controller+factory KDoc SRP narrative updated to document the moved boundary. |
+| F-8 | Important | `core/DictatePipelineServiceOverlayTransitionTest.kt` | fixed | Added `F-8 both-in-flight HOVER-close-from-pipeline-done stays within MAX_CASCADE_DEPTH` Robolectric test (recording+pipeline both in-flight → HOVER → PipelineDone; asserts settles KEYBOARD + overlay detached without a cascade-cap throw in DEBUG). |
+| F-9 | Important | `database/DictateDatabase.kt`, `migration/LegacyAudioFileMigrationTest.kt`, `core/DictatePipelineServiceOverlayTransitionTest.kt` | fixed | `@VisibleForTesting resetForTest(context)` drops the singleton AND `deleteDatabase()` the file-backed DB; migration test + amplifier transition test now full-reset (singleton + default-prefs `clear()`) in `@Before`/`@After`. Production code uninvolved. |
+| F-10 | NTH | `state/render/overlay/OverlayDragController.kt` | fixed | 79-line controller KDoc relocated from the factory interface to `class OverlayDragController(`; factory keeps its own short KDoc. Coherent edit with F-7's contract update. |
+| F-11 | NTH | `res/layout/activity_overlay_permission_onboarding.xml` | fixed | `xmlns:tools` hoisted to root `ConstraintLayout`; leaf `TextView` keeps only `tools:ignore`. |
+| F-12 | NTH | `state/render/overlay/OverlayDragController.kt` | fixed | Detach-before-params-swap invariant comment added in `detach()`. |
+| F-13 | NTH | `core/DictatePipelineService.kt` | fixed | `KeyboardLayoutManager.detachBackend` remove-before-detach ordering comment added on the detach branch (verified against `KeyboardLayoutManager.kt:95-96`). |
+
+**Cross-fix conflicts:** none.
+
+**Files modified (production):**
+- `core/DictateInputMethodService.java` (F-1/F-2/F-3 — imports, onStartInputView, onFinishInputView refactor, onCreateInputView info-bar wiring, attachImeViewBackendIfReady observer start, onDestroy observer stop, fields)
+- `core/OverlayOnboardingObserver.kt` (new, F-2)
+- `state/Action.kt` (F-2 `ShowOverlayOnboarding`, F-4 `RequestOverlayPermissionNotification`)
+- `state/modules/OverlayModule.kt` (F-2 reduce-arm + §5.4 cascade, F-4 effect + cascade, KDoc)
+- `state/ModuleServices.kt` (F-4 `NotificationStatus.OverlayPermissionRequired`)
+- `state/layout/ActionResolvers.kt` (F-2 `resolveWidgetToggleAction`)
+- `state/layout/LayoutCatalog.kt` (F-2 2 slot rewires)
+- `state/render/overlay/OverlayPositionMapper.kt` (F-6)
+- `state/render/overlay/OverlayDragController.kt` (F-7/F-10/F-12)
+- `state/render/overlay/OverlayBackend.kt` (F-7 wiring)
+- `core/DictatePipelineService.kt` (F-13 comment)
+- `database/DictateDatabase.kt` (F-9 `resetForTest`)
+- `res/layout/activity_dictate_keyboard_view.xml` (F-2 info-bar)
+- `res/layout/activity_overlay_permission_onboarding.xml` (F-11)
+- `res/values-de/-es/-pt/strings.xml` (F-5)
+
+**Files modified (tests):** `OverlayModuleTest.kt`, `ActionResolversTest.kt`, `OverlayBackendTest.kt`, `OverlayDragControllerTest.kt`, `DefaultOverlayPositionMapperTest.kt`, `DictatePipelineServiceOverlayTransitionTest.kt`, `LegacyAudioFileMigrationTest.kt`.
+
+**Files outside findings-scope (drift):** none — every modified file is named in a finding, its research spec (§6.x), or is a direct test-update consequent of the F-7 signature change / F-8/F-9 new tests.
+
+**ADR-0005 amended:** yes — append-only Decision-History entry `2026-05-15 — IME-activation contract pinned (B5 repair-wave, F-1/F-2/F-3)`.
+
+#### Documented deviation (F-2 info-bar ownership)
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Info-bar bound in the IME service, NOT `ImeViewBackend` | Spec 3 §5.3 sketch (`ImeViewBackend.bindPermissionInfoBar`) | The info-bar root/grant/dismiss views are found + wired in `DictateInputMethodService.onCreateInputView`; visibility driven by a new `OverlayOnboardingObserver` StateFlow bridge | The B4 `ImeViewBackend` contract is button-map-only (it has no root-view handle); threading the root + onAction sink + gate purely for the info-bar would widen its ctor and break SRP. The IME already owns the symmetric `InfoBarController` surface + the binder + the inflated root. The §5.3 sketch predates the B4 contract. | None — final block; Phase 4 integration only verifies. | inline-fixed (research §4.3 resolved, marker `plan-deviation-resolved`) |
+
+#### Additional deviation (F-2 IME StateFlow bridge)
+
+Research §4.3 assumed "the IME already subscribes to the pipeline state
+StateFlow (B1b state-collect)". The current code's state-collect is
+**service-side only** (`DictatePipelineService.kt:518`); the IME has no
+`lifecycleScope` (not a `LifecycleOwner`). Resolution: a dedicated
+`OverlayOnboardingObserver` Kotlin bridge (sibling pattern to
+`ActiveJobRegistryObserver`) gives the Java IME a minimal
+lifecycle-scoped subscription to the single `onboardingPending`
+sub-axis, started in `attachImeViewBackendIfReady` (the bind↔inflate
+consolidation point) and stopped in `onDestroy`. This honours the
+research intent (IME-owned info-bar, not `ImeViewBackend`) without the
+inaccurate "IME already collects" premise. Marker:
+`plan-deviation-resolved` (small, locally decidable from surrounding
+code).
+
+### Validate-Fixes Self-Check (B5-VAL-W1)
+
+**Date:** 2026-05-15
+
+- **Build:** `./gradlew assembleDebug` green.
+- **Tests:** `./gradlew test` green (debug + release). `--rerun-tasks`
+  green **twice** consecutively — the F-9 flaky
+  `LegacyAudioFileMigrationTest` (`expected:<[RECORDING]> but
+  was:<[FAILED]>`) no longer reproduces under the clean full-suite run
+  that originally triggered it. New B5 suites: OverlayModuleTest 32/0,
+  ActionResolversTest 29/0, OverlayDragControllerTest 6/0,
+  DefaultOverlayPositionMapperTest 10/0,
+  DictatePipelineServiceOverlayTransitionTest 12/0.
+- **F-1 T1–T7 trace (re-read of the new hooks, confirmed):**
+  - **T1** KEYBOARD→WIDGET: WIDGET_TOGGLE → `resolveWidgetToggleAction`
+    (hasPermission) → `ToggleViewModeWidget` → reducer WIDGET. ✅
+  - **T2** WIDGET→KEYBOARD: `ToggleViewModeWidget`/`CloseOverlay` →
+    reducer KEYBOARD + `SetUserPrefersWidget(false)` cascade. ✅
+  - **T3** KEYBOARD→HOVER: `onFinishInputView` State (A)
+    recording-active path now falls through to the **single tail**
+    dispatch → `OnImeViewHidden` → `computeViewMode(false,false,true)
+    =HOVER`. ✅ (the load-bearing refactor — verified the dispatch is
+    after the if/else-if/else, line 1173-1176, fires on State (A)/(B)).
+  - **T4** WIDGET→HOVER: same tail dispatch, `userPrefersWidget` stays
+    → `computeViewMode(false,true,true)=HOVER`. ✅
+  - **T5** HOVER→KEYBOARD: `onStartInputView` → `refresh()` then
+    `OnImeViewShown` → `computeViewMode(true,false,*)=KEYBOARD`. ✅
+  - **T6** HOVER→WIDGET: `onStartInputView`→`OnImeViewShown`,
+    userPrefersWidget=true → `computeViewMode(true,true,*)=WIDGET`. ✅
+    (covered by new `F-1 T6` Robolectric test).
+  - **T7** HOVER→KEYBOARD via `OnPipelineDone`: unchanged reducer arm,
+    now reachable because T3/T4 fire; covered by existing T7 test +
+    new F-8 worst-case both-in-flight test. ✅
+- **F-3 ordering:** `refresh()` is dispatched BEFORE `OnImeViewShown`
+  in the same `pipelineBinder != null` block (verified line ordering)
+  so the FSM sees the fresh `hasPermission`.
+- **F-9 root-cause depth:** the production DB is file-backed; closing
+  the connection alone left rows on disk across the Robolectric fork.
+  `resetForTest` now also `deleteDatabase(DATABASE_NAME)` — verified by
+  the migration test passing in the clean-suite rerun that previously
+  failed.
+- **No drift:** every modified file maps to a finding / its research
+  spec / a direct test consequence.
+
+**Self-check result:** PASS — all 11 actionable findings fixed,
+ADR amended, build + tests green (incl. F-9 stability), F-1 trace
+confirmed correct end-to-end.
 
 ---
 
 ## Block Deviation Summary
 
-⏳
+See `### Block-Validate Repair Wave 1 (B5-VAL-REPAIR)` above for the two
+documented F-2 deviations (info-bar ownership in the IME service vs.
+the Spec 3 §5.3 `ImeViewBackend` sketch; IME StateFlow bridge vs. the
+research's "IME already collects" premise). Both `plan-deviation-resolved`,
+justified by the B4 `ImeViewBackend` button-map-only contract and the
+actual (service-side-only) state-collect topology. No other deviations.
 
 ---
 

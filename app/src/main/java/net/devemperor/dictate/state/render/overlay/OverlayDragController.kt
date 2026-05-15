@@ -9,6 +9,72 @@ import kotlin.math.hypot
 import kotlin.math.max
 
 /**
+ * Factory for [OverlayDragController].
+ *
+ * Hoisted as an interface so JVM tests can inject a fake that records
+ * every persist call without going through a real `MotionEvent`
+ * stream. Production wires [DefaultOverlayDragControllerFactory].
+ *
+ * F-10 (B5): the 79-line controller-responsibility KDoc that used to
+ * sit here was relocated to immediately precede `class
+ * OverlayDragController(` — per Kotlin doc-attachment it documented
+ * *this interface*, not the controller (IDE quick-doc showed the
+ * controller's `@property` tags on the factory, and nothing on the
+ * class). The relocated block also carries the F-7 orientation-snapshot
+ * contract update so the SRP narrative stays coherent.
+ */
+interface OverlayDragControllerFactory {
+    /**
+     * Build a controller wired to [view] + [window]. The
+     * [paramsHolder] lambda MUST return the same
+     * [WindowManager.LayoutParams] instance the backend holds — see
+     * [OverlayDragController]'s `paramsHolder` KDoc.
+     *
+     * [orientationProvider] supplies the "is portrait" snapshot the
+     * controller captures **once** at `ACTION_DOWN` (F-7) and threads
+     * back through [onPositionPersist] so the persisted normalised
+     * value and its pref-bucket come from the same configuration
+     * snapshot.
+     */
+    fun create(
+        view: View,
+        window: OverlayWindow,
+        paramsHolder: () -> WindowManager.LayoutParams?,
+        positionMapper: OverlayPositionMapper,
+        orientationProvider: () -> Boolean,
+        onPositionPersist: (portrait: Boolean, normX: Float, normY: Float) -> Unit,
+    ): OverlayDragController
+}
+
+/**
+ * Production [OverlayDragControllerFactory] — captures the
+ * [Context] needed by the controller's threshold calculation.
+ *
+ * @property ctx context bound at Service-creation time; survives the
+ *   factory's whole lifetime alongside the backend it serves.
+ */
+class DefaultOverlayDragControllerFactory(
+    private val ctx: Context,
+) : OverlayDragControllerFactory {
+    override fun create(
+        view: View,
+        window: OverlayWindow,
+        paramsHolder: () -> WindowManager.LayoutParams?,
+        positionMapper: OverlayPositionMapper,
+        orientationProvider: () -> Boolean,
+        onPositionPersist: (portrait: Boolean, normX: Float, normY: Float) -> Unit,
+    ): OverlayDragController = OverlayDragController(
+        ctx = ctx,
+        view = view,
+        window = window,
+        paramsHolder = paramsHolder,
+        positionMapper = positionMapper,
+        orientationProvider = orientationProvider,
+        onPositionPersist = onPositionPersist,
+    )
+}
+
+/**
  * Touch-listener + state machine that turns finger drags on the
  * floating-overlay root view into [WindowManager.LayoutParams] updates,
  * and translates the final pixel position into a normalised
@@ -50,12 +116,36 @@ import kotlin.math.max
  * `Action.OverlayAction.UpdateOverlayPosition`, which lands in the
  * reducer + `PersistOverlayPosition` effect — single dispatch (F-8).
  *
+ * # Orientation snapshot (F-7, B5 — SRP boundary update)
+ *
+ * The controller captures the "is portrait" bucket **once** at
+ * `ACTION_DOWN` via [orientationProvider] and threads it back through
+ * [onPositionPersist] together with the normalised coords. **This
+ * changes the earlier SRP boundary** (which asserted "the controller
+ * does not know which orientation it's in — orientation discrimination
+ * lives in the backend"). Rationale: the backend used to read
+ * `isPortraitOrientation()` *independently* in its `onPositionPersist`
+ * lambda, a second `Configuration` read split from the
+ * `pixelsToNormalized` geometry read. A config-change landing between
+ * the two reads computed the normalised value against the old geometry
+ * but persisted it into the *new* orientation's bucket → corrupted
+ * position in the wrong bucket (also affects the R.18 mid-drag-detach
+ * path via `teardownOverlay()`). Capturing the orientation at gesture
+ * start and passing it through makes the bucket and the geometry that
+ * produced the value come from the **same configuration snapshot**.
+ * The backend still *owns* the orientation source (its
+ * `isPortraitOrientation()` is the single SoT, injected here as
+ * [orientationProvider]); the controller only captures and forwards
+ * the snapshot — SRP is preserved, the boundary just moved the
+ * *timing* of the read into the gesture.
+ *
  * # Mid-drag detach safety net (Spec 3 §4.6 Issue 3.1.5 / R.18)
  *
  * If [detach] runs while [dragging] is true — e.g. a mode-transition
  * tears down the overlay while the user's finger is still on the
  * window — the controller persists the current params position before
- * releasing the listener. Without this hook the un-emitted drag would
+ * releasing the listener (using the orientation snapshot captured at
+ * `ACTION_DOWN`, F-7). Without this hook the un-emitted drag would
  * disappear from the state axis.
  *
  * # Why not `View.setOnTouchListener` in the backend?
@@ -77,72 +167,26 @@ import kotlin.math.max
  *   defeat the wrapper's idempotency).
  * @property positionMapper see [OverlayPositionMapper] — the only
  *   pixel↔normalised conversion site.
+ * @property orientationProvider supplies the backend's
+ *   `isPortraitOrientation()` (the single orientation SoT). Read
+ *   **once** at `ACTION_DOWN` and cached for the whole gesture (F-7) so
+ *   the persisted value's bucket matches the geometry that produced it.
  * @property onPositionPersist invoked on drag-end (Spec 3 §11.5.4)
- *   with the final normalised position. Receives only the coordinates;
- *   the controller does **not** know which orientation it's in
- *   (orientation discrimination lives in the backend, which has the
- *   `Configuration` reference — SRP).
+ *   with the orientation snapshot captured at `ACTION_DOWN` and the
+ *   final normalised position.
  *
  * @see OverlayBackend
  * @see OverlayPositionMapper
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §4.6 + §11.5
  */
-/**
- * Factory for [OverlayDragController].
- *
- * Hoisted as an interface so JVM tests can inject a fake that records
- * every persist call without going through a real `MotionEvent`
- * stream. Production wires [DefaultOverlayDragControllerFactory].
- */
-interface OverlayDragControllerFactory {
-    /**
-     * Build a controller wired to [view] + [window]. The
-     * [paramsHolder] lambda MUST return the same
-     * [WindowManager.LayoutParams] instance the backend holds — see
-     * [OverlayDragController]'s `paramsHolder` KDoc.
-     */
-    fun create(
-        view: View,
-        window: OverlayWindow,
-        paramsHolder: () -> WindowManager.LayoutParams?,
-        positionMapper: OverlayPositionMapper,
-        onPositionPersist: (Float, Float) -> Unit,
-    ): OverlayDragController
-}
-
-/**
- * Production [OverlayDragControllerFactory] — captures the
- * [Context] needed by the controller's threshold calculation.
- *
- * @property ctx context bound at Service-creation time; survives the
- *   factory's whole lifetime alongside the backend it serves.
- */
-class DefaultOverlayDragControllerFactory(
-    private val ctx: Context,
-) : OverlayDragControllerFactory {
-    override fun create(
-        view: View,
-        window: OverlayWindow,
-        paramsHolder: () -> WindowManager.LayoutParams?,
-        positionMapper: OverlayPositionMapper,
-        onPositionPersist: (Float, Float) -> Unit,
-    ): OverlayDragController = OverlayDragController(
-        ctx = ctx,
-        view = view,
-        window = window,
-        paramsHolder = paramsHolder,
-        positionMapper = positionMapper,
-        onPositionPersist = onPositionPersist,
-    )
-}
-
 class OverlayDragController(
     ctx: Context,
     private val view: View,
     private val window: OverlayWindow,
     private val paramsHolder: () -> WindowManager.LayoutParams?,
     private val positionMapper: OverlayPositionMapper,
-    private val onPositionPersist: (normX: Float, normY: Float) -> Unit,
+    private val orientationProvider: () -> Boolean,
+    private val onPositionPersist: (portrait: Boolean, normX: Float, normY: Float) -> Unit,
 ) {
 
     /**
@@ -164,6 +208,16 @@ class OverlayDragController(
     private var dragging: Boolean = false
 
     /**
+     * Orientation ("is portrait") snapshot captured at `ACTION_DOWN`
+     * and used for the whole gesture (F-7). Read once so the persisted
+     * value's pref-bucket and the geometry that produced the
+     * normalised value come from the *same* configuration — a
+     * config-change mid-drag no longer splits the read between
+     * `pixelsToNormalized` and the bucket selection.
+     */
+    private var gestureOrientationPortrait: Boolean = true
+
+    /**
      * `true` when the controller is actively dispatching `update()`
      * calls. Exposed so the backend can short-circuit its
      * state-driven `applyPosition` while a user drag is in flight
@@ -180,6 +234,12 @@ class OverlayDragController(
                 initialTouchY = event.rawY
                 initialParamsX = params.x
                 initialParamsY = params.y
+                // F-7: snapshot the orientation ONCE here. params is
+                // the same instance the backend holds; capturing
+                // `initialParamsX/Y` from it relies on the
+                // detach-before-params-swap invariant (F-12 comment in
+                // detach()).
+                gestureOrientationPortrait = orientationProvider()
                 dragging = false
                 // Return `false` so the inflated button children still
                 // receive `ACTION_DOWN` for ripple feedback (Spec 3
@@ -238,6 +298,16 @@ class OverlayDragController(
      */
     fun detach() {
         if (dragging) {
+            // F-12 invariant — drag-params stability: this relies on
+            // the backend's `teardownOverlay()` calling
+            // `dragController.detach()` **before** it swaps/clears
+            // `currentParams`. `initialParamsX/Y` (captured at
+            // `ACTION_DOWN`) and `paramsHolder()` here must refer to the
+            // SAME `WindowManager.LayoutParams` instance; if teardown
+            // re-inflated a fresh params object first, this mid-drag
+            // persist would read post-swap coordinates. The ordering is
+            // enforced in `OverlayBackend.teardownOverlay()` — do not
+            // reorder it without revisiting this dependency.
             paramsHolder()?.let { params -> persistCurrentPosition(params) }
             dragging = false
         }
@@ -246,6 +316,10 @@ class OverlayDragController(
 
     private fun persistCurrentPosition(params: WindowManager.LayoutParams) {
         positionMapper.pixelsToNormalized(params.x, params.y, view)
-            ?.let { (nx, ny) -> onPositionPersist(nx, ny) }
+            ?.let { (nx, ny) ->
+                // F-7: use the orientation captured at ACTION_DOWN, not
+                // a fresh read — so the bucket matches the geometry.
+                onPositionPersist(gestureOrientationPortrait, nx, ny)
+            }
     }
 }

@@ -83,10 +83,20 @@ class PipelineModuleTest {
     }
 
     @Test
-    fun `StepStarted in Running emits UpdateNotification but keeps state`() {
-        val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION)
+    fun `StepStarted in Running emits UpdateNotification and restamps elapsedMs (F-13)`() {
+        // F-13 (2026-05-15): StepStarted is a progress tick — it now
+        // restamps `elapsedMs` from ctx.now (previously a pure no-op state
+        // pass-through). The notification side-effect is unchanged. Only
+        // `elapsedMs` may differ from the input state; all other Running
+        // fields are preserved.
+        val state = PipelineUiState.Running(
+            sid,
+            InsertionTarget.INPUT_CONNECTION,
+            startedAtMs = 1_500L,
+        )
         val result = module.reduce(state, Action.PipelineAction.StepStarted(sid, "transcribing"), ctx())
-        assertEquals(state, result!!.nextState)
+        val next = result!!.nextState as PipelineUiState.Running
+        assertEquals(state.copy(elapsedMs = 3_500L), next)   // 5_000 - 1_500
         assertEquals(1, result.sideEffects.size)
     }
 
@@ -170,6 +180,149 @@ class PipelineModuleTest {
         val state = PipelineUiState.ReprocessStaging(sid, "x")
         val result = module.reduce(state, Action.PipelineAction.CancelReprocessStaging(sid), ctx())
         assertEquals(PipelineUiState.Idle, result!!.nextState)
+    }
+
+    // ─── F-12 SendStaging double-click guard ────────────────────────────
+
+    @Test
+    fun `F-12 ReprocessStaging defaults isStarting to false`() {
+        assertEquals(false, PipelineUiState.ReprocessStaging(sid, "x").isStarting)
+    }
+
+    @Test
+    fun `F-12 SendStaging while isStarting true is a no-op`() {
+        // Double-tap on the large record button: the guard rejects the
+        // second SendStaging so the reprocess job submits exactly once.
+        val state = PipelineUiState.ReprocessStaging(sid, transcript = "x", isStarting = true)
+        val result = module.reduce(state, Action.PipelineAction.SendStaging(sid), ctx())
+        assertNull(result)
+    }
+
+    @Test
+    fun `F-12 SendStaging with isStarting false still submits once`() {
+        val state = PipelineUiState.ReprocessStaging(sid, transcript = "x", isStarting = false)
+        val result = module.reduce(state, Action.PipelineAction.SendStaging(sid), ctx())
+        assertTrue(result!!.nextState is PipelineUiState.Preparing)
+        assertEquals(
+            1,
+            result.sideEffects.count { it is PipelineModule.Effect.SubmitReprocess },
+        )
+    }
+
+    @Test
+    fun `F-12 SendStaging with mismatched sessionId is rejected even when not starting`() {
+        val state = PipelineUiState.ReprocessStaging(sid, transcript = "x", isStarting = false)
+        val result = module.reduce(state, Action.PipelineAction.SendStaging("other-sid"), ctx())
+        assertNull(result)
+    }
+
+    // ─── F-13 Running progress counters ─────────────────────────────────
+
+    @Test
+    fun `F-13 Running defaults all counters to zero`() {
+        val running = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION)
+        assertEquals(0, running.completedSteps)
+        assertEquals(0, running.totalSteps)
+        assertEquals(0L, running.startedAtMs)
+        assertEquals(0L, running.elapsedMs)
+    }
+
+    @Test
+    fun `F-13 StartPipeline stamps totalSteps + startedAtMs from ctx-now`() {
+        val result = module.reduce(
+            state = PipelineUiState.Preparing(sid),
+            action = Action.PipelineAction.StartPipeline(sid, totalSteps = 4, autoEnterActive = false),
+            ctx = ctx(),
+        )
+        val next = result!!.nextState as PipelineUiState.Running
+        assertEquals(4, next.totalSteps)
+        assertEquals(0, next.completedSteps)
+        assertEquals(5_000L, next.startedAtMs)   // ctx() injects now = 5_000L
+        assertEquals(0L, next.elapsedMs)
+    }
+
+    @Test
+    fun `F-13 StepCompleted increments completedSteps and restamps elapsedMs`() {
+        val state = PipelineUiState.Running(
+            sessionId = sid,
+            target = InsertionTarget.INPUT_CONNECTION,
+            completedSteps = 1,
+            totalSteps = 3,
+            startedAtMs = 1_000L,
+        )
+        val result = module.reduce(state, Action.PipelineAction.StepCompleted(sid), ctx())
+        val next = result!!.nextState as PipelineUiState.Running
+        assertEquals(2, next.completedSteps)
+        assertEquals(4_000L, next.elapsedMs)   // ctx now 5_000 - startedAt 1_000
+        assertEquals(3, next.totalSteps)       // unchanged
+    }
+
+    @Test
+    fun `F-13 StepCompleted with mismatched sessionId is rejected`() {
+        val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION, startedAtMs = 1_000L)
+        val result = module.reduce(state, Action.PipelineAction.StepCompleted("other"), ctx())
+        assertNull(result)
+    }
+
+    @Test
+    fun `F-13 StepCompleted outside Running is a no-op`() {
+        assertNull(module.reduce(PipelineUiState.Idle, Action.PipelineAction.StepCompleted(sid), ctx()))
+        assertNull(
+            module.reduce(
+                PipelineUiState.Preparing(sid),
+                Action.PipelineAction.StepCompleted(sid),
+                ctx(),
+            ),
+        )
+    }
+
+    @Test
+    fun `F-13 StepStarted restamps elapsedMs without touching counters`() {
+        val state = PipelineUiState.Running(
+            sessionId = sid,
+            target = InsertionTarget.INPUT_CONNECTION,
+            completedSteps = 1,
+            totalSteps = 3,
+            startedAtMs = 2_000L,
+        )
+        val result = module.reduce(state, Action.PipelineAction.StepStarted(sid, "rewording"), ctx())
+        val next = result!!.nextState as PipelineUiState.Running
+        assertEquals(3_000L, next.elapsedMs)   // 5_000 - 2_000
+        assertEquals(1, next.completedSteps)   // unchanged
+        assertEquals(3, next.totalSteps)       // unchanged
+        assertTrue(result.sideEffects.any { it is PipelineModule.Effect.UpdateNotification })
+    }
+
+    @Test
+    fun `F-13 StepStarted with mismatched sessionId is rejected`() {
+        val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION, startedAtMs = 1_000L)
+        val result = module.reduce(state, Action.PipelineAction.StepStarted("other", "x"), ctx())
+        assertNull(result)
+    }
+
+    @Test
+    fun `F-13 StepStarted outside Running is a no-op`() {
+        assertNull(
+            module.reduce(
+                PipelineUiState.Preparing(sid),
+                Action.PipelineAction.StepStarted(sid, "x"),
+                ctx(),
+            ),
+        )
+    }
+
+    @Test
+    fun `F-13 elapsedMs is floored at zero when ctx-now precedes startedAtMs`() {
+        // Defensive: a test-constructed Running with a high startedAtMs (or
+        // a non-monotonic injected clock) must not surface a negative timer.
+        val state = PipelineUiState.Running(
+            sessionId = sid,
+            target = InsertionTarget.INPUT_CONNECTION,
+            startedAtMs = 9_000L,   // later than ctx() now = 5_000L
+        )
+        val result = module.reduce(state, Action.PipelineAction.StepCompleted(sid), ctx())
+        val next = result!!.nextState as PipelineUiState.Running
+        assertEquals(0L, next.elapsedMs)
     }
 
     // ─── Cross-module cascade ───────────────────────────────────────────

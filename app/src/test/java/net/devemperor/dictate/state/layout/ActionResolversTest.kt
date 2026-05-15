@@ -296,6 +296,41 @@ class ActionResolversTest {
     }
 
     @Test
+    fun `F-13 resolveRecordButtonTextPipeline renders real Running counters not placeholders`() {
+        // Regression for the B4-resolver placeholder (`0, 0, …, 0L`):
+        // the live label must reflect the actual Running progress fields.
+        val strings = testLayoutStrings()
+        val s = state.copy(
+            pipeline = PipelineUiState.Running(
+                sessionId = "s1",
+                target = InsertionTarget.INPUT_CONNECTION,
+                autoEnterActive = true,
+                completedSteps = 2,
+                totalSteps = 3,
+                elapsedMs = 8_000L,
+            ),
+        )
+        // testLayoutStrings().formatPipelineLabel: "$done/$total$mark  ${elapsedMs}ms"
+        assertEquals("2/3 ↵  8000ms", resolveRecordButtonTextPipeline(s, strings))
+    }
+
+    @Test
+    fun `F-13 resolveRecordButtonTextPipeline reflects autoEnter false in label`() {
+        val strings = testLayoutStrings()
+        val s = state.copy(
+            pipeline = PipelineUiState.Running(
+                sessionId = "s1",
+                target = InsertionTarget.INPUT_CONNECTION,
+                autoEnterActive = false,
+                completedSteps = 0,
+                totalSteps = 1,
+                elapsedMs = 0L,
+            ),
+        )
+        assertEquals("0/1  0ms", resolveRecordButtonTextPipeline(s, strings))
+    }
+
+    @Test
     fun `resolveRecordButtonTextStaging returns empty string outside staging`() {
         val strings = testLayoutStrings()
         val s = state.copy(pipeline = PipelineUiState.Idle)

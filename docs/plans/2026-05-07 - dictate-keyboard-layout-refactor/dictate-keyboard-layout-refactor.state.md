@@ -298,7 +298,7 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 |-------|------|--------|------:|----:|------------:|--------|
 | B0 | Architecture-Foundation (ADRs + state-architecture docs) | C0 (1) | 3600 | 2800 (docs) | 1 | ✅ (commits 1ca3bcc → 3e5a8dd, 14 fixes 1 wave) |
 | B1 | Pre-Architecture and Service-Skeleton | C1+C2 (2) | 1250 | 650 | 1 | ✅ (commits bd8f1e6 → 7a5afd1, 23 fixes 1 wave; 198 tests pass) |
-| B2 | Modular-Orchestrator-Implementation | C3+C4+C5+C6+C7 (5) | 4350 | 3100 | 3 | ⏳ pending |
+| B2 | Modular-Orchestrator-Implementation | C3+C4+C5+C6+C7 (5) | 4350 | 3100 | 3 | ✅ (commits d0dffd9 → 6c16951; 14 modules + Orchestrator + Registry + PrefMirror + Recovery + Service-wiring; 22 fixes 1 wave; 536 tests pass) |
 | B3 | Migration-Persistence-AudioFactory | C8+C9+C10+C11 (4) | 3150 | 1900 | 2 | ⏳ pending |
 | B4 | Keyboard-Layout-Catalog | C12+C13+C14+C15 (4) | 2500 | 1510 | 2 | ⏳ pending |
 | B5 | Floating-Overlay | C16+C17+C18 (3) | 2000 | 1250 | 2 | ⏳ pending |
@@ -310,11 +310,11 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 | C0-block0-arch-docs | Block 0: ADRs + state-architecture docs | Block 0 | 3600 | XL (D12-atomic Foundation-Pack) | ✅ (commit 1ca3bcc + wave 3e5a8dd, 18 docs + 4 back-refs + 14 audit-fixes) |
 | C1-block1a-quick-wins | Block 1a: Quick-Wins in today's code | Block 1a | 400 | S/M | ✅ (ff6da41 prod + f1686e8 tests, 17 unit-tests) |
 | C2-block2-pipeline-service-skeleton | Block 2: DictatePipelineService skeleton + FGS | Block 2 | 850 | M | ✅ (cf7a8ba prod + 0b3d126 tests, 10 Robolectric tests) |
-| C3-state-core | Block 1b/1: DictateUiState + Store + DictateModule + Action | Block 1b | 850 | M | ⏳ |
-| C4-orchestrator-and-registry | Block 1b/2: DictateOrchestrator + Registry + ModuleServices | Block 1b | 650 | M | ⏳ |
-| C5-modules-core | Block 1b/3: Core modules — Recording/Pipeline/Audio/ViewMode/Overlay | Block 1b | 1150 | L | ⏳ |
-| C6-modules-auxiliary | Block 1b/4: Auxiliary modules (8 simpler modules) | Block 1b | 1100 | L | ⏳ |
-| C7-prefmirror-recovery-wiring | Block 1b/5: PipelinePrefMirror + Recovery + Wiring | Block 1b | 600 | M | ⏳ |
+| C3-state-core | Block 1b/1: DictateUiState + Store + DictateModule + Action | Block 1b | 850 | M | ✅ (c127730 prod + 6af14a8 tests, 60 tests) |
+| C4-orchestrator-and-registry | Block 1b/2: DictateOrchestrator + Registry + ModuleServices | Block 1b | 650 | M | ✅ (d0af21a prod + 8ca80d8 tests, 34 architecture-tests) |
+| C5-modules-core | Block 1b/3: Core modules — Recording/Pipeline/Audio/ViewMode/Overlay | Block 1b | 1150 | L | ✅ (57c2079 prod + 71580a4 tests, 110 reducer+T1-T7 tests) |
+| C6-modules-auxiliary | Block 1b/4: Auxiliary modules (9 modules incl. KeyboardInput + Interruption-stub) | Block 1b | 1100 | L | ✅ (565a434 prod + 4746cdf tests, 81 tests) |
+| C7-prefmirror-recovery-wiring | Block 1b/5: PipelinePrefMirror + Recovery + Wiring | Block 1b | 600 | M | ✅ (eb3471c prod + 3fb5e46 tests, 34 tests; IMPL-1 re-deferred to C8) |
 | C8-block3-subsystem-adapter-migration | Block 3a: Subsystem-Adapter-Migration | Block 3 (plan) | 700 | M | ⏳ |
 | C9-block3-db-persistence-schema-m4 | Block 3b: DB-Persistence — Schema-Migration M3→M4 | Block 3 (spec1) | 850 | M | ⏳ |
 | C10-block3-db-persistence-recovery | Block 3c: DB-Persistence — Recovery + Cleanup | Block 3 (spec1) | 600 | M | ⏳ |
@@ -335,11 +335,15 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 |---------|--------|------|---------------------|---------|-------------|
 | B0-VAL-W1 | Block-Validate B0 (AUDIT-PLAN-AND-API + AUDIT-CONVENTION; AUDIT-LOGIC + AUDIT-TEST n/a for docs-only) | 1 | 11/0/5 (consolidator deduplicated 14 audit-findings into 11 unique + 5 ❌ eliminated; implementer tracked as F-1..F-14 in block-report) | ✓ converged (self-check verified, no Wave-2 needed) | 3e5a8dd |
 | B1-VAL-W1 | Block-Validate B1 (4 audits: AUDIT-PLAN-AND-API + AUDIT-CONVENTION + AUDIT-LOGIC + AUDIT-TEST) | 1 | 23/0/2 (consolidator deduplicated 26 audit-findings → 23 unique + 1 ❌ false-positive + 1 OOS for ADR follow-up; LOGIC found 3 real bugs — hard-coded Idle, startForeground exceptions, bind-failure silent) | ✓ converged (self-check verified; 198 tests pass; new tests for KeyboardUiController + PipelineServiceConnection + pre-API-34 + NotificationChannel-invariants) | 7a5afd1 |
+| B2-VAL-W1 | Block-Validate B2 (4 audits: AUDIT-PLAN-AND-API + AUDIT-CONVENTION + AUDIT-LOGIC + AUDIT-TEST) — the architectural core, 5 chunks / ~3100 LOC diff | 1 | 23/1/0 (1 🟡-with-research + 23 🟢; research recommended Option D for Critical F-1 manual-paste flag — fold into ResendState). 22 fixed in this wave; 2 NTH postponed to Phase 4.6 (spec-matrix); 1 SF postponed to B3 (post-extraction-failure recovery wiring) | ✓ converged (536 tests pass; 7 new behavioural tests; Option D implemented + ADR-0001 Decision-History entry appended) | 6c16951 |
 
 ## Postponed Issues
 
 | Block | Postponed-Issue | Severity | Why postponed | Tracking |
 |-------|-----------------|----------|---------------|----------|
+| B2 | F-11, F-14: spec-internal §15.1 matrix inconsistency + §15 module-inventory column drift | NTH | Spec-doc-edits, not implementation-blocking; consolidate with Phase 4.6 doc-pass | Phase 4.6c |
+| B2 | SF-4: post-extraction-failure manual-paste-flag wiring | NTH | Recovery-path responsibility — needs B3 SessionRepo + Recovery + Service-side error handler; pipeline-reducer is not the right owner | B3 recovery wiring |
+| B2 | IMPL-1 (B1 carry-over re-deferred): JobExecutor-Init move from IME.onCreate → Service.onCreate | Important | Service composition-root requires AIOrchestrator + AutoFormattingService + PromptQueueManager + SessionManager + SessionTracker + PipelineCallback construction = B3 chunk C8 subsystem-migration scope | B3 C8 |
 
 ## Mid-Chunk-Triage Trigger Log
 
@@ -362,6 +366,7 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 |-------|--------------------|--------------------|--------|
 | B0 | 0df6557 | 3e5a8dd | ✅ |
 | B1 | bd8f1e6 | 7a5afd1 | ✅ |
+| B2 | d0dffd9 | 6c16951 | ✅ |
 
 ---
 
@@ -388,3 +393,5 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 | 2026-05-15 | Phase 3.1 B1-C2 | B1-C2-IMPL-FULL combined Steps 1-5: DictatePipelineService.kt new (303 lines KDoc-rich Foreground Service skeleton with LocalBinder); Manifest entries (FGS + FGS-MICROPHONE + POST_NOTIFICATIONS + service decl with `foregroundServiceType="microphone"`); IME-side bind/unbind; Robolectric 4.14.1 introduced as K-4 opt-out (documented). 10 Robolectric tests (channel-order + FGS 5s-budget + LocalBinder + onDestroy). 1 IMPORTANT issue IMPL-1 (JobExecutor-init move deferred to B2 — Spec 1 §7.3 Composition-Root requires full PipelineOrchestrator). Split into Commit 1 cf7a8ba + Commit 2 0b3d126. | ✅ |
 | 2026-05-15 | Phase 3.2 B1 | Block-Validate: 4-topic audit (all 4 active) found 0 Crit + 10 Imp + 16 NTH = 26 raw findings. VAL-SANITY consolidated → 23 🟢 + 0 🟡 + 2 ❌ (1 OOS to ADR-0003 path-drift follow-up + 1 informational FP). B1-VAL-REPAIR Wave 1 fixed all 23 incl. 3 substantive LOGIC bugs (hard-coded Idle / startForeground exception / silent bind-failure), F-6 Spec-mandated German translation, F-8 predXxx→isXxx mechanical rename. 3 new test files (KeyboardUiControllerTest 6, PipelineServiceConnectionContractTest 4, DictatePipelineServicePreApi34Test 1). Self-check ✅; ./gradlew test all green. Wave-commit 7a5afd1. | ✅ |
 | 2026-05-14 | Phase 1b | E2E-Test-Strategy-Agent (fresh-spawn, no SendMessage available — per skill the Phase-1b prompt is identical for resume vs fresh) wrote `./reports/e2e-runbook.md` with 24 manual TCs (TC-PRE + TC-B0-DOCS + TC-1..TC-23) covering 10 risk-points: FGS-lifecycle, IME-lifecycle, audio-capture, Room v3→v4 migration, Triangle-FSM T1-T7, MotionLayout transitions, Cross-Module-Cascade, Visibility-Predicate, Overlay-Permission flow, Orphan-FAILED-audio-cleanup. Knowledge-gap flagged: no `test-knowledge-android`/`-mobile`/`-ime` skill exists — runbook hand-rolled per TC with self-contained adb steps. 7 user-questions emitted (Q1-Q3 blocking, Q4-Q7 configuration). Pre-Flight extended with 9 E2E-specific items (device, adb-connection-USB, apk-installed, ime-enabled+selected, mic-permission, target-app, network+api-key, personal-device-consent). E2E NOT skipped — refactor has significant behaviour-impact. | ✅ |
+| 2026-05-15 | Phase 3.1 B2-C3..C7 | B2 architectural core: 5 chunks implemented sequentially in combined-Steps-1-5 pattern with orchestrator-split commits. C3 c127730+6af14a8 (state-core types, 60 tests). C4 d0af21a+8ca80d8 (Orchestrator+Registry+ModuleServices+ProGuard, 34 tests). C5 57c2079+71580a4 (5 core modules incl. ViewMode T1-T7, 110 tests). C6 565a434+4746cdf (9 aux modules incl. KeyboardInput+Interruption-stub, 81 tests). C7 eb3471c+3fb5e46 (PrefMirror+Recovery+Service-wiring; assertCompleteCoverage active; LocalBinder typed; IMPL-1 re-deferred to C8 per D5). Total: 14 active DictateModule + 1 stub, all 14 in Registry.Default.all. New deps: kotlinx-collections-immutable, kotlin-reflect, kotlinx-coroutines-test. | ✅ |
+| 2026-05-15 | Phase 3.2 B2 | Block-Validate (the heaviest of the plan, ~3100 LOC diff): 4-topic audit found **1 Critical** + 9 Imp + 17 NTH = 27 raw findings. Critical: LOGIC-B2-1 PipelineModule.NotifyResultNeedsManualPaste dead code (claimed "out-of-band write" doesn't exist; service-death recovery user-affordance non-functional). VAL-SANITY → 23 🟢 + 1 🟡 + 0 ❌. B2-VAL-RES-1 research-agent investigated 3 architectural options; **recommended Option D** (fold flag into ResendState — sibling of lastAudioExists, owned by ResendModule). B2-VAL-REPAIR Wave 1 implemented Option D + 22 other findings; 2 NTH postponed to Phase 4.6 (spec-matrix doc-edits); 1 SF postponed to B3 (post-extraction recovery wiring). ADR-0001 Decision-History entry appended. Self-check ✅; 536 tests pass. Wave-commit 6c16951. Block-Validate converged in 1 wave + 1 research-step (soft-cap 3 not approached). | ✅ |

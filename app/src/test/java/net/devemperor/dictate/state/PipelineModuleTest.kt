@@ -182,25 +182,33 @@ class PipelineModuleTest {
         assertEquals(PipelineUiState.Idle, result!!.nextState)
     }
 
-    // ─── F-12 SendStaging double-click guard ────────────────────────────
+    // ─── F-12 SendStaging single-submit guard (B1-VAL-W1 option b) ──────
+    // The guard is the FSM `ReprocessStaging → Preparing` edge, NOT a
+    // state flag — `ReprocessStaging` carries no `isStarting` field
+    // (Spec 1 §3). Dispatch is main-thread-confined (ADR-0001) so two
+    // taps are serialized: the second arrives in `Preparing` and reduces
+    // to `null`. See research/sendstaging-isstarting-guard-semantics.md.
 
     @Test
-    fun `F-12 ReprocessStaging defaults isStarting to false`() {
-        assertEquals(false, PipelineUiState.ReprocessStaging(sid, "x").isStarting)
+    fun `F-12 second SendStaging after the first is a no-op (FSM edge guards single-submit)`() {
+        // First tap: ReprocessStaging → Preparing + SubmitReprocess.
+        val staging = PipelineUiState.ReprocessStaging(sid, transcript = "x")
+        val first = module.reduce(staging, Action.PipelineAction.SendStaging(sid), ctx())
+        assertTrue(first!!.nextState is PipelineUiState.Preparing)
+        // Second tap on the large record button arrives with the pipeline
+        // already in Preparing — falls to the `else -> null` arm, so the
+        // reprocess job is submitted exactly once.
+        val second = module.reduce(
+            first.nextState,
+            Action.PipelineAction.SendStaging(sid),
+            ctx(),
+        )
+        assertNull(second)
     }
 
     @Test
-    fun `F-12 SendStaging while isStarting true is a no-op`() {
-        // Double-tap on the large record button: the guard rejects the
-        // second SendStaging so the reprocess job submits exactly once.
-        val state = PipelineUiState.ReprocessStaging(sid, transcript = "x", isStarting = true)
-        val result = module.reduce(state, Action.PipelineAction.SendStaging(sid), ctx())
-        assertNull(result)
-    }
-
-    @Test
-    fun `F-12 SendStaging with isStarting false still submits once`() {
-        val state = PipelineUiState.ReprocessStaging(sid, transcript = "x", isStarting = false)
+    fun `F-12 SendStaging submits exactly once`() {
+        val state = PipelineUiState.ReprocessStaging(sid, transcript = "x")
         val result = module.reduce(state, Action.PipelineAction.SendStaging(sid), ctx())
         assertTrue(result!!.nextState is PipelineUiState.Preparing)
         assertEquals(
@@ -210,8 +218,8 @@ class PipelineModuleTest {
     }
 
     @Test
-    fun `F-12 SendStaging with mismatched sessionId is rejected even when not starting`() {
-        val state = PipelineUiState.ReprocessStaging(sid, transcript = "x", isStarting = false)
+    fun `F-12 SendStaging with mismatched sessionId is rejected`() {
+        val state = PipelineUiState.ReprocessStaging(sid, transcript = "x")
         val result = module.reduce(state, Action.PipelineAction.SendStaging("other-sid"), ctx())
         assertNull(result)
     }

@@ -195,6 +195,16 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
             // F-13: count the finished step and restamp the elapsed timer.
             // The live record-button label + FGS notification read
             // `completedSteps`/`totalSteps`/`elapsedMs` off `Running`.
+            //
+            // F-6: the runner is authoritative on step count;
+            // `completedSteps` is NOT clamped here — if the runner
+            // mis-reports / double-emits / `totalSteps == 0`, the label
+            // may briefly show an overrun (`N/M` with `N > M`). The
+            // display formatter, not the pure reducer, owns any cosmetic
+            // clamp (keeps the reducer minimal + runner-authoritative;
+            // a `completedSteps.coerceAtMost(totalSteps)` could live in
+            // `formatPipelineLabel` in a later display-polish block —
+            // forward-note only, not implemented in B1).
             is PipelineUiState.Running -> if (state.sessionId == action.sessionId) {
                 TransitionResult(
                     nextState = state.copy(
@@ -287,14 +297,17 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         // signals "no state change needed in PipelineModule".
 
         is Action.PipelineAction.SendStaging -> when (state) {
+            // F-12 single-submit guard (B1-VAL-W1 option b): there is no
+            // `isStarting` flag. The first SendStaging transitions
+            // `ReprocessStaging → Preparing`; a second tap on the large
+            // record button arrives with `pipeline is Preparing` and falls
+            // to the `else -> null` arm below — so the reprocess job is
+            // submitted exactly once. Dispatch is main-thread-confined
+            // (ADR-0001 §"Main-Thread Confined Dispatch") so the two taps
+            // are serialized: the FSM `→ Preparing` edge IS the guard, not
+            // a state flag. See
+            // research/sendstaging-isstarting-guard-semantics.md.
             is PipelineUiState.ReprocessStaging -> if (state.sessionId != action.sessionId) {
-                null
-            } else if (state.isStarting) {
-                // F-12 double-click guard: the first SendStaging flips
-                // `isStarting`; a second tap on the large record button
-                // before the FSM leaves ReprocessStaging is a no-op
-                // (returning `null` = "action not relevant in this state",
-                // so the reprocess job is submitted exactly once).
                 null
             } else {
                 TransitionResult(

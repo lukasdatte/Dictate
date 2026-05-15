@@ -11,6 +11,7 @@ import net.devemperor.dictate.state.ModuleServices
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
 import net.devemperor.dictate.state.ViewMode
+import java.util.UUID
 
 /**
  * Shared `ButtonSlot.actionResolver` helpers consumed by the
@@ -57,7 +58,7 @@ private const val TAG: String = "LayoutResolver"
  * pre-allocated `JobExecutor.register()` id flows in instead) without
  * touching the resolver shape.
  */
-private fun newSessionId(): String = java.util.UUID.randomUUID().toString()
+private fun newSessionId(): String = UUID.randomUUID().toString()
 
 /**
  * Record-button click resolver in standard (non-SEND-MODE) layouts.

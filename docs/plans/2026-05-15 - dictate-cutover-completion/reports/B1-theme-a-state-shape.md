@@ -506,17 +506,162 @@ adopts the documented `StartRecording`-carries-sessionId contract).
 | logic | `B1-AUDIT-LOGIC` | ⏳ | `./reports/audit-logic-B1.md` | — |
 | test | `B1-AUDIT-TEST` | ⏳ | `./reports/audit-test-B1.md` | — |
 
-### Sanity-Check Consolidator
+### Block-Validate Sanity-Check (B1-VAL-SANITY)
 
 **Agent-ID:** `B1-VAL-SANITY` · **Output:** `./reports/validated-findings-B1.md`
+**Date:** 2026-05-15
+
+**What was done:** Read all 4 audit outputs in full, deduplicated the 2
+known overlap pairs, validated every finding against the live code
+(`PipelineModule.kt`, `DictateUiState.kt`, `LayoutCatalog.kt`,
+`ActionResolvers.kt`, `DictatePipelineService.kt`, `Action.kt`) + Epic
+§2 AC-4 / §4 Block A1+A2. Raw 0 Crit / 4 Imp / 5 NTH → **7 unique
+findings**: 🟢 5 · 🟡 1 · ❌ 1. No Critical. AUDIT-TEST fully clean
+(964/964 forced-rerun, doc-trail intact, no hidden sibling-test
+regressions). The 2 sessionId/`data object` delegated deviations
+(C2-A2 Dev-1, Dev-2) confirmed-justified with **no** residual finding;
+the SendStaging `→ Preparing` deviation (C1-A1 Dev-2) confirmed-
+justified for the FSM edge but spawns the residual F-1.
+
+**Central decision — the `isStarting` inert-mechanism (F-1, 🟡):**
+Merged AUDIT-PLAN-AND-API-B1-1 + AUDIT-LOGIC-B1-1 (both independently
+found it). Grep-verified: **zero production writers of `isStarting =
+true`** (only `PipelineModuleTest.kt:196`). The field + the `else if
+(state.isStarting) null` guard branch + the `LayoutCatalog.kt:390-393`
+comment describe a double-click guard that protects nothing — the real
+protection is the FSM `ReprocessStaging → Preparing` edge. Classified
+**🟡 research-needed**, not 🟢, because this is a genuine design tension
+(Epic AC-4 + §4-A1 explicitly want `isStarting` to BE the `!isStarting`
+guard, vs the runner-handshake that forced the `→ Preparing` deviation),
+IMPL-PLAN-FIX-1 explicitly asked Block-Validate to confirm the call, and
+B2 (FGS notification) + B3 (recording-drive cutover) build on this seam
+so the guard semantics must be unambiguous **before B2**. Research
+(`sendstaging-isstarting-guard-semantics`) must pick (a) wire
+`isStarting` as the real guard while preserving the runner handshake +
+deliver the spec disabled-button UX, or (b) delete the inert
+field+branch+comment, document the FSM edge as canonical, and adjust the
+Epic AC-4 `(!isStarting)` expectation + F-12 test. Both options + the
+B2/B3 forward-impact must be fully specified by the research (D5: when
+in doubt research more; D4: long-term highest quality — a shipped
+do-nothing state field is a future-reader trap on a seam the next two
+blocks build on).
+
+**Issues:**
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| F-1 | Important | `isStarting` inert mechanism (field + guard branch + LayoutCatalog comment) — `PipelineModule.kt:289-320`, `DictateUiState.kt:238-251`, `LayoutCatalog.kt:390-393` | delegated-to-orchestrator | 🟡 research-needed `sendstaging-isstarting-guard-semantics`; gates B2 |
+| F-2 | Important | `Running.totalSteps` KDoc says `StepStarted` refreshes it; reducer does not — `DictateUiState.kt:208-212` | delegated-to-orchestrator | 🟢 doc-only auto-fix |
+| F-3 | Nice-to-have | Stale `formatPipelineLabel` "passes 0s" comment — `DictatePipelineService.kt:730-732` | delegated-to-orchestrator | 🟢 doc-only auto-fix |
+| F-4 | Nice-to-have | FQN `java.util.UUID` vs import-convention — `ActionResolvers.kt:60` | delegated-to-orchestrator | 🟢 auto-fix |
+| F-5 | Nice-to-have | F-15 raw language code in label — `DictatePipelineService.kt:713-719` | postponed | ❌ false-positive: testable contract met, intentional-deferred-with-rationale (D3 carve-out); tracked known-gap |
+| F-6 | Nice-to-have | No `completedSteps` overrun clamp/comment — `PipelineModule.kt:194-207` | delegated-to-orchestrator | 🟢 auto-fix (document runner-authoritative assumption; no reducer clamp) |
+| F-7 | Nice-to-have | `StartRecording.sessionId` no non-blank guard (F-10 forward-risk for B3) — `Action.kt:117-121`, `RecordingModule.kt:184-199` | delegated-to-orchestrator | 🟢 auto-fix (add `require` + regression test) + carry as B3 forwarding concern |
 
 | Issue-ID | Verdict | Severity | Routing |
 |----------|---------|----------|---------|
-| — | — | — | — |
+| F-1 (AUDIT-PLAN-AND-API-B1-1 + AUDIT-LOGIC-B1-1) | 🟡 research-needed | Important | research `sendstaging-isstarting-guard-semantics` → resume-chain repair; **gates B2** |
+| F-2 (AUDIT-PLAN-AND-API-B1-2 + AUDIT-LOGIC-B1-2) | 🟢 auto-fixable | Important | consolidator resume-chain (doc-only) |
+| F-3 (AUDIT-CONVENTION-B1-1) | 🟢 auto-fixable | Nice-to-have | consolidator resume-chain (doc-only) |
+| F-4 (AUDIT-CONVENTION-B1-2) | 🟢 auto-fixable | Nice-to-have | consolidator resume-chain |
+| F-5 (AUDIT-PLAN-AND-API-B1-3) | ❌ eliminated | Nice-to-have | no repair — tracked known-gap (C2-A2 block-report) |
+| F-6 (AUDIT-LOGIC-B1-3) | 🟢 auto-fixable | Nice-to-have | consolidator resume-chain (comment + forward-note) |
+| F-7 (AUDIT-LOGIC-B1-4) | 🟢 auto-fixable | Nice-to-have | consolidator resume-chain + B3 forwarding concern |
+
+**Overlooked / known gaps:** Did not re-audit the ~11 mechanically
+contract-updated test files (AUDIT-TEST already verified them clean —
+12 sibling edits are pure compile-fixes, no weakened assertions). No
+fixes applied (sanity mode only — orchestrator decides routing; may
+resume as `B1-VAL-REPAIR` for the 🟢 wave + spawn `B1-VAL-RES-1` for
+F-1's research).
 
 ### Mini-Triage + Repair-Wave(s)
 
 (Per iteration, max 3 per D5 soft-cap.)
+
+#### Block-Validate Repair Wave 1 (B1-VAL-REPAIR-1)
+
+**Date:** 2026-05-15
+**Agent-ID:** `B1-VAL-RES-1` (research) → `B1-VAL-REPAIR-1` (repair) →
+`B1-VAL-REPAIR-1-VERIFY` (self-check) — single session, all three roles.
+**Scope:** all-validated (1 🟡 F-1 + 5 🟢: F-2, F-3, F-4, F-6, F-7).
+**Findings addressed:** 6 (F-5 ❌ eliminated — no action, tracked
+known-gap).
+
+**F-1 decision: option (b) — delete the inert `isStarting` trio.**
+Research `research/sendstaging-isstarting-guard-semantics.md`. Decisive:
+the **canonical new-state spec (Spec 1 §3) defines
+`ReprocessStaging(sessionId, transcript)` with NO `isStarting`** — the
+field was a legacy `core/PipelineUiState.kt` carry-over and is itself a
+**dead field even in legacy** (never read; the "disabled-Send UX" the
+audit feared losing has no spec home and was never wired). Dispatch is
+**main-thread-confined** (ADR-0001) so two `SendStaging` taps are
+serialized — the FSM `ReprocessStaging → Preparing` edge already makes
+the second tap a `null` no-op; there is no async/optimistic-UI writer
+for `isStarting` to serve. Option (a) would entrench a spec-rejected
+field to wire a UX no spec requested (gold-plating against Spec 1).
+Option (b) makes code + canonical spec + Epic agree (D4 long-term
+quality; the Epic §4-A1 literal pseudo-code was already proven wrong by
+C1-A1 — it strands the reprocess job).
+
+| Finding ID | Severity | File | Status | Fix description |
+|------------|----------|------|--------|-----------------|
+| F-1 | Important | `DictateUiState.kt:247`, `PipelineModule.kt:289+`, `LayoutCatalog.kt:390` | fixed | Removed `ReprocessStaging.isStarting` field + KDoc; removed `else if (state.isStarting) null` guard branch (collapsed to sessionId-mismatch→null / else→transition, FSM-edge guard documented); rewrote LayoutCatalog comment. |
+| F-2 | Important | `DictateUiState.kt:208-212` | fixed | `totalSteps` KDoc: removed false "refreshed by `StepStarted`"; now "set once on `Preparing → Running`; never re-stamped (Dev-1)". |
+| F-3 | Nice-to-have | `DictatePipelineService.kt:730-732` | fixed | Replaced stale "resolver passes 0s" comment with the live F-13 flow description (matches `TextResolvers.kt` twin KDoc). |
+| F-4 | Nice-to-have | `ActionResolvers.kt:14,60` | fixed | Added `import java.util.UUID` (project convention: `java.*` last); `newSessionId()` uses short name. |
+| F-6 | Nice-to-have | `PipelineModule.kt:194-207` | fixed | Added runner-authoritative `completedSteps`-not-clamped comment + forward-note (no reducer clamp — per auditor, avoids over-engineering the pure reducer). |
+| F-7 | Nice-to-have | `RecordingModule.kt:184-199`, `Action.kt` | fixed | `require(action.sessionId.isNotBlank())` fail-fast at the `Idle + StartRecording` arm + regression test `F-7 StartRecording with a blank sessionId throws` (red on unfixed code, green now). B3 forward-concern recorded below. |
+
+**Cross-fix conflicts:** none. The doc-drift cluster (F-1 doc-leg +
+F-2 + F-3 + LayoutCatalog comment) tells one consistent story: "the FSM
+`ReprocessStaging → Preparing` edge on main-thread-confined dispatch is
+the canonical single-submit guard; F-13 counters flow live."
+
+**Files modified — production (4):** `DictateUiState.kt`,
+`PipelineModule.kt`, `LayoutCatalog.kt`, `ActionResolvers.kt`,
+`DictatePipelineService.kt`, `RecordingModule.kt` (6 production files).
+**Files modified — test (2):** `PipelineModuleTest.kt`,
+`RecordingModuleTest.kt`.
+**Files modified — plan/docs (2):** `dictate-cutover-completion.md`
+(Epic §0 F-12 bullet, §2 AC-4, §4 Block A1 — documented plan-deviation
+option b), `B1-theme-a-state-shape.md` (this report).
+**New file:** `research/sendstaging-isstarting-guard-semantics.md`.
+**Files outside findings-scope (drift):** none — `RecordingModuleTest.kt`
+& `PipelineModuleTest.kt` are the test contract-updates for F-7/F-1
+(in-scope); the plan-file edits are the mandatory option-(b)
+plan-deviation per D22.
+
+**F-1 test-contract update (expected, not a regression):** option (b)
+removes the `isStarting` field, so the F-12 tests change from
+"field-flag no-op" to "FSM-edge no-op": deleted
+`F-12 ReprocessStaging defaults isStarting to false`; rewrote
+`F-12 ... while isStarting true is a no-op` →
+`F-12 second SendStaging after the first is a no-op (FSM edge guards
+single-submit)` (asserts the *real* guard: first tap → Preparing,
+second tap → null); two other F-12 tests dropped the removed
+`isStarting` arg. Net test delta 0 (−1 deleted, +1 F-7 regression);
+suite **964/964 green** (`./gradlew assembleDebug` + `./gradlew test`
+both BUILD SUCCESSFUL; 0 fail / 0 error / 0 skipped, baseline held).
+
+**Self-check (B1-VAL-REPAIR-1-VERIFY):** re-read own diff — all 6
+findings addressed, none skipped; no new code-quality/type/import
+issues (verified by green compile of both debug + release unit-test
+variants); changes match file style (KDoc/comment conventions, import
+ordering verified against `PipelineOrchestrator.kt`); behaviour
+preserved — the single-submit guarantee is unchanged (FSM edge was
+already the real guard; only the inert flag + dead branch removed).
+Convergence: **✓ converged** — no new issues, no forwarded issues.
+
+**Cross-block forward-concern (F-7 → B3):** B3 (C5/C7
+recording-trigger cutover) must mint/route a **non-blank real UUID**
+into `StartRecording.sessionId` (the IME's `preAllocatedId`,
+`DictateInputMethodService.java:2213`). The new
+`require(sessionId.isNotBlank())` in `RecordingModule` is the
+enforcement point; B3 is the contract owner. This sits alongside the
+existing IMPL-PLAN-FIX-2 B3 contract note (FN-4 — `StartRecording(...,
+preAllocatedId)` + payload-less `StopRecordingAndSend`). Orchestrator:
+forward to B3 (no state-file edit made — block-report only, per prompt).
 
 ---
 
@@ -524,7 +669,7 @@ adopts the documented `StartRecording`-carries-sessionId contract).
 
 | # | Plan Location | What changed | Why | Impact | Inline-fixed | Source-Agent | Source-Step |
 |---|---------------|--------------|-----|--------|--------------|--------------|--------------|
-| — | — | — | — | — | — | — | — |
+| BVW1-1 | Epic §0 F-12 bullet (`:73-74`), §2 AC-4 (`:191-197`), §4 Block A1 (`:321-327`) | The SendStaging single-submit guard is the FSM `ReprocessStaging → Preparing` edge; **no `isStarting` field** is added to the new `state/` module. Epic AC-4 / §4-A1 literal `if (state.isStarting) null else copy(isStarting=true)` pseudo-code is **not** implemented and the Epic text is updated to match. | Canonical Spec 1 §3 defines `ReprocessStaging(sessionId, transcript)` with no `isStarting`; legacy field is dead (never read even in legacy); literal pseudo-code strands the reprocess job (`StartPipeline` only fires from `Preparing`, C1-A1 Dev-2). Dispatch is main-thread-confined (ADR-0001) — the FSM edge already serializes double-submit. Research-decided option (b). | B2 (FGS notification): zero impact, improved (no ambiguous flag on the seam B2 reads). B3 (recording-drive): single-submit is explicitly the FSM edge; B3 must not re-add an optimistic flag. F-12 test contract updated to assert the FSM-edge guard (net test delta 0). | inline-fixed (research-decided, option b; documented plan-deviation per D22) | `B1-VAL-RES-1` → `B1-VAL-REPAIR-1` | Block-Validate Repair Wave 1 |
 
 ---
 

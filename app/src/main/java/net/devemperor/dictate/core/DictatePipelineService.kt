@@ -727,9 +727,10 @@ class DictatePipelineService : Service() {
             String.format(Locale.US, "Audio %d:%02d · Send", minutes, seconds)
         },
         formatPipelineLabel = { completedSteps, totalSteps, autoEnterActive, elapsedMs ->
-            // Live values come from `PipelineUiState.Running`. The
-            // resolver currently passes 0s pending pipeline-state
-            // extension (Spec 2 C12/C14 follow-up).
+            // Live `completedSteps/totalSteps/elapsedMs` come from
+            // `PipelineUiState.Running` via `resolveRecordButtonTextPipeline`
+            // (F-13, Epic §4 Block A1). This lambda only formats them as
+            // `N/M ↵ M:SS`.
             val seconds = (elapsedMs / 1000L).toInt()
             val mm = seconds / 60
             val ss = seconds % 60

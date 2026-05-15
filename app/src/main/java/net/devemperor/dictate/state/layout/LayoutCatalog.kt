@@ -387,9 +387,12 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         widthPolicy = WidthPolicy.FillRemaining,
                         visibilityPredicate = { true },
                         textResolver = { state -> resolveRecordButtonTextStaging(state, strings) },
-                        // Enabled while staging is non-null. The spec also reads `s.isStarting`,
-                        // a field not yet on `ReprocessStaging` — C14 will fold it in once
-                        // Spec 1 §3 adds the field. For now we accept any non-null staging.
+                        // Enabled whenever the pipeline is in ReprocessStaging.
+                        // Single-submit is guarded by the FSM
+                        // `ReprocessStaging → Preparing` edge (PipelineModule
+                        // `SendStaging` arm, B1-VAL-W1 option b), not by an
+                        // enabled-state flag — `ReprocessStaging` carries no
+                        // `isStarting` field (Spec 1 §3).
                         enabledResolver = { state -> state.pipeline is PipelineUiState.ReprocessStaging },
                         actionResolver = ::resolveSendStagingAction,
                     ),

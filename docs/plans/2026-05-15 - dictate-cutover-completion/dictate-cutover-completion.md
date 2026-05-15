@@ -70,8 +70,12 @@ implementing any Theme-B/C chunk.
 
 - **F-10** — `Action.RecordingAction.StopRecordingAndSend(sessionId = "")`
   documented empty-string sentinel. Needs a real sessionId source.
-- **F-12** — missing `PipelineUiState.ReprocessStaging.isStarting` field
-  (SendStaging double-click guard).
+- **F-12** — SendStaging single-submit guard. *(B1-VAL-W1 option b,
+  2026-05-15: resolved **without** an `isStarting` field — the canonical
+  Spec 1 §3 defines `ReprocessStaging(sessionId, transcript)` only, and
+  the legacy `isStarting` was a dead field. The FSM `ReprocessStaging →
+  Preparing` edge on main-thread-confined dispatch is the canonical
+  guard. See research/sendstaging-isstarting-guard-semantics.md.)*
 - **F-13** — missing `PipelineUiState.Running.completedSteps/totalSteps/elapsedMs`
   fields (live progress for record-button text + notification).
 - **F-15** — `LayoutStrings.dictateButtonText` is not language-aware
@@ -184,13 +188,18 @@ Concrete, testable:
    runs via `PipelineRunnerSubsystem` (JobExecutor-backed), the notification
    transitions `Recording → Pipeline → Idle`, `stopSelf()` dismisses it after
    insertion.
-4. **AC-4 (state-shape, compile + unit).** `PipelineUiState.ReprocessStaging`
-   has `isStarting: Boolean` (F-12); `PipelineUiState.Running` has
-   `completedSteps: Int`, `totalSteps: Int`, `elapsedMs: Long` (F-13);
-   `StopRecordingAndSend` has no empty-string sentinel call-site (F-10);
-   `LayoutStrings.dictateButtonText` resolves language-aware via
-   `LanguageModule` state (F-15). Reducer unit-tests cover each new field's
-   transition + the SendStaging double-click guard (`!isStarting`).
+4. **AC-4 (state-shape, compile + unit).** The SendStaging single-submit
+   guard is the FSM `ReprocessStaging → Preparing` edge — a second tap
+   arrives in `Preparing` and reduces to `null` (F-12; *B1-VAL-W1 option
+   b, 2026-05-15: no `isStarting` field — Spec 1 §3 defines
+   `ReprocessStaging(sessionId, transcript)` only; the legacy field was
+   dead. See research/sendstaging-isstarting-guard-semantics.md*);
+   `PipelineUiState.Running` has `completedSteps: Int`, `totalSteps: Int`,
+   `elapsedMs: Long` (F-13); `StopRecordingAndSend` has no empty-string
+   sentinel call-site (F-10); `LayoutStrings.dictateButtonText` resolves
+   language-aware via `LanguageModule` state (F-15). Reducer unit-tests
+   cover each new field's transition + the SendStaging single-submit
+   guard (the FSM `→Preparing` edge: a second tap is a no-op).
 5. **AC-5 (legacy-retire, compile invariant).** `LanguageController.kt` is
    deleted; `grep -rl "LanguageController" app/src/main/` returns zero hits
    (D-13). The `DictateApplication` singleton + `PreferencesFragment` +
@@ -309,12 +318,22 @@ Plan-Correctness-Fix → Self-Code-Fix → Tests → Test-Self-Review).
 
 ### Block A1 — State-shape extensions: F-12 / F-13 (size M)
 
-- **Scope.** Add `PipelineUiState.ReprocessStaging.isStarting: Boolean = false`
-  (F-12) and `PipelineUiState.Running.completedSteps/totalSteps/elapsedMs`
-  (F-13). Wire the SendStaging double-click guard in `PipelineModule.reduce`
-  (`SendStaging` arm: `if (state.isStarting) null else copy(isStarting=true)`).
-  Wire the `Running` counters: `StepCompleted` increments `completedSteps`;
-  `StartPipeline`/`StepStarted` sets `totalSteps`; `elapsedMs` derived from
+- **Scope.** F-12: the SendStaging single-submit guard in
+  `PipelineModule.reduce` is the FSM `ReprocessStaging → Preparing` edge —
+  the first `SendStaging` transitions to `Preparing`; a second tap arrives
+  with `pipeline is Preparing` and falls to `else -> null`. Dispatch is
+  main-thread-confined (ADR-0001) so the two taps are serialized; the FSM
+  edge is the guard. *(Plan-deviation B1-VAL-W1, option b, 2026-05-15:
+  the literal pseudo-code `if (state.isStarting) null else
+  copy(isStarting=true)` was **not** implemented — it strands the
+  reprocess job because `StartPipeline` only fires from `Preparing`, and
+  the legacy `isStarting` field is a dead carry-over the canonical Spec 1
+  §3 `ReprocessStaging(sessionId, transcript)` does not define. No
+  `isStarting` field is added to the new `state/` module. See
+  research/sendstaging-isstarting-guard-semantics.md.)* F-13: add
+  `PipelineUiState.Running.completedSteps/totalSteps/elapsedMs`. Wire the
+  `Running` counters: `StepCompleted` increments `completedSteps`;
+  `StartPipeline` sets `totalSteps`; `elapsedMs` derived from
   `ReducerContext.now`. Replace the B4-resolver placeholders that read these.
 - **Files.** `state/DictateUiState.kt` (the two `data class` variants),
   `state/modules/PipelineModule.kt` (reducer arms), the B4 record-button-text

@@ -205,11 +205,11 @@ sealed interface PipelineUiState {
      * @property completedSteps number of pipeline steps finished so far
      *   (incremented by `StepCompleted`). `0` until the first step
      *   completes.
-     * @property totalSteps total pipeline steps for this run, set from
-     *   `StartPipeline.totalSteps` on `Preparing → Running` and refreshed
-     *   by `StepStarted` (defensive — keeps the label sane if the runner
-     *   re-reports a different total mid-run). `0` means "unknown" and the
-     *   label formatter renders it as such.
+     * @property totalSteps total pipeline steps for this run, set once from
+     *   `StartPipeline.totalSteps` on `Preparing → Running`; never
+     *   re-stamped — `StepStarted` carries no total in its payload (see
+     *   PipelineModule Dev-1). `0` means "unknown" and the label formatter
+     *   renders it as such.
      * @property startedAtMs wall-clock ms (from [ReducerContext.now]) at
      *   the `Preparing → Running` transition. The basis for [elapsedMs];
      *   not rendered directly. `0L` only in the defaulted (test) case
@@ -235,19 +235,22 @@ sealed interface PipelineUiState {
      * before re-submitting. The large record button acts as a Send trigger
      * in this state.
      *
-     * @property isStarting **F-12 double-click guard (2026-05-15).** Set
-     *   to `true` by the first `SendStaging` action; a second `SendStaging`
-     *   while `isStarting` is already `true` is a no-op (the reducer
-     *   returns `null`). Prevents a double-tap on the large record button
-     *   from submitting the reprocess job twice before the FSM leaves
-     *   `ReprocessStaging` (Epic §4 Block A1, AC-4). Additive defaulted
-     *   field — source-compatible with every existing
-     *   `ReprocessStaging(...)` construction site.
+     * **F-12 single-submit guard (2026-05-15, B1-VAL-W1 option b).** This
+     * variant deliberately does **not** carry an `isStarting` flag. The
+     * canonical new-state spec (Spec 1 §3) defines `ReprocessStaging` as
+     * `(sessionId, transcript)` only. Double-submit protection is the FSM
+     * `ReprocessStaging → Preparing` edge in `PipelineModule`'s
+     * `SendStaging` arm: the first tap transitions to `Preparing`; a
+     * second tap arrives with `pipeline is Preparing` and reduces to
+     * `null`. Dispatch is main-thread-confined (ADR-0001) so the two taps
+     * are serialized — the FSM edge is the guard, not a state flag. The
+     * legacy `core/PipelineUiState.kt` `isStarting` was a dead field
+     * (never read even in legacy); it is not carried into the new module.
+     * See `docs/plans/2026-05-15 - dictate-cutover-completion/research/sendstaging-isstarting-guard-semantics.md`.
      */
     data class ReprocessStaging(
         val sessionId: String,
         val transcript: String,
-        val isStarting: Boolean = false,
     ) : PipelineUiState
 }
 

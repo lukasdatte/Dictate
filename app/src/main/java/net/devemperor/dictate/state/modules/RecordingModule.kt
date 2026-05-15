@@ -181,22 +181,38 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
         ctx: ReducerContext,
     ): TransitionResult<RecordingState, Effect>? = when (state) {
         is RecordingState.Idle -> when (action) {
-            is Action.RecordingAction.StartRecording -> TransitionResult(
-                nextState = RecordingState.Preparing(
-                    useBluetooth = ctx.global.audio.useBluetoothMic,
-                    audioFile = action.audioFile,
-                    // F-10 — the FSM is the single source of the session
-                    // id; carry the caller-minted UUID verbatim.
-                    sessionId = action.sessionId,
-                ),
-                sideEffects = listOf(
-                    Effect.AllocateMediaRecorder(
-                        target = action.target,
+            is Action.RecordingAction.StartRecording -> {
+                // F-7: fail-fast on a blank sessionId. B1 callers all mint
+                // a UUID via `newSessionId()`, but B3 will route the IME's
+                // `preAllocatedId` in instead — a regression there (blank
+                // id) would silently re-introduce the exact F-10
+                // empty-string sentinel this block removes, propagating
+                // through the whole FSM into `EmitPipelineTrigger` with no
+                // fail-fast. The FSM is the single source of the id
+                // (F-10) — enforce the non-empty invariant at its entry
+                // point rather than relying on every future caller's
+                // discipline. B3 (recording-trigger cutover) is the
+                // contract owner for supplying a non-blank id.
+                require(action.sessionId.isNotBlank()) {
+                    "F-10: StartRecording.sessionId must be non-blank"
+                }
+                TransitionResult(
+                    nextState = RecordingState.Preparing(
                         useBluetooth = ctx.global.audio.useBluetoothMic,
                         audioFile = action.audioFile,
+                        // F-10 — the FSM is the single source of the session
+                        // id; carry the caller-minted UUID verbatim.
+                        sessionId = action.sessionId,
                     ),
-                ),
-            )
+                    sideEffects = listOf(
+                        Effect.AllocateMediaRecorder(
+                            target = action.target,
+                            useBluetooth = ctx.global.audio.useBluetoothMic,
+                            audioFile = action.audioFile,
+                        ),
+                    ),
+                )
+            }
             // F1 / ADR-0001 §"Pure-Reducer Invariant": other actions are
             // not meaningful when no recording is in flight (e.g. user
             // tapping Stop while Idle). Returning `null` becomes

@@ -3,6 +3,7 @@ package net.devemperor.dictate.state
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -83,6 +84,36 @@ class RecordingModuleTest {
         )
         val next = result!!.nextState as RecordingState.Preparing
         assertEquals(false, next.useBluetooth)
+    }
+
+    @Test
+    fun `F-7 StartRecording with a blank sessionId throws`() {
+        // Regression guard: B3 will route the IME's preAllocatedId into
+        // StartRecording; a blank id there would silently re-introduce the
+        // F-10 empty-string sentinel. The reducer fails fast at the FSM
+        // entry point so the invariant cannot be re-entered via B3.
+        assertThrows(IllegalArgumentException::class.java) {
+            module.reduce(
+                state = RecordingState.Idle,
+                action = Action.RecordingAction.StartRecording(
+                    target = InsertionTarget.INPUT_CONNECTION,
+                    audioFile = testFile,
+                    sessionId = "",
+                ),
+                ctx = ctx(),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            module.reduce(
+                state = RecordingState.Idle,
+                action = Action.RecordingAction.StartRecording(
+                    target = InsertionTarget.INPUT_CONNECTION,
+                    audioFile = testFile,
+                    sessionId = "   ",
+                ),
+                ctx = ctx(),
+            )
+        }
     }
 
     @Test

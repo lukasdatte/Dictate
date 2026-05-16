@@ -324,6 +324,16 @@ public class DictateInputMethodService extends InputMethodService
     private OverlayCharactersController overlayCharactersController;
     private RenderGate overlayCharactersGate;
 
+    // CR4 (Theme C-R / G15, render-path-cutover.md §3 / §7 A2) — the
+    // edit-numbers animation is now owned by an IME-held
+    // EditNumbersAnimator (CR1 extracted the helper; MainButtonsController
+    // was a thin delegate). CR4 re-points the IME call-sites
+    // (onSmallModeToggled / onSingleRowModeToggled / onStartInputView) to
+    // this field and removes the mainButtonsController delegation drive.
+    // Rebuilt against the fresh tree alongside the other CR-EXTRACT
+    // owners (it holds a direct View reference).
+    private net.devemperor.dictate.core.EditNumbersAnimator editNumbersAnimator;
+
     // Recording controllers (extracted from God-Class)
     private RecordingStateController recordingStateController;
     private RecordingUiController recordingUiController;
@@ -881,13 +891,45 @@ public class DictateInputMethodService extends InputMethodService
             () -> getCurrentInputConnection(),
             qwertzKeyboardView.getKeyPressAnimator()
         );
-        mainButtonsController.registerAllListeners();
-        mainButtonsController.initializeKeyPressAnimations();
-        // Block 2 (Quality-Gate K-Block-2): paint the audio-focus icon from the
-        // persisted Pref value once the freshly inflated buttons exist. Without
-        // this, both buttons would show the XML default (volume_off ≙ "enabled")
-        // even when the user disabled AudioFocus across a previous session.
-        mainButtonsController.refreshAudioFocusIcon(DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE));
+        // CR4 (Theme C-R / AC-RR-6 — the render-layer AC-10 analogue):
+        // the legacy MainButtonsController render drive
+        // (registerAllListeners / initializeKeyPressAnimations /
+        // refreshAudioFocusIcon / applyTheme / updateOverlayCharacters /
+        // updateRecordButtonText / setResendEnabled /
+        // animateSmallModeToggle|Bounce) is REMOVED here. The new path is
+        // the sole render driver once the service is bound:
+        // ImeViewBackend.wireStaticHandlers owns click + key-press
+        // animation + long-press, SpecialTouchHandlerInstaller owns the
+        // SPACE/BACKSPACE/ENTER touch, EditBarController/EmojiController
+        // own the edit-bar/emoji listeners, OverlayCharactersController
+        // owns the overlay-chars strip, the catalog AUDIO_FOCUS
+        // iconResolver + RECORD textResolver drive state-reactively, and
+        // ContentAreaController/PromptVisibilityController/OverlayResetHandler
+        // own visibility — all flipped per-axis atomically in
+        // attachImeViewBackendIfReady() (RR-1/RR-2: never both wired at
+        // once; render-path-cutover.md §5/§6.1).
+        //
+        // UNBOUND FALLBACK (the established pre-bind pattern, mirrors
+        // attachImeViewBackendIfReady's pipelineBinder==null early-return
+        // at line ~1117): the reactive state-collect lives in the bound
+        // DictatePipelineService; with no binder there is no new render
+        // path, so the legacy MainButtonsController must drive until
+        // onServiceConnected re-runs attachImeViewBackendIfReady and
+        // flips to the new owners. The legacy controller stays
+        // INSTANTIATED (compile-safe) but DRIVEN only on the unbound
+        // path — the drive-call surface IS the rollback switch (no
+        // boolean; §6.1 staged-safety-net).
+        if (pipelineBinder == null) {
+            mainButtonsController.registerAllListeners();
+            mainButtonsController.initializeKeyPressAnimations();
+            // Block 2 (Quality-Gate K-Block-2): paint the audio-focus
+            // icon from the persisted Pref value once the freshly
+            // inflated buttons exist (unbound-fallback only — on the
+            // bound path the catalog AUDIO_FOCUS iconResolver drives it
+            // state-reactively).
+            mainButtonsController.refreshAudioFocusIcon(
+                DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE));
+        }
 
         // C15 — KeyboardLayoutModeController + KSM.setLayoutModeController
         // are gone (Spec 2 §11.8 5d). MotionLayout + LayoutCatalog now own
@@ -983,7 +1025,15 @@ public class DictateInputMethodService extends InputMethodService
         audioFocusListener = (changedPrefs, key) -> {
             if (Pref.AudioFocus.INSTANCE.getKey().equals(key)) {
                 boolean newValue = DictatePrefsKt.get(changedPrefs, Pref.AudioFocus.INSTANCE);
-                if (mainButtonsController != null) {
+                // CR4 (Theme C-R / G14): on the BOUND path the catalog
+                // AUDIO_FOCUS iconResolver drives the icon
+                // state-reactively — Pref.AudioFocus is mirrored into
+                // state.audio.audioFocusEnabledPref by PipelinePrefMirror,
+                // which emits a fresh state → the attached ImeViewBackend
+                // re-renders the AUDIO_FOCUS slot. The imperative legacy
+                // refreshAudioFocusIcon is the UNBOUND fallback only
+                // (no reactive state-collect without a binder).
+                if (pipelineBinder == null && mainButtonsController != null) {
                     mainButtonsController.refreshAudioFocusIcon(newValue);
                 }
                 if (recordingStateController != null) {
@@ -1171,28 +1221,26 @@ public class DictateInputMethodService extends InputMethodService
             return kotlin.Unit.INSTANCE;
         };
 
-        // CR2 (Theme C-R) — supply the real staticHandlerInstaller
-        // (was null in CR1). The SpecialTouchHandlerInstaller builds the
-        // three Spec 2 §11.7 touch handlers (SPACE CursorSwipe / BACKSPACE
-        // swipe-select / ENTER overlay) wired to the IME's real
-        // InputConnection / accent / vibrate / accel-delete-cancel +
-        // the SAME shared KeyPressAnimator (G3/G4/G5).
+        // CR2/CR4 (Theme C-R) — the SpecialTouchHandlerInstaller builds
+        // the three Spec 2 §11.7 touch handlers (SPACE CursorSwipe /
+        // BACKSPACE swipe-select / ENTER overlay) wired to the IME's real
+        // InputConnection / accent / vibrate / accel-delete-cancel + the
+        // SAME shared KeyPressAnimator (G3/G4/G5).
         //
-        // RR-1 (THE trap of this block): the legacy
-        // mainButtonsController.registerAllListeners() ran above (line
-        // ~827) and is the LIVE owner of the SPACE/BACKSPACE/ENTER
-        // setOnTouchListener until CR4. attachBackend() (below) runs
-        // attach() → staticHandlerInstaller AFTER that, so attaching a
-        // touch listener here would silently OVERWRITE the live legacy
-        // handler (Android keeps only the most-recent listener) — the
-        // exact F-1/F-2 trap. Mitigation: the installer's `installDormant`
-        // only BUILDS + caches the handlers (no setOnTouchListener on the
-        // live Views). CR4 calls installer.attachToViews(...) in the same
-        // chunk it removes the legacy touch wiring (never both wired at
-        // once — render-path-cutover.md §6 RR-1; identical to CR1's
-        // accepted RESEND-only long-press model). installDormant also runs
-        // a single-owner-per-View guard (Log.wtf on double-build,
-        // Strict-Mode-Logging, Spec 2 §10).
+        // RR-1 (THE trap of this block) — CR4 FLIP: the legacy
+        // mainButtonsController.registerAllListeners() (the LIVE owner of
+        // the SPACE/BACKSPACE/ENTER setOnTouchListener pre-CR4) is now
+        // removed on the bound path (it runs only as the unbound
+        // fallback — see the onCreateInputView CR4 comment). This whole
+        // method (attachImeViewBackendIfReady) only runs when
+        // pipelineBinder != null, so the legacy touch wiring was NOT
+        // applied. CR4 therefore calls attachToViews() (NOT
+        // installDormant()) so the new §11.7 handlers become the sole
+        // live SPACE/BACKSPACE/ENTER touch owner — never both wired at
+        // once (render-path-cutover.md §5/§6 RR-1; the dormant→attached
+        // ledger transition CR2 established). installDormant() runs
+        // first (build + single-owner-guard + cache) then attachToViews()
+        // does the setOnTouchListener (the same cached handler instances).
         specialTouchHandlerInstaller = new SpecialTouchHandlerInstaller(
             () -> getCurrentInputConnection(),
             () -> DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE),
@@ -1208,7 +1256,11 @@ public class DictateInputMethodService extends InputMethodService
             staticHandlerInstaller = views -> {
                 @SuppressWarnings("unchecked")
                 Map<LogicalButtonId, View> typedViews = (Map<LogicalButtonId, View>) views;
+                // CR4: build (+ single-owner guard + cache) THEN attach
+                // to the live Views — the legacy touch wiring is gone on
+                // the bound path so this is now the sole live owner.
                 installerRef.installDormant(typedViews);
+                installerRef.attachToViews(typedViews);
                 return kotlin.Unit.INSTANCE;
             };
 
@@ -1223,9 +1275,68 @@ public class DictateInputMethodService extends InputMethodService
         // listener on the *non-special* buttons is the same
         // KeyPressAnimator behaviour the legacy controller wired (returns
         // false, click/long-press unaffected); the special handlers
-        // compose press-animation internally. The applyTheme axis is
-        // still driven by mainButtonsController.applyTheme until CR4
-        // (render-path-cutover.md §5 — additive: legacy still drives).
+        // compose press-animation internally. CR4: the applyTheme axis
+        // is now driven by imeViewBackend.applyTheme (the legacy
+        // mainButtonsController.applyTheme drive is removed on the bound
+        // path — see onStartInputView CR4 comment).
+        // CR4 (Theme C-R / render-path-cutover.md §7 A1 / CR4-IMPL-3) —
+        // the IME-side affordance hook. Several legacy
+        // MainButtonsController.Callback button behaviours have NO
+        // FSM/dispatch representation — the catalog/modules model only
+        // part of what the legacy listener did and the remainder is a
+        // pure IME-side side-effect with no Action/ModuleServices
+        // surface:
+        //  - RECORD long-press: legacy onRecordLongClicked did the Idle
+        //    → Settings+file-picker launch + the autoSwitchKeyboard
+        //    one-shot; the catalog resolveRecordLongPressAction +
+        //    RecordingModule own only the FSM-half (discard-stop).
+        //  - RESEND click: legacy onResendClicked does the
+        //    last-keyboard-session DB lookup → ResendStatusDispatcher →
+        //    insert/resume; the catalog ResendLastAudio → ResendModule
+        //    ONLY arms the cooldown (no effect — the resend insertion
+        //    has NO new-path implementation; CR4-IMPL-3 architecture
+        //    gap, the §13.2-class "assumed-an-owner-that-was-never-
+        //    created" pattern at the RESEND-action layer).
+        //  - RESEND long-press: legacy onResendLongClicked enters
+        //    ReprocessStaging with the last session; the catalog
+        //    ResendLastAudioLong → ResendModule ONLY arms the cooldown.
+        // The backend fires this hook (the EXACT legacy
+        // onRecordLongClicked / onResendClicked / onResendLongClicked
+        // Callback bodies — behaviour-identical) BEFORE the catalog
+        // dispatch, so the affordances survive the cutover with zero
+        // behaviour drift while the catalog dispatch still arms the
+        // cooldown / models the FSM-half. render-path-cutover.md §7 A1
+        // explicitly scopes "IME-side affordances with no FSM/dispatch
+        // representation" as the CR4 IME-side activation.
+        kotlin.jvm.functions.Function2<LogicalButtonId, Boolean, kotlin.Unit>
+            imeSideAffordance = (id, isLongPress) -> {
+                if (id == LogicalButtonId.RECORD && isLongPress) {
+                    onRecordLongClicked();
+                } else if (id == LogicalButtonId.RESEND && isLongPress) {
+                    onResendLongClicked();
+                } else if (id == LogicalButtonId.RESEND) {
+                    // CR4 (G8) — double-click guard on the bound path.
+                    // The legacy guard was the synchronous imperative
+                    // setResendEnabled(false) (now removed on the bound
+                    // path); the catalog ResendLastAudio → ResendModule
+                    // arms state.resend.resendCooldown but only AFTER the
+                    // dispatch+render, so a fast second tap could slip a
+                    // duplicate DB-lookup through before the
+                    // enabledResolver disables the button. Mirror the
+                    // ResendModule `if (!resendCooldown)` guard here so a
+                    // second RESEND tap during the cooldown window is a
+                    // no-op (idempotent — exactly the legacy
+                    // setResendEnabled(false) intent).
+                    boolean inCooldown = pipelineBinder != null
+                            && pipelineBinder.getState().getValue()
+                                .getResend().getResendCooldown();
+                    if (!inCooldown) {
+                        onResendClicked();
+                    }
+                }
+                return kotlin.Unit.INSTANCE;
+            };
+
         imeViewBackend = new ImeViewBackend(
             new RealMotionSurface(motionLayout),
             buttonViews,
@@ -1234,7 +1345,8 @@ public class DictateInputMethodService extends InputMethodService
             recordingAnimationCtrlForBackend,
             qwertzKeyboardView.getKeyPressAnimator(),
             staticHandlerInstaller,
-            vibrateLambda
+            vibrateLambda,
+            imeSideAffordance
         );
 
         try {
@@ -1362,12 +1474,31 @@ public class DictateInputMethodService extends InputMethodService
             keyboardLayoutManager.attachBackend(contentAreaController);
             keyboardLayoutManager.attachBackend(promptVisibilityController);
             keyboardLayoutManager.attachBackend(overlayResetHandler);
+            // CR4 (Theme C-R / RR-2 — THE flip): arm the three gates so
+            // the controllers become the SOLE LIVE writer of the
+            // ContentArea / Promptbar / overlay-reset axes. This is safe
+            // and atomic because the legacy KSM drive
+            // (stateManager.setContentArea / setSmallMode / refresh) is
+            // removed on the bound path in the SAME chunk (it runs only
+            // as the unbound fallback — see the per-call CR4 comments).
+            // arm()ing while the KSM still drove would double-write the
+            // same container every render-tick (silent flicker, no
+            // error); removing the KSM drive without arming would blank
+            // the UI — RR-2 requires both together, which CR4 does here.
+            // The state.layout.contentArea axis itself is now mutated via
+            // dispatch(LayoutAction.SetContentArea) at the former
+            // stateManager.setContentArea call-sites (LayoutModule is the
+            // SoT — contentArea is NOT pref-mirrored, so the dispatch is
+            // mandatory for the reactive ContentAreaController to render).
+            contentAreaGate.arm();
+            promptVisibilityGate.arm();
+            overlayResetGate.arm();
         } catch (Throwable t) {
             // Mirror the imeViewBackend attach failure handling: log +
             // null out so detach paths stay consistent and the legacy
             // KSM keeps driving (the staged-safety-net fallback).
             Log.w("DictateIME",
-                "Dormant visibility-controller attach failed — legacy KSM keeps driving", t);
+                "Visibility-controller attach/arm failed — legacy KSM keeps driving", t);
             detachDormantVisibilityControllers();
         }
     }
@@ -1442,6 +1573,17 @@ public class DictateInputMethodService extends InputMethodService
             return;
         }
 
+        // CR4 (Theme C-R / CR4-IMPL-1 resolution — THE flip): this method
+        // is only reachable from attachImeViewBackendIfReady() which
+        // requires pipelineBinder != null, so the legacy
+        // MainButtonsController.registerAllListeners() (the sole live
+        // edit-bar/emoji/overlay-chars owner pre-CR4) was NOT applied
+        // (it runs only as the unbound fallback — see the
+        // onCreateInputView CR4 comment). The new owners therefore
+        // installDormant() (build + single-owner-guard + cache) THEN
+        // attachToViews() / arm() — becoming the sole live owner with no
+        // overlap (RR-1/RR-2: never both wired at once; the
+        // dormant→attached-cr4 ledger transition CR-EXTRACT established).
         editBarController = new EditBarController(
             new EditBarViews(
                 editNumbersButton, editSettingsButton, editHistoryButton,
@@ -1450,12 +1592,32 @@ public class DictateInputMethodService extends InputMethodService
                 editCopyButton, editPasteButton),
             this);
         editBarController.installDormant();
+        editBarController.attachToViews();
 
         emojiController = new EmojiController(
             new EmojiViews(editEmojiButton, emojiPickerCloseButton, emojiPickerView),
             this,
             this::getCurrentInputConnection);
         emojiController.installDormant();
+        emojiController.attachToViews();
+
+        // CR4 (G15) — the edit-numbers animation owner. CR1 extracted
+        // EditNumbersAnimator; MainButtonsController was a thin delegate
+        // (removed on the bound path). The IME holds it directly and the
+        // onSmallModeToggled / onSingleRowModeToggled / onStartInputView
+        // call-sites drive it (re-pointed from mainButtonsController.*).
+        // Decoupled suppliers: animationsEnabled ← Pref.Animations,
+        // isSmallMode ← state.layout.smallMode (the SoT post-cutover;
+        // KSM is on the kill-list). Pre-bind the legacy
+        // mainButtonsController.animateSmallModeToggle still drives (the
+        // unbound fallback ran registerAllListeners but the animate calls
+        // are also guarded — see those call-sites).
+        editNumbersAnimator = new net.devemperor.dictate.core.EditNumbersAnimator(
+            editNumbersButton,
+            () -> DictatePrefsKt.get(sp, Pref.Animations.INSTANCE),
+            () -> pipelineBinder != null
+                ? pipelineBinder.getState().getValue().getLayout().getSmallMode()
+                : DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE));
 
         // Overlay-chars is a *write* axis (8 char-view inflate +
         // visibility/text/tint) → reuse the CR3 RenderGate dormant
@@ -1470,10 +1632,20 @@ public class DictateInputMethodService extends InputMethodService
         overlayCharactersController = new OverlayCharactersController(
             new OverlayCharactersViews(overlayCharactersLl),
             overlayCharactersGate);
-        // initialize() is dormant (gate not armed) → does NOT inflate;
-        // the legacy MainButtonsController.initializeOverlayCharacters()
-        // (already ran via registerAllListeners) stays the sole live
-        // inflater until CR4 arm()s the gate.
+        // CR4: arm the gate FIRST (the legacy
+        // MainButtonsController.initializeOverlayCharacters() drive is
+        // removed on the bound path — registerAllListeners ran only as
+        // the unbound fallback), then initialize() inflates the 8
+        // char-views for real. The per-input content/theme update is
+        // re-pointed from mainButtonsController.updateOverlayCharacters
+        // to overlayCharactersController.update(...) at the
+        // onStartInputView call-site (the same drive cadence — overlay
+        // chars are set on input-view-start, not per render-tick; the
+        // RenderGate is reused only for the dormant/armed + ledger
+        // proof, not a reactive RenderBackend). initialize() is
+        // idempotent (childCount guard) so a view-recreate cannot stack
+        // a second set of 8.
+        overlayCharactersGate.arm();
         overlayCharactersController.initialize();
     }
 
@@ -1493,6 +1665,11 @@ public class DictateInputMethodService extends InputMethodService
         emojiController = null;
         overlayCharactersController = null;
         overlayCharactersGate = null;
+        // CR4 (G15) — the IME-held EditNumbersAnimator holds a direct
+        // View reference; clear it symmetrically with the other
+        // CR-EXTRACT owners (rebuilt against the fresh tree by
+        // attachDormantEditBarEmojiOwners()).
+        editNumbersAnimator = null;
     }
 
     // method is called if the user closed the keyboard
@@ -1518,10 +1695,10 @@ public class DictateInputMethodService extends InputMethodService
                 || recordingStateController.getState() instanceof RecordingState.Preparing) {
             // State (A): Recording is active or paused -> delegate to controller (pause + timeout)
             recordingStateController.onKeyboardHidden();
-            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
+            setEffectiveContentArea(ContentArea.MAIN_BUTTONS);
         } else if (pipelineOrchestrator != null && pipelineOrchestrator.isRunning()) {
             // State (B): API request is running -> let it continue, just hide content panels
-            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
+            setEffectiveContentArea(ContentArea.MAIN_BUTTONS);
         } else {
             // State (C): Idle -> full cleanup
             if (pipelineOrchestrator != null) {
@@ -1533,8 +1710,15 @@ public class DictateInputMethodService extends InputMethodService
             bluetoothScoManager.unregisterReceiver();
 
             infoBarController.dismiss();
-            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
-            stateManager.refresh();
+            setEffectiveContentArea(ContentArea.MAIN_BUTTONS);
+            // CR4 (RR-2): the legacy KSM refresh is the UNBOUND fallback
+            // only — on the bound path the armed visibility controllers
+            // own every axis (arming a gate while KSM still drove =
+            // double-write). The SetContentArea dispatch above already
+            // re-emits state → the armed controllers re-render.
+            if (pipelineBinder == null) {
+                stateManager.refresh();
+            }
             uiController.stopPipeline();
             livePrompt = false;
             updatePromptButtonsEnabledState();
@@ -1846,8 +2030,16 @@ public class DictateInputMethodService extends InputMethodService
             restoreAutoEnter = null;
         }
 
-        // 3. Small mode from preferences
-        stateManager.setSmallMode(DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE));
+        // 3. Small mode from preferences. CR4 (Theme C-R / RR-2): on the
+        // bound path Pref.SmallMode is mirrored into
+        // state.layout.smallMode by PipelinePrefMirror and the armed
+        // visibility controllers + ImeViewBackend render it reactively
+        // — the legacy KSM setSmallMode is the UNBOUND fallback only
+        // (driving KSM while its gate-armed successors also drive =
+        // double-write).
+        if (pipelineBinder == null) {
+            stateManager.setSmallMode(DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE));
+        }
     }
 
     /**
@@ -2054,7 +2246,13 @@ public class DictateInputMethodService extends InputMethodService
             }
         }
         refreshLanguageChip();
-        if (mainButtonsController != null) {
+        // CR4 (Theme C-R / G14): on the BOUND path the RECORD-slot
+        // textResolver (resolveRecordButtonText, state-driven) re-renders
+        // the label — the RefreshFromPref dispatch above moves
+        // state.language.effective, which re-emits state → the attached
+        // ImeViewBackend re-renders the RECORD slot. The imperative
+        // legacy updateRecordButtonText is the UNBOUND fallback only.
+        if (pipelineBinder == null && mainButtonsController != null) {
             mainButtonsController.updateRecordButtonText(getDictateButtonText());
         }
     }
@@ -2332,30 +2530,47 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         if (isIdle) {
-            // Block-1a Quick-Win: resend visibility consolidated into the
-            // isResendVisible helper (KeyboardVisibilityPredicates).
-            // Recording is guaranteed Idle on this branch (isIdle gate above);
-            // pipeline is also Idle on a fresh onStartInputView so the helper
-            // returns true iff the cached audio still exists AND
-            // Pref.ResendButton is on — same expression that previously lived
-            // inline.
-            resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
-                    new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
-                    DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
-                    RecordingState.Idle.INSTANCE,
-                    PipelineUiState.Idle.INSTANCE));
+            // CR4 (Theme C-R / §9.6 — Spec 2 §13.1 rows 25/26): the
+            // imperative resend setVisibility (the onStartInputView
+            // Idle-branch V/G mutations §9.6 :1345/:1347) is REMOVED on
+            // the bound path — the RESEND-slot `isResendVisible`
+            // predicate owns visibility state-reactively (lastAudioExists
+            // is carried via state.resend; a fresh onStartInputView with
+            // an existing cache file + Pref.ResendButton already evaluates
+            // the predicate true). The imperative call is the UNBOUND
+            // fallback only (no reactive render without a binder). Same
+            // for the record-button label (RECORD textResolver owns it
+            // on the bound path).
+            if (pipelineBinder == null) {
+                resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
+                        new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
+                        DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
+                        RecordingState.Idle.INSTANCE,
+                        PipelineUiState.Idle.INSTANCE));
 
-            // get the currently selected input language
-            recordButton.setText(getDictateButtonText());
+                // get the currently selected input language
+                recordButton.setText(getDictateButtonText());
+            }
         }
 
         // Block 3b: audio-focus is read on-demand from the pref by the
         // controller's startRecording() path — no service-side caching.
 
-        // fill all overlay characters
+        // fill all overlay characters. CR4 (Theme C-R / G-overlay-chars,
+        // §13.2 / §9.2 :481-493): on the bound path the armed
+        // OverlayCharactersController owns the strip
+        // (initialize()+update()); the legacy
+        // mainButtonsController.updateOverlayCharacters is the UNBOUND
+        // fallback only (RR-2: the legacy drive removed in the same
+        // chunk the gate was armed). Same imperative drive cadence
+        // (set on input-view-start, not per render-tick).
         int accentColor = DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
         String charactersString = DictatePrefsKt.get(sp, Pref.OverlayCharacters.INSTANCE);
-        mainButtonsController.updateOverlayCharacters(charactersString, accentColor);
+        if (pipelineBinder != null && overlayCharactersController != null) {
+            overlayCharactersController.update(charactersString, accentColor);
+        } else {
+            mainButtonsController.updateOverlayCharacters(charactersString, accentColor);
+        }
 
         // update theme
         String theme = DictatePrefsKt.get(sp, Pref.Theme.INSTANCE);
@@ -2371,6 +2586,29 @@ public class DictateInputMethodService extends InputMethodService
 
         TextView[] textColorViews = { infoTv, emojiPickerTitleTv };
         for (TextView tv : textColorViews) tv.setTextColor(accentColor);
+        // CR4 (Theme C-R / G6 — Spec 2 §9.2 "Theme-Mutation ist eine
+        // separate Achse, nicht state-getrieben; ImeViewBackend hat eine
+        // applyTheme(accentColor)-Methode, die der Service nach jedem
+        // Re-Inflate aufruft"): on the BOUND path the new
+        // ImeViewBackend.applyTheme themes the 8 owned logical buttons
+        // (the §9.2-mapped set). The legacy mainButtonsController.applyTheme
+        // ALSO themed ~11 edit-row buttons that Spec 2 §9.2 does NOT map
+        // to the backend and for which no extracted owner exists yet
+        // (the CR1 + CR-EXTRACT theme-residual flag — EditBarController
+        // owns the edit-bar *listeners* but not its *theme*; theming is
+        // an explicitly separate axis, §9.2). To avoid stranding the
+        // edit-row theme (RR-2 — a silently un-themed edit row) the
+        // legacy applyTheme is retained on the bound path TOO, scoped to
+        // the edit-row residual; the 8 owned buttons it also re-paints
+        // is a benign idempotent double-paint of identical colours
+        // (theme is a non-state, non-double-write-sensitive axis, unlike
+        // visibility). This is the carried-forward CR1/CR-EXTRACT
+        // theme-residual (IMPL issue CR4-IMPL-3 → CR-DEL: extract the
+        // edit-row theme into EditBarController so the legacy call fully
+        // retires and AC-RR-6 is a clean zero-`mainButtonsController`).
+        if (pipelineBinder != null && imeViewBackend != null) {
+            imeViewBackend.applyTheme(accentColor);
+        }
         mainButtonsController.applyTheme(accentColor);
         recordingUiController.updateAnimationColor(accentColor);
         qwertzController.applyColors(accentColor, DictateUtils.darkenColor(accentColor, 0.18f), DictateUtils.darkenColor(accentColor, 0.35f));
@@ -2396,9 +2634,23 @@ public class DictateInputMethodService extends InputMethodService
         qwertzKeyboardView.getKeyPressAnimator().setAnimationsEnabled(
                 DictatePrefsKt.get(sp, Pref.Animations.INSTANCE));
 
-        // Sync small mode from prefs and apply visibility + animation
-        stateManager.setSmallMode(DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE));
-        mainButtonsController.animateSmallModeToggle(false);
+        // Sync small mode from prefs and apply visibility + animation.
+        // CR4 (Theme C-R / RR-2 + G15): Pref.SmallMode is mirrored into
+        // state.layout.smallMode by PipelinePrefMirror on the bound path
+        // → the armed visibility controllers + ImeViewBackend
+        // (MotionLayout scene) render it reactively, so the legacy KSM
+        // setSmallMode is the UNBOUND fallback only (double-write guard).
+        // The edit-numbers rotation animation is re-pointed from the
+        // removed mainButtonsController delegate to the IME-held
+        // EditNumbersAnimator (bound) / legacy (unbound fallback).
+        if (pipelineBinder == null) {
+            stateManager.setSmallMode(DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE));
+        }
+        if (pipelineBinder != null && editNumbersAnimator != null) {
+            editNumbersAnimator.animateSmallModeToggle(false);
+        } else {
+            mainButtonsController.animateSmallModeToggle(false);
+        }
 
         // start audio file transcription if user selected an audio file
         if (!DictatePrefsKt.get(sp, Pref.TranscriptionAudioFile.INSTANCE).isEmpty()) {
@@ -2443,8 +2695,57 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
+    /**
+     * CR4 (Theme C-R / G10 — render-path-cutover.md §5 / Spec 2 §9.3) —
+     * the authoritative content-area read.
+     *
+     * <p>On the <b>bound</b> path the SoT is
+     * {@code state.layout.contentArea} (owned by {@code LayoutModule};
+     * the dormant→armed {@link ContentAreaController} renders it). On
+     * the <b>unbound</b> path (no reactive state-collect — the
+     * established pre-bind fallback) the legacy
+     * {@link KeyboardStateManager} is still the owner, exactly as
+     * pre-CR4.</p>
+     *
+     * <p>{@code contentArea} is <b>not</b> Pref-mirrored
+     * ({@code PipelinePrefMirror} mirrors only the 3 LayoutState
+     * booleans), so the bound write MUST go through
+     * {@code dispatch(LayoutAction.SetContentArea)} — see
+     * {@link #setEffectiveContentArea(ContentArea)}.</p>
+     */
+    private ContentArea effectiveContentArea() {
+        if (pipelineBinder != null) {
+            return pipelineBinder.getState().getValue().getLayout().getContentArea();
+        }
+        return stateManager.getContentArea();
+    }
+
+    /**
+     * CR4 — set the authoritative content-area. Bound:
+     * {@code dispatch(LayoutAction.SetContentArea(area))} →
+     * {@code LayoutModule} mutates {@code state.layout.contentArea} →
+     * state emit → the armed {@link ContentAreaController} renders the
+     * container visibility (and the small-mode structural-rejection in
+     * {@code LayoutModule.reduce} is preserved). Unbound: the legacy
+     * {@code stateManager.setContentArea} as pre-CR4.
+     *
+     * <p>RR-2: this is the same-chunk counterpart to arming
+     * {@code contentAreaGate} — the legacy KSM
+     * {@code applyContentAreaVisibility} drive is removed (it runs only
+     * on the unbound path) so there is exactly one live writer per
+     * axis.</p>
+     */
+    private void setEffectiveContentArea(ContentArea area) {
+        if (pipelineBinder != null) {
+            pipelineBinder.dispatch(
+                    new net.devemperor.dictate.state.Action.LayoutAction.SetContentArea(area));
+            return;
+        }
+        stateManager.setContentArea(area);
+    }
+
     private void toggleEmojiPicker() {
-        if (stateManager.getContentArea() == ContentArea.EMOJI_PICKER) {
+        if (effectiveContentArea() == ContentArea.EMOJI_PICKER) {
             hideEmojiPicker();
         } else {
             showEmojiPicker();
@@ -2452,13 +2753,13 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void showEmojiPicker() {
-        stateManager.setContentArea(ContentArea.EMOJI_PICKER);
+        setEffectiveContentArea(ContentArea.EMOJI_PICKER);
         emojiPickerCl.bringToFront();
     }
 
     private void hideEmojiPicker() {
-        if (stateManager.getContentArea() == ContentArea.EMOJI_PICKER) {
-            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
+        if (effectiveContentArea() == ContentArea.EMOJI_PICKER) {
+            setEffectiveContentArea(ContentArea.MAIN_BUTTONS);
         }
     }
 
@@ -2494,7 +2795,7 @@ public class DictateInputMethodService extends InputMethodService
 
     private void toggleQwertzKeyboard() {
         if (qwertzContainer == null) return;
-        if (stateManager.getContentArea() == ContentArea.QWERTZ) {
+        if (effectiveContentArea() == ContentArea.QWERTZ) {
             hideQwertzKeyboard();
         } else {
             showQwertzKeyboard();
@@ -2503,15 +2804,15 @@ public class DictateInputMethodService extends InputMethodService
 
     private void showQwertzKeyboard() {
         if (qwertzContainer == null) return;
-        stateManager.setContentArea(ContentArea.QWERTZ);
+        setEffectiveContentArea(ContentArea.QWERTZ);
         qwertzContainer.bringToFront();
         qwertzController.checkAutoShiftAtCursor();
     }
 
     private void hideQwertzKeyboard() {
         if (qwertzContainer == null) return;
-        if (stateManager.getContentArea() == ContentArea.QWERTZ) {
-            stateManager.setContentArea(ContentArea.MAIN_BUTTONS);
+        if (effectiveContentArea() == ContentArea.QWERTZ) {
+            setEffectiveContentArea(ContentArea.MAIN_BUTTONS);
         }
     }
 
@@ -2952,17 +3253,36 @@ public class DictateInputMethodService extends InputMethodService
      */
     private void primePipelineUiForNewPath() {
         try {
+            // G13 BLEIBT (CR3 binding A3 option-a, CR-DEL-staged): the
+            // uiController.* pipeline-step-row UI stays driven until
+            // CR-DEL extracts the small step-row owner — CR4 removes only
+            // the *render* drive (the resend setVisibility §9.6 + the
+            // KSM refresh), not the step-row bookkeeping (the
+            // orchestrator owns the authoritative state.pipeline; this is
+            // thin UI bookkeeping the step-row render still needs).
             uiController.preparePipeline();
-            resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
-                    new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
-                    DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
-                    recordingStateController != null
-                            ? recordingStateController.getState()
-                            : RecordingState.Idle.INSTANCE,
-                    uiController.getState()));
+            // CR4 (Theme C-R / §9.6 — Spec 2 §13.1 row 27): the
+            // pipeline-start resend setVisibility is REMOVED on the
+            // bound path (pipeline → Preparing → predResendVisible=false;
+            // the RESEND-slot predicate owns visibility reactively). The
+            // imperative call is the UNBOUND fallback only.
+            if (pipelineBinder == null) {
+                resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
+                        new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
+                        DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
+                        recordingStateController != null
+                                ? recordingStateController.getState()
+                                : RecordingState.Idle.INSTANCE,
+                        uiController.getState()));
+            }
             infoBarController.dismiss();
             updatePromptButtonsEnabledState();
-            stateManager.refresh();
+            // CR4 (RR-2): KSM refresh is the UNBOUND fallback only — the
+            // armed visibility controllers own every axis on the bound
+            // path (the pipeline state-emit re-renders them).
+            if (pipelineBinder == null) {
+                stateManager.refresh();
+            }
 
             int totalSteps = 1;
             if (autoFormattingService.isEnabled()) totalSteps++;
@@ -3202,21 +3522,29 @@ public class DictateInputMethodService extends InputMethodService
     public void onShowResend() {
         mainHandler.post(() -> {
             if (resendButton == null) return;  // View recreation not yet complete
-            // Block-1a Quick-Win exception (Spec 1 §9.4):
-            // This callback fires from PipelineOrchestrator BEFORE the
-            // pipeline-state transitions back to Idle (`onPipelineFinished()` is
-            // posted separately and calls `uiController.stopPipeline()` only
-            // after this returns). Running `isResendVisible` here would
-            // therefore evaluate to `false` and the resend button would never
-            // appear — the very thing the callback exists to do. Block 5
-            // (LayoutCatalog) folds the predicate into a state-driven
-            // subscriber and re-orders the pipeline-completion sequence so
-            // this explicit setter disappears entirely. Until then, the
-            // gating happens upstream: `onShowResend` is only fired when
-            // `PipelineConfig.showResendButton == true`, which is itself
-            // derived from `Pref.ResendButton` AND the cached audio file
-            // existing (see `captureFreshConfigSnapshot`).
-            resendButton.setVisibility(View.VISIBLE);
+            // CR4 (Theme C-R / §9.6 — Spec 2 §13.1 row 28 / §9.6 :1839):
+            // the imperative resendButton.setVisibility(VISIBLE) is
+            // REPLACED by `dispatch(ResendAction.MarkLastAudio(exists =
+            // true))` → ResendModule sets state.resend.lastAudioExists =
+            // true → state emit → the RESEND-slot `isResendVisible`
+            // predicate evaluates true → the attached ImeViewBackend
+            // renders RESEND visible. This is the exact Spec 2 §9.6
+            // replacement form (the Block-1a "Quick-Win exception" the
+            // old KDoc described — the predicate folding + completion
+            // re-order — is precisely this CR4 cutover). The imperative
+            // setVisibility is the UNBOUND fallback only (no
+            // ResendModule / reactive render without a binder).
+            if (pipelineBinder != null) {
+                try {
+                    pipelineBinder.dispatch(
+                            new net.devemperor.dictate.state.Action.ResendAction
+                                    .MarkLastAudio(true));
+                } catch (Throwable t) {
+                    Log.w("DictateIME", "MarkLastAudio dispatch failed", t);
+                }
+            } else {
+                resendButton.setVisibility(View.VISIBLE);
+            }
         });
     }
 
@@ -3638,9 +3966,17 @@ public class DictateInputMethodService extends InputMethodService
 
         // Quality-Gate N-2 — double-click race: disable the button on the
         // main thread immediately so a second tap within the cooldown window
-        // can't kick off a parallel DB lookup + insertion. Re-enabled in the
-        // worker's finally block via mainHandler.postDelayed.
-        if (mainButtonsController != null) {
+        // can't kick off a parallel DB lookup + insertion.
+        // CR4 (Theme C-R / G8): on the BOUND path the RESEND-slot
+        // `enabledResolver = { !state.resend.resendCooldown }` +
+        // `alphaResolver` own the disabled state state-reactively — the
+        // catalog `ResendLastAudio` dispatch (fired alongside this
+        // affordance call on the same RESEND click) arms
+        // state.resend.resendCooldown, and the CR4-IMPL-2
+        // ResendCooldownExpired postDelayed-dispatch (below) clears it.
+        // The imperative legacy setResendEnabled is the UNBOUND fallback
+        // only (no reactive render / no ResendModule without a binder).
+        if (pipelineBinder == null && mainButtonsController != null) {
             mainButtonsController.setResendEnabled(false);
         }
 
@@ -3694,8 +4030,15 @@ public class DictateInputMethodService extends InputMethodService
                 // Quality-Gate N-2 — re-enable after a 500 ms cooldown so the
                 // capture + dispatch phase has time to settle without a
                 // second click slipping through.
+                // CR4 (Theme C-R / G8): on the BOUND path the
+                // CR4-IMPL-2 ResendCooldownExpired postDelayed-dispatch
+                // (scheduled above in onResendClicked) clears
+                // state.resend.resendCooldown → the RESEND-slot
+                // enabledResolver re-enables the button reactively. The
+                // imperative legacy setResendEnabled(true) is the
+                // UNBOUND fallback only.
                 mainHandler.postDelayed(() -> {
-                    if (mainButtonsController != null) {
+                    if (pipelineBinder == null && mainButtonsController != null) {
                         mainButtonsController.setResendEnabled(true);
                     }
                 }, 500);
@@ -4062,10 +4405,29 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onSmallModeToggled() {
-        boolean newSmallMode = !stateManager.isSmallMode();
+        // CR4 (Theme C-R / RR-2 + G15): the SoT for small-mode is
+        // state.layout.smallMode on the bound path (KSM is the unbound
+        // fallback owner). The pref-write is mirrored into
+        // state.layout.smallMode by PipelinePrefMirror → state emit →
+        // the armed visibility controllers + ImeViewBackend
+        // (MotionLayout scene) render it; the legacy
+        // stateManager.setSmallMode is the unbound fallback only
+        // (double-write guard). The rotation animation is re-pointed
+        // from the removed mainButtonsController delegate to the
+        // IME-held EditNumbersAnimator (bound) / legacy (unbound).
+        boolean currentSmall = pipelineBinder != null
+                ? pipelineBinder.getState().getValue().getLayout().getSmallMode()
+                : stateManager.isSmallMode();
+        boolean newSmallMode = !currentSmall;
         DictatePrefsKt.put(sp.edit(), Pref.SmallMode.INSTANCE, newSmallMode).apply();
-        stateManager.setSmallMode(newSmallMode);
-        mainButtonsController.animateSmallModeToggle(true);
+        if (pipelineBinder == null) {
+            stateManager.setSmallMode(newSmallMode);
+        }
+        if (pipelineBinder != null && editNumbersAnimator != null) {
+            editNumbersAnimator.animateSmallModeToggle(true);
+        } else {
+            mainButtonsController.animateSmallModeToggle(true);
+        }
     }
 
     @Override
@@ -4095,10 +4457,20 @@ public class DictateInputMethodService extends InputMethodService
         // is mirrored into the orchestrator state via PipelinePrefMirror;
         // the attached ImeViewBackend re-renders and asks MotionLayout to
         // transition to the new scene-id. No direct controller call needed.
-        if (mainButtonsController != null) {
+        // CR4 (Theme C-R / G15 + RR-2): bounce animation re-pointed from
+        // the removed mainButtonsController delegate to the IME-held
+        // EditNumbersAnimator (bound) / legacy (unbound). The KSM
+        // refresh is the unbound fallback only — on the bound path
+        // Pref.SingleRowMode is mirrored into state.layout.singleRowMode
+        // by PipelinePrefMirror → state emit → the armed visibility
+        // controllers + ImeViewBackend (MotionLayout scene) render it
+        // (arming a gate while KSM still drove = double-write).
+        if (pipelineBinder != null && editNumbersAnimator != null) {
+            editNumbersAnimator.animateEditNumbersBounce();
+        } else if (mainButtonsController != null) {
             mainButtonsController.animateEditNumbersBounce();
         }
-        if (stateManager != null) {
+        if (pipelineBinder == null && stateManager != null) {
             stateManager.refresh();
         }
     }
@@ -4124,20 +4496,27 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         // 3. UI refresh — both buttons synced via refreshAudioFocusIcon.
-        if (mainButtonsController != null) {
+        //    CR4 (Theme C-R / G14): on the BOUND path the SP-write above
+        //    is mirrored into state.audio.audioFocusEnabledPref by
+        //    PipelinePrefMirror → a state emit → the catalog AUDIO_FOCUS
+        //    iconResolver re-renders the icon on the attached
+        //    ImeViewBackend. The imperative legacy refreshAudioFocusIcon
+        //    is the UNBOUND fallback only (no reactive state-collect
+        //    without a binder).
+        if (pipelineBinder == null && mainButtonsController != null) {
             mainButtonsController.refreshAudioFocusIcon(newValue);
         }
 
         // 4. Block-1a Quick-Win (Spec 1 §11.2.2 step 3): the audio-focus
         //    toggle does not directly change any KSM-owned axis today, but
         //    downstream visibility resolvers may consult the pref via the
-        //    `isRecording`/`isPaused` lambdas in a future iteration. Adding
-        //    the refresh now keeps the toggle on the same "user-action ⇒
-        //    refresh" rhythm as setSmallMode / onSingleRowModeToggled and
-        //    eliminates the off-by-one frame the plan §11.2.2 step 3 calls
-        //    out (the icon update would otherwise reach the screen one
-        //    layout-pass before any KSM-driven downstream visibility).
-        if (stateManager != null) {
+        //    `isRecording`/`isPaused` lambdas in a future iteration. CR4
+        //    (Theme C-R / RR-2): the KSM refresh is the UNBOUND fallback
+        //    only — on the bound path the dormant→armed visibility
+        //    controllers own every visibility axis (the legacy KSM drive
+        //    is removed; arming a gate while KSM still drove = double
+        //    write).
+        if (pipelineBinder == null && stateManager != null) {
             stateManager.refresh();
         }
     }

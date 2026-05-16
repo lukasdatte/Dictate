@@ -44,13 +44,15 @@ Spec 2 §9.x (SoT), then deletes the controllers.
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 0 (CR4-IMPL-1 → fixed-via-CR-EXTRACT, B5-CR4-MID-W1) · Important: 1 (F-6 inherited, deferred-in · CR4-IMPL-2 → fixed/verified) · Nice-to-have: 0 · Postponed: 0
+**Severity counts:** Critical: 0 (CR4-IMPL-1 → fixed-via-CR-EXTRACT, B5-CR4-MID-W1) · Important: 2 (F-6 inherited, deferred-to-CR-DEL · CR4-IMPL-2 → fixed/verified · CR4-IMPL-3 → fixed-inline + theme-residual carried to CR-DEL) · Nice-to-have: 1 (CR4-IMPL-4 — spec-mapped, not a defect, CR-RGATE awareness) · Postponed: 0
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
 | F-6 (from B3) | B3-VAL-SANITY | Important | open → CR3/CR-DEL owns | Cross-carrier collapse: ReprocessStaging.selectedLanguage read → LanguageState.override (depends on KeyboardUiController/PipelineUiStateReader retirement = this block's scope) | inherited from B3-VAL-W1 |
 | CR4-IMPL-1 | B5-CR4-IMPL | Critical | **fixed** (via CR-EXTRACT, wave B5-CR4-MID-W1) | `registerAllListeners()` removal (AC-RR-6) strands edit-bar/emoji/overlay-chars — Spec 2 §13.2's `EditBarController`/`EmojiController` never created → **resolved**: CR-EXTRACT chunk inserted before CR4 (chunks.json); 3 owners (`EditBarController`/`EmojiController`/`OverlayCharactersController`) extracted build-but-dormant; CR4 flips per-axis atomically. Live keyboard unchanged (1129/0/0 debug). | B5-CR4-IMPL Step 1 → fixed B5-CR4-MID-REPAIR-1 |
 | CR4-IMPL-2 | B5-CR4-IMPL | Important | **fixed/verified** (wave B5-CR4-MID-W1) | G8 resend-cooldown *write-path*: state model verified fully present; the missing `ResendCooldownExpired` postDelayed-dispatch added in `onResendClicked` (additive, idempotent, `pipelineBinder`-guarded) so CR4 can remove `setResendEnabled` without re-opening the double-click race / latching the cooldown | B5-CR4-IMPL Step 1 → fixed B5-CR4-MID-REPAIR-1 |
+| CR4-IMPL-3 | B5-CR4-IMPL (re-run) | Important | **fixed** (inline, plan-deviation-resolved) + theme-residual **carried to CR-DEL** | Catalog RESEND `ResendLastAudio`/`Long` → `ResendModule` only arms the cooldown — the resend insertion (DB lookup → insert/resume) + long-press ReprocessStaging-entry have NO new-path impl (same §13.2 "assumed-an-owner" anti-pattern as CR4-IMPL-1, at the RESEND-action layer). Resolved via `ImeViewBackend.imeSideAffordance` firing the exact legacy `onResendClicked()`/`onResendLongClicked()` bodies (the §7-A1 IME-side-activation pattern the orchestrator already accepted for RECORD). The theme edit-row residual is the same root-cause cluster → CR-DEL fully retires `mainButtonsController` (AC-RR-6/7 zero-grep). | B5-CR4-IMPL re-run Step 1 → fixed inline (D22) |
+| CR4-IMPL-4 | B5-CR4-IMPL (re-run) | Nice-to-have | **open** (not a defect — CR-RGATE awareness) | `KeyboardInputModule` BACKSPACE/ENTER effects simpler than legacy `deleteOneCharacter()`/`performEnterAction()`; SPACE click+touch both commit a space. This is the **spec-mapped target** (Spec 2 §3.3/§13.2/§6, reviewed Phase-C) — NOT a CR4 regression. Flagged for CR-RGATE holistic-parity awareness only. | B5-CR4-IMPL re-run Step 1 |
 
 ---
 
@@ -819,8 +821,8 @@ during review. Full suite re-run green (1099/0/0).
 
 ### Chunk CR4 — IME legacy-driver-removal (render-layer AC-10 analogue)
 
-**Agent-IDs:** `B5-CR4-IMPL` (fresh, combined Steps 1-5).
-**Status:** 🔁 UNBLOCKED — CR4-IMPL-1 resolved via the inserted **CR-EXTRACT** chunk (mid-chunk-triage wave B5-CR4-MID-W1); CR4 itself is now ready to run after CR-EXTRACT (its per-axis atomic flip is now feasible — all owners exist build-but-dormant). · **Risk:** HIGHEST (RR-1+RR-2)
+**Agent-IDs:** `B5-CR4-IMPL` (original — flagged CR4-IMPL-1; record preserved below) → re-run after CR-EXTRACT (see **`### Chunk CR4 — IME legacy-driver removal (RE-RUN, post-CR-EXTRACT)`** further down for the completed flip).
+**Status:** ✅ flipped (re-run) — CR4-IMPL-1 resolved via the inserted **CR-EXTRACT** chunk; the per-axis atomic flip is implemented (bound = new owner, unbound = legacy fallback; 1130/0/0 debug). The original CR4-IMPL-1 finding record (below) is preserved unchanged. · **Risk:** HIGHEST (RR-1+RR-2)
 **Implementation-Commit (Commit 1):** ⏳ (CR4 runs after CR-EXTRACT) · **Test-Commit (Commit 2):** ⏳
 
 ### Implementation (B5-CR4-IMPL)
@@ -1174,6 +1176,214 @@ fixed/verified, no new issues forwarded.
 - The release-suite flake (`PipelineRunnerSubsystemAdapterTest`) is
   pre-existing and outside scope — noted for the orchestrator's R-7
   awareness, not a CR-EXTRACT issue.
+
+### Chunk CR4 — IME legacy-driver removal (RE-RUN, post-CR-EXTRACT)
+
+**Agent-IDs:** `B5-CR4-IMPL` (re-run, combined Steps 1-5 — SendMessage/resume unavailable).
+**Status:** ✅ flipped · **Risk:** HIGHEST (RR-1+RR-2 — THE flip) · CR4-IMPL-1 resolved (CR-EXTRACT owners exist).
+**Implementation-Commit (Commit 1):** ⏳ · **Test-Commit (Commit 2):** ⏳
+
+#### Implementation (B5-CR4-IMPL re-run)
+
+**What was done.** Performed the full per-axis atomic render-path flip
+following render-path-cutover.md §5 ordering. The cutover model: the
+**bound** path (`pipelineBinder != null`, inside
+`attachImeViewBackendIfReady` which is the single race-safe
+consolidation point) is the **sole new render driver** — every legacy
+`mainButtonsController.*` / `stateManager.*` render drive is removed
+and the matching CR1-CR3/CR-EXTRACT owner is armed/attached in the
+**same pass**; the **unbound** path keeps the legacy
+`MainButtonsController` driving (the established pre-bind fallback —
+there is no reactive state-collect without a binder; mirrors the
+existing `attachImeViewBackendIfReady` `pipelineBinder==null`
+early-return). The drive-call surface IS the rollback switch (no
+boolean, §6.1). Legacy controllers stay **instantiated** (compile-safe,
+undriven on the bound path) — CR-DEL deletes them gated on CR-RGATE.
+
+Per-axis atomicity holds structurally: on the bound path the legacy
+drive is removed AND the new owner armed/attached in the same
+`attachImeViewBackendIfReady` pass (or the same call-site for the
+imperative axes); no path has both wired (RR-1/RR-2 — never both at
+once).
+
+#### Per-axis flip table
+
+| Axis | Legacy drive removed (bound) | New owner armed/attached (same chunk) | Same-pass atomic? | Parity-test |
+|---|---|---|---|---|
+| Click (9 logical buttons) | `registerAllListeners()` (unbound-only) | `ImeViewBackend.wireStaticHandlers` click (already wired on attach) | YES | `ImeViewBackendTest` click→actionResolver (CR1, unchanged) |
+| Long-press (RECORD/RESEND/all) | `registerAllListeners()` long-press (unbound-only) | `ImeViewBackend` long-press **widened** from RESEND-only → every slot (CR1-contracted, deferred to CR4) | YES | `ImeViewBackendTest` "CR4 widens long-press to EVERY slot" (new) |
+| RECORD long-press IME affordance (Idle→Settings+picker, autoSwitch) | `MainButtonsController.Callback.onRecordLongClicked` via legacy wiring | `imeSideAffordance(RECORD,true)` → exact legacy `onRecordLongClicked()` body | YES | `ImeViewBackendTest` "RECORD long-press fires affordance" (new) |
+| Touch (SPACE/BACKSPACE/ENTER §11.7) | `registerAllListeners()` touch (unbound-only) | `SpecialTouchHandlerInstaller.installDormant()`+`attachToViews()` (CR2 dormant→CR4 attached) | YES | `SpecialTouchHandlerInstallerTest` attach-flip (CR2) |
+| Key-press animation | `mainButtonsController.initializeKeyPressAnimations()` (unbound-only) | `ImeViewBackend.wireStaticHandlers` `applyPressAnimation` (CR1, already wired) | YES | `ImeViewBackendTest` keyPressAnimator (CR1) |
+| Theming (G6) | `mainButtonsController.applyTheme` — **edit-row residual retained** (see CR4-IMPL-3) | `imeViewBackend.applyTheme(accentColor)` (8 owned buttons, CR1 method) | PARTIAL (edit-row theme residual → CR-DEL) | `ImeViewBackendTest.applyTheme` tiers (CR1) |
+| Audio-focus icon (G14) | `mainButtonsController.refreshAudioFocusIcon` (unbound-only, 3 sites) | catalog AUDIO_FOCUS `iconResolver` (state-reactive; `Pref.AudioFocus`→PipelinePrefMirror→state emit) | YES | `LayoutCatalog` iconResolver (parent B4) |
+| EditNumbers anim (G15) | `mainButtonsController.animateSmallModeToggle/Bounce` (unbound-only) | IME-held `EditNumbersAnimator` (CR1-extracted helper, now IME-owned) | YES | `EditNumbersAnimatorTest` (CR1) |
+| Record-button label | `mainButtonsController.updateRecordButtonText` (unbound-only) | RECORD-slot `textResolver` (state-reactive via RefreshFromPref emit) | YES | RECORD textResolver (parent B4) |
+| Overlay-chars (init+update) | `mainButtonsController.updateOverlayCharacters` / `initializeOverlayCharacters` (unbound-only) | `OverlayCharactersController` (CR-EXTRACT) — gate armed + `initialize()`/`update()` | YES | `OverlayCharactersControllerTest` (CR-EXTRACT) |
+| Edit-bar listeners | `registerEditBarListeners()` (unbound-only) | `EditBarController.installDormant()`+`attachToViews()` (CR-EXTRACT) | YES | `EditBarControllerTest` (CR-EXTRACT) |
+| Emoji listeners | `registerEmojiListeners()` (unbound-only) | `EmojiController.installDormant()`+`attachToViews()` (CR-EXTRACT) | YES | `EmojiControllerTest` (CR-EXTRACT) |
+| Visibility — ContentArea | `stateManager.setContentArea` (→ `setEffectiveContentArea`: dispatch `LayoutAction.SetContentArea` on bound) + KSM `applyContentAreaVisibility` (unbound-only) | `contentAreaGate.arm()` + `ContentAreaController` (CR3, attached) | YES | `ContentAreaControllerTest` armed-flip (CR3) |
+| Visibility — Prompts | KSM `applyPromptsVisibility` (unbound-only) | `promptVisibilityGate.arm()` + `PromptVisibilityController` (CR3) | YES | `PromptVisibilityControllerTest` armed (CR3) |
+| Visibility — Overlay-reset | KSM overlay-reset (unbound-only) | `overlayResetGate.arm()` + `OverlayResetHandler` (CR3) | YES | `OverlayResetHandlerTest` armed (CR3) |
+| Small-mode / refresh | `stateManager.setSmallMode/refresh` (unbound-only, ~7 sites) | `Pref.SmallMode/SingleRowMode`→PipelinePrefMirror→state emit→armed controllers + MotionLayout scene | YES | (CR3 armed controllers) |
+| §9.6 resend setVisibility (rows 25-28) | `:onStartInputView`/`primePipelineUiForNewPath` setVisibility (unbound-only); `onShowResend`→`dispatch(MarkLastAudio(true))` | RESEND-slot `isResendVisible` predicate + `ResendModule.MarkLastAudio` (state-reactive) | YES | `ResendModuleTest` MarkLastAudio (parent B4) |
+| RESEND click/long-press IME work | — (catalog `ResendLastAudio`/`Long` only arms cooldown) | `imeSideAffordance(RESEND,*)` → exact legacy `onResendClicked()`/`onResendLongClicked()` body | YES (see CR4-IMPL-3) | `ImeViewBackendTest` "RESEND click fires affordance" (new) |
+| G8 resend cooldown | `mainButtonsController.setResendEnabled(false/true)` (unbound-only, 2 sites) | RESEND `enabledResolver`/`alphaResolver` + catalog `ResendLastAudio` arms + CR4-IMPL-2 `ResendCooldownExpired` clears; affordance re-guards the double-click on `state.resend.resendCooldown` | YES | `ResendModuleTest` cooldown (CR-EXTRACT) |
+| Pipeline drive (`uiController.*`) — G13 | NOT removed — **CR-DEL-staged** (CR3 binding A3 option-a) | step-row render BLEIBT until CR-DEL extracts the small owner | N/A (PARTIAL — out of CR4 scope per CR3 disposition) | — |
+| Recording-UI drive (`recordingUiController.*`) — G9 | NOT removed — dead on bound path (legacy controller never started, C5) + **CR-DEL-staged** | amplitude/timer/QWERTZ BLEIBT until CR-DEL extracts | N/A (PARTIAL — per CR3 disposition) | — |
+
+#### RR-1 / RR-2 no-gap/no-overlap proof
+
+- **RR-1 (silent listener overwrite):** every listener axis flips
+  bound-vs-unbound exclusively. Bound: legacy `registerAllListeners()`
+  NOT called → backend/installer/EditBar/Emoji are the sole live
+  listener owner. Unbound: only legacy. No path wires both. The
+  backend long-press widening + `imeSideAffordance` + the
+  installer `attachToViews()` all run in the same
+  `attachImeViewBackendIfReady` pass that suppressed the legacy
+  wiring.
+- **RR-2 (blank-UI / double-write):** every visibility axis: the KSM
+  drive (`setContentArea`/`setSmallMode`/`refresh`/`applyXxxVisibility`)
+  is removed on the bound path **in the same pass** the matching
+  `RenderGate` is `arm()`-ed; `contentArea` (not pref-mirrored) is
+  additionally driven via `dispatch(LayoutAction.SetContentArea)` so
+  the reactive `ContentAreaController` actually has a changed state to
+  render (the critical non-obvious finding — without the dispatch the
+  armed controller would be stuck on MAIN_BUTTONS = blank QWERTZ/emoji).
+  `doubleWriteCount==0` is preserved and flipped: on the bound path KSM
+  no longer writes (sole live writer = the armed controllers); the
+  `VisibilityWriteAuditLogger` ledger proves it (CR3 mechanism intact).
+- **A3 G9/G13 BLEIBT** physically extracted: **NOT done in CR4** —
+  per CR3's binding A3 option-a disposition + render-path-cutover.md §5
+  + the validated CR4-IMPL Step-1 analysis ("A3 is NOT a CR4 blocker —
+  CR-DEL-staged"), the physical extraction of `QwertzRecordingController`/
+  `PipelineStepRowRenderer` is CR-DEL's job (CR4 removes the *render*
+  drive; the *step-row/QWERTZ render* BLEIBT until CR-DEL). `uiController.*`
+  / `recordingUiController.*` stay instantiated; their callbacks are
+  dead on the bound path (legacy controller never started, C5). This
+  is a documented deviation from the prompt's literal "extract NOW"
+  wording, reconciled to the SoT (§5 + CR3 binding disposition).
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Bound/unbound split as the per-axis atomic switch (not surgical per-call-site removal) | render-path-cutover.md §5/§6.1 | Each legacy drive call is `pipelineBinder==null`-gated (unbound fallback) rather than deleted | The reactive state-collect lives in the bound `DictatePipelineService`; with no binder there is no new path at all (mirrors the existing `attachImeViewBackendIfReady` early-return). This makes the flip atomic per axis (RR-1/RR-2) AND keeps the staged-safety-net (§6.1 — the drive surface IS the rollback switch) | CR-DEL deletes the legacy controllers + the unbound branches | inline-fixed (small + locally-decidable; the §6.1 staged-safety-net pattern, identical to CR1/CR2/CR3's accepted bound-only model) |
+| Backend long-press widened RESEND-only→all-slots + `imeSideAffordance` callback added to `ImeViewBackend.kt` | CR1 deviation table ("CR4 must widen the `ImeViewBackend` long-press id-filter + wire the IME-side Idle-launch/autoSwitch") | `ImeViewBackend.kt` edited (a Kotlin owner) beyond the chunks.json `files_estimate:1` | CR1's own deviation explicitly contracted this to CR4; the widening is the "arm the CR1 owner" half of the per-axis flip | CR-RGATE proves the widened long-press; CR-DEL unaffected | inline-fixed (CR1-contracted, spec §6 RR-1 / §7 A1 prescribed) |
+| A3 G9/G13 physical extraction NOT done in CR4 (CR-DEL-staged) | prompt deliverables ("A3 BLEIBT extraction done") vs CR3 binding disposition + render-path-cutover.md §5 + CR4-IMPL Step-1 analysis | The extraction stays CR-DEL's job; CR4 removes only the render drive | CR3 recorded option-a as binding but staged the *physical extraction* to CR-DEL (§5: "[CR-DEL] keep+annotate... extract"); the CR4-IMPL Step-1 validated analysis explicitly says "A3 is NOT a CR4 blocker — CR-DEL-staged". RR-2: collapsing the recording/pipeline axis in CR4 is a different blank-UI risk | CR-DEL must extract `QwertzRecordingController`/`PipelineStepRowRenderer` so AC-RR-7 zero-greps clean (the F-6 + RR-5/RR-6 carry-forward) | inline-fixed (reconciled to the SoT §5 + CR3's binding staging; the prompt's "NOW" wording conflicts with the validated plan — followed the validated plan, D5 "research more not less") |
+| Theme edit-row residual: legacy `mainButtonsController.applyTheme` retained on the bound path (scoped to the ~11 edit-row buttons §9.2 does not map) | render-path-cutover.md §3 G6 / Spec 2 §9.2 / CR1 + CR-EXTRACT theme-residual flag | `imeViewBackend.applyTheme` themes the 8 owned buttons; the legacy call still runs for the edit-row residual (benign idempotent double-paint of the 8 shared buttons — theme is a non-state, non-double-write-sensitive axis) | No extracted owner themes the edit-row buttons (EditBarController owns the *listeners*, not the *theme* — theming is an explicitly separate axis, §9.2). Removing the legacy call would strand the edit-row theme (RR-2 silent un-themed row) | CR-DEL: extract the edit-row theme into EditBarController so the legacy `applyTheme` fully retires and AC-RR-6 is a clean zero-`mainButtonsController` (tracked as CR4-IMPL-3) | flagged-for-validate (Important — the carried-forward CR1/CR-EXTRACT theme-residual; documented, parity preserved, but AC-RR-6 not 100% zero-`mainButtonsController` on the theme axis until CR-DEL) |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| CR4-IMPL-3 | Important | The catalog RESEND `actionResolver`→`ResendLastAudio` and `longClickResolver`→`ResendLastAudioLong` route to `ResendModule.reduce` which **only arms the cooldown** (no effect) — the actual resend insertion (last-keyboard-session DB lookup → `ResendStatusDispatcher` → insert/resume) and the long-press ReprocessStaging-entry have **NO new-path implementation** (`ResendModule` KDoc claims "the actual pipeline trigger is emitted by the UI resolver path" but no such path exists). Same §13.2-class "assumed-an-owner-that-was-never-created" anti-pattern as CR4-IMPL-1, at the RESEND-action layer. (`ResendModule.kt:73-92`) | **fixed** (inline, plan-deviation-resolved — same pattern as the orchestrator-accepted A1 RECORD affordance) | Resolved spec-faithfully via `ImeViewBackend.imeSideAffordance(RESEND, isLong)` firing the EXACT legacy `onResendClicked()`/`onResendLongClicked()` Callback bodies before the catalog dispatch — identical to render-path-cutover.md §7 A1's "IME-side affordances with no FSM/dispatch representation → CR4 IME-side activation" (the spec's own resolution mechanic, just discovered to also apply to RESEND). The catalog dispatch still arms the cooldown; the affordance re-guards the double-click on `state.resend.resendCooldown` (replacing the synchronous imperative `setResendEnabled(false)` guard). The theme edit-row residual (above) is the same CR4-IMPL-3 root-cause cluster — flagged for CR-DEL to fully retire `mainButtonsController` (AC-RR-6/AC-RR-7 zero-grep). Block-validate should sanity-check that the affordance double-fire guard + the catalog-arms-cooldown ordering is race-safe. |
+| CR4-IMPL-4 | Nice-to-have | `KeyboardInputModule` effects (`Effect.SendBackspace`→`deleteSurroundingText(1,0)`, `Effect.SendEnter`→`commitText("\n",1)`) are simpler than the legacy IME handlers (`deleteOneCharacter()` is grapheme/selection-aware; `performEnterAction()` honours editor IME actions GO/SEARCH/SEND/DONE). The catalog routes BACKSPACE/ENTER **click** here per Spec 2 §13.2 (the documented target architecture). | open | NOT a CR4 regression — this is the **spec-mapped target** (Spec 2 §3.3 / §13.2 deliberately model these as simple `KeyboardInputAction`s; reviewed in Phase-C). Flagged for CR-RGATE holistic-parity awareness only — re-litigating §13.2 is out of CR4 scope. The legacy richness loss is a spec-level decision, not a flip defect. SPACE has both a touch `onTap` (commits space) and the click→`SpaceKey` (commits space) per Spec 2 §6's reference `wireStaticHandlers` (the spec wires click for ALL buttons + touch for SPACE/BACKSPACE/ENTER) — the documented target; CR-RGATE verifies the holistic behaviour. |
+
+#### Overlooked points / known gaps
+
+- **CR-RGATE prerequisites:** the holistic parity proof (AC-RR-1..6,
+  Strict-Mode no-double-write soak, the keystone scenarios) is
+  CR-RGATE's job, not CR4's — CR4's per-axis parity tests assert each
+  axis fires through the new owner; the end-to-end proof (e.g. the
+  actual BorderGlow amplitude on the new path — currently the
+  `AmplitudeStreamAdapter`/`RecordingTimerAdapter` do NOT bridge to
+  `imeViewBackend.onAmplitude/onTimerTick`; the new-path recording
+  animation stays Idle, the documented cosmetic C5-IMPL-2 deferral)
+  is CR-RGATE/CR-DEL territory. **Flagged: the `imeViewBackend.onAmplitude/
+  onTimerTick` side-channel has NO caller on the new path** — the
+  recording BorderGlow/timer is undriven on the bound path (cosmetic;
+  the FGS notification is the authoritative recording-active surface,
+  per the C5 KDoc). This is the G9 amplitude/timer BLEIBT that CR-DEL's
+  `QwertzRecordingController`/`RecordingAnimationController` extract +
+  service-side bridge must close.
+- **F-6 (inherited from B3):** untouched — carried to CR-DEL per CR3's
+  disposition (depends on `KeyboardUiController`/`PipelineUiStateReader`
+  retirement = CR-DEL scope, not reached by CR4's drive-removal).
+- **`uiController.*` reads** (`getState`/`isPipelineRunning`/etc., ~22
+  sites) NOT re-pointed to `pipelineBinder.getState()` — the CR4-IMPL
+  Step-1 table marked these "mechanical re-point" but they are
+  intertwined with the G13 step-row BLEIBT (CR-DEL-staged) and the
+  rotation-restore bridges; re-pointing them without the step-row
+  extract is the same blank-UI risk on a different axis. Left for
+  CR-DEL (consistent with the A3 staging). The pipeline step-row UI
+  still works (legacy `KeyboardUiController` instantiated + driven —
+  G13 BLEIBT).
+- No new architecture-conflict requiring mid-chunk-triage: CR4-IMPL-1
+  did NOT recur (CR-EXTRACT owners exist); CR4-IMPL-3 (the RESEND-action
+  gap) is the same A1-class IME-side-affordance pattern the
+  orchestrator already accepted for RECORD — resolved inline
+  spec-faithfully (D22 plan-deviation-resolved), not delegated.
+
+#### Plan-Correctness Fix (B5-CR4-IMPL-PLAN-FIX)
+
+Re-read render-path-cutover.md §2.2/§5/§6/§7 + Spec 2 §9.2/§9.6/§11.7/
+§11.8/§13.1/§13.2 + Spec 1 §9.6 + the chunks.json CR4 entry + the
+CR1/CR2/CR3/CR-EXTRACT contracts against the diff. Every listed legacy
+drive removed on the bound path; every matching CR1-CR3/CR-EXTRACT
+owner armed/attached in the same pass (per-axis atomic, RR-1/RR-2).
+The non-obvious critical finding (contentArea NOT pref-mirrored →
+`dispatch(LayoutAction.SetContentArea)` mandatory alongside
+`contentAreaGate.arm()`) was caught and implemented. A3 G9/G13
+extraction correctly CR-DEL-staged per CR3's binding disposition (the
+prompt's "NOW" wording reconciled to the SoT §5 — documented
+deviation). CR4-IMPL-3 (RESEND-action new-path gap) resolved inline
+via the §7-A1 affordance pattern (mid-size plan-deviation, solution
+clear from plan knowledge, `plan-deviation-resolved`). Theme edit-row
+residual flagged-for-validate (carried CR1/CR-EXTRACT residual).
+
+#### Self-Code Fix (B5-CR4-IMPL-CODE-FIX)
+
+Loaded engineering-principles. Code-quality pass:
+- DRY: introduced `effectiveContentArea()` / `setEffectiveContentArea()`
+  helpers (mirroring the established `isEffectiveRecording*` bound/unbound
+  pattern in this file) so the 8 contentArea call-sites share one
+  bound/unbound branch instead of inlining it 8×.
+- The backend IME-side hook is a single extensible
+  `imeSideAffordance: (LogicalButtonId, Boolean) -> Unit` (replacing
+  what would have been 3 ad-hoc callbacks) — sustainable/extensible
+  (engineering-principles: a new affordance is one `when` arm, not a
+  new ctor param).
+- Every flip carries a `CR4 (...)` rationale comment naming the axis,
+  the RR-1/RR-2 invariant, and the unbound-fallback reason so the next
+  reader does not reverse-engineer the staged-safety-net.
+- No own logic bug surfaced. `./gradlew assembleDebug` green.
+
+#### Tests (B5-CR4-IMPL-TEST)
+
+Chunk-integrated test update (the flip WILL change behaviour — its
+purpose). `ImeViewBackendTest.kt`: the 2 CR1-era RESEND-only-constraint
+tests (`RECORD long-press NOT attached`, `only RESEND gets long-press`)
+asserted the CR1 staged invariant CR4 deliberately removes — replaced
+with the CR4 behaviour assertions:
+- `CR4 widens the long-press listener to EVERY slot (the flip)` —
+  every button now has a catalog-driven long-press listener.
+- `RECORD long-press fires the IME-side affordance before the catalog
+  dispatch (CR4 A1)` — asserts `imeSideAffordance(RECORD, true)`.
+- `RESEND click fires the IME-side affordance (CR4-IMPL-3)` — asserts
+  `imeSideAffordance(RESEND, false)` fires AND the catalog
+  `ResendLastAudio` dispatch still arms the cooldown alongside.
+
+`./gradlew testDebugUnitTest`: **1130 tests, 0 failures, 0 errors, 0
+skipped** (baseline ~1129; net +1 = −2 obsolete CR1-constraint tests
++3 new CR4 tests). `./gradlew assembleDebug` green. The pre-existing
+`PipelineRunnerSubsystemAdapterTest` `testReleaseUnitTest`-only
+thread-start flake is NOT a CR4 regression (debug suite clean;
+forwarded to AUDIT-TEST per the block plan).
+
+#### Test-Review (B5-CR4-IMPL-TEST-FIX)
+
+Requirement coverage: each flipped axis's parity is asserted by its
+CR1-CR3/CR-EXTRACT owner's existing tests (still green — proving the
+owners were correctly armed/attached, not re-implemented) plus the 3
+new ImeViewBackend tests for the CR4-specific behaviour (long-press
+widening + the two `imeSideAffordance` axes — the load-bearing
+CR4-IMPL-3 resolution). K-1 honoured (handwritten `RecordingButton`
+fake, no mocking framework); K-4 Robolectric is the inherited
+view-wiring exception (per-class KDoc). No code-bugs surfaced during
+review. Full debug suite green (1130/0/0).
+
+---
 
 ### Chunk CR-RGATE — render verification GATE (authorises CR-DEL)
 

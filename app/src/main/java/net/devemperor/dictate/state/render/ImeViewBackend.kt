@@ -91,6 +91,39 @@ import net.devemperor.dictate.state.layout.RenderBackend
  *   don't have to provide it.
  * @property onVibrate optional haptic feedback callback fired on every
  *   click. Defaults to no-op for tests.
+ * @property imeSideAffordance optional IME-side hook fired
+ *   `(LogicalButtonId, isLongPress)` *before* the catalog
+ *   click/long-click dispatch (CR4 — render-path-cutover.md §7 A1).
+ *   Some legacy `MainButtonsController.Callback` button behaviours have
+ *   **no FSM/dispatch representation** — the catalog/modules model only
+ *   part of what the legacy listener did, and the remainder is an
+ *   IME-side side-effect with no `Action`/`ModuleServices` surface:
+ *
+ *    - **RECORD long-press**: legacy `onRecordLongClicked` did the Idle
+ *      → launch Settings + file-picker, and the `autoSwitchKeyboard`
+ *      one-shot before an Active/Paused stop. The catalog
+ *      `resolveRecordLongPressAction` + [RecordingModule] own only the
+ *      FSM-half (Active/Paused discard-stop).
+ *    - **RESEND click**: legacy `onResendClicked` does the
+ *      last-keyboard-session DB lookup → `ResendStatusDispatcher` →
+ *      insert / resume. The catalog `ResendLastAudio` →
+ *      [net.devemperor.dictate.state.modules.ResendModule] only **arms
+ *      the cooldown** (no effect — the resend insertion has no new-path
+ *      implementation; CR4-IMPL-3).
+ *    - **RESEND long-press**: legacy `onResendLongClicked` enters
+ *      ReprocessStaging with the last session. The catalog
+ *      `ResendLastAudioLong` → [ResendModule] only arms the cooldown.
+ *
+ *   There is no Activity-launch / DB-lookup / ReprocessStaging-entry
+ *   surface on `ModuleServices`
+ *   ([net.devemperor.dictate.state.ModuleServices]) — render-path-cutover.md
+ *   §7 A1 scopes these as the **CR4 IME-side activation**. The backend
+ *   fires this callback (the IME wires the exact legacy
+ *   `onRecordLongClicked` / `onResendClicked` / `onResendLongClicked`
+ *   bodies — behaviour-identical) so the affordances survive the cutover
+ *   with zero behaviour drift, *in addition to* the catalog dispatch
+ *   (which still arms the cooldown / models the FSM-half). Default
+ *   no-op for JVM/legacy callers.
  *
  * @see net.devemperor.dictate.state.layout.RenderBackend
  * @see net.devemperor.dictate.state.render.RecordingAnimationController
@@ -107,6 +140,7 @@ class ImeViewBackend(
     private val keyPressAnimator: KeyPressAnimator = KeyPressAnimator(),
     private val staticHandlerInstaller: ((Map<LogicalButtonId, View>) -> Unit)? = null,
     private val onVibrate: () -> Unit = {},
+    private val imeSideAffordance: (LogicalButtonId, Boolean) -> Unit = { _, _ -> },
 ) : RenderBackend {
 
     override val backendType: BackendType = BackendType.IME_VIEW
@@ -252,29 +286,35 @@ class ImeViewBackend(
      * `OnRecordLongPress` Action + the RecordingModule reducer arm now
      * exist).
      *
-     * **RR-1 — listener-attachment scope is still RESEND-only in CR1.**
-     * `attach()` runs *after* the legacy
-     * `MainButtonsController.registerAllListeners()`, so any
+     * **RR-1 — CR4 widens the long-press attachment to every slot with
+     * a non-null `longClickResolver`.** `attach()` runs *after* the
+     * legacy `MainButtonsController.registerAllListeners()`, so any
      * `setOnLongClickListener` here is the View's *most-recent* (live)
-     * listener. Attaching the generic long-press listener to **RECORD**
-     * now would overwrite the legacy `onRecordLongClicked` and regress the
-     * live keyboard: the catalog resolver only models the Active/Paused
-     * *discard-stop* half, losing the Idle Settings+file-picker launch and
-     * the `autoSwitchKeyboard`+send affordance (both IME-side, not
-     * reducer-modellable without new ModuleServices surface — see
-     * [Action.RecordingAction.OnRecordLongPress] KDoc, A1). Likewise
-     * **BACKSPACE** has a legacy `onBackspaceLongClicked` and no
-     * `longClickResolver` (default `null`) — a generic listener there
-     * would vibrate-and-consume, killing it. So CR1 keeps the
-     * **RESEND-only** attachment (its `ResendLastAudioLong` is behaviourally
-     * identical to the legacy `onResendLongClicked` → ReprocessStaging, so
-     * RESEND was already the live owner pre-CR1 — zero regression). The
-     * RECORD/other long-press *listeners* are attached by **CR4** in the
-     * same chunk that removes the legacy `registerAllListeners()` drive
-     * (RR-1 mitigation: never both wired at once — render-path-cutover.md
-     * §6 RR-1). The catalog `longClickResolver` data + the reducer arm are
-     * complete + unit-tested now (backend feature-complete, dormant
-     * listener-side per the staged-safety-net §6.1).
+     * listener. CR1 kept this **RESEND-only** (its `ResendLastAudioLong`
+     * was already the live owner pre-CR1 — zero regression) and deferred
+     * RECORD/other long-press to CR4 so the legacy `onRecordLongClicked`
+     * survived (RR-1: never both wired at once). **CR4 removes the
+     * legacy `registerAllListeners()` drive (when bound) in the same
+     * chunk it widens this filter** — so the new owner takes over with
+     * no overlap (render-path-cutover.md §6 RR-1 / §5).
+     *
+     * The widened listener fires the catalog `longClickResolver` for
+     * every slot (RESEND → `ResendLastAudioLong`; RECORD →
+     * `resolveRecordLongPressAction`, i.e. `OnRecordLongPress` for
+     * Active/Paused, `null` for Idle/Preparing; others default `null`).
+     * For **RECORD** it additionally fires [onRecordLongPressAffordance]
+     * *before* the dispatch — the legacy `onRecordLongClicked` did two
+     * IME-side affordances (Idle → Settings + file-picker launch; the
+     * `autoSwitchKeyboard` one-shot) that have **no FSM/dispatch
+     * representation** (no Activity-launch / IME-flag surface on
+     * `ModuleServices`; render-path-cutover.md §7 A1 scopes them as the
+     * CR4 IME-side activation). Without this hook the Idle Settings/
+     * file-picker launch would be a silently-stranded feature (RR-2).
+     * BACKSPACE has no `longClickResolver` (default `{ _, _ -> null }`)
+     * so its widened listener vibrates-and-consumes only — the
+     * accelerated-delete cascade is owned by the
+     * [staticHandlerInstaller]'s `BackspaceSwipeHandler` (CR2/CR4,
+     * §11.7), exactly as on the legacy path.
      *
      * # Key-press animation (Spec 2 §6 / §9.2 G7)
      *
@@ -294,6 +334,17 @@ class ImeViewBackend(
         buttonViews.forEach { (id, view) ->
             view.setOnClickListener {
                 onVibrate()
+                // CR4 (render-path-cutover.md §7 A1 / CR4-IMPL-3) — the
+                // RESEND click's real work (last-session DB lookup →
+                // insert / resume) has NO new-path implementation: the
+                // catalog `ResendLastAudio` → ResendModule only arms the
+                // cooldown. Fire the IME-side affordance (the exact
+                // legacy `onResendClicked` body) BEFORE the catalog
+                // dispatch so the resend feature survives the cutover.
+                // No-op for every other button (default callback).
+                if (id == LogicalButtonId.RESEND) {
+                    imeSideAffordance(id, false)
+                }
                 val s = stateRef ?: return@setOnClickListener
                 val slot = currentSlot(id) ?: return@setOnClickListener
                 // R.3 nullable-resolver-idiom: null = silent no-op,
@@ -303,32 +354,46 @@ class ImeViewBackend(
                 }
             }
 
-            // RR-1 — CR1 attaches the catalog-driven long-press listener
-            // for RESEND only. RESEND's `ResendLastAudioLong` is
-            // behaviourally identical to the legacy `onResendLongClicked`
-            // (ReprocessStaging entry), so RESEND was already the live
-            // long-press owner pre-CR1 — zero regression. RECORD/BACKSPACE
-            // long-press listeners are attached by CR4 in the same chunk
-            // that removes the legacy `registerAllListeners()` drive (never
-            // both wired at once — see the function KDoc + §6 RR-1). The
-            // listener is catalog-driven (reads `slot.longClickResolver`),
-            // not a hardcoded ResendLastAudioLong, so CR4 only needs to
-            // widen the id filter.
-            if (id == LogicalButtonId.RESEND) {
-                view.setOnLongClickListener {
-                    onVibrate()
-                    val s = stateRef
-                    val slot = currentSlot(id)
-                    if (s != null && slot != null) {
-                        slot.longClickResolver(s, services)?.let { action ->
-                            onAction?.invoke(action)
-                        }
-                    }
-                    // Consume the long-press so it doesn't fall through to
-                    // a click; R.3 nullable-resolver short-circuits the
-                    // dispatch when structurally meaningless.
-                    true
+            // RR-1 — CR4 widens the long-press listener to EVERY slot
+            // (CR1 was RESEND-only; the legacy `registerAllListeners()`
+            // RECORD/BACKSPACE long-press wiring is removed in this same
+            // chunk — never both wired at once, §6 RR-1 / §5). The
+            // listener is catalog-driven (reads `slot.longClickResolver`):
+            //  - RESEND → `ResendLastAudioLong` (catalog: arms cooldown)
+            //    PLUS the IME-side affordance: the legacy
+            //    `onResendLongClicked` ReprocessStaging-entry has NO
+            //    new-path implementation (ResendModule only arms the
+            //    cooldown — CR4-IMPL-3), so the affordance carries it.
+            //  - RECORD → `resolveRecordLongPressAction` (OnRecordLongPress
+            //    for Active/Paused, null Idle/Preparing) PLUS the IME-side
+            //    affordance (Idle→Settings+picker / autoSwitch) which has
+            //    no dispatch representation — see [imeSideAffordance]
+            //    + the function KDoc (render-path-cutover.md §7 A1).
+            //  - BACKSPACE / others → default `null` resolver: just
+            //    vibrate-and-consume (the accel-delete cascade is the
+            //    staticHandlerInstaller's BackspaceSwipeHandler, §11.7).
+            view.setOnLongClickListener {
+                onVibrate()
+                if (id == LogicalButtonId.RECORD || id == LogicalButtonId.RESEND) {
+                    // IME-side affordance — fired BEFORE the catalog
+                    // dispatch so the IME observes the gesture even when
+                    // the resolver returns null. The IME body re-checks
+                    // the effective state itself (legacy
+                    // `onRecordLongClicked` / `onResendLongClicked`
+                    // parity).
+                    imeSideAffordance(id, true)
                 }
+                val s = stateRef
+                val slot = currentSlot(id)
+                if (s != null && slot != null) {
+                    slot.longClickResolver(s, services)?.let { action ->
+                        onAction?.invoke(action)
+                    }
+                }
+                // Consume the long-press so it doesn't fall through to
+                // a click; R.3 nullable-resolver short-circuits the
+                // dispatch when structurally meaningless.
+                true
             }
 
             // G7 key-press scale animation — skip the special-touch

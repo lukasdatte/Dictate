@@ -777,12 +777,22 @@ delegation chain it documents. No coverage gap introduced.)
 
 ## Block Closeout (Orchestrator)
 
-- **All chunks complete (5-step, both commits):** ⏳
-- **Block-Validate converged:** ⏳
-- **AUDIT-TEST: coverage + no cross-chunk regressions:** ⏳
-- **Build green at block-end (cleanup-greps pass per Spec 1 §9.6):** ⏳
-- **Issue index reconciled:** ⏳
-- **Cross-block-API consumer info forwarded to B4:** ⏳
+- **All chunks complete (5-step, both commits):** ✅ C8-C1 (6de54b1+93f86d6) · C9-C2 (bd82070+ccb38c2). C10-C3 MOVED to B5 per C10-IMPL-2 — only its OQ-1 PipelineOrchestrator KDoc landed here (185f3f6).
+- **Block-Validate converged:** ✅ 1 wave (B3-VAL-W1 80cdda2) — clean block, 0 Crit
+- **AUDIT-TEST: coverage + no cross-chunk regressions:** ✅ C8-IMPL-1 DurationHealing flake CLOSED; 1048/1048 both variants ×3 uncached; LanguageControllerTest coverage preserved
+- **Build green at block-end:** ✅ assembleDebug + test (AC-9 ≥946 holds)
+- **Issue index reconciled:** ✅ C8-IMPL-1 + F-2..F-5 fixed; F-6 deferred→B5; 2 ❌ recorded
+- **Cross-block consumer info forwarded:** ✅ AC-5 + AC-6 met. **F-6 cross-carrier collapse forwarded to B5 Theme-C-R** (depends on KeyboardUiController/PipelineUiStateReader retirement = render-cutover scope; folded into C10-IMPL-2). Latent F-15 RenderBackend "system" bug fixed as C8 side-effect.
 
-**Block completed at:** ⏳
-**Block-End-Commit:** ⏳
+**Note (Phase 4.7):** B3 narrowed mid-flight to {C8-C1,C9-C2} when C10's
+per-class trace surfaced C10-IMPL-2 (render-path cutover never happened —
+INT-1 pattern at the render layer). C10-C3 correctly moved to new B5
+Theme-C-R (gated on a render verification gate). The R-mitigation
+(mandatory per-class trace) prevented deleting controllers whose
+behaviour was unported. Dev-5 = graceful-shutdown correction of
+AUDIT-TEST's mechanically-wrong shutdownNow() spec detail.
+
+**Block completed at:** 2026-05-16
+**Block-End-Commit:** 80cdda2
+**Cross-reference set in state file:** ✅
+**Postponed issues forwarded:** F-6 → B5/C10-IMPL-2; 2 ❌ recorded-not-fixed

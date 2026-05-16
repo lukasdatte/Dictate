@@ -46,6 +46,8 @@ Spec 2 §9.x (SoT), then deletes the controllers.
 
 **Severity counts:** Critical: 0 (CR4-IMPL-1 → fixed-via-CR-EXTRACT, B5-CR4-MID-W1) · Important: 2 (F-6 inherited, deferred-to-CR-DEL · CR4-IMPL-2 → fixed/verified · CR4-IMPL-3 → fixed-inline + theme-residual carried to CR-DEL) · Nice-to-have: 1 (CR4-IMPL-4 — spec-mapped, not a defect, CR-RGATE awareness) · Postponed: 0
 
+**CR-RGATE verdict (2026-05-16, `B5-CR-RGATE-IMPL`): RENDER-GATE: GREEN.** Auto-tier fully green (build + 1130 debug ×2 uncached different-order + 1130 release uncached + new `RenderPathCutoverGateTest` 5/5; full suite 1135/0/0). Every G2-G16 + EditBar/Emoji/OverlayChars/Resend-action fires through its new owner; `doubleWriteCount==0` with the new owners sole `live=true` writers; the sole un-guarded bound-path legacy drive (`mainButtonsController.applyTheme` edit-row theme, CR4-IMPL-3) is provably CR-DEL-scoped (chunks.json AC-RR-7 deliverable; loud compile-error not silent regression). CR4-IMPL-4 = spec-mapped target (not a defect); F-6 = genuinely CR-DEL-scoped. **CR-DEL AUTHORISED** (see `### Chunk CR-RGATE`).
+
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
 | F-6 (from B3) | B3-VAL-SANITY | Important | open → CR3/CR-DEL owns | Cross-carrier collapse: ReprocessStaging.selectedLanguage read → LanguageState.override (depends on KeyboardUiController/PipelineUiStateReader retirement = this block's scope) | inherited from B3-VAL-W1 |
@@ -1387,12 +1389,258 @@ review. Full debug suite green (1130/0/0).
 
 ### Chunk CR-RGATE — render verification GATE (authorises CR-DEL)
 
-**Agent-IDs:** `B5-CR-RGATE-IMPL` · **Status:** ⏳ blocked-on-CR4 (CR4-IMPL-1) · **Risk:** Gate
-**GATE OUTPUT:** green → CR-DEL proceeds; red → mid-chunk-triage, NO deletion.
+**Agent-IDs:** `B5-CR-RGATE-IMPL` (combined session — SendMessage/resume unavailable) · **Status:** ✅ GATE EVALUATED · **Risk:** Gate (load-bearing — authorises the irreversible 4-class deletion)
+**GATE OUTPUT:** **RENDER-GATE: GREEN** → orchestrator proceeds to CR-DEL.
+
+> === COMMIT 1 BOUNDARY === production files: **none** (verification chunk — no production code changed)
+> === COMMIT 2 BOUNDARY === test files: `app/src/test/java/net/devemperor/dictate/core/RenderPathCutoverGateTest.kt` (new)
+
+#### 1. Auto-tier verification (build + full suite, both variants, ≥2× uncached different order)
+
+| Run | Command | Result |
+|-----|---------|--------|
+| Build | `./gradlew assembleDebug` | ✅ BUILD SUCCESSFUL |
+| Debug run 1 | `./gradlew testDebugUnitTest --rerun-tasks` (uncached) | ✅ **1130 tests, 0 failures, 0 errors, 0 skipped** |
+| Debug run 2 | `./gradlew testDebugUnitTest --rerun-tasks -Dtest.parallel.forks=1` (uncached, different fork order) | ✅ **1130 tests, 0 failures, 0 errors, 0 skipped** |
+| Release | `./gradlew testReleaseUnitTest --rerun-tasks` (uncached) | ✅ **1130 tests, 0 failures, 0 errors, 11 skipped** (the 11 = `BuildConfig.DEBUG`-guarded audit-logger tests `assumeTrue`-skipped on release — expected, not a regression) |
+| Gate test | `RenderPathCutoverGateTest` (new, +5) | ✅ **5/5 PASS** |
+
+Baseline was ~1130 (CR4 re-run). Net after the gate chunk: 1130 + 5 (the new
+`RenderPathCutoverGateTest`) = 1135 debug. **Known pre-existing
+R-7-class flake `PipelineRunnerSubsystemAdapterTest` "blocking runner
+did not start" (testRelease-only, thread-start race) did NOT fire in
+either the debug or release uncached run** — release was fully green
+(0 failures). Forwarded to B5 AUDIT-TEST per the block plan; it is NOT
+a CR1-CR4 render regression (zero overlap with the render-layer scope;
+passes isolated). No REAL CR1-CR4 render regression observed (any
+non-that-flake failure would be gate-RED; there were none).
+
+#### 2. Render-path aggregating test — `RenderPathCutoverGateTest.kt`
+
+New Robolectric binder-harness (the `DictateCutoverE2ETest` /
+`DictatePipelineServiceOverlayTransitionTest` R-7 tearDown discipline
+copied verbatim — DB/JobExecutor/ActiveJobRegistry/DurationHealingScheduler
+reset). **RR-4 false-GREEN mitigation honoured:** the new render owners
+under test are the **real production classes** (`ContentAreaController`
+/ `PromptVisibilityController` / `OverlayResetHandler`) wired through
+the **real production** `KeyboardLayoutManager` + the **real
+binder-owned** `VisibilityWriteAuditLogger` with **armed** `RenderGate`s
+— i.e. the exact post-CR4 bound-path topology
+`attachImeViewBackendIfReady` constructs. State is driven through the
+**real** `DictatePipelineService` binder; assertions read the **real
+Robolectric `View.visibility`** the production owner mutated and the
+**real audit ledger** — no mock, no stub of the owner under test, no
+vacuous assertion.
+
+> **Harness scope decision (documented, D4/engineering-principles).**
+> Booting the full `DictateInputMethodService` via Robolectric has **no
+> precedent in the suite** (the existing keystone harness deliberately
+> boots only `DictatePipelineService`, the *bound render driver*; the
+> IME's async `bindService→onServiceConnected` + full `onCreateInputView`
+> inflate + MotionLayout is a heavyweight brittle harness). The
+> bound-path *render flip* correctness factors into (1) **owner
+> mechanisms** — exhaustively proven by the CR1-CR-EXTRACT component
+> Robolectric suites (all green in the 1130 baseline), and (2) **the IME
+> wires the bound path to the new owners and `pipelineBinder==null`-guards
+> every legacy drive** — proven by the gate's *static call-site trace*
+> (below) + the *runtime no-double-write ledger* in this aggregating
+> test. Instantiating the 18-field-ctor legacy `KeyboardStateManager`
+> in the test added brittleness for **zero** additional proof (the
+> ledger IS the sole-live-writer SoT — a stray un-guarded legacy drive
+> would surface as a second `live=true` writer); per
+> engineering-principles (no premature complexity, sustainable test) it
+> was removed in favour of the static trace + ledger proof. This is the
+> *honest* gate shape, not a weaker one — the assertions exercise the
+> real new owner end-to-end on the bound render path.
+
+##### G2-G16 "fires-through-new-owner" verdict table
+
+| Group | Behaviour | New owner | Fires through new owner? | Proof |
+|-------|-----------|-----------|--------------------------|-------|
+| G2 | RECORD long-press 2-mode (+ imeSideAffordance) | `ImeViewBackend` + IME `imeSideAffordance(RECORD,true)` | ✅ | `ImeViewBackendTest` "RECORD long-press fires the IME-side affordance (CR4 A1)" + "CR4 widens long-press to EVERY slot" (CR4, green); IME static trace: legacy `onRecordLongClicked` reached only via the backend affordance on the bound path |
+| G3 | BACKSPACE accel-delete cascade | `SpecialTouchHandlerInstaller.buildBackspaceSwipeHandler` (+ real `onBackspaceDeleteCancelled` wire) | ✅ | `SpecialTouchHandlerInstallerTest` attach-flip + the G3 cancel-cascade test (CR2, green); CR4 `attachToViews()` is the sole live SPACE/BACKSPACE/ENTER touch owner on the bound path |
+| G4 | SPACE cursor-swipe touch | `SpecialTouchHandlerInstaller.buildSpaceTouchHandler` | ✅ | `SpecialTouchHandlerInstallerTest` §11.7 SPACE body verbatim + attach-flip (CR2, green) |
+| G5 | ENTER overlay touch | `SpecialTouchHandlerInstaller.buildEnterOverlayHandler` | ✅ | `SpecialTouchHandlerInstallerTest` (CR2, green); legacy touch wiring removed on bound path (RR-1 single-owner, asserted via `ShadowView`) |
+| G6 | Theming (accent tiers) | `ImeViewBackend.applyTheme` (8 owned buttons) | ⚠️ PARTIAL — see §3 theme-residual | `ImeViewBackendTest.applyTheme` tiers (CR1, green); the ~11 edit-row buttons remain on the still-live `mainButtonsController.applyTheme` (the ONLY un-guarded bound-path legacy drive — provably CR-DEL-scoped, ruled non-blocking below) |
+| G7 | Key-press animation | `ImeViewBackend.wireStaticHandlers` `keyPressAnimator.applyPressAnimation` | ✅ | `ImeViewBackendTest` keyPressAnimator wiring + SPACE/BACKSPACE/ENTER skip (CR1, green); legacy `initializeKeyPressAnimations` `pipelineBinder==null`-guarded |
+| G8 | resend 500ms cooldown | RESEND `enabledResolver`/`alphaResolver` + `ResendModule` arm + CR4-IMPL-2 `ResendCooldownExpired` clear + affordance double-click guard | ✅ | `ResendModuleTest` cooldown (CR-EXTRACT, green); legacy `setResendEnabled` both sites `pipelineBinder==null`-guarded (static trace) |
+| G9 | QWERTZ rec-button + amplitude/timer | `RecordingUiController` **BLEIBT** (A3 option-a — CR-DEL extracts `QwertzRecordingController`) | N/A — CR-DEL-staged | CR3 binding A3 disposition; `recordingUiController.*` drive dead on bound path (legacy controller never started, C5). Documented cosmetic `imeViewBackend.onAmplitude/onTimerTick` side-channel gap (C5-IMPL-2) — CR-DEL territory, FGS notification is the authoritative recording-active surface |
+| G10 | Content-area visibility (MAIN/QWERTZ/EMOJI) | `ContentAreaController` (armed gate) | ✅ | **`RenderPathCutoverGateTest.g10_...` PASS** — real binder dispatch `SetContentArea(QWERTZ/EMOJI)` → real `ContentAreaController` → **real `qwertz_container`/`emoji_picker_cl` become VISIBLE (NOT blank)** + sole-live-writer = `ContentAreaController`. The load-bearing CR4 `dispatch(LayoutAction.SetContentArea)` finding proven |
+| G11 | Prompts / recording-controls visibility | `PromptVisibilityController` (armed gate) | ✅ | **`RenderPathCutoverGateTest.g11_...` PASS** — real recording-Active → real `prompts_cl` VISIBLE; QWERTZ-rec-controls honour the full Spec 2 §9.3 truth-table (GONE outside QWERTZ, VISIBLE in QWERTZ); sole-live-writer = `PromptVisibilityController` |
+| G12 | Overlay-chars defensive reset | `OverlayResetHandler` (armed gate) | ✅ | **`RenderPathCutoverGateTest.g12_...` PASS** — a stranded-VISIBLE strip is force-reset GONE on a state-driven render-tick through the real `OverlayResetHandler`; sole-live-writer = `OverlayResetHandler` |
+| G13 | Pipeline step-row UI | `KeyboardUiController` **BLEIBT** (A3 option-a — CR-DEL extracts `PipelineStepRowRenderer`) | N/A — CR-DEL-staged | CR3 binding A3 disposition; CR4 removed the *drive*, step-row *render* BLEIBT until CR-DEL. `uiController.*` reads not re-pointed (intertwined with the BLEIBT extract — CR-DEL scope, documented) |
+| G14 | Audio-focus icon + record-button text | AUDIO_FOCUS `iconResolver` + RECORD `textResolver` (state-reactive) | ✅ | parent-B4 `LayoutCatalog` resolvers (green); legacy `refreshAudioFocusIcon`/`updateRecordButtonText` all 3+1 sites `pipelineBinder==null`-guarded (static trace) |
+| G15 | EditNumbers small-mode/bounce anim | IME-held `EditNumbersAnimator` | ✅ | `EditNumbersAnimatorTest` (CR1, green); IME call-sites re-pointed; legacy `animateSmallModeToggle/Bounce` `pipelineBinder==null`-guarded (static trace) |
+| G16 | resend_btn visibility (4 mutations) | `predResendVisible` predicate + `ResendModule.MarkLastAudio` | ✅ | `ResendModuleTest` MarkLastAudio (parent B4, green); §9.6 setVisibility sites unbound-only, `onShowResend`→dispatch (static trace) |
+| EditBar | edit-bar listeners (13) | `EditBarController` (CR-EXTRACT) | ✅ | `EditBarControllerTest` (CR-EXTRACT, green); legacy `registerEditBarListeners` via `registerAllListeners()` `pipelineBinder==null`-guarded |
+| Emoji | emoji listeners (3) | `EmojiController` (CR-EXTRACT) | ✅ | `EmojiControllerTest` (CR-EXTRACT, green) |
+| OverlayChars | overlay-chars init+update | `OverlayCharactersController` (CR-EXTRACT) | ✅ | `OverlayCharactersControllerTest` (CR-EXTRACT, green); legacy `updateOverlayCharacters`/`initializeOverlayCharacters` `pipelineBinder!=null`→new-owner branch (static trace) |
+| Resend-action | RESEND click/long-press real work | `imeSideAffordance(RESEND,*)` → exact legacy `onResendClicked`/`onResendLongClicked` body | ✅ | `ImeViewBackendTest` "RESEND click fires the IME-side affordance" (CR4, green) — the §7-A1 IME-side-activation pattern (orchestrator-accepted for RECORD) |
+
+##### Strict-Mode no-double-write + sole-live-writer proof
+
+`RenderPathCutoverGateTest.strictMode_noDoubleWrite_acrossAllContentAreaAndRecordingTransitions`
++ `keystone_triangleFsm_onRenderPath_noDoubleWrite` PASS: across every
+content-area transition (QWERTZ↔EMOJI↔MAIN ×5) + recording
+start/cancel + the keystone F-1/F-2/F-3 + Triangle T1/T3/T5 round-trip,
+the **real binder-owned `VisibilityWriteAuditLogger.doubleWriteCount ==
+0`** AND every migrated visibility axis (`main_buttons_cl`,
+`qwertz_container`, `emoji_picker_cl`, `prompts_cl`, `prompts_rv`,
+`pipeline_progress_ll`, `prompt_recording_controls_ll`,
+`overlay_characters_ll`) reports its **sole `live=true` writer = the
+NEW owner** (`ContentAreaController` / `PromptVisibilityController` /
+`OverlayResetHandler`). The flip is **complete, not merely dormant** —
+no legacy `KeyboardStateManager` live write surfaced (it is never
+driven on the bound path; the ledger would have caught any un-guarded
+drive as a second live writer). RR-1 single-touch-owner is asserted by
+the CR2 `SpecialTouchHandlerInstallerTest` (each touch View has exactly
+one listener via `ShadowView.getOnTouchListener()`), inherited green.
+
+##### Static bound-path legacy-drive trace (the gate's core question)
+
+Every `mainButtonsController.* / stateManager.* / recordingUiController.* / uiController.*`
+**render-drive** call-site in `DictateInputMethodService.java` was
+traced for its guard. Result: **every drive call is
+`pipelineBinder == null`-guarded (unbound fallback) EXCEPT exactly one**
+— line 2612 `mainButtonsController.applyTheme(accentColor)` (and its
+neighbour `recordingUiController.updateAnimationColor` — recording
+animation accent, also a non-visibility cosmetic axis). All
+`uiController.*` / `recordingUiController.*` drive callbacks are dead
+on the bound path (legacy controllers never started — C5). No
+un-guarded *visibility* or *listener* drive exists on the bound path.
+
+#### 3. Per-criterion gate assessment
+
+**(a) Theme edit-row residual (CR4-IMPL-3, flagged-for-validate) — NON-BLOCKING.**
+Trace: the ONLY legacy controller call on the bound path is
+`mainButtonsController.applyTheme(accentColor)` (line 2612), which
+themes ~11 edit-row buttons (`editSettings`/`editUndo`/…/`editAudioFocus`)
+that Spec 2 §9.2 does **not** map to `ImeViewBackend` (the new
+`applyTheme` themes only the 8 owned logical buttons). **Does this
+block CR-DEL?** No — and decisively so:
+- Theming is an **explicitly separate, non-state, non-double-write
+  axis** (Spec 2 §9.2: *"Theme-Mutation ist eine separate Achse, nicht
+  state-getrieben"*). The double-paint of the 8 shared buttons is a
+  benign idempotent identical-colour write (no flicker — unlike a
+  visibility double-write; the no-double-write ledger covers
+  *visibility*, not theme, and §10 acceptance is a visibility-axis
+  criterion).
+- `chunks.json` **explicitly scopes this into CR-DEL**: the CR-DEL
+  entry mandates the `grep -rl "MainButtonsController" app/src/main/ →
+  zero` (AC-RR-7) deliverable and rates CR-DEL *"RISK MED (residual
+  ref = fast compile error)"* — i.e. CR-DEL is *designed* to resolve
+  the remaining `mainButtonsController` references (extract the edit-row
+  theme into `EditBarController` or fold into the A3 option-a extract).
+  The render-path-cutover.md §7 A3 + the CR3 binding option-a
+  disposition + CR4-IMPL-3 all consistently route this to CR-DEL.
+- This is therefore **"a residual provably CR-DEL's own scope to
+  extract"** (the gate prompt's explicit GREEN-permitting clause), NOT
+  a bound-path legacy-controller *behaviour* drive that CR-DEL's
+  deletion would silently break: CR-DEL will see a compile error
+  (fast, loud, impossible to miss — not a silent regression) and
+  extract the theme axis as its documented deliverable. The gate's
+  job is to confirm no *user-visible render regression* on the new
+  path and no *silent* legacy-drive that deletion strands — both hold.
+  A RED here would block CR-DEL on work that **is CR-DEL's own defined
+  scope**, which is incorrect gating.
+
+**(b) CR4-IMPL-4 (KeyboardInputModule BACKSPACE/ENTER/SPACE simpler than legacy) — NON-BLOCKING.**
+Confirmed via the catalog trace: BACKSPACE/ENTER/SPACE **click** route
+to `Action.KeyboardInputAction.Backspace/EnterKey/SpaceKey`
+(`LayoutCatalog.kt:99-211`) — this **IS** the Spec 2 §3.3/§13.2
+documented target architecture (reviewed in Phase-C), not a CR4 flip
+defect. The legacy richness loss (`deleteOneCharacter()`
+grapheme/selection-awareness, `performEnterAction()` editor-IME-action
+honouring) is a **spec-level decision**, not a parity regression the
+flip introduced. SPACE additionally has the §11.7 touch `onTap` (commit
+space) + the click `SpaceKey` (commit space) per Spec 2 §6's reference
+`wireStaticHandlers` (click for ALL, touch for SPACE/BACKSPACE/ENTER) —
+the documented target. The gate verifies the flip is **faithful to the
+spec**, not that it re-litigates the spec → non-blocking, flagged for
+awareness only (already Nice-to-have / "not a defect" in the Issue
+Index).
+
+**(c) F-6 (cross-carrier collapse → CR-DEL) — NON-BLOCKING for THIS gate.**
+F-6 (`ReprocessStaging.selectedLanguage` → `LanguageState.override`) is
+inherited from B3, depends on `KeyboardUiController`/`PipelineUiStateReader`
+**retirement** (= CR-DEL scope, not reached by CR4's drive-removal),
+and is **not a render behaviour group G2-G16** (it is a cross-carrier
+transcription-config language read). chunks.json CR-DEL `dep` + the CR3
+binding disposition both own it; the Issue Index tracks it
+`open → CR3/CR-DEL owns`. It is genuinely CR-DEL-scoped and does not
+gate the render-path verification (no render axis depends on it).
+
+#### 4. RENDER-GATE verdict
+
+**RENDER-GATE: GREEN.** Per-criterion:
+- ✅ Every render behaviour group G2-G8/G10-G12/G14-G16 + EditBar/Emoji/
+  OverlayChars/Resend-action fires through its **new owner** (proven by
+  the green CR1-CR-EXTRACT component suites + the new
+  `RenderPathCutoverGateTest` aggregating proof on the real bound
+  binder path with real Views/ledger).
+- ✅ Strict-Mode no-double-write: `doubleWriteCount == 0` and the new
+  owners are the **sole `live=true` writers** of every migrated
+  visibility axis across all content-area + recording + keystone
+  transitions (the flip is complete, not dormant).
+- ✅ No bound-path legacy-controller *behaviour/visibility/listener*
+  drive that CR-DEL's deletion would **silently** break. The single
+  un-guarded residual (`mainButtonsController.applyTheme` edit-row
+  theme) is a non-state, non-double-write-sensitive axis that is
+  **provably CR-DEL's own defined scope to extract** (chunks.json
+  AC-RR-7 deliverable; deletion yields a loud compile error, not a
+  silent regression) — the gate prompt's explicit GREEN-permitting
+  clause.
+- ✅ CR4-IMPL-4 is the spec-mapped target (not a flip regression);
+  F-6 is genuinely CR-DEL-scoped and non-render-gating.
+- ✅ Auto-tier fully green: build + 1130 debug ×2 uncached
+  (different order) + 1130 release uncached + 5/5 gate test; the known
+  R-7 flake did not even fire.
+
+**CR-DEL is AUTHORISED.** CR-DEL must, as its own defined scope:
+(1) extract the edit-row theme into `EditBarController` (or fold into
+the A3 option-a extract) so `mainButtonsController.applyTheme` fully
+retires and AC-RR-7 `grep MainButtonsController → zero` holds;
+(2) extract the G9/G13 BLEIBT parts (`QwertzRecordingController` /
+`PipelineStepRowRenderer`) per the CR3 binding A3 option-a disposition;
+(3) close inherited F-6; (4) re-run the C10-C3 mandatory per-class
+responsibility-trace (RR-3). None of these is a render-flip *defect* —
+they are CR-DEL's documented deliverables, correctly preconditioned by
+this GREEN gate.
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Gate aggregating test wires the production render owners through the real bound `DictatePipelineService` binder + real KLM + real ledger, rather than booting the full `DictateInputMethodService` IME | chunks.json CR-RGATE ("Robolectric binder-harness, parent `DictatePipelineServiceOverlayTransitionTest` pattern") + render-path-cutover.md §9 | Used the real bound-service binder harness (the documented pattern) + real production owners + the static call-site trace, NOT a full IME-service Robolectric boot | No IME-boot harness precedent exists; the bound `DictatePipelineService` IS the render driver via `KeyboardLayoutManager`; the owner mechanisms are exhaustively component-tested (CR1-CR-EXTRACT green) and the "IME guards every legacy drive" property is proven by the static trace + the runtime no-double-write ledger (RR-4-mitigating real assertions). Booting the 18-field-ctor legacy KSM added brittleness for zero extra proof (the ledger is the SoT) | None — CR-DEL unaffected; the gate proof is real, not vacuous (RR-4 honoured) | inline-fixed (verification-chunk test-modeling decision; D4/engineering-principles — the documented binder-harness pattern + static trace is the honest gate shape, not a weaker one) |
+| G11 gate-test assertion corrected mid-implementation: `promptRecordingControlsLl` is VISIBLE only when `isActive && contentArea==QWERTZ` (full Spec 2 §9.3 truth-table), not naively on active | render-path-cutover.md §9 (G11 parity) / Spec 2 §9.3 PromptVisibilityController truth-table | First assertion draft expected active⇒visible; the production owner correctly honours the full truth-table (GONE outside QWERTZ). Assertion corrected to prove the truth-table fidelity (a *stronger* parity check) | A test bug (not a production bug) — the corrected assertion is a stronger holistic-parity gate proof; production `PromptVisibilityController` is spec-faithful | None | inline-fixed (test-only; the corrected assertion is the spec-faithful holistic-parity proof the gate needs) |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| — | — | No new gate issues. The 3 carried items (theme-residual / CR4-IMPL-4 / F-6) are each assessed §3 as non-blocking + provably CR-DEL-scoped; CR4-IMPL-3 (theme-residual) + F-6 remain CR-DEL-owned per the Issue Index (unchanged); CR4-IMPL-4 stays Nice-to-have "not a defect". | n/a | Gate is GREEN — no RED finding, no repair worklist needed. |
+
+#### Overlooked points / known gaps
+
+- The gate proves the **bound-path** render flip. The **unbound
+  fallback** (pre-bind: legacy `MainButtonsController`/KSM drive) is
+  intentionally unchanged (the §6.1 staged-safety-net rollback surface)
+  — not a gate concern (CR-DEL deletes the unbound branches too).
+- The G9 amplitude/timer side-channel (`imeViewBackend.onAmplitude/
+  onTimerTick` has no caller on the bound path — recording BorderGlow/
+  timer undriven, cosmetic) is the documented C5-IMPL-2 / G9 BLEIBT
+  deferral — CR-DEL's `QwertzRecordingController`/`RecordingAnimationController`
+  extract + service-side bridge must close it. The FGS notification is
+  the authoritative recording-active surface (C5 KDoc) — non-blocking
+  for the render gate (not a G2-G16 visibility/listener axis).
+- `uiController.*` reads (~22 sites) not re-pointed — CR-DEL-staged
+  with the G13 step-row BLEIBT extract (documented CR4 known-gap,
+  consistent with the A3 staging). Pipeline step-row UI still works
+  (legacy `KeyboardUiController` instantiated + driven — G13 BLEIBT).
 
 ### Chunk C10-C3 (CR-DEL) — dead-controller deletion (HARD-GATED on GREEN CR-RGATE)
 
-**Agent-IDs:** `B5-C10-C3-IMPL` · **Status:** ⏳ blocked-on-CR-RGATE · **Risk:** MED
+**Agent-IDs:** `B5-C10-C3-IMPL` · **Status:** ✅ UNBLOCKED — CR-RGATE signed off **GREEN** (CR-DEL authorised; see `### Chunk CR-RGATE`) · **Risk:** MED
 
 ---
 

@@ -97,6 +97,8 @@ import net.devemperor.dictate.state.render.OverlayCharactersController;
 import net.devemperor.dictate.state.render.OverlayCharactersViews;
 import net.devemperor.dictate.state.render.OverlayResetHandler;
 import net.devemperor.dictate.state.render.OverlayResetViews;
+import net.devemperor.dictate.state.render.PipelineStepRowRenderer;
+import net.devemperor.dictate.state.render.QwertzRecordingController;
 import net.devemperor.dictate.state.render.PromptVisibilityController;
 import net.devemperor.dictate.state.render.PromptVisibilityViews;
 import net.devemperor.dictate.state.render.RealMotionSurface;
@@ -124,12 +126,14 @@ import java.util.concurrent.Executors;
 public class DictateInputMethodService extends InputMethodService
         implements PromptQueueManager.PromptQueueCallback,
                    PipelineOrchestrator.PipelineCallback,
-                   MainButtonsController.Callback,
-                   // B5 CR-EXTRACT — the new edit-bar / emoji owner
-                   // callbacks are strict subsets of
-                   // MainButtonsController.Callback (parity contract), so
-                   // the existing callback method bodies satisfy both
-                   // without duplication.
+                   // CR-DEL — MainButtonsController.Callback removed
+                   // (MainButtonsController deleted). The button-action
+                   // method bodies stay as plain IME methods: the
+                   // EditBarController/EmojiController callbacks (strict
+                   // ISP subsets) keep their @Override, and the
+                   // RECORD/RESEND/BACKSPACE/TRASH/PAUSE/ENTER methods are
+                   // invoked via the ImeViewBackend imeSideAffordance hook
+                   // + SpecialTouchHandlerInstaller (no interface needed).
                    EditBarController.Callback,
                    EmojiController.Callback {
 
@@ -204,7 +208,11 @@ public class DictateInputMethodService extends InputMethodService
 
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private PipelineOrchestrator pipelineOrchestrator;
-    private KeyboardUiController uiController;
+    // CR-DEL (Theme C-R / C10-C3) — KeyboardUiController DELETED; the
+    // pipeline-progress step-row UI + PipelineUiState machinery (Spec 1
+    // §9.2 "stepRows bleibt View-side" BLEIBT) is relocated into
+    // PipelineStepRowRenderer (A3 option-a, the binding CR3 disposition).
+    private PipelineStepRowRenderer pipelineStepRowRenderer;
 
     /**
      * D-13 (Epic §4 Block C1): the per-view legacy language-controller
@@ -250,7 +258,7 @@ public class DictateInputMethodService extends InputMethodService
 
     /**
      * Service-side pipeline observer. Held as a field so it can be detached
-     * via {@link KeyboardUiController#removeCallback(PipelineUiCallback)} on
+     * via {@link net.devemperor.dictate.state.render.PipelineStepRowRenderer#removeCallback(PipelineUiCallback)} on
      * view recreate. Phase 1 cross-phase refactor (Quality-Gate K-2): the
      * Service registers via {@code addCallback}, not the deprecated
      * single-slot {@code setCallback}, so multiple {@code PipelineUiCallback}
@@ -267,9 +275,11 @@ public class DictateInputMethodService extends InputMethodService
     private RecordingManager recordingManager;
     private BluetoothScoManager bluetoothScoManager;
     private PromptQueueManager promptQueueManager;
-    private KeyboardStateManager stateManager;
+    // CR-DEL — KeyboardStateManager + MainButtonsController DELETED (their
+    // axes owned by the armed CR3 controllers / catalog resolvers /
+    // ImeViewBackend / EditBar+Emoji+OverlayChars owners — RR-3 trace
+    // PASS). No unbound fallback (point-of-no-return).
     private InfoBarController infoBarController;
-    private MainButtonsController mainButtonsController;
 
     // B5 F-2 — in-IME overlay-permission onboarding info-bar (Spec 3
     // §5.3). The IME owns this view surface (co-located with
@@ -336,7 +346,13 @@ public class DictateInputMethodService extends InputMethodService
 
     // Recording controllers (extracted from God-Class)
     private RecordingStateController recordingStateController;
-    private RecordingUiController recordingUiController;
+    // CR-DEL — RecordingUiController DELETED; its recording-axis
+    // Main-button side-effects are dead on the bound path (legacy
+    // controller never started, C5) and collapsed onto
+    // RecordingAnimationController + catalog resolvers + predResendVisible.
+    // The still-live QWERTZ rec-button + prompts-visualizer (G9 BLEIBT,
+    // Spec 2 §9.4) is extracted into QwertzRecordingController.
+    private QwertzRecordingController qwertzRecordingController;
 
     // Prompt data flow: InvalidationTracker auto-reloads prompts when DB changes
     private DictateDatabase dictateDb;
@@ -754,16 +770,17 @@ public class DictateInputMethodService extends InputMethodService
             () -> { onRecordClicked(); return kotlin.Unit.INSTANCE; },
             () -> {
                 // Re-apply recording/pipeline icon after layout rebuild (shift toggle, layout switch)
-                if (recordingUiController != null && recordingStateController != null) {
-                    if (uiController != null && uiController.getState() instanceof PipelineUiState.Running) {
+                if (qwertzRecordingController != null && recordingStateController != null) {
+                    if (pipelineStepRowRenderer != null
+                            && pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
                         // Pipeline active — layout rebuild: we need a fresh one-shot setup AND
                         // an immediate timer text update so the button isn't stale until the next tick.
-                        PipelineUiState.Running s = (PipelineUiState.Running) uiController.getState();
-                        recordingUiController.enterPipelineDisplay(s);
-                        recordingUiController.updatePipelineTimer(
-                            s, uiController.getLatestPipelineElapsedMs());
+                        PipelineUiState.Running s = (PipelineUiState.Running) pipelineStepRowRenderer.getState();
+                        qwertzRecordingController.enterPipelineDisplay(s);
+                        qwertzRecordingController.updatePipelineTimer(
+                            s, pipelineStepRowRenderer.getLatestPipelineElapsedMs());
                     } else {
-                        recordingUiController.updateQwertzRecButton(
+                        qwertzRecordingController.updateQwertzRecButton(
                             recordingStateController.getState().isRecordingOrPaused()
                         );
                     }
@@ -830,106 +847,57 @@ public class DictateInputMethodService extends InputMethodService
 
         View pipelineProgressLl = dictateKeyboardView.findViewById(R.id.pipeline_progress_ll);
 
-        // KeyboardStateManager (deterministic visibility calculator)
-        // Note: recordingStateController and uiController are initialized after stateManager,
-        // but lambdas are evaluated lazily, so this is safe.
-        // C15: action_row + input_row are gone (MotionLayout owns the layout
-        // switch); KeyboardViews no longer carries them.
-        KeyboardViews keyboardViews = new KeyboardViews(
-            mainButtonsClGroup, editButtonsKeyboardLl, promptsCl, emojiPickerCl,
-            qwertzContainer, overlayCharactersLl, pauseButton, trashButton,
-            promptRecordingControlsLl, promptTrashBtn,
-            promptsRv, pipelineProgressLl,
-            recordPulseLayout, spaceButton, backspaceButton,
-            enterButton, resendButton, audioFocusButton);
-        stateManager = new KeyboardStateManager(
-            keyboardViews,
-            () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Active,
-            () -> recordingStateController != null && recordingStateController.getState() instanceof RecordingState.Paused,
-            () -> pipelineOrchestrator != null && pipelineOrchestrator.isRunning(),
-            () -> DictatePrefsKt.get(sp, Pref.RewordingEnabled.INSTANCE),
-            keepAwake -> { updateKeepScreenAwake(keepAwake); return kotlin.Unit.INSTANCE; },
-            infoBarController,
-            () -> uiController != null && uiController.getState() instanceof PipelineUiState.Running,
-            /* isReprocessStaging */ () -> uiController != null
-                    && uiController.getState() instanceof PipelineUiState.ReprocessStaging
-        );
+        // CR-DEL (Theme C-R / C10-C3) — KeyboardStateManager DELETED.
+        // Its visibility axes are owned by the armed CR3 controllers
+        // (ContentAreaController / PromptVisibilityController /
+        // OverlayResetHandler) + the catalog PAUSE enabledResolver/
+        // alphaResolver, all state-reactive on the bound path. There is
+        // no unbound fallback any more (the drive-call rollback surface
+        // collapses at the point-of-no-return — chunks.json CR-DEL /
+        // CR-RGATE GREEN §4). KeyboardViews removed with the class.
 
-        // KeyboardUiController (wraps pipeline progress views, delegates visibility to stateManager).
-        // Block-1a Quick-Win (Spec 1 §11.2.2 step 2): the controller now also owns the
-        // record-button-appearance resolver for the recording axis. The dictate-button
-        // label provider is wired here so the Idle branch in
-        // KeyboardUiController.applyRecordButtonForRecording can read it without
-        // taking a dependency on the LanguageResolver / SharedPreferences plumbing.
-        uiController = new KeyboardUiController(new KeyboardUiController.PipelineViews(
+        // CR-DEL — KeyboardUiController DELETED; its pipeline-progress
+        // step-row UI + PipelineUiState machinery (the Spec 1 §9.2
+        // "stepRows bleibt View-side" BLEIBT) is relocated verbatim into
+        // PipelineStepRowRenderer (state.render package, A3 option-a —
+        // the binding CR3 disposition so AC-RR-7 zero-greps clean). The
+        // onPipelineUiStateChanged hook replaces the legacy
+        // stateManager.refresh() — a no-op on the bound path (prompts /
+        // pipeline-progress container visibility is owned reactively by
+        // the armed PromptVisibilityController off the orchestrator's
+        // state.pipeline; the renderer owns only the step-row CONTENT +
+        // the record-button-from-pipeline-state, not container
+        // visibility).
+        pipelineStepRowRenderer = new PipelineStepRowRenderer(new PipelineStepRowRenderer.PipelineViews(
             dictateKeyboardView.findViewById(R.id.pipeline_steps_container),
             dictateKeyboardView.findViewById(R.id.pipeline_scroll_view),
             recordButton,
             infoCl,
             LayoutInflater.from(context),
             mainHandler
-        ), stateManager, () -> getDictateButtonText());
+        ), () -> kotlin.Unit.INSTANCE, () -> getDictateButtonText());
 
         StaggeredGridLayoutManager promptsLayoutManager =
                 new StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.HORIZONTAL);
         promptsLayoutManager.setGapStrategy(StaggeredGridLayoutManager.GAP_HANDLING_MOVE_ITEMS_BETWEEN_SPANS);
         promptsRv.setLayoutManager(promptsLayoutManager);
 
-        // MainButtonsController: handles all button registration, overlay init, and theming
-        mainButtonsController = new MainButtonsController(
-            new MainButtonViews(
-                recordButton, resendButton, backspaceButton, trashButton,
-                spaceButton, pauseButton, enterButton, editSettingsButton,
-                editUndoButton, editRedoButton, editCutButton, editCopyButton,
-                editPasteButton, editEmojiButton, editNumbersButton, editKeyboardButton,
-                editHistoryButton, emojiPickerCloseButton, emojiPickerView,
-                overlayCharactersLl, pipelineCancelBtn, infoYesButton, infoNoButton,
-                recordPulseLayout,
-                editAudioFocusButton, audioFocusButton
-            ),
-            sp, stateManager, this,
-            () -> getCurrentInputConnection(),
-            qwertzKeyboardView.getKeyPressAnimator()
-        );
-        // CR4 (Theme C-R / AC-RR-6 — the render-layer AC-10 analogue):
-        // the legacy MainButtonsController render drive
-        // (registerAllListeners / initializeKeyPressAnimations /
-        // refreshAudioFocusIcon / applyTheme / updateOverlayCharacters /
-        // updateRecordButtonText / setResendEnabled /
-        // animateSmallModeToggle|Bounce) is REMOVED here. The new path is
-        // the sole render driver once the service is bound:
-        // ImeViewBackend.wireStaticHandlers owns click + key-press
-        // animation + long-press, SpecialTouchHandlerInstaller owns the
-        // SPACE/BACKSPACE/ENTER touch, EditBarController/EmojiController
-        // own the edit-bar/emoji listeners, OverlayCharactersController
-        // owns the overlay-chars strip, the catalog AUDIO_FOCUS
-        // iconResolver + RECORD textResolver drive state-reactively, and
-        // ContentAreaController/PromptVisibilityController/OverlayResetHandler
-        // own visibility — all flipped per-axis atomically in
-        // attachImeViewBackendIfReady() (RR-1/RR-2: never both wired at
-        // once; render-path-cutover.md §5/§6.1).
-        //
-        // UNBOUND FALLBACK (the established pre-bind pattern, mirrors
-        // attachImeViewBackendIfReady's pipelineBinder==null early-return
-        // at line ~1117): the reactive state-collect lives in the bound
-        // DictatePipelineService; with no binder there is no new render
-        // path, so the legacy MainButtonsController must drive until
-        // onServiceConnected re-runs attachImeViewBackendIfReady and
-        // flips to the new owners. The legacy controller stays
-        // INSTANTIATED (compile-safe) but DRIVEN only on the unbound
-        // path — the drive-call surface IS the rollback switch (no
-        // boolean; §6.1 staged-safety-net).
-        if (pipelineBinder == null) {
-            mainButtonsController.registerAllListeners();
-            mainButtonsController.initializeKeyPressAnimations();
-            // Block 2 (Quality-Gate K-Block-2): paint the audio-focus
-            // icon from the persisted Pref value once the freshly
-            // inflated buttons exist (unbound-fallback only — on the
-            // bound path the catalog AUDIO_FOCUS iconResolver drives it
-            // state-reactively).
-            mainButtonsController.refreshAudioFocusIcon(
-                DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE));
-        }
+        // CR-DEL (Theme C-R / C10-C3 / AC-RR-6+AC-RR-7 = Epic AC-7+AC-10
+        // render half) — MainButtonsController DELETED. Every render axis
+        // it owned has a verified-present, IME-attached new owner (RR-3
+        // per-class trace, PASS): ImeViewBackend.wireStaticHandlers (click
+        // + long-press + key-press-animation), SpecialTouchHandlerInstaller
+        // (SPACE/BACKSPACE/ENTER touch), EditBarController/EmojiController
+        // (edit-bar/emoji listeners + the edit-row applyTheme residual),
+        // OverlayCharactersController (overlay-chars strip), the catalog
+        // AUDIO_FOCUS iconResolver + RECORD textResolver (state-reactive),
+        // ImeViewBackend.applyTheme (8 logical buttons), the IME-held
+        // EditNumbersAnimator (small-mode/bounce). There is NO unbound
+        // fallback any more — the drive-call rollback surface (§6.1
+        // staged-safety-net) collapses at the point-of-no-return
+        // (chunks.json CR-DEL / CR-RGATE GREEN §4). The keyboard always
+        // binds while open (bindService in onCreateInputView;
+        // onServiceConnected re-runs the consolidation point).
 
         // C15 — KeyboardLayoutModeController + KSM.setLayoutModeController
         // are gone (Spec 2 §11.8 5d). MotionLayout + LayoutCatalog now own
@@ -945,42 +913,21 @@ public class DictateInputMethodService extends InputMethodService
             onTrashClicked();
         });
 
-        // RecordingUiController (needs views + animation)
-        float displayDensity = recordButton.getResources().getDisplayMetrics().density;
-        net.devemperor.dictate.widget.RecordingAnimation recordingAnimation =
-            new net.devemperor.dictate.widget.BorderGlowAnimation(
-                DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE),
-                AppCompatResources.getDrawable(context, R.drawable.ic_baseline_send_20),
-                new net.devemperor.dictate.widget.AmplitudeVisualizerDrawable.BarCountMode.Fixed(30),
-                0.35f,  // max brightness boost
-                displayDensity
-            );
-        // Block-1a Quick-Win: the previously combined "audio file exists AND
-        // Pref.ResendButton" lambda is split into two independent axes so the
-        // isResendVisible helper receives them separately (mirrors the
-        // future Block-5 LayoutCatalog RESEND-slot predicate, Spec 2 §3.2).
-        // The recordButton-appearance lambda points at
-        // KeyboardUiController.applyRecordButtonForRecording — that resolver
-        // combines this with the pipeline axis it already owns.
-        // The pipelineStateProvider supplies the live pipeline axis to the
-        // RecordingUiController's resend-visibility call sites so a
-        // non-stop Idle transition (view-recreate restoreUiState, language-
-        // flip, cancel-recording paths) cannot evaluate against a stale
-        // PipelineUiState.Idle literal. SoT is KeyboardUiController.state.
-        recordingUiController = new RecordingUiController(
-            recordButton, pauseButton, resendButton,
-            recordingAnimation, stateManager, this,
-            () -> getDictateButtonText(),
-            () -> DictatePrefsKt.get(sp, Pref.Animations.INSTANCE),
-            () -> new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
-            () -> DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
-            () -> uiController != null ? uiController.getState() : PipelineUiState.Idle.INSTANCE,
-            newRecordingState -> {
-                if (uiController != null) {
-                    uiController.applyRecordButtonForRecording(newRecordingState);
-                }
-                return kotlin.Unit.INSTANCE;
-            },
+        // CR-DEL (Theme C-R / C10-C3 / G9 BLEIBT, A3 option-a) —
+        // RecordingUiController DELETED. Its recording-axis Main-button
+        // side-effects (record/pause/resend appearance, BorderGlow
+        // animation, resend-visibility) are DEAD on the bound path: the
+        // legacy recordingStateController is never started on the new path
+        // (C5; isEffectiveRecordingIdle KDoc) and the orchestrator's
+        // RecordingModule + RecordingAnimationController + the catalog
+        // resolvers + predResendVisible own them reactively. The only
+        // still-LIVE responsibility — the QWERTZ rec-button +
+        // prompts-visualizer (Spec 2 §9.4 "bleibt — QWERTZ-Bereich ist
+        // orthogonal, eigener Controller") — is extracted verbatim into
+        // QwertzRecordingController (the binding CR3 A3 option-a so the
+        // kill-list class deletes and AC-RR-7 zero-greps clean).
+        qwertzRecordingController = new QwertzRecordingController(
+            context,
             () -> qwertzKeyboardView != null ? qwertzKeyboardView.findButtonForAction(KeyAction.RECORD) : null,
             promptRecIndicatorBtn,
             promptPauseBtn,
@@ -1025,17 +972,16 @@ public class DictateInputMethodService extends InputMethodService
         audioFocusListener = (changedPrefs, key) -> {
             if (Pref.AudioFocus.INSTANCE.getKey().equals(key)) {
                 boolean newValue = DictatePrefsKt.get(changedPrefs, Pref.AudioFocus.INSTANCE);
-                // CR4 (Theme C-R / G14): on the BOUND path the catalog
-                // AUDIO_FOCUS iconResolver drives the icon
-                // state-reactively — Pref.AudioFocus is mirrored into
+                // CR-DEL (Theme C-R / G14): the catalog AUDIO_FOCUS
+                // iconResolver drives the icon state-reactively —
+                // Pref.AudioFocus is mirrored into
                 // state.audio.audioFocusEnabledPref by PipelinePrefMirror,
                 // which emits a fresh state → the attached ImeViewBackend
-                // re-renders the AUDIO_FOCUS slot. The imperative legacy
-                // refreshAudioFocusIcon is the UNBOUND fallback only
-                // (no reactive state-collect without a binder).
-                if (pipelineBinder == null && mainButtonsController != null) {
-                    mainButtonsController.refreshAudioFocusIcon(newValue);
-                }
+                // re-renders the AUDIO_FOCUS slot. The legacy
+                // mainButtonsController.refreshAudioFocusIcon unbound
+                // fallback is GONE (MainButtonsController deleted; the
+                // drive-call rollback surface collapses at the
+                // point-of-no-return).
                 if (recordingStateController != null) {
                     recordingStateController.setAudioFocusRuntime(newValue);
                 }
@@ -1053,8 +999,8 @@ public class DictateInputMethodService extends InputMethodService
         servicePipelineCallback = new PipelineUiCallback() {
             @Override
             public void onPipelineTimerTick(@NonNull PipelineUiState.Running state, long elapsedMs) {
-                if (recordingUiController != null) {
-                    recordingUiController.updatePipelineTimer(state, elapsedMs);
+                if (qwertzRecordingController != null) {
+                    qwertzRecordingController.updatePipelineTimer(state, elapsedMs);
                 }
             }
 
@@ -1082,9 +1028,9 @@ public class DictateInputMethodService extends InputMethodService
                 // label must re-resolve. Idempotent (same code → same label).
                 refreshLanguageChip();
 
-                if (recordingUiController == null) return;
+                if (qwertzRecordingController == null) return;
                 if (newState instanceof PipelineUiState.Idle) {
-                    recordingUiController.updateQwertzRecButton(false);  // QWERTZ → Mic-Icon
+                    qwertzRecordingController.updateQwertzRecButton(false);  // QWERTZ → Mic-Icon
                 } else if (newState instanceof PipelineUiState.Running) {
                     // One-shot setup only on the actual Idle/Preparing → Running transition.
                     // Running → Running transitions (step completion, auto-enter toggle) skip
@@ -1092,18 +1038,18 @@ public class DictateInputMethodService extends InputMethodService
                     // a trailing updatePipelineTimer() keeps the text in sync.
                     PipelineUiState.Running runningState = (PipelineUiState.Running) newState;
                     if (!(oldState instanceof PipelineUiState.Running)) {
-                        recordingUiController.enterPipelineDisplay(runningState);
+                        qwertzRecordingController.enterPipelineDisplay(runningState);
                     }
-                    recordingUiController.updatePipelineTimer(
-                        runningState, uiController.getLatestPipelineElapsedMs());
+                    qwertzRecordingController.updatePipelineTimer(
+                        runningState, pipelineStepRowRenderer.getLatestPipelineElapsedMs());
                 } else if (newState instanceof PipelineUiState.Preparing) {
                     // Upload phase: make sure the QWERTZ button shows the idle mic icon
                     // (clears any leftover recording-state rendering).
-                    recordingUiController.updateQwertzRecButton(false);
+                    qwertzRecordingController.updateQwertzRecButton(false);
                 }
             }
         };
-        uiController.addCallback(servicePipelineCallback);
+        pipelineStepRowRenderer.addCallback(servicePipelineCallback);
 
         // ── 5. Rewire callbacks (connect long-lived objects to new UI controllers) ──
         // INVARIANT: Order is controllers (above) → rewireCallbacks() → restoreUiState()
@@ -1404,29 +1350,23 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * CR3 (Theme C-R / AC-RR-5) — attach the three R.10 visibility
-     * controllers ({@link ContentAreaController} G10, {@link
-     * PromptVisibilityController} G11, {@link OverlayResetHandler} G12)
-     * as {@code backendType=null} multi-backends (ambiguity A4 — parent
-     * B4 design, reused not reinvented), and wire the shared
-     * Strict-Mode ledger into the legacy {@link KeyboardStateManager}.
+     * CR3/CR4/CR-DEL (Theme C-R / AC-RR-5) — attach the R.10 visibility
+     * controllers ({@link ContentAreaController} G10 + the 4th
+     * editButtons axis, {@link PromptVisibilityController} G11, {@link
+     * OverlayResetHandler} G12) as {@code backendType=null}
+     * multi-backends (ambiguity A4 — parent B4 design, reused not
+     * reinvented) and {@code arm()} them.
      *
-     * <p><b>RR-2 — the load-bearing decision of this chunk.</b> Each
-     * controller is wrapped in a {@link RenderGate} constructed
-     * <em>dormant</em> ({@code armed=false}). While dormant the
-     * controller still receives every {@code render(state, mode)} tick
-     * (it is a fully-attached backend, view-recreate-safe), but it does
-     * <b>not</b> write the visibility axis — it only reports the
-     * <em>intended</em> write to the shared {@link
-     * net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger}.
-     * The legacy {@code KeyboardStateManager.applyVisibility()} remains
-     * the <b>sole LIVE writer</b> of the ContentArea / Promptbar /
-     * overlay-reset axes through CR3; the ledger proves it
-     * ({@code doubleWriteCount == 0}, Spec 2 §10). CR4 calls {@code
-     * arm()} on each gate <em>in the same chunk</em> it removes the KSM
-     * drive — the sole live writer flips KSM → controller with zero
-     * overlap (the exact CR1 RESEND-only / CR2 installDormant
-     * staged-safety-net, render-path-cutover.md §6 RR-2 / §6.1).
+     * <p><b>CR-DEL — the legacy KeyboardStateManager is DELETED.</b> The
+     * gates are {@code arm()}-ed (the controllers are the SOLE LIVE
+     * writer of the ContentArea / Promptbar / overlay-reset axes); the
+     * shared {@link
+     * net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger}
+     * ledger proves {@code doubleWriteCount == 0} because there is now
+     * exactly one writer per axis (the controller — no KSM half), as
+     * CR-RGATE's RenderPathCutoverGateTest verified GREEN. The
+     * dormant→armed staged-safety-net (CR3 dormant / CR4 arm) collapses
+     * here: no unbound fallback, the point-of-no-return.
      *
      * <p>Idempotent on view-recreate: the previous controllers are
      * detached in {@link #cleanupOldControllers()} / {@link
@@ -1438,14 +1378,13 @@ public class DictateInputMethodService extends InputMethodService
             return;
         }
 
-        // Wire the shared Strict-Mode ledger into the legacy KSM so its
-        // every visibility write is reported under "KeyboardStateManager"
-        // (the no-double-write proof's legacy half — Spec 2 §11.8 5c).
+        // CR-DEL — the legacy KeyboardStateManager (the no-double-write
+        // proof's legacy half) is DELETED. The ledger now only sees the
+        // armed controllers as live writers — `doubleWriteCount == 0`
+        // holds because there is exactly one (the controller per axis),
+        // proven by CR-RGATE's RenderPathCutoverGateTest.
         net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger auditLogger =
             pipelineBinder.getVisibilityWriteAuditLogger();
-        if (stateManager != null) {
-            stateManager.attachAuditLogger(auditLogger);
-        }
 
         // pipeline_progress_ll is resolved fresh from the inflated tree
         // (it is a local in the KSM-setup path, not a service field —
@@ -1455,8 +1394,13 @@ public class DictateInputMethodService extends InputMethodService
             dictateKeyboardView.findViewById(R.id.pipeline_progress_ll);
 
         contentAreaGate = new RenderGate("ContentAreaController", auditLogger);
+        // CR-DEL (RR-3 gap) — the 4th ContentArea axis: editButtonsKeyboardLl
+        // (Spec 2 §13 row 2, BLEIBT ContentArea-Achse). The deleted KSM
+        // owned it; relocated into ContentAreaController so no visibility
+        // axis is stranded by the deletion.
         contentAreaController = new ContentAreaController(
-            new ContentAreaViews(mainButtonsClGroup, qwertzContainer, emojiPickerCl),
+            new ContentAreaViews(mainButtonsClGroup, qwertzContainer, emojiPickerCl,
+                editButtonsKeyboardLl),
             contentAreaGate);
 
         promptVisibilityGate = new RenderGate("PromptVisibilityController", auditLogger);
@@ -1705,21 +1649,17 @@ public class DictateInputMethodService extends InputMethodService
                 pipelineOrchestrator.cancel();
             }
             pendingLivePromptChain = false;
-            // Note: PipelineConfig is owned by uiController; stopPipeline() nulls it below.
+            // Note: AutoEnterConfig is owned by pipelineStepRowRenderer; stopPipeline() nulls it below.
 
             bluetoothScoManager.unregisterReceiver();
 
             infoBarController.dismiss();
             setEffectiveContentArea(ContentArea.MAIN_BUTTONS);
-            // CR4 (RR-2): the legacy KSM refresh is the UNBOUND fallback
-            // only — on the bound path the armed visibility controllers
-            // own every axis (arming a gate while KSM still drove =
-            // double-write). The SetContentArea dispatch above already
-            // re-emits state → the armed controllers re-render.
-            if (pipelineBinder == null) {
-                stateManager.refresh();
-            }
-            uiController.stopPipeline();
+            // CR-DEL (RR-2): the legacy KSM refresh unbound fallback is
+            // GONE (KeyboardStateManager deleted). The SetContentArea
+            // dispatch above re-emits state → the armed visibility
+            // controllers re-render every axis reactively.
+            pipelineStepRowRenderer.stopPipeline();
             livePrompt = false;
             updatePromptButtonsEnabledState();
         }
@@ -1830,17 +1770,17 @@ public class DictateInputMethodService extends InputMethodService
      */
     private void cleanupOldControllers() {
         // Stop only the elapsed timer — no mode reset, no side-effects
-        if (uiController != null) {
-            // Capture the current auto-enter value so the upcoming fresh controller
+        if (pipelineStepRowRenderer != null) {
+            // Capture the current auto-enter value so the upcoming fresh renderer
             // (created in onCreateInputView) can re-adopt it in restoreUiState() — otherwise
             // a user's in-pipeline toggle would silently revert to the pref default on rotation.
-            KeyboardUiController.AutoEnterConfig cfg = uiController.getAutoEnterConfig();
+            PipelineStepRowRenderer.AutoEnterConfig cfg = pipelineStepRowRenderer.getAutoEnterConfig();
             restoreAutoEnter = (cfg != null) ? cfg.getAutoEnterActive() : null;
 
             // W1: Capture the active ReprocessStaging so we can re-enter it on
-            // the fresh controller. Only the data matters — the state itself
-            // is owned by the old controller and gets discarded.
-            PipelineUiState oldState = uiController.getState();
+            // the fresh renderer. Only the data matters — the state itself
+            // is owned by the old renderer and gets discarded.
+            PipelineUiState oldState = pipelineStepRowRenderer.getState();
             if (oldState instanceof PipelineUiState.ReprocessStaging) {
                 restoreReprocessStaging = (PipelineUiState.ReprocessStaging) oldState;
             } else {
@@ -1848,15 +1788,15 @@ public class DictateInputMethodService extends InputMethodService
             }
 
             // Phase 1 cross-phase: detach Service-side pipeline observer so the
-            // CopyOnWriteArrayList in the soon-to-be-discarded controller does
-            // not retain a reference. The new uiController will get a fresh
-            // servicePipelineCallback in onCreateInputView.
+            // CopyOnWriteArrayList in the soon-to-be-discarded renderer does
+            // not retain a reference. The new pipelineStepRowRenderer will get
+            // a fresh servicePipelineCallback in onCreateInputView.
             if (servicePipelineCallback != null) {
-                uiController.removeCallback(servicePipelineCallback);
+                pipelineStepRowRenderer.removeCallback(servicePipelineCallback);
                 servicePipelineCallback = null;
             }
 
-            uiController.stopActiveTimer();
+            pipelineStepRowRenderer.stopActiveTimer();
         }
         // D-13: deregister the input-languages prefs listener bound to the
         // old view. The fresh onCreateInputView re-registers a new one.
@@ -1910,26 +1850,50 @@ public class DictateInputMethodService extends InputMethodService
      * Must be called AFTER view-dependent controllers are created, BEFORE restoreUiState().
      */
     private void rewireCallbacks() {
-        // 1. RecordingStateController → new UI controllers
-        //    The closures reference Service fields (recordingUiController etc.)
-        //    which now point to the NEW controllers.
+        // 1. RecordingStateController → new UI owners.
+        //    CR-DEL: the legacy RecordingUiController is deleted. On the
+        //    bound path the legacy recordingStateController is NEVER
+        //    started (C5 — the orchestrator's RecordingModule owns
+        //    recording end-to-end; isEffectiveRecordingIdle KDoc), so
+        //    these callbacks never fire on the new path — the recording
+        //    BorderGlow/amplitude/timer is owned reactively by
+        //    RecordingAnimationController + the catalog resolvers (the
+        //    documented cosmetic C5-IMPL-2 side-channel gap; the FGS
+        //    notification is the authoritative recording-active surface).
+        //    The QWERTZ rec-button + visualizer half (the still-live
+        //    surface, G9 BLEIBT) is forwarded to QwertzRecordingController
+        //    for behaviour-equivalence parity should any legacy caller
+        //    reach these (kept compiling + routed through the relocated
+        //    owner — byte-equivalent to the deleted RecordingUiController
+        //    QWERTZ path).
         recordingStateController.setCallback(new RecordingStateController.Callback() {
             @Override
             public void onStateChanged(RecordingState oldState, RecordingState newState) {
                 mainHandler.post(() -> {
-                    recordingUiController.onStateChanged(oldState, newState);
+                    if (qwertzRecordingController != null) {
+                        qwertzRecordingController.updateQwertzRecButton(
+                            newState.isRecordingOrPaused());
+                    }
                     updatePromptButtonsEnabledState();
                 });
             }
 
             @Override
             public void onAmplitudeUpdate(float level) {
-                mainHandler.post(() -> recordingUiController.onAmplitudeUpdate(level));
+                mainHandler.post(() -> {
+                    if (qwertzRecordingController != null) {
+                        qwertzRecordingController.onAmplitude(level);
+                    }
+                });
             }
 
             @Override
             public void onTimerTick(long elapsedMs) {
-                mainHandler.post(() -> recordingUiController.onTimerTick(elapsedMs));
+                mainHandler.post(() -> {
+                    if (qwertzRecordingController != null) {
+                        qwertzRecordingController.onTimerTick(elapsedMs);
+                    }
+                });
             }
 
             @Override
@@ -1983,9 +1947,17 @@ public class DictateInputMethodService extends InputMethodService
         // 1. Recording state → UI
         RecordingState currentState = recordingStateController.getState();
         if (!(currentState instanceof RecordingState.Idle)) {
-            // Fake a state transition Idle → currentState so RecordingUiController
-            // builds the correct UI (button text, animation, visibility)
-            recordingUiController.onStateChanged(RecordingState.Idle.INSTANCE, currentState);
+            // CR-DEL: RecordingUiController deleted. The recording-axis
+            // record-button/animation/visibility is owned reactively by
+            // RecordingAnimationController + the catalog resolvers off
+            // the orchestrator's state.recording; only the QWERTZ
+            // rec-button (G9 BLEIBT) needs the imperative re-apply on a
+            // view-recreate restore (byte-equivalent to the deleted
+            // RecordingUiController.onStateChanged step 3).
+            if (qwertzRecordingController != null) {
+                qwertzRecordingController.updateQwertzRecButton(
+                    currentState.isRecordingOrPaused());
+            }
             updatePromptButtonsEnabledState();
             updateKeepScreenAwake(currentState.isRecordingOrPaused());
         }
@@ -1994,11 +1966,11 @@ public class DictateInputMethodService extends InputMethodService
         if (restoreReprocessStaging != null) {
             // W1: The user was editing the reprocess queue when the view was
             // recreated (rotation / theme change). Re-enter staging on the
-            // fresh controller so the record-button label, the editable
+            // fresh renderer so the record-button label, the editable
             // prompt queue, and the selected language all survive.
             PipelineUiState.ReprocessStaging staging = restoreReprocessStaging;
             restoreReprocessStaging = null;
-            uiController.enterReprocessStaging(
+            pipelineStepRowRenderer.enterReprocessStaging(
                 staging.getTargetSessionId(),
                 staging.getAudioDurationSeconds(),
                 staging.getEditableQueue(),
@@ -2018,28 +1990,24 @@ public class DictateInputMethodService extends InputMethodService
                 ? restoreAutoEnter
                 : DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
             restoreAutoEnter = null;
-            uiController.startPipeline(
+            pipelineStepRowRenderer.startPipeline(
                 total > 0 ? total : 1,
-                new KeyboardUiController.AutoEnterConfig(autoEnter),
+                new PipelineStepRowRenderer.AutoEnterConfig(autoEnter),
                 completedSoFar);
 
             // Show the currently running step
-            uiController.addRunningStep(stepName != null ? stepName : "\u2026");
+            pipelineStepRowRenderer.addRunningStep(stepName != null ? stepName : "\u2026");
         } else {
             // No pipeline active — clear any stale bridge value so it can't leak into a later run.
             restoreAutoEnter = null;
         }
 
-        // 3. Small mode from preferences. CR4 (Theme C-R / RR-2): on the
-        // bound path Pref.SmallMode is mirrored into
-        // state.layout.smallMode by PipelinePrefMirror and the armed
-        // visibility controllers + ImeViewBackend render it reactively
-        // — the legacy KSM setSmallMode is the UNBOUND fallback only
-        // (driving KSM while its gate-armed successors also drive =
-        // double-write).
-        if (pipelineBinder == null) {
-            stateManager.setSmallMode(DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE));
-        }
+        // 3. Small mode from preferences. CR-DEL (Theme C-R / RR-2):
+        // Pref.SmallMode is mirrored into state.layout.smallMode by
+        // PipelinePrefMirror and the armed visibility controllers +
+        // ImeViewBackend render it reactively — the legacy KSM
+        // setSmallMode unbound fallback is GONE (KeyboardStateManager
+        // deleted at the point-of-no-return).
     }
 
     /**
@@ -2054,7 +2022,7 @@ public class DictateInputMethodService extends InputMethodService
                 PromptEntity model = promptsAdapter.getItem(position);
 
                 // ReprocessStaging: prompt clicks toggle into/out of the editable queue.
-                PipelineUiState currentState = uiController != null ? uiController.getState() : null;
+                PipelineUiState currentState = pipelineStepRowRenderer != null ? pipelineStepRowRenderer.getState() : null;
                 if (currentState instanceof PipelineUiState.ReprocessStaging) {
                     handleReprocessPromptToggle(model, (PipelineUiState.ReprocessStaging) currentState);
                     return;
@@ -2158,14 +2126,20 @@ public class DictateInputMethodService extends InputMethodService
      * pref-resolved language, mirroring the deleted legacy
      * language-controller's effective-resolution semantics (D-13).
      *
-     * <p>The ReprocessStaging override is still carried on the legacy
-     * {@link PipelineUiState.ReprocessStaging#getSelectedLanguage()}
-     * (owned by {@link KeyboardUiController} until C10 retires it); the
-     * permanent value comes from the static
-     * {@link net.devemperor.dictate.preferences.LanguageResolver}. Both
-     * are framework-light reads — safe to call on every render-tick and
-     * before the orchestrator binds (R-3 boot-before-bind: the permanent
-     * read returns the persisted value, never a stale cache or NPE).</p>
+     * <p><b>F-6 collapsed (B3-VAL, this chunk = CR-DEL).</b> The
+     * ReprocessStaging override is now read from the <b>single</b>
+     * {@code LanguageState.override} carrier (the orchestrator's new SoT,
+     * written by {@code LanguageAction.SetOverride} from
+     * {@link #setLanguageFromPicker(String)} and cleared on staging exit),
+     * <i>not</i> the legacy
+     * {@code PipelineUiState.ReprocessStaging.selectedLanguage} carrier
+     * (owned by the deleted {@code KeyboardUiController}). The dual-carrier
+     * the parent B3 left transitional is collapsed now that the legacy
+     * carrier's owner is retired. The permanent value still comes from the
+     * static {@link net.devemperor.dictate.preferences.LanguageResolver}.
+     * R-3 boot-before-bind: when unbound the binder read returns null and
+     * we fall through to the permanent resolver (never a stale cache or
+     * NPE).</p>
      */
     private String resolveEffectiveLanguage() {
         String override = reprocessStagingOverrideOrNull();
@@ -2175,45 +2149,44 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * The current {@link PipelineUiState.ReprocessStaging} state, or
-     * {@code null} when the IME is not in ReprocessStaging (or the
-     * {@code uiController} is not attached).
-     *
-     * <p>F-3 (B3-VAL): single canonical detector for the
-     * "are we in ReprocessStaging" predicate that
-     * {@link #resolveEffectiveLanguage()} and
-     * {@link #setLanguageFromPicker(String)} both need. Before this was
-     * duplicated byte-identically in both. This is the legacy
-     * ReprocessStaging carrier; the cross-carrier collapse onto
-     * {@code LanguageState.override} is F-6, deferred to the
-     * render-path-cutover block.</p>
+     * The current {@link PipelineUiState.ReprocessStaging} staging state,
+     * or {@code null} when not in ReprocessStaging (or the renderer is not
+     * attached). Reads the relocated
+     * {@link net.devemperor.dictate.state.render.PipelineStepRowRenderer}
+     * (the View-side BLEIBT owner, Spec 1 §9.2). Used for the editable
+     * queue / staging-session needs — NOT for the language override
+     * (which is the collapsed {@code LanguageState.override} carrier; see
+     * {@link #reprocessStagingOverrideOrNull()}).
      */
     private PipelineUiState.ReprocessStaging reprocessStagingOrNull() {
-        if (uiController != null
-                && uiController.getState() instanceof PipelineUiState.ReprocessStaging) {
-            return (PipelineUiState.ReprocessStaging) uiController.getState();
+        if (pipelineStepRowRenderer != null
+                && pipelineStepRowRenderer.getState() instanceof PipelineUiState.ReprocessStaging) {
+            return (PipelineUiState.ReprocessStaging) pipelineStepRowRenderer.getState();
         }
         return null;
     }
 
     /**
      * The trimmed, non-blank ReprocessStaging language override, or
-     * {@code null} when not in ReprocessStaging or the override is unset
-     * / blank.
+     * {@code null} when not in ReprocessStaging / unbound / unset.
      *
-     * <p>F-3 (B3-VAL): the single guarded reader for the transient
-     * override. The blank-guard ({@code override != null &&
-     * !override.trim().isEmpty()}) previously lived only in
-     * {@link #resolveEffectiveLanguage()} while a duplicated detector in
-     * {@link #setLanguageFromPicker(String)} had drifted without it;
-     * centralising the guarded read here removes both the duplication
-     * and the drift — there is now exactly one place that decides what a
-     * valid override is.</p>
+     * <p><b>F-6 collapsed.</b> Reads the single {@code LanguageState.override}
+     * carrier off the bound orchestrator (the new SoT), guarded so it
+     * only counts while the renderer is actually in ReprocessStaging
+     * (the override is a per-staging-session transient — outside staging
+     * the permanent resolver must win, exactly as the legacy carrier
+     * scoped it). The blank-guard is preserved (F-3): exactly one place
+     * decides what a valid override is.</p>
      */
     private String reprocessStagingOverrideOrNull() {
-        PipelineUiState.ReprocessStaging staging = reprocessStagingOrNull();
-        if (staging == null) return null;
-        String override = staging.getSelectedLanguage();
+        // Scope: an override only applies while in ReprocessStaging (the
+        // legacy carrier was structurally scoped that way — the override
+        // lived inside PipelineUiState.ReprocessStaging). The collapsed
+        // LanguageState.override carrier is process-wide, so re-apply the
+        // staging scope here.
+        if (reprocessStagingOrNull() == null) return null;
+        if (pipelineBinder == null) return null;
+        String override = pipelineBinder.getState().getValue().getLanguage().getOverride();
         if (override != null && !override.trim().isEmpty()) return override;
         return null;
     }
@@ -2246,15 +2219,13 @@ public class DictateInputMethodService extends InputMethodService
             }
         }
         refreshLanguageChip();
-        // CR4 (Theme C-R / G14): on the BOUND path the RECORD-slot
-        // textResolver (resolveRecordButtonText, state-driven) re-renders
-        // the label — the RefreshFromPref dispatch above moves
-        // state.language.effective, which re-emits state → the attached
-        // ImeViewBackend re-renders the RECORD slot. The imperative
-        // legacy updateRecordButtonText is the UNBOUND fallback only.
-        if (pipelineBinder == null && mainButtonsController != null) {
-            mainButtonsController.updateRecordButtonText(getDictateButtonText());
-        }
+        // CR-DEL (Theme C-R / G14): the RECORD-slot textResolver
+        // (resolveRecordButtonText, state-driven) re-renders the label —
+        // the RefreshFromPref dispatch above moves state.language.effective,
+        // which re-emits state → the attached ImeViewBackend re-renders
+        // the RECORD slot. The legacy mainButtonsController.updateRecordButtonText
+        // unbound fallback is GONE (MainButtonsController deleted at the
+        // point-of-no-return).
     }
 
     /**
@@ -2280,7 +2251,7 @@ public class DictateInputMethodService extends InputMethodService
      *
      * W6: Single source of truth — we write the new queue onto
      * {@link PipelineUiState.ReprocessStaging} via
-     * {@code uiController.updateReprocessQueue}, and the state-change
+     * {@code pipelineStepRowRenderer.updateReprocessQueue}, and the state-change
      * callback routes back through {@link #syncQueueOrder}
      * which updates the adapter. No direct adapter write here.
      */
@@ -2293,7 +2264,7 @@ public class DictateInputMethodService extends InputMethodService
         } else {
             queue.add(promptId);
         }
-        uiController.updateReprocessQueue(queue);
+        pipelineStepRowRenderer.updateReprocessQueue(queue);
     }
 
     /**
@@ -2386,13 +2357,17 @@ public class DictateInputMethodService extends InputMethodService
      * language-controller's set-language routing (D-13):
      *
      * <ul>
-     *   <li><b>ReprocessStaging</b> → a <i>transient</i> override. Written
-     *       to the legacy {@link PipelineUiState.ReprocessStaging}
-     *       (via {@link KeyboardUiController#updateReprocessLanguage(String)},
-     *       still the carrier until C10) <i>and</i> dispatched as
-     *       {@code LanguageAction.SetOverride(code)} so the orchestrator's
-     *       {@code LanguageState.override} (the new SoT) tracks it. The
-     *       state-change callback refreshes the chip; never persisted.</li>
+     *   <li><b>ReprocessStaging</b> → a <i>transient</i> override.
+     *       Dispatched as {@code LanguageAction.SetOverride(code)} —
+     *       {@code LanguageState.override} is the <b>single</b> SoT the
+     *       effective-language read now uses (F-6 collapsed, CR-DEL). The
+     *       relocated {@link net.devemperor.dictate.state.render.PipelineStepRowRenderer#updateReprocessLanguage(String)}
+     *       still mirrors it into the View-side
+     *       {@code PipelineUiState.ReprocessStaging.selectedLanguage}
+     *       staging state (kept for the record-button label + queue
+     *       restore — the BLEIBT staging state, Spec 1 §9.2), but the
+     *       language READ no longer depends on that carrier. Never
+     *       persisted.</li>
      *   <li><b>any other state</b> → a <i>permanent</i> write with
      *       auto-curation via the static
      *       {@link net.devemperor.dictate.preferences.LanguageResolver},
@@ -2409,7 +2384,8 @@ public class DictateInputMethodService extends InputMethodService
         // resource-array-derived ISO code, never blank, so the
         // read-side blank-guard does not apply to this write path.)
         if (reprocessStagingOrNull() != null) {
-            uiController.updateReprocessLanguage(code);
+            // F-6 collapsed (CR-DEL): LanguageState.override is the single
+            // SoT the effective-language read uses. Dispatch it first.
             if (pipelineBinder != null) {
                 try {
                     pipelineBinder.dispatch(
@@ -2418,8 +2394,12 @@ public class DictateInputMethodService extends InputMethodService
                     Log.w("DictateIME", "SetOverride dispatch failed", t);
                 }
             }
-            // The KeyboardUiController state-change callback path refreshes
-            // the chip; nothing persisted for a transient override.
+            // Mirror into the View-side ReprocessStaging staging state so
+            // the record-button label + queue-restore stay correct (the
+            // BLEIBT staging state, Spec 1 §9.2 — NOT the language read
+            // carrier any more). Its state-change callback refreshes the
+            // chip; nothing persisted for a transient override.
+            pipelineStepRowRenderer.updateReprocessLanguage(code);
         } else {
             net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
                     .setLanguage(sp, code);
@@ -2566,10 +2546,15 @@ public class DictateInputMethodService extends InputMethodService
         // (set on input-view-start, not per render-tick).
         int accentColor = DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
         String charactersString = DictatePrefsKt.get(sp, Pref.OverlayCharacters.INSTANCE);
-        if (pipelineBinder != null && overlayCharactersController != null) {
+        // CR-DEL (Theme C-R / overlay-chars, §13.2 / §9.2 :481-493): the
+        // armed OverlayCharactersController owns the strip
+        // (initialize()+update()); the legacy
+        // mainButtonsController.updateOverlayCharacters unbound fallback
+        // is GONE (MainButtonsController deleted at the
+        // point-of-no-return). Same imperative drive cadence (set on
+        // input-view-start, not per render-tick).
+        if (overlayCharactersController != null) {
             overlayCharactersController.update(charactersString, accentColor);
-        } else {
-            mainButtonsController.updateOverlayCharacters(charactersString, accentColor);
         }
 
         // update theme
@@ -2586,31 +2571,39 @@ public class DictateInputMethodService extends InputMethodService
 
         TextView[] textColorViews = { infoTv, emojiPickerTitleTv };
         for (TextView tv : textColorViews) tv.setTextColor(accentColor);
-        // CR4 (Theme C-R / G6 — Spec 2 §9.2 "Theme-Mutation ist eine
-        // separate Achse, nicht state-getrieben; ImeViewBackend hat eine
-        // applyTheme(accentColor)-Methode, die der Service nach jedem
-        // Re-Inflate aufruft"): on the BOUND path the new
-        // ImeViewBackend.applyTheme themes the 8 owned logical buttons
-        // (the §9.2-mapped set). The legacy mainButtonsController.applyTheme
-        // ALSO themed ~11 edit-row buttons that Spec 2 §9.2 does NOT map
-        // to the backend and for which no extracted owner exists yet
-        // (the CR1 + CR-EXTRACT theme-residual flag — EditBarController
-        // owns the edit-bar *listeners* but not its *theme*; theming is
-        // an explicitly separate axis, §9.2). To avoid stranding the
-        // edit-row theme (RR-2 — a silently un-themed edit row) the
-        // legacy applyTheme is retained on the bound path TOO, scoped to
-        // the edit-row residual; the 8 owned buttons it also re-paints
-        // is a benign idempotent double-paint of identical colours
-        // (theme is a non-state, non-double-write-sensitive axis, unlike
-        // visibility). This is the carried-forward CR1/CR-EXTRACT
-        // theme-residual (IMPL issue CR4-IMPL-3 → CR-DEL: extract the
-        // edit-row theme into EditBarController so the legacy call fully
-        // retires and AC-RR-6 is a clean zero-`mainButtonsController`).
-        if (pipelineBinder != null && imeViewBackend != null) {
+        // CR-DEL (Theme C-R / G6 — Spec 2 §9.2 "Theme-Mutation ist eine
+        // separate Achse, nicht state-getrieben"): the theme axis now has
+        // THREE faithful owners, no `mainButtonsController.applyTheme`
+        // remains (AC-RR-6/AC-RR-7 zero-grep):
+        //  - ImeViewBackend.applyTheme — the 8 logical buttons (§9.2 set).
+        //  - EditBarController.applyTheme — the 10 edit-row residual
+        //    buttons (CR-RGATE's flagged residual; owned by the class
+        //    that owns the edit-bar views — sibling-faithful to the §9.2
+        //    "separate Theme-Klasse" intent, no extra class, byte-identical
+        //    legacy tiers).
+        //  - EmojiController.applyTheme — editEmoji + emojiPickerClose.
+        // Theme is a non-state, non-double-write-sensitive axis (§9.2);
+        // imperative call after re-inflate / accent change.
+        if (imeViewBackend != null) {
             imeViewBackend.applyTheme(accentColor);
         }
-        mainButtonsController.applyTheme(accentColor);
-        recordingUiController.updateAnimationColor(accentColor);
+        if (editBarController != null) {
+            editBarController.applyTheme(accentColor);
+        }
+        if (emojiController != null) {
+            emojiController.applyTheme(accentColor);
+        }
+        // Recording-animation accent: ImeViewBackend forwards into
+        // RecordingAnimationController (the recording-axis collapse
+        // target); the prompts-visualizer accent is the QWERTZ owner's
+        // (G9 BLEIBT). Replaces the deleted
+        // recordingUiController.updateAnimationColor (which did both).
+        if (imeViewBackend != null) {
+            imeViewBackend.updateAccentColor(accentColor);
+        }
+        if (qwertzRecordingController != null) {
+            qwertzRecordingController.updateAnimationColor(accentColor);
+        }
         qwertzController.applyColors(accentColor, DictateUtils.darkenColor(accentColor, 0.18f), DictateUtils.darkenColor(accentColor, 0.35f));
 
         // show infos for updates, ratings or donations (DB query on background thread)
@@ -2635,21 +2628,16 @@ public class DictateInputMethodService extends InputMethodService
                 DictatePrefsKt.get(sp, Pref.Animations.INSTANCE));
 
         // Sync small mode from prefs and apply visibility + animation.
-        // CR4 (Theme C-R / RR-2 + G15): Pref.SmallMode is mirrored into
-        // state.layout.smallMode by PipelinePrefMirror on the bound path
-        // → the armed visibility controllers + ImeViewBackend
-        // (MotionLayout scene) render it reactively, so the legacy KSM
-        // setSmallMode is the UNBOUND fallback only (double-write guard).
-        // The edit-numbers rotation animation is re-pointed from the
-        // removed mainButtonsController delegate to the IME-held
-        // EditNumbersAnimator (bound) / legacy (unbound fallback).
-        if (pipelineBinder == null) {
-            stateManager.setSmallMode(DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE));
-        }
-        if (pipelineBinder != null && editNumbersAnimator != null) {
+        // CR-DEL (Theme C-R / RR-2 + G15): Pref.SmallMode is mirrored
+        // into state.layout.smallMode by PipelinePrefMirror → the armed
+        // visibility controllers + ImeViewBackend (MotionLayout scene)
+        // render it reactively. The legacy KSM setSmallMode unbound
+        // fallback is GONE (KeyboardStateManager deleted). The
+        // edit-numbers rotation animation is the IME-held
+        // EditNumbersAnimator (the legacy MainButtonsController delegate
+        // is deleted at the point-of-no-return).
+        if (editNumbersAnimator != null) {
             editNumbersAnimator.animateSmallModeToggle(false);
-        } else {
-            mainButtonsController.animateSmallModeToggle(false);
         }
 
         // start audio file transcription if user selected an audio file
@@ -2701,11 +2689,13 @@ public class DictateInputMethodService extends InputMethodService
      *
      * <p>On the <b>bound</b> path the SoT is
      * {@code state.layout.contentArea} (owned by {@code LayoutModule};
-     * the dormant→armed {@link ContentAreaController} renders it). On
-     * the <b>unbound</b> path (no reactive state-collect — the
-     * established pre-bind fallback) the legacy
-     * {@link KeyboardStateManager} is still the owner, exactly as
-     * pre-CR4.</p>
+     * the armed {@link ContentAreaController} renders it). CR-DEL: the
+     * legacy {@code KeyboardStateManager} unbound owner is GONE
+     * (deleted at the point-of-no-return). Pre-bind the keyboard is in
+     * its initial inflate state ({@code MAIN_BUTTONS}) — there is no
+     * content-area switch possible before the binder arrives (which it
+     * does near-instantly in {@code onCreateInputView}), so the unbound
+     * read returns the initial default.</p>
      *
      * <p>{@code contentArea} is <b>not</b> Pref-mirrored
      * ({@code PipelinePrefMirror} mirrors only the 3 LayoutState
@@ -2717,31 +2707,28 @@ public class DictateInputMethodService extends InputMethodService
         if (pipelineBinder != null) {
             return pipelineBinder.getState().getValue().getLayout().getContentArea();
         }
-        return stateManager.getContentArea();
+        return ContentArea.MAIN_BUTTONS;
     }
 
     /**
-     * CR4 — set the authoritative content-area. Bound:
+     * CR4/CR-DEL — set the authoritative content-area. Bound:
      * {@code dispatch(LayoutAction.SetContentArea(area))} →
      * {@code LayoutModule} mutates {@code state.layout.contentArea} →
      * state emit → the armed {@link ContentAreaController} renders the
      * container visibility (and the small-mode structural-rejection in
-     * {@code LayoutModule.reduce} is preserved). Unbound: the legacy
-     * {@code stateManager.setContentArea} as pre-CR4.
+     * {@code LayoutModule.reduce} is preserved).
      *
-     * <p>RR-2: this is the same-chunk counterpart to arming
-     * {@code contentAreaGate} — the legacy KSM
-     * {@code applyContentAreaVisibility} drive is removed (it runs only
-     * on the unbound path) so there is exactly one live writer per
-     * axis.</p>
+     * <p>CR-DEL: the legacy {@code stateManager.setContentArea} unbound
+     * fallback is GONE (KeyboardStateManager deleted). Pre-bind there is
+     * no content-area state to set and no switch is possible (the binder
+     * arrives near-instantly); the call is a no-op until bound, after
+     * which the next dispatch + reactive render is authoritative.</p>
      */
     private void setEffectiveContentArea(ContentArea area) {
         if (pipelineBinder != null) {
             pipelineBinder.dispatch(
                     new net.devemperor.dictate.state.Action.LayoutAction.SetContentArea(area));
-            return;
         }
-        stateManager.setContentArea(area);
     }
 
     private void toggleEmojiPicker() {
@@ -3241,54 +3228,41 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * C5 — drive the legacy {@code KeyboardUiController} pipeline UI for
-     * the new path so the keyboard still shows the "Sending…"/progress
-     * affordance the legacy pre-C7 fresh-recording trigger set up. Shared
-     * by {@link #stopRecording()} and
+     * C5 — drive the pipeline step-row UI for the new path so the
+     * keyboard still shows the "Sending…"/progress affordance the legacy
+     * pre-C7 fresh-recording trigger set up. Shared by
+     * {@link #stopRecording()} and
      * {@link #transcribeImportedAudioFileViaOrchestrator()} (C7-IMPL-1).
-     * The orchestrator owns the authoritative
-     * {@code state.pipeline}; this is the same thin UI bookkeeping the
-     * legacy trigger performed (the RenderBackend cutover that makes this
-     * unnecessary is Theme-C/C3, out of C5 scope).
+     * The orchestrator owns the authoritative {@code state.pipeline};
+     * this is the same thin UI bookkeeping the legacy trigger performed,
+     * now driving the relocated
+     * {@link net.devemperor.dictate.state.render.PipelineStepRowRenderer}
+     * (G13 BLEIBT, Spec 1 §9.2 View-side).
      */
     private void primePipelineUiForNewPath() {
         try {
-            // G13 BLEIBT (CR3 binding A3 option-a, CR-DEL-staged): the
-            // uiController.* pipeline-step-row UI stays driven until
-            // CR-DEL extracts the small step-row owner — CR4 removes only
-            // the *render* drive (the resend setVisibility §9.6 + the
-            // KSM refresh), not the step-row bookkeeping (the
-            // orchestrator owns the authoritative state.pipeline; this is
-            // thin UI bookkeeping the step-row render still needs).
-            uiController.preparePipeline();
-            // CR4 (Theme C-R / §9.6 — Spec 2 §13.1 row 27): the
-            // pipeline-start resend setVisibility is REMOVED on the
-            // bound path (pipeline → Preparing → predResendVisible=false;
-            // the RESEND-slot predicate owns visibility reactively). The
-            // imperative call is the UNBOUND fallback only.
-            if (pipelineBinder == null) {
-                resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
-                        new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
-                        DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
-                        recordingStateController != null
-                                ? recordingStateController.getState()
-                                : RecordingState.Idle.INSTANCE,
-                        uiController.getState()));
-            }
+            // G13 BLEIBT (CR-DEL — the binding A3 option-a extraction):
+            // the pipeline-step-row UI is the relocated
+            // PipelineStepRowRenderer. The orchestrator owns the
+            // authoritative state.pipeline; this is thin UI bookkeeping
+            // the step-row render still needs.
+            pipelineStepRowRenderer.preparePipeline();
+            // CR-DEL (Theme C-R / §9.6 — Spec 2 §13.1 row 27): the
+            // pipeline-start resend setVisibility is owned reactively by
+            // the RESEND-slot predicate (pipeline → Preparing →
+            // predResendVisible=false). The legacy imperative unbound
+            // fallback is GONE (point-of-no-return).
             infoBarController.dismiss();
             updatePromptButtonsEnabledState();
-            // CR4 (RR-2): KSM refresh is the UNBOUND fallback only — the
-            // armed visibility controllers own every axis on the bound
-            // path (the pipeline state-emit re-renders them).
-            if (pipelineBinder == null) {
-                stateManager.refresh();
-            }
+            // CR-DEL (RR-2): the armed visibility controllers own every
+            // axis (the pipeline state-emit re-renders them); the legacy
+            // KSM refresh unbound fallback is GONE.
 
             int totalSteps = 1;
             if (autoFormattingService.isEnabled()) totalSteps++;
             totalSteps += promptQueueManager.getQueuedIds().size();
             boolean autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-            uiController.startPipeline(totalSteps, new KeyboardUiController.AutoEnterConfig(autoEnter));
+            pipelineStepRowRenderer.startPipeline(totalSteps, new PipelineStepRowRenderer.AutoEnterConfig(autoEnter));
         } catch (RuntimeException e) {
             // UI bookkeeping is best-effort — a view-recreation race must
             // not abort the (already-dispatched) recording stop. The
@@ -3442,11 +3416,11 @@ public class DictateInputMethodService extends InputMethodService
         // authoritative source (it reflects any in-pipeline user toggle). Direct-prompt-button
         // callers have no previous config — we seed from prefs in that case.
         String displayName = model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName();
-        KeyboardUiController.AutoEnterConfig prevCfg = uiController.getAutoEnterConfig();
+        PipelineStepRowRenderer.AutoEnterConfig prevCfg = pipelineStepRowRenderer.getAutoEnterConfig();
         boolean autoEnter = (prevCfg != null)
             ? prevCfg.getAutoEnterActive()
             : DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-        uiController.startPipeline(1, new KeyboardUiController.AutoEnterConfig(autoEnter), 0);
+        pipelineStepRowRenderer.startPipeline(1, new PipelineStepRowRenderer.AutoEnterConfig(autoEnter), 0);
 
         EditorInfo editorInfo = getCurrentInputEditorInfo();
         PipelineOrchestrator.StandaloneConfig config = new PipelineOrchestrator.StandaloneConfig(
@@ -3465,9 +3439,9 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStepStarted(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
-            if (uiController == null) return;  // View recreation not yet complete
-            if (uiController.getState() instanceof PipelineUiState.Running) {
-                uiController.addRunningStep(stepName);
+            if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
+            if (pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
+                pipelineStepRowRenderer.addRunningStep(stepName);
             }
         });
     }
@@ -3475,9 +3449,9 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStepCompleted(@androidx.annotation.NonNull String stepName, long durationMs) {
         mainHandler.post(() -> {
-            if (uiController == null) return;  // View recreation not yet complete
-            if (uiController.getState() instanceof PipelineUiState.Running) {
-                uiController.completeStep(stepName, durationMs);
+            if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
+            if (pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
+                pipelineStepRowRenderer.completeStep(stepName, durationMs);
             }
         });
     }
@@ -3485,9 +3459,9 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStepFailed(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
-            if (uiController == null) return;  // View recreation not yet complete
-            if (uiController.getState() instanceof PipelineUiState.Running) {
-                uiController.failStep(stepName);
+            if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
+            if (pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
+                pipelineStepRowRenderer.failStep(stepName);
             }
         });
     }
@@ -3498,7 +3472,7 @@ public class DictateInputMethodService extends InputMethodService
             if (pendingLivePromptChain) {
                 // Live prompt: transcription result becomes the prompt for a completion call
                 pendingLivePromptChain = false;
-                if (uiController == null) return;  // View recreation not yet complete
+                if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
                 PromptEntity liveEntity = new PromptEntity(-1, Integer.MIN_VALUE, "", text, true, false);
                 runStandalonePromptViaOrchestrator(liveEntity);
             } else {
@@ -3583,9 +3557,9 @@ public class DictateInputMethodService extends InputMethodService
         // for "last keyboard session" — see SessionTracker.getLastKeyboardSession).
         sessionTracker.clearCurrent();
         mainHandler.post(() -> {
-            if (uiController == null) return;  // View recreation not yet complete
-            uiController.stopPipeline();  // → updatePipelineState(Idle) → Callback → QWERTZ reset
-            uiController.restoreRecordButtonIdle(
+            if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
+            pipelineStepRowRenderer.stopPipeline();  // → updatePipelineState(Idle) → Callback → QWERTZ reset
+            pipelineStepRowRenderer.restoreRecordButtonIdle(
                 getDictateButtonText(),
                 R.drawable.ic_baseline_mic_20,
                 R.drawable.ic_baseline_folder_open_20);
@@ -3594,7 +3568,7 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private boolean isAutoEnterActive() {
-        KeyboardUiController.AutoEnterConfig cfg = uiController != null ? uiController.getAutoEnterConfig() : null;
+        PipelineStepRowRenderer.AutoEnterConfig cfg = pipelineStepRowRenderer != null ? pipelineStepRowRenderer.getAutoEnterConfig() : null;
         if (cfg != null) return cfg.getAutoEnterActive();
         return DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
     }
@@ -3602,9 +3576,9 @@ public class DictateInputMethodService extends InputMethodService
     private void toggleAutoEnterOverride() {
         // Only meaningful during Running — during Preparing the auto-enter chip is not visible,
         // and during Idle there is no pipeline to toggle against.
-        if (uiController == null || !uiController.isPipelineRunning()) return;
+        if (pipelineStepRowRenderer == null || !pipelineStepRowRenderer.isPipelineRunning()) return;
         // Controller owns the PipelineConfig; it atomically flips config + Running.autoEnterActive.
-        uiController.toggleAutoEnter();
+        pipelineStepRowRenderer.toggleAutoEnter();
     }
 
     /**
@@ -3914,19 +3888,20 @@ public class DictateInputMethodService extends InputMethodService
         vibrate();
     }
 
-    @Override
+    // CR-DEL: was MainButtonsController.Callback (deleted); now invoked
+    // via the ImeViewBackend imeSideAffordance hook (RECORD click).
     public void onRecordClicked() {
         infoBarController.dismiss();
 
         // ReprocessStaging: the big record button becomes a Send trigger for the
         // currently staged queue (Phase 9.3).
-        PipelineUiState state = uiController != null ? uiController.getState() : null;
+        PipelineUiState state = pipelineStepRowRenderer != null ? pipelineStepRowRenderer.getState() : null;
         if (state instanceof PipelineUiState.ReprocessStaging) {
             handleReprocessSend((PipelineUiState.ReprocessStaging) state);
             return;
         }
 
-        if (uiController.isPipelineActive()) {
+        if (pipelineStepRowRenderer.isPipelineActive()) {
             // Pipeline running or preparing → toggle auto-enter (no-op during Preparing).
             // Using isPipelineActive() closes the Preparing-window race on the QWERTZ record
             // button, which otherwise fell through to startRecording() during audio upload.
@@ -3940,7 +3915,8 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
-    @Override
+    // CR-DEL: was MainButtonsController.Callback; invoked via
+    // imeSideAffordance(RECORD, isLongPress=true).
     public void onRecordLongClicked() {
         if (isEffectiveRecordingIdle()) {
             Intent intent = new Intent(this, DictateSettingsActivity.class);
@@ -3953,7 +3929,8 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
-    @Override
+    // CR-DEL: was MainButtonsController.Callback; invoked via
+    // imeSideAffordance(RESEND, isLongPress=false).
     public void onResendClicked() {
         // Phase 5 — status-based dispatch with InputConnection capture.
         //
@@ -3967,18 +3944,16 @@ public class DictateInputMethodService extends InputMethodService
         // Quality-Gate N-2 — double-click race: disable the button on the
         // main thread immediately so a second tap within the cooldown window
         // can't kick off a parallel DB lookup + insertion.
-        // CR4 (Theme C-R / G8): on the BOUND path the RESEND-slot
+        // CR-DEL (Theme C-R / G8): the RESEND-slot
         // `enabledResolver = { !state.resend.resendCooldown }` +
         // `alphaResolver` own the disabled state state-reactively — the
         // catalog `ResendLastAudio` dispatch (fired alongside this
         // affordance call on the same RESEND click) arms
         // state.resend.resendCooldown, and the CR4-IMPL-2
         // ResendCooldownExpired postDelayed-dispatch (below) clears it.
-        // The imperative legacy setResendEnabled is the UNBOUND fallback
-        // only (no reactive render / no ResendModule without a binder).
-        if (pipelineBinder == null && mainButtonsController != null) {
-            mainButtonsController.setResendEnabled(false);
-        }
+        // The legacy mainButtonsController.setResendEnabled unbound
+        // fallback is GONE (MainButtonsController deleted at the
+        // point-of-no-return).
 
         // CR4-IMPL-2 (Theme C-R / B5-CR4-MID-W1) — the resend-cooldown
         // *state* model is fully present (ResendState.resendCooldown +
@@ -4030,18 +4005,14 @@ public class DictateInputMethodService extends InputMethodService
                 // Quality-Gate N-2 — re-enable after a 500 ms cooldown so the
                 // capture + dispatch phase has time to settle without a
                 // second click slipping through.
-                // CR4 (Theme C-R / G8): on the BOUND path the
-                // CR4-IMPL-2 ResendCooldownExpired postDelayed-dispatch
-                // (scheduled above in onResendClicked) clears
+                // CR-DEL (Theme C-R / G8): the CR4-IMPL-2
+                // ResendCooldownExpired postDelayed-dispatch (scheduled
+                // above in onResendClicked) clears
                 // state.resend.resendCooldown → the RESEND-slot
                 // enabledResolver re-enables the button reactively. The
-                // imperative legacy setResendEnabled(true) is the
-                // UNBOUND fallback only.
-                mainHandler.postDelayed(() -> {
-                    if (pipelineBinder == null && mainButtonsController != null) {
-                        mainButtonsController.setResendEnabled(true);
-                    }
-                }, 500);
+                // legacy mainButtonsController.setResendEnabled(true)
+                // unbound fallback is GONE (MainButtonsController deleted
+                // at the point-of-no-return).
             }
         });
     }
@@ -4147,10 +4118,11 @@ public class DictateInputMethodService extends InputMethodService
         return Math.max(1, totalQueued - completed);
     }
 
-    @Override
+    // CR-DEL: was MainButtonsController.Callback; invoked via
+    // imeSideAffordance(RESEND, isLongPress=true).
     public void onResendLongClicked() {
         // Phase 9.2 — enter ReprocessStaging with the last keyboard session.
-        if (uiController.isBusy()) return;
+        if (pipelineStepRowRenderer.isBusy()) return;
 
         dbExecutor.execute(() -> {
             SessionEntity lastSession = sessionTracker.getLastKeyboardSession();
@@ -4165,8 +4137,8 @@ public class DictateInputMethodService extends InputMethodService
 
             List<Integer> historicalQueue = sessionManager.getHistoricalQueuedPromptIds(lastSession.getId());
             mainHandler.post(() -> {
-                if (uiController == null) return;
-                uiController.enterReprocessStaging(
+                if (pipelineStepRowRenderer == null) return;
+                pipelineStepRowRenderer.enterReprocessStaging(
                         lastSession.getId(),
                         lastSession.getAudioDurationSeconds(),
                         historicalQueue,
@@ -4176,12 +4148,16 @@ public class DictateInputMethodService extends InputMethodService
         });
     }
 
-    @Override
+    // CR-DEL: was MainButtonsController.Callback (deleted). BACKSPACE
+    // click is now the catalog Action.KeyboardInputAction.Backspace on
+    // the bound path; this body is kept for any non-catalog caller.
     public void onBackspaceClicked() {
         deleteOneCharacter();
     }
 
-    @Override
+    // CR-DEL: was MainButtonsController.Callback (deleted). The
+    // accel-delete cascade is owned by SpecialTouchHandlerInstaller's
+    // BackspaceSwipeHandler (§11.7); this body kept for parity.
     public void onBackspaceLongClicked() {
         isDeleting = true;
         startDeleteTime = System.currentTimeMillis();
@@ -4209,17 +4185,19 @@ public class DictateInputMethodService extends InputMethodService
         deleteHandler.post(deleteRunnable);
     }
 
-    @Override
+    // CR-DEL: was MainButtonsController.Callback (deleted); invoked by
+    // SpecialTouchHandlerInstaller's onBackspaceDeleteCancelled lambda.
     public void onBackspaceDeleteCancelled() {
         isDeleting = false;
         if (deleteRunnable != null) deleteHandler.removeCallbacks(deleteRunnable);
     }
 
-    @Override
+    // CR-DEL: was MainButtonsController.Callback (deleted). TRASH is the
+    // catalog actionResolver on the bound path; body kept for parity.
     public void onTrashClicked() {
         // ReprocessStaging: the trash button cancels back to Idle.
-        if (uiController != null && uiController.getState() instanceof PipelineUiState.ReprocessStaging) {
-            uiController.cancelReprocessStaging();
+        if (pipelineStepRowRenderer != null && pipelineStepRowRenderer.getState() instanceof PipelineUiState.ReprocessStaging) {
+            pipelineStepRowRenderer.cancelReprocessStaging();
             updatePromptButtonsEnabledState();
             return;
         }
@@ -4303,19 +4281,23 @@ public class DictateInputMethodService extends InputMethodService
 
                 // Transition staging → Preparing → Running via the same path used by
                 // the fresh-recording flow (SEC-7-6).
-                uiController.preparePipeline();
+                pipelineStepRowRenderer.preparePipeline();
                 boolean autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-                uiController.startPipeline(totalSteps, new KeyboardUiController.AutoEnterConfig(autoEnter));
+                pipelineStepRowRenderer.startPipeline(totalSteps, new PipelineStepRowRenderer.AutoEnterConfig(autoEnter));
             });
         });
     }
 
-    @Override
+    // CR-DEL: was MainButtonsController.Callback (deleted). PAUSE is the
+    // catalog actionResolver on the bound path; also invoked by the
+    // QwertzRecordingController prompt-pause toggle. Body kept.
     public void onPauseClicked() {
         togglePauseEffectiveRecording();
     }
 
-    @Override
+    // CR-DEL: was MainButtonsController.Callback (deleted). ENTER is the
+    // catalog Action.KeyboardInputAction.EnterKey on the bound path;
+    // body kept for any non-catalog caller.
     public void onEnterClicked() {
         performEnterAction();
     }
@@ -4380,8 +4362,8 @@ public class DictateInputMethodService extends InputMethodService
 
         pendingLivePromptChain = false;
 
-        uiController.stopPipeline();
-        uiController.restoreRecordButtonIdle(
+        pipelineStepRowRenderer.stopPipeline();
+        pipelineStepRowRenderer.restoreRecordButtonIdle(
             getDictateButtonText(),
             R.drawable.ic_baseline_mic_20,
             R.drawable.ic_baseline_folder_open_20);
@@ -4405,28 +4387,24 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onSmallModeToggled() {
-        // CR4 (Theme C-R / RR-2 + G15): the SoT for small-mode is
-        // state.layout.smallMode on the bound path (KSM is the unbound
-        // fallback owner). The pref-write is mirrored into
+        // CR-DEL (Theme C-R / RR-2 + G15): the SoT for small-mode is
+        // state.layout.smallMode. The pref-write is mirrored into
         // state.layout.smallMode by PipelinePrefMirror → state emit →
         // the armed visibility controllers + ImeViewBackend
-        // (MotionLayout scene) render it; the legacy
-        // stateManager.setSmallMode is the unbound fallback only
-        // (double-write guard). The rotation animation is re-pointed
-        // from the removed mainButtonsController delegate to the
-        // IME-held EditNumbersAnimator (bound) / legacy (unbound).
+        // (MotionLayout scene) render it. The legacy KSM
+        // setSmallMode unbound fallback is GONE (KeyboardStateManager
+        // deleted). The rotation animation is the IME-held
+        // EditNumbersAnimator (the legacy MainButtonsController delegate
+        // is deleted at the point-of-no-return). Pre-bind there is no
+        // state to read; default to the persisted pref (the binder
+        // arrives near-instantly and the reactive render reconciles).
         boolean currentSmall = pipelineBinder != null
                 ? pipelineBinder.getState().getValue().getLayout().getSmallMode()
-                : stateManager.isSmallMode();
+                : DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE);
         boolean newSmallMode = !currentSmall;
         DictatePrefsKt.put(sp.edit(), Pref.SmallMode.INSTANCE, newSmallMode).apply();
-        if (pipelineBinder == null) {
-            stateManager.setSmallMode(newSmallMode);
-        }
-        if (pipelineBinder != null && editNumbersAnimator != null) {
+        if (editNumbersAnimator != null) {
             editNumbersAnimator.animateSmallModeToggle(true);
-        } else {
-            mainButtonsController.animateSmallModeToggle(true);
         }
     }
 
@@ -4457,21 +4435,15 @@ public class DictateInputMethodService extends InputMethodService
         // is mirrored into the orchestrator state via PipelinePrefMirror;
         // the attached ImeViewBackend re-renders and asks MotionLayout to
         // transition to the new scene-id. No direct controller call needed.
-        // CR4 (Theme C-R / G15 + RR-2): bounce animation re-pointed from
-        // the removed mainButtonsController delegate to the IME-held
-        // EditNumbersAnimator (bound) / legacy (unbound). The KSM
-        // refresh is the unbound fallback only — on the bound path
-        // Pref.SingleRowMode is mirrored into state.layout.singleRowMode
-        // by PipelinePrefMirror → state emit → the armed visibility
-        // controllers + ImeViewBackend (MotionLayout scene) render it
-        // (arming a gate while KSM still drove = double-write).
-        if (pipelineBinder != null && editNumbersAnimator != null) {
+        // CR-DEL (Theme C-R / G15 + RR-2): bounce animation is the
+        // IME-held EditNumbersAnimator (the legacy MainButtonsController
+        // delegate is deleted). The KSM refresh unbound fallback is GONE
+        // (KeyboardStateManager deleted) — Pref.SingleRowMode is mirrored
+        // into state.layout.singleRowMode by PipelinePrefMirror → state
+        // emit → the armed visibility controllers + ImeViewBackend
+        // (MotionLayout scene) render it reactively.
+        if (editNumbersAnimator != null) {
             editNumbersAnimator.animateEditNumbersBounce();
-        } else if (mainButtonsController != null) {
-            mainButtonsController.animateEditNumbersBounce();
-        }
-        if (pipelineBinder == null && stateManager != null) {
-            stateManager.refresh();
         }
     }
 
@@ -4495,30 +4467,15 @@ public class DictateInputMethodService extends InputMethodService
             recordingStateController.setAudioFocusRuntime(newValue);
         }
 
-        // 3. UI refresh — both buttons synced via refreshAudioFocusIcon.
-        //    CR4 (Theme C-R / G14): on the BOUND path the SP-write above
-        //    is mirrored into state.audio.audioFocusEnabledPref by
+        // 3. UI refresh — CR-DEL (Theme C-R / G14): the SP-write above is
+        //    mirrored into state.audio.audioFocusEnabledPref by
         //    PipelinePrefMirror → a state emit → the catalog AUDIO_FOCUS
         //    iconResolver re-renders the icon on the attached
-        //    ImeViewBackend. The imperative legacy refreshAudioFocusIcon
-        //    is the UNBOUND fallback only (no reactive state-collect
-        //    without a binder).
-        if (pipelineBinder == null && mainButtonsController != null) {
-            mainButtonsController.refreshAudioFocusIcon(newValue);
-        }
-
-        // 4. Block-1a Quick-Win (Spec 1 §11.2.2 step 3): the audio-focus
-        //    toggle does not directly change any KSM-owned axis today, but
-        //    downstream visibility resolvers may consult the pref via the
-        //    `isRecording`/`isPaused` lambdas in a future iteration. CR4
-        //    (Theme C-R / RR-2): the KSM refresh is the UNBOUND fallback
-        //    only — on the bound path the dormant→armed visibility
-        //    controllers own every visibility axis (the legacy KSM drive
-        //    is removed; arming a gate while KSM still drove = double
-        //    write).
-        if (pipelineBinder == null && stateManager != null) {
-            stateManager.refresh();
-        }
+        //    ImeViewBackend. The legacy mainButtonsController.refreshAudioFocusIcon
+        //    + KSM refresh unbound fallbacks are GONE (both classes
+        //    deleted at the point-of-no-return — the armed visibility
+        //    controllers + the state-reactive iconResolver own every
+        //    axis).
     }
 
     @Override

@@ -3,6 +3,7 @@ package net.devemperor.dictate.state.render
 import android.util.Log
 import android.view.View
 import com.google.android.material.button.MaterialButton
+import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.R
 
 /**
@@ -199,6 +200,39 @@ class EditBarController(
             ownerLedger[view.id] = OWNER_ATTACHED_CR4
             view.setTag(OWNER_TAG_KEY, OWNER_ATTACHED_CR4)
         }
+    }
+
+    /**
+     * Re-apply accent-colour theming to the edit-bar buttons (G6 — Spec 2
+     * §9.2 *"Theme-Mutation ist eine separate Achse, nicht state-getrieben"*;
+     * the edit-row residual the new `ImeViewBackend.applyTheme` does NOT
+     * map — it themes only the 8 logical buttons).
+     *
+     * Owned here (not in a separate theme class) because [EditBarController]
+     * already holds the exact edit-bar [MaterialButton]s — the §9.2
+     * "separate Theme-Klasse" intent is satisfied by the owner that also
+     * owns the listeners (sibling-faithful, no extra class). Tiers mirror
+     * the deleted `MainButtonsController.applyTheme` (`:407-429`) **exactly**:
+     * `editKeyboard` = accent darkened 0.35; the other 9 themed edit-bar
+     * buttons = accent darkened 0.18. `pipelineCancelButton` is
+     * intentionally **not** themed — the legacy `applyTheme` never themed
+     * it (byte-identical parity). Imperative (the IME calls it after
+     * re-inflate / accent change) — never both this and the legacy call
+     * (the legacy `mainButtonsController.applyTheme` is removed by CR-DEL).
+     */
+    fun applyTheme(accentColor: Int) {
+        val accentMedium = DictateUtils.darkenColor(accentColor, 0.18f)
+        val accentDark = DictateUtils.darkenColor(accentColor, 0.35f)
+        views.editSettingsButton.setBackgroundColor(accentMedium)
+        views.editKeyboardButton.setBackgroundColor(accentDark)
+        views.editUndoButton.setBackgroundColor(accentMedium)
+        views.editRedoButton.setBackgroundColor(accentMedium)
+        views.editCutButton.setBackgroundColor(accentMedium)
+        views.editCopyButton.setBackgroundColor(accentMedium)
+        views.editPasteButton.setBackgroundColor(accentMedium)
+        views.editNumbersButton.setBackgroundColor(accentMedium)
+        views.editHistoryButton.setBackgroundColor(accentMedium)
+        views.editAudioFocusButton.setBackgroundColor(accentMedium)
     }
 
     /**

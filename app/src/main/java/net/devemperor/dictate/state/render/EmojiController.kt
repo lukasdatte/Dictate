@@ -5,6 +5,7 @@ import android.view.View
 import android.view.inputmethod.InputConnection
 import androidx.emoji2.emojipicker.EmojiPickerView
 import com.google.android.material.button.MaterialButton
+import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.R
 
 /**
@@ -128,6 +129,19 @@ class EmojiController(
             ownerLedger[view.id] = OWNER_ATTACHED_CR4
             view.setTag(OWNER_TAG_KEY, OWNER_ATTACHED_CR4)
         }
+    }
+
+    /**
+     * Re-apply accent-colour theming to the emoji buttons (G6 — the
+     * edit-row residual the new `ImeViewBackend.applyTheme` does NOT map;
+     * sibling to [EditBarController.applyTheme]). Tiers mirror the deleted
+     * `MainButtonsController.applyTheme` (`:421/:424`) **exactly**:
+     * `editEmojiButton` = accent darkened 0.18; `emojiPickerCloseButton`
+     * = the raw accent colour.
+     */
+    fun applyTheme(accentColor: Int) {
+        views.editEmojiButton.setBackgroundColor(DictateUtils.darkenColor(accentColor, 0.18f))
+        views.emojiPickerCloseButton.setBackgroundColor(accentColor)
     }
 
     /**

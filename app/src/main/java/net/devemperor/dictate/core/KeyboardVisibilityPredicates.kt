@@ -14,10 +14,12 @@ import android.view.View
  * Before this refactor, six call sites mutated `resendButton.visibility`
  * imperatively — each with a subtly different gating expression:
  *
- * - `RecordingUiController.applyIdleState` — VISIBLE iff last audio exists
- *   (the lambda gating Pref.ResendButton lived in the IME service).
- * - `RecordingUiController.applyActiveState` — unconditional GONE while
- *   recording is active.
+ * - (legacy) the recording-UI controller idle branch — VISIBLE iff last
+ *   audio exists (the lambda gating Pref.ResendButton lived in the IME
+ *   service). That controller was retired in CR-DEL; the resend
+ *   visibility is now the RESEND-slot `predResendVisible` predicate.
+ * - (legacy) the recording-UI controller active branch — unconditional
+ *   GONE while recording is active.
  * - `DictateInputMethodService.onStartInputView` (Idle branch) — VISIBLE iff
  *   audio exists AND `Pref.ResendButton` is on.
  * - `DictateInputMethodService.runTranscriptionViaOrchestrator` —
@@ -43,7 +45,7 @@ import android.view.View
  *
  * In Block 5 the function body is identical; only the inputs swap from
  * scattered sources (cache-dir File-check, SharedPreferences,
- * RecordingStateController.state, KeyboardUiController.state) to
+ * RecordingStateController.state, the legacy pipeline-UI state) to
  * sub-state reads off the global `DictateUiState`. The signature is
  * intentionally written to mirror that future shape so the migration is a
  * rename, not a rewrite.
@@ -81,9 +83,8 @@ import android.view.View
  */
 @Deprecated(
     "Use net.devemperor.dictate.state.layout.isResendVisible(state) — the " +
-        "legacy four-arg form is scheduled for removal once the legacy " +
-        "DictateInputMethodService + RecordingUiController consumers migrate " +
-        "(D-13 / B7 follow-up).",
+        "legacy four-arg form is scheduled for removal once the remaining " +
+        "DictateInputMethodService consumers migrate (D-13 / B7 follow-up).",
     level = DeprecationLevel.WARNING,
 )
 fun isResendVisible(

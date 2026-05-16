@@ -1,8 +1,9 @@
 package net.devemperor.dictate.core
 
 /**
- * Narrow read/observe surface of [KeyboardUiController] for the
- * ReprocessStaging language-override carrier.
+ * Narrow read/observe surface of the pipeline-UI owner
+ * ([net.devemperor.dictate.state.render.PipelineStepRowRenderer]) for the
+ * ReprocessStaging staging-state carrier.
  *
  * Pulled out as a separate interface so consumers do not import the
  * concrete UI class — that would force callers to know about
@@ -11,11 +12,16 @@ package net.devemperor.dictate.core
  *
  * The legacy effective-language controller that originally drove this
  * surface was removed in D-13 (Epic §4 Block C1); the permanent language
- * SoT is now [net.devemperor.dictate.preferences.LanguageResolver] and
- * the override axis is `LanguageState.override`. This interface remains
- * the carrier for the still-legacy
- * [PipelineUiState.ReprocessStaging.selectedLanguage] until
- * `KeyboardUiController` itself is retired (Epic §4 Block C3).
+ * SoT is [net.devemperor.dictate.preferences.LanguageResolver] and the
+ * ReprocessStaging override is now the single-carrier
+ * `LanguageState.override` (B3-VAL **F-6 collapsed** in CR-DEL — the
+ * IME's `resolveEffectiveLanguage()` reads the orchestrator's
+ * `LanguageState.override`, no longer this carrier). C10-C3 retired
+ * `KeyboardUiController`; this interface is **adapted, not deleted**
+ * (Spec 1 §9.6) and now points at the relocated
+ * [net.devemperor.dictate.state.render.PipelineStepRowRenderer], which
+ * still carries the `selectedLanguage` field inside
+ * [PipelineUiState.ReprocessStaging] as View-side staging state.
  *
  *  - [state] — read the current pipeline UI state (Idle, Running,
  *    ReprocessStaging, Preparing) to decide whether a write is permanent

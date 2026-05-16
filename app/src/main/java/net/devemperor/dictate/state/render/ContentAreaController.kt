@@ -119,6 +119,23 @@ class ContentAreaController(
             views.emojiPickerContainer,
             if (area == ContentArea.EMOJI_PICKER) View.VISIBLE else View.GONE,
         )
+        // CR-DEL (RR-3 gap) — the 4th ContentArea axis Spec 2 §13 row 2
+        // marks `editButtonsLl` BLEIBT (ContentArea-Achse). The deleted
+        // `KeyboardStateManager.applyContentAreaVisibility` owned it
+        // (visible iff MAIN_BUTTONS || QWERTZ); relocated here verbatim so
+        // the kill-list class deletes with no stranded visibility axis.
+        // Nullable + null-skip so pre-CR-DEL tests constructing the 3-arg
+        // holder stay byte-identical.
+        views.editButtonsContainer?.let { editButtons ->
+            writeVisibility(
+                editButtons,
+                if (area == ContentArea.MAIN_BUTTONS || area == ContentArea.QWERTZ) {
+                    View.VISIBLE
+                } else {
+                    View.GONE
+                },
+            )
+        }
     }
 
     /**
@@ -154,4 +171,12 @@ data class ContentAreaViews(
     val mainButtonsContainer: View,
     val qwertzContainer: View,
     val emojiPickerContainer: View,
+    /**
+     * CR-DEL — the `edit_buttons_keyboard_ll` row (Spec 2 §13 row 2,
+     * ContentArea-Achse). Visible iff `MAIN_BUTTONS || QWERTZ`. Nullable
+     * with a `null` default so unit tests / callers that predate the 4th
+     * axis keep compiling and behave byte-identically (the write is
+     * skipped when absent). The IME service supplies the concrete view.
+     */
+    val editButtonsContainer: View? = null,
 )

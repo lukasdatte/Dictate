@@ -64,6 +64,14 @@ class DictatePipelineServiceRecordingDriveTest {
         // a prior test whose async unregister had not completed would
         // make this boot-test's job silently never start).
         ActiveJobRegistry.resetForTest()
+        // C8-IMPL-1 / B3-VAL F-1 — belt-and-suspenders: this class boots
+        // the full Service (→ DictateApplication →
+        // DurationHealingScheduler.schedule()) repeatedly. Drain the
+        // in-flight heal thread BEFORE the DB is dropped so it cannot
+        // pollute a co-locating sibling (notably
+        // LegacyAudioFileMigrationTest). Ordering mandatory: scheduler
+        // reset precedes DictateDatabase.resetForTest.
+        net.devemperor.dictate.database.DurationHealingScheduler.resetForTest()
         // Epic R-7 / b5-ime-activation-wiring §8: drop the shared
         // DictateDatabase singleton + file so the next boot-test starts
         // clean (this class boots the full Service repeatedly).

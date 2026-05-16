@@ -86,6 +86,13 @@ class PipelineRunnerSubsystemAdapterTest {
         // same Robolectric fork is not blocked by a still-registered job
         // whose async unregister had not completed.
         ActiveJobRegistry.resetForTest()
+        // C8-IMPL-1 / B3-VAL F-1 — belt-and-suspenders: this test boots
+        // the full Service (→ DictateApplication →
+        // DurationHealingScheduler.schedule()). Drain the in-flight heal
+        // thread BEFORE the DB is dropped so it cannot pollute a
+        // co-locating sibling. Ordering mandatory: scheduler reset
+        // precedes DictateDatabase.resetForTest.
+        net.devemperor.dictate.database.DurationHealingScheduler.resetForTest()
         net.devemperor.dictate.database.DictateDatabase.resetForTest(
             ApplicationProvider.getApplicationContext(),
         )

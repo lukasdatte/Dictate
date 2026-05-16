@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.preference.PreferenceManager
 import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.database.DictateDatabase
+import net.devemperor.dictate.database.DurationHealingScheduler
 import net.devemperor.dictate.database.entity.SessionEntity
 import net.devemperor.dictate.database.entity.SessionStatus
 import org.junit.After
@@ -59,6 +60,18 @@ class LegacyAudioFileMigrationTest {
         // singleton entirely so the next getInstance builds a fresh DB
         // (no carried-over migration flag or rows), and (2) clear the
         // entire default SharedPreferences (not just the one flag key).
+        //
+        // C8-IMPL-1 / B3-VAL F-1 — drain the DurationHealingScheduler's
+        // in-flight heal thread BEFORE the DB is rebuilt. Every
+        // Robolectric test in this fork instantiates DictateApplication
+        // → DurationHealingScheduler.schedule() spawns a heal thread
+        // that promotes any row with a missing audio file to FAILED
+        // ("Audio file not found during healing"). An in-flight heal
+        // racing this test's inserted rows is the root cause of the
+        // C8-IMPL-1 method-varying flake. Ordering is mandatory: reset
+        // the scheduler first so the heal is fully drained before
+        // DictateDatabase.resetForTest rebuilds the DB.
+        DurationHealingScheduler.resetForTest()
         DictateDatabase.resetForTest(context)
         PreferenceManager.getDefaultSharedPreferences(context)
             .edit()
@@ -80,6 +93,12 @@ class LegacyAudioFileMigrationTest {
             .edit()
             .clear()
             .apply()
+        // C8-IMPL-1 / B3-VAL F-1 — symmetric drain: cancel + await the
+        // heal thread BEFORE rebuilding/dropping the DB, so a heal
+        // spawned by this test's DictateApplication boot cannot pollute
+        // the sibling that co-locates after it. Ordering mandatory:
+        // scheduler reset precedes DictateDatabase.resetForTest.
+        DurationHealingScheduler.resetForTest()
         DictateDatabase.resetForTest(context)
         // Delete any stray legacy file we might have created.
         File(context.cacheDir, LegacyAudioFileMigration.LEGACY_NAME).delete()

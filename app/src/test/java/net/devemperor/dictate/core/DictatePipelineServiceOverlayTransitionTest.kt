@@ -78,6 +78,14 @@ class DictatePipelineServiceOverlayTransitionTest {
         // (notably LegacyAudioFileMigrationTest) co-locating after this
         // one in the same Robolectric fork starts from a clean DB
         // rather than this test's accumulated rows / migration flag.
+        //
+        // C8-IMPL-1 / B3-VAL F-1 — this test is the amplifier for the
+        // heal-thread axis too: every onCreate runs
+        // DurationHealingScheduler.schedule(). Drain the in-flight heal
+        // thread BEFORE the DB is dropped so it cannot pollute the
+        // sibling. Ordering mandatory: scheduler reset precedes
+        // DictateDatabase.resetForTest.
+        net.devemperor.dictate.database.DurationHealingScheduler.resetForTest()
         net.devemperor.dictate.database.DictateDatabase.resetForTest(
             androidx.test.core.app.ApplicationProvider.getApplicationContext(),
         )

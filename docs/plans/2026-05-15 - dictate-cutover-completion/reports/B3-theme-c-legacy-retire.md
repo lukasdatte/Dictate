@@ -30,11 +30,12 @@
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 1 · Important: 1 · Nice-to-have: 1 · Postponed: 0
+**Severity counts:** Critical: 1 · Important: 0 (1 fixed) · Nice-to-have: 1 · Postponed: 0 · B5-carry-over: 1 (F-6)
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
-| C8-IMPL-1 | B3-C8-C1-IMPL | Important | delegated-to-orchestrator → **B3 AUDIT-TEST** | R-7-variant: `LegacyAudioFileMigrationTest` flakes non-deterministically in the full `testReleaseUnitTest` run only (passes isolated + full testDebugUnitTest). DB-singleton / `DurationHealingJob` test-pollution axis (C9-C2 / audioFile territory) — DIFFERENT shared-state axis than B2-VAL-W1's `ActiveJobRegistry.resetForTest()`. Zero code-path overlap with C8 (not a regression). B3 AUDIT-TEST must add a `DurationHealingJob`/DB-singleton `tearDown` for the `migration/` Robolectric tests. | step-1-impl (C8-C1) |
+| C8-IMPL-1 (F-1) | B3-C8-C1-IMPL → B3-AUDIT-TEST → B3-VAL-REPAIR-1 | Important | **fixed** (B3-VAL-W1) | R-7-variant `LegacyAudioFileMigrationTest` flake — root-caused as the `DurationHealingJob`/DB-singleton async axis (`DictateApplication.onCreate` spawned heal thread). **Corrected (F-2):** manifested in **BOTH** `testDebug`+`testReleaseUnitTest` non-deterministically (not release-only). Fixed via production-owned `DurationHealingScheduler` graceful-drain `resetForTest()` seam; verified 1048/1048 green ×3 uncached both variants. | step-1-impl (C8-C1) → B3-VAL-W1 |
+| F-6 | B3-VAL-SANITY (merged PLAN-AND-API-B3-1 + LOGIC-B3-1 + conv-1 footnote) | Nice-to-have (info) | **deferred-with-tracking → B5** | Dual-carrier ReprocessStaging override (legacy `PipelineUiState.ReprocessStaging.selectedLanguage` vs new `LanguageState.override`). Behaviour-safe today; the cross-carrier *collapse* is the missing render-path-cutover block's job — **inherited by the B5/Theme-C-R render-path-cutover scope under the C10-IMPL-2 umbrella** so the transitional dual-carrier does not become permanent when `KeyboardUiController` is retired. NOT a B3 defect (F-3 already de-dups the B3-local legacy-carrier read; disjoint from F-6). | block-validate (B3-VAL-SANITY) |
 | C10-IMPL-2 | B3-C10-C3-IMPL | **Critical** | delegated-to-orchestrator → **mid-chunk-triage / Epic re-scope** | **Architecture-conflict: the render-path cutover block does not exist.** C10-C3's premise ("Theme B + the parent RenderBackend path made the 4 controllers dead") is false — Theme B was recording-drive only; `ImeViewBackend` runs *parallel* to the legacy controllers (`staticHandlerInstaller=null`, new render controllers not IME-attached); RECORD/BACKSPACE long-press + touch handlers + theming + key-press-anim + QWERTZ + pipeline-progress UI have no ported owner (parent B4-VAL F-1/F-2/F-33 deferred the IME render-attach to a never-created follow-up). Per-class responsibility-trace caught it before any deletion (R-mitigation). Needs a new render-path-cutover block before the 4 deletions are safe. Subsumes C5-IMPL-2. Blocks D1/D2. | step-1-impl (C10-C3) |
 | C10-IMPL-3 | B3-C10-C3-IMPL | Nice-to-have | open | Optional architecture-test guarding the AC-10 "PipelineOrchestrator has no caller outside {adapter, JobExecutor, standalone/cancel/RESUME}" invariant. Noted for D1/D2 or follow-up; not done this (blocked) chunk. | step-1-impl (C10-C3) |
 
@@ -209,7 +210,7 @@ resolution half is covered by `LanguageResolverTest` (13 cases).
 
 | ID | Severity | Description | Status | Reason |
 |----|----------|--------------|--------|--------|
-| IMPL-1 | Important | `LegacyAudioFileMigrationTest` (Robolectric, `migration/`) flakes in the **full `testReleaseUnitTest` run** — fails non-deterministically at a *different test method/line each run* (kt:220 `openai_rate_limit` vs kt:183 `promotes recoverable…`). Passes in isolation (uncached) + full `testDebugUnitTest` (uncached) all green. ZERO code-path overlap with C8-C1 (language only); the error is a `DurationHealingJob` "Audio file not found during healing" artifact = R-7-class DB-singleton test-pollution on the audioFile/healing axis (C9-C2 territory), NOT covered by the B2-VAL-W1 `ActiveJobRegistry.resetForTest()` fix (different shared-state axis). | delegated-to-orchestrator | Cross-chunk test-infra (R-7 family, audioFile-healing DB-singleton). Out of C8-C1 scope; not finder-fixer (external test-infra). Non-deterministic + method-varying ⇒ pollution flake, not a C8-C1 regression. Recommend block-validate / B2-VAL-W1-follow-up adds a DB-singleton/`DurationHealingJob` `tearDown` reset for the `migration/` Robolectric tests. |
+| IMPL-1 | Important | `LegacyAudioFileMigrationTest` (Robolectric, `migration/`) flakes non-deterministically at a *method-varying* line. **CORRECTION (B3-VAL F-2, AUDIT-TEST-verified):** the original "release-only / `testDebugUnitTest` always green" framing was **inaccurate** — the flake manifests in **BOTH** `testDebugUnitTest` and `testReleaseUnitTest` non-deterministically (1047/1048 green every uncached run, the single failure always the C8-IMPL-1 pollution flake; AUDIT-TEST reproduced 3/3 uncached runs incl. a `testDebugUnitTest` failure at kt:244). ZERO code-path overlap with C8-C1 (language only); the error is a `DurationHealingJob` "Audio file not found during healing" artifact = R-7-class DB-singleton test-pollution on the audioFile/healing axis, NOT covered by the B2-VAL-W1 `ActiveJobRegistry.resetForTest()` fix (different shared-state axis — the `DurationHealingJob`/DB-singleton async axis). | **fixed** (B3-VAL-REPAIR-1, F-1) | Root-caused + fixed: production-owned `DurationHealingScheduler` holder with a `@JvmStatic @VisibleForTesting resetForTest()` graceful-drain seam; called before `DictateDatabase.resetForTest()` in `LegacyAudioFileMigrationTest` @Before/@After + the `DictatePipelineService*` boot-test teardowns. Test-infra only, no production behaviour change. Verified 1048/1048 green across 3 uncached runs both variants. |
 
 #### Code-Bugs Found While Writing Tests (Step 4)
 
@@ -249,6 +250,18 @@ complete. No quality issues found.
   `VersionedPluginRegistryTest.kt` (Step-4 own-API-change fix /
   KDoc scrub). All drift is mechanically forced by AC-5's literal
   grep-zero + the Dev-1 API change; documented above.
+
+> **§9.6 reconciliation (B3-VAL F-5):** Spec 1 §9.6 says
+> `LanguageController` "wandert direkt in den Modul-Reducer; keine
+> Adapter-Phase nötig". This is satisfied by the pref-only
+> resolution/write algorithm living in the stateless
+> `preferences/LanguageResolver` object, invoked **Pre-Dispatch** per
+> Spec 1 §4.11 — *not* literally inside `LanguageModule.reduce`, because
+> the reducer must stay I/O-free (ADR-0002 pure-reducer invariant;
+> putting `SharedPreferences` I/O inside the reducer would violate it).
+> The chosen placement is therefore the *more* spec-faithful reading of
+> Spec 1 as a whole, not unplanned drift. (Spec-file edit is out of B3
+> scope; this block-report note is the SSoT-correct location.)
 
 #### Overlooked points / known gaps
 
@@ -353,21 +366,38 @@ post-cutover SoT.
   (DB), code path not touched by this chunk (zero edits in/around `:3431`).
 - **Legacy-migration:** unchanged — sources from `Pref.LastFileName`,
   code path not touched. `LegacyAudioFileMigrationTest` passes
-  **isolated** (8 tests, 0 fail). The full `testReleaseUnitTest`
-  BUILD-FAILED is the **pre-existing C8-IMPL-1 pollution flake**
+  **isolated** (8 tests, 0 fail). The full-suite flake is the
+  **pre-existing C8-IMPL-1 pollution flake**
   (DB-singleton/`DurationHealingJob` shared-state axis) — NOT a
   regression: my change does not touch the audioFile/migration axis
   (resend/migration source from `Pref.LastFileName`/DB, never the
-  deleted field), and full `testDebugUnitTest` is green (1048/0/0).
-  Documented per the acceptance note — my re-sourcing does not worsen
-  the C8-IMPL-1 axis.
+  deleted field). **CORRECTION (B3-VAL F-2):** the original claim that
+  "full `testDebugUnitTest` is green (1048/0/0)" was **inaccurate** —
+  AUDIT-TEST verified the C8-IMPL-1 flake manifests in **BOTH**
+  `testDebugUnitTest` and `testReleaseUnitTest` non-deterministically
+  (1047/1048 green every uncached run, the single failure always the
+  C8-IMPL-1 pollution flake; never debug-always-green). My re-sourcing
+  does not worsen the C8-IMPL-1 axis; the axis itself is now fixed by
+  B3-VAL-REPAIR-1 (F-1 `DurationHealingScheduler` seam — 1048/1048
+  green across 3 uncached runs both variants).
 
 #### Build + test (AC-9)
 
 - `./gradlew assembleDebug` → **BUILD SUCCESSFUL**.
-- `./gradlew testDebugUnitTest` → **BUILD SUCCESSFUL**, **1048 tests,
-  0 failures, 0 skipped** (baseline ~1043 + 5 new `audioFileOrNull`
-  tests).
+- `./gradlew testDebugUnitTest` → **1048 tests** (baseline ~1043 + 5
+  new `audioFileOrNull` tests).
+  **CORRECTION (B3-VAL F-2):** the original "**0 failures, 0 skipped**"
+  claim for the uncached full `testDebugUnitTest` was **inaccurate** —
+  AUDIT-TEST verified that pre-fix, the forwarded C8-IMPL-1 pollution
+  flake manifested in **BOTH** `testDebugUnitTest` and
+  `testReleaseUnitTest` non-deterministically (1047/1048 green every
+  uncached run, the single failure always the C8-IMPL-1 flake at a
+  method-varying line; debug was *not* always-green). This is **not** a
+  C9-C2 regression (zero audioFile/migration-axis edit; isolated test
+  green). The C8-IMPL-1 axis is now fixed by B3-VAL-REPAIR-1 (F-1):
+  full `testDebugUnitTest` AND `testReleaseUnitTest` are **1048/1048,
+  0 failures, 0 errors** across 3 uncached `--rerun-tasks` runs in
+  varying order.
 
 #### Disjoint commit-boundary file lists
 
@@ -646,11 +676,86 @@ delegation chain it documents. No coverage gap introduced.)
 | plan-and-api | `B3-AUDIT-PLAN-AND-API` | ⏳ | `./reports/audit-plan-and-api-B3.md` | — |
 | convention | `B3-AUDIT-CONVENTION` | ⏳ | `./reports/audit-convention-B3.md` | — |
 | logic | `B3-AUDIT-LOGIC` | ⏳ | `./reports/audit-logic-B3.md` | — |
-| test | `B3-AUDIT-TEST` | ⏳ | `./reports/audit-test-B3.md` | — |
+| test | `B3-AUDIT-TEST` | ✅ done | `./reports/audit-test-B3.md` | 1 Important (C8-IMPL-1 root-caused: `DurationHealingJob` async axis — precise fix specified, → repair-sub-phase per D3) + 2 Important (doc-gap: C8/C9 "debug green" claim falsified) + 1 Nice-to-have (R-3 onServiceConnected coverage gap). **NO non-C8-IMPL-1 regression** — 1047/1048 green every run; the single failure is the forwarded C8-IMPL-1 pollution flake in BOTH variants (3/3 uncached runs). |
 
-### Sanity-Check Consolidator
+### Block-Validate Sanity-Check (B3-VAL-SANITY)
 
 **Agent-ID:** `B3-VAL-SANITY` · **Output:** `./reports/validated-findings-B3.md`
+**Date:** 2026-05-16 · **Source audits:** 4 (plan-and-api / convention / logic / test), read in full.
+
+**What was done:** Consolidated all 4 B3 audit outputs. Raw input: 0 Critical / 2 Important / 7 Nice-to-have-class observations + 1 doc-gap, across the 4 audits — a clean block (the only failing test is the forwarded C8-IMPL-1 pollution flake, 1047/1048 green every uncached run; zero real C8/C9 regressions). De-duplicated (the dual-carrier ReprocessStaging override was flagged from 3 angles → merged into one), validated each finding, classified 🟢/🟡/❌ per D3 (every real finding incl. NTH repaired in this block; only genuine intentional-deferred → ❌/tracked).
+
+**Classified findings:**
+
+| Issue-ID | Was | Verdict | Severity | Routing |
+|----------|-----|---------|----------|---------|
+| F-1 | AUDIT-TEST C8-IMPL-1 | 🟢 valid+auto-fixable | Important | repair-sub-phase, B3 (forwarded Postponed test-debt **actioned now per D3**, NOT re-postponed) |
+| F-2 | AUDIT-TEST-B3-1 | 🟢 valid+auto-fixable | Important | repair-sub-phase, B3 (doc-correction; co-commit with F-1) |
+| F-3 | AUDIT-CONVENTION-B3-1 | 🟢 valid+auto-fixable | Nice-to-have | repair-sub-phase, B3 (dedup + **blank-guard-drift normalise** — B3-local, behaviour-preserving) |
+| F-4 | AUDIT-LOGIC-B3-2 | 🟢 valid+auto-fixable | Nice-to-have | repair-sub-phase, B3 (one clarifying comment at `inputLanguagesListener`) |
+| F-5 | AUDIT-PLAN-AND-API-B3-2 | 🟢 valid+auto-fixable | Nice-to-have | repair-sub-phase, B3 (one-line §9.6-vs-LanguageResolver reconciliation doc-note) |
+| F-6 | AUDIT-PLAN-AND-API-B3-1 + AUDIT-LOGIC-B3-1 + conv-1 footnote (merged) | ❌ deferred-with-rationale | Nice-to-have (informational) | **NOT B3** — genuine intentional transitional duplication; the *collapse* is the missing B5/render-path-cutover block's job (folded into C10-IMPL-2). **Tracked-for-B5** (see Issue Index). |
+| (none) | AUDIT-CONVENTION-B3-2 | ❌ false-positive-as-finding | — | No action — the broad `catch (Throwable t)` is **byte-consistent with the pre-existing in-file convention**; auditor flagged only so it is not re-raised as new drift. |
+| (none) | AUDIT-LOGIC-B3-3 + AUDIT-TEST R-3 coverage row | ❌ deferred-with-tracking | Nice-to-have | **Known inherent gap** — IME-service binder-lifecycle untestability predates B3; reducer end *is* covered (real-orchestrator AC-5 test). NOT B3-introduced; recorded as known intentional gap. |
+
+**Counts:** 🟢 5 (Important 2, NTH 3) · 🟡 0 · ❌ 3 (1 tracked-for-B5, 1 false-positive, 1 known-inherent-gap).
+
+**C8-IMPL-1 classification (the priority item):** 🟢 valid + auto-fixable, Important, **fixed in this block per D3** (it is the forwarded Postponed test-debt being actioned now, NOT re-postponed). AUDIT-TEST fully root-caused it (`DurationHealingJob` async axis spawned by `DictateApplication.onCreate()`; smoking-gun: the `"Audio file not found during healing"` string exists in exactly one place, `DurationHealingJob.kt:61`) and fully specified the fix (extract a production-owned `DurationHealingScheduler` holder with `@JvmStatic @VisibleForTesting resetForTest()` mirroring the `DictateDatabase`/`JobExecutor`/`ActiveJobRegistry.resetForTest()` convention; call it from `LegacyAudioFileMigrationTest` @Before/@After before `DictateDatabase.resetForTest()`, + the `DictatePipelineService*` boot-test teardowns). Test-infra only, no behavioural production change. Mechanical + fully determined → 🟢.
+
+**NTH defer-to-B5 vs fix-now split:**
+- **Fix-now in B3:** F-3 (dedup + blank-guard-drift normalise — the duplicated read lives entirely inside C8-C1's *own new* helpers; the blank-guard drift is a latent correctness smell; B3-local + behaviour-preserving), F-4 (one comment), F-5 (one-line doc note).
+- **Defer-to-B5 (genuine intentional, tracked):** F-6 — the *cross-carrier collapse* (unify `resolveEffectiveLanguage()` + `handleReprocessSend` + `PipelineModule` onto `LanguageState.override`, remove the legacy `PipelineUiState.ReprocessStaging.selectedLanguage` carrier read). It depends on the legacy `KeyboardUiController`/`PipelineUiStateReader` retirement and is the work the new B5/render-path-cutover block owns (C10-IMPL-2). Fixing it in B3 would pre-empt the blocked cutover (D7 anti-pattern). **F-3 and F-6 do not overlap** — F-3 de-duplicates the legacy-carrier *read* within B3 code; F-6 is the larger cross-carrier *collapse*.
+
+**Tracking obligation (orchestrator):** the new B5/render-path-cutover block scope must explicitly inherit the F-6 "collapse the ReprocessStaging override read onto `LanguageState.override`; remove the legacy carrier read" item that the C8-C1 "Overlooked points" hands off (folded into the C10-IMPL-2 render-path-cutover umbrella) so the transitional dual-carrier does not become permanent when `KeyboardUiController` is retired.
+
+**Validated-no-residual:** AC-5 PASS, AC-6 PASS, R-3 SOUND, override-vs-rebind clobber CANNOT-HAPPEN, F-15 side-effect REAL+CORRECT+COMPLETE, R-5 GREEN, C10-C3-only-OQ-1-landed CORRECT — all independently confirmed across ≥2 audits; no action. All C8/C9 documented deviations (Dev-1 RefreshFromPref payload, Dev-2 onServiceConnected re-push, Dev-3 audioFileOrNull accessor) re-scrutinised spec-faithful with no logic hole.
+
+> Do NOT fix (consolidator phase). The orchestrator may resume this agent as `B3-VAL-REPAIR` with `implement-fixes.md` to apply F-1…F-5.
+
+### Block-Validate Repair Wave 1 (B3-VAL-REPAIR-1)
+
+**Agent-ID:** `B3-VAL-REPAIR-1` → `B3-VAL-REPAIR-1-VERIFY` · **Wave:** B3-VAL-W1, iter 1
+**Date:** 2026-05-16 · **Scope:** green-only (F-1…F-5) · **Findings addressed:** 5 🟢 (2 Important, 3 NTH). F-6 + 2 ❌ recorded-not-fixed (see below).
+
+| Finding | Sev | What was done | Status |
+|---------|-----|---------------|--------|
+| F-1 | Important | New production-owned holder `database/DurationHealingScheduler.kt` (Kotlin sibling-convention) owning the `ExecutorService`; `schedule(dao, repo)` keeps the exact prior `DictateApplication.onCreate` async-single-shot semantics; `@JvmStatic @VisibleForTesting internal fun resetForTest()` drains the in-flight heal. `DictateApplication.onCreate()` (Java, in place) now calls `DurationHealingScheduler.schedule(...)` instead of inlining `Executors.newSingleThreadExecutor()`. `LegacyAudioFileMigrationTest` @Before+@After call `DurationHealingScheduler.resetForTest()` **before** `DictateDatabase.resetForTest()` (mandatory ordering). Belt-and-suspenders: same call added before `DictateDatabase.resetForTest(...)` in 5 `DictatePipelineService*`/cutover boot-test teardowns. | **fixed** |
+| F-2 | Important | Corrected 3 block-report subsections (C8-C1 IMPL-1 Issues row; C9-C2 "Resend + migration still work"; C9-C2 "Build + test (AC-9)") — the false "release-only / `testDebugUnitTest` always green (1048/0/0)" claims replaced with the verified truth: the C8-IMPL-1 flake manifested in **BOTH** variants non-deterministically, 1047/1048 every uncached run, now fixed. | **fixed** |
+| F-3 | NTH | De-duplicated the byte-identical `uiController != null && state instanceof ReprocessStaging` detection in `resolveEffectiveLanguage()` + `setLanguageFromPicker()` into one private `reprocessStagingOrNull()`; added `reprocessStagingOverrideOrNull()` as the **single guarded reader** (trimmed-non-blank). `resolveEffectiveLanguage()` uses the guarded reader; `setLanguageFromPicker()` routes on `reprocessStagingOrNull() != null` — **routing semantics unchanged** (in-staging → transient regardless of override blankness; picker `code` is resource-array-derived, never blank). Blank-guard drift normalised into the one reader. | **fixed** |
+| F-4 | NTH | Added the clarifying comment at the `inputLanguagesListener` site (override still wins for display via `resolveEffectiveLanguage()`; this listener only moves the orthogonal permanent `effective` axis — not a clobber; cross-refs `LanguageModuleTest:78`). | **fixed** |
+| F-5 | NTH | Added the one-line §9.6-vs-`LanguageResolver` reconciliation note to the C8-C1 "Files modified — drift classification" section (the pref-only algorithm in `preferences/LanguageResolver` invoked Pre-Dispatch per §4.11 satisfies §9.6 without violating the ADR-0002 pure-reducer invariant). | **fixed** |
+| F-6 | NTH (info) | **NOT fixed — deferred-with-tracking to B5** per validated-findings (genuine intentional transitional dual-carrier; the cross-carrier *collapse* is the missing render-path-cutover block's job, folded into C10-IMPL-2). F-3 de-dups only the *legacy-carrier read* within B3 code and does **not** touch the cross-carrier collapse — disjoint from F-6. Recorded in Issue Index as a B5 carry-over. | recorded-not-fixed |
+
+**DurationHealingScheduler design.** Production-owned `object` in `database/` (sibling to `DurationHealingJob`, mirroring the `DictateDatabase`/`JobExecutor`/`ActiveJobRegistry.resetForTest()` convention — K-1, no Mockito). `schedule()` creates the single-thread executor, submits `DurationHealingJob.heal`, `shutdown()`s — byte-identical production semantics to the old inline code (still async, still single-shot, still shut down after enqueue; no behavioural production change). `resetForTest()` does a **graceful** `shutdown()` + `awaitTermination(10s)`.
+
+**Deviation D22 (F-1 drain mechanic).** AUDIT-TEST's spec said `shutdownNow()` + `awaitTermination()`. First implementation followed that literally and **regressed**: `shutdownNow()` interrupts the heal thread mid-Room/SQLite-native-call, which corrupts Robolectric's process-wide native SQLite runtime → a release-suite-wide `UnsatisfiedLinkError: SQLiteConnectionNatives.nativeOpen` cascade (10 failures), *and* failed to actually stop the JNI-blocked heal (debug `LegacyAudioFileMigrationTest` still polluted: `non-legacy-path row … expected:<RECORDING> but was:<FAILED>`). Switched to a **graceful** `shutdown()` + `awaitTermination(10s)` (no interrupt): the in-flight heal runs to completion uninterrupted against the *old* DB (harmless — it is dropped immediately after), `awaitTermination` blocks the caller until done, so the heal can never reach the next test's rebuilt DB. Small + locally-decidable correction of a mechanically-wrong spec detail; same seam shape + same call sites; documented in the holder's KDoc. → inline-fixed, `plan-deviation-resolved`.
+
+**Self-check (B3-VAL-REPAIR-1-VERIFY).** `./gradlew assembleDebug` BUILD SUCCESSFUL. `./gradlew test --rerun-tasks` for `testDebugUnitTest` + `testReleaseUnitTest`, **3 uncached runs in varying order** (run1 both-in-one-invocation; run2 release-then-debug separate invocations; run3 both-in-one): **every run 1048/1048, 0 failures, 0 errors, both variants.** `LegacyAudioFileMigrationTest` 8/8 green both variants every run — the C8-IMPL-1 flake is **GONE**. F-3 behaviour-preservation confirmed: `LanguageModuleTest` 10/10 (incl. AC-5 real-dispatch propagation + `RefreshFromPref does not clear an active override`:78), `LanguageResolverTest` 11/11, both variants. No new issues; no self-corrections needed beyond the D22 drain-mechanic fix folded into this wave. Convergence: ✓ converged.
+
+**Files modified (wave-commit — DISJOINT production vs test):**
+
+*Production (Commit-wave):*
+- `app/src/main/java/net/devemperor/dictate/database/DurationHealingScheduler.kt` (new — F-1)
+- `app/src/main/java/net/devemperor/dictate/DictateApplication.java` (F-1 — use holder; removed inline executor + unused imports)
+- `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java` (F-3 dedup + guarded-reader; F-4 comment)
+
+*Test:*
+- `app/src/test/java/net/devemperor/dictate/migration/LegacyAudioFileMigrationTest.kt` (F-1 — @Before/@After scheduler drain before DB reset)
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceRecordingDriveTest.kt` (F-1 belt-and-suspenders teardown)
+- `app/src/test/java/net/devemperor/dictate/core/ImeRecordingDriveCutoverTest.kt` (F-1 belt-and-suspenders teardown)
+- `app/src/test/java/net/devemperor/dictate/core/DictateCutoverE2ETest.kt` (F-1 belt-and-suspenders teardown)
+- `app/src/test/java/net/devemperor/dictate/core/PipelineRunnerSubsystemAdapterTest.kt` (F-1 belt-and-suspenders teardown)
+- `app/src/test/java/net/devemperor/dictate/core/DictatePipelineServiceOverlayTransitionTest.kt` (F-1 belt-and-suspenders teardown)
+
+*Documentation (this block-report — F-2, F-5, this subsection, Issue Index, Deviation Summary):*
+- `docs/plans/2026-05-15 - dictate-cutover-completion/reports/B3-theme-c-legacy-retire.md`
+
+**Files outside findings-scope (drift):** none — the wave-diff stays within the loci named in F-1…F-5 (the 5 belt-and-suspenders boot-tests are explicitly named in F-1's "Files" + suggested-fix step 3).
+**Cross-fix conflicts:** none (F-3 and F-6 are disjoint by construction; F-1 prod/test split is clean).
+
+### Block-Validate Repair Wave (B3-VAL-REPAIR)
+
+(superseded — applied as B3-VAL-REPAIR-1 above, wave B3-VAL-W1 iter 1)
 
 ### Mini-Triage + Repair-Wave(s)
 
@@ -666,6 +771,7 @@ delegation chain it documents. No coverage gap introduced.)
 | Dev-2 | Epic §4 Block C1 (caller graph / R-3) | `onServiceConnected` re-pushes `pushPermanentLanguageToOrchestrator()` | Boot-before-bind race: onCreateInputView push runs before binder arrives → `effective` stays `"system"`; plan mandates documenting the ordering + `pipelineBinder != null` discipline | IME-internal, idempotent; closes R-3 silent-stale risk | yes | `B3-C8-C1-IMPL` | Step 2 |
 | Dev-3 (chunk-local Dev-1) | Epic §4 Block C2 ("Files: `DictateInputMethodService.java` only") | Added `RecordingState.audioFileOrNull` extension to `state/DictateUiState.kt` | The plan also mandates "recording-active reads → orchestrator state (`state.recording`)"; sourcing the sealed-`RecordingState` `audioFile` from Java needs a canonical accessor — project convention is a centralised extension next to the FSM def (`isActiveOrPaused` sibling). Most plan-compatible/DRY. Additive, no behaviour change. | C10-C3 may consume the same canonical accessor when collapsing legacy recording-UI reads | yes (small + locally decidable — plan's own state-source mandate forces it) | `B3-C9-C2-IMPL` | Step 2 |
 | Dev-4 (chunk-local Dev-1) | Epic §4 Block C3 / chunks.json `C10-C3` ("Delete MainButtonsController/RecordingUiController/KeyboardUiController/KeyboardStateManager") | The 4 controller deletions **not performed**; only OQ-1 KDoc + already-gone confirmation done | Chunk premise false — render-path cutover never happened (Theme B = recording-drive only); new render owners exist but are not IME-wired; RECORD/BACKSPACE long-press deferred by parent B4-VAL F-1/F-2 to a never-created block. Deleting strands unported core features (subtle R-risk; prompt forbids deleting unported behaviour; D4). | All of D1/D2 (assume sole-RenderBackend post-C3 — e2e-runbook TC-21). Render-path cutover is missing scope. | **delegated — Critical `architecture-conflict` (C10-IMPL-2)**; NOT inline-fixed (needs new module work) | `B3-C10-C3-IMPL` | Step 1 |
+| Dev-5 (B3-VAL-W1, F-1) | AUDIT-TEST C8-IMPL-1 suggested-fix step 1 (`shutdownNow()` + `awaitTermination()`) | `DurationHealingScheduler.resetForTest()` uses **graceful** `shutdown()` + `awaitTermination(10s)` instead of `shutdownNow()` | `shutdownNow()` interrupts the heal mid-Room/SQLite-native-call → corrupts Robolectric's process-wide native SQLite runtime (release-suite-wide `UnsatisfiedLinkError` cascade, 10 fails) **and** fails to stop the JNI-blocked heal (debug pollution still fired). Graceful drain lets the in-flight heal complete uninterrupted against the old DB (dropped right after) — no native corruption, deterministic. Empirically reproduced both failure modes before switching. | None beyond F-1's own seam — same call sites, same seam shape; documented in the holder KDoc + the B3-VAL-REPAIR-1 subsection. Verified 1048/1048 ×3 uncached both variants. | yes (`plan-deviation-resolved` — small + locally-decidable correction of a mechanically-wrong spec detail) | `B3-VAL-REPAIR-1` | Block-Validate repair wave B3-VAL-W1 |
 
 ---
 

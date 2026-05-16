@@ -907,6 +907,15 @@ public class DictateInputMethodService extends InputMethodService
         inputLanguagesListener = (changedPrefs, key) -> {
             if (Pref.InputLanguages.INSTANCE.getKey().equals(key)
                     || Pref.InputLanguagePos.INSTANCE.getKey().equals(key)) {
+                // F-4 (B3-VAL): if the IME is in ReprocessStaging with an
+                // active override, the chip/label still show the override
+                // (resolveEffectiveLanguage() honours it); this listener
+                // only moves the *permanent* `effective` axis underneath
+                // via RefreshFromPref. override and effective are
+                // orthogonal LanguageState fields — the silent `effective`
+                // move is NOT a clobber of the override (see
+                // LanguageModuleTest "RefreshFromPref does not clear an
+                // active override").
                 pushPermanentLanguageToOrchestrator();
             }
         };
@@ -1609,15 +1618,54 @@ public class DictateInputMethodService extends InputMethodService
      * read returns the persisted value, never a stale cache or NPE).</p>
      */
     private String resolveEffectiveLanguage() {
-        if (uiController != null
-                && uiController.getState() instanceof PipelineUiState.ReprocessStaging) {
-            String override =
-                    ((PipelineUiState.ReprocessStaging) uiController.getState())
-                            .getSelectedLanguage();
-            if (override != null && !override.trim().isEmpty()) return override;
-        }
+        String override = reprocessStagingOverrideOrNull();
+        if (override != null) return override;
         return net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
                 .effectiveLanguage(sp);
+    }
+
+    /**
+     * The current {@link PipelineUiState.ReprocessStaging} state, or
+     * {@code null} when the IME is not in ReprocessStaging (or the
+     * {@code uiController} is not attached).
+     *
+     * <p>F-3 (B3-VAL): single canonical detector for the
+     * "are we in ReprocessStaging" predicate that
+     * {@link #resolveEffectiveLanguage()} and
+     * {@link #setLanguageFromPicker(String)} both need. Before this was
+     * duplicated byte-identically in both. This is the legacy
+     * ReprocessStaging carrier; the cross-carrier collapse onto
+     * {@code LanguageState.override} is F-6, deferred to the
+     * render-path-cutover block.</p>
+     */
+    private PipelineUiState.ReprocessStaging reprocessStagingOrNull() {
+        if (uiController != null
+                && uiController.getState() instanceof PipelineUiState.ReprocessStaging) {
+            return (PipelineUiState.ReprocessStaging) uiController.getState();
+        }
+        return null;
+    }
+
+    /**
+     * The trimmed, non-blank ReprocessStaging language override, or
+     * {@code null} when not in ReprocessStaging or the override is unset
+     * / blank.
+     *
+     * <p>F-3 (B3-VAL): the single guarded reader for the transient
+     * override. The blank-guard ({@code override != null &&
+     * !override.trim().isEmpty()}) previously lived only in
+     * {@link #resolveEffectiveLanguage()} while a duplicated detector in
+     * {@link #setLanguageFromPicker(String)} had drifted without it;
+     * centralising the guarded read here removes both the duplication
+     * and the drift — there is now exactly one place that decides what a
+     * valid override is.</p>
+     */
+    private String reprocessStagingOverrideOrNull() {
+        PipelineUiState.ReprocessStaging staging = reprocessStagingOrNull();
+        if (staging == null) return null;
+        String override = staging.getSelectedLanguage();
+        if (override != null && !override.trim().isEmpty()) return override;
+        return null;
     }
 
     /**
@@ -1797,8 +1845,14 @@ public class DictateInputMethodService extends InputMethodService
      * </ul>
      */
     private void setLanguageFromPicker(String code) {
-        if (uiController != null
-                && uiController.getState() instanceof PipelineUiState.ReprocessStaging) {
+        // F-3 (B3-VAL): route on the canonical ReprocessStaging detector
+        // (shared with resolveEffectiveLanguage). Routing semantics are
+        // unchanged — in ReprocessStaging the pick is a transient
+        // override regardless of whether one was already set; otherwise
+        // it is a permanent write. (The picker `code` is always a
+        // resource-array-derived ISO code, never blank, so the
+        // read-side blank-guard does not apply to this write path.)
+        if (reprocessStagingOrNull() != null) {
             uiController.updateReprocessLanguage(code);
             if (pipelineBinder != null) {
                 try {

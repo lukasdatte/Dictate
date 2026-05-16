@@ -269,7 +269,35 @@ ORDERING NOTE.)
 | 7 | C7-B3 | B2 | legacy call-site deletion (was gated on C6 — done) | B | Med | ✅ | B2-C7-B3-IMPL + MID-W1 | 799f3af | (MID-W1 6159d4c) |
 | 8 | C8-C1 | B3 | LanguageController full removal (D-13) | C | Med-High (R-3) | ✅ | B3-C8-C1-IMPL | 6de54b1 | 93f86d6 |
 | 9 | C9-C2 | B3 | audioFile field removal (D-14) | C | Med (R-5) | ✅ | B3-C9-C2-IMPL | bd82070 | ccb38c2 |
-| 10 | C10-C3 | B3 | dead-controller retire + PipelineOrchestrator disposition | C | Med | ⏳ | | | |
+| 10 | C10-C3 | B3 | dead-controller retire + PipelineOrchestrator disposition | C | Med | ⚠️ BLOCKED | B3-C10-C3-IMPL | 185f3f6 (OQ-1 only) | — |
+
+> **⚠️ C10-IMPL-2 — Critical architecture-conflict (ESCALATED, INT-1-class).**
+> The C10 per-class responsibility-trace proved the chunk premise FALSE:
+> Theme B was the *recording-drive* cutover ONLY; the **render-path cutover
+> never happened**. MainButtonsController / RecordingUiController /
+> KeyboardStateManager / KeyboardUiController remain the sole owners of
+> RECORD-long-press(2-mode), BACKSPACE-accel-delete, SPACE/ENTER touch,
+> theming, key-press-animation, QWERTZ rec-button, prompts-visualizer,
+> pipeline-progress/step-row UI — ImeViewBackend runs in PARALLEL,
+> incomplete. Parent B4-VAL F-1/F-2/F-33 deferred this to a "B5/B7
+> follow-up" block NEVER created — the exact INT-1 anti-pattern this Epic
+> exists to cure, recurring at the render layer. C5-IMPL-2 folds in. D1/D2
+> render-path assumptions invalid. OQ-1 (PipelineOrchestrator kept+
+> annotated) was completed cleanly (185f3f6). C8-C1/C9-C2 (LanguageController
+> D-13, audioFile D-14) remain ✅.
+>
+> **RESOLUTION (orchestrator-autonomous, 2026-05-16): Option 1 — author +
+> implement the render-path cutover NOW.** User was asked (INT-1-class
+> escalation) and answered "Weitermachen" (proceed autonomously, no
+> walkthrough). Per D4 + the Epic's raison d'être (kill the
+> parallel-dormant anti-pattern; a dormant render layer repeats the exact
+> INT-1 mistake) + the user's INT-1 precedent ("implement the cutover
+> now"): the Epic is extended with a **Theme C-R (render-path cutover)**
+> — port the ~8 controller UI-behaviour groups to the RenderBackend, then
+> delete the 4 controllers. New blocks authored by a planning agent
+> (chunking is delegated, not orchestrator-done). C10-C3's deletion
+> becomes the FINAL chunk of Theme C-R (gated on the render-port being
+> proven). D1/D2 re-scoped accordingly.
 | 11 | C11-D1 | B4 | Espresso UI-Tests 1-10 + Robolectric mirror | D | Low-Med (R-6) | ⏳ | | | |
 | 12 | C12-D2 | B4 | final integration E2E + cleanup-grep regression | D | Low | ⏳ | | | |
 

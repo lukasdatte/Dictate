@@ -265,4 +265,56 @@ class EditBarControllerTest {
             c.ownerOf(views.editNumbersButton.id),
         )
     }
+
+    // ── 5. CR-DEL — edit-row applyTheme (the CR-RGATE-flagged residual) ──
+
+    @Test
+    fun applyTheme_paints_legacy_tiers_byte_equivalent() {
+        // K-1 handwritten capturing fake — reading MaterialButton
+        // background colour back under Robolectric is tint-vs-drawable
+        // flaky (the CR1 ImeViewBackendTest hit the same), so capture the
+        // setBackgroundColor argument directly (the legacy
+        // MainButtonsController.applyTheme contract).
+        val captured = mutableMapOf<Int, Int>()
+        var capId = 5000
+        fun cap(): MaterialButton = object : MaterialButton(ctx) {
+            override fun setBackgroundColor(color: Int) {
+                captured[id] = color
+                super.setBackgroundColor(color)
+            }
+        }.apply { id = capId++ }
+
+        val v = EditBarViews(
+            editNumbersButton = cap(), editSettingsButton = cap(),
+            editHistoryButton = cap(), pipelineCancelButton = cap(),
+            editAudioFocusButton = cap(), editKeyboardButton = cap(),
+            editUndoButton = cap(), editRedoButton = cap(),
+            editCutButton = cap(), editCopyButton = cap(),
+            editPasteButton = cap(),
+        )
+        val accent = 0xFF3366CC.toInt()
+        val medium = net.devemperor.dictate.DictateUtils.darkenColor(accent, 0.18f)
+        val dark = net.devemperor.dictate.DictateUtils.darkenColor(accent, 0.35f)
+
+        EditBarController(v, rec).applyTheme(accent)
+
+        // Legacy MainButtonsController.applyTheme tiers (:407-429):
+        // editKeyboard = accentDark; the other 9 themed = accentMedium.
+        assertEquals(dark, captured[v.editKeyboardButton.id])
+        for (b in listOf(
+            v.editSettingsButton, v.editUndoButton, v.editRedoButton,
+            v.editCutButton, v.editCopyButton, v.editPasteButton,
+            v.editNumbersButton, v.editHistoryButton, v.editAudioFocusButton,
+        )) {
+            assertEquals(
+                "every non-keyboard edit-bar button = accentMedium (legacy parity)",
+                medium, captured[b.id],
+            )
+        }
+        // pipelineCancelButton must NOT be themed (legacy never themed it).
+        assertNull(
+            "pipelineCancelButton was never themed by the legacy applyTheme — byte-identical parity",
+            captured[v.pipelineCancelButton.id],
+        )
+    }
 }

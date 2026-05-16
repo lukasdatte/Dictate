@@ -14,14 +14,15 @@ import org.junit.Test
  *
  * Quality-Gate K-2: replaces the obsolete `CompositePipelineCallbackTest`.
  * The original plan suggested a Composite-Wrapper around a single-slot
- * `setCallback`; the K-2 review collapsed that into a listener list directly
- * on the `KeyboardUiController`. Multiple `PipelineUiCallback` consumers
- * register independently via `addCallback` (D-13: the legacy
- * effective-language controller consumer was removed; the Service-side
- * pipeline observer remains the production consumer).
+ * `setCallback`; the K-2 review collapsed that into a listener list on the
+ * pipeline-UI owner (CR-DEL relocated it from the deleted
+ * `KeyboardUiController` to `PipelineStepRowRenderer`). Multiple
+ * `PipelineUiCallback` consumers register independently via `addCallback`
+ * (D-13: the legacy effective-language controller consumer was removed;
+ * the Service-side pipeline observer remains the production consumer).
  *
- * The real [KeyboardUiController] cannot be instantiated in a JVM unit test
- * (it constructor-depends on `LayoutInflater`, `Handler`, `MaterialButton`,
+ * The real `PipelineStepRowRenderer` cannot be instantiated in a JVM unit
+ * test (it constructor-depends on `LayoutInflater`, `Handler`, `MaterialButton`,
  * etc., all of which require an Android runtime — the project intentionally
  * runs unit tests without Robolectric, see Quality-Gate K-1). The
  * production class and [FakePipelineUiStateReader] both implement

@@ -7,10 +7,11 @@ import net.devemperor.dictate.core.PipelineUiStateReader
 /**
  * In-memory [PipelineUiStateReader] for unit tests of consumers that
  * need to drive ReprocessStaging state transitions and observe callback
- * registration without spinning up the real `KeyboardUiController`
- * (which depends on Android views). The legacy effective-language
- * controller consumer was removed in D-13 (Epic §4 Block C1); this fake
- * still backs the `PipelineUiStateReader` multi-callback contract tests.
+ * registration without spinning up the real `PipelineStepRowRenderer`
+ * (the CR-DEL-relocated pipeline-UI owner; depends on Android views).
+ * The legacy effective-language controller consumer was removed in D-13
+ * (Epic §4 Block C1); this fake still backs the `PipelineUiStateReader`
+ * multi-callback contract tests.
  *
  * Quality-Gate K-1 — pure handwritten fake, no Mockito.
  */

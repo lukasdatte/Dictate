@@ -155,6 +155,59 @@ class ContentAreaControllerTest {
         assertEquals(View.GONE, mainButtons.visibility)
     }
 
+    // ── CR-DEL — the 4th ContentArea axis: editButtonsLl (Spec 2 §13
+    //    row 2 BLEIBT). The deleted KSM applyContentAreaVisibility owned
+    //    it (visible iff MAIN_BUTTONS || QWERTZ); relocated here so no
+    //    visibility axis is stranded by the deletion. ──
+
+    @Test
+    fun `editButtons axis - VISIBLE in MAIN_BUTTONS and QWERTZ, GONE in EMOJI`() {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        val editButtons = FrameLayout(ctx)
+        val c = ContentAreaController(
+            ContentAreaViews(mainButtons, qwertz, emoji, editButtons),
+        )
+        c.attach { }
+
+        c.render(stateWithContentArea(ContentArea.MAIN_BUTTONS), catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.VISIBLE, editButtons.visibility)
+
+        c.render(stateWithContentArea(ContentArea.QWERTZ), catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.VISIBLE, editButtons.visibility)
+
+        c.render(stateWithContentArea(ContentArea.EMOJI_PICKER), catalog.KEYBOARD_TWO_ROW)
+        assertEquals(
+            "editButtonsLl is GONE in EMOJI_PICKER (byte-identical to the deleted KSM rule)",
+            View.GONE, editButtons.visibility,
+        )
+    }
+
+    @Test
+    fun `editButtons axis - null editButtonsContainer is a backward-compatible no-op`() {
+        // The 3-arg holder (every pre-CR-DEL caller / test) must stay
+        // byte-identical — the 4th axis defaults to null and is skipped.
+        val state = stateWithContentArea(ContentArea.EMOJI_PICKER)
+        // controller (3-arg holder, from setUp) — must not throw.
+        controller.render(state, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.VISIBLE, emoji.visibility)
+    }
+
+    @Test
+    fun `editButtons axis - dormant gate leaves editButtons untouched`() {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        val editButtons = FrameLayout(ctx).apply { visibility = View.INVISIBLE }
+        val gated = ContentAreaController(
+            ContentAreaViews(mainButtons, qwertz, emoji, editButtons),
+            RenderGate("ContentAreaController", auditLogger = null),
+        )
+        gated.attach { }
+        gated.render(stateWithContentArea(ContentArea.MAIN_BUTTONS), catalog.KEYBOARD_TWO_ROW)
+        assertEquals(
+            "dormant gate must route the 4th axis through the gate too (RR-2)",
+            View.INVISIBLE, editButtons.visibility,
+        )
+    }
+
     private fun stateWithContentArea(area: ContentArea): DictateUiState =
         DictateUiState.initial().copy(
             layout = DictateUiState.initial().layout.copy(contentArea = area),

@@ -180,4 +180,32 @@ class EmojiControllerTest {
         c.installDormant()
         assertNull(shadowOf(views.editEmojiButton).onClickListener)
     }
+
+    // ── CR-DEL — emoji-row applyTheme (the CR-RGATE-flagged residual) ──
+
+    @Test
+    fun applyTheme_paints_legacy_emoji_tiers_byte_equivalent() {
+        val captured = HashMap<Int, Int>()
+        fun cap(id: Int): MaterialButton = object : MaterialButton(ctx) {
+            override fun setBackgroundColor(color: Int) {
+                captured[id] = color
+                super.setBackgroundColor(color)
+            }
+        }.apply { this.id = id }
+
+        val v = EmojiViews(
+            editEmojiButton = cap(3001),
+            emojiPickerCloseButton = cap(3002),
+            emojiPickerView = EmojiPickerView(ctx).apply { id = 3003 },
+        )
+        val accent = 0xFF3366CC.toInt()
+        val medium = net.devemperor.dictate.DictateUtils.darkenColor(accent, 0.18f)
+
+        EmojiController(v, rec) { ic }.applyTheme(accent)
+
+        // Legacy MainButtonsController.applyTheme (:421/:424):
+        // editEmojiButton = accentMedium; emojiPickerCloseButton = accent.
+        assertEquals(medium, captured[3001])
+        assertEquals(accent, captured[3002])
+    }
 }

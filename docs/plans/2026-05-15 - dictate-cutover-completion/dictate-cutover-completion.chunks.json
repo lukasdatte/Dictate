@@ -1,6 +1,6 @@
 {
   "source": "docs/plans/2026-05-15 - dictate-cutover-completion/dictate-cutover-completion.md",
-  "note": "Modular-plan-pattern (D21) ACTIVE. The Epic's implementation detail lives in §4 (all 10 plan-block descriptions, 4661 tok — read whole, cheap) PLUS the 3 parent-plan specs which are the Single-Source-of-Truth. Each implementation chunk carries `main: [§4]` + `context` background sections + `spec_references` (free-text §-pointers, parent-chunks.json convention) + `targeted_sub_sections` (structured: spec-relative-path → parent H2 section heading → the sub-section IDs the impl-agent narrows to after `plan-reader read <spec> \"<H2 heading>\"`). Specs are NOT re-chunked — reuse the existing per-spec *.reviewed.chunks.json in the sibling 2026-05-07 folder. Spec-relative paths are Epic-dir-relative: `../2026-05-07 - dictate-keyboard-layout-refactor/research/<spec>/<spec>.reviewed.md`. CONSISTENCY-FINDING (resolved): Epic §4.1 prose says \"9 blocks total\" but §4 lists 10 plan-blocks (A1,A2,B1,B2,B3,C1,C2,C3,D1,D2); the EXECUTION-PLAN ESTIMATE says \"9 blocks, ~15-17 chunks\". Resolution: 10 plan-blocks is correct; the \"9\" is an off-by-one in the prose (counts the 4 themes' blocks as A=2,B=3,C=3,D=2=10, miscounted as 9). This does not affect chunking — plan-blocks are the author's narrative, skill-blocks come from aggregate complexity. ORDERING NOTE is load-bearing and ADOPTED: D2 is a verification GATE, not a tail. B3 is split into B3-guarded (C5, behind USE_LEGACY_RECORDING_DRIVE) and B3-final-deletion (C7, deletes the legacy call-site + boolean), with D2-pre (C6) as its own gate chunk between them. C7 + all Theme-C chunks (C8/C9/C10) are GATED on a green C6 (D2-pre) run.",
+  "note": "Modular-plan-pattern (D21) ACTIVE. The Epic's implementation detail lives in §4 (all 10 plan-block descriptions, 4661 tok — read whole, cheap) PLUS the 3 parent-plan specs which are the Single-Source-of-Truth. Each implementation chunk carries `main: [§4]` + `context` background sections + `spec_references` (free-text §-pointers, parent-chunks.json convention) + `targeted_sub_sections` (structured: spec-relative-path → parent H2 section heading → the sub-section IDs the impl-agent narrows to after `plan-reader read <spec> \"<H2 heading>\"`). Specs are NOT re-chunked — reuse the existing per-spec *.reviewed.chunks.json in the sibling 2026-05-07 folder. Spec-relative paths are Epic-dir-relative: `../2026-05-07 - dictate-keyboard-layout-refactor/research/<spec>/<spec>.reviewed.md`. CONSISTENCY-FINDING (resolved): Epic §4.1 prose says \"9 blocks total\" but §4 lists 10 plan-blocks (A1,A2,B1,B2,B3,C1,C2,C3,D1,D2); the EXECUTION-PLAN ESTIMATE says \"9 blocks, ~15-17 chunks\". Resolution: 10 plan-blocks is correct; the \"9\" is an off-by-one in the prose (counts the 4 themes' blocks as A=2,B=3,C=3,D=2=10, miscounted as 9). This does not affect chunking — plan-blocks are the author's narrative, skill-blocks come from aggregate complexity. ORDERING NOTE is load-bearing and ADOPTED: D2 is a verification GATE, not a tail. B3 is split into B3-guarded (C5, behind USE_LEGACY_RECORDING_DRIVE) and B3-final-deletion (C7, deletes the legacy call-site + boolean), with D2-pre (C6) as its own gate chunk between them. C7 + all Theme-C chunks (C8/C9/C10) are GATED on a green C6 (D2-pre) run. THEME-C-R EXTENSION (2026-05-16, B0-RENDER-CUTOVER-PLAN, triggered by C10-IMPL-2 architecture-conflict): the render-path cutover was NEVER implemented (Theme B was recording-drive only; `ImeViewBackend` runs parallel-dormant — `staticHandlerInstaller=null`, ContentArea/PromptVisibility/OverlayReset controllers defined-but-not-attached, RECORD/BACKSPACE long-press + touch + theming + key-press-anim + QWERTZ + pipeline-progress unported — parent B4-VAL F-1/F-2/F-6/F-33 deferred it to a never-created block, the INT-1 anti-pattern recurring at the render layer). A new block B5 (theme_c_r) is inserted AFTER C9-C2 and BEFORE the (repurposed) C10-C3 deletion: CR1 backend-completion → CR2 special-touch-installer → CR3 visibility-controller-attach + KSM-thinning → CR4 IME legacy-driver-removal → CR-RGATE D2pre-style render-verification GATE → then C10-C3 (now CR-DEL: the 4-class deletion, HARD-GATED on a GREEN CR-RGATE, mirroring the C5→C6→C7 staged-safety-net pattern). Block B6 (was B4) Theme-D re-scoped: C11-D1/C12-D2 now depend on C10-C3 (=CR-DEL) which is correctly preconditioned by Theme-C-R; their sole-RenderBackend assumption is restored ONLY after Theme-C-R. SoT for every Theme-C-R disposition: Spec 2 §9.1-§9.6 + §11.5-§11.8 + §13 (followed verbatim where given); the per-group→owner table + the 4 flagged ambiguities (longClickResolver body, ImeViewBackend.applyTheme/keyPressAnimator delta, RecordingUiController/KeyboardUiController split-vs-delete, multi-backend visibility) live in `research/render-path-cutover.md` (Spec — programmer-ready).",
   "sections": [
     {
       "heading": "Table of Contents",
@@ -73,17 +73,30 @@
     },
     {
       "id": "B3",
-      "name": "Theme C — legacy-retire (point of no return; gated on green D2-pre/C6)",
+      "name": "Theme C — legacy-retire (recording-drive carve-out; gated on green D2-pre/C6)",
       "chunk_ids": [
         "C8-C1-languagecontroller-removal",
-        "C9-C2-audiofile-field-removal",
-        "C10-C3-dead-controller-retire"
+        "C9-C2-audiofile-field-removal"
       ],
       "test_agent_count": 2,
-      "notes": "DESTRUCTIVE — deletes legacy paths. Every chunk here is GATED on a green C6 (D2-pre) run (Epic §6.2: 'Themes C1/C2/C3 are the point of no return — they run after D2 proves the new path'). Mostly compile-invariant greps + regression (AC-5/AC-6/AC-7). C8 is MED-HIGH risk (R-3 Application-singleton boot-before-bind). C9/C10 are MED. 3 chunks, aggregate score ~2400. Block diff 800-2500 LOC → test_agent_count=2."
+      "notes": "DESTRUCTIVE — deletes legacy recording-drive-side paths. Every chunk here is GATED on a green C6 (D2-pre) run (Epic §6.2: 'Themes C1/C2/C3 are the point of no return — they run after D2 proves the new path'). Mostly compile-invariant greps + regression (AC-5/AC-6). C8 is MED-HIGH risk (R-3 Application-singleton boot-before-bind). C9 is MED. C10-C3 (dead-controller retire) was MOVED OUT of this block into B5 (Theme-C-R) as the HARD-GATED CR-DEL chunk: the C10-IMPL-2 architecture-conflict proved the render-path cutover (its precondition) never happened. 2 chunks, aggregate score ~1450. Block diff 800-2500 LOC → test_agent_count=2."
     },
     {
-      "id": "B4",
+      "id": "B5",
+      "name": "Theme C-R — render-path cutover (the missing block; closes the parallel-dormant render layer)",
+      "chunk_ids": [
+        "CR1-RR1-imeviewbackend-completion",
+        "CR2-RR2-special-touch-installer",
+        "CR3-RR3-visibility-controller-attach",
+        "CR4-RR4-ime-legacy-driver-removal",
+        "CR-RGATE-render-verification-gate",
+        "C10-C3-dead-controller-retire"
+      ],
+      "test_agent_count": 3,
+      "notes": "THE MISSING BLOCK (B0-RENDER-CUTOVER-PLAN, triggered by C10-IMPL-2). DESTRUCTIVE UI surgery on a working keyboard — mirrors the Epic §6 staged-safety-net + D2pre-gate pattern (C5→C6→C7 analogue). CR1-CR3 are ADDITIVE (complete the backend + attach the defined-but-dormant controllers; legacy path still drives — revertible). CR4 removes the IME legacy-driver call-sites (controllers stay instantiated/compile-safe but undriven — the drive-call surface IS the rollback switch, no boolean needed). CR-RGATE is a D12-atomic D2pre-style render-verification GATE: a GREEN run authorises C10-C3 (=CR-DEL, the 4-class deletion, HARD-GATED — orchestrator must NOT start it until CR-RGATE signs off green). Mid-chunk-triage ARMED for CR1/CR2/CR3/CR4 (architecture-conflict / blocks-following-chunks markers likely — silent-listener-overwrite RR-1 + blank-UI RR-2 are HIGHEST risk). SoT: Spec 2 §9.1-§9.6/§11.5-§11.8/§13 + research/render-path-cutover.md (per-group→owner table + 4 flagged ambiguities A1-A4 for per-chunk orchestrator decision, esp. A3 RecordingUiController/KeyboardUiController split-vs-delete). 6 chunks (incl. the gate + the repurposed deletion), aggregate score ~4250. Block diff > 2500 LOC → test_agent_count=3."
+    },
+    {
+      "id": "B6",
       "name": "Theme D — test-completion (locks the result; final regression gate)",
       "chunk_ids": [
         "C11-D1-espresso-ui-tests",
@@ -373,9 +386,168 @@
       "notes": "Epic §4 Block C2. AC-6. dep: C6 GREEN (Theme-C gated) + C5 (audioFile authoritative in RecordingState) + C2 (RecordingState payload pattern). RISK MED (R-5 — non-recording reads :1880 migration, :2104 resend must trace to correct source). Files: DictateInputMethodService.java only. Sequenced after C8 for git-index safety (Epic §4.1: 'C2 parallelizable with C1 after B3 but sequenced')."
     },
     {
+      "id": "CR1-RR1-imeviewbackend-completion",
+      "title": "Theme C-R / CR1 — ImeViewBackend feature-completion (longClickResolver + applyTheme + keyPressAnimator)",
+      "description": "Close the Spec 2 §6 ↔ current-code delta (research/render-path-cutover.md §4). Add `keyPressAnimator: KeyPressAnimator` to the `ImeViewBackend` constructor (Spec 2 §6 ctor specifies it; current `state/render/ImeViewBackend.kt:85-93` omits it) and call `keyPressAnimator.applyPressAnimation(view)` per button in `wireStaticHandlers` (G7). Add an `applyTheme(accentColor)` method to `ImeViewBackend` the service calls after each re-inflate (G6, Spec 2 §9.2 'Theme-Mutation ist eine separate Achse, nicht state-getrieben'). Model the RECORD long-press 2-mode as a nullable `longClickResolver` slot field + `Action.RecordingAction.OnRecordLongPress` (G2, ambiguity A1 — orchestrator-decided body: Idle→Settings+file-picker, Active/Paused→autoSwitch+stop, resolved in the reducer from `state.recording`); remove the F-1/F-2 interim KDoc (`ImeViewBackend.kt:226-251`). Extract `EditNumbersAnimator` from `MainButtonsController.kt:424-477` (G15, A2). Wire the resend-cooldown state→`enabledResolver` (G8) + resend_btn `MarkLastAudio` dispatch (G16, Spec 2 §9.6 exact replacement). NO IME drive-call removal here (that is CR4) — legacy path still drives; this chunk only makes the backend feature-complete.",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §6 (ImeViewBackend — constructor incl. keyPressAnimator, wireStaticHandlers, render-loop contract)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.2 (MainButtonsController → ImeViewBackend — applyTheme/keyPressAnim/long-press/animator rows)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.6 (DictateInputMethodService.java — 4 problematische resend-Mutationen, MarkLastAudio exact replacement)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §13.2 (Click-/Long-Click-Handler → actionResolver/longClickResolver Verifikation)",
+        "research/render-path-cutover.md §3 (per-group→owner table G2/G6/G7/G8/G14/G15/G16) + §4 (Spec 2 §6 ↔ code delta) + §7 (ambiguity A1/A2)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md": {
+          "§6 ImeViewBackend (KEYBOARD-Modus)": [
+            "constructor signature (keyPressAnimator param)",
+            "wireStaticHandlers (click + long-press wiring)"
+          ],
+          "§9 Migration vorhandener Klassen — Code-Pointer pro Aussage": [
+            "§9.2 MainButtonsController → ImeViewBackend (applyTheme/initializeKeyPressAnimations/long-press/EditNumbersAnimator/setResendEnabled rows)",
+            "§9.6 DictateInputMethodService.java — die 4 problematischen resend-Mutationen"
+          ]
+        }
+      },
+      "implementation_score_estimate": 950,
+      "bracket": "L",
+      "files_estimate": 6,
+      "loc_estimate": 500,
+      "notes": "Theme C-R / CR1. AC-RR-1/3/parity-prep (no parity proof yet — that is CR-RGATE). dep: C9 (sequential — same render surface; B5 starts after B3's C9). RISK MED (additive backend surface; the long-press model A1 is the only creative axis — mid-chunk-triage armed for A1 architecture-conflict). Files: state/render/ImeViewBackend.kt (+ctor param, applyTheme, longClickResolver wiring, drop F-1/F-2 KDoc), state/layout/ButtonSlot (longClickResolver field), state/Action.kt (OnRecordLongPress), state/modules/RecordingModule.kt (long-press reducer arm), new core/EditNumbersAnimator.kt, LayoutCatalog (resend enabledResolver/MarkLastAudio). ADDITIVE — legacy path still drives (no IME drive-call removal here). Orchestrator decides A1 longClickResolver body + A2 EditNumbersAnimator extraction shape per research/render-path-cutover.md §7."
+    },
+    {
+      "id": "CR2-RR2-special-touch-installer",
+      "title": "Theme C-R / CR2 — staticHandlerInstaller lambda (SPACE swipe / BACKSPACE accel-delete / ENTER overlay)",
+      "description": "Supply the real `staticHandlerInstaller` lambda from the IME (currently wired `null` at `DictateInputMethodService.java:1113`). Per Spec 2 §11.7 the lambda builds `buildSpaceTouchHandler()` (CursorSwipeTouchHandler — onTap/onCursorMove/onSwipeStateChanged + compound-drawable swap, §11.7 gives the full body), `buildBackspaceSwipeHandler()` (BackspaceSwipeHandler incl. the accelerated-delete cascade — G3, restores what parent B4-VAL F-1 dropped), `buildEnterOverlayHandler()` (EnterOverlayHandler — G5). The hook keeps the backend independent of the IME-side handler classes (parent-B4 SRP/DIP design — kept, not reverted; research/render-path-cutover.md §4 NOTE). RR-1 silent-listener-overwrite mitigation: the legacy MainButtonsController touch wiring (`:189-194`/`:203-232`/`:254-259`) is NOT removed here (that is CR4) — but the installer must not double-wire; verify single-owner per View at attach.",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §11.7 (Special-Touch-Handler: CursorSwipe / Backspace-Swipe / Enter-Overlay — full builder bodies)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.2 (MainButtonsController touch-handler rows :189-259)",
+        "research/render-path-cutover.md §3 (G3/G4/G5) + §4 (staticHandlerInstaller NOTE) + §6 (RR-1)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md": {
+          "§11 Research-TODOs für Agent — konkrete Antworten": [
+            "§11.7 Special-Touch-Handler (buildSpaceTouchHandler / buildBackspaceSwipeHandler / buildEnterOverlayHandler)"
+          ]
+        }
+      },
+      "implementation_score_estimate": 600,
+      "bracket": "M",
+      "files_estimate": 1,
+      "loc_estimate": 300,
+      "notes": "Theme C-R / CR2. AC-RR-2 (touch parity prep). dep: CR1 (backend feature-complete; installer references the resolver model). RISK HIGH (RR-1 silent-listener-overwrite — the exact F-1/F-2 trap; mid-chunk-triage armed). Files: DictateInputMethodService.java (build the installer lambda + pass it into the ImeViewBackend ctor instead of null at :1107-1115). Java legacy file — do NOT convert to Kotlin. ADDITIVE — legacy touch handlers still wired in parallel until CR4."
+    },
+    {
+      "id": "CR3-RR3-visibility-controller-attach",
+      "title": "Theme C-R / CR3 — attach ContentArea/PromptVisibility/OverlayReset controllers + KSM thinning",
+      "description": "Attach the three defined-but-dormant R.10 visibility controllers via `KeyboardLayoutManager.attachBackend`: `ContentAreaController` (G10), `PromptVisibilityController` (G11), `OverlayResetHandler` (G12) — all `backendType=null` multi-backends (parent B4 design, ambiguity A4 follow-spec). Thin `KeyboardStateManager` per Spec 2 §11.8 5c + §13 BLEIBT rows: KSM keeps its still-owned ContentArea/Promptbar axes but the IME's direct `stateManager.setContentArea/refresh` drive (`:1169/:1172/:1184-1185`) collapses onto state; Strict-Mode-Logging verifies NO double-write per visibility axis (Spec 2 §10 acceptance / §11.8 5c). Handle G9/G13 SPLIT dispositions (RecordingUiController QWERTZ + KeyboardUiController step-rows are BLEIBT per §9.4/§9.5/§13-row-20): collapse the IME amplitude/timer/pipeline drive onto ImeViewBackend.onAmplitude/onTimerTick (already exist) + dispatch(Action.PipelineAction.*); orchestrator decides ambiguity A3 (extract BLEIBT parts vs keep class for its axis) at this chunk boundary.",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.3 (KeyboardStateManager → ContentAreaController + PromptVisibilityController + OverlayResetHandler, R.10)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.4 (RecordingUiController BLEIBT-Anteile — QWERTZ/amplitude/timer)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.5 (KeyboardUiController state→PipelineModule, stepRows BLEIBT view-side)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §11.8 (Migration-Reihenfolge 5c — empty/thinned KSM bodies + Strict-Mode-Logging)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §13 (Visibility-Mutation-Map — BLEIBT vs ENTFERNT per axis)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §9.2 (KeyboardUiController state-Teil → PipelineModule)",
+        "research/render-path-cutover.md §3 (G9/G10/G11/G12/G13) + §5 (CR3 KSM-thinning) + §7 (A3/A4)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md": {
+          "§9 Migration vorhandener Klassen — Code-Pointer pro Aussage": [
+            "§9.3 KeyboardStateManager → drei Owner-Klassen (R.10)",
+            "§9.4 RecordingUiController → KeyboardUiController-Anteile + LayoutCatalog",
+            "§9.5 KeyboardUiController.refreshRecordButtonFromState → record_btn-Resolver"
+          ],
+          "§11 Research-TODOs für Agent — konkrete Antworten": [
+            "§11.8 Migration-Reihenfolge (5c thinned-KSM-bodies + Strict-Mode-Logging)"
+          ],
+          "§13 Vollständigkeits-Verifikation": [
+            "Visibility-Mutation-Map (BLEIBT vs ENTFERNT rows 1-20)"
+          ]
+        }
+      },
+      "implementation_score_estimate": 1100,
+      "bracket": "L",
+      "files_estimate": 5,
+      "loc_estimate": 550,
+      "notes": "Theme C-R / CR3. AC-RR-5 (content/prompt visibility parity prep). dep: CR2 (visibility owners attach onto a fully-wired backend; view-recreate race otherwise). RISK HIGHEST (RR-2 blank-UI from drive-removal sequencing; A3 split-vs-delete is an architecture decision — mid-chunk-triage armed). Files: DictateInputMethodService.java (attachBackend the 3 controllers; collapse stateManager.setContentArea/refresh + recordingUiController/uiController drive onto state/dispatch), core/KeyboardStateManager.kt (thin to BLEIBT axes), possibly new small owners if orchestrator picks A3-option-(a). ADDITIVE+collapse — legacy classes still instantiated, drive-calls being removed is CR4. Strict-Mode-Logging is the in-chunk no-double-write proof."
+    },
+    {
+      "id": "CR4-RR4-ime-legacy-driver-removal",
+      "title": "Theme C-R / CR4 — remove IME legacy-driver call-sites (single render driver, AC-RR-6)",
+      "description": "Remove every IME legacy controller drive-call site so the RenderBackend path is the SOLE render driver (AC-RR-6, render-layer analogue of Epic AC-10): `recordingUiController.onStateChanged/onAmplitudeUpdate/onTimerTick` (`:1369/:1376/:1381/:1437`), `uiController.startPipeline/addRunningStep/completeStep/failStep/stopPipeline/enterReprocessStaging/getAutoEnterConfig/getState` (`:1295/:1301/:1450/:1470/:1476/:2559/:2713/:2717/:3528` + KSM/RUC lambdas `:786/:788/:878/:881`), `stateManager.setContentArea/refresh` (`:1169/:1172/:1184-1185`), `mainButtonsController.*` (registerAllListeners/initializeKeyPressAnimations/refreshAudioFocusIcon/applyTheme `:827-833/:920-921`), the `servicePipelineCallback` legacy fan-out (`:940/:969-990`). The controller CLASSES stay instantiated (compile-safe, undriven) — the drive-call surface IS the rollback switch (no boolean needed; forward-fix by re-adding one call). RR-1: legacy listener wiring removed in the SAME chunk the new path owns it (never both live). After CR4 the legacy classes are provably dead → CR-RGATE can prove it → CR-DEL deletes them.",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §11.8 (Migration-Reihenfolge 5c→5d — Service-Wiring removal precondition)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.6 (DictateInputMethodService.java resend-Mutationen removal)",
+        "research/render-path-cutover.md §2.2 (AC-RR-6) + §5 (CR4 ordering) + §6.1 (staged-safety-net analogue)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md": {
+          "§11 Research-TODOs für Agent — konkrete Antworten": [
+            "§11.8 Migration-Reihenfolge (5c functional → 5d destructive precondition)"
+          ],
+          "§9 Migration vorhandener Klassen — Code-Pointer pro Aussage": [
+            "§9.6 DictateInputMethodService.java — die 4 problematischen resend-Mutationen"
+          ]
+        }
+      },
+      "implementation_score_estimate": 600,
+      "bracket": "M",
+      "files_estimate": 1,
+      "loc_estimate": 250,
+      "notes": "Theme C-R / CR4. AC-RR-6. dep: CR3 (every visibility/animation/pipeline axis must have a proven-attached new owner before its drive call is removed — RR-2). RISK HIGHEST (RR-1 + RR-2 — removing a drive call before its new owner is live blanks the UI / strands a feature; mid-chunk-triage armed). Files: DictateInputMethodService.java only. Classes stay instantiated (compile-safe) — separately committed for git-revert isolation; this is the render-layer 'flip' (the C5 analogue), the deletion is CR-DEL (the C7 analogue) gated on CR-RGATE."
+    },
+    {
+      "id": "CR-RGATE-render-verification-gate",
+      "title": "Theme C-R / CR-RGATE — D2pre-style render-verification GATE (authorises the 4-class deletion)",
+      "description": "GATE chunk (D12-atomic, the C6/D2-pre analogue at the render layer). Re-run the parent keystone scenarios on the RENDER path with the legacy classes still present-but-undriven: two-keyboard switch (Spec 1 §10), FGS-survival, OOM-kill view-recreate, rotation — asserting every behaviour group G2-G16 fires through the NEW owner (not the legacy controller). Strict-Mode-Logging assertion: no visibility axis double-written. Long-press/touch parity asserts (AC-RR-1/2): RECORD 2-mode, BACKSPACE accel-delete, SPACE cursor-swipe, ENTER overlay each produce the legacy effect via the new path. Robolectric binder-harness (parent DictatePipelineServiceOverlayTransitionTest pattern, R-7 tearDown discipline). GATE OUTPUT: GREEN → orchestrator proceeds to C10-C3 (CR-DEL); RED → mid-chunk-triage, NO controller deletion until resolved.",
+      "main": [],
+      "context": [
+        "3. Architektur-Übergang (legacy → new cutover seam map)",
+        "4. Building Blocks (Implementierungs-Reihenfolge)"
+      ],
+      "spec_references": [
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §10 (Acceptance-Kriterien — Strict-Mode no-double-write, render parity)",
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/b5-ime-activation-wiring.md §3 (Triangle-FSM IME-wiring, T1-T7 trace — render-side re-trace)",
+        "research/render-path-cutover.md §9 (R-GATE contents) + §2.4 (AC-RR-9) + §6 (RR-4 false-GREEN mitigation)"
+      ],
+      "targeted_sub_sections": {
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md": {
+          "§10 Acceptance-Kriterien": [
+            "Strict-Mode no-double-write acceptance",
+            "render parity acceptance"
+          ]
+        }
+      },
+      "implementation_score_estimate": 400,
+      "bracket": "S/M",
+      "files_estimate": 1,
+      "loc_estimate": 250,
+      "merge_exemption": "Verification-Gate — D12-atomic. The render-layer analogue of C6 (D2-pre). NOT an implementation chunk; it is the load-bearing dependency GATE between CR4 (legacy drive removed, classes still present) and C10-C3 (CR-DEL — the 4-class deletion). Merging it into CR4 or C10-C3 destroys the gate semantics (a separate, independently-evaluable sign-off run BEFORE the irreversible deletion). Mirrors the Epic EXECUTION-PLAN ORDERING NOTE pattern.",
+      "notes": "Theme C-R / CR-RGATE. AC-RR-9 holistic on the new render path. dep: CR4 (legacy drive removed; classes still present so the gate measures the real cutover and a RED gate can re-add a drive call without a revert). RISK LOW (verification gate). Files: new render-path E2E test (or extend the existing Robolectric binder-harness / DictateCutoverE2ETest.kt). GATE OUTPUT: green → C10-C3 (CR-DEL) proceeds; red → mid-chunk-triage, no deletion. This is the chunk the staged-safety-net mandates between CR4 (render flip) and CR-DEL (render deletion)."
+    },
+    {
       "id": "C10-C3-dead-controller-retire",
-      "title": "Block C3 — dead-controller retire + PipelineOrchestrator disposition",
-      "description": "Delete the legacy render/state controllers Theme B + the parent RenderBackend path made dead, per Spec 1 §9.6 + Spec 2 §9.1-§9.6 retire-tables: KeyboardLayoutModeController (verify already deleted in parent C15), MainButtonsController, RecordingUiController, KeyboardUiController (state+view), KeyboardStateManager. Run Spec 1 §9.6 End-of-Block-Cleanup-Check grep per class. Confirm PipelineOrchestrator disposition (OQ-1): NOT deleted — survives as the PipelineRunnerSubsystem adaptee (C3's adapter delegates to it, not a reimplementation); annotate the boundary. Per-class responsibility-trace against Spec 2 §9.x before deletion.",
+      "title": "Theme C-R / CR-DEL (repurposed Block C3) — dead-controller deletion + PipelineOrchestrator disposition",
+      "description": "HARD-GATED ON GREEN CR-RGATE. The point-of-no-return: delete the now-provably-dead legacy render/state controllers per Spec 1 §9.6 + Spec 2 §9.1-§9.6 retire-tables — MainButtonsController, RecordingUiController, KeyboardUiController, KeyboardStateManager (+ their tests). KeyboardLayoutModeController already gone (parent C15 — C10-C3 confirmed; no action). Re-run the C10-C3 MANDATORY per-class responsibility-trace against research/render-path-cutover.md §3: every responsibility must show a verified-present, IME-attached new owner (RR-3 — the exact trace that blocked the original C10-C3; it must now pass because CR1-CR4 ported every group). Resolve ambiguity A3 here if not at CR3: if RecordingUiController/KeyboardUiController retain BLEIBT parts (QWERTZ / step-rows), either the BLEIBT parts were extracted (CR3 option-a → classes fully delete, clean AC-RR-7 zero-grep) or the classes survive for their axis (option-b → AC-RR-7 narrowed to no-IME-drive-refs; re-point PipelineUiStateReader/FakePipelineUiStateReader consumers — RR-6). PipelineOrchestrator NOT deleted (OQ-1 — C10-C3 already added the boundary KDoc; Spec 1 §9.6 'never deleted'). Run Spec 1 §9.6 End-of-Block-Cleanup-Check grep per deleted class (AC-RR-7).",
       "main": [],
       "context": [
         "3. Architektur-Übergang (legacy → new cutover seam map)",
@@ -388,7 +560,8 @@
         "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.3 (KeyboardStateManager → drei Owner-Klassen R.10)",
         "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.4 (RecordingUiController → KeyboardUiController-Anteile + LayoutCatalog)",
         "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.5 (KeyboardUiController.refreshRecordButtonFromState → record_btn-Resolver)",
-        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.6 (DictateInputMethodService.java — 4 problematische resend-Mutationen)"
+        "../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9.6 (DictateInputMethodService.java — 4 problematische resend-Mutationen)",
+        "research/render-path-cutover.md §3 (per-class disposition table — re-trace target) + §2.3 (AC-RR-7/8) + §7 (A3 resolution)"
       ],
       "targeted_sub_sections": {
         "../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md": {
@@ -407,11 +580,12 @@
           ]
         }
       },
-      "implementation_score_estimate": 950,
-      "bracket": "L",
+      "implementation_score_estimate": 600,
+      "bracket": "M",
       "files_estimate": 8,
-      "loc_estimate": 450,
-      "notes": "Epic §4 Block C3. AC-7 + AC-10. dep: C6 GREEN (Theme-C gated) + C5 (render path solely RenderBackend) + C8 (KeyboardUiController held LanguageController ref) + C9. RISK MED (residual IME ref = fast compile error; subtle risk = unported side-effect — mitigate via per-class responsibility-trace). Pure-delete-leaning but carries the OQ-1 PipelineOrchestrator-boundary confirmation (creative). Delete MainButtonsController, RecordingUiController, KeyboardUiController, KeyboardStateManager (+tests); keep+annotate PipelineOrchestrator. NOTE: §9 heading text in Spec 2 chunks.json may differ — impl-agent resolves via plan-reader headings on the spec."
+      "loc_estimate": 400,
+      "merge_exemption": "Pure-Delete-Pass + dependency-gated (the C7 analogue at the render layer). Repurposed from the original Epic §4 Block C3: its premise ('Theme B made these dead') was false (C10-IMPL-2); it is now the FINAL gated deletion of Theme-C-R, HARD-GATED on a GREEN CR-RGATE. Kept as its own chunk (not merged into CR4) per the staged-safety-net invariant: the deletion MUST be a separate revertible commit gated on the render-verification GATE.",
+      "notes": "Theme C-R / CR-DEL (repurposed Epic §4 Block C3). AC-RR-7 + AC-RR-8 (= Epic AC-7 + AC-10 render half). dep: CR-RGATE GREEN (HARD GATE — orchestrator must NOT start this chunk until CR-RGATE signs off green) + C8 (KeyboardUiController held LanguageController ref, removed in B3 C8) + C9. RISK MED (residual ref = fast compile error; the subtle unported-side-effect R-risk is now mitigated by CR1-CR4 having ported every group + the mandatory re-trace). Delete MainButtonsController/RecordingUiController/KeyboardUiController/KeyboardStateManager (+tests); keep+annotate PipelineOrchestrator (OQ-1 already done by the original C10-C3 run). Separately committed for git-revert isolation. NOTE: §9 heading text in Spec 2 chunks.json may differ — impl-agent resolves via plan-reader headings on the spec. C5-IMPL-2 (B2 deferred) is subsumed here (same root cause — folded into the IMPL-2 → Theme-C-R resolution per the C10-C3 block-report)."
     },
     {
       "id": "C11-D1-espresso-ui-tests",
@@ -436,7 +610,7 @@
       "bracket": "L",
       "files_estimate": 2,
       "loc_estimate": 600,
-      "notes": "Epic §4 Block D1. AC-8. dep: C1 (F-13 counters) + C5 (live drive) + C10 (render path solely RenderBackend so assertions test the real path). RISK LOW-MED (R-6 Espresso device-infra flakiness; mitigated by Robolectric mirror). Pure test code — no production risk. Files: androidTest/.../ui/KeyboardLayoutUiTest.kt (10 bodies) + possible new Robolectric mirror under test/. NOTE: this chunk's primary output IS test code (exception to the 'tests are IMPL-TEST's concern' rule — Spec 2 §14.2 specifies the bodies as plan-spec deliverables, so the IMPL agent implements them; the chunk's own IMPL-TEST step then sanity-checks/extends)."
+      "notes": "Epic §4 Block D1 (re-scoped, Theme-C-R). AC-8. dep: C1 (F-13 counters) + C5 (live drive) + C10-C3 (=CR-DEL — render path solely RenderBackend so assertions test the real path; this dep is now correctly preconditioned: C10-C3 only deletes the legacy controllers AFTER Theme-C-R's CR1-CR4 + GREEN CR-RGATE, so the sole-RenderBackend assumption holds — it did NOT before the Theme-C-R extension). RISK LOW-MED (R-6 Espresso device-infra flakiness; mitigated by Robolectric mirror). Pure test code — no production risk. Files: androidTest/.../ui/KeyboardLayoutUiTest.kt (10 bodies) + possible new Robolectric mirror under test/. NOTE: this chunk's primary output IS test code (exception to the 'tests are IMPL-TEST's concern' rule — Spec 2 §14.2 specifies the bodies as plan-spec deliverables, so the IMPL agent implements them; the chunk's own IMPL-TEST step then sanity-checks/extends). e2e-runbook TC-21 ('C3 deleted the legacy controllers') re-points to C10-C3=CR-DEL — same chunk-id, now correctly gated."
     },
     {
       "id": "C12-D2-final-integration-e2e",

@@ -44,11 +44,13 @@ Spec 2 §9.x (SoT), then deletes the controllers.
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 0 · Important: 1 (F-6 inherited, deferred-in) · Nice-to-have: 0 · Postponed: 0
+**Severity counts:** Critical: 1 (CR4-IMPL-1, mid-chunk-triage) · Important: 2 (F-6 inherited, deferred-in · CR4-IMPL-2 needs-verify) · Nice-to-have: 0 · Postponed: 0
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
 | F-6 (from B3) | B3-VAL-SANITY | Important | open → CR3/CR-DEL owns | Cross-carrier collapse: ReprocessStaging.selectedLanguage read → LanguageState.override (depends on KeyboardUiController/PipelineUiStateReader retirement = this block's scope) | inherited from B3-VAL-W1 |
+| CR4-IMPL-1 | B5-CR4-IMPL | Critical | delegated-to-orchestrator (mid-chunk-triage armed) | `registerAllListeners()` removal (AC-RR-6) strands edit-bar/emoji/overlay-chars — Spec 2 §13.2's `EditBarController`/`EmojiController` never created; blocks CR-RGATE/CR-DEL | B5-CR4-IMPL Step 1 |
+| CR4-IMPL-2 | B5-CR4-IMPL | Important | delegated-to-orchestrator (needs-verify, ride-along CR4-IMPL-1) | G8 resend-cooldown *write-path* (`setResendEnabled` `:3511/:3541`) may lack a `state.resend.resendCooldown` dispatch equivalent — silent double-click race if removed without it | B5-CR4-IMPL Step 1 |
 
 ---
 
@@ -817,11 +819,186 @@ during review. Full suite re-run green (1099/0/0).
 
 ### Chunk CR4 — IME legacy-driver-removal (render-layer AC-10 analogue)
 
-**Agent-IDs:** `B5-CR4-IMPL` · **Status:** ⏳ pending · **Risk:** HIGHEST (RR-1+RR-2)
+**Agent-IDs:** `B5-CR4-IMPL` (fresh, combined Steps 1-5).
+**Status:** ⛔ BLOCKED — Critical `architecture-conflict` (CR4-IMPL-1), flagged for mid-chunk-triage · **Risk:** HIGHEST (RR-1+RR-2)
+**Implementation-Commit (Commit 1):** ⏳ (blocked) · **Test-Commit (Commit 2):** ⏳ (blocked)
+
+### Implementation (B5-CR4-IMPL)
+
+**What was done.** A full read of the CR4 surface (the entire 3995-line
+`DictateInputMethodService.java`, the CR1-CR3 staged owners, Spec 2
+§9.2/§9.6/§11.7/§11.8/§13.2, Spec 1 §9.2/§9.6, render-path-cutover.md
+§2.2/§5/§6.1, the chunks.json CR4 entry) was performed to plan the
+per-axis atomic flip. **No production code was changed** — a Critical
+`architecture-conflict` was found that blocks the chunk's central
+deliverable (AC-RR-6 "remove `mainButtonsController.*`") and **cannot be
+resolved by an IMPL inline fix** (D7/D22 — architecture conflict →
+delegate Critical, not fix). Per the D4 directive in the chunk prompt
+("If any axis cannot be flipped atomically within CR4, flag Critical
+`architecture-conflict` rather than ship a gap/overlap"), the chunk is
+flagged rather than shipped with a silent blank-UI gap.
+
+**The architecture-conflict (CR4-IMPL-1) — `registerAllListeners()` has
+three sub-axes with NO new owner.** AC-RR-6 + the CR4 chunk description
+literally mandate removing `mainButtonsController.registerAllListeners()`
+(IME `:856`). But `MainButtonsController.registerAllListeners()`
+(`MainButtonsController.kt:106-111`) fans out to **four** private
+sub-registrations, only **one** of which has a proven new owner:
+
+| Sub-registration | What it wires | New-path owner | Flip-safe in CR4? |
+|---|---|---|---|
+| `registerMainButtonListeners()` (`:169`) | the 9 logical buttons (RECORD/RESEND/BACKSPACE/AUDIO_FOCUS/TRASH/SPACE/PAUSE/ENTER click+long-press+touch) | `ImeViewBackend.wireStaticHandlers` (CR1, dormant RECORD/BACKSPACE long-press) + `SpecialTouchHandlerInstaller` (CR2, dormant touch) | **YES** — CR1/CR2 explicitly staged these for a one-line CR4 flip |
+| `registerEditBarListeners()` (`:115`) | edit-bar: `editSettings`/`editUndo`/`editRedo`/`editCut`/`editCopy`/`editPaste`/`editEmoji`/`editNumbers`(+long)/`editKeyboard`(+long)/`editHistory`/`pipelineCancel`/`editAudioFocus` click | **NONE — does not exist** | **NO** |
+| `registerEmojiListeners()` | emoji-picker: `editEmoji`/`emojiPickerClose`/`emojiPickerView` | **NONE — does not exist** | **NO** |
+| `initializeOverlayCharacters()` | overlay-characters strip init | **NONE — does not exist** (legacy `updateOverlayCharacters` still drives via IME `:2225`) | **NO** |
+
+Spec 2 **§13.2** (the Click-Listener-Audit, the SoT for this exact
+migration) explicitly states the edit-bar **"BLEIBT in einem separaten
+`EditBarController`, der sich nicht ändert"** and the emoji listeners
+**"BLEIBT in EmojiController"**. **Neither `EditBarController` nor
+`EmojiController` exists in the codebase** (`find app/src/main -name
+'*EditBar*' -o -name '*EmojiController*'` → empty; the edit-bar/emoji
+listeners live *inside* `MainButtonsController.registerEditBarListeners`/
+`registerEmojiListeners` today — the very class CR-DEL kills). This is
+the **exact INT-1 / F-1 / F-2 parallel-dormant deferral anti-pattern at
+the edit-bar/emoji layer** — structurally identical to the
+B4-VAL-F-1/F-2/F-33 render-layer deferral that birthed Theme C-R itself
+(render-path-cutover.md §1). The spec assumed an extracted owner the
+parent plan never created.
+
+**Why this is `architecture-conflict`, not an inline-fixable
+plan-deviation (D7/D22).** Removing `registerAllListeners()` strands the
+**entire edit-bar** (Settings/Undo/Redo/Cut/Copy/Paste/Emoji/Numbers/
+Keyboard/History + emoji-picker-close + pipeline-cancel + edit-audio-
+focus) **and** the emoji-picker **and** the overlay-characters init with
+**no error** — a dead edit-row, the precise RR-2 silent-blank-UI
+regression AC-RR-6's own parity requirement (AC-RR-1..5) forbids. The
+spec-faithful resolution is **known** (Spec 2 §13.2 + the binding A3
+disposition recorded in CR3 = option-a: *extract* the BLEIBT parts into
+small new owners — `EditBarController`/`EmojiController`/an
+overlay-chars owner — so the kill-list class fully deletes and AC-RR-7
+stays a clean zero-grep). But that is a **multi-file new-class
+extraction (~3-4 new Kotlin owners, 13+ edit-bar listeners + emoji + a
+500 ms-cooldown `setResendEnabled` axis G8-residual + `updateRecordButtonText`
++ `updateOverlayCharacters`), well outside CR4's authorised scope**
+(chunks.json CR4: `files_estimate: 1` = `DictateInputMethodService.java`
+*only*, `loc_estimate: 250`, "Files: DictateInputMethodService.java
+only. Classes stay instantiated"). It is the same A3/RR-5-class
+per-chunk **orchestrator architecture decision** (RR-5: option-a extract
+vs option-b narrow AC-RR-7) that CR3 recorded for G9/G13 — here it
+recurs for the edit-bar/emoji/overlay-chars axes the §3 table never
+enumerated as behaviour groups (they are outside the 16 G-groups; §13.2
+silently assumed a pre-existing `EditBarController`). An IMPL agent
+inventing 3-4 new owner classes + their full listener bodies + their
+LayoutCatalog/dispatch wiring under a "remove drive calls" chunk would
+be exactly the unbounded-scope-creep D7 forbids and the finder-fixer
+bias D22 routes away from.
+
+**Per-axis flip plan (the deliverable for the triage/repair agent).**
+The flip *is* feasible per axis once the missing owners exist — the
+reactive path (`orchestrator.state.collect → KeyboardLayoutManager.onStateChanged
+→ backend.render`, `DictatePipelineService.kt:601/621`) is **already
+live** and already carries the authoritative `DictateUiState` to the
+attached CR1-CR3 backends (proven by Theme B's C5 recording-drive
+cutover, `ImeRecordingDriveCutoverTest`). `DictateUiState.pipeline` is
+the *same* `PipelineUiState` type the legacy `uiController` caches, so
+every `uiController.*` read re-points to
+`pipelineBinder.getState().getValue().getPipeline()` and every mutator
+to `dispatch(Action.PipelineAction.*)` (all variants exist —
+`StartReprocessStaging`/`UpdateReprocessQueue`/`UpdateReprocessLanguage`/
+`CancelReprocessStaging`/`StepStarted`/… verified in `Action.kt:238-298`).
+The full per-axis table:
+
+| Axis | Legacy drive-site(s) to remove | New owner to arm/attach | Same-commit atomic? | Parity-test |
+|---|---|---|---|---|
+| **Visibility — ContentArea** | `stateManager.setContentArea/refresh` (IME `:1395/1398/1410/1411/2314/2322/2328/2364/2373/2381/2832/3944/3983` + `onFinishInputView`) | `contentAreaGate.arm()` (CR3, one-line) — `ContentAreaController` already attached+reactive | YES (remove KSM drive **and** `arm()` together, RR-2) | `ContentAreaControllerTest` armed-flip (CR3 added) + new IME-attach Robolectric assert |
+| **Visibility — Prompts/recording-controls** | `stateManager.refresh` (prompts path) | `promptVisibilityGate.arm()` (CR3) | YES (same chunk) | `PromptVisibilityControllerTest` armed (CR3) |
+| **Visibility — Overlay-reset** | KSM `applyVisibility` overlay-reset line | `overlayResetGate.arm()` (CR3) | YES (same chunk) | `OverlayResetHandlerTest` armed (CR3) |
+| **Touch — SPACE/BACKSPACE/ENTER** | `mainButtonsController.registerMainButtonListeners` touch wiring (via `registerAllListeners` — see conflict) | `specialTouchHandlerInstaller.attachToViews(buttonViews)` (CR2, dormant→attached-cr4) | YES *iff* `registerMainButtonListeners` removable independently of the 3 NO-owner sub-axes (= the conflict) | `SpecialTouchHandlerInstallerTest` attach-flip (CR2) |
+| **Long-press — RECORD/BACKSPACE** | `MainButtonsController` `onRecordLongClicked`/`onBackspaceLongClicked` legacy listeners (via `registerAllListeners`) + IME-side wire of the `OnRecordLongPress` consumer (Idle→Settings+file-picker `:3483-3493`, Active/Paused→`autoSwitchKeyboard=true`+stop) | widen `ImeViewBackend` long-press id-filter `id == RESEND` → all long-press slots (CR1 contract) + IME-side `OnRecordLongPress` consumer (CR1 deferred this here) | YES *iff* the conflict resolved (same `registerAllListeners` removal) | `ImeViewBackendTest` RECORD long-press + new IME `onRecordLongClicked` parity |
+| **Key-press animation** | `mainButtonsController.initializeKeyPressAnimations()` (IME `:857`) | `ImeViewBackend.wireStaticHandlers` `keyPressAnimator.applyPressAnimation` (CR1, already wired on attach — just remove the legacy call) | YES (pure removal — CR1 owner already live) | `ImeViewBackendTest` keyPressAnimator wiring (CR1) |
+| **Theming** | `mainButtonsController.applyTheme(accentColor)` (IME `:2241`) | `imeViewBackend.applyTheme(accentColor)` service-call after re-inflate (CR1 added the method) | YES (swap the call target; edit-row theme residual — see Overlooked) | `ImeViewBackendTest.applyTheme` tiers (CR1) + new IME service-call assert |
+| **Audio-focus icon** | `mainButtonsController.refreshAudioFocusIcon` (IME `:862/:959/:970/:3970`) | AUDIO_FOCUS slot `iconResolver` (parent B4, state-driven via reactive render) — remove the imperative call; the resolver already drives | YES (pure removal — resolver already live on the reactive path) | `LayoutCatalog`/`SlotRenderer` AUDIO_FOCUS iconResolver (parent B4) |
+| **EditNumbers animation** | `mainButtonsController.animateSmallModeToggle/animateEditNumbersBounce` (IME `:2268/:3910/:3941`) | IME-held `EditNumbersAnimator` (CR1 extracted the helper; `MainButtonsController` currently thin-delegates) — re-point IME call-sites to a service-held `EditNumbersAnimator` instance | YES (re-point 3 call-sites to the CR1 helper) | `EditNumbersAnimatorTest` (CR1) + new IME call-site assert |
+| **resend_btn visibility (§9.6)** | IME `resendButton.setVisibility` `:2209/:2823/:3086` + `onShowResend()` `:3069-3088` | `predResendVisible` predicate (state-driven) + `dispatch(Action.ResendAction.MarkLastAudio(exists=true))` for `onShowResend` (Spec 2 §9.6 exact replacement; `ResendAction.MarkLastAudio` defined Spec 2 §3.3, verified in `Action.kt`) | YES (delete 3 setVisibility, swap `onShowResend` body to dispatch) — predicate already drives RESEND via reactive render | `ResendModuleTest` MarkLastAudio + RESEND predicate (parent B4) |
+| **`setResendEnabled` 500 ms cooldown (G8-residual)** | `mainButtonsController.setResendEnabled(false/true)` (IME `:3511/:3541`) | G8 `enabledResolver` + a `state.resend.resendCooldown` state field (Spec 2 §9.2 G8 / §13) — **CR1 found G8 "already implemented by parent B4"; verify the cooldown *write-path* (the IME `onResendClicked` 500 ms toggle) has a dispatch equivalent** | NEEDS-VERIFY (likely a small `ResendAction` cooldown dispatch; flag if absent) | `ResendModuleTest` cooldown |
+| **`updateRecordButtonText`** | `mainButtonsController.updateRecordButtonText(getDictateButtonText())` (IME `:1925`) | RECORD slot `textResolver` (Spec 2 §9.5, parent B4 — state-driven) — pure removal | YES (pure removal — resolver already live) | RECORD textResolver (parent B4) |
+| **`updateOverlayCharacters`** | `mainButtonsController.updateOverlayCharacters` (IME `:2225`) | **NONE — Spec 2 §9.2 says `:481-493` "bleibt — overlay-spezifisch"; no extracted owner exists** (part of the conflict — tied to `initializeOverlayCharacters` in `registerAllListeners`) | NO (no new owner — part of CR4-IMPL-1) | — |
+| **Pipeline drive — `uiController.startPipeline/addRunningStep/completeStep/failStep/stopPipeline/preparePipeline/enterReprocessStaging`** | IME `:1684/1704/1710/1965/2081/2822/2838/2996/3017/3027/3037/3126/3721/3805/3807/3882` + `servicePipelineCallback` fan-out `:975-1028` | `dispatch(Action.PipelineAction.*)` — the orchestrator's `state.pipeline` is **already authoritative** (code comments confirm: "the orchestrator owns the authoritative `state.pipeline`; this is the same thin UI bookkeeping the legacy trigger performed" `:2815-2818`). The step-row *rendering* is **G13 BLEIBT** (A3 option-a → extract `PipelineStepRowRenderer`) | PARTIAL — the *dispatch* re-point is atomic+safe; the step-row **render BLEIBT** needs the A3 extract (CR-DEL-staged per CR3's binding A3 disposition; `KeyboardUiController` stays instantiated until CR-DEL) | `PipelineModuleTest` + `ImeRecordingDriveCutoverTest`-pattern IME flip test |
+| **Pipeline reads — `uiController.getState/isPipelineRunning/isBusy/isPipelineActive/getAutoEnterConfig/getLatestPipelineElapsedMs`** | IME `:720/723/726/815/817/907/1020/1524/1530/1732/1868/2829/2992/3016/3026/3036/3136/3144/3462/3468/3652/3720` | re-point each to `pipelineBinder.getState().getValue().getPipeline()` (same `PipelineUiState` type) + trivial derivations; rotation-survival bridges (`restoreReprocessStaging`/`restoreAutoEnter` `:1524-1535/1682-1714`) read the same authoritative state | YES (mechanical re-point — same type, authoritative SoT) | targeted IME read-path tests |
+| **Recording-UI drive — `recordingUiController.onStateChanged/onAmplitudeUpdate/onTimerTick`** | IME `rewireCallbacks` `:1603/1610/1615`, `restoreUiState` `:1671` | `recordingStateController` already dispatches to the orchestrator (Theme B C5); amplitude/timer → `imeViewBackend.onAmplitude/onTimerTick` (CR1, methods exist `:217/:224`); state → reactive render. **QWERTZ rec-button + amplitude/timer = G9 BLEIBT** (A3 option-a → extract `QwertzRecordingController`) | PARTIAL — the `onStateChanged` removal is atomic (reactive render owns it); the QWERTZ/amplitude/timer **BLEIBT** is the A3 extract (CR-DEL-staged) | `RecordingAnimationControllerTest` + IME flip test |
+
+**Conclusion / D4 verdict.** ~13 of the ~16 axes are atomically
+flippable *today* (CR1-CR3 staged them precisely for this); the **3
+NO-owner sub-axes inside `registerAllListeners()` (edit-bar / emoji /
+overlay-chars-init) make the AC-RR-6-mandated
+`mainButtonsController.registerAllListeners()` removal non-atomic — a
+silent blank edit-row/emoji/overlay gap**. That blocks AC-RR-6's central
+deliverable and the RR-1/RR-2 no-gap invariant. The two SPLIT axes (G9
+QWERTZ, G13 step-rows) are *already* CR-DEL-staged per CR3's binding A3
+option-a disposition (not a CR4 blocker — CR4 removes the *drive*, the
+*render* BLEIBT until CR-DEL extracts the small owners). Per D4 +
+D7/D22, **flagged Critical `architecture-conflict` for mid-chunk-triage**
+rather than shipped as a gap. The resolution direction is the binding A3
+option-a (extract `EditBarController` + `EmojiController` +
+overlay-chars owner, Spec 2 §13.2-faithful) but the **scope decision
+(create these owners under CR4, or split a new CR-EXTRACT chunk before
+CR4, or option-b narrow AC-RR-7) is an orchestrator routing call**, not
+an IMPL inline fix.
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| No production change shipped in CR4 (chunk flagged, not implemented) | render-path-cutover.md §2.2 AC-RR-6 / §5 CR4 / chunks.json CR4 | CR4's central deliverable (`mainButtonsController.registerAllListeners()` removal → single render driver) is blocked by a missing new owner for 3 sub-axes (edit-bar/emoji/overlay-chars) | Removing `registerAllListeners()` strands the edit-bar/emoji/overlay-chars with no error (RR-2 silent blank-UI) — the chunk's own AC-RR-1..5 parity requirement forbids this; the spec-prescribed `EditBarController`/`EmojiController` (§13.2) were never created (recurring INT-1/F-1/F-2 deferral anti-pattern) | CR-RGATE cannot run (no single-render-driver state to verify); CR-DEL stays blocked. Triage must decide the extraction scope before CR4 can complete | delegated-to-orchestrator (architecture-conflict — not IMPL-inline-fixable per D7/D22; mid-chunk-triage armed for CR4 per the block plan) |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| CR4-IMPL-1 | Critical | `mainButtonsController.registerAllListeners()` (IME `:856`, mandated for removal by AC-RR-6 / CR4 chunk desc) fans out to 4 private sub-registrations; 3 of them (`registerEditBarListeners` edit-bar, `registerEmojiListeners` emoji-picker, `initializeOverlayCharacters` overlay-chars) have **NO new-path owner** — Spec 2 §13.2's prescribed `EditBarController`/`EmojiController` do not exist in the codebase. Removing `registerAllListeners()` atomically within CR4 strands the entire edit-bar + emoji-picker + overlay-chars init with no error (RR-2 silent blank-UI), violating CR4's own AC-RR-1..5 parity requirement. The fix requires extracting 3-4 new Kotlin owner classes (Spec 2 §13.2-faithful, the binding A3 option-a pattern) — a multi-file extraction far outside CR4's authorised scope (`DictateInputMethodService.java` only, loc 250). `MainButtonsController.kt:106-111` / IME `:856` | delegated-to-orchestrator | architecture-conflict, marker `architecture-conflict` · blocks-following-chunks (CR-RGATE/CR-DEL hard-gated on a single-render-driver state CR4 cannot produce without this) · mid-chunk-triage armed for CR4 per block plan |
+| CR4-IMPL-2 | Important | G8 resend-cooldown *write-path*: CR1 found the G8 `enabledResolver` "already implemented by parent B4", but the IME's `onResendClicked` 500 ms double-click cooldown still drives via `mainButtonsController.setResendEnabled(false/true)` (`:3511/:3541`) — verify a `state.resend.resendCooldown` + dispatch equivalent exists before CR4 removes the imperative call; if absent, a small `ResendAction` cooldown axis must be added (Spec 2 §9.2 G8 / §13) | delegated-to-orchestrator | needs-verify; ride-along with the CR4-IMPL-1 triage (same `MainButtonsController` retirement surface). Not independently architecture-blocking, but a silent regression (double-click race re-opens) if removed without the state equivalent |
+
+#### Overlooked points / known gaps
+
+- **A3 (G9/G13) is NOT a CR4 blocker** — CR3 already recorded the
+  binding A3 option-a disposition (extract `QwertzRecordingController` /
+  `PipelineStepRowRenderer`) as **CR-DEL-staged** (`KeyboardUiController`/
+  `RecordingUiController` stay instantiated through CR4; CR4 removes only
+  the *drive*, the *render* BLEIBT until CR-DEL extracts the small
+  owners). The CR4-IMPL-1 conflict is a *different* class of problem: the
+  edit-bar/emoji/overlay-chars sub-axes of `registerAllListeners()` were
+  **never enumerated as G-groups in render-path-cutover.md §3** (they are
+  outside the 16 behaviour groups) — Spec 2 §13.2 silently assumed a
+  pre-existing `EditBarController`/`EmojiController`. The CR-DEL kill-list
+  (AC-RR-7 `grep -rl "MainButtonsController"` → zero) is **also**
+  impossible until these owners exist (same root cause; flag carries to
+  CR-DEL/RR-5 as well).
+- The CR1 block-report already flagged a related residual: *"The
+  edit-row buttons (editSettings/editUndo/… ~11 buttons) the legacy
+  `applyTheme` also themed are not in `buttonViews` … still
+  legacy-owned."* That theme-residual and this listener-residual are the
+  **same missing-`EditBarController` root cause** — they should be
+  resolved together by the triage's extraction decision.
+- F-6 (inherited from B3, cross-carrier `ReprocessStaging.selectedLanguage
+  → LanguageState.override`) remains carried-to-CR-DEL per CR3's
+  disposition — untouched here (CR4 did not reach the
+  `KeyboardUiController`/`PipelineUiStateReader` retirement that F-6
+  depends on; the block was halted at the CR4-IMPL-1 conflict before any
+  drive-removal).
+- No `### Plan-Correctness Fix` / `### Self-Code Fix` / `### Tests` /
+  `### Test-Review` subsections: Steps 2-5 are **not applicable** — Step
+  1 produced no production diff (the chunk is blocked at a Critical
+  architecture-conflict that must be triaged before any code lands).
+  There is nothing to plan-correctness-check, code-fix, or test.
+
+**Files modified in this step:** none (analysis only — block-report
+subsection filled). **Files in plan-prescribed scope:** none touched.
+**Files outside plan-prescribed scope (drift):** none.
 
 ### Chunk CR-RGATE — render verification GATE (authorises CR-DEL)
 
-**Agent-IDs:** `B5-CR-RGATE-IMPL` · **Status:** ⏳ pending · **Risk:** Gate
+**Agent-IDs:** `B5-CR-RGATE-IMPL` · **Status:** ⏳ blocked-on-CR4 (CR4-IMPL-1) · **Risk:** Gate
 **GATE OUTPUT:** green → CR-DEL proceeds; red → mid-chunk-triage, NO deletion.
 
 ### Chunk C10-C3 (CR-DEL) — dead-controller deletion (HARD-GATED on GREEN CR-RGATE)

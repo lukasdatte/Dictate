@@ -22,4 +22,13 @@
          MaterialButton View under this key (B4-VAL F-28). -->
     <item name="slot_renderer_last_text" type="id" />
 
+    <!-- SpecialTouchHandlerInstaller (B5 CR2) marks each
+         SPACE/BACKSPACE/ENTER View it built a §11.7 touch handler for
+         under this key, so the single-owner-per-View guard (RR-1,
+         Strict-Mode-Logging, Spec 2 §10) can detect a double-build.
+         Does NOT mean the View's setOnTouchListener is ours — in CR2
+         the handler is built-but-dormant; the legacy MainButtonsController
+         stays the sole live touch owner until CR4. -->
+    <item name="special_touch_owner_tag" type="id" />
+
 </resources>

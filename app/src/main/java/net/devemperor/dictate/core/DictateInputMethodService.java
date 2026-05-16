@@ -89,6 +89,7 @@ import net.devemperor.dictate.state.layout.LogicalButtonId;
 import net.devemperor.dictate.state.render.ImeViewBackend;
 import net.devemperor.dictate.state.render.RealMotionSurface;
 import net.devemperor.dictate.state.render.RecordingAnimationController;
+import net.devemperor.dictate.state.render.SpecialTouchHandlerInstaller;
 import net.devemperor.dictate.widget.PulseLayout;
 
 import androidx.constraintlayout.motion.widget.MotionLayout;
@@ -265,6 +266,12 @@ public class DictateInputMethodService extends InputMethodService
     // service-side KeyboardLayoutManager via the LocalBinder. Detached in
     // onDestroyInputView() / onDestroy().
     private ImeViewBackend imeViewBackend;
+    // CR2 (Theme C-R) — builds the three Spec 2 §11.7 special-touch
+    // handlers (SPACE/BACKSPACE/ENTER) but keeps them DORMANT (built, not
+    // attached) until CR4. RR-1: the legacy MainButtonsController is the
+    // sole LIVE touch owner of these Views until CR4 calls
+    // attachToViews(...) in the same chunk it removes the legacy wiring.
+    private SpecialTouchHandlerInstaller specialTouchHandlerInstaller;
     private KeyboardLayoutManager keyboardLayoutManager; // copy of the service-side instance, for detach
 
     // Recording controllers (extracted from God-Class)
@@ -1113,17 +1120,60 @@ public class DictateInputMethodService extends InputMethodService
             vibrate();
             return kotlin.Unit.INSTANCE;
         };
+
+        // CR2 (Theme C-R) — supply the real staticHandlerInstaller
+        // (was null in CR1). The SpecialTouchHandlerInstaller builds the
+        // three Spec 2 §11.7 touch handlers (SPACE CursorSwipe / BACKSPACE
+        // swipe-select / ENTER overlay) wired to the IME's real
+        // InputConnection / accent / vibrate / accel-delete-cancel +
+        // the SAME shared KeyPressAnimator (G3/G4/G5).
+        //
+        // RR-1 (THE trap of this block): the legacy
+        // mainButtonsController.registerAllListeners() ran above (line
+        // ~827) and is the LIVE owner of the SPACE/BACKSPACE/ENTER
+        // setOnTouchListener until CR4. attachBackend() (below) runs
+        // attach() → staticHandlerInstaller AFTER that, so attaching a
+        // touch listener here would silently OVERWRITE the live legacy
+        // handler (Android keeps only the most-recent listener) — the
+        // exact F-1/F-2 trap. Mitigation: the installer's `installDormant`
+        // only BUILDS + caches the handlers (no setOnTouchListener on the
+        // live Views). CR4 calls installer.attachToViews(...) in the same
+        // chunk it removes the legacy touch wiring (never both wired at
+        // once — render-path-cutover.md §6 RR-1; identical to CR1's
+        // accepted RESEND-only long-press model). installDormant also runs
+        // a single-owner-per-View guard (Log.wtf on double-build,
+        // Strict-Mode-Logging, Spec 2 §10).
+        specialTouchHandlerInstaller = new SpecialTouchHandlerInstaller(
+            () -> getCurrentInputConnection(),
+            () -> DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE),
+            vibrateLambda,
+            () -> {
+                onBackspaceDeleteCancelled();
+                return kotlin.Unit.INSTANCE;
+            },
+            qwertzKeyboardView.getKeyPressAnimator()
+        );
+        final SpecialTouchHandlerInstaller installerRef = specialTouchHandlerInstaller;
+        kotlin.jvm.functions.Function1<Map<LogicalButtonId, ? extends View>, kotlin.Unit>
+            staticHandlerInstaller = views -> {
+                @SuppressWarnings("unchecked")
+                Map<LogicalButtonId, View> typedViews = (Map<LogicalButtonId, View>) views;
+                installerRef.installDormant(typedViews);
+                return kotlin.Unit.INSTANCE;
+            };
+
         // CR1 (Theme C-R) — Spec 2 §6 ctor now carries the shared
         // KeyPressAnimator (behaviour group G7). Pass the SAME instance
         // MainButtonsController uses (qwertzKeyboardView's animator) so the
         // new path's key-press scale animation is byte-identical to the
         // legacy one. The backend skips the three special-touch buttons
         // (SPACE/BACKSPACE/ENTER) when wiring press-animation — their
-        // OnTouchListener is the staticHandlerInstaller's (still null in
-        // CR1; CR2 supplies it). RR-1: no double-wire — the backend's
-        // press-anim listener on the *non-special* buttons is the same
+        // OnTouchListener is the staticHandlerInstaller's (CR2 builds it
+        // dormant). RR-1: no double-wire — the backend's press-anim
+        // listener on the *non-special* buttons is the same
         // KeyPressAnimator behaviour the legacy controller wired (returns
-        // false, click/long-press unaffected). The applyTheme axis is
+        // false, click/long-press unaffected); the special handlers
+        // compose press-animation internally. The applyTheme axis is
         // still driven by mainButtonsController.applyTheme until CR4
         // (render-path-cutover.md §5 — additive: legacy still drives).
         imeViewBackend = new ImeViewBackend(
@@ -1133,7 +1183,7 @@ public class DictateInputMethodService extends InputMethodService
             pipelineBinder.getModuleServices(),
             recordingAnimationCtrlForBackend,
             qwertzKeyboardView.getKeyPressAnimator(),
-            /* staticHandlerInstaller */ null,
+            staticHandlerInstaller,
             vibrateLambda
         );
 

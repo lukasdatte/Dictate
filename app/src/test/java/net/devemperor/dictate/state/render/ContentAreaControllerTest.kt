@@ -110,6 +110,51 @@ class ContentAreaControllerTest {
         assertEquals(View.GONE, emoji.visibility)
     }
 
+    // ─── CR3 RenderGate (RR-2 staged-safety-net) ──────────────────────
+
+    @Test
+    fun `CR3 dormant gate - render does NOT mutate any container`() {
+        mainButtons.visibility = View.INVISIBLE
+        qwertz.visibility = View.INVISIBLE
+        emoji.visibility = View.INVISIBLE
+
+        val gated = ContentAreaController(
+            ContentAreaViews(mainButtons, qwertz, emoji),
+            RenderGate("ContentAreaController", auditLogger = null),
+        )
+        gated.attach { }
+        gated.render(stateWithContentArea(ContentArea.QWERTZ), catalog.KEYBOARD_TWO_ROW)
+
+        // Dormant → legacy KSM stays the sole live writer; the
+        // controller leaves every container exactly as it found it.
+        assertEquals(View.INVISIBLE, mainButtons.visibility)
+        assertEquals(View.INVISIBLE, qwertz.visibility)
+        assertEquals(View.INVISIBLE, emoji.visibility)
+    }
+
+    @Test
+    fun `CR4 armed gate - render drives the containers (the flip)`() {
+        val gate = RenderGate("ContentAreaController", auditLogger = null)
+        val gated = ContentAreaController(
+            ContentAreaViews(mainButtons, qwertz, emoji), gate,
+        )
+        gated.attach { }
+        gate.arm() // CR4 one-line flip
+        gated.render(stateWithContentArea(ContentArea.QWERTZ), catalog.KEYBOARD_TWO_ROW)
+
+        assertEquals(View.GONE, mainButtons.visibility)
+        assertEquals(View.VISIBLE, qwertz.visibility)
+        assertEquals(View.GONE, emoji.visibility)
+    }
+
+    @Test
+    fun `null gate - legacy always-write contract unchanged`() {
+        val state = stateWithContentArea(ContentArea.EMOJI_PICKER)
+        controller.render(state, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.VISIBLE, emoji.visibility)
+        assertEquals(View.GONE, mainButtons.visibility)
+    }
+
     private fun stateWithContentArea(area: ContentArea): DictateUiState =
         DictateUiState.initial().copy(
             layout = DictateUiState.initial().layout.copy(contentArea = area),

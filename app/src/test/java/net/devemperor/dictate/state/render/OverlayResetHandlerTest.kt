@@ -60,4 +60,33 @@ class OverlayResetHandlerTest {
         handler.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
         assertEquals(View.GONE, overlayStrip.visibility)
     }
+
+    // ─── CR3 RenderGate (RR-2 staged-safety-net) ──────────────────────
+
+    @Test
+    fun `CR3 dormant gate - render does NOT reset the strip (KSM still owns it)`() {
+        overlayStrip.visibility = View.VISIBLE
+        val gated = OverlayResetHandler(
+            OverlayResetViews(overlayStrip),
+            RenderGate("OverlayResetHandler", auditLogger = null),
+        )
+        gated.attach { }
+        gated.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
+
+        // Dormant → the legacy KSM applyVisibility() reset (line ~142)
+        // stays the sole live writer; the handler leaves it untouched.
+        assertEquals(View.VISIBLE, overlayStrip.visibility)
+    }
+
+    @Test
+    fun `CR4 armed gate - render forces the strip GONE (the flip)`() {
+        overlayStrip.visibility = View.VISIBLE
+        val gate = RenderGate("OverlayResetHandler", auditLogger = null)
+        val gated = OverlayResetHandler(OverlayResetViews(overlayStrip), gate)
+        gated.attach { }
+        gate.arm()
+        gated.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
+
+        assertEquals(View.GONE, overlayStrip.visibility)
+    }
 }

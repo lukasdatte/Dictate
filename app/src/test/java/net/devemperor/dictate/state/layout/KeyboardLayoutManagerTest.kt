@@ -229,6 +229,40 @@ class KeyboardLayoutManagerTest {
         assertEquals(1, b.renderCount)
     }
 
+    // ─── CR3 — audit-logger render-generation boundary (RR-2) ──────────
+
+    @Test
+    fun `onStateChanged opens one audit render-generation per state-emit`() {
+        org.junit.Assume.assumeTrue(
+            "audit logger is DEBUG-guarded",
+            net.devemperor.dictate.BuildConfig.DEBUG,
+        )
+        val logger = net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger()
+        val auditedManager = KeyboardLayoutManager(
+            catalog = catalog,
+            visibilityAuditLogger = logger,
+        ) { action -> emittedActions.add(action) }
+
+        val viewId = 9001
+
+        // Generation 1: simulate the legacy KSM live write, then a
+        // dormant controller reporting the same axis (the CR3 steady
+        // state). Exactly one live writer → no double-write.
+        auditedManager.onStateChanged(stateForKeyboard(singleRow = false))
+        logger.logWrite(viewId, "KeyboardStateManager", android.view.View.GONE, live = true)
+        logger.logWrite(viewId, "ContentAreaController", android.view.View.VISIBLE, live = false)
+        assertEquals(0, logger.doubleWriteCount)
+        assertEquals("KeyboardStateManager", logger.soleLiveWriterOf(viewId))
+
+        // Generation 2: a fresh state-emit must reset the per-generation
+        // ledger (else the gen-1 owner would carry over and a gen-2
+        // different live writer would be a false double-write).
+        auditedManager.onStateChanged(stateForKeyboard(singleRow = true))
+        logger.logWrite(viewId, "PromptVisibilityController", android.view.View.GONE, live = true)
+        assertEquals(0, logger.doubleWriteCount)
+        assertEquals("PromptVisibilityController", logger.soleLiveWriterOf(viewId))
+    }
+
     // ─── Test fixtures ─────────────────────────────────────────────────
 
     private fun stateForKeyboard(singleRow: Boolean): DictateUiState =

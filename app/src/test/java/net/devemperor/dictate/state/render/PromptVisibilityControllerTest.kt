@@ -196,4 +196,56 @@ class PromptVisibilityControllerTest {
         // No crash expected.
         controllerNoViews.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
     }
+
+    // ─── CR3 RenderGate (RR-2 staged-safety-net) ──────────────────────
+
+    @Test
+    fun `CR3 dormant gate - render does NOT mutate any prompt view`() {
+        promptsContainer.visibility = View.INVISIBLE
+        promptsRv.visibility = View.INVISIBLE
+        pipelineProgress.visibility = View.INVISIBLE
+        qwertzRecControls.visibility = View.INVISIBLE
+
+        val gated = PromptVisibilityController(
+            PromptVisibilityViews(
+                promptsContainer, promptsRv, pipelineProgress, qwertzRecControls,
+            ),
+            RenderGate("PromptVisibilityController", auditLogger = null),
+        )
+        gated.attach { }
+        // smallMode → KSM would set promptsContainer GONE; the dormant
+        // controller must leave it exactly as found.
+        gated.render(
+            DictateUiState.initial().copy(
+                layout = DictateUiState.initial().layout.copy(smallMode = true),
+            ),
+            catalog.KEYBOARD_TWO_ROW,
+        )
+
+        assertEquals(View.INVISIBLE, promptsContainer.visibility)
+        assertEquals(View.INVISIBLE, promptsRv.visibility)
+        assertEquals(View.INVISIBLE, pipelineProgress.visibility)
+        assertEquals(View.INVISIBLE, qwertzRecControls.visibility)
+    }
+
+    @Test
+    fun `CR4 armed gate - render drives the prompt views (the flip)`() {
+        val gate = RenderGate("PromptVisibilityController", auditLogger = null)
+        val gated = PromptVisibilityController(
+            PromptVisibilityViews(
+                promptsContainer, promptsRv, pipelineProgress, qwertzRecControls,
+            ),
+            gate,
+        )
+        gated.attach { }
+        gate.arm()
+        gated.render(
+            DictateUiState.initial().copy(
+                layout = DictateUiState.initial().layout.copy(smallMode = true),
+            ),
+            catalog.KEYBOARD_TWO_ROW,
+        )
+
+        assertEquals(View.GONE, promptsContainer.visibility)
+    }
 }

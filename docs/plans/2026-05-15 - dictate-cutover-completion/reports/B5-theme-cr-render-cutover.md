@@ -509,7 +509,311 @@ suite re-run green (1079/0/0).
 
 ### Chunk CR3 — visibility-controller-attach + KSM-thinning
 
-**Agent-IDs:** `B5-CR3-IMPL` · **Status:** ⏳ pending · **Risk:** HIGHEST (RR-2 blank-UI sequencing; A3)
+**Agent-IDs:** `B5-CR3-IMPL` (fresh, combined Steps 1-5).
+**Status:** ⏳ in_progress · **Risk:** HIGHEST (RR-2 blank-UI sequencing; A3 split-vs-delete)
+**Implementation-Commit (Commit 1):** ⏳ · **Test-Commit (Commit 2):** ⏳
+
+### Implementation (B5-CR3-IMPL)
+
+**What was done.** Attached the three dormant R.10 visibility
+controllers via `KeyboardLayoutManager.attachBackend` and made the
+no-double-write invariant *provable*, all ADDITIVE (no legacy drive
+removed — that is CR4). Concretely:
+
+- `core/audit/VisibilityWriteAuditLogger.kt` — **new** (Spec 2 §10 /
+  §11.8 5c — the concrete Strict-Mode logger the spec mandates as its
+  own class). `BuildConfig.DEBUG`-guarded. API: `beginRenderGeneration()`
+  (per state-emit fan-out boundary), `logWrite(viewId, caller, target,
+  live)`, plus test-observable `doubleWriteCount` / `soleLiveWriterOf` /
+  `dormantReportersOf`. A *second distinct **live** writer* on the same
+  `viewId` in one generation = double-write (`Log.wtf` + counter). A
+  *dormant* report (suppressed intended write) is recorded separately —
+  it provably cannot conflict with the one live writer (RR-2).
+- `state/render/RenderGate.kt` — **new**. The dormant↔armed
+  staged-safety-net switch (the visibility-axis analogue of CR2's
+  `SpecialTouchHandlerInstaller.installDormant`/`attachToViews`).
+  `shouldWrite(viewId, target)` reports to the ledger (`live = armed`)
+  and returns `armed`; CR3 constructs it dormant → controller never
+  touches the view. `arm()` is the CR4 one-line flip.
+- `state/render/ContentAreaController.kt` / `PromptVisibilityController.kt`
+  / `OverlayResetHandler.kt` — added an optional `gate: RenderGate?`
+  ctor param (default `null` = legacy always-write, keeps every
+  existing unit test byte-identical). Every visibility write routes
+  through a private `writeVisibility(view, target)` helper:
+  `gate == null` → write; gate dormant → ledger-report only (no view
+  mutation); gate armed (CR4) → write.
+- `state/layout/KeyboardLayoutManager.kt` — optional
+  `visibilityAuditLogger` ctor param (placed **before** `onAction` so
+  the trailing-lambda construction idiom is preserved). `onStateChanged`
+  calls `beginRenderGeneration()` per state-emit (the single fan-out =
+  one render generation, RR-2 ledger keying).
+- `core/KeyboardStateManager.kt` — every KSM visibility write now routes
+  through a single `writeVisibility(view?, target)` seam that reports
+  `"KeyboardStateManager"` to the ledger with `live = true` **then
+  performs the write unconditionally** (KSM IS the sole live writer
+  until CR4 — Spec 2 §13 rows 1-4/7-11 `BLEIBT`). `auditLogger` is
+  wired *post-construction* via `attachAuditLogger(...)` (KSM is built
+  in the IME-View inflate path before the service-bind may complete —
+  the established bind↔inflate race the IME already consolidates).
+- `core/DictatePipelineService.kt` — owns a single
+  `VisibilityWriteAuditLogger` instance (shared by the manager, KSM,
+  and all 3 gates so every writer reports to ONE ledger); passed to the
+  manager ctor; exposed via the LocalBinder (`visibilityWriteAuditLogger`).
+- `core/DictateInputMethodService.java` — new
+  `attachDormantVisibilityControllers()` (called from the existing
+  `attachImeViewBackendIfReady` consolidation point, so it runs on both
+  `onCreateInputView` and `onServiceConnected`, race-safe): wires the
+  shared ledger into KSM, builds the 3 controllers each behind a
+  **dormant** `RenderGate`, attaches them via `attachBackend`
+  (`backendType=null` — ambiguity A4, parent-B4 design reused). New
+  `detachDormantVisibilityControllers()` called symmetrically in
+  `cleanupOldControllers()` (view-recreate) + `onDestroy()` (tear-down),
+  exactly like the `imeViewBackend` lifecycle.
+
+**RR-2 — the no-double-write sequencing model (the load-bearing
+decision; PASS — live keyboard UNCHANGED).** A visibility write, unlike
+a touch listener, is NOT an "Android keeps the most-recent" overwrite —
+it is a *repeated write* to the same field. Attaching a controller that
+writes the axis while KSM still drives it = both mutate the container
+every render-tick (silent flicker / wrong container, no error). The
+mitigation is the exact CR1/CR2 staged-safety-net applied to the
+visibility axis: the controllers **attach** (wiring proven,
+view-recreate-safe, CR4 = one-line `arm()`) but are **gated dormant** —
+they receive every `render()` tick and report their *intended* write to
+the ledger, but do **not** touch the view.
+
+*Sole-live-writer table (the no-double-write proof):*
+
+| Visibility axis (views) | Pre-CR3 sole LIVE writer | **Post-CR3 sole LIVE writer** | What CR4 flips |
+|---|---|---|---|
+| ContentArea (`main_buttons_cl`/`qwertz_keyboard_container`/`emoji_picker_cl`/`edit_buttons_keyboard_ll`) | KSM `applyContentAreaVisibility` | **still KSM** (`ContentAreaController` attached **dormant**) | CR4 removes the IME `stateManager.setContentArea/refresh` drive **and** `contentAreaGate.arm()` in the same chunk |
+| Recording-controls + Prompts (`pause_btn`/`trash_btn`/`prompts_*_cl`/`prompts_*_rv`/`pipeline_progress_ll`/`prompt_recording_controls_ll`) | KSM `applyRecordingControlsVisibility` + `applyPromptsVisibility` | **still KSM** (`PromptVisibilityController` attached **dormant**) | CR4 removes the KSM prompts drive **and** `promptVisibilityGate.arm()` together |
+| Overlay-reset (`overlay_characters_ll` → GONE) | KSM `applyVisibility` line ~142 | **still KSM** (`OverlayResetHandler` attached **dormant**) | CR4 removes the KSM reset line **and** `overlayResetGate.arm()` together |
+
+*Proof mechanism:* the dormant controllers report under their own
+owner-tag with `live = false` → recorded in `dormantReporters`
+(observability: "this owner exists and WOULD write, but is suppressed").
+KSM reports `live = true`. The ledger's double-write detector only
+fires on **two distinct LIVE writers** in one generation → through CR3
+exactly one live writer per axis (`KeyboardStateManager`),
+`doubleWriteCount == 0` (Spec 2 §10 acceptance). CR4 will remove the KSM
+drive and `arm()` the gates in the **same** chunk: the live writer
+flips KSM → controller with zero overlap (the exact `dormant-cr2 →
+attached-cr4` ledger transition CR2 established for the touch axis).
+Removing a KSM drive before the gate is armed = blank UI; arming a gate
+before the KSM drive is removed = double-write — CR4 must do both
+together per axis (never out of order). **Not flagged
+architecture-conflict** — this is the orchestrator-accepted CR1/CR2
+staged pattern reapplied to the visibility axis; CR3/CR4 separate
+cleanly.
+
+**A3 decision (split-vs-delete — the architecture call) — option-a
+(extract), staged.** Spec 2 §9.4/§9.5/§13-row-20 mark
+`RecordingUiController` QWERTZ/amplitude/timer (G9) and
+`KeyboardUiController` step-rows (G13) `BLEIBT`; the CR-DEL kill-list +
+AC-RR-7 assume full deletion. Per D4 (long-term, fewest special-cases)
++ the spec's own §9.x extract-helper pattern (it already names
+`EditNumbersAnimator`, `RecordingAnimationController` as extracted
+helpers — CR1 did exactly this), **A3 is decided option-a: extract the
+BLEIBT parts so the kill-list classes fully delete and AC-RR-7 stays a
+clean zero-grep.** This is the binding disposition recorded here.
+*Staging:* the physical extraction + the IME `recordingUiController.*`
+/ `uiController.*` amplitude/timer/pipeline drive-collapse onto
+`ImeViewBackend.onAmplitude/onTimerTick` (already exist, `:217/:224`) +
+`dispatch(Action.PipelineAction.*)` is **CR4 (drive removal) + CR-DEL
+(class deletion)** work, NOT CR3 — per render-path-cutover.md §5 RR-2
+("CR3 attaches + proves all owners *before* CR4 removes any drive
+call") and the chunks.json CR-DEL entry which explicitly says A3 may be
+resolved at the CR3 **or** CR-DEL boundary and that the BLEIBT-extract
+is option-a. CR3 attaching its visibility owners is what *makes* the
+G9/G13 collapse safe to do in CR4/CR-DEL. **No architecture change
+beyond extract/collapse is required** → not flagged
+architecture-conflict; mid-chunk-triage NOT needed.
+
+**F-6 (inherited from B3) disposition — CARRIED FORWARD to CR-DEL.**
+F-6 (cross-carrier collapse `PipelineUiState.ReprocessStaging.selectedLanguage`
+→ `LanguageState.override`) depends on `KeyboardUiController` /
+`PipelineUiStateReader` **retirement**. CR3 attaches visibility owners
+and thins KSM; it does **not** retire `KeyboardUiController` (that is
+CR-DEL, gated on CR-RGATE). The F-6 collapse is therefore NOT cleanly
+doable inside CR3's visibility-attach/KSM-thin scope (it touches the
+transcription-config language read, a different subsystem). Carried
+forward to CR-DEL with this note; must be closed before B5 block-end
+(tracked in the Issue Index, status unchanged `open → CR3/CR-DEL owns`
+— CR-DEL now owns it).
+
+**Live-keyboard-unchanged confirmation.** No user-visible behaviour
+change: the 3 controllers attach **dormant** (zero visibility writes —
+the legacy KSM remains the sole live writer of every migrated axis); a
+`null` gate/logger leaves every existing controller + KSM path
+byte-identical (proven — all pre-existing `ContentAreaControllerTest` /
+`PromptVisibilityControllerTest` / `OverlayResetHandlerTest` /
+`KeyboardLayoutManagerTest` green unchanged). `./gradlew assembleDebug`
+green.
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Controllers attach **dormant** (gated, no visibility write) in CR3; the IME `stateManager.setContentArea/refresh` drive is NOT removed | chunks.json CR3 ("collapse stateManager…drive onto state") vs render-path-cutover.md §5 ("CR3 ATTACHES; CR4 REMOVES the legacy drive") + §6 RR-2 | The chunk text "collapses onto state" is the **CR4** action; CR3's job per the §5 ordering rule + RR-2 is to make the new owner present-and-proven so CR4's removal is safe. The chunks.json notes confirm: "ADDITIVE+collapse — legacy classes still instantiated, **drive-calls being removed is CR4**" | CR4 must remove each KSM drive site AND `arm()` the matching gate **in the same chunk, per axis** (never out of order — RR-2: removed-drive-before-arm = blank UI; armed-before-removed = double-write). Drive sites: `:1264/1267/1279/1280` (onFinishInputView), `:~2693` (primePipelineUiForNewPath), `:~2175-2242` (emoji/qwertz toggles), `:~3768-3845` (small-mode/single-row/audio-focus refresh) | inline-fixed (RR-2-mandated; the spec §5 ordering rule + §6 RR-2 explicitly resolve the chunks.json "collapse" wording vs the staged-safety-net in favour of dormant-attach; identical to CR1/CR2's accepted models) |
+| KSM bodies kept (not emptied) in CR3 | Spec 2 §11.8 5c ("5c hat leere KSM-Bodies (no-op)") | KSM keeps its `applyXxxVisibility` bodies + still writes the axes; CR3 adds the Strict-Mode instrumentation that makes 5c's no-double-write *verifiable* | Spec 2 §11.8-5c's "empty bodies" assumes a *parallel live owner* takes over; render-path-cutover.md §5/§6 RR-2 explicitly override this ("removing the drive calls before CR3 blanks the UI"; "Parent B4 already chose 'KSM thinned to its still-owned axes' over 'empty bridge'") — emptying the bodies while the controllers are dormant = blank UI. The §13 `BLEIBT` rows 1-4/7-11 keep these axes in KSM until the deletion chunk | CR-DEL (= 5d) deletes KSM entirely (incl. these bodies) once CR4 has armed the controllers + CR-RGATE is GREEN | inline-fixed (small + locally-decidable; render-path-cutover.md §5 is the SoT that resolves the §11.8-5c-"empty" vs RR-2-"blank UI" tension; the audit logger is the spec's own §11.8-5c verification mechanism) |
+| A3 decided **option-a (extract)** but the G9/G13 physical extraction + IME amplitude/timer/pipeline drive-collapse staged to CR4/CR-DEL (not done in CR3) | render-path-cutover.md §7 A3 / chunks.json CR3 (mentions G9/G13 collapse) + CR-DEL ("Resolve ambiguity A3 here if not at CR3") | A3 is *decided* here (option-a binding); the extraction itself is CR4-drive-removal + CR-DEL-class-deletion work | RR-2: CR3 must attach+prove visibility owners BEFORE any drive collapse (§5). The G9/G13 `recordingUiController.*`/`uiController.*` drive is a *recording/pipeline* axis, not the *visibility* axis CR3 owns; collapsing it in CR3 would be the same blank-UI risk applied to a different axis. chunks.json explicitly permits A3 resolution at the CR3 **or** CR-DEL boundary | CR4 collapses the IME `recordingUiController.onAmplitudeUpdate/onTimerTick`/`uiController.startPipeline/...` drive onto `ImeViewBackend.onAmplitude/onTimerTick` + `dispatch(Action.PipelineAction.*)`; CR-DEL extracts the QWERTZ/step-row BLEIBT parts into small owners so AC-RR-7 zero-greps clean | inline-fixed (A3 is the orchestrator-delegated creative call; decided spec-faithfully option-a per D4 + the §9.x extract-helper precedent; staging is RR-2-mandated, no architecture-conflict) |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| IMPL-1 | Nice-to-have | The `writeVisibility(view, target)` gate-routing helper is structurally repeated across the 3 controllers (`ContentAreaController`/`PromptVisibilityController`/`OverlayResetHandler`) | open | Deliberate — each controller is an independent SRP `RenderBackend`; the duplication is ~6 lines of trivial branching and the shared abstraction already exists (`RenderGate`). A common base class would couple 3 concern-pure backends for marginal DRY gain (engineering-principles: no premature abstraction; don't mass-refactor an established consistent per-controller `render` style). Documented, left as-is. |
+
+#### Overlooked points / known gaps
+
+- The `ContentAreaController` owns `main_buttons_cl`/`qwertz`/`emoji`
+  but **not** `edit_buttons_keyboard_ll` (KSM's `applyContentAreaVisibility`
+  also toggles `editButtonsLl`). Spec 2 §13 row 2 marks `editButtonsLl`
+  `BLEIBT` (ContentArea-axis) — the new `ContentAreaViews` holder has no
+  edit-buttons field. Flagged so CR4/CR-DEL knows the `editButtonsLl`
+  visibility is still legacy-owned and either needs a 4th `ContentAreaViews`
+  field or stays a documented KSM-residual when the class is split.
+- The audit logger is `BuildConfig.DEBUG`-guarded — in release builds
+  `logWrite`/`beginRenderGeneration` early-return (zero cost, no proof).
+  The CR-RGATE render-verification gate must run the no-double-write
+  assertion against a **debug** build (Spec 2 §10 acceptance is a
+  debug-soak criterion — `0 Logs after 60s over all 5 LayoutModes`).
+- F-6 carried forward to CR-DEL (see disposition above) — NOT closed
+  in CR3 by design (depends on KeyboardUiController/PipelineUiStateReader
+  retirement = CR-DEL scope).
+
+### Plan-Correctness Fix (B5-CR3-IMPL-PLAN-FIX)
+
+Re-read render-path-cutover.md §3 (G9-G13) / §5 (CR3 ordering rule +
+KSM-thinning-in-CR3) / §6 RR-2 / §7 A3/A4, Spec 2 §9.3/§9.4/§9.5/§11.8-5c/§13
+(BLEIBT rows 1-20 + §10 Strict-Mode acceptance), and the chunks.json
+CR3 + CR-DEL entries against the diff. All three CR3 deliverables
+present + spec-faithful: (1) the 3 R.10 controllers attached via
+`attachBackend` as `backendType=null` (A4 — parent-B4 design reused,
+not reinvented); (2) KSM kept its BLEIBT axes (§13) + the Strict-Mode
+`VisibilityWriteAuditLogger` instruments every visibility write so
+§11.8-5c's no-double-write is *verifiable* (the spec's own 5c
+mechanism); (3) the IME direct `stateManager.setContentArea/refresh`
+drive is NOT removed (CR4 per §5 — removing it in CR3 = blank UI, RR-2).
+A3 decided option-a (extract — binding), staged to CR4/CR-DEL per the
+§5 ordering rule + chunks.json's explicit "CR3 or CR-DEL boundary"
+latitude. F-6 carried to CR-DEL (depends on KUC/PUSR retirement, not
+CR3 scope). The three plan-deviations above are all small +
+locally-decidable + RR-2/A3-mandated (the spec §5 ordering rule + §6
+RR-2 explicitly prescribe "CR3 attaches; CR4 removes"; chunks.json
+notes confirm "drive-calls being removed is CR4") → inline-fixed +
+documented, no delegation. **No architecture-conflict** — the
+dormant-attach is the orchestrator-accepted CR1/CR2 staged pattern at
+the visibility axis; CR3/CR4 separate cleanly. mid-chunk-triage NOT
+needed.
+
+### Self-Code Fix (B5-CR3-IMPL-CODE-FIX)
+
+Loaded engineering-principles. Code-quality + own-logic-bug pass:
+- **Own logic bug fixed inline (Step-3 self-check):** the first
+  `VisibilityWriteAuditLogger` cut keyed double-writes on *any* second
+  caller, so a dormant controller reporting the same `viewId` as KSM's
+  live write in one generation would have **spuriously tripped
+  `doubleWriteCount` and inverted the entire RR-2 proof**. Fixed by
+  adding a `live: Boolean` to `logWrite`: dormant gates report
+  `live = false` → recorded in a separate `dormantReporters` map
+  (observability only, never a conflict); only **two distinct LIVE
+  writers** in one generation trip the detector. `RenderGate.shouldWrite`
+  passes `live = armed`; KSM passes `live = true`. This makes the proof
+  correct: through CR3 exactly one live writer per axis
+  (`KeyboardStateManager`), `doubleWriteCount == 0`; CR4 flips `live`
+  KSM → controller.
+- `KeyboardLayoutManager` ctor param ordering: `visibilityAuditLogger`
+  placed **before** `onAction` so the codebase's trailing-lambda
+  construction idiom (`KeyboardLayoutManager(catalog) { … }`) keeps
+  compiling unchanged (the alternative — appending it — broke
+  `KeyboardLayoutManagerTest`; caught + fixed in PLAN-FIX).
+- KSM `auditLogger` wired post-construction (`attachAuditLogger`)
+  rather than via ctor: KSM is built in the IME-View inflate path
+  before the service-bind may complete; a ctor param would force a
+  null at construction and a fragile re-build. The post-ctor setter
+  matches the established bind↔inflate consolidation pattern
+  (`attachImeViewBackendIfReady`).
+- IMPL-1 (per-controller `writeVisibility` duplication) left documented
+  — `RenderGate` is the shared abstraction; a common base would couple
+  3 SRP backends for marginal gain (engineering-principles: no
+  premature abstraction).
+`./gradlew assembleDebug` + the 4 pre-existing affected test classes
+green after the fixes.
+
+### Tests (B5-CR3-IMPL-TEST)
+
+**What was done.** Added 20 unit tests for the CR3 production-diff
+across 2 new + 4 extended test classes, all AC-mapped:
+
+- `core/audit/VisibilityWriteAuditLoggerTest.kt` (**new**, +8, pure
+  JVM — K-4 no-Robolectric justified, the logger keys on `Int`+`String`
+  only): single live writer ≠ double-write (idempotent re-render);
+  **two distinct LIVE writers in one generation = double-write**;
+  **dormant report does NOT conflict with the KSM live write (the RR-2
+  core invariant)**; CR4 flip (armed controller becomes sole live
+  writer, KSM gone); generation-boundary resets the ledger; distinct
+  axes tracked independently; fresh-logger empty state. `BuildConfig.DEBUG`
+  `assumeTrue` (the logger is debug-guarded by design — the proof is
+  exercised under `testDebugUnitTest`).
+- `state/render/RenderGateTest.kt` (**new**, +5, pure JVM): dormant
+  default → `shouldWrite=false`; `arm()` → `shouldWrite=true` (CR4
+  flip); **dormant gate reports a SUPPRESSED (non-live) write — no
+  conflict vs the KSM live write (RR-2 proof half)**; armed gate
+  reports a LIVE write (sole live writer flips to the controller);
+  null-logger semantics still hold (no crash, proof unobserved).
+- `ContentAreaControllerTest` (+3): **CR3 dormant gate → render
+  mutates NO container** (all 3 left exactly as found — the
+  no-double-write proof at the controller level); **CR4 armed gate →
+  render drives the containers** (the flip); null gate → legacy
+  always-write unchanged.
+- `PromptVisibilityControllerTest` (+2): dormant → no prompt-view
+  mutation; armed → drives the prompt views.
+- `OverlayResetHandlerTest` (+2): dormant → strip NOT reset (KSM still
+  owns it); armed → strip forced GONE (the flip).
+- `KeyboardLayoutManagerTest` (+1): **`onStateChanged` opens one audit
+  render-generation per state-emit** + a fresh emit resets the
+  per-generation ledger (proves a gen-1 owner does not bleed into
+  gen-2 as a false double-write — RR-2 generation-keying).
+
+**Test counts.** `./gradlew testDebugUnitTest`: **1099 tests, 0
+failures, 0 errors, 0 skipped** (CR2 baseline ~1079 + 20 CR3; R-7
+family clean, no flakes). `./gradlew assembleDebug` green.
+
+#### Code-Bugs Found While Writing Tests
+
+None. The Step-3 self-check already fixed the only logic bug (the
+`live` flag — see Self-Code Fix). All 20 new tests passed on first run
+after that fix; the pre-existing controller / manager tests stayed
+green unchanged (the `null` gate/logger default proves the
+backward-compatible pass-through).
+
+### Test-Review (B5-CR3-IMPL-TEST-FIX)
+
+Requirement coverage complete — every CR3 acceptance point has ≥1
+direct assertion: the 3 R.10 controllers attach as `backendType=null`
+(pre-existing `backendType is null` tests, unchanged); the
+load-bearing **RR-2 no-double-write invariant** (dormant report ≠
+conflict with the KSM live write) asserted at three levels — the
+logger core (`VisibilityWriteAuditLoggerTest`), the gate
+(`RenderGateTest`), and each controller (dormant → zero view
+mutation); the **CR4 flip** (armed → sole live writer transitions KSM →
+controller, zero overlap) asserted at all three levels; the
+per-state-emit **render-generation boundary** (`KeyboardLayoutManagerTest`).
+The KSM `writeVisibility` seam has no dedicated test — it is a pure
+pass-through (audit-report-then-unconditional-write) whose dependency
+(`VisibilityWriteAuditLogger`) is exhaustively tested, and whose
+"sole live writer" end-to-end behaviour is asserted in the
+manager/gate integration tests; a direct KSM test would need heavy
+view-holder fakes for zero additional logic coverage (documented
+overlooked-point, not a gap). K-1 honoured (no mocking framework — the
+logger/gate tests are pure JVM with real objects; the controller tests
+reuse the existing handwritten Robolectric `FrameLayout` fixtures);
+K-4 Robolectric used only where an Android `View` is genuinely needed
+(the controller tests — inherited per-class justification), pure JUnit
+for the logger/gate (explicit K-4 opt-out KDoc). No code-bugs surfaced
+during review. Full suite re-run green (1099/0/0).
 
 ### Chunk CR4 — IME legacy-driver-removal (render-layer AC-10 analogue)
 

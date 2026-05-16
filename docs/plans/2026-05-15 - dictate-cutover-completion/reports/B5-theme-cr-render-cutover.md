@@ -295,7 +295,217 @@ surfaced during review. Full suite re-run green (1068/0/0).
 
 ### Chunk CR2 — special-touch-installer (CursorSwipe/Backspace/Enter)
 
-**Agent-IDs:** `B5-CR2-IMPL` · **Status:** ⏳ pending · **Risk:** HIGH (RR-1 silent-listener-overwrite — the F-1/F-2 trap)
+**Agent-IDs:** `B5-CR2-IMPL` (fresh, combined Steps 1-5).
+**Status:** ⏳ in_progress · **Risk:** HIGH (RR-1 silent-listener-overwrite — the F-1/F-2 trap)
+**Implementation-Commit (Commit 1):** ⏳ · **Test-Commit (Commit 2):** ⏳
+
+### Implementation (B5-CR2-IMPL)
+
+**What was done.** Supplied the real `staticHandlerInstaller` lambda
+(was `null` in CR1 at `DictateInputMethodService.java:1136`, now
+`:~1207`). Concretely:
+
+- `state/render/SpecialTouchHandlerInstaller.kt` — **new** class. Builds
+  the three Spec 2 §11.7 touch handlers **verbatim**:
+  `buildSpaceTouchHandler` (CursorSwipe: onTap/onCursorMove/
+  onSwipeStateChanged + compound-drawable arrow swap + keyPressAnimator
+  composition + null-IC short-circuit clearing the drawables),
+  `buildBackspaceSwipeHandler` (BackspaceSwipeHandler with
+  `onDeleteCancelled` wired to the real IME `onBackspaceDeleteCancelled`
+  — the G3 accel-delete-cascade-cancel half F-1 dropped),
+  `buildEnterOverlayHandler` (EnterOverlayHandler reading
+  `overlay_characters_ll` off the ENTER view's rootView, accent +
+  keyPressAnimator). Exposes `installDormant` (CR2 — build+cache only),
+  `attachToViews` (CR4 — gated attach), `ownerOf` (single-owner proof
+  surface), and a `Log.wtf` single-owner guard.
+- `res/values/ids.xml` — added `special_touch_owner_tag` keyed-tag id
+  (follows the established `slot_renderer_*` keyed-tag convention) for
+  the single-owner ledger marker.
+- `core/DictateInputMethodService.java` — instantiates
+  `specialTouchHandlerInstaller` (wired to `getCurrentInputConnection`,
+  `Pref.AccentColor`, `vibrate()`, `onBackspaceDeleteCancelled()`, the
+  shared `qwertzKeyboardView.getKeyPressAnimator()`) and passes
+  `installer::installDormant` as the `ImeViewBackend`
+  `staticHandlerInstaller` (replacing the CR1 `null`). New field +
+  import added; CR1 ctor-comment updated.
+
+**RR-1 single-owner model — PASS (build-but-don't-attach; no live
+behaviour regression).** This is the load-bearing decision of the
+chunk:
+
+- *The trap.* The legacy `MainButtonsController.registerAllListeners()`
+  (`DictateInputMethodService.java:827`) is the **LIVE** owner of the
+  SPACE/BACKSPACE/ENTER `setOnTouchListener` and is NOT removed in CR2
+  (that is CR4). `attachBackend()` → `ImeViewBackend.attach()` →
+  `staticHandlerInstaller` runs at `:~1247`, i.e. **after** line 827.
+  Android keeps only the most-recent `setOnXListener`. A naive
+  `space.setOnTouchListener(...)` in the installer would **silently
+  overwrite** the live legacy `CursorSwipeTouchHandler` /
+  `BackspaceSwipeHandler` / `EnterOverlayHandler` — a half-broken
+  keyboard with no error (the exact F-1/F-2 trap, RR-1).
+- *The model chosen — build-but-don't-attach* (one of the spec's three
+  evaluated options, render-path-cutover.md §6 RR-1; the one identical
+  to CR1's already-accepted RESEND-only long-press model). The IME
+  wires `installer::installDormant`, which only **builds + caches** the
+  three handlers; it does **NOT** call `setOnTouchListener` on the live
+  Views. CR4 calls `installer.attachToViews(...)` in the **same chunk**
+  it removes the legacy `registerAllListeners()` touch wiring — never
+  both wired at once.
+- *Single-owner proof (pre/post-CR2).*
+  - **Pre-CR2 & post-CR2:** SPACE/BACKSPACE/ENTER `setOnTouchListener`
+    sole live owner = the **legacy `MainButtonsController`**
+    (`:203-208` / `:217-246` / `:268-273`). CR2 attaches **zero**
+    touch listeners to these Views (`installDormant` only builds +
+    `setTag`s the single-owner marker). Proven by: (1) code — no
+    `setOnTouchListener` call path in `installDormant`/its builders on
+    the live Views; (2) the `ownerOf(id)` ledger reads `dormant-cr2`
+    (built, NOT attached) after CR2; (3) the `Log.wtf` guard +
+    asserted-in-test single-owner invariant.
+  - **What CR4 will flip:** CR4 calls `installer.attachToViews(...)`
+    (ledger transitions `dormant-cr2` → `attached-cr4`) in the same
+    chunk it deletes the legacy `MainButtonsController` touch wiring.
+    Sole live owner then = the new §11.7 handlers. Never both at once.
+- *No architecture-conflict.* CR2 and CR4 separate cleanly — the exact
+  same staged-safety-net pattern the orchestrator already accepted for
+  CR1's long-press axis (RESEND-only attach; RECORD built-but-dormant).
+  CR2 applies it to the touch axis. **Not flagged
+  `architecture-conflict`.** mid-chunk-triage NOT needed.
+
+**§11.7 builder fidelity.** All three builder bodies follow Spec 2
+§11.7 verbatim (compared line-by-line against §11.7 + the legacy
+`MainButtonsController.kt:203-273` for behaviour parity). The shared
+`KeyPressAnimator` is the **same instance** the legacy controller + CR1
+backend use → press-animation byte-identical.
+
+**Live-keyboard-unchanged confirmation.** No user-visible behaviour
+change: CR2 attaches no touch listener to any live View; the legacy
+`MainButtonsController` remains the sole live owner of SPACE swipe /
+BACKSPACE accel-delete+swipe / ENTER overlay. The new handlers are
+built-but-dormant. `./gradlew assembleDebug` green.
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| `staticHandlerInstaller` builds-but-does-not-attach in CR2 (handlers cached, not `setOnTouchListener`'d on live Views) | render-path-cutover.md §4 row 3 ("supply the real installer lambda") + §6 RR-1 | Installer is feature-complete (3 §11.7 handlers built) but attachment deferred to CR4 | Attaching in CR2 would silently overwrite the live legacy `CursorSwipe/Backspace/EnterOverlay` handlers (RR-1, the F-1/F-2 trap); CR2 AC mandates "NO live keyboard behaviour change" | CR4 must call `installer.attachToViews(buttonViews)` **in the same chunk** it removes the legacy `MainButtonsController.registerAllListeners()` touch wiring (`:203-208`/`:217-246`/`:268-273`) — never both wired at once | inline-fixed (RR-1-mandated; small + locally-decidable; spec §6 RR-1 explicitly prescribes "never both wired at once"; identical to CR1's accepted RESEND-only model) |
+| `buildBackspaceSwipeHandler().onDeleteCancelled` wired to the **real** IME `onBackspaceDeleteCancelled()` (not the §11.7-snippet's `{ /* no-op */ }` comment) | Spec 2 §11.7 BackspaceSwipeHandler snippet vs render-path-cutover.md §3 **G3** + CR2 mandate | The §11.7 code-snippet shows `onDeleteCancelled = { /* … no Action-Emit needed */ }`; G3 + the CR2 task mandate + legacy `MainButtonsController.kt:206` parity require the real cancel so the accel-delete cascade is interruptible by a swipe | A pure no-op would regress: a swipe-select would NOT stop a running `deleteHandler` accel-delete cascade (exactly the behaviour F-1 lost). G3 is explicit: "restores exactly what parent B4-VAL F-1 dropped" | CR4: the IME-side `onBackspaceLongClicked` accel-delete *trigger* (long-press path) is attached by CR4 in the same chunk per CR1's KDoc; this handler's *cancel* wire is complete now | inline-fixed (small + locally-decidable; G3 + legacy-parity + CR2-mandate resolve the §11.7-snippet-comment vs G3-behaviour tension in favour of behaviour parity, the SoT's overriding intent) |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| IMPL-1 | Nice-to-have | Java→Kotlin variance friction: `installDormant(Map<LogicalButtonId, View>)` requires an unchecked cast in the IME lambda (Kotlin emits the param as `Map<LogicalButtonId, ? extends View>` due to `Map`'s declaration-site `out V`) (`DictateInputMethodService.java:~1209`) | open | Unavoidable Kotlin/Java generics boundary friction (the same pattern would recur for any Kotlin `(Map<K,V>) -> Unit` consumed from Java). Cast is `@SuppressWarnings("unchecked")`-annotated + safe (the map is constructed locally as `Map<LogicalButtonId, View>` two screens up). A signature change to `Map<LogicalButtonId, out View>` would not help (same erasure). Left as-is, documented. |
+
+#### Overlooked points / known gaps
+
+- The `EnterOverlayHandler` reads `overlay_characters_ll` via
+  `enter.rootView.findViewById(...)` (matching the legacy controller
+  which is passed the same `overlayCharactersLl`). This is dormant in
+  CR2 (handler built, not attached) so the rootView resolution is only
+  exercised once CR4 attaches — verified the legacy controller resolves
+  the identical id from the same inflated tree, so CR4 attach is safe.
+- G12 `OverlayResetHandler` (the defensive overlay-reset belt) is **CR3
+  scope** (attach existing controller) — not touched here. §11.7's
+  "Special" note (handler-internal `overlayCharactersLl` reset stays as
+  defensive depth) is preserved verbatim in `EnterOverlayHandler` (not
+  modified by CR2).
+- CR4 contract surfaced for the next chunk: CR4 must (a) call
+  `installer.attachToViews(buttonViews)`, (b) remove the legacy
+  `MainButtonsController` SPACE/BACKSPACE/ENTER `setOnTouchListener`
+  wiring, (c) widen `ImeViewBackend`'s long-press id-filter (CR1
+  contract) — **all in the same chunk** (RR-1: never both wired at
+  once).
+
+### Plan-Correctness Fix (B5-CR2-IMPL-PLAN-FIX)
+
+Re-read render-path-cutover.md §3 (G3/G4/G5) / §4 row 3 / §6 RR-1 / §7,
+Spec 2 §11.7 (verbatim builder bodies) + §9.2 rows
+`:189-194`/`:203-232`/`:254-259`, and the legacy
+`MainButtonsController.kt:203-273` against the diff. All three §11.7
+builders present and verbatim-faithful (CursorSwipe full body incl.
+keyPressAnimator + null-IC short-circuit; BackspaceSwipe incl. the G3
+cancel-cascade wire; EnterOverlay). The two plan-deviations above are
+small + locally-decidable + RR-1/G3-mandated (the spec §6 RR-1
+explicitly prescribes "never both wired at once"; G3 + the CR2 mandate
+explicitly require the accel-delete-cascade-cancel restored) →
+inline-fixed + documented, no delegation. **No architecture-conflict**
+— the build-but-don't-attach model is the orchestrator-accepted CR1
+pattern reapplied to the touch axis; CR2/CR4 separate cleanly. No
+mid-chunk-triage.
+
+### Self-Code Fix (B5-CR2-IMPL-CODE-FIX)
+
+Loaded engineering-principles. Code-quality pass:
+- Refactored `attachToViews` from three repeated
+  `(view to handler).let { (v,h) -> … }` blocks into a single
+  `attachOne(...)` private helper (DRY; readability;
+  maintainability — CR4 touches this path).
+- Single-owner marker uses a real keyed-tag resource
+  (`R.id.special_touch_owner_tag`) following the established
+  `SlotRenderer` `R.id.slot_renderer_*` convention (not a magic int
+  tag) — collision-safe, consistent with the codebase pattern.
+- KDoc captures the full RR-1 "why" (wiring-order diagram + the
+  build-but-don't-attach rationale + the CR2→CR4 ledger transition) so
+  the next reader does not have to reverse-engineer the trap.
+- IMPL-1 (Java variance cast) left documented — unavoidable boundary
+  friction, `@SuppressWarnings`-annotated + safe.
+`./gradlew assembleDebug` green after the fixes.
+
+### Tests (B5-CR2-IMPL-TEST)
+
+**What was done.** Added `state/render/SpecialTouchHandlerInstallerTest.kt`
+(**new**, Robolectric — K-4 justified view-wiring exception, per-class
+KDoc), 12 tests, all AC-mapped:
+
+- **RR-1 single-owner invariant (load-bearing):**
+  `installDormant_attaches_no_touch_listener_to_live_views` —
+  `ShadowView.getOnTouchListener()` is `null` for SPACE/BACKSPACE/ENTER
+  after `installDormant` (the legacy controller stays sole live owner);
+  `installDormant_ledger_reads_dormant_cr2_for_all_three`;
+  `ownerOf_is_null_before_installDormant`.
+- **3 §11.7 handlers built:**
+  `installDormant_builds_all_three_handlers_distinct` (non-null +
+  distinct G3/G4/G5); `handlers_are_null_before_installDormant`.
+- **CR4 flip:** `attachToViews_is_what_actually_attaches_the_cached_handlers`
+  (`assertSame` the cached handler is now the live listener);
+  `attachToViews_transitions_ledger_dormant_to_attached`.
+- **Double-build guard:**
+  `second_installDormant_still_attaches_no_live_listener` (no overwrite
+  in CR2 even on a double-build).
+- **§11.7 SPACE body verbatim:**
+  `space_handler_onTap_commits_a_space_via_inputconnection`;
+  `space_handler_clears_drawables_and_short_circuits_when_no_inputconnection`.
+- **G3 (the half F-1 dropped):**
+  `backspace_handler_swipe_select_fires_onBackspaceDeleteCancelled` —
+  proves the swipe-cancel is wired to the REAL IME cancel (deviation
+  #2), so a running accel-delete cascade is interruptible.
+- Handwritten K-1 `FakeInputConnection` (captures `commitText`; no
+  mocking framework).
+
+**Test counts.** `./gradlew testDebugUnitTest`: **1079 tests, 0
+failures, 0 errors** (CR1 baseline ~1068 + 12 CR2; R-7 family clean, no
+flakes). `./gradlew assembleDebug` green.
+
+#### Code-Bugs Found While Writing Tests
+
+None. The production code was correct as written; all 12 tests passed
+without any production change. (The G3-cancel-wire test was added in
+Step 5 self-review to directly assert deviation #2's behaviour parity —
+it passed immediately, confirming the wire is correct.)
+
+### Test-Review (B5-CR2-IMPL-TEST-FIX)
+
+Requirement coverage complete — every CR2 acceptance point has ≥1
+direct assertion: the real installer + 3 §11.7 handlers, the
+load-bearing RR-1 single-owner-per-View invariant (no live listener
+overwrite — the F-1/F-2 trap, asserted via `ShadowView`), CR4 flip
+semantics, double-build safety, §11.7 SPACE body verbatim, and the G3
+accel-delete-cascade-cancel wire (deviation #2). Added the G3 test in
+this step (was the one coverage gap — the load-bearing deviation #2
+deserved a direct behaviour assertion). K-1 honoured (handwritten
+`FakeInputConnection`); K-4 Robolectric is the justified view-wiring
+exception (per-class KDoc). No code-bugs surfaced during review. Full
+suite re-run green (1079/0/0).
 
 ### Chunk CR3 — visibility-controller-attach + KSM-thinning
 

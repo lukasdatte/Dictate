@@ -436,6 +436,68 @@ class RecordingModuleTest {
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.DeleteAudioFile(testFile)))
     }
 
+    // ─── G2 / CR1 / A1 — OnRecordLongPress reducer arm ──────────────────
+    // The RECORD long-press 2-mode: Idle → null (Settings+file-picker
+    // launch is IME-side, wired in CR4); Active/Paused → discard-stop
+    // (identical FSM effect set to StopRecording — the legacy
+    // `stopRecording()` it called discards rather than sends). The
+    // `autoSwitchKeyboard` one-shot is an IME-side affordance, not FSM
+    // state. See Action.RecordingAction.OnRecordLongPress KDoc.
+
+    @Test
+    fun `OnRecordLongPress from Active emits Idle + discard-stop effects (no DeleteAudioFile, no EmitPipelineTrigger)`() {
+        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-lp-a")
+        val result = module.reduce(state, Action.RecordingAction.OnRecordLongPress, ctx())
+        assertEquals(RecordingState.Idle, result!!.nextState)
+        // Same discard-stop set as StopRecording from Active (5 effects).
+        assertEquals(5, result.sideEffects.size)
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.StopMediaRecorder))
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.StopTimer))
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.StopBorderGlow))
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.StopAmplitudeStream))
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.DismissNotification))
+        // Discard (not send): no pipeline hand-off, no file delete.
+        assertTrue(result.sideEffects.none { it is RecordingModule.Effect.EmitPipelineTrigger })
+        assertTrue(result.sideEffects.none { it is RecordingModule.Effect.DeleteAudioFile })
+    }
+
+    @Test
+    fun `OnRecordLongPress from Paused emits Idle + discard-stop effects (no StopAmplitudeStream - already stopped)`() {
+        val state = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "sid-lp-p")
+        val result = module.reduce(state, Action.RecordingAction.OnRecordLongPress, ctx())
+        assertEquals(RecordingState.Idle, result!!.nextState)
+        // Mirrors the Paused StopRecording set: amplitude already stopped
+        // on Active → Paused, so 4 effects, no StopAmplitudeStream.
+        assertEquals(4, result.sideEffects.size)
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.StopMediaRecorder))
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.StopTimer))
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.StopBorderGlow))
+        assertTrue(result.sideEffects.contains(RecordingModule.Effect.DismissNotification))
+        assertTrue(result.sideEffects.none { it is RecordingModule.Effect.EmitPipelineTrigger })
+        assertTrue(result.sideEffects.none { it is RecordingModule.Effect.DeleteAudioFile })
+    }
+
+    @Test
+    fun `OnRecordLongPress from Idle is null (Idle launch is IME-side - A1)`() {
+        // Idle → Settings + audio-file picker is an IME-side Activity
+        // launch (no ModuleServices surface) wired in CR4 — the reducer
+        // produces no FSM transition (Rejected("reducer-null"), the
+        // correct "no transition for this mode" outcome).
+        val result = module.reduce(
+            RecordingState.Idle, Action.RecordingAction.OnRecordLongPress, ctx(),
+        )
+        assertNull(result)
+    }
+
+    @Test
+    fun `OnRecordLongPress while Preparing is null`() {
+        val state = RecordingState.Preparing(
+            useBluetooth = false, audioFile = testFile, sessionId = "sid-lp-prep",
+        )
+        val result = module.reduce(state, Action.RecordingAction.OnRecordLongPress, ctx())
+        assertNull(result)
+    }
+
     // ─── C5 / C4-IMPL-1 — recording-phase FGS notification emission ─────
     //
     // Spec 1 §7.6 Recording-Active / Recording-Paused. The recording FSM

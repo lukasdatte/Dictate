@@ -117,6 +117,53 @@ class ActionResolversTest {
         assertTrue("Should not use error-channel String overload", toast.errorMessages.isEmpty())
     }
 
+    // ─── resolveRecordLongPressAction (G2 / CR1 / A1) ──────────────────
+
+    @Test
+    fun `resolveRecordLongPressAction emits OnRecordLongPress from Active`() {
+        val s = state.copy(
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test",
+            ),
+        )
+        assertEquals(
+            Action.RecordingAction.OnRecordLongPress,
+            resolveRecordLongPressAction(s, fakeModuleServices()),
+        )
+    }
+
+    @Test
+    fun `resolveRecordLongPressAction emits OnRecordLongPress from Paused`() {
+        val s = state.copy(
+            recording = RecordingState.Paused(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test",
+            ),
+        )
+        assertEquals(
+            Action.RecordingAction.OnRecordLongPress,
+            resolveRecordLongPressAction(s, fakeModuleServices()),
+        )
+    }
+
+    @Test
+    fun `resolveRecordLongPressAction returns null from Idle (R-3 — Idle launch is IME-side, A1)`() {
+        val s = state.copy(recording = RecordingState.Idle)
+        // R.3: the Idle Settings+file-picker launch is an IME-side
+        // affordance wired in CR4, NOT a reducer transition — the resolver
+        // short-circuits so no pointless action reaches the orchestrator.
+        assertNull(resolveRecordLongPressAction(s, fakeModuleServices()))
+    }
+
+    @Test
+    fun `resolveRecordLongPressAction returns null while Preparing`() {
+        val s = state.copy(
+            recording = RecordingState.Preparing(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test",
+            ),
+        )
+        assertNull(resolveRecordLongPressAction(s, fakeModuleServices()))
+    }
+
     // ─── resolveRecordActionPipeline ──────────────────────────────────
 
     @Test

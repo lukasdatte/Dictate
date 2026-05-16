@@ -31,4 +31,15 @@
          stays the sole live touch owner until CR4. -->
     <item name="special_touch_owner_tag" type="id" />
 
+    <!-- EditBarController / EmojiController (B5 CR-EXTRACT) mark each
+         edit-bar / emoji View they built a click/long-click listener
+         for under this single shared key (the two owners never tag the
+         same View). Single-owner-per-View guard (RR-1,
+         Strict-Mode-Logging, Spec 2 §10) — detects a double-build.
+         Does NOT mean the View's listener is ours: in CR-EXTRACT the
+         listeners are built-but-dormant; the legacy
+         MainButtonsController.registerEditBarListeners /
+         registerEmojiListeners stay the sole live owner until CR4. -->
+    <item name="editbar_emoji_owner_tag" type="id" />
+
 </resources>

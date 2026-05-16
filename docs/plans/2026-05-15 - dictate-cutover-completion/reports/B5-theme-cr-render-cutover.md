@@ -44,13 +44,13 @@ Spec 2 §9.x (SoT), then deletes the controllers.
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts:** Critical: 1 (CR4-IMPL-1, mid-chunk-triage) · Important: 2 (F-6 inherited, deferred-in · CR4-IMPL-2 needs-verify) · Nice-to-have: 0 · Postponed: 0
+**Severity counts:** Critical: 0 (CR4-IMPL-1 → fixed-via-CR-EXTRACT, B5-CR4-MID-W1) · Important: 1 (F-6 inherited, deferred-in · CR4-IMPL-2 → fixed/verified) · Nice-to-have: 0 · Postponed: 0
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
 | F-6 (from B3) | B3-VAL-SANITY | Important | open → CR3/CR-DEL owns | Cross-carrier collapse: ReprocessStaging.selectedLanguage read → LanguageState.override (depends on KeyboardUiController/PipelineUiStateReader retirement = this block's scope) | inherited from B3-VAL-W1 |
-| CR4-IMPL-1 | B5-CR4-IMPL | Critical | delegated-to-orchestrator (mid-chunk-triage armed) | `registerAllListeners()` removal (AC-RR-6) strands edit-bar/emoji/overlay-chars — Spec 2 §13.2's `EditBarController`/`EmojiController` never created; blocks CR-RGATE/CR-DEL | B5-CR4-IMPL Step 1 |
-| CR4-IMPL-2 | B5-CR4-IMPL | Important | delegated-to-orchestrator (needs-verify, ride-along CR4-IMPL-1) | G8 resend-cooldown *write-path* (`setResendEnabled` `:3511/:3541`) may lack a `state.resend.resendCooldown` dispatch equivalent — silent double-click race if removed without it | B5-CR4-IMPL Step 1 |
+| CR4-IMPL-1 | B5-CR4-IMPL | Critical | **fixed** (via CR-EXTRACT, wave B5-CR4-MID-W1) | `registerAllListeners()` removal (AC-RR-6) strands edit-bar/emoji/overlay-chars — Spec 2 §13.2's `EditBarController`/`EmojiController` never created → **resolved**: CR-EXTRACT chunk inserted before CR4 (chunks.json); 3 owners (`EditBarController`/`EmojiController`/`OverlayCharactersController`) extracted build-but-dormant; CR4 flips per-axis atomically. Live keyboard unchanged (1129/0/0 debug). | B5-CR4-IMPL Step 1 → fixed B5-CR4-MID-REPAIR-1 |
+| CR4-IMPL-2 | B5-CR4-IMPL | Important | **fixed/verified** (wave B5-CR4-MID-W1) | G8 resend-cooldown *write-path*: state model verified fully present; the missing `ResendCooldownExpired` postDelayed-dispatch added in `onResendClicked` (additive, idempotent, `pipelineBinder`-guarded) so CR4 can remove `setResendEnabled` without re-opening the double-click race / latching the cooldown | B5-CR4-IMPL Step 1 → fixed B5-CR4-MID-REPAIR-1 |
 
 ---
 
@@ -820,8 +820,8 @@ during review. Full suite re-run green (1099/0/0).
 ### Chunk CR4 — IME legacy-driver-removal (render-layer AC-10 analogue)
 
 **Agent-IDs:** `B5-CR4-IMPL` (fresh, combined Steps 1-5).
-**Status:** ⛔ BLOCKED — Critical `architecture-conflict` (CR4-IMPL-1), flagged for mid-chunk-triage · **Risk:** HIGHEST (RR-1+RR-2)
-**Implementation-Commit (Commit 1):** ⏳ (blocked) · **Test-Commit (Commit 2):** ⏳ (blocked)
+**Status:** 🔁 UNBLOCKED — CR4-IMPL-1 resolved via the inserted **CR-EXTRACT** chunk (mid-chunk-triage wave B5-CR4-MID-W1); CR4 itself is now ready to run after CR-EXTRACT (its per-axis atomic flip is now feasible — all owners exist build-but-dormant). · **Risk:** HIGHEST (RR-1+RR-2)
+**Implementation-Commit (Commit 1):** ⏳ (CR4 runs after CR-EXTRACT) · **Test-Commit (Commit 2):** ⏳
 
 ### Implementation (B5-CR4-IMPL)
 
@@ -956,8 +956,8 @@ an IMPL inline fix.
 
 | ID | Severity | Description | Status | Reason |
 |----|----------|--------------|--------|--------|
-| CR4-IMPL-1 | Critical | `mainButtonsController.registerAllListeners()` (IME `:856`, mandated for removal by AC-RR-6 / CR4 chunk desc) fans out to 4 private sub-registrations; 3 of them (`registerEditBarListeners` edit-bar, `registerEmojiListeners` emoji-picker, `initializeOverlayCharacters` overlay-chars) have **NO new-path owner** — Spec 2 §13.2's prescribed `EditBarController`/`EmojiController` do not exist in the codebase. Removing `registerAllListeners()` atomically within CR4 strands the entire edit-bar + emoji-picker + overlay-chars init with no error (RR-2 silent blank-UI), violating CR4's own AC-RR-1..5 parity requirement. The fix requires extracting 3-4 new Kotlin owner classes (Spec 2 §13.2-faithful, the binding A3 option-a pattern) — a multi-file extraction far outside CR4's authorised scope (`DictateInputMethodService.java` only, loc 250). `MainButtonsController.kt:106-111` / IME `:856` | delegated-to-orchestrator | architecture-conflict, marker `architecture-conflict` · blocks-following-chunks (CR-RGATE/CR-DEL hard-gated on a single-render-driver state CR4 cannot produce without this) · mid-chunk-triage armed for CR4 per block plan |
-| CR4-IMPL-2 | Important | G8 resend-cooldown *write-path*: CR1 found the G8 `enabledResolver` "already implemented by parent B4", but the IME's `onResendClicked` 500 ms double-click cooldown still drives via `mainButtonsController.setResendEnabled(false/true)` (`:3511/:3541`) — verify a `state.resend.resendCooldown` + dispatch equivalent exists before CR4 removes the imperative call; if absent, a small `ResendAction` cooldown axis must be added (Spec 2 §9.2 G8 / §13) | delegated-to-orchestrator | needs-verify; ride-along with the CR4-IMPL-1 triage (same `MainButtonsController` retirement surface). Not independently architecture-blocking, but a silent regression (double-click race re-opens) if removed without the state equivalent |
+| CR4-IMPL-1 | Critical | `mainButtonsController.registerAllListeners()` fans out to 4 private sub-registrations; 3 (`registerEditBarListeners`/`registerEmojiListeners`/`initializeOverlayCharacters`) had **NO new-path owner** — Spec 2 §13.2's `EditBarController`/`EmojiController` never created. `MainButtonsController.kt:106-111` | **fixed** (B5-CR4-MID-REPAIR-1, wave B5-CR4-MID-W1) | Resolved via the inserted **CR-EXTRACT** chunk: `EditBarController`/`EmojiController`/`OverlayCharactersController` extracted build-but-dormant (Spec 2 §13.2-faithful, A3 option-a binding). CR4 can now remove `registerAllListeners()` and flip every axis per-axis-atomically (`attachToViews()`/`arm()` same-chunk). Live keyboard unchanged (legacy still sole live owner; 1129/0/0 debug). See §"Mid-Chunk-Triage Wave B5-CR4-MID-W1". |
+| CR4-IMPL-2 | Important | G8 resend-cooldown *write-path*: the IME's `onResendClicked` 500 ms cooldown drove only via imperative `setResendEnabled` (`:3511/:3539`); no `ResendCooldownExpired` dispatch existed (Spec 2 §9.2 G8 / §13.5.c Gap 2) | **fixed/verified** (B5-CR4-MID-REPAIR-1, wave B5-CR4-MID-W1) | State model verified fully present (`ResendState.resendCooldown` + `ResendModule` arm/clear + RESEND `enabledResolver`/`alphaResolver`); the missing `ResendCooldownExpired` postDelayed-dispatch added in `onResendClicked` (additive, idempotent, `pipelineBinder`-guarded) so CR4 can remove `setResendEnabled` without re-opening the double-click race or latching the cooldown. |
 
 #### Overlooked points / known gaps
 
@@ -995,6 +995,185 @@ an IMPL inline fix.
 **Files modified in this step:** none (analysis only — block-report
 subsection filled). **Files in plan-prescribed scope:** none touched.
 **Files outside plan-prescribed scope (drift):** none.
+
+### Mid-Chunk-Triage Wave B5-CR4-MID-W1
+
+**Agent-IDs:** `B5-CR4-MID-RES-1` (research) → `B5-CR4-MID-REPAIR-1`
+(repair, CR-EXTRACT impl) → `-VERIFY` (self-check). **Wave:**
+`B5-CR4-MID-W1`, iter 1 (iter-cap 2). **Date:** 2026-05-16.
+**Triggered by:** CR4-IMPL-1 (Critical `architecture-conflict`) +
+CR4-IMPL-2 (Important needs-verify ride-along).
+
+**What was done.** Researched the §13.2 SoT, wrote the per-sub-
+registration → new-owner contract into
+`research/render-path-cutover.md` §11 (D20 append-only), amended
+`dictate-cutover-completion.chunks.json` (inserted **CR-EXTRACT**
+before CR4 — sequence CR1→CR2→CR3→**CR-EXTRACT**→CR4→CR-RGATE→CR-DEL),
+then **implemented CR-EXTRACT**: extracted the three §13.2-prescribed-
+but-never-created owner classes **build-but-dormant** and verified +
+closed the CR4-IMPL-2 resend-cooldown gap.
+
+**§13.2 owner contracts (SoT, verbatim where given).**
+
+| Sub-registration | New owner (Spec 2 §13.2) | Listener inventory ported (byte-equivalent) |
+|---|---|---|
+| `registerEditBarListeners()` (`MainButtonsController.kt:115-165`) | **`EditBarController`** (§13.2 "bleibt in einem separaten `EditBarController`, der sich nicht ändert" — verbatim) | editNumbers click+long, editSettings, editHistory, pipelineCancel, editAudioFocus (shared listener), editKeyboard click+long, undo/redo/cut/copy/paste (×5, android.R.id.* ids) — 13 listeners, same callbacks/vibrate/`return true` semantics |
+| `registerEmojiListeners()` (`:278-295`) | **`EmojiController`** (§13.2 "Emoji-Listener … BLEIBT in EmojiController" — verbatim) | editEmoji click, emojiPickerClose click, emojiPickerView picked (null-guarded `commitText`) |
+| `initializeOverlayCharacters()` (`:299-313`) + `updateOverlayCharacters` (`:451-463`) | **`OverlayCharactersController`** (proposed spec-faithful name — §13.1 row 13 / §9.2 `:481-493` say only "separate Animations-/Theme-Klasse", no concrete name; sibling-naming to `ContentAreaController`) | one-time 8-view inflate + per-call visibility/text/accent-tint update |
+
+All 3 owners spec-faithful: 2 verbatim from §13.2 (`EditBarController`/
+`EmojiController`), 1 proposed-spec-faithful (`OverlayCharactersController`
+— §13/§9.2 name no class; the sibling-convention name + the
+controller-grade dual responsibility (init + update) justify it; kept
+distinct from `OverlayResetHandler` per §13.1's two separate rows 11
+vs. 13). Every listener traced from the live `MainButtonsController`
+source and ported byte-equivalent (callback parity contract: the new
+`EditBarController.Callback`/`EmojiController.Callback` are strict ISP
+subsets of `MainButtonsController.Callback`, satisfied by the IME's
+existing method bodies — zero behaviour duplication).
+
+**Build-but-dormant proof (RR-1/RR-2 — live keyboard CONFIRMED
+unchanged).**
+
+- `EditBarController`/`EmojiController` reuse the **CR2
+  `SpecialTouchHandlerInstaller`** model: `installDormant()` only
+  **builds + caches** the listener lambdas + tags a shared keyed-tag
+  single-owner ledger marker (`R.id.editbar_emoji_owner_tag`,
+  `dormant-cr-extract`); it does **NOT** call
+  `setOnClickListener`/`setOnLongClickListener` on the live Views. The
+  legacy `MainButtonsController.registerEditBarListeners`/
+  `registerEmojiListeners` (still wired via `registerAllListeners()`,
+  removed only by CR4) stay the **sole live owner**. CR4 calls
+  `attachToViews()` *in the same chunk* it removes the legacy wiring
+  (ledger transitions `dormant-cr-extract → attached-cr4`) — never both
+  wired at once. Proven by test: `ShadowView.onClickListener` is
+  `null` for every edit-bar/emoji View after `installDormant`; ledger
+  reads `dormant-cr-extract`; `attachToViews` `assertSame`s the cached
+  instance.
+- `OverlayCharactersController` reuses the **CR3 `RenderGate`** model
+  (write axis, not listener-overwrite): constructed dormant,
+  `initialize()` does **not** inflate (legacy stays the sole live
+  inflater — inflating here too would double the child count, the
+  structural RR-2 analogue) and `update()` does **not** mutate; both
+  report the *intended* write to the shared
+  `VisibilityWriteAuditLogger` (`live=false`). `doubleWriteCount == 0`
+  proven (test asserts the dormant report does not conflict with a
+  legacy `MainButtonsController` live write in the same generation).
+  CR4 `arm()`s the gate in the same chunk it removes the legacy drive.
+- IME wiring: `attachDormantEditBarEmojiOwners()` (new) runs at the
+  same race-safe consolidation point as `attachImeViewBackendIfReady`
+  / `attachDormantVisibilityControllers` (both `onCreateInputView` +
+  `onServiceConnected`); `detachDormantEditBarEmojiOwners()` (new)
+  symmetric in `cleanupOldControllers()` (view-recreate) + `onDestroy()`.
+  **No legacy sub-registration removed (CR4); `MainButtonsController`
+  not deleted (CR-DEL).**
+
+**CR4-IMPL-2 disposition — fixed (gap was real).** Verified the
+`state.resend.resendCooldown` *state model* is fully present
+(`ResendState.resendCooldown`, `ResendModule` arming on
+`ResendLastAudio`/`Long` + clearing on `ResendCooldownExpired`, RESEND
+slot `enabledResolver = { !resendCooldown }` + `alphaResolver` in
+`LayoutCatalog`). But the IME's `onResendClicked` cooldown *write-path*
+was purely imperative (`setResendEnabled(false)` `:3511` +
+`postDelayed setResendEnabled(true)` `:3539`) with **no
+`dispatch(ResendCooldownExpired)`** anywhere (`ResendModule`'s own
+KDoc: "the Phase-1 placeholder relies on the UI side scheduling that
+action via `Handler.postDelayed`" — never wired). If CR4 removed
+`setResendEnabled` relying on the state path, the cooldown would latch
+`true` forever (RESEND permanently disabled). **Fixed:** added the
+missing `mainHandler.postDelayed(() -> pipelineBinder.dispatch(
+Action.ResendAction.ResendCooldownExpired.INSTANCE), 500)` next to the
+imperative path (additive, `pipelineBinder`-guarded, idempotent — a
+no-op while `resendCooldown==false`). The imperative `setResendEnabled`
+remains the live UI effect until CR4 removes it; the arming half
+(`ResendLastAudio` → catalog `actionResolver`) is dormant until CR4
+flips the RESEND click. CR4 can now remove `setResendEnabled` without
+re-opening the double-click race or latching the cooldown.
+
+#### Plan deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| `OverlayCharactersController` name proposed (not given by §13/§9.2) | Spec 2 §13.1 row 13 / §9.2 `:481-493` ("separate Animations-/Theme-Klasse" — no concrete name) | Named the overlay-chars owner `OverlayCharactersController` (sibling-convention to `ContentAreaController`) | The SoT names `EditBarController`/`EmojiController` verbatim but only describes the overlay-chars owner; the sibling-naming + controller-grade dual responsibility (init+update) is the spec-faithful fill; kept distinct from `OverlayResetHandler` (§13.1 rows 11≠13) | CR4 arms `overlayCharactersGate` + re-points the IME `updateOverlayCharacters` drive to the new owner; CR-DEL deletes the `MainButtonsController` overlay-chars methods | inline-fixed (small + locally-decidable; D22 — §13.2 verbatim where given, spec-faithful where the SoT only describes) |
+| `OverlayCharactersController` is not a `RenderBackend` (imperatively driven, like the legacy `updateOverlayCharacters`) | research/render-path-cutover.md §11.2 | Modelled it as an imperatively-invoked owner (init/update) gated by `RenderGate`, not a `attachBackend` reactive backend | The legacy `updateOverlayCharacters` is called imperatively from `onStartInputView`/setup (not per state-tick); a reactive `RenderBackend` would change the drive cadence (overlay-chars content is set on input-view-start, not every render). The `RenderGate` still gives the identical dormant/`arm()` + ledger proof | CR4 re-points the imperative IME call-site + `arm()`s the gate same-chunk | inline-fixed (small + locally-decidable; preserves legacy drive cadence — byte-equivalent behaviour) |
+
+#### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|--------------|--------|--------|
+| CR4-IMPL-1 | Critical | (see Issue Index) `registerAllListeners()` 3 NO-owner sub-axes | **fixed** | Resolved via CR-EXTRACT: `EditBarController`/`EmojiController`/`OverlayCharactersController` extracted build-but-dormant (Spec 2 §13.2-faithful, A3 option-a). CR4 can now remove `registerAllListeners()` and flip all axes atomically (per-axis `attachToViews()`/`arm()` same-chunk). Live keyboard unchanged (legacy still sole live owner; 1129/0/0 debug). |
+| CR4-IMPL-2 | Important | (see Issue Index) G8 resend-cooldown write-path | **fixed/verified** | State model verified present; the missing `ResendCooldownExpired` dispatch added in `onResendClicked` (additive, idempotent, `pipelineBinder`-guarded). CR4 can remove `setResendEnabled` without re-opening the race or latching the cooldown. |
+
+#### Inline-fixed items (production)
+
+- `state/render/EditBarController.kt` (**new**) — owns
+  `registerEditBarListeners` inventory build-but-dormant.
+- `state/render/EmojiController.kt` (**new**) — owns
+  `registerEmojiListeners` inventory build-but-dormant.
+- `state/render/OverlayCharactersController.kt` (**new**) — owns
+  `initializeOverlayCharacters` + `updateOverlayCharacters`,
+  `RenderGate`-gated dormant.
+- `res/values/ids.xml` — added `editbar_emoji_owner_tag` keyed-tag id.
+- `core/DictateInputMethodService.java` — implements
+  `EditBarController.Callback` + `EmojiController.Callback` (no new
+  method bodies — ISP subsets of the existing
+  `MainButtonsController.Callback`); new fields + imports;
+  `attachDormantEditBarEmojiOwners()` / `detachDormantEditBarEmojiOwners()`
+  (called at the existing consolidation + view-recreate/onDestroy
+  points); CR4-IMPL-2 `ResendCooldownExpired` postDelayed-dispatch in
+  `onResendClicked`.
+
+**Files modified — DISJOINT for the wave-commit:**
+
+- **Production:** `app/src/main/java/net/devemperor/dictate/state/render/EditBarController.kt`,
+  `app/src/main/java/net/devemperor/dictate/state/render/EmojiController.kt`,
+  `app/src/main/java/net/devemperor/dictate/state/render/OverlayCharactersController.kt`,
+  `app/src/main/res/values/ids.xml`,
+  `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java`
+- **Test:** `app/src/test/java/net/devemperor/dictate/state/render/EditBarControllerTest.kt`,
+  `app/src/test/java/net/devemperor/dictate/state/render/EmojiControllerTest.kt`,
+  `app/src/test/java/net/devemperor/dictate/state/render/OverlayCharactersControllerTest.kt`
+- **Plan/docs (this wave):**
+  `docs/plans/2026-05-15 - dictate-cutover-completion/research/render-path-cutover.md` (§11 D20 append),
+  `docs/plans/2026-05-15 - dictate-cutover-completion/dictate-cutover-completion.chunks.json` (CR-EXTRACT insert),
+  `docs/plans/2026-05-15 - dictate-cutover-completion/reports/B5-theme-cr-render-cutover.md` (this subsection + Issue Index)
+
+**Self-check (B5-CR4-MID-REPAIR-1-VERIFY).** `./gradlew assembleDebug`
+green; `./gradlew testDebugUnitTest` **1129 tests, 0 failures, 0
+errors** (baseline ~1099 + 30 new: EditBar 12 / Emoji 12 / OverlayChars
+6). One isolated `testReleaseUnitTest` failure
+(`PipelineRunnerSubsystemAdapterTest` — "blocking runner did not
+start", a pre-existing R-7-class thread-start concurrency flake under
+parallel load; **passes in isolation**; zero overlap with CR-EXTRACT's
+render-layer scope — not a regression). Build-but-dormant CONFIRMED:
+no `setOnClickListener`/inflate on any live View until CR4 flip; the
+legacy `MainButtonsController` sub-registrations remain the sole live
+owner; `doubleWriteCount==0` for the overlay-chars axis. Each owner's
+ported listener set + the dormant single-owner invariant + the
+CR4-IMPL-2 cooldown dispatch path are unit-tested. Convergence: **✓
+converged** — CR4-IMPL-1 closed via CR-EXTRACT, CR4-IMPL-2
+fixed/verified, no new issues forwarded.
+
+#### Overlooked points / known gaps
+
+- CR4 must, *in the same chunk* it removes
+  `mainButtonsController.registerAllListeners()`: (a)
+  `editBarController.attachToViews()`, (b)
+  `emojiController.attachToViews()`, (c)
+  `overlayCharactersGate.arm()` + re-point the imperative
+  `updateOverlayCharacters` IME call-site to
+  `overlayCharactersController.update(...)` — never both wired at once
+  (RR-1/RR-2). The CR1 theme-residual ("the edit-row buttons the
+  legacy `applyTheme` also themed are not in `buttonViews`") is the
+  *same missing-EditBar-owner root cause*; the `EditBarController`
+  could grow an `applyTheme` axis later, but theming is a **separate
+  axis** (Spec 2 §9.2 "Theme-Mutation ist eine separate Achse, nicht
+  state-getrieben") and is outside this triage's listener/init scope —
+  flagged for CR4/CR-DEL to resolve with the theme-residual together,
+  not opened here (scope discipline, D7).
+- The release-suite flake (`PipelineRunnerSubsystemAdapterTest`) is
+  pre-existing and outside scope — noted for the orchestrator's R-7
+  awareness, not a CR-EXTRACT issue.
 
 ### Chunk CR-RGATE — render verification GATE (authorises CR-DEL)
 

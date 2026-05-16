@@ -335,3 +335,229 @@ Modelled on Epic C6 (D2-pre). D12-atomic (its own chunk, not merged).
 - Deferral source: `../2026-05-07 - dictate-keyboard-layout-refactor/reports/B4-keyboard-layout-catalog.md` (F-1/F-2/F-6/F-33)
 - Epic: `dictate-cutover-completion.md` §2 (AC-7/AC-10), §6 (risk/rollback), §6.2 (staged safety net)
 - Gate pattern: Epic C6 (D2-pre) in `dictate-cutover-completion.chunks.json`
+
+---
+
+## 11. EditBar / Emoji / Overlay-Chars Owner Extraction (Update 2026-05-16)
+
+> [!NOTE]
+> D20 append-only section. **Topic:**
+> `editbar-emoji-overlaychars-owner-extraction`. **Triggered by:**
+> CR4-IMPL-1 (Critical `architecture-conflict`, `B5-CR4-IMPL`) +
+> CR4-IMPL-2 (Important needs-verify ride-along). **Block:** B5
+> Theme C-R. **Agent-ID:** `B5-CR4-MID-RES-1` (mid-chunk-triage wave
+> `B5-CR4-MID-W1`, iter 1).
+
+### 11.1 The conflict (why §3's 16-group map under-enumerated)
+
+`MainButtonsController.registerAllListeners()`
+(`MainButtonsController.kt:106-111`) fans out to **four** private
+sub-registrations. The §3 16-group map only enumerated the *render*
+sub-set; `registerAllListeners()` actually bundles the render listeners
+CR-DEL kills **with three sub-axes that have no new-path owner**:
+
+| Sub-registration | §13.2 disposition (SoT, verbatim) | Owner class status |
+|---|---|---|
+| `registerMainButtonListeners()` (`MainButtonsController.kt:169`) | 9 Main-Button-Area handlers → `actionResolver` slots + `wireStaticHandlers` (§13.2 "alle 9 … wandern in `actionResolver`-Slots") | **CR1/CR2 staged** — `ImeViewBackend.wireStaticHandlers` + `SpecialTouchHandlerInstaller` (dormant). Not part of this conflict. |
+| `registerEditBarListeners()` (`MainButtonsController.kt:115`) | **"Edit-Bar (außerhalb der Main-Button-Area) bleibt in einem separaten `EditBarController`, der sich nicht ändert"** (§13.2 Befund) | **`EditBarController` does not exist** — listeners live inside `MainButtonsController` today (the class CR-DEL kills). |
+| `registerEmojiListeners()` (`MainButtonsController.kt:278`) | **"Emoji-Listener (Z. 264-280) BLEIBT in EmojiController"** (§13.2) | **`EmojiController` does not exist.** |
+| `initializeOverlayCharacters()` (`MainButtonsController.kt:299`) | §13.1 row 13 `overlayCharactersLl` (per-Slot) **"BLEIBT (Theme-internal, separate Animations-/Theme-Klasse)"**; §9.2 `:481-493` `updateOverlayCharacters` **"bleibt — overlay-spezifisch"** | **No extracted owner class exists.** §13 names no concrete class — only "separate Animations-/Theme-Klasse". |
+
+§13.2's "BLEIBT in *EditBarController*/*EmojiController*" presupposes
+classes the parent plan never created — the exact INT-1 / F-1 / F-2
+parallel-dormant deferral anti-pattern at the edit-bar/emoji layer
+(structurally identical to the B4-VAL-F-1/F-2/F-33 render-layer
+deferral that birthed Theme C-R itself, §1). The spec assumed an
+extracted owner; the listeners are still inside the kill-list class.
+
+### 11.2 Per-sub-registration → new-owner contract (the SoT, §13.2-faithful)
+
+The resolution is the **binding A3 option-a** disposition CR3 already
+recorded for G9/G13 (extract the BLEIBT parts into small new owners so
+the kill-list class fully deletes and AC-RR-7 stays a clean
+zero-grep). It recurs here for the edit-bar/emoji/overlay-chars axes
+§3 never enumerated. Three new Kotlin owner classes (sibling to
+`ContentAreaController`/`SpecialTouchHandlerInstaller`):
+
+**`EditBarController`** — §13.2 "bleibt in einem separaten
+`EditBarController`, der sich nicht ändert". OWNS the exact
+`registerEditBarListeners()` listener inventory
+(`MainButtonsController.kt:115-165`), ported byte-equivalent:
+
+| Listener (current `MainButtonsController` line) | Wire | §13.2 row |
+|---|---|---|
+| `editNumbersButton.setOnClickListener` (`:116-119`) | `onVibrate()` + `callback.onSmallModeToggled()` | "`Action.LayoutAction.ToggleSmallMode`" — BLEIBT EditBar |
+| `editNumbersButton.setOnLongClickListener` (`:126-130`) | `onVibrate()` + `callback.onSingleRowModeToggled()` + return `true` | "`Action.LayoutAction.ToggleSingleRowMode`" — BLEIBT EditBar |
+| `editSettingsButton.setOnClickListener` (`:132`) | `callback.onSettingsClicked()` | "BLEIBT — separate Achse" |
+| `editHistoryButton.setOnClickListener` (`:133`) | `callback.onHistoryClicked()` | "BLEIBT — separate Achse" |
+| `pipelineCancelBtn.setOnClickListener` (`:134`) | `callback.onPipelineCancelClicked()` | "BLEIBT — separate Achse" |
+| `editAudioFocusButton.setOnClickListener` (`:138`) | shared `audioFocusClickListener` (`onVibrate()` + `callback.onAudioFocusToggled()`) | §13.2 "`editAudioFocusButton` … **BLEIBT** — Edit-Bar-Audio-Focus-Btn ist außerhalb der Main-Button-Area"; F-4 |
+| `editKeyboardButton.setOnClickListener` (`:140-143`) | `onVibrate()` + `callback.onKeyboardToggleClicked()` | "BLEIBT — `Action.LayoutAction.SetContentArea(QWERTZ)`" |
+| `editKeyboardButton.setOnLongClickListener` (`:145-149`) | `onVibrate()` + `callback.onKeyboardLongClicked()` + `true` | "BLEIBT" |
+| undo/redo/cut/copy/paste `setOnClickListener` ×5 (`:151-164`) | per-button `onVibrate()` + `callback.onEditAction(actionId)` (android.R.id.undo/redo/cut/copy/paste) | "Edit actions undo/redo/cut/copy/paste — BLEIBT EditBar" |
+
+**`EmojiController`** — §13.2 "Emoji-Listener (Z. 264-280) BLEIBT in
+EmojiController". OWNS the `registerEmojiListeners()` inventory
+(`MainButtonsController.kt:278-295`):
+
+| Listener (current line) | Wire |
+|---|---|
+| `editEmojiButton.setOnClickListener` (`:279-282`) | `onVibrate()` + `callback.onEmojiToggleClicked()` |
+| `emojiPickerCloseButton.setOnClickListener` (`:284-287`) | `onVibrate()` + `callback.onEmojiCloseClicked()` |
+| `emojiPickerView.setOnEmojiPickedListener` (`:289-294`) | `onVibrate()` + `inputConnectionProvider()?.commitText(emoji.emoji, 1)` (null-guarded) |
+
+**`OverlayCharactersController`** (proposed spec-faithful name —
+§13/§9.2 only say "separate Animations-/Theme-Klasse", no concrete
+name; `OverlayCharactersController` matches the
+`ContentAreaController`/`OverlayResetHandler` sibling-naming
+convention). OWNS both overlay-chars responsibilities currently split
+across `MainButtonsController`:
+
+| Method (current line) | Responsibility |
+|---|---|
+| `initializeOverlayCharacters()` (`:299-313`) | inflate 8 `item_overlay_characters` TextViews into `overlayCharactersLl` with the rounded-stroke `GradientDrawable` background (one-time init) |
+| `updateOverlayCharacters(characters, accentColor)` (`:451-463`) | per-render: show/hide + set text + accent-tint the 8 char views (the §9.2 `:481-493` "bleibt — overlay-spezifisch" axis) |
+
+> Naming rationale: `OverlayCharactersController` (not `…Handler`)
+> because it owns both *init* (structural inflate) and *update*
+> (theme/content) — a controller-grade responsibility, parallel to
+> `ContentAreaController`. `OverlayResetHandler` (G12, already
+> attached CR3) is the *defensive-reset belt* and stays distinct —
+> different concern (transient reset vs. content/theme ownership),
+> §13.1 rows 11 vs. 13 are explicitly two separate rows.
+
+### 11.3 Build-but-dormant staged model (identical to CR2/CR3)
+
+The three new owners follow the **exact CR2
+`SpecialTouchHandlerInstaller.installDormant`/`attachToViews` +
+CR3 `RenderGate` dormant/`arm()`** staged-safety-net:
+
+- **build-but-dormant in CR-EXTRACT:** the classes exist, are
+  constructed + attached at the IME consolidation point
+  (`attachImeViewBackendIfReady`, race-safe both `onCreateInputView`
+  + `onServiceConnected`), but a `RenderGate`-style ledger marker
+  keeps them from calling `setOnClickListener`/`setOnLongClickListener`
+  on the live Views. The **legacy `MainButtonsController`
+  sub-registrations stay the SOLE LIVE owner** (RR-1: Android keeps
+  only the most-recent `setOnXListener` — attaching now would silently
+  overwrite the live legacy listener, the F-1/F-2 trap).
+- **CR4 flips per-axis atomically:** CR4 removes
+  `mainButtonsController.registerAllListeners()` (which now no longer
+  fans out to the 3 NO-owner sub-axes — they will have armed owners)
+  AND calls `editBarController.attachToViews()` /
+  `emojiController.attachToViews()` /
+  `overlayCharactersController.arm()` in the *same* chunk, never both
+  wired at once (the established `dormant-cr-extract → attached-cr4`
+  ledger transition CR2 set for the touch axis / CR3 for the
+  visibility axis).
+- **single-owner proof:** each new owner reports its intended writes
+  to a ledger (`live=false` while dormant) → `doubleWriteCount == 0`
+  through CR-EXTRACT (Spec 2 §10 Strict-Mode-Logging acceptance,
+  reusing the CR2 `OWNER_TAG`/`Log.wtf` guard pattern + the CR3
+  `RenderGate` ledger). Click-listener axes (EditBar/Emoji) reuse the
+  CR2 `installDormant`/`attachToViews` + keyed-tag single-owner
+  marker; the overlay-chars *write* axis (visibility/text/tint on the
+  8 char views) reuses the CR3 `RenderGate` (dormant → ledger-report
+  only; `arm()` = CR4 flip).
+
+### 11.4 CR4-IMPL-2 — G8 resend-cooldown write-path verification
+
+**Finding (verified real, not a false positive).** The
+`state.resend.resendCooldown` state model is **fully present**:
+`ResendState.resendCooldown` (`DictateUiState.kt:434`),
+`Action.ResendAction.ResendLastAudio`/`ResendLastAudioLong`
+arm the cooldown in `ResendModule.reduce`
+(`ResendModule.kt:77-92`), `Action.ResendAction.ResendCooldownExpired`
+clears it (`:96-102`), and the RESEND slot's
+`enabledResolver = { !state.resend.resendCooldown }` +
+`alphaResolver` already render the disabled state
+(`LayoutCatalog.kt:88-89/217-218`). **However**, the IME's
+`onResendClicked` (`DictateInputMethodService.java:3496-3546`)
+cooldown *write-path* is purely **imperative**:
+`mainButtonsController.setResendEnabled(false)` at `:3511` and
+`mainHandler.postDelayed(() -> setResendEnabled(true), 500)` at
+`:3539-3543`. **No `dispatch(ResendCooldownExpired)` scheduling
+exists** — `ResendModule`'s own KDoc confirms it
+("the Phase-1 placeholder relies on the UI side scheduling that
+action via `Handler.postDelayed`"; that scheduling was never wired).
+The catalog `actionResolver = { _, _ -> ResendLastAudio }` *arms*
+the cooldown when the RESEND slot fires via the new reactive path,
+but **nothing clears it** → if CR4 removes the imperative
+`setResendEnabled` calls and relies on the state path, the cooldown
+latches `true` forever (resend button permanently disabled — a worse
+regression than the double-click race).
+
+**Resolution (build-but-dormant, mirrors the owner extraction).**
+CR-EXTRACT adds the missing `ResendCooldownExpired` dispatch-schedule
+*next to* the existing imperative path (both run; the imperative call
+stays the live effect until CR4 removes it). Concretely: when
+`onResendClicked` arms the imperative cooldown it ALSO schedules
+`mainHandler.postDelayed(() -> pipelineBinder.dispatch(
+Action.ResendAction.ResendCooldownExpired.INSTANCE), 500)` (guarded
+`pipelineBinder != null`). The arming half (`ResendLastAudio` →
+`resendCooldown=true`) is dispatched by the catalog `actionResolver`
+on the **reactive path** (dormant until CR4 flips the RESEND click),
+so CR-EXTRACT only needs to wire the **clear** half so the round-trip
+is complete before CR4 removes the imperative `setResendEnabled`. This
+is additive + dormant-safe: the double dispatch is idempotent
+(`ResendCooldownExpired` is a no-op when `resendCooldown==false`,
+`ResendModule.kt:97`) and the imperative `setResendEnabled` remains
+the live UI effect until CR4.
+
+### 11.5 Implementation Hints (concrete, for the repair leg)
+
+1. `EditBarController` / `EmojiController` — Kotlin, package
+   `net.devemperor.dictate.state.render` (sibling to
+   `SpecialTouchHandlerInstaller`). Constructor takes a typed
+   view-holder data class (`EditBarViews` / `EmojiViews`) + the
+   shared callbacks (the `MainButtonsController.Callback` surface is
+   the parity contract) + `inputConnectionProvider` (emoji). Expose
+   `installDormant()` (build + cache the listener lambdas, tag the
+   single-owner keyed-marker, no `setOnClickListener` on live Views)
+   and `attachToViews()` (CR4 flip — `setOnClickListener` the cached
+   lambdas + ledger `attached-cr4`), exactly like
+   `SpecialTouchHandlerInstaller`.
+2. `OverlayCharactersController` — Kotlin, same package. Constructor
+   takes `OverlayCharactersViews(overlayCharactersLl)` +
+   `gate: RenderGate?`. `initialize()` does the one-time 8-view
+   inflate (idempotent — guard on `childCount`). `update(characters,
+   accentColor)` routes every char-view `visibility`/`text`/tint
+   write through the `RenderGate` (dormant → ledger-report only;
+   `arm()` = CR4). Reuse the CR3 `writeVisibility` gate-routing idiom.
+3. IME wiring: extend `attachDormantVisibilityControllers()` (or a
+   parallel `attachDormantEditBarEmojiOwners()` at the same
+   consolidation point) to construct + attach the 3 owners dormant;
+   extend `detachDormant…` symmetrically (view-recreate + onDestroy).
+   Add a new keyed-tag id `editbar_emoji_owner_tag` in `ids.xml`
+   (follows the `special_touch_owner_tag` convention).
+4. Do **not** remove any `MainButtonsController` sub-registration
+   here — that is CR4. Do **not** delete `MainButtonsController` —
+   that is CR-DEL.
+5. CR4-IMPL-2: add the `ResendCooldownExpired` postDelayed-dispatch
+   in `onResendClicked`'s cooldown path next to the existing
+   `setResendEnabled` calls (additive, idempotent, `pipelineBinder`-
+   guarded).
+
+### 11.6 chunks.json / spec amendment summary
+
+- **chunks.json:** new chunk `CR-EXTRACT-RR-editbar-emoji-owners`
+  inserted into Block B5 `chunk_ids` immediately **before** CR4
+  (sequence: CR1 → CR2 → CR3 → **CR-EXTRACT** → CR4 → CR-RGATE →
+  CR-DEL). `spec_references` = Spec 2 §13.2 (+ §13.1 row 13 / §9.2
+  `:481-493` for overlay-chars). dep: CR3. note: "resolves
+  CR4-IMPL-1; build-but-dormant; CR4 flips per-axis atomically".
+  Block note + top-level note updated.
+- **This spec:** §3.2 / §7 A3 disposition extended to the
+  edit-bar/emoji/overlay-chars axes (this §11).
+
+### 11.7 References
+
+- Block-report: `reports/B5-theme-cr-render-cutover.md`
+  §"Mid-Chunk-Triage Wave B5-CR4-MID-W1" + Issue Index (CR4-IMPL-1 /
+  CR4-IMPL-2)
+- SoT: `../2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md`
+  §13.2 (Click-Listener-Audit), §13.1 row 13, §9.2 (`:481-493`),
+  §13.5.c Gap 2 (resend-cooldown)
+- Plan: `dictate-cutover-completion.chunks.json` (Block B5)
+- Pattern precedent: this spec §6 RR-1 / §6.1 (CR2
+  `SpecialTouchHandlerInstaller`), §6 RR-2 (CR3 `RenderGate`)

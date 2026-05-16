@@ -88,7 +88,13 @@ import net.devemperor.dictate.state.layout.KeyboardLayoutManager;
 import net.devemperor.dictate.state.layout.LogicalButtonId;
 import net.devemperor.dictate.state.render.ContentAreaController;
 import net.devemperor.dictate.state.render.ContentAreaViews;
+import net.devemperor.dictate.state.render.EditBarController;
+import net.devemperor.dictate.state.render.EditBarViews;
+import net.devemperor.dictate.state.render.EmojiController;
+import net.devemperor.dictate.state.render.EmojiViews;
 import net.devemperor.dictate.state.render.ImeViewBackend;
+import net.devemperor.dictate.state.render.OverlayCharactersController;
+import net.devemperor.dictate.state.render.OverlayCharactersViews;
 import net.devemperor.dictate.state.render.OverlayResetHandler;
 import net.devemperor.dictate.state.render.OverlayResetViews;
 import net.devemperor.dictate.state.render.PromptVisibilityController;
@@ -118,7 +124,14 @@ import java.util.concurrent.Executors;
 public class DictateInputMethodService extends InputMethodService
         implements PromptQueueManager.PromptQueueCallback,
                    PipelineOrchestrator.PipelineCallback,
-                   MainButtonsController.Callback {
+                   MainButtonsController.Callback,
+                   // B5 CR-EXTRACT — the new edit-bar / emoji owner
+                   // callbacks are strict subsets of
+                   // MainButtonsController.Callback (parity contract), so
+                   // the existing callback method bodies satisfy both
+                   // without duplication.
+                   EditBarController.Callback,
+                   EmojiController.Callback {
 
     // define handlers and runnables for background tasks
     private static final int DELETE_LOOKBACK_CHARACTERS = 64;
@@ -295,6 +308,21 @@ public class DictateInputMethodService extends InputMethodService
     private RenderGate contentAreaGate;
     private RenderGate promptVisibilityGate;
     private RenderGate overlayResetGate;
+
+    // CR-EXTRACT (Theme C-R) — the three §13.2-prescribed-but-never-
+    // created owners (CR4-IMPL-1 resolution). Built BUILD-BUT-DORMANT:
+    // they exist + are attached at the consolidation point but the
+    // legacy MainButtonsController.registerEditBarListeners /
+    // registerEmojiListeners / initializeOverlayCharacters stay the
+    // SOLE LIVE owner until CR4 flips per-axis atomically
+    // (attachToViews()/arm() in the same chunk it removes
+    // registerAllListeners(), never both wired at once — RR-1/RR-2).
+    // The overlay-chars owner uses a RenderGate (write axis, CR3
+    // pattern) constructed dormant; CR4 arm()s it.
+    private EditBarController editBarController;
+    private EmojiController emojiController;
+    private OverlayCharactersController overlayCharactersController;
+    private RenderGate overlayCharactersGate;
 
     // Recording controllers (extracted from God-Class)
     private RecordingStateController recordingStateController;
@@ -1232,6 +1260,15 @@ public class DictateInputMethodService extends InputMethodService
         // RESEND-only long-press + CR2's installDormant touch model).
         attachDormantVisibilityControllers();
 
+        // CR-EXTRACT (Theme C-R) — build the three §13.2 owners
+        // (EditBar / Emoji / OverlayChars) BUILD-BUT-DORMANT (CR4-IMPL-1
+        // resolution). RR-1/RR-2: the legacy MainButtonsController
+        // sub-registrations are still the SOLE LIVE owner until CR4
+        // flips per-axis atomically. Same consolidation point as the
+        // backend / visibility-controller attach so it runs on both
+        // onCreateInputView and onServiceConnected (race-safe).
+        attachDormantEditBarEmojiOwners();
+
         // B5 F-2 — (re)start the onboarding info-bar observer now that
         // both the binder and the inflated info-bar view exist. This is
         // the single consolidation point (called from both
@@ -1369,6 +1406,95 @@ public class DictateInputMethodService extends InputMethodService
         overlayResetGate = null;
     }
 
+    /**
+     * CR-EXTRACT (Theme C-R / CR4-IMPL-1 resolution) — build the three
+     * §13.2-prescribed-but-never-created owners
+     * ({@link EditBarController} / {@link EmojiController} /
+     * {@link OverlayCharactersController}) <b>build-but-dormant</b>.
+     *
+     * <p><b>RR-1/RR-2 — the load-bearing decision.</b> The legacy
+     * {@code MainButtonsController.registerEditBarListeners() /
+     * registerEmojiListeners() / initializeOverlayCharacters()} ran
+     * earlier (via {@code registerAllListeners()}, line ~870) and are
+     * the <b>sole LIVE owner</b> of the edit-bar / emoji / overlay-chars
+     * axes until <b>CR4</b>. Android keeps only the most-recent
+     * {@code setOnClickListener}, and a second overlay-chars inflate
+     * would double the child count — so the new owners only
+     * <b>build + cache</b> ({@code installDormant()}) / are
+     * <b>gated dormant</b> ({@link RenderGate}, {@code armed=false}).
+     * CR4 calls {@code attachToViews()} / {@code arm()} <em>in the same
+     * chunk</em> it removes {@code registerAllListeners()} — never both
+     * wired at once (identical staged-safety-net to CR2's
+     * {@code installDormant} touch model + CR3's dormant
+     * visibility-controller {@link RenderGate}).
+     *
+     * <p>Idempotent on view-recreate: the previous owners are cleared
+     * by {@link #detachDormantEditBarEmojiOwners()} (called from
+     * {@link #cleanupOldControllers()} / {@link #onDestroy()}) before
+     * this rebuilds them against the fresh inflated tree.
+     */
+    private void attachDormantEditBarEmojiOwners() {
+        if (editNumbersButton == null || editEmojiButton == null
+                || overlayCharactersLl == null) {
+            // The inflated tree isn't ready yet — the consolidation
+            // point also fires from onServiceConnected before
+            // onCreateInputView in some races; the later call rebuilds.
+            return;
+        }
+
+        editBarController = new EditBarController(
+            new EditBarViews(
+                editNumbersButton, editSettingsButton, editHistoryButton,
+                pipelineCancelBtn, editAudioFocusButton, editKeyboardButton,
+                editUndoButton, editRedoButton, editCutButton,
+                editCopyButton, editPasteButton),
+            this);
+        editBarController.installDormant();
+
+        emojiController = new EmojiController(
+            new EmojiViews(editEmojiButton, emojiPickerCloseButton, emojiPickerView),
+            this,
+            this::getCurrentInputConnection);
+        emojiController.installDormant();
+
+        // Overlay-chars is a *write* axis (8 char-view inflate +
+        // visibility/text/tint) → reuse the CR3 RenderGate dormant
+        // model + the same shared Strict-Mode ledger as the visibility
+        // controllers (RR-2 no-double-write proof, Spec 2 §10).
+        net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger auditLogger =
+            pipelineBinder != null
+                ? pipelineBinder.getVisibilityWriteAuditLogger()
+                : null;
+        overlayCharactersGate =
+            new RenderGate("OverlayCharactersController", auditLogger);
+        overlayCharactersController = new OverlayCharactersController(
+            new OverlayCharactersViews(overlayCharactersLl),
+            overlayCharactersGate);
+        // initialize() is dormant (gate not armed) → does NOT inflate;
+        // the legacy MainButtonsController.initializeOverlayCharacters()
+        // (already ran via registerAllListeners) stays the sole live
+        // inflater until CR4 arm()s the gate.
+        overlayCharactersController.initialize();
+    }
+
+    /**
+     * Symmetric counterpart to
+     * {@link #attachDormantEditBarEmojiOwners()} — clears the three
+     * CR-EXTRACT owner fields (releasing their View references) on
+     * view-recreate ({@link #cleanupOldControllers()}) and process
+     * tear-down ({@link #onDestroy()}), exactly like the {@code
+     * imeViewBackend} / dormant-visibility-controller detach. The owners
+     * hold no manager registration (they are not RenderBackends — they
+     * are imperatively driven), so clearing the fields is the whole
+     * detach. Idempotent.
+     */
+    private void detachDormantEditBarEmojiOwners() {
+        editBarController = null;
+        emojiController = null;
+        overlayCharactersController = null;
+        overlayCharactersGate = null;
+    }
+
     // method is called if the user closed the keyboard
     @Override
     public void onFinishInputView(boolean finishingInput) {
@@ -1445,6 +1571,9 @@ public class DictateInputMethodService extends InputMethodService
         // CR3 — detach the three dormant R.10 visibility controllers
         // (symmetric with imeViewBackend) BEFORE nulling the manager.
         detachDormantVisibilityControllers();
+        // CR-EXTRACT — clear the EditBar/Emoji/OverlayChars owners
+        // (symmetric, hold direct View references too).
+        detachDormantEditBarEmojiOwners();
         keyboardLayoutManager = null;
 
         // B5 F-2 — cancel the onboarding info-bar collector scope so
@@ -1578,6 +1707,10 @@ public class DictateInputMethodService extends InputMethodService
         // symmetric with imeViewBackend). Rebuilt against the fresh
         // tree by attachDormantVisibilityControllers().
         detachDormantVisibilityControllers();
+        // CR-EXTRACT — clear the EditBar/Emoji/OverlayChars owners
+        // before re-inflate (direct View references). Rebuilt against
+        // the fresh tree by attachDormantEditBarEmojiOwners().
+        detachDormantEditBarEmojiOwners();
         // Remove old InvalidationTracker observer (will be re-added in setupPromptsAdapter)
         if (promptsInvalidationObserver != null && dictateDb != null) {
             dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
@@ -3509,6 +3642,31 @@ public class DictateInputMethodService extends InputMethodService
         // worker's finally block via mainHandler.postDelayed.
         if (mainButtonsController != null) {
             mainButtonsController.setResendEnabled(false);
+        }
+
+        // CR4-IMPL-2 (Theme C-R / B5-CR4-MID-W1) — the resend-cooldown
+        // *state* model is fully present (ResendState.resendCooldown +
+        // ResendModule arming on ResendLastAudio + the RESEND-slot
+        // enabledResolver `{ !resendCooldown }`), but nothing dispatched
+        // the *clear* half: ResendModule's own KDoc says "the Phase-1
+        // placeholder relies on the UI side scheduling that action via
+        // Handler.postDelayed" — that scheduling was never wired. Wire
+        // the missing ResendCooldownExpired dispatch here, ADDITIVE +
+        // dormant-safe (idempotent — a no-op while resendCooldown is
+        // false, ResendModule.kt:97). When CR4 flips the RESEND click
+        // to the catalog actionResolver (which dispatches ResendLastAudio
+        // → arms resendCooldown), this completes the round-trip so CR4
+        // can remove the imperative setResendEnabled WITHOUT latching
+        // the cooldown forever (the regression CR4-IMPL-2 flagged). The
+        // 500 ms window matches the imperative re-enable below.
+        if (pipelineBinder != null) {
+            mainHandler.postDelayed(() -> {
+                if (pipelineBinder != null) {
+                    pipelineBinder.dispatch(
+                        net.devemperor.dictate.state.Action.ResendAction
+                            .ResendCooldownExpired.INSTANCE);
+                }
+            }, 500);
         }
 
         dbExecutor.execute(() -> {

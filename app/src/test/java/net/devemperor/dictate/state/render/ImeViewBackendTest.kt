@@ -425,43 +425,77 @@ class ImeViewBackendTest {
     }
 
     @Test
-    fun `RECORD long-press listener is NOT attached in CR1 (RR-1 no-double-wire)`() {
-        // RR-1: attaching a RECORD long-press listener here would overwrite
-        // the live legacy `onRecordLongClicked` and regress the keyboard.
-        // CR1 attaches the long-press listener for RESEND only; RECORD's
-        // listener is CR4's (in the same chunk it removes the legacy drive).
-        val (backend, recBtns) = recordingBackend()
-        backend.attach { captured += it }
-        backend.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
-
-        assertNull(
-            "RECORD must have NO backend long-press listener in CR1 (RR-1)",
-            recBtns[LogicalButtonId.RECORD]!!.longClickListener,
-        )
-    }
-
-    @Test
-    fun `only RESEND gets a backend long-press listener in CR1 (RR-1)`() {
-        // BACKSPACE/SPACE/ENTER/etc. have no catalog `longClickResolver`
-        // and (per RR-1) no backend long-press listener in CR1 — their
-        // legacy long-press handlers survive. Only RESEND is wired.
+    fun `CR4 widens the long-press listener to EVERY slot (the flip)`() {
+        // CR4 removes the CR1 RESEND-only constraint: the legacy
+        // `registerAllListeners()` RECORD/BACKSPACE long-press wiring is
+        // removed (bound path) in the SAME chunk this widens, so the
+        // backend now wires a long-press listener on EVERY button
+        // (catalog-driven via `slot.longClickResolver`; default-null
+        // resolvers just vibrate-and-consume). RR-1: never both wired at
+        // once — the legacy drive is gone when this is live.
         val (backend, recBtns) = recordingBackend()
         backend.attach { captured += it }
         backend.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
 
         recBtns.forEach { (id, btn) ->
-            if (id == LogicalButtonId.RESEND) {
-                assertNotNull(
-                    "RESEND must have a long-press listener",
-                    btn.longClickListener,
-                )
-            } else {
-                assertNull(
-                    "$id must NOT have a backend long-press listener in CR1",
-                    btn.longClickListener,
-                )
-            }
+            assertNotNull(
+                "$id must have a CR4-widened backend long-press listener",
+                btn.longClickListener,
+            )
         }
+    }
+
+    @Test
+    fun `RECORD long-press fires the IME-side affordance before the catalog dispatch (CR4 A1)`() {
+        // CR4 / render-path-cutover.md §7 A1: the legacy
+        // `onRecordLongClicked` Idle→Settings+picker / autoSwitch has no
+        // FSM/dispatch representation, so the backend fires
+        // `imeSideAffordance(RECORD, true)` on the RECORD long-press.
+        val recBtns = buttons.keys.associateWith { RecordingButton(ctx) }
+        val affordances = mutableListOf<Pair<LogicalButtonId, Boolean>>()
+        val backend = ImeViewBackend(
+            motionSurface = motion,
+            buttonViews = recBtns.mapValues { it.value as View },
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            recordingAnimationController = controller,
+            imeSideAffordance = { id, long -> affordances += id to long },
+        )
+        backend.attach { captured += it }
+        backend.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
+
+        val record = recBtns[LogicalButtonId.RECORD]!!
+        record.longClickListener!!.onLongClick(record)
+
+        assertEquals(listOf(LogicalButtonId.RECORD to true), affordances)
+    }
+
+    @Test
+    fun `RESEND click fires the IME-side affordance (CR4-IMPL-3 — resend has no new-path effect)`() {
+        // CR4-IMPL-3: the catalog RESEND `ResendLastAudio` →
+        // ResendModule only arms the cooldown (no effect — the resend
+        // insertion / resume has NO new-path implementation). The
+        // backend fires `imeSideAffordance(RESEND, false)` so the
+        // legacy `onResendClicked` DB-lookup → insert/resume survives.
+        val recBtns = buttons.keys.associateWith { RecordingButton(ctx) }
+        val affordances = mutableListOf<Pair<LogicalButtonId, Boolean>>()
+        val backend = ImeViewBackend(
+            motionSurface = motion,
+            buttonViews = recBtns.mapValues { it.value as View },
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            recordingAnimationController = controller,
+            imeSideAffordance = { id, long -> affordances += id to long },
+        )
+        backend.attach { captured += it }
+        backend.render(resendVisibleState(), catalog.KEYBOARD_TWO_ROW)
+
+        val resend = recBtns[LogicalButtonId.RESEND]!!
+        resend.performClick()
+
+        assertEquals(listOf(LogicalButtonId.RESEND to false), affordances)
+        // The catalog dispatch still fires alongside (arms the cooldown).
+        assertEquals(listOf(Action.ResendAction.ResendLastAudio), captured)
     }
 
     @Test

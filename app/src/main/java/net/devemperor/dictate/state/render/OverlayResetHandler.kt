@@ -51,15 +51,30 @@ import net.devemperor.dictate.state.layout.RenderBackend
  * keeping IME-View widgets in a known state when the overlay is up.
  * Splitting them keeps each backend's responsibility crisp (SRP).
  *
+ * # CR3 staged-safety-net (render-path-cutover.md §6 RR-2)
+ *
+ * Attached in CR3 but [gate]d **dormant** until CR4: the
+ * `overlay_characters_ll.visibility = GONE` defensive reset is still
+ * driven by [net.devemperor.dictate.core.KeyboardStateManager.applyVisibility]
+ * (line ~142) until CR4. Dormant → report the intended reset to the
+ * audit ledger (proves KSM is the sole live writer, Spec 2 §10), do
+ * not touch the view. CR4 [arm]s the gate in the same chunk it removes
+ * the KSM reset line. `null` gate = legacy always-write (unit-test
+ * contract). Same pattern as [ContentAreaController].
+ *
  * @property views the IME-side widgets that need an overlay-aware
  *   reset. Nullable members are skipped (defensive — re-skin variants
  *   may not include every widget).
+ * @property gate the dormant/armed staged-safety-net switch (RR-2).
+ *   `null` = always write (legacy contract / unit tests).
  *
  * @see net.devemperor.dictate.state.layout.RenderBackend
+ * @see net.devemperor.dictate.state.render.RenderGate
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §4.1
  */
 class OverlayResetHandler(
     private val views: OverlayResetViews,
+    private val gate: RenderGate? = null,
 ) : RenderBackend {
 
     override val backendType: BackendType? = null
@@ -87,7 +102,14 @@ class OverlayResetHandler(
         // edge case where a ViewMode transition (KEYBOARD → WIDGET/HOVER)
         // interrupts the touch sequence and the handler never observes
         // the matching release event.
-        views.overlayCharactersStrip?.visibility = View.GONE
+        val strip = views.overlayCharactersStrip ?: return
+        if (gate == null) {
+            strip.visibility = View.GONE
+            return
+        }
+        if (gate.shouldWrite(strip.id, View.GONE)) {
+            strip.visibility = View.GONE
+        }
     }
 }
 

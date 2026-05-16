@@ -1,5 +1,6 @@
 package net.devemperor.dictate.state.layout
 
+import net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.ViewMode
@@ -38,16 +39,34 @@ import net.devemperor.dictate.state.ViewMode
  * [RenderBackend.attach] — backends turn user clicks into `Action`s and
  * push them through the same single pipe (F-8 Single-Dispatch).
  *
+ * # Visibility-write audit boundary (CR3, Spec 2 §10 / §11.8 5c)
+ *
+ * Each [onStateChanged] fan-out is one "render generation". When a
+ * [VisibilityWriteAuditLogger] is supplied (CR3 staged cutover), the
+ * manager opens a fresh generation before fanning out so the
+ * Strict-Mode no-double-write ledger keys per state-emit (RR-2). A
+ * `null` logger (tests / release without the audit) is a no-op — the
+ * fan-out is unchanged.
+ *
  * @property catalog the data SoT for layout modes.
  * @property onAction click-sink — typically `orchestrator::dispatch`.
+ * @property visibilityAuditLogger optional Strict-Mode ledger (CR3);
+ *   `null` = no audit (unchanged fan-out).
  *
  * @see net.devemperor.dictate.state.layout.LayoutCatalog
  * @see net.devemperor.dictate.state.layout.RenderBackend
- * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §4 + §4.1
+ * @see net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger
+ * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §4 + §4.1 + §10 + §11.8
  * @see docs/decisions/0004-ui-layout-catalog-motionlayout.md §3
  */
 class KeyboardLayoutManager(
     private val catalog: LayoutCatalog,
+    // `visibilityAuditLogger` sits BEFORE `onAction` so `onAction`
+    // stays the last parameter — the codebase constructs the manager
+    // with the trailing-lambda idiom `KeyboardLayoutManager(catalog) {
+    // ... }`. The audit logger has a default so that call-site is
+    // unchanged (CR3 — Spec 2 §10 / §11.8 5c).
+    private val visibilityAuditLogger: VisibilityWriteAuditLogger? = null,
     private val onAction: (Action) -> Unit,
 ) {
 
@@ -115,6 +134,11 @@ class KeyboardLayoutManager(
      */
     fun onStateChanged(state: DictateUiState) {
         currentState = state
+        // CR3 (Spec 2 §10 / §11.8 5c): one render generation per
+        // state-emit. The Strict-Mode ledger keys per generation so an
+        // idempotent re-render by the same axis owner is not mistaken
+        // for a double-write (RR-2). No-op when no logger is wired.
+        visibilityAuditLogger?.beginRenderGeneration()
         activeBackends.forEach { backend -> renderTo(backend, state) }
     }
 

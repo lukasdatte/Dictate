@@ -8,6 +8,7 @@ import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.StaggeredGridLayoutManager
 import com.google.android.material.button.MaterialButton
+import net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger
 
 /**
  * Deterministic visibility calculator for the keyboard UI.
@@ -96,6 +97,38 @@ class KeyboardStateManager(
      */
     private val isReprocessStaging: () -> Boolean = { false }
 ) {
+    /**
+     * CR3 (Spec 2 §10 / §11.8 5c — "5c thinned-KSM-bodies +
+     * Strict-Mode-Logging"). KSM stays the **sole live writer** of the
+     * ContentArea / Promptbar / overlay-reset visibility axes through
+     * CR3 (the new controllers attach **dormant** — render-path-cutover.md
+     * §6 RR-2). This logger instruments every KSM visibility write so
+     * the no-double-write acceptance is *observable*: the dormant
+     * controllers also report their intended writes, and the ledger
+     * proves KSM is the only owner that actually reached the view
+     * (`doubleWriteCount == 0`). `null` = no audit (unit tests / the
+     * pre-CR3 contract); behaviour is byte-identical when absent.
+     *
+     * Wired **after construction** (via [attachAuditLogger]) because
+     * the shared logger is binder-owned and KSM is built in the
+     * IME-View inflate path *before* the service-bind may complete (the
+     * established bind↔inflate race the IME's
+     * `attachImeViewBackendIfReady` consolidation point already
+     * handles). CR4 removes the KSM drive call-sites and arms the
+     * controllers in the same chunk — the sole live writer flips KSM →
+     * controller with zero overlap, still proven by this same ledger.
+     */
+    private var auditLogger: VisibilityWriteAuditLogger? = null
+
+    /**
+     * CR3 — wire the shared Strict-Mode ledger after construction (see
+     * [auditLogger] for why this is post-ctor). Idempotent: re-wiring
+     * the same logger on a view-recreate is a benign no-op.
+     */
+    fun attachAuditLogger(logger: VisibilityWriteAuditLogger) {
+        auditLogger = logger
+    }
+
     // === Own state (lives only here, nowhere else) ===
     var contentArea: ContentArea = ContentArea.MAIN_BUTTONS
         private set
@@ -137,9 +170,12 @@ class KeyboardStateManager(
         applyContentAreaVisibility()
         applyRecordingControlsVisibility()
         applyPromptsVisibility()
-        // TODO(D-13 follow-up): remove once `OverlayResetHandler` attaches
-        // in production — mirrors the new path's defensive reset (B4-VAL F-33).
-        views.overlayCharactersLl.visibility = View.GONE
+        // TODO(CR4): remove once `OverlayResetHandler` is armed in
+        // production — mirrors the new path's defensive reset (B4-VAL
+        // F-33). CR3: KSM stays the sole LIVE writer; the dormant
+        // OverlayResetHandler reports its intended GONE to the same
+        // ledger (RR-2 no-double-write proof, Spec 2 §10).
+        writeVisibility(views.overlayCharactersLl, View.GONE)
         infoBarController?.onStateChanged(contentArea, isSmallMode)
         // C15 — layoutModeController?.refresh() removed. The single-row
         // axis lives in DictateUiState now; ImeViewBackend re-renders
@@ -158,26 +194,50 @@ class KeyboardStateManager(
      * `ContentAreaController` attaches in production (B4-VAL F-33).
      */
     private fun applyContentAreaVisibility() {
-        views.mainButtonsClTyped.visibility =
-            if (contentArea == ContentArea.MAIN_BUTTONS) View.VISIBLE else View.GONE
-        views.editButtonsLl.visibility =
+        writeVisibility(
+            views.mainButtonsClTyped,
+            if (contentArea == ContentArea.MAIN_BUTTONS) View.VISIBLE else View.GONE,
+        )
+        writeVisibility(
+            views.editButtonsLl,
             if (contentArea == ContentArea.MAIN_BUTTONS || contentArea == ContentArea.QWERTZ) View.VISIBLE
-            else View.GONE
-        views.qwertzContainer.visibility =
-            if (contentArea == ContentArea.QWERTZ) View.VISIBLE else View.GONE
-        views.emojiPickerCl.visibility =
-            if (contentArea == ContentArea.EMOJI_PICKER) View.VISIBLE else View.GONE
+            else View.GONE,
+        )
+        writeVisibility(
+            views.qwertzContainer,
+            if (contentArea == ContentArea.QWERTZ) View.VISIBLE else View.GONE,
+        )
+        writeVisibility(
+            views.emojiPickerCl,
+            if (contentArea == ContentArea.EMOJI_PICKER) View.VISIBLE else View.GONE,
+        )
+    }
+
+    /**
+     * The single KSM visibility-write seam (CR3, Spec 2 §11.8 5c).
+     * Reports the write to the [auditLogger] (tagged
+     * `"KeyboardStateManager"`) **before** performing it, so the
+     * Strict-Mode ledger can prove KSM is the sole *live* writer per
+     * axis while the new controllers are dormant (RR-2, Spec 2 §10).
+     * The actual mutation is unconditional — KSM IS the live owner
+     * until CR4. `null` logger = unchanged behaviour.
+     */
+    private fun writeVisibility(view: View?, target: Int) {
+        if (view == null) return
+        // KSM is the sole LIVE writer of these axes through CR3 → live=true.
+        auditLogger?.logWrite(view.id, "KeyboardStateManager", target, /* live = */ true)
+        view.visibility = target
     }
 
     private fun applyRecordingControlsVisibility() {
         val isActive = isRecording() || isPaused()
         val isStaging = isReprocessStaging()
         // Pause button: visible during recording; also visible but DISABLED ("blind") during ReprocessStaging.
-        views.pauseButton.visibility = if (isActive || isStaging) View.VISIBLE else View.GONE
+        writeVisibility(views.pauseButton, if (isActive || isStaging) View.VISIBLE else View.GONE)
         views.pauseButton.isEnabled = isActive
         views.pauseButton.alpha = if (isActive) 1.0f else 0.4f
         // Trash button: visible during recording AND ReprocessStaging (cancel action in both cases)
-        views.trashButton.visibility = if (isActive || isStaging) View.VISIBLE else View.GONE
+        writeVisibility(views.trashButton, if (isActive || isStaging) View.VISIBLE else View.GONE)
     }
 
     /**
@@ -203,20 +263,26 @@ class KeyboardStateManager(
             isActive || isPipelineRunning() || isStaging -> true
             else -> isRewordingEnabled()
         }
-        views.promptsCl.visibility = if (showPrompts) View.VISIBLE else View.GONE
+        writeVisibility(views.promptsCl, if (showPrompts) View.VISIBLE else View.GONE)
 
         // Prompts content: RecyclerView vs pipeline progress.
         // ReprocessStaging shows the RecyclerView (queue editing), NOT pipeline progress.
-        views.promptsRv?.visibility =
-            if (!isPipelineProgress) View.VISIBLE else View.GONE
-        views.pipelineProgressLl?.visibility =
-            if (isPipelineProgress) View.VISIBLE else View.GONE
+        writeVisibility(
+            views.promptsRv,
+            if (!isPipelineProgress) View.VISIBLE else View.GONE,
+        )
+        writeVisibility(
+            views.pipelineProgressLl,
+            if (isPipelineProgress) View.VISIBLE else View.GONE,
+        )
 
         // Recording controls: only visible when active AND NOT in pipeline progress mode
         // (pipeline progress replaces the recording indicator)
         val showRecControls = isActive && !isPipelineProgress && contentArea == ContentArea.QWERTZ
-        views.promptRecordingControlsLl?.visibility =
-            if (showRecControls) View.VISIBLE else View.GONE
+        writeVisibility(
+            views.promptRecordingControlsLl,
+            if (showRecControls) View.VISIBLE else View.GONE,
+        )
 
         if (showPrompts) {
             applyPromptsLayout()

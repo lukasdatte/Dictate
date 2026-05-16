@@ -60,17 +60,32 @@ import net.devemperor.dictate.state.layout.RenderBackend
  * layout-mode partition. The manager fans every render-tick out
  * regardless of which surface owns the active mode.
  *
+ * # CR3 staged-safety-net (render-path-cutover.md §6 RR-2)
+ *
+ * Attached in CR3 but [gate]d **dormant** until CR4: while
+ * [net.devemperor.dictate.core.KeyboardStateManager.applyPromptsVisibility]
+ * still drives this axis, a real write here would double-write
+ * (silent flicker — RR-2). Dormant → report the intended write to the
+ * audit ledger (proves KSM is the sole live writer, Spec 2 §10), do
+ * not touch the view. CR4 [arm]s the gate in the same chunk it removes
+ * the KSM drive. `null` gate = legacy always-write (unit-test
+ * contract). Same pattern as [ContentAreaController].
+ *
  * @property views the four prompt-area containers; some are nullable
  *   because the IME service can run in configurations where the prompt
  *   row is omitted (legacy single-row variant). `null` references are
  *   treated as "view not present" — skip the visibility write.
+ * @property gate the dormant/armed staged-safety-net switch (RR-2).
+ *   `null` = always write (legacy contract / unit tests).
  *
  * @see net.devemperor.dictate.state.layout.RenderBackend
  * @see net.devemperor.dictate.state.render.ContentAreaController
+ * @see net.devemperor.dictate.state.render.RenderGate
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §4.1
  */
 class PromptVisibilityController(
     private val views: PromptVisibilityViews,
+    private val gate: RenderGate? = null,
 ) : RenderBackend {
 
     override val backendType: BackendType? = null
@@ -104,15 +119,15 @@ class PromptVisibilityController(
             isActive || isPipelineRunning || isPreparing || isStaging -> true
             else -> rewordingEnabled
         }
-        views.promptsContainer?.visibility = if (showPrompts) View.VISIBLE else View.GONE
+        writeVisibility(views.promptsContainer, if (showPrompts) View.VISIBLE else View.GONE)
 
         // The progress-list replaces the recycler view *during* a
         // Running pipeline (NOT Preparing — upload phase keeps the
         // prompt list visible per Spec 2 §9.3). ReprocessStaging shows
         // the recycler (editable queue), so we explicitly exclude it.
         val showProgress = isPipelineRunning && !isStaging
-        views.promptsRecyclerView?.visibility = if (showProgress) View.GONE else View.VISIBLE
-        views.pipelineProgressView?.visibility = if (showProgress) View.VISIBLE else View.GONE
+        writeVisibility(views.promptsRecyclerView, if (showProgress) View.GONE else View.VISIBLE)
+        writeVisibility(views.pipelineProgressView, if (showProgress) View.VISIBLE else View.GONE)
 
         // QWERTZ-side recording controls (small mini-pause + send) are
         // only on screen during active recording inside the QWERTZ
@@ -120,8 +135,27 @@ class PromptVisibilityController(
         // main button row already.
         val showQwertzRecControls =
             isActive && !showProgress && layout.contentArea == ContentArea.QWERTZ
-        views.qwertzRecordingControls?.visibility =
-            if (showQwertzRecControls) View.VISIBLE else View.GONE
+        writeVisibility(
+            views.qwertzRecordingControls,
+            if (showQwertzRecControls) View.VISIBLE else View.GONE,
+        )
+    }
+
+    /**
+     * Route every visibility write through the [gate] (RR-2), skipping
+     * `null` views (the "view not present" contract). Dormant → ledger
+     * report only; armed/absent → real mutation. Mirrors
+     * [ContentAreaController.writeVisibility].
+     */
+    private fun writeVisibility(view: View?, target: Int) {
+        if (view == null) return
+        if (gate == null) {
+            view.visibility = target
+            return
+        }
+        if (gate.shouldWrite(view.id, target)) {
+            view.visibility = target
+        }
     }
 }
 

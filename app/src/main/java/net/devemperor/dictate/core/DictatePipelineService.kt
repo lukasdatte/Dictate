@@ -203,6 +203,19 @@ class DictatePipelineService : Service() {
     private lateinit var layoutCatalogImpl: LayoutCatalog
     private lateinit var keyboardLayoutManagerImpl: KeyboardLayoutManager
 
+    /**
+     * CR3 (Spec 2 §10 / §11.8 5c) — the Strict-Mode no-double-write
+     * ledger, shared by the [KeyboardLayoutManager] fan-out, the legacy
+     * [KeyboardStateManager], and the three dormant visibility
+     * controllers' [net.devemperor.dictate.state.render.RenderGate]s so
+     * the "exactly one live writer per visibility axis" acceptance is
+     * observable across the CR3→CR4 staged cutover (render-path-cutover.md
+     * §6 RR-2). Single instance per manager → all writers report to the
+     * same ledger.
+     */
+    private val visibilityWriteAuditLoggerImpl =
+        net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger()
+
     // ── C16 — Floating-overlay render backend (Spec 3 §4.2) ────────────
     //
     // [overlayBackendImpl] is constructed here so the Service owns its
@@ -579,6 +592,10 @@ class DictatePipelineService : Service() {
                 // pipe (F-8 Single-Dispatch).
                 orchestrator.dispatch(action)
             },
+            // CR3 — open one audit render-generation per state-emit so
+            // the no-double-write ledger keys per fan-out (RR-2, Spec 2
+            // §10 / §11.8 5c).
+            visibilityAuditLogger = visibilityWriteAuditLoggerImpl,
         )
         serviceScope.launch {
             orchestrator.state.collect { state ->
@@ -1163,6 +1180,19 @@ class DictatePipelineService : Service() {
          */
         val keyboardLayoutManager: KeyboardLayoutManager
             get() = keyboardLayoutManagerImpl
+
+        /**
+         * CR3 (Spec 2 §10 / §11.8 5c) — the shared Strict-Mode
+         * visibility-write audit ledger. The IME wires this same
+         * instance into the legacy [KeyboardStateManager] and the three
+         * dormant visibility controllers' `RenderGate`s so the
+         * no-double-write acceptance is provable across the staged
+         * CR3→CR4 cutover (render-path-cutover.md §6 RR-2). Removed
+         * ersatzlos in CR-DEL (= Block 5d) together with KSM.
+         */
+        val visibilityWriteAuditLogger:
+            net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger
+            get() = visibilityWriteAuditLoggerImpl
 
         /**
          * Service-owned [ModuleServices] container — exposed so the IME

@@ -86,9 +86,16 @@ import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
 import net.devemperor.dictate.state.layout.KeyboardLayoutManager;
 import net.devemperor.dictate.state.layout.LogicalButtonId;
+import net.devemperor.dictate.state.render.ContentAreaController;
+import net.devemperor.dictate.state.render.ContentAreaViews;
 import net.devemperor.dictate.state.render.ImeViewBackend;
+import net.devemperor.dictate.state.render.OverlayResetHandler;
+import net.devemperor.dictate.state.render.OverlayResetViews;
+import net.devemperor.dictate.state.render.PromptVisibilityController;
+import net.devemperor.dictate.state.render.PromptVisibilityViews;
 import net.devemperor.dictate.state.render.RealMotionSurface;
 import net.devemperor.dictate.state.render.RecordingAnimationController;
+import net.devemperor.dictate.state.render.RenderGate;
 import net.devemperor.dictate.state.render.SpecialTouchHandlerInstaller;
 import net.devemperor.dictate.widget.PulseLayout;
 
@@ -273,6 +280,21 @@ public class DictateInputMethodService extends InputMethodService
     // attachToViews(...) in the same chunk it removes the legacy wiring.
     private SpecialTouchHandlerInstaller specialTouchHandlerInstaller;
     private KeyboardLayoutManager keyboardLayoutManager; // copy of the service-side instance, for detach
+
+    // CR3 (Theme C-R) — the three R.10 visibility controllers, attached
+    // via KeyboardLayoutManager.attachBackend but GATED DORMANT until
+    // CR4 (render-path-cutover.md §6 RR-2 — the legacy KSM
+    // applyVisibility() drive is still the sole LIVE writer of these
+    // axes until CR4; a real write here would double-write/flicker).
+    // The gate fields are retained so CR4 can arm() them (the one-line
+    // flip) and detach is symmetric. backendType=null multi-backends
+    // (ambiguity A4 — follow parent-B4 design).
+    private ContentAreaController contentAreaController;
+    private PromptVisibilityController promptVisibilityController;
+    private OverlayResetHandler overlayResetHandler;
+    private RenderGate contentAreaGate;
+    private RenderGate promptVisibilityGate;
+    private RenderGate overlayResetGate;
 
     // Recording controllers (extracted from God-Class)
     private RecordingStateController recordingStateController;
@@ -1194,6 +1216,22 @@ public class DictateInputMethodService extends InputMethodService
             imeViewBackend = null;
         }
 
+        // CR3 (Theme C-R) — attach the three R.10 visibility controllers
+        // (G10/G11/G12) GATED DORMANT, and wire the shared Strict-Mode
+        // ledger into the legacy KSM (Spec 2 §10 / §11.8 5c). RR-2 (THE
+        // highest risk of B5): KSM.applyVisibility() is still the sole
+        // LIVE writer of the ContentArea/Promptbar/overlay-reset axes
+        // until CR4 — a real write from a controller here would
+        // double-write the same container every render-tick (silent
+        // flicker / wrong container, no error). The dormant gate makes
+        // the controllers report their *intended* write to the same
+        // ledger as KSM (proving KSM is the only writer that actually
+        // reaches the view) WITHOUT touching the view. CR4 arm()s the
+        // gates in the same chunk it removes the KSM drive — never two
+        // live writers at once (identical staged-safety-net to CR1's
+        // RESEND-only long-press + CR2's installDormant touch model).
+        attachDormantVisibilityControllers();
+
         // B5 F-2 — (re)start the onboarding info-bar observer now that
         // both the binder and the inflated info-bar view exist. This is
         // the single consolidation point (called from both
@@ -1214,6 +1252,121 @@ public class DictateInputMethodService extends InputMethodService
                 });
             overlayOnboardingObserver.start();
         }
+    }
+
+    /**
+     * CR3 (Theme C-R / AC-RR-5) — attach the three R.10 visibility
+     * controllers ({@link ContentAreaController} G10, {@link
+     * PromptVisibilityController} G11, {@link OverlayResetHandler} G12)
+     * as {@code backendType=null} multi-backends (ambiguity A4 — parent
+     * B4 design, reused not reinvented), and wire the shared
+     * Strict-Mode ledger into the legacy {@link KeyboardStateManager}.
+     *
+     * <p><b>RR-2 — the load-bearing decision of this chunk.</b> Each
+     * controller is wrapped in a {@link RenderGate} constructed
+     * <em>dormant</em> ({@code armed=false}). While dormant the
+     * controller still receives every {@code render(state, mode)} tick
+     * (it is a fully-attached backend, view-recreate-safe), but it does
+     * <b>not</b> write the visibility axis — it only reports the
+     * <em>intended</em> write to the shared {@link
+     * net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger}.
+     * The legacy {@code KeyboardStateManager.applyVisibility()} remains
+     * the <b>sole LIVE writer</b> of the ContentArea / Promptbar /
+     * overlay-reset axes through CR3; the ledger proves it
+     * ({@code doubleWriteCount == 0}, Spec 2 §10). CR4 calls {@code
+     * arm()} on each gate <em>in the same chunk</em> it removes the KSM
+     * drive — the sole live writer flips KSM → controller with zero
+     * overlap (the exact CR1 RESEND-only / CR2 installDormant
+     * staged-safety-net, render-path-cutover.md §6 RR-2 / §6.1).
+     *
+     * <p>Idempotent on view-recreate: the previous controllers are
+     * detached in {@link #cleanupOldControllers()} / {@link
+     * #onDestroy()} (symmetric with the {@code imeViewBackend}
+     * lifecycle) before this rebuilds them against the fresh tree.
+     */
+    private void attachDormantVisibilityControllers() {
+        if (pipelineBinder == null || keyboardLayoutManager == null) {
+            return;
+        }
+
+        // Wire the shared Strict-Mode ledger into the legacy KSM so its
+        // every visibility write is reported under "KeyboardStateManager"
+        // (the no-double-write proof's legacy half — Spec 2 §11.8 5c).
+        net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger auditLogger =
+            pipelineBinder.getVisibilityWriteAuditLogger();
+        if (stateManager != null) {
+            stateManager.attachAuditLogger(auditLogger);
+        }
+
+        // pipeline_progress_ll is resolved fresh from the inflated tree
+        // (it is a local in the KSM-setup path, not a service field —
+        // re-resolving is cheap and matches how widget_toggle_btn is
+        // handled above).
+        View pipelineProgressLl =
+            dictateKeyboardView.findViewById(R.id.pipeline_progress_ll);
+
+        contentAreaGate = new RenderGate("ContentAreaController", auditLogger);
+        contentAreaController = new ContentAreaController(
+            new ContentAreaViews(mainButtonsClGroup, qwertzContainer, emojiPickerCl),
+            contentAreaGate);
+
+        promptVisibilityGate = new RenderGate("PromptVisibilityController", auditLogger);
+        promptVisibilityController = new PromptVisibilityController(
+            new PromptVisibilityViews(
+                promptsCl, promptsRv, pipelineProgressLl, promptRecordingControlsLl),
+            promptVisibilityGate);
+
+        overlayResetGate = new RenderGate("OverlayResetHandler", auditLogger);
+        overlayResetHandler = new OverlayResetHandler(
+            new OverlayResetViews(overlayCharactersLl),
+            overlayResetGate);
+
+        try {
+            keyboardLayoutManager.attachBackend(contentAreaController);
+            keyboardLayoutManager.attachBackend(promptVisibilityController);
+            keyboardLayoutManager.attachBackend(overlayResetHandler);
+        } catch (Throwable t) {
+            // Mirror the imeViewBackend attach failure handling: log +
+            // null out so detach paths stay consistent and the legacy
+            // KSM keeps driving (the staged-safety-net fallback).
+            Log.w("DictateIME",
+                "Dormant visibility-controller attach failed — legacy KSM keeps driving", t);
+            detachDormantVisibilityControllers();
+        }
+    }
+
+    /**
+     * Symmetric counterpart to {@link
+     * #attachDormantVisibilityControllers()} — detaches the three R.10
+     * controllers from the manager (releasing their View references)
+     * and clears the fields. Called on view-recreate ({@link
+     * #cleanupOldControllers()}) and process tear-down ({@link
+     * #onDestroy()}), exactly like the {@code imeViewBackend} detach.
+     * Detach is idempotent (the manager's {@code detachBackend} no-ops
+     * an unattached backend), so this is safe to call in error paths.
+     */
+    private void detachDormantVisibilityControllers() {
+        if (keyboardLayoutManager != null) {
+            try {
+                if (contentAreaController != null) {
+                    keyboardLayoutManager.detachBackend(contentAreaController);
+                }
+                if (promptVisibilityController != null) {
+                    keyboardLayoutManager.detachBackend(promptVisibilityController);
+                }
+                if (overlayResetHandler != null) {
+                    keyboardLayoutManager.detachBackend(overlayResetHandler);
+                }
+            } catch (Throwable t) {
+                Log.w("DictateIME", "Dormant visibility-controller detach failed", t);
+            }
+        }
+        contentAreaController = null;
+        promptVisibilityController = null;
+        overlayResetHandler = null;
+        contentAreaGate = null;
+        promptVisibilityGate = null;
+        overlayResetGate = null;
     }
 
     // method is called if the user closed the keyboard
@@ -1289,6 +1442,9 @@ public class DictateInputMethodService extends InputMethodService
             }
         }
         imeViewBackend = null;
+        // CR3 — detach the three dormant R.10 visibility controllers
+        // (symmetric with imeViewBackend) BEFORE nulling the manager.
+        detachDormantVisibilityControllers();
         keyboardLayoutManager = null;
 
         // B5 F-2 — cancel the onboarding info-bar collector scope so
@@ -1417,6 +1573,11 @@ public class DictateInputMethodService extends InputMethodService
             }
         }
         imeViewBackend = null;
+        // CR3 — detach the three dormant R.10 visibility controllers
+        // before re-inflate (they hold direct View references too,
+        // symmetric with imeViewBackend). Rebuilt against the fresh
+        // tree by attachDormantVisibilityControllers().
+        detachDormantVisibilityControllers();
         // Remove old InvalidationTracker observer (will be re-added in setupPromptsAdapter)
         if (promptsInvalidationObserver != null && dictateDb != null) {
             dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);

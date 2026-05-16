@@ -54,15 +54,31 @@ import net.devemperor.dictate.state.layout.RenderBackend
  * scope). [attach] therefore captures `onAction` only as future-proofing
  * for the eventual "close QWERTZ" / "back to main buttons" affordance.
  *
+ * # CR3 staged-safety-net (render-path-cutover.md §6 RR-2)
+ *
+ * The controller is **attached in CR3** but [gate]d **dormant** until
+ * CR4: while [net.devemperor.dictate.core.KeyboardStateManager.applyContentAreaVisibility]
+ * is still the live writer of this axis, a real write here would
+ * double-write the container (silent flicker — RR-2). When [gate] is
+ * dormant, [render] reports the *intended* write to the audit ledger
+ * (proving KSM is the sole live writer, Spec 2 §10) but does NOT touch
+ * the view. CR4 [arm]s the gate in the same chunk it removes the KSM
+ * drive. A `null` gate = legacy "always write" (the pre-CR3 contract;
+ * keeps the existing unit tests' semantics).
+ *
  * @property views container references — non-null for all three
  *   containers. The IME service builds the holder in `onCreateInputView`.
+ * @property gate the dormant/armed staged-safety-net switch (RR-2).
+ *   `null` = always write (legacy contract / unit tests).
  *
  * @see net.devemperor.dictate.state.layout.RenderBackend
+ * @see net.devemperor.dictate.state.render.RenderGate
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §4.1
  * @see docs/decisions/0004-ui-layout-catalog-motionlayout.md §3
  */
 class ContentAreaController(
     private val views: ContentAreaViews,
+    private val gate: RenderGate? = null,
 ) : RenderBackend {
 
     /**
@@ -91,12 +107,35 @@ class ContentAreaController(
         // a single contract for all backends.
 
         val area = state.layout.contentArea
-        views.mainButtonsContainer.visibility =
-            if (area == ContentArea.MAIN_BUTTONS) View.VISIBLE else View.GONE
-        views.qwertzContainer.visibility =
-            if (area == ContentArea.QWERTZ) View.VISIBLE else View.GONE
-        views.emojiPickerContainer.visibility =
-            if (area == ContentArea.EMOJI_PICKER) View.VISIBLE else View.GONE
+        writeVisibility(
+            views.mainButtonsContainer,
+            if (area == ContentArea.MAIN_BUTTONS) View.VISIBLE else View.GONE,
+        )
+        writeVisibility(
+            views.qwertzContainer,
+            if (area == ContentArea.QWERTZ) View.VISIBLE else View.GONE,
+        )
+        writeVisibility(
+            views.emojiPickerContainer,
+            if (area == ContentArea.EMOJI_PICKER) View.VISIBLE else View.GONE,
+        )
+    }
+
+    /**
+     * Route every visibility write through the [gate] (RR-2). When the
+     * gate is dormant the intended write is recorded in the audit
+     * ledger (proving the legacy KSM is the sole live writer) but the
+     * view is left untouched; when armed (CR4) or absent (legacy
+     * contract) the real mutation happens.
+     */
+    private fun writeVisibility(view: View, target: Int) {
+        if (gate == null) {
+            view.visibility = target
+            return
+        }
+        if (gate.shouldWrite(view.id, target)) {
+            view.visibility = target
+        }
     }
 }
 

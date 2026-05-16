@@ -2,6 +2,9 @@ package net.devemperor.dictate.state.render
 
 import android.content.Context
 import android.view.View
+import com.google.android.material.button.MaterialButton
+import net.devemperor.dictate.DictateUtils
+import net.devemperor.dictate.keyboard.KeyPressAnimator
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.ModuleServices
@@ -67,6 +70,19 @@ import net.devemperor.dictate.state.layout.RenderBackend
  *   allocator + toast sink + other subsystems).
  * @property recordingAnimationController the animator-bridge driving
  *   BorderGlow + PulseLayout from `state.recording` transitions.
+ * @property keyPressAnimator the shared key-press scale animator (Spec 2
+ *   §6 ctor / §9.2 `initializeKeyPressAnimations` row, behaviour group
+ *   G7). [wireStaticHandlers] calls
+ *   [KeyPressAnimator.applyPressAnimation] per owned button **except**
+ *   the three special-touch buttons (SPACE / BACKSPACE / ENTER) whose
+ *   `OnTouchListener` is owned by the [staticHandlerInstaller] path
+ *   (CR2) — wiring press-animation there would silently overwrite the
+ *   CursorSwipe / Backspace-Swipe / Enter-Overlay handler (RR-1, the
+ *   F-1/F-2 trap). The legacy `MainButtonsController` composes
+ *   press-animation *into* those special handlers via
+ *   [KeyPressAnimator.handlePressAnimationEvent]; CR2's installer does
+ *   the same when it takes over. Defaults to a fresh no-op-friendly
+ *   instance so JVM-only callers/tests need not supply it.
  * @property staticHandlerInstaller optional hook executed once per
  *   [attach] **after** standard click-listener wiring — used by the
  *   IME service to bolt on special-touch handlers (CursorSwipe /
@@ -88,6 +104,7 @@ class ImeViewBackend(
     private val ctx: Context,
     private val services: ModuleServices,
     private val recordingAnimationController: RecordingAnimationController? = null,
+    private val keyPressAnimator: KeyPressAnimator = KeyPressAnimator(),
     private val staticHandlerInstaller: ((Map<LogicalButtonId, View>) -> Unit)? = null,
     private val onVibrate: () -> Unit = {},
 ) : RenderBackend {
@@ -219,31 +236,55 @@ class ImeViewBackend(
     // ─── Internal ─────────────────────────────────────────────────────
 
     /**
-     * Wire click listeners exactly once. Click handlers read
-     * [stateRef] / [modeRef] **at click-time** so the listener captures
-     * a single lambda per button, not one per render-tick (L8).
+     * Wire click + long-click listeners (and key-press animation) exactly
+     * once. Click/long-click handlers read [stateRef] / [modeRef] **at
+     * (long-)click-time** so each captures a single lambda per button, not
+     * one per render-tick (L8).
      *
-     * # Long-press wiring scope (D7 interim, post-B4-VAL)
+     * # Long-press model (Spec 2 §6 / §13.2 — CR1, render-path-cutover.md G2)
      *
-     * The new render path only wires the **RESEND** long-press — it is the
-     * only long-press the catalog actually models today
-     * ([Action.ResendAction.ResendLastAudioLong]). The other two long-press
-     * cascades stay on their legacy owners until the next refactor:
+     * Long-press is now a first-class catalog axis via
+     * [ButtonSlot.longClickResolver] — symmetric with the click
+     * [ButtonSlot.actionResolver]. The B4-interim F-1/F-2 KDoc
+     * (RESEND-only wiring; RECORD/BACKSPACE long-press left on the legacy
+     * `MainButtonsController`) is **removed** — the model it deferred is
+     * exactly this CR1 work (the `longClickResolver` slot field + the
+     * `OnRecordLongPress` Action + the RecordingModule reducer arm now
+     * exist).
      *
-     *  - **RECORD** long-press: `onRecordLongClicked` in `MainButtonsController`
-     *    drives a two-mode handler (a) Idle → open Settings + audio-file
-     *    picker, (b) Active/Paused → set `autoSwitchKeyboard = true` then
-     *    `stopRecording()`. Wiring a vibrate-only listener here would
-     *    **silently overwrite** the legacy listener on the same View (Android
-     *    keeps the most-recent `setOnLongClickListener` only), erasing both
-     *    user features. F-2 (validated-findings-B4) Option (c) interim: drop
-     *    the wire entirely so the legacy handler survives. The longer-term
-     *    fix is to model long-press as an `Action.RecordingAction.OnRecord*`
-     *    via a `longClickResolver` slot field, deferred to B5/B7 follow-up.
-     *  - **BACKSPACE** long-press: `MainButtonsController` installs the
-     *    accelerated-delete `deleteHandler.postDelayed` cascade. A bare
-     *    `setOnLongClickListener { true }` here would consume the event and
-     *    kill the cascade — F-1 (validated-findings-B4) drop the wire.
+     * **RR-1 — listener-attachment scope is still RESEND-only in CR1.**
+     * `attach()` runs *after* the legacy
+     * `MainButtonsController.registerAllListeners()`, so any
+     * `setOnLongClickListener` here is the View's *most-recent* (live)
+     * listener. Attaching the generic long-press listener to **RECORD**
+     * now would overwrite the legacy `onRecordLongClicked` and regress the
+     * live keyboard: the catalog resolver only models the Active/Paused
+     * *discard-stop* half, losing the Idle Settings+file-picker launch and
+     * the `autoSwitchKeyboard`+send affordance (both IME-side, not
+     * reducer-modellable without new ModuleServices surface — see
+     * [Action.RecordingAction.OnRecordLongPress] KDoc, A1). Likewise
+     * **BACKSPACE** has a legacy `onBackspaceLongClicked` and no
+     * `longClickResolver` (default `null`) — a generic listener there
+     * would vibrate-and-consume, killing it. So CR1 keeps the
+     * **RESEND-only** attachment (its `ResendLastAudioLong` is behaviourally
+     * identical to the legacy `onResendLongClicked` → ReprocessStaging, so
+     * RESEND was already the live owner pre-CR1 — zero regression). The
+     * RECORD/other long-press *listeners* are attached by **CR4** in the
+     * same chunk that removes the legacy `registerAllListeners()` drive
+     * (RR-1 mitigation: never both wired at once — render-path-cutover.md
+     * §6 RR-1). The catalog `longClickResolver` data + the reducer arm are
+     * complete + unit-tested now (backend feature-complete, dormant
+     * listener-side per the staged-safety-net §6.1).
+     *
+     * # Key-press animation (Spec 2 §6 / §9.2 G7)
+     *
+     * [keyPressAnimator] is applied per owned button **except** the three
+     * special-touch buttons (SPACE / BACKSPACE / ENTER): their
+     * `OnTouchListener` belongs to the [staticHandlerInstaller] path (CR2)
+     * — calling `applyPressAnimation` there would silently overwrite the
+     * CursorSwipe / Backspace-Swipe / Enter-Overlay handler (RR-1). The
+     * legacy controller composes press-animation *into* those special
+     * handlers; CR2's installer does the same.
      *
      * Special touch handlers (CursorSwipe / Backspace-Swipe /
      * Enter-Overlay) come via the [staticHandlerInstaller] hook so the
@@ -261,17 +302,81 @@ class ImeViewBackend(
                     onAction?.invoke(action)
                 }
             }
-        }
 
-        // RESEND long-press is the only long-press the catalog currently
-        // models (Spec 2 §6). RECORD + BACKSPACE long-presses remain on
-        // their legacy owners (`MainButtonsController.onRecordLongClicked`
-        // + accelerated-delete `deleteHandler`) — see the function KDoc
-        // for rationale.
-        buttonViews[LogicalButtonId.RESEND]?.setOnLongClickListener {
-            onVibrate()
-            onAction?.invoke(Action.ResendAction.ResendLastAudioLong)
-            true
+            // RR-1 — CR1 attaches the catalog-driven long-press listener
+            // for RESEND only. RESEND's `ResendLastAudioLong` is
+            // behaviourally identical to the legacy `onResendLongClicked`
+            // (ReprocessStaging entry), so RESEND was already the live
+            // long-press owner pre-CR1 — zero regression. RECORD/BACKSPACE
+            // long-press listeners are attached by CR4 in the same chunk
+            // that removes the legacy `registerAllListeners()` drive (never
+            // both wired at once — see the function KDoc + §6 RR-1). The
+            // listener is catalog-driven (reads `slot.longClickResolver`),
+            // not a hardcoded ResendLastAudioLong, so CR4 only needs to
+            // widen the id filter.
+            if (id == LogicalButtonId.RESEND) {
+                view.setOnLongClickListener {
+                    onVibrate()
+                    val s = stateRef
+                    val slot = currentSlot(id)
+                    if (s != null && slot != null) {
+                        slot.longClickResolver(s, services)?.let { action ->
+                            onAction?.invoke(action)
+                        }
+                    }
+                    // Consume the long-press so it doesn't fall through to
+                    // a click; R.3 nullable-resolver short-circuits the
+                    // dispatch when structurally meaningless.
+                    true
+                }
+            }
+
+            // G7 key-press scale animation — skip the special-touch
+            // buttons (their OnTouchListener is the installer's, CR2;
+            // wiring here would clobber CursorSwipe/Backspace/Enter — RR-1).
+            if (id != LogicalButtonId.SPACE &&
+                id != LogicalButtonId.BACKSPACE &&
+                id != LogicalButtonId.ENTER
+            ) {
+                keyPressAnimator.applyPressAnimation(view)
+            }
+        }
+    }
+
+    /**
+     * Re-apply accent-colour theming to the owned buttons (behaviour
+     * group G6, Spec 2 §9.2 — *"Theme-Mutation ist eine separate Achse,
+     * nicht state-getrieben. Der ImeViewBackend hat eine
+     * `applyTheme(accentColor)`-Methode, die der Service nach jedem
+     * Re-Inflate aufruft."*).
+     *
+     * Theme is a **separate, non-state-driven axis** — it is *not* derived
+     * in [render] from [DictateUiState]; the IME service calls this
+     * imperatively after a re-inflate / accent-colour change. The colour
+     * tiers mirror the legacy `MainButtonsController.applyTheme`
+     * (`:389-416`): RECORD = accent; BACKSPACE / ENTER = accent darkened
+     * 0.35; the remaining owned buttons = accent darkened 0.18.
+     * `WIDGET_TOGGLE` is intentionally not themed here (the legacy
+     * `applyTheme` never themed it — it predates the button). The
+     * non-owned edit-row buttons stay themed by the legacy controller
+     * until CR4 (additive — legacy still drives the theme axis in CR1).
+     *
+     * Only [MaterialButton]-typed owned views are coloured (the legacy
+     * `applyButtonColor` is `MaterialButton`-typed); a non-button view in
+     * the map is skipped defensively.
+     */
+    fun applyTheme(accentColor: Int) {
+        val accentMedium = DictateUtils.darkenColor(accentColor, 0.18f)
+        val accentDark = DictateUtils.darkenColor(accentColor, 0.35f)
+        buttonViews.forEach { (id, view) ->
+            val button = view as? MaterialButton ?: return@forEach
+            val tier = when (id) {
+                LogicalButtonId.RECORD -> accentColor
+                LogicalButtonId.BACKSPACE, LogicalButtonId.ENTER -> accentDark
+                LogicalButtonId.WIDGET_TOGGLE -> return@forEach
+                else -> accentMedium
+            }
+            button.setBackgroundColor(tier)
         }
     }
 

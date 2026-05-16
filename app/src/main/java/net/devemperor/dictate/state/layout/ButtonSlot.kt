@@ -70,6 +70,21 @@ import net.devemperor.dictate.state.ModuleServices
  *   disabled and `1f` for enabled, but resolvers can shade arbitrarily.
  * @property actionResolver `(state, services) → Action?`. `null` is a
  *   silent no-op per R.3.
+ * @property longClickResolver **long-press** counterpart of
+ *   [actionResolver] (Spec 2 §6 / §13.2 long-click slot, behaviour
+ *   groups G2 RECORD-long-press + the existing RESEND-long-press).
+ *   Same `(state, services) → Action?` shape and same R.3 nullable
+ *   contract — `null` means "this long-press is structurally
+ *   meaningless in the current state" and the backend's long-press
+ *   listener short-circuits without dispatching. Default `{ _, _ ->
+ *   null }` so the (majority of) slots without a long-press behaviour
+ *   need not spell it out. The backend still consumes the long-press
+ *   (`OnLongClickListener` returns `true`) so a no-op resolver does
+ *   not fall through to an unwanted click. Render-path-cutover.md §7
+ *   A1: the RECORD 2-mode body is resolved in
+ *   [net.devemperor.dictate.state.RecordingModule]'s reducer from
+ *   `state.recording`, keeping this resolver a thin
+ *   state→Action mapping symmetric with [actionResolver].
  *
  * @see net.devemperor.dictate.state.layout.LayoutMode
  * @see net.devemperor.dictate.state.layout.RenderBackend
@@ -85,6 +100,7 @@ data class ButtonSlot(
     val enabledResolver: (DictateUiState) -> Boolean = { true },
     val alphaResolver: (DictateUiState) -> Float = { 1f },
     val actionResolver: (DictateUiState, ModuleServices) -> Action?,
+    val longClickResolver: (DictateUiState, ModuleServices) -> Action? = { _, _ -> null },
 )
 
 /**

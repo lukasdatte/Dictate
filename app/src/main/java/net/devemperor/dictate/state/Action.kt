@@ -134,6 +134,57 @@ sealed class Action {
         data object CancelRecording : RecordingAction()
 
         /**
+         * RECORD-button **long-press** — the 2-mode handler ported from
+         * the legacy `MainButtonsController.onRecordLongClicked`
+         * (`DictateInputMethodService.java:3257-3268`, behaviour group G2,
+         * render-path-cutover.md §3 / §7 ambiguity A1).
+         *
+         * **Pure-data action, body resolved in the reducer (ADR-0001
+         * single-dispatch).** The legacy handler has two state-dependent
+         * modes:
+         *
+         *  - **`Idle`** → open Settings + the audio-file picker
+         *    (`startActivity(DictateSettingsActivity` + `open_file_picker`
+         *    extra). This is an **IME-side Activity launch** — there is no
+         *    Activity/IME-flag surface on [ModuleServices] and adding one
+         *    would exceed CR1's additive scope (it is the CR4 IME-side
+         *    wiring concern). The reducer therefore returns `null` for the
+         *    Idle case (`DispatchOutcome.Rejected("reducer-null")` — the
+         *    correct "no FSM transition for this mode" outcome); the
+         *    Activity launch is wired IME-side when CR4 activates the new
+         *    path. Until then the **legacy** `MainButtonsController`
+         *    long-press listener still drives the live keyboard (RR-1:
+         *    the new surface is dormant — `staticHandlerInstaller` is
+         *    `null`, the catalog `longClickResolver` is wired but the
+         *    backend's long-press listener is not the live one for RECORD
+         *    until CR4 removes the legacy drive).
+         *  - **`Active` / `Paused`** → the legacy path set the IME's
+         *    `autoSwitchKeyboard = true` flag then called
+         *    `stopRecording()`. The FSM half is exactly the existing
+         *    [StopRecordingAndSend]-shaped *stop* transition; this arm
+         *    reuses the `StopRecording` effect set (stop recorder / timer
+         *    / glow / amplitude + dismiss notification — a *discard* stop,
+         *    matching the legacy `stopRecording()` which discards rather
+         *    than sending). The `autoSwitchKeyboard` one-shot flag is an
+         *    IME-side affordance (not FSM state) wired in CR4.
+         *
+         * Modelling this as pure data with the mode resolved in the
+         * reducer from `state.recording` is the spec-faithful A1
+         * resolution (render-path-cutover.md §7 A1: "Model
+         * `Action.RecordingAction.OnRecordLongPress` (2-mode resolved in
+         * the module reducer from `state.recording`)"). It mirrors the
+         * existing [StopRecording] / [CancelRecording] data-object arms —
+         * no new [ModuleServices] surface, no architecture change. The
+         * `Preparing` case returns `null` (long-press while the recorder
+         * warms up is structurally meaningless, same as the click
+         * resolver's `Preparing → null`).
+         *
+         * @see net.devemperor.dictate.state.layout.resolveRecordLongPressAction
+         * @see docs/plans/2026-05-15 - dictate-cutover-completion/research/render-path-cutover.md §3 G2 / §7 A1
+         */
+        data object OnRecordLongPress : RecordingAction()
+
+        /**
          * Bluetooth-SCO route resolved during a BT-mic `Preparing` wait
          * (C6-IMPL-1 / B2-C6-W1). Cascaded by [AudioModule]'s
          * cross-module observer once the SCO connection either connects

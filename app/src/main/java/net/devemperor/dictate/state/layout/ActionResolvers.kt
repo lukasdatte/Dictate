@@ -109,6 +109,43 @@ fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action
     }
 
 /**
+ * Record-button **long-press** resolver (behaviour group G2,
+ * render-path-cutover.md §3 / §7 A1).
+ *
+ * Thin state→Action mapping symmetric with [resolveRecordAction]: it
+ * emits [Action.RecordingAction.OnRecordLongPress] whenever a recording
+ * session is in flight ([RecordingState.Active] / [RecordingState.Paused])
+ * and `null` otherwise. The **2-mode body** (Idle → Settings+file-picker
+ * vs Active/Paused → autoSwitch+stop) is resolved in
+ * [net.devemperor.dictate.state.RecordingModule]'s reducer from
+ * `state.recording` — see [Action.RecordingAction.OnRecordLongPress]
+ * KDoc for the full A1 rationale (the Idle Activity-launch is an
+ * IME-side concern wired in CR4; this resolver returns `null` for Idle
+ * so no pointless action reaches the orchestrator, R.3).
+ *
+ * **Why not just always emit `OnRecordLongPress` and let the reducer
+ * decide?** The R.3 nullable-resolver contract pushes structurally
+ * meaningless interactions out *before* dispatch (no
+ * `DispatchOutcome.Rejected` log-spam). Idle + Preparing long-press
+ * produce no FSM transition, so the resolver short-circuits them here —
+ * the reducer's `null` is the second defence layer, not the first.
+ *
+ * Dormant until CR4 (the new long-press listener is not the live one
+ * for RECORD until the legacy `MainButtonsController` drive is removed —
+ * RR-1 no-double-wire).
+ */
+fun resolveRecordLongPressAction(
+    state: DictateUiState,
+    @Suppress("UNUSED_PARAMETER") services: ModuleServices,
+): Action? =
+    when (state.recording) {
+        is RecordingState.Active,
+        is RecordingState.Paused -> Action.RecordingAction.OnRecordLongPress
+        RecordingState.Idle,
+        is RecordingState.Preparing -> null
+    }
+
+/**
  * Record-button click resolver while the pipeline is live (SEND_MODE).
  *
  * While the pipeline is `Running` the record button acts as an

@@ -5,7 +5,6 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.LayoutInflater
 import android.view.View
-import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputConnection
 import android.widget.Button
 import android.widget.LinearLayout
@@ -43,6 +42,21 @@ class MainButtonsController(
     private val inputConnectionProvider: () -> InputConnection?,
     private val keyPressAnimator: KeyPressAnimator
 ) {
+    /**
+     * G15 (CR1, render-path-cutover.md §3 / §7 A2) — the two
+     * `edit_numbers_btn` animations are now owned by the extracted
+     * [EditNumbersAnimator] helper (Spec 2 §9.2). The controller's
+     * `animateSmallModeToggle` / `animateEditNumbersBounce` methods stay
+     * as **thin delegations** so the legacy IME call-sites (still the
+     * live drivers in CR1 — additive, no behaviour change) keep working
+     * byte-identically. CR4 re-points those call-sites to the helper
+     * directly and deletes the controller (CR-DEL).
+     */
+    private val editNumbersAnimator = EditNumbersAnimator(
+        editNumbersButton = views.editNumbersButton,
+        animationsEnabled = { sp.get(Pref.Animations) },
+        isSmallMode = { stateManager.isSmallMode },
+    )
     interface Callback {
         fun onVibrate()
         fun onRecordClicked()
@@ -421,60 +435,16 @@ class MainButtonsController(
 
     // ── Small Mode Animation ──
 
-    fun animateSmallModeToggle(animate: Boolean) {
-        val animationsEnabled = sp.get(Pref.Animations)
-        val target = if (stateManager.isSmallMode) 180f else 0f
-
-        if (animate && animationsEnabled) {
-            views.editNumbersButton.animate()
-                .rotation(target)
-                .setDuration(200)
-                .setInterpolator(DecelerateInterpolator())
-                .start()
-        } else {
-            views.editNumbersButton.rotation = target
-        }
-    }
+    fun animateSmallModeToggle(animate: Boolean) =
+        editNumbersAnimator.animateSmallModeToggle(animate)
 
     /**
-     * Visual feedback for the SingleRowMode long-press toggle (Plan-Z. 214-218).
-     *
-     * Quality-Gate K6: a naive 180° rotation would clash with
-     * [animateSmallModeToggle] — both animations would fight over the same
-     * `rotation` axis and the resulting end state would depend on the toggle
-     * order. Instead the long-press uses a horizontal `translationX` bounce
-     * (±8dp, ~200ms total, end state `translationX = 0f`) so the click and
-     * long-press animations stay orthogonal.
-     *
-     * When [Pref.Animations] is disabled the call is a no-op — the layout
-     * change itself is the user-visible feedback.
+     * Thin delegation to [EditNumbersAnimator.animateEditNumbersBounce]
+     * (G15 extraction, CR1). Full rationale — incl. the Quality-Gate K6
+     * orthogonal-axis note — lives on the helper method.
      */
-    fun animateEditNumbersBounce() {
-        if (!sp.get(Pref.Animations)) return
-        val density = views.editNumbersButton.resources.displayMetrics.density
-        val offset = 8f * density // 8dp in pixels
-        val btn = views.editNumbersButton
-        // Cancel any in-flight animation so back-to-back long-presses do not
-        // accumulate translationX drift.
-        btn.animate().cancel()
-        btn.translationX = 0f
-        btn.animate()
-            .translationX(offset)
-            .setDuration(70)
-            .withEndAction {
-                btn.animate()
-                    .translationX(-offset)
-                    .setDuration(70)
-                    .withEndAction {
-                        btn.animate()
-                            .translationX(0f)
-                            .setDuration(60)
-                            .start()
-                    }
-                    .start()
-            }
-            .start()
-    }
+    fun animateEditNumbersBounce() =
+        editNumbersAnimator.animateEditNumbersBounce()
 
     // ── Overlay Characters Update (called from onStartInputView) ──
 

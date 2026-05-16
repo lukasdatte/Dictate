@@ -422,6 +422,27 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.DismissNotification,
                 ),
             )
+            // G2 / A1 — RECORD long-press from Active (the legacy
+            // `onRecordLongClicked` Active/Paused branch:
+            // `autoSwitchKeyboard = true; stopRecording()`,
+            // DictateInputMethodService.java:3264-3266). The FSM half is a
+            // *discard* stop, identical to StopRecording — the legacy
+            // `stopRecording()` it called discards rather than sends. The
+            // `autoSwitchKeyboard` one-shot is an IME-side affordance (not
+            // FSM state); it is wired IME-side in CR4 when the new
+            // long-press path goes live (render-path-cutover.md §7 A1, the
+            // OnRecordLongPress KDoc). Reusing the StopRecording effect set
+            // keeps the cleanup semantics in one place (DRY).
+            Action.RecordingAction.OnRecordLongPress -> TransitionResult(
+                nextState = RecordingState.Idle,
+                sideEffects = listOf(
+                    Effect.StopMediaRecorder,
+                    Effect.StopTimer,
+                    Effect.StopBorderGlow,
+                    Effect.StopAmplitudeStream,
+                    Effect.DismissNotification,
+                ),
+            )
             Action.RecordingAction.StopRecordingAndSend -> TransitionResult(
                 nextState = RecordingState.Idle,
                 sideEffects = listOf(
@@ -483,6 +504,20 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StopTimer,
                     Effect.StopBorderGlow,
                     // Stop-without-send from Paused: discard + dismiss.
+                    Effect.DismissNotification,
+                ),
+            )
+            // G2 / A1 — RECORD long-press from Paused. Same discard-stop
+            // semantics as the Active arm (see its KDoc); mirrors the
+            // Paused StopRecording effect set (no StopAmplitudeStream —
+            // Paused already stopped the amplitude stream on the
+            // Active → Paused transition).
+            Action.RecordingAction.OnRecordLongPress -> TransitionResult(
+                nextState = RecordingState.Idle,
+                sideEffects = listOf(
+                    Effect.StopMediaRecorder,
+                    Effect.StopTimer,
+                    Effect.StopBorderGlow,
                     Effect.DismissNotification,
                 ),
             )

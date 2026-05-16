@@ -75,6 +75,11 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         textResolver = { state -> resolveRecordButtonText(state, strings) },
                         enabledResolver = { state -> state.recording !is RecordingState.Preparing },
                         actionResolver = ::resolveRecordAction,
+                        // G2 — RECORD long-press 2-mode (render-path-cutover.md
+                        // §3 / §7 A1). Only the standard (non-pipeline) modes
+                        // carry it: the legacy `onRecordLongClicked` is a
+                        // recording-state handler. Dormant until CR4 (RR-1).
+                        longClickResolver = ::resolveRecordLongPressAction,
                     ),
                     ButtonSlot(
                         logicalId = LogicalButtonId.RESEND,
@@ -83,6 +88,12 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         enabledResolver = { state -> !state.resend.resendCooldown },
                         alphaResolver = { state -> if (state.resend.resendCooldown) 0.4f else 1f },
                         actionResolver = { _, _ -> Action.ResendAction.ResendLastAudio },
+                        // Long-press → ReprocessStaging entry (Spec 2 §6,
+                        // behaviour-identical to legacy `onResendLongClicked`).
+                        // CR1 moves this from the hardcoded ImeViewBackend
+                        // wire to the catalog (the backend's RESEND
+                        // OnLongClickListener now reads this resolver).
+                        longClickResolver = { _, _ -> Action.ResendAction.ResendLastAudioLong },
                     ),
                     ButtonSlot(
                         logicalId = LogicalButtonId.BACKSPACE,
@@ -168,6 +179,9 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     textResolver = { state -> resolveRecordButtonText(state, strings) },
                     enabledResolver = { state -> state.recording !is RecordingState.Preparing },
                     actionResolver = ::resolveRecordAction,
+                    // G2 — RECORD long-press 2-mode (see KEYBOARD_TWO_ROW
+                    // RECORD slot). Dormant until CR4 (RR-1).
+                    longClickResolver = ::resolveRecordLongPressAction,
                 ),
                 ButtonSlot(
                     logicalId = LogicalButtonId.SPACE,
@@ -203,6 +217,9 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     enabledResolver = { state -> !state.resend.resendCooldown },
                     alphaResolver = { state -> if (state.resend.resendCooldown) 0.4f else 1f },
                     actionResolver = { _, _ -> Action.ResendAction.ResendLastAudio },
+                    // Long-press → ReprocessStaging (see KEYBOARD_TWO_ROW
+                    // RESEND slot).
+                    longClickResolver = { _, _ -> Action.ResendAction.ResendLastAudioLong },
                 ),
                 ButtonSlot(
                     logicalId = LogicalButtonId.AUDIO_FOCUS,

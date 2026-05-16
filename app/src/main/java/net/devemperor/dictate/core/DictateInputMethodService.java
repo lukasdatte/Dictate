@@ -1113,12 +1113,26 @@ public class DictateInputMethodService extends InputMethodService
             vibrate();
             return kotlin.Unit.INSTANCE;
         };
+        // CR1 (Theme C-R) — Spec 2 §6 ctor now carries the shared
+        // KeyPressAnimator (behaviour group G7). Pass the SAME instance
+        // MainButtonsController uses (qwertzKeyboardView's animator) so the
+        // new path's key-press scale animation is byte-identical to the
+        // legacy one. The backend skips the three special-touch buttons
+        // (SPACE/BACKSPACE/ENTER) when wiring press-animation — their
+        // OnTouchListener is the staticHandlerInstaller's (still null in
+        // CR1; CR2 supplies it). RR-1: no double-wire — the backend's
+        // press-anim listener on the *non-special* buttons is the same
+        // KeyPressAnimator behaviour the legacy controller wired (returns
+        // false, click/long-press unaffected). The applyTheme axis is
+        // still driven by mainButtonsController.applyTheme until CR4
+        // (render-path-cutover.md §5 — additive: legacy still drives).
         imeViewBackend = new ImeViewBackend(
             new RealMotionSurface(motionLayout),
             buttonViews,
             context,
             pipelineBinder.getModuleServices(),
             recordingAnimationCtrlForBackend,
+            qwertzKeyboardView.getKeyPressAnimator(),
             /* staticHandlerInstaller */ null,
             vibrateLambda
         );

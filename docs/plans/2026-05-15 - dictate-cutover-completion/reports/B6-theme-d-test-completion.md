@@ -389,13 +389,15 @@ wave, remain `postponed` → Phase 4.7.
 
 ## Block Closeout (Orchestrator)
 
-- **All chunks complete (5-step, both commits):** ⏳
-- **Block-Validate converged:** ⏳
-- **AUDIT-TEST: AC-8 Espresso 1-10 green (device or Robolectric mirror):** ⏳
-- **C12-D2 holistic: AC-9 (≥946) + AC-10 + all cleanup/compile-invariant greps:** ⏳
-- **Build green at block-end:** ⏳
-- **Issue index reconciled:** ⏳
-- **Epic implementation CODE-COMPLETE — ready for Phase 4:** ⏳
+- **All chunks complete (5-step, both commits):** ✅ C11-D1 (single test-commit 397bfbd; Commit 1 empty — pure test) · C12-D2 (verification-only, no commit)
+- **Block-Validate converged:** ✅ 1 trivial wave (B6-VAL-W1 d6a1a84; focused per skill small-block topic-skip)
+- **AUDIT-TEST: AC-8 Espresso 1-10 green (device or Robolectric mirror):** ✅ 10 Espresso bodies compile (androidTest) + 10 Robolectric mirrors green (OQ-4 CI path); non-vacuous (AUDIT-TEST verified 8/10 sharp + the 2 §1.1#3a-labels corrected to point at VisibilityMatrixTest)
+- **C12-D2 holistic: AC-9 (≥946) + AC-10 + all cleanup/compile-invariant greps:** ✅ FINAL-LOCK GREEN — all AC-1..10 PASS; 1172/0/0 debug · 1172/0/0/16-skip release ×2 uncached (+226 net vs 946); every grep verdict clean; PipelineOrchestrator adapter-only (Spec1 §9.6)
+- **Build green at block-end:** ✅ assembleDebug + assembleRelease + both-variant suites
+- **Issue index reconciled:** ✅ F-1 fixed; C5-IMPL-2 + C10-C3-IMPL-1 NTH postponed → Phase 4.7
+- **Epic implementation CODE-COMPLETE — ready for Phase 4:** ✅ **ALL 6 Epic blocks (B1/B2/B3/B5/B6) done.** Recording-drive (A/B) + legacy-retire (C: D-13/D-14) + render-path cutover (C-R: 4 controllers deleted) + test-completion (D) — **NO parallel-dormant layer remains** (the systemic answer to the original INT-1; Phase 4 re-integration-check confirms it formally).
 
-**Block completed at:** ⏳
-**Block-End-Commit:** ⏳
+**Block completed at:** 2026-05-17
+**Block-End-Commit:** d6a1a84
+**Cross-reference set in state file:** ✅
+**Postponed issues forwarded to Phase 4 aggregate:** C5-IMPL-2 (NTH amplitude/timer), C10-C3-IMPL-1 (NTH)

@@ -691,6 +691,193 @@ failure mode surfaced in a B2 recording-drive repair-wave, or an AC-10
 double-dispatch site found beyond the 3 known `JobExecutor.start` call-sites).
 Placeholder section.
 
+---
+
+**Phase-4.5 Refresh — added by the `E2E` agent (2026-05-17), gegen-checked
+against all 5 block reports (B1/B2/B3/B5/B6) + `reports/integration-check.md`.**
+
+Six "edge-of-the-blade" points emerged during implementation that the
+human device-tier runner must exercise on the device (the auto-tier
+surrogate is named per-TC). They are appended as device-tier TCs (the
+auto-surrogate already ran green in the in-plan gates / INTEGRATION-W1).
+
+### TC-R1: BT-SCO already-connected does NOT hang recording (B2-VAL-W1 F-1, was Critical)
+
+- **Mode:** manual
+- **Profiles:** C12-FULL  *(regression — Critical fix, blocks-following-chunks at the time)*
+- **Knowledge:** hand-rolled (Spec 1 §15.2/§15.3)
+- **Scope:** B2-VAL-W1 F-1 — when the BT headset SCO link is **already
+  connected** before recording starts, the old logic could wait forever
+  for a `Connected` edge that never re-fires. Fix: prime
+  `bluetoothSco = Waiting` on BT-mic start so `Waiting → Connected`
+  becomes a real edge (stale-resolve-after-cancel still defeated, no
+  Mode-3).
+- **Steps:**
+  1. Pair + connect a Bluetooth headset/earbuds. Confirm SCO/calls route
+     to it (place + end a quick call, or play audio so the SCO link is
+     warm/connected).
+  2. In Dictate Settings enable "Use Bluetooth microphone".
+  3. `adb logcat -c`. Open Notes, tap record **while the BT device is
+     already connected**.
+  4. Verify: recording **starts within ~2.5 s** (does NOT hang on
+     "preparing"); the FGS notification appears; audio captures via the
+     BT mic.
+  5. `adb logcat -d | grep -E "(ScoRouteResolved|bluetoothSco|Waiting|Connected|AllocateMediaRecorder)"`
+     — verify `Waiting → Connected` fired and `AllocateMediaRecorder`
+     was deferred until SCO resolved (not an indefinite wait).
+  6. Stop-and-send → transcription completes.
+- **Expected Result:** No infinite "preparing" hang when the BT device
+  is pre-connected; recording starts ≤2.5 s; SCO route resolves to
+  `VOICE_COMMUNICATION` (or `MIC` fallback on timeout).
+- **Auto-surrogate (GREEN):** `DictateCutoverE2ETest` C6-IMPL-1 audio-focus/
+  BT-SCO parity cases + B2-C6-W1-REGATE code-trace (Connected/Failed/
+  timeout/duplicate edges tested); `CutoverArchitectureInvariantTest`.
+
+### TC-R2: SPACE key — exactly one space per tap, no double-commit (B5-VAL-W1 F-1, was Critical)
+
+- **Mode:** manual
+- **Profiles:** C12-FULL  *(regression — Critical user-visible render regression)*
+- **Knowledge:** hand-rolled (Spec 2 §13.2 / §11.7 — SPACE is touch-only, no click row)
+- **Scope:** B5-VAL-W1 F-1 — the render-cutover briefly wired SPACE into
+  **both** the click loop and the touch handler → every SPACE tap
+  committed **two** spaces. Fix: exclude SPACE from the click loop
+  (one-tap-one-space; G4/§11.7 intact).
+- **Steps:**
+  1. Open Notes, Dictate IME selected, KEYBOARD mode.
+  2. Type `a`, then tap the **space bar once**, then type `b`.
+  3. Verify the inserted text is exactly `a b` (single space) — **not**
+     `a  b` (double space).
+  4. Repeat 5× rapidly + with a long-press on space (cursor-swipe must
+     still work, no extra spaces committed).
+- **Expected Result:** Exactly one space character per single SPACE tap;
+  long-press SPACE still triggers cursor-swipe (no regression of
+  §11.7); never a double-commit.
+- **Auto-surrogate (GREEN):** B5 render unit-tests + `RenderPathCutoverGateTest`
+  5/5 (G2-G16 sole-owner, no double-write); B5-VAL-W1 fixed + re-validated.
+
+### TC-R3: Reword-staging language override seeded on entry + cleared on exit (B5-VAL-W1 F-2 / F-6 reopened-then-closed)
+
+- **Mode:** manual
+- **Profiles:** C12-FULL  *(regression — cross-session stale-language leak)*
+- **Knowledge:** hand-rolled (F-6 single-carrier `LanguageState.override` lifecycle)
+- **Scope:** B5-VAL-W1 F-2/F-6 — the cross-carrier collapse onto a single
+  `LanguageState.override` initially wired only the *read* side; the
+  *seed-on-staging-entry* and *clear-on-staging-exit* were missing →
+  the reword-staging language chip showed the wrong language and the
+  override leaked into the **next** session. Fix: `dispatchStagingOverride`
+  seeds session-language on entry + `SetOverride(null)` on every exit
+  (4 boundary wirings: 2 seed / 2 clear).
+- **Steps:**
+  1. Set transcription language to German. Record a German phrase,
+     trigger a reword that enters ReprocessStaging.
+  2. Verify: the staging language chip shows **German** (the session
+     language, seeded on entry — not the default/stale value).
+  3. Exit staging (send or cancel). Start a **new** recording in a
+     fresh session.
+  4. Verify: the new session uses the configured language with **no
+     stale override** leaked from the previous staging session
+     (language chip = configured language, not the previous override).
+  5. `adb logcat -d | grep -E "(SetOverride|LanguageState|dispatchStagingOverride|selectedLanguage)"`
+     — verify a seed on staging-entry and a `SetOverride(null)` on
+     staging-exit; no leak across the session boundary.
+- **Expected Result:** Staging language chip = session language on entry;
+  override cleared on exit; no stale-override leak into the next
+  session; single carrier (`LanguageState.override`) only.
+- **Auto-surrogate (GREEN):** B5 language-override lifecycle unit-tests
+  (research `f6-staging-language-override-lifecycle`); B5-VAL-W1 closed.
+
+### TC-R4: F-6 staging-override does not corrupt the reprocess job config
+
+- **Mode:** manual
+- **Profiles:** C12-FULL
+- **Knowledge:** hand-rolled
+- **Scope:** B5-VAL-W1 F-2 corollary — the staging override is a
+  **display/config-read** concern; the actual reprocess `JobRequest`
+  must be unaffected (the reword still re-processes in the correct
+  language regardless of the chip).
+- **Steps:**
+  1. From TC-R3 step 1 (German session, ReprocessStaging).
+  2. Send the reword. Verify the reworded output is in German (the
+     reprocess job used the correct language — the override fix did not
+     corrupt the job config, only the display chip + clear lifecycle).
+- **Expected Result:** Reword output language correct; the F-6 fix is
+  display+lifecycle only, reprocess JobRequest fidelity intact.
+- **Auto-surrogate (GREEN):** B5 reprocess-config unit-tests; covered
+  by the F-6-closed validation in B5-VAL-W1.
+
+### TC-R5: INT-1-pattern non-recurrence — no parallel-dormant layer (3× caught during Epic)
+
+- **Mode:** auto (architecture-test) + manual (behaviour spot-check)
+- **Profiles:** C12-FULL  *(the Epic's raison d'être — INT-1 recurred 3× during impl, each caught + spec-faithfully resolved)*
+- **Knowledge:** test-orchestrator
+- **Scope:** INT-1 / AC-10 — the INT-1 anti-pattern (built-but-not-driven
+  production code) recurred **three times** during the Epic
+  (C10-IMPL-2 render-cutover never done, CR4-IMPL-1 listener-bundle
+  with no owner classes, CR4-IMPL-3 RESEND-action no new-path impl) and
+  was caught + resolved each time, not re-deferred. The D4 regression-
+  lock (`CutoverArchitectureInvariantTest`) now prevents silent
+  recurrence.
+- **Steps (auto):**
+  1. Run `./gradlew test --tests "*CutoverArchitectureInvariantTest"` —
+     assert 8/8 green (4 invariant + 4 stripper-soundness self-tests).
+  2. The 4 invariants: exactly one `JobExecutor.INSTANCE.start` in the
+     IME (RESUME carve-out only); zero `USE_LEGACY_RECORDING_DRIVE`
+     functional code; zero functional refs to the 4 deleted
+     controllers; stubs not wired + real adapters wired in
+     `DictatePipelineService.onCreate`.
+- **Steps (manual spot-check):**
+  3. Record→stop-and-send on a real device; pull the notification —
+     verify the FGS notification + transcription is driven by the new
+     orchestrator (the `stub-leak-scan` Periodic Visit shows zero stub
+     `Log.w` lines).
+- **Expected Result:** `CutoverArchitectureInvariantTest` 8/8 green;
+  zero stub `Log.w` at runtime; single recording driver. The
+  parallel-dormant failure class cannot silently regress.
+- **Auto-surrogate (GREEN):** **this TC's own auto-tier is the
+  surrogate** — `CutoverArchitectureInvariantTest` (INT-3 D4 lock,
+  non-vacuity self-tested + empirically RED-proven in INTEGRATION-W1).
+
+### TC-R6: HistoryDetailActivity re-process is single-dispatch (INT-2 — out-of-scope, awareness)
+
+- **Mode:** manual  *(awareness only — INT-2 is `out-of-scope-recorded`, NOT a blocker)*
+- **Profiles:** C12-FULL
+- **Knowledge:** hand-rolled
+- **Scope:** INT-2 — `HistoryDetailActivity:492` has a pre-existing
+  `JobExecutor.INSTANCE.start` (the "re-process a historical
+  transcription" button). It is **outside the Epic scope** (not the IME
+  recording surface), pre-existing + untouched by the Epic, and
+  **single-dispatch** (a History Activity button, not a recording
+  user-action) so it does **not** violate AC-10. This TC documents the
+  awareness; a failure here is a Nice-to-have follow-up, not a Phase-4.5
+  blocker.
+- **Steps:**
+  1. Open Dictate History, pick a past transcription, tap "re-process".
+  2. `adb logcat -d | grep -E "(JobExecutor.*start|RecordingAction.StartRecording)"`
+     — verify exactly ONE driver fired (the History `JobExecutor.start`),
+     NOT also an orchestrator dispatch (no double-drive; this is a
+     non-IME path so AC-10 is structurally not in scope).
+  3. Verify the historical transcription re-processes correctly.
+- **Expected Result:** History re-process works single-dispatch; no
+  AC-10 violation (it is a separate, untouched, non-IME feature). Any
+  defect → Nice-to-have Phase-5 follow-up (collapse HistoryDetailActivity
+  onto the orchestrator), explicitly **non-blocking**.
+- **Auto-surrogate (GREEN):** `CutoverArchitectureInvariantTest` asserts
+  exactly-one `JobExecutor.start` *in the IME* (the History site is a
+  different file, intentionally out of the IME invariant scope per
+  INT-2/D3).
+
+> **Pre-Flight env-note (Phase-4.5 agent, 2026-05-17):** The runbook's
+> Prerequisite #3 / Pre-Flight E-3 names `android-35`; the project now
+> sets `compileSdkVersion 36` (`app/build.gradle:9`) and the installed
+> platform is `android-36` — the build prerequisite is **satisfied**
+> against SDK 36 (the "-35" literal is parent-baseline-stale; not a
+> failure). The device/adb/ime-enabled/mic-permission Pre-Flight items
+> (#4-#15, E-1..E-5/E-9) are **`blocked: no-device-in-env`** — an
+> environment constraint (no Android device/emulator in this CI-like
+> env), NOT a test failure. The device-tier TCs are listed for the user
+> to run on their phone per the Q1-Q7 defaults; each carries an
+> auto-surrogate that has already run GREEN in the in-plan gates.
+
 ## How to use this file
 
 This runbook serves **three readers**:

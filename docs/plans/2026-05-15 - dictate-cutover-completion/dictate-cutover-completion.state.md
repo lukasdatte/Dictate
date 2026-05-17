@@ -382,6 +382,29 @@ triage armed for C3/C4/C5 (architecture-conflict / blocks-following-chunks).
 (Populated by Phase-4.5 agent. Note: Epic D2 is itself an in-plan E2E
 verification GATE — Phase 4.5 is the post-all-blocks holistic re-run.)
 
+```yaml
+run_at: 2026-05-17
+agent: E2E
+report: ./reports/e2e-test.md
+runbook: ./reports/e2e-runbook.md   # Phase-4.5 Refresh appended: TC-R1..TC-R6 (6 edge-of-the-blade device TCs)
+profile: C12-FULL                   # post-all-blocks holistic re-run
+test_case_count: 34                 # 28 base (4 auto TC-A1..A4 + 24 manual TC-1..24) + 6 Phase-4.5-Refresh (TC-R1..R6)
+auto_executed: TC-A1, TC-A2, TC-A3, TC-A4, + TC-R5(auto half) + TC-C5(grep half) + 3 cutover-invariant suites
+pass_count: 4                       # all 4 runbook auto-TCs PASS (TC-A1/A2/A3/A4)
+fail_count: 0
+cutover_invariant_suites:
+  CutoverArchitectureInvariantTest: 8/8 green   # INT-3 D4 lock — AC-1/5/6/7/10 source-scan, non-vacuity self-tested
+  DictateCutoverE2ETest: 10/10 green            # keystone F-1/F-2/F-3 + Triangle T1-T7 + AC-2/AC-3 + audio-focus parity on bound binder
+  RenderPathCutoverGateTest: 5/5 green          # G2-G16 sole-owner render path + Spec2 §10 no-double-write soak
+ac9_holistic_reconfirm: "testDebugUnitTest 1180/0/0/0 + testReleaseUnitTest 1180/0/0/16-skip — uncached --rerun-tasks BOTH variants; exactly matches INTEGRATION-W1 (1172 baseline + 8 INT-3 tests); +234 vs 946 parent baseline, no coverage deletion. assembleDebug BUILD SUCCESSFUL."
+ksp_cache_flake: not-encountered    # clean --rerun-tasks; no kspCaches workaround needed
+manual_pending_count: 30            # device-tier TC-1..24 (minus auto-halves) + TC-R1..R6 manual halves — env has NO Android device; status: manual-pending — requires device (env has none); auto-surrogate green. NOT failed.
+blocked_env_constraint: "Pre-Flight device items #4-#15 / E-1..E-5/E-9 — no Android device/emulator in this CI-like env (not a failure; user runs device-tier per Q1-Q7 defaults). Pre-Flight #3 android-35 adjusted→PASS: project is compileSdkVersion 36, platform android-36 installed."
+issue_severity_counts: 0 Critical / 0 Important / 0 Nice-to-have   # no E2E-{N} issue raised — auto-tier fully GREEN
+in_plan_gate_surrogates_all_green: "C6-D2pre RE-GATE (authorised C7+Theme-C) · CR-RGATE (authorised CR-DEL) · C12-D2 FINAL-LOCK (all AC-1..10) · Phase-4 INTEGRATION-W1 (INT-1 RESOLVED, 1180/0) — the achievable holistic verification surrogate for a no-device env; all GREEN"
+next_step: ready_for_closure        # auto-tier green + 0 Crit/0 Imp E2E issues; manual device-tier is an env constraint, not a blocker — in-plan gate surrogates GREEN
+```
+
 ## Phase 4.6 Documentation Update
 
 (Populated by Phase-4.6 final agent.)

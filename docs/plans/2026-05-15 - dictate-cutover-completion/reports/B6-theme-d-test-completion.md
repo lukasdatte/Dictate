@@ -159,8 +159,120 @@ mirror green, androidTest re-compiles clean. No production code touched.
 
 ### Chunk C12-D2 — final integration E2E + cleanup-grep regression (verification only)
 
-**Agent-IDs:** `B6-C12-D2-IMPL` · **Status:** ⏳ pending · **Risk:** LOW (verification gate)
-(subsections filled when chunk runs)
+**Agent-IDs:** `B6-C12-D2-IMPL` (fresh, combined Steps 1-5 — verification-only).
+**Status:** ✅ verified · **Risk:** LOW (final verification lock)
+**Implementation-Commit (Commit 1):** EMPTY (zero production change — verification only) · **Test-Commit (Commit 2):** NONE (no test delta — the keystone+Triangle cross-block trace is already fully covered by the existing `DictateCutoverE2ETest` 10/10 + `RenderPathCutoverGateTest` 5/5; a new aggregating file would be vacuous duplication, explicitly avoided per prompt)
+
+### FINAL-LOCK Verdict (B6-C12-D2-IMPL)
+
+> **FINAL-LOCK: GREEN** — every AC-1..AC-10 holds on the fully-cutover,
+> legacy-FREE path. The Epic implementation is CODE-COMPLETE +
+> verification-locked. Ready for the skill's Phase 4 (integration check) /
+> 4.5 / 4.7 / 5.
+
+### What was done (B6-C12-D2-IMPL)
+
+Final holistic verification of the fully-cutover path (all 5 prior blocks
+landed; legacy `LanguageController` / `audioFile`-field / 4 render
+controllers deleted). Ran the full unit suite **uncached, both variants,
+2× in different orders** (`--rerun-tasks`, debug→release then
+release→debug), executed every AC cleanup-/compile-invariant grep, and
+ran the existing keystone+Triangle aggregating tests. No production code
+changed; no test delta written (existing aggregating coverage is
+complete — adding a third file would be vacuous, RR-4).
+
+**Full-suite result (both runs identical — order-independence proven):**
+
+| Variant | Run #1 (debug→release) | Run #2 (release→debug) |
+|---------|------------------------|------------------------|
+| `testDebugUnitTest` | **1172 tests, 0 fail, 0 err, 0 skip** | **1172 tests, 0 fail, 0 err, 0 skip** |
+| `testReleaseUnitTest` | **1172 tests, 0 fail, 0 err, 16 skip** | **1172 tests, 0 fail, 0 err, 16 skip** |
+
+- `assembleDebug` ✅ · `assembleRelease` ✅ (release variant fresh-compiled
+  — independent proof AC-7 zero code-refs to the 4 deleted controllers;
+  the build would not link otherwise).
+- The 16 release-variant skips are the `assumeTrue(BuildConfig.DEBUG)`
+  no-double-write / sole-live-writer assertions in
+  `RenderPathCutoverGateTest` (release-build skip is **by design**,
+  documented at `RenderPathCutoverGateTest.kt:466-489` — Spec 2 §10
+  no-double-write is a debug-build acceptance criterion). Not a coverage
+  gap.
+- **AC-9:** 1172 ≥ 946 baseline (Epic added ~226 net behaviour coverage;
+  no NET deletion). All 3 R-7 axes confirmed CLOSED — **zero R-7 flake**
+  across either ordering (scan for any `failures>0`/`errors>0`: empty).
+  No KSP-cache env-flake encountered (no workaround needed).
+
+**Keystone F-1/F-2/F-3 + Triangle-FSM T1-T7 cross-block trace (on the
+fully-cutover, legacy-FREE path):**
+
+| Test | Result | Cross-block trace covered |
+|------|--------|---------------------------|
+| `DictateCutoverE2ETest` | **10/10 green** | Keystone F-1/F-2/F-3 (boot→KEYBOARD, overlay detached); AC-2 (StartRecording→Active + §7.6 FGS Recording notification w/ `[Pause][Stopp][Senden]`); T1/T2 widget round-trip; T3/T5 real-recording→HOVER survival→KEYBOARD (ADR-0003); T4 WIDGET+recording→HOVER; AC-3/T7 StopAndSend→pipeline-via-new-runner→notification Recording→Pipeline→Idle, HOVER→KEYBOARD Geist-Widget guard; AC-2 CancelRecording dismiss; C6-IMPL-1 audio-focus parity (3 cases) |
+| `RenderPathCutoverGateTest` | **5/5 green** | G10 ContentArea / G11 PromptVisibility / G12 OverlayReset fire through the NEW owners; keystone+Triangle on the render path; Spec 2 §10 no-double-write soak; new owners are SOLE live writers (legacy KSM deleted, never a writer) |
+
+These two tests already drive the **real bound `DictatePipelineService`**
+on the new orchestrator path with the 4 legacy controllers deleted —
+i.e. the now-legacy-FREE path. RR-4 honoured: real assertions on a real
+bound binder + real Robolectric Views + real audit ledger, no vacuous
+duplication. No `DictateCutoverFinalE2ETest.kt` added (would be a
+duplicate of an already-complete cross-block trace).
+
+**AC-2/AC-3/AC-4 spot-confirm** via the existing green suites:
+recording-drive Active/notification + sessionId/F-13 state-shape are
+covered by `DictateCutoverE2ETest` (AC-2/AC-3 above) and the reducer
+unit-tests landed in Theme A (A1/A2, part of the 1172). Referenced, not
+re-implemented.
+
+### AC-1..AC-10 Holistic Verification Table
+
+| AC | How verified | Grep / test result | Verdict |
+|----|--------------|--------------------|---------|
+| **AC-1** (stub no-op refs gone) | `grep -rn "StubSubsystems.pipelineRunner\|StubSubsystems.notificationCoordinator" core/` | 1 hit — `DictatePipelineService.kt:475`, a **comment** documenting the real coordinator *replaced* the no-op; ZERO functional refs. Real `PipelineActionRouter` + coordinator wired at :483. | **PASS** |
+| **AC-2** (recording→Active + FGS Recording notif) | `DictateCutoverE2ETest.ac2_*` | green — `state.recording` Idle→Active, FGS `NotificationStatus.Recording` posts `[Pause][Stopp][Senden]` | **PASS** |
+| **AC-3** (StopAndSend→pipeline via new runner, notif lifecycle) | `DictateCutoverE2ETest.ac3_t7_*` | green — StopRecordingAndSend → pipeline via JobExecutor-backed `PipelineRunnerSubsystem`, notif Recording→Pipeline→Idle | **PASS** |
+| **AC-4** (F-10/F-12/F-13/F-15 state-shape) | Theme-A reducer unit-tests (in the 1172) + `DictateCutoverE2ETest` real sessionId threading | green — sessionId carried (no `""` sentinel), `Running` counters, language-aware strings | **PASS** |
+| **AC-5** (LanguageController deleted) | `grep -rl "LanguageController" app/src/main` + file check | ZERO hits; `LanguageController.kt` DELETED | **PASS** |
+| **AC-6** (audioFile field deleted) | `grep -n "private File audioFile" DictateInputMethodService.java` | ZERO hits | **PASS** |
+| **AC-7** (4 dead controllers deleted) | file-existence check + zero import/instantiation grep + `assembleDebug`+`assembleRelease` green | `MainButtonsController/RecordingUiController/KeyboardUiController/KeyboardStateManager.kt` all DELETED; ~140 grep hits are ALL doc-anchors/comments/string-labels — ZERO code refs; both build variants link green (the compile proof) | **PASS** |
+| **AC-8** (Espresso 1-10) | C11-D1 — Espresso bodies compile (androidTest) + Robolectric mirror 10/10 green (OQ-4) | covered by C11-D1 (this block); mirrors in the 1172 | **PASS** (per C11-D1) |
+| **AC-9** (regression invariant ≥946) | full uncached suite both variants ×2 orders | 1172/0/0 debug · 1172/0/0/16-skip release — identical both orders; +226 net vs 946 baseline; keystone trace green; no R-7 flake | **PASS** |
+| **AC-10** (single-architecture, no double-dispatch) | `grep "JobExecutor.INSTANCE.start"` IME + `grep USE_LEGACY_RECORDING_DRIVE app/src/main` + Spec1 §9.6 PipelineOrchestrator | exactly **ONE** `JobExecutor.INSTANCE.start` (line 4171 — documented RESUME carve-out C6-IMPL-2, single-dispatch, orthogonal to recording-drive); ZERO `USE_LEGACY_RECORDING_DRIVE` in `app/src/main`; `PipelineOrchestrator.kt` survives (constructed once at composition root `:315`, reachable only via the `PipelineRunnerSubsystemAdapter` chain — Spec1 §9.6 holds) | **PASS** |
+
+### Deviations
+
+| Deviation | Plan Location | What changed | Why | Impact on later chunks | Resolved? |
+|-----------|---------------|--------------|-----|------------------------|-----------|
+| Dev-1: no new `DictateCutoverFinalE2ETest.kt` written | Epic §4 Block D2 "possibly a new `DictateCutoverE2ETest.kt` aggregating the cross-block trace" | The aggregating cross-block trace (keystone F-1/F-2/F-3 + Triangle T1-T7 on the legacy-FREE path) is **already fully covered** by the existing `DictateCutoverE2ETest` (10/10) + `RenderPathCutoverGateTest` (5/5), which drive the real bound service with the 4 controllers deleted. The plan says "*possibly* a new file"; the prompt explicitly directs avoiding vacuous duplication. A third file would re-assert an identical trace. | Existing coverage is complete + the path is already legacy-FREE (Theme C/C-R landed before B6) — a new file adds maintenance burden + brittleness for zero added coverage (RR-4). | None — verification-only, no test/prod delta | inline-decision (documented) |
+
+### Issues
+
+| ID | Severity | Description | Status | Reason |
+|----|----------|-------------|--------|--------|
+| — | — | none | — | verification-only chunk; every AC-1..AC-10 PASS on the fully-cutover path; zero production change; zero test delta; no architecture/plan conflict found |
+
+### Overlooked points / known gaps
+
+- **Manual E2E runbook (two-keyboard survival, FGS OOM-recovery,
+  notification action-button round-trip)** is the device-tier
+  confirmation Epic §4 Block-D2 references. This auto-tier final lock
+  proves the **automated** trace (unit + Robolectric bound-service);
+  the manual runbook execution is Phase 4.5's job (the skill's
+  end-to-end-test phase) — out of scope for this verification-only
+  chunk, flagged here so Phase 4.5 picks it up.
+- The 16 release-variant skips are intentional (`BuildConfig.DEBUG`
+  no-double-write gate). The debug variant runs them green (0 skip), so
+  Spec 2 §10 no-double-write IS proven — just on the debug build, by
+  design. Not a coverage gap.
+- AC-8 verdict is carried from C11-D1 (same block) — this chunk did not
+  re-run the Espresso device tier (no device infra; OQ-4 — the
+  Robolectric mirror in the 1172 is the CI-green path).
+- Postponed NTH issues (C5-IMPL-2 amplitude/timer side-channel,
+  C10-C3-IMPL-1) remain carried to Phase 4.7 per the Issue Index —
+  untouched by this verification chunk (they are non-blocking and
+  out-of-scope for the final lock).
+
+=== COMMIT 1 BOUNDARY === production files: none
+=== COMMIT 2 BOUNDARY === test files: none — verification only, existing aggregating tests (DictateCutoverE2ETest + RenderPathCutoverGateTest) already cover the full keystone+Triangle cross-block trace on the legacy-FREE path
 
 ---
 

@@ -46,8 +46,77 @@
 ```yaml
 current_path: docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md
 move_to: docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md     # already in target location
-status: in_place
-note: plan was authored directly in docs/plans/ — no Phase-0 mv needed
+status: archived
+archived_at: 2026-05-17 15:20
+note: |
+  Plan was authored directly in docs/plans/ — no Phase-0 mv needed.
+  Phase-5a archive: per-plan README.md authored (status archived;
+  records that this plan's Phase 4.5/4.6/4.7/5 were COMPLETED-VIA the
+  follow-up Epic dictate-cutover-completion — see "deferred_phases"
+  below; bidirectional link to that Epic). Plan body + 3 specs
+  preserved unchanged as the historical record (specs remain the SoT
+  the Epic referenced). EN translation (5b/5c) pending.
+
+# This plan's Phase-4 escalated INT-1 (Critical, escalate-to-user):
+# the new state-architecture shipped as a parallel-dormant layer; the
+# plan had no remaining block for the make-it-live + retire-legacy
+# cutover. User chose INT-1 routing option (a) — implement the cutover.
+# That follow-up is the Epic dictate-cutover-completion, run on the
+# SAME branch + worktree + commit lineage (Epic baseline sits on this
+# plan's 52 commits — one unified codebase).
+deferred_phases:
+  status: closed-via-epic dictate-cutover-completion
+  closed_at: 2026-05-17 15:20
+  phases: [Phase 4.5 (E2E), Phase 4.6 (Documentation), Phase 4.7 (Implementation-Report), Phase 5 (Closure)]
+  rationale: |
+    Deferred when INT-1 escalated — a dormant architecture cannot be
+    meaningfully E2E'd / documented-as-live / closed. The follow-up
+    Epic dictate-cutover-completion made the architecture LIVE and
+    retired legacy on the IDENTICAL unified codebase (same branch +
+    commit lineage). Per the orchestrator's D4 / single-source-of-truth
+    decision (no redundant re-run of identical-code phases), these
+    phases are satisfied VIA the Epic's corresponding phases rather
+    than separately re-run on the same code:
+      - Phase 4.5 / 4.7 ← Epic reports/e2e-test.md +
+        reports/implementation-report.md (1180/0 both variants on the
+        unified codebase; +226 over this plan's 946 baseline).
+      - INT-1 ← Epic reports/integration-check.md Central Verdict
+        (all four INT-1 constituent facts code-verified FALSE;
+        CutoverArchitectureInvariantTest regression-lock).
+      - Phase 4.6 ← Epic Phase-4.6 doc pass: ADR-0001/0003/0005
+        Decision-History appends captured THIS plan's now-live
+        architecture decisions; state-architecture/ dormant-seam docs
+        updated to the live cutover.
+  see_also: ../2026-05-15 - dictate-cutover-completion/reports/integration-check.md
+
+en_translation:
+  decided_at: 2026-05-17
+  decided_by: PHASE5-TRANSLATE (Phase 5b/5c, D4 disposition)
+  done:
+    - research/motionlayout-architecture-options.en.md
+    - research/main-button-area-inventory.en.md
+    - research/_pending-ime-lifecycle-view-recreation/_pending-ime-lifecycle-view-recreation.en.md
+    - research/_pending-layout-container-architecture/_pending-layout-container-architecture.en.md
+    - research/_pending-persistence-background-architecture/_pending-persistence-background-architecture.en.md
+    - research/_pending-state-machine-visibility-owners/_pending-state-machine-visibility-owners.en.md
+  outstanding-genuine-german:
+    # NOT skipped, NOT attested-english — these are genuinely German-authored
+    # and DO require a real .en.md per language-conventions.md. The 5b/5c
+    # session translated the 6 tractable German research files; the plan
+    # file + 3 specs (~14,200 lines of dense technical German) remain a
+    # tracked outstanding EN-sidecar deliverable. See README "Language
+    # Disposition (Phase 5b/5c)".
+    - dictate-keyboard-layout-refactor.reviewed.md          # 1717 lines — split-output per D16 when produced
+    - research/1-pipeline-service/1-pipeline-service.reviewed.md       # 7023 lines
+    - research/2-keyboard-layout/2-keyboard-layout.reviewed.md         # 2613 lines
+    - research/3-floating-overlay/3-floating-overlay.reviewed.md       # 2868 lines
+  english-native-no-sidecar:
+    # german-only-headings / english-native prose — SSoT: a near-verbatim
+    # sidecar is the redundant duplication the SSoT rule forbids; the
+    # language-conventions.md German→EN trigger does not apply.
+    - research/b3-cleanup-cascade-and-backfill-policy.md     # english-native
+    - research/b5-ime-activation-wiring.md                   # english-native
+    - research/manual-paste-field-architecture.md            # english-native
 ```
 
 ---
@@ -364,11 +433,26 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 
 ## End-to-End-Test-Result
 
-(Populated by Phase-4.5 agent.)
+**CLOSED-VIA-EPIC `dictate-cutover-completion` (2026-05-17).** Phase 4.5
+was deferred at INT-1 escalation (a parallel-dormant architecture cannot
+be meaningfully E2E'd) and is satisfied via the Epic's Phase-4.5 on the
+identical unified codebase — see
+`../2026-05-15 - dictate-cutover-completion/reports/e2e-test.md`
+(auto-tier GREEN; device-tier env-blocked, not a failure) and the D4 /
+SSoT rationale in `plan_lifecycle.deferred_phases` above. Not separately
+re-run on the same code (no redundant re-run of identical-code phases).
 
 ## Phase 4.6 Documentation Update
 
-(Populated by Phase-4.6 final agent.)
+**CLOSED-VIA-EPIC `dictate-cutover-completion` (2026-05-17).** Phase 4.6
+deferred at INT-1 (a dormant architecture cannot be documented as live).
+Satisfied via the Epic's Phase-4.6 doc pass on the unified codebase: the
+**ADR-0001 / ADR-0003 / ADR-0005 Decision-History appends captured this
+plan's now-live architecture decisions** (e.g. ADR-0001 2026-05-17
+"Two-orchestrator coexistence collapsed; single-dispatch is now the
+production recording driver"), and the `state-architecture/`
+dormant-seam docs were updated to the live cutover. See
+`../2026-05-15 - dictate-cutover-completion/reports/phase-4.6-report.md`.
 
 ## Block-End Commits
 
@@ -385,7 +469,13 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 
 ## Implementation Report (Phase 4.7)
 
-(Populated by Phase-4.7 aggregator-agent.)
+**CLOSED-VIA-EPIC `dictate-cutover-completion` (2026-05-17).** Phase 4.7
+deferred at INT-1; satisfied via the Epic's Phase-4.7 aggregate on the
+unified codebase — see
+`../2026-05-15 - dictate-cutover-completion/reports/implementation-report.md`
+(33 issues / 26 drifts / 24 fixes; 1180/0 both variants; INT-1
+code-verified RESOLVED; the 3× anti-pattern arc). Not separately re-run
+on the identical code (D4 / SSoT — see `plan_lifecycle.deferred_phases`).
 
 ---
 
@@ -410,3 +500,7 @@ Status legend: ⏳ pending, 🔄 in progress, ✅ done, ⚠️ blocked.
 | 2026-05-15 | Phase 3.2 B2 | Block-Validate (the heaviest of the plan, ~3100 LOC diff): 4-topic audit found **1 Critical** + 9 Imp + 17 NTH = 27 raw findings. Critical: LOGIC-B2-1 PipelineModule.NotifyResultNeedsManualPaste dead code (claimed "out-of-band write" doesn't exist; service-death recovery user-affordance non-functional). VAL-SANITY → 23 🟢 + 1 🟡 + 0 ❌. B2-VAL-RES-1 research-agent investigated 3 architectural options; **recommended Option D** (fold flag into ResendState — sibling of lastAudioExists, owned by ResendModule). B2-VAL-REPAIR Wave 1 implemented Option D + 22 other findings; 2 NTH postponed to Phase 4.6 (spec-matrix doc-edits); 1 SF postponed to B3 (post-extraction recovery wiring). ADR-0001 Decision-History entry appended. Self-check ✅; 536 tests pass. Wave-commit 6c16951. Block-Validate converged in 1 wave + 1 research-step (soft-cap 3 not approached). | ✅ |
 | 2026-05-15 | Phase 3.1 B3-C8..C11 | B3 migration/persistence/audio-factory: 4 chunks. **C8** d5b9f0f+5f02d25: 7 adapter classes (RecordingHardware, BluetoothSco, AudioFocus, RecordingTimer, AmplitudeStream, BorderGlow, PipelineCallbackBridge); **IMPL-1 closed** — AIOrchestrator + AutoFormattingService + PromptQueueManager + SessionManager + SessionTracker + legacy PipelineOrchestrator + JobExecutor.initialize moved to Service.onCreate; LocalBinder typed getters for IME consumers. **C9** d78984c+02124ba: M3→M4 schema (SessionStatus 6 variants + inserted_at column + CHECK-Recreate per DATABASE-PATTERNS); first androidTest infrastructure (`app/src/androidTest/` + room-testing dep + MigrationTo4Test 7 cases); local-only-no-CI per spec §11.7.0a. **C10** eea6f6e+9666c93: PipelineSessionRepoAdapter real impl + PipelineOrphanCleaner with 6 KG-SST-2 cases; PipelineRecovery filled with Spec 1 §6.3 algorithm (MERGE semantics); **SF-4 closed** — NotifyManualPasteNeeded dispatch for COMPLETED-with-pending-insertion. **C11** 3c28d48+38f28a0: CacheDirAudioFileFactory + Pre-Dispatch-Allocation (UUID files) + LegacyAudioFileMigration filesDir→cacheDir; all KG-AFF-1..5 implemented 1:1. New deps: room-testing 2.6.1 + test-runner + test-rules. | ✅ |
 | 2026-05-15 | Phase 3.2 B3 | Block-Validate: 4-topic audit found **2 CRITICAL data-loss bugs** + 14 Imp + 17 NTH = 33 raw findings. Criticals: LOGIC-B3-1 (parent_session_id ON DELETE CASCADE wipes fresh POST_PROCESSING children when parent ages out — data loss); LOGIC-B3-2 (M3→M4 backfill inserted_at = created_at for pre-existing rows → first post-upgrade idle-stop silently deletes user history >7d old — data loss). VAL-SANITY → 27 🟢 + 2 🟡 (Criticals research-needed). B3-VAL-RES-1 combined research-agent recommended **Option (a) for both** (FK → SET NULL + backfill = NULL + Pref.PendingInsertionFreshnessMs gate) + **amend M4 in-place** (pre-merge, no users affected — no M5 needed). B3-VAL-REPAIR Wave 1 implemented research + 25 other findings; 4 deferred (3 to B4 AUDIT-TEST, 1 cleanup-wave); 1 partially. Schema 4.json regenerated with ON DELETE SET NULL. **ADR-0003 + DATABASE-PATTERNS.md amended** (Data-preservation rule). Self-check ✅; 679 tests pass. Wave-commit 676a62f. Block-Validate converged in 1 wave + 1 research-step. | ✅ |
+| 2026-05-15 | Phase 4 Integration | INTEGRATION agent cross-block audit (6 blocks, 19 chunks, 52 commits). No code-correctness regression in the shipped diff (legacy paths authoritative; keystone IME-activation chain green; 946 tests). **Escalated INT-1 (`Critical, escalate-to-user`):** the new state-architecture is a permanent parallel-dormant layer; the make-it-live + retire-legacy work was forwarded to blocks (B5-pre/B6/B7) the executed plan never contained; D15 postponed-aggregate over threshold (7 open Important). Verdict: do NOT silently archive — user must decide (a) follow-up plan or (b) accept-dormant. Phases 4.5/4.6/4.7/5 deferred (a dormant architecture cannot be meaningfully E2E'd / documented-as-live / closed). | ✅ (escalated) |
+| 2026-05-16 | INT-1 routing | User chose **INT-1 routing option (a)** — implement the cutover. Follow-up Epic `dictate-cutover-completion` authored + run on the SAME branch + worktree + commit lineage (Epic baseline 65bb303 on this plan's 52 commits — one unified codebase). This plan's deferred Phase 4.5/4.6/4.7/5 to be satisfied VIA the Epic (D4 / SSoT — no redundant re-run of identical-code phases). | ✅ |
+| 2026-05-17 | Phase 4.5/4.6/4.7 | **CLOSED-VIA-EPIC `dictate-cutover-completion`.** Epic Phase-4 Integration Check **code-verified INT-1 RESOLVED** (all four constituent facts FALSE; CutoverArchitectureInvariantTest regression-lock). Epic Phase 4.5 (e2e-test.md auto-tier GREEN) + 4.7 (implementation-report.md, 1180/0 both variants, +226 over the 946 baseline) + 4.6 (ADR-0001/0003/0005 Decision-History appends captured THIS plan's now-live architecture decisions; state-architecture/ docs updated to the live cutover) satisfy this plan's deferred phases on the identical unified codebase. See `plan_lifecycle.deferred_phases` + the deferred-phase section notes above. | ✅ (via Epic) |
+| 2026-05-17 15:20 | Phase 5a | PHASE5-ARCHIVE: plan archived. Per-plan `README.md` authored (status archived; Phase 4.5/4.6/4.7/5 completed-via the Epic with D4/SSoT rationale; plan body + 3 specs preserved unchanged as the historical record / Epic SoT; bidirectional link to the Epic). `docs/plans/README.md` process index authored (was MISSING). `plan_lifecycle.status: archived` + deferred-phases `closed-via-epic`. Cross-reference integrity verified. EN translation deferred to Phase 5b/5c. Self-check ✅. | ✅ |

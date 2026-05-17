@@ -62,8 +62,18 @@ this Epic references §-sections, does not duplicate.
 ```yaml
 current_path: docs/plans/2026-05-15 - dictate-cutover-completion/dictate-cutover-completion.md
 move_to: docs/plans/2026-05-15 - dictate-cutover-completion/dictate-cutover-completion.md   # already in target location
-status: in_place
-note: Epic was authored directly in docs/plans/ — no Phase-0 mv needed
+status: archived
+archived_at: 2026-05-17 15:20
+note: |
+  Epic was authored directly in docs/plans/ — no Phase-0 mv needed
+  (archive_target frontmatter == own folder name). Phase-5a archive:
+  per-plan README.md authored (archive metadata + 6-block/19-chunk
+  summary + INT-1-RESOLVED outcome + 3× anti-pattern arc + bidirectional
+  link to parent plan dictate-keyboard-layout-refactor, of which this
+  Epic is the INT-1 routing-option-(a) follow-up). docs/plans/README.md
+  process index authored (was missing). @see anchors in production
+  source are archive-stable — archive_target == identical folder name,
+  no path change. EN translation (5b/5c) pending.
 ```
 
 ---
@@ -507,6 +517,8 @@ decision_basis: "Run converged cleanly — INT-1 RESOLVED, 1180/0 both variants,
 
 | Timestamp | Phase | Action | Outcome |
 |-----------|-------|--------|---------|
+| 2026-05-17 | Phase 5b/5c | PHASE5-TRANSLATE: language audit + EN-sidecar disposition (D4). **This Epic's plan + all 4 research files are `english-native` (English prose; German limited to a few §-headings).** Per D4 / SSoT / `language-conventions.md` (the German-working-language → EN trigger does not apply), **no `.en.md` produced for this Epic — correct, not skipped.** A near-verbatim sidecar would be the redundant duplication the SSoT rule forbids. Disposition recorded in this Epic's per-plan README "Language Disposition (Phase 5b/5c)". (The parent plan `dictate-keyboard-layout-refactor` is genuinely German-native — 6 of its 9 German research files were translated this session; its plan file + 3 specs are tracked outstanding in the parent state-file `plan_lifecycle.en_translation`.) Self-check ✅. | ✅ |
+| 2026-05-17 15:20 | Phase 5a | PHASE5-ARCHIVE: plan archived. Authored `docs/plans/README.md` (process index — was MISSING; folder schema + per-plan README convention + language convention + `archive/` relationship + index of both dated-folder plans). Authored this Epic's per-plan `README.md` (archive metadata + 6-block/19-chunk summary + INT-1-RESOLVED outcome + 3× anti-pattern arc + bidirectional parent↔Epic link). Authored the parent plan's per-plan `README.md` (records its Phase 4.5/4.6/4.7/5 completed-via this Epic; D4/SSoT rationale; parent body/specs preserved). Set parent state-file deferred-phases `closed-via-epic dictate-cutover-completion`. Both `plan_lifecycle.status: archived`. Cross-reference integrity verified; @see anchors archive-stable (folder name unchanged). EN translation deferred to Phase 5b/5c. Self-check ✅. | ✅ |
 | 2026-05-15 | Phase 0 | Epic state-file created in worktree feature/dictate-keyboard-layout-refactor; reports/ dir created; Epic file committed (65bb303). Plan in-place (no mv). Doc-landscape probed: docs/decisions/ (5 ADRs) + docs/architecture/state-architecture/ exist (parent plan B0). Phase-4.6 activation `full` (skill-default, "ohne Walkthrough"). | ✅ |
 | 2026-05-15 | Phase 3.1 B2-C6-D2pre | C6-D2pre VERIFICATION GATE. Auto-tier FULLY GREEN: 1016 tests 0 fail (AC-9 holds), assembleDebug green, AC-10 no-double-dispatch verified, new DictateCutoverE2ETest.kt 7 green (keystone F-1/F-2/F-3 + Triangle T1-T7 on NEW LIVE path; recording survives keyboard-switch ADR-0003). **GATE: 🔴 RED** — blocker C6-IMPL-1 (=C5-IMPL-1, code-traced): legacy requests audio-focus (Pref.AudioFocus default-true, 100% users) + BT-SCO; new path emits neither (AudioModule.reduce no arm; effects defined-never-emitted; KDoc factually wrong). C7 would delete the masking fallback → shipped core-feature regression. C5-IMPL-2 → 🟢 non-blocking (lost keyboard-hide-pause IS the intended ADR-0003 improvement; FGS notif acceptable interim). C5-IMPL-3/C4-IMPL-2 → 🟢. C7 + ALL Theme C (B3) HARD-GATED. Commit 397a148. | ✅ (gate did its job) |
 | 2026-05-17 | Phase 3.2 B6 | Block-Validate B6 (focused per skill small-block topic-skip — pure-test block, C12-D2 already holistic): AUDIT-TEST 0C/0I/1NTH + VAL-SANITY → 🟢1/🟡0/❌0. B6-VAL-W1: F-1 doc-honesty text-only (UI-4/UI-10 §1.1#3a label corrected, both files, zero assertion change). C12-D2 FINAL-LOCK confirmed non-vacuous. Wave-commit d6a1a84. **Block B6 ✅ COMPLETE. ALL 6 EPIC BLOCKS (B1/B2/B3/B5/B6) DONE — implementation CODE-COMPLETE + verification-locked (1172/0 both variants, all AC-1..10 PASS, no parallel-dormant layer remains).** Next: Phase 4 Integration Check (the systemic answer to the original INT-1). | ✅ |

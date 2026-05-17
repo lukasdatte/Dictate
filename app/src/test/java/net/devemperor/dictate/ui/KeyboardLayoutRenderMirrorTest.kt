@@ -233,12 +233,16 @@ class KeyboardLayoutRenderMirrorTest {
             vis(LogicalButtonId.RECORD),
         )
         assertEquals(
-            "UI-4 (§1.1 #3a): TRASH must be GONE in single-row send-mode",
+            "UI-4: TRASH GONE in single-row send-mode (SEND_MODE structural " +
+                "outcome; the §1.1 #3a `{ false }` eliminator literal itself " +
+                "is pinned by VisibilityMatrixTest \"TWO_ROW_SEND + recording\")",
             View.GONE,
             vis(LogicalButtonId.TRASH),
         )
         assertEquals(
-            "UI-4 (§1.1 #3a): PAUSE must be GONE in single-row send-mode",
+            "UI-4: PAUSE GONE in single-row send-mode (SEND_MODE structural " +
+                "outcome; the §1.1 #3a `{ false }` eliminator literal itself " +
+                "is pinned by VisibilityMatrixTest \"TWO_ROW_SEND + recording\")",
             View.GONE,
             vis(LogicalButtonId.PAUSE),
         )
@@ -376,14 +380,18 @@ class KeyboardLayoutRenderMirrorTest {
             mode.id,
         )
         assertEquals(
-            "UI-10 (§1.1 #3a): TRASH must be GONE on the Active→Preparing " +
-                "transition (cannot overlap record_btn)",
+            "UI-10: TRASH GONE on the Active→Preparing transition (SEND_MODE " +
+                "structural outcome; the §1.1 #3a `{ false }` eliminator " +
+                "literal itself is pinned by VisibilityMatrixTest " +
+                "\"TWO_ROW_SEND + recording\")",
             View.GONE,
             vis(LogicalButtonId.TRASH),
         )
         assertEquals(
-            "UI-10 (§1.1 #3a): PAUSE must be GONE on the Active→Preparing " +
-                "transition (cannot overlap record_btn)",
+            "UI-10: PAUSE GONE on the Active→Preparing transition (SEND_MODE " +
+                "structural outcome; the §1.1 #3a `{ false }` eliminator " +
+                "literal itself is pinned by VisibilityMatrixTest " +
+                "\"TWO_ROW_SEND + recording\")",
             View.GONE,
             vis(LogicalButtonId.PAUSE),
         )

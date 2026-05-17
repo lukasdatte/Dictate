@@ -237,9 +237,17 @@ class KeyboardLayoutUiTest {
     }
 
     // ════════════════════════════════════════════════════════════════
-    // UI-4 — §1.1 #3a (critical bug-fix verifier): Send-Mode +
-    //        Single-Row keeps the record_btn unobstructed (trash/pause
-    //        hardcoded GONE — they used to cover the send button).
+    // UI-4 — §1.1 #3a outcome guard: Send-Mode + Single-Row keeps the
+    //        record_btn unobstructed (trash/pause GONE — they used to
+    //        cover the send button). This pins the mode-selection
+    //        (single-row pipeline → SEND_MODE) + the structural-GONE
+    //        outcome. NOTE: it does NOT pin the §1.1 #3a SEND_MODE
+    //        `{ false }` eliminator literal — in this state
+    //        isTrashVisible/isPauseVisible are already false (no
+    //        recording, not ReprocessStaging), so a revert of that
+    //        literal would still leave this test GREEN. The eliminator
+    //        literal's non-vacuous guard is VisibilityMatrixTest's
+    //        "TWO_ROW_SEND + recording (cross-mode)" case.
     // ════════════════════════════════════════════════════════════════
 
     @Test
@@ -256,16 +264,22 @@ class KeyboardLayoutUiTest {
             View.VISIBLE,
             vis(LogicalButtonId.RECORD),
         )
-        // §1.1 #3a eliminator: TRASH + PAUSE are hardcoded `{ false }`
-        // in the SEND_MODE catalog entries so they cannot cover the
-        // send button.
+        // SEND_MODE structural outcome: TRASH + PAUSE resolve to GONE so
+        // they cannot cover the send button. (The §1.1 #3a hardcoded
+        // `{ false }` eliminator literal itself is pinned non-vacuously
+        // by VisibilityMatrixTest's "TWO_ROW_SEND + recording" case, not
+        // here — in this state the predicates are already false.)
         assertEquals(
-            "UI-4 (§1.1 #3a): TRASH must be GONE in single-row send-mode",
+            "UI-4: TRASH GONE in single-row send-mode (SEND_MODE structural " +
+                "outcome; the §1.1 #3a `{ false }` eliminator literal itself " +
+                "is pinned by VisibilityMatrixTest \"TWO_ROW_SEND + recording\")",
             View.GONE,
             vis(LogicalButtonId.TRASH),
         )
         assertEquals(
-            "UI-4 (§1.1 #3a): PAUSE must be GONE in single-row send-mode",
+            "UI-4: PAUSE GONE in single-row send-mode (SEND_MODE structural " +
+                "outcome; the §1.1 #3a `{ false }` eliminator literal itself " +
+                "is pinned by VisibilityMatrixTest \"TWO_ROW_SEND + recording\")",
             View.GONE,
             vis(LogicalButtonId.PAUSE),
         )
@@ -412,10 +426,18 @@ class KeyboardLayoutUiTest {
     }
 
     // ════════════════════════════════════════════════════════════════
-    // UI-10 — §1.1 #3a + #3b cross-bug: Active → Pipeline-Preparing
+    // UI-10 — §1.1 #3a + #3b outcome guard: Active → Pipeline-Preparing
     //         transition. Across every frame neither trash nor pause is
     //         rendered VISIBLE in the send-mode layout (so they can
-    //         never be drawn over record_btn).
+    //         never be drawn over record_btn). This pins the
+    //         transition's mode-selection (Preparing → SEND_MODE) + the
+    //         structural-GONE outcome. NOTE: it does NOT pin the §1.1
+    //         #3a SEND_MODE `{ false }` eliminator literal — in the
+    //         Preparing frame isTrashVisible/isPauseVisible are already
+    //         false, so a revert of that literal would still leave this
+    //         test GREEN. The eliminator literal's non-vacuous guard is
+    //         VisibilityMatrixTest's "TWO_ROW_SEND + recording
+    //         (cross-mode)" case.
     // ════════════════════════════════════════════════════════════════
 
     @Test
@@ -426,9 +448,13 @@ class KeyboardLayoutUiTest {
         assertEquals(View.VISIBLE, vis(LogicalButtonId.PAUSE))
 
         // Frame 2: stop → Pipeline Preparing. The mode flips to
-        // SEND_MODE where TRASH + PAUSE are hardcoded `{ false }` —
-        // they can NEVER be drawn over the record_btn (§1.1 #3a),
-        // and the resend button stays out of the way too (§1.1 #3b).
+        // SEND_MODE and TRASH + PAUSE resolve to GONE — they can NEVER
+        // be drawn over the record_btn (§1.1 #3a outcome), and the
+        // resend button stays out of the way too (§1.1 #3b). (The §1.1
+        // #3a hardcoded `{ false }` eliminator literal itself is pinned
+        // non-vacuously by VisibilityMatrixTest's "TWO_ROW_SEND +
+        // recording" case, not here — in Preparing the predicates are
+        // already false.)
         val preparing = idle().copy(
             pipeline = PipelineUiState.Preparing(sessionId = "ui-sess"),
         )
@@ -440,14 +466,18 @@ class KeyboardLayoutUiTest {
             mode.id,
         )
         assertEquals(
-            "UI-10 (§1.1 #3a): TRASH must be GONE on the Active→Preparing " +
-                "transition (cannot overlap record_btn)",
+            "UI-10: TRASH GONE on the Active→Preparing transition (SEND_MODE " +
+                "structural outcome; the §1.1 #3a `{ false }` eliminator " +
+                "literal itself is pinned by VisibilityMatrixTest " +
+                "\"TWO_ROW_SEND + recording\")",
             View.GONE,
             vis(LogicalButtonId.TRASH),
         )
         assertEquals(
-            "UI-10 (§1.1 #3a): PAUSE must be GONE on the Active→Preparing " +
-                "transition (cannot overlap record_btn)",
+            "UI-10: PAUSE GONE on the Active→Preparing transition (SEND_MODE " +
+                "structural outcome; the §1.1 #3a `{ false }` eliminator " +
+                "literal itself is pinned by VisibilityMatrixTest " +
+                "\"TWO_ROW_SEND + recording\")",
             View.GONE,
             vis(LogicalButtonId.PAUSE),
         )

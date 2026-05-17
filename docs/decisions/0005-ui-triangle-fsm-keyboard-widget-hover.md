@@ -310,7 +310,9 @@ Three view modes (`KEYBOARD`, `WIDGET`, `HOVER`) and seven transitions (T1–T7)
 
 ## References
 
-- **Related Plan:** [dictate-keyboard-layout-refactor](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md) §1.2 (user-iteration requirements), §3.1 (Triangle-FSM diagram), §4.0.1.0 (ADR-0005 decision-kernsatz), §7 OPEN-1, OPEN-2
+- **Related Plans:**
+  - [dictate-keyboard-layout-refactor](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md) §1.2 (user-iteration requirements), §3.1 (Triangle-FSM diagram), §4.0.1.0 (ADR-0005 decision-kernsatz), §7 OPEN-1, OPEN-2 — the plan that motivated this ADR.
+  - [dictate-cutover-completion](../plans/2026-05-15%20-%20dictate-cutover-completion/dictate-cutover-completion.md) — the Epic that flipped the IME recording-trigger to dispatch and completed the render-path cutover (4 legacy controllers deleted, `RenderBackend` sole driver; see Decision History 2026-05-17). §8 of that plan references this ADR (bidirectional).
 - **Related Specs:**
   - [Spec 3 — Floating-Overlay](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md) §6 (Close-button differential), §7.1 (computeViewMode), §7.3 (T1–T7 code-snippets), §11.9 (userPrefersWidget transience rationale)
   - [Spec 1 — Pipeline-Service](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md) §15.1 (Module-Inventar #4 ViewModeModule), §15.1.x (Coupling-Matrix), §15.2 (RecordingModule self-cascade)
@@ -348,6 +350,18 @@ e.g. WIDGET → HOVER via long-press) land as Decision-History
 entries with a new T-ID. The truth table form is stable.
 
 ## Decision History
+
+### 2026-05-17 — IME recording-trigger flipped to dispatch; render-path cutover (Epic dictate-cutover-completion)
+
+**Trigger:** Epic `dictate-cutover-completion` Theme-B (IME recording-trigger flip) + Theme-C-R (the render-path cutover). The 2026-05-15 entry pinned the IME-activation *view* contract; this entry records the *recording-trigger* flip and the legacy render-controller retirement that were still outstanding (the INT-1 parallel-dormant anti-pattern at the render layer). Code-verified in `reports/integration-check.md` Central Verdict §2/§3.
+
+**Before:** The IME-activation view contract (`OnImeViewShown/Hidden`) was pinned (2026-05-15 entry), but recording was still triggered via the legacy `JobExecutor.INSTANCE.start` call-sites, and the legacy render controllers (`MainButtonsController` / `RecordingUiController` / `KeyboardUiController` / `KeyboardStateManager`) were the live render path, attached **in parallel** to the `RenderBackend` (`ImeViewBackend` etc.). The render side was nominally on `RenderBackend` but the legacy controllers were still the production drivers.
+
+**After:** The IME recording-trigger dispatches `RecordingAction.StartRecording` / `StopRecordingAndSend` instead of `JobExecutor.start` (one documented RESUME carve-out — `startResumeJob` — survives and is regression-locked by `CutoverArchitectureInvariantTest`). The render-path cutover (Theme-C-R, gated on a GREEN CR-RGATE) deletes the 4 legacy render controllers; `RenderBackend` is the **sole render driver** (`doubleWriteCount == 0`). The ~16 controller behaviour-groups were ported to `RenderBackend` owners — `ImeViewBackend`, `SpecialTouchHandlerInstaller`, `ContentAreaController`, `PromptVisibilityController`, `OverlayResetHandler`, the new `EditBarController` / `EmojiController` / `OverlayCharactersController`, `QwertzRecordingController`, `PipelineStepRowRenderer` (the per-group→owner map is the SoT table in `research/render-path-cutover.md` §3 / §11). The safe-cutover mechanic is the staged build-but-dormant → `RenderGate`-armed → atomic per-axis flip → delete pattern (CR1–CR3 attach owners dormant behind a `RenderGate`; CR4 flips them live per-axis atomically; CR-DEL deletes the legacy controllers only after the RR-3 per-class responsibility-trace is GREEN). The RR-2 visibility-double-write risk is guarded by `core/audit/VisibilityWriteAuditLogger` (strict-mode double-write detection). `OnRecordLongPress` becomes a 2-mode model (Idle → Settings+file-picker / Active → autoSwitch+stop) via a `ButtonSlot.longClickResolver` (Spec 2 §13.2 / render-path-cutover.md §7 A1).
+
+**Reasoning:** Triangle-FSM's render side was nominally on `RenderBackend` while the legacy controllers were still live — the third recurrence of the INT-1 parallel-dormant anti-pattern (render layer). The flip + deletion completes ADR-0005's intended end-state (the FSM drives `RenderBackend` switching per ADR-0004) and ADR-0001's single-dispatch on the recording axis; it is an append, not a supersede (the three-mode FSM, the seven transitions T1–T7, and `computeViewMode` are unchanged). The staged RenderGate mechanic is the safe-cutover answer to RR-1 (silent listener overwrite) / RR-2 (blank-UI premature drive-removal): the new owners build dormant and the legacy drive is removed only in the same chunk the new path takes over, gated and per-class-traced — never both wired at once.
+
+**Reference:** `docs/plans/2026-05-15 - dictate-cutover-completion/research/render-path-cutover.md` (the per-group→owner SoT — §3 + §11; not duplicated here); `docs/plans/2026-05-15 - dictate-cutover-completion/reports/B5-theme-cr-render-cutover.md`; `docs/plans/2026-05-15 - dictate-cutover-completion/reports/integration-check.md` Central Verdict §2/§3; Spec 2 §9.x / §13.x.
 
 ### 2026-05-15 — IME-activation contract pinned (B5 repair-wave, F-1/F-2/F-3)
 

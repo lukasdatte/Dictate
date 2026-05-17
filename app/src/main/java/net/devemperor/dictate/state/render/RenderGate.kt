@@ -7,26 +7,33 @@ import net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger
  * RenderBackend (render-path-cutover.md §6 RR-2 + §6.1 staged safety
  * net; Spec 2 §11.8 5c).
  *
- * # Why a gate (RR-2 — the highest risk of Block B5)
+ * # Why a gate (RR-2 — the highest risk of Block B5) — historical rationale
  *
- * Theme C-R attaches [ContentAreaController] / [PromptVisibilityController]
- * / [OverlayResetHandler] in **CR3**, but the legacy
+ * This explains *why* the gate exists; the CR3→CR4→CR-DEL timeline it
+ * describes is **history** — `KeyboardStateManager` is now **deleted**
+ * (CR-DEL completed the D-13 migration) and the gated controllers are
+ * the sole live owners of their axes. During the cutover Theme C-R
+ * attached [ContentAreaController] / [PromptVisibilityController] /
+ * [OverlayResetHandler] in **CR3**, while the legacy
  * [net.devemperor.dictate.core.KeyboardStateManager] `applyVisibility()`
- * drive that writes the *same* visibility axes is removed only in
+ * drive that wrote the *same* visibility axes was removed only in
  * **CR4**. A visibility write — unlike a touch listener — is not an
  * "Android keeps the most-recent" overwrite; it is a *repeated write*
- * to the same field. If a controller writes the axis while KSM still
- * drives it, **both** mutate the container every render-tick: the
- * keyboard flickers or settles on the wrong container, with **no
+ * to the same field. Had a controller written the axis while KSM still
+ * drove it, **both** would have mutated the container every render-tick:
+ * the keyboard flickering or settling on the wrong container, with **no
  * error** (the F-1/F-2 silent-regression class at the visibility
  * layer).
  *
- * The mitigation mirrors CR1's RESEND-only long-press model and CR2's
- * `SpecialTouchHandlerInstaller.installDormant`: the new owner is
- * **attached** (wiring proven, view-recreate-safe, CR4 becomes a
- * one-line flip) but **dormant** — it does **not** write the live axis
- * until CR4 [arm]s it *in the same chunk* that removes the legacy KSM
- * drive. Never two live writers on one axis at once.
+ * The mitigation mirrored CR1's RESEND-only long-press model and CR2's
+ * `SpecialTouchHandlerInstaller.installDormant`: the new owner was
+ * **attached** (wiring proven, view-recreate-safe, CR4 a one-line flip)
+ * but **dormant** — it did **not** write the live axis until CR4
+ * [arm]ed it *in the same chunk* that removed the legacy KSM drive;
+ * CR-DEL then deleted KSM entirely. Never two live writers on one axis
+ * at once. The dormant/armed switch survives as the live API (a `null`
+ * gate / armed gate are still meaningful for unit tests and
+ * release-build configurations — see [shouldWrite]).
  *
  * # What dormant still does — the no-double-write proof
  *
@@ -40,14 +47,17 @@ import net.devemperor.dictate.core.audit.VisibilityWriteAuditLogger
  * is the active half of the Strict-Mode-Logging acceptance: it makes
  * "exactly one live writer per axis" *observable*, not merely asserted.
  *
- * # CR4 flip
+ * # CR4 flip — historical
  *
- * CR4 calls [arm] on each controller in the **same** chunk it removes
- * the KSM `setContentArea`/`refresh` drive. From that tick on the
- * controller writes the axis and KSM no longer does — the sole writer
- * transitions KSM → controller with zero overlap, exactly the
+ * This is the staged transition recorded as history (the cutover is
+ * complete — see the historical rationale above). CR4 called [arm] on
+ * each controller in the **same** chunk it removed the KSM
+ * `setContentArea`/`refresh` drive. From that tick on the controller
+ * wrote the axis and KSM no longer did — the sole writer transitioned
+ * KSM → controller with zero overlap, exactly the
  * `dormant-cr2 → attached-cr4` ledger transition CR2 established for
- * the touch axis.
+ * the touch axis. CR-DEL then deleted `KeyboardStateManager`, leaving
+ * each controller the permanent sole owner of its axis.
  *
  * @see SpecialTouchHandlerInstaller — the same staged pattern for the
  *   touch axis (CR2).
@@ -72,18 +82,24 @@ class RenderGate(
 ) {
 
     /**
-     * `false` = dormant (CR3 default — do not write the live axis,
-     * only report the intended write to the audit ledger).
-     * `true` = armed (CR4 flips it — write the axis for real).
+     * `false` = dormant (do not write the live axis, only report the
+     * intended write to the audit ledger).
+     * `true` = armed (write the axis for real).
+     *
+     * Historically the dormant→armed flip was the CR3→CR4 cutover
+     * transition; post-CR-DEL the live owners are armed in production
+     * and the dormant mode survives only as a unit-test / audit-proof
+     * configuration.
      */
     var armed: Boolean = false
         private set
 
     /**
-     * CR4 entry point — arm the gate so the controller writes the live
-     * axis from the next render-tick. MUST be called from the same
-     * chunk that removes the legacy KSM drive for this axis (RR-2 —
-     * never two live writers at once).
+     * Arm the gate so the controller writes the live axis from the
+     * next render-tick. (Historically the CR4 entry point — it had to
+     * be called from the same chunk that removed the legacy KSM drive
+     * for this axis, RR-2, never two live writers at once. KSM is now
+     * deleted; production callers arm at construction/attach time.)
      */
     fun arm() {
         armed = true
@@ -96,11 +112,12 @@ class RenderGate(
      *
      * Returns `true` iff the gate is [armed]; the controller does the
      * actual `view.visibility =` mutation only on `true`. On `false`
-     * (dormant) the controller skips the mutation entirely — the
-     * legacy KSM is the sole live writer and the audit ledger now
-     * carries this controller's *intended* write under [ownerTag],
-     * which is exactly what proves KSM is the only writer that
-     * actually reached the view.
+     * (dormant) the controller skips the mutation entirely and the
+     * audit ledger carries only this controller's *intended* write
+     * under [ownerTag]. Historically that proved the legacy KSM was the
+     * sole writer that actually reached the view during the CR3 dormant
+     * phase; post-CR-DEL it remains the audit-proof / unit-test
+     * configuration (no legacy writer exists any more).
      *
      * @param viewId the `View.getId()` of the view about to be written
      *   (or that *would* be written, when dormant). Pass `0` only if
@@ -110,10 +127,10 @@ class RenderGate(
      */
     fun shouldWrite(viewId: Int, target: Int): Boolean {
         // `live = armed`: a dormant gate reports a *suppressed* intended
-        // write (observability only — never a double-write vs the
-        // legacy KSM live write, RR-2). An armed gate (CR4) reports a
-        // real live write, at which point KSM no longer writes this
-        // axis so it is still the sole live writer.
+        // write (observability only — historically never a double-write
+        // vs the legacy KSM live write, RR-2). An armed gate reports a
+        // real live write; post-CR-DEL the controller is the permanent
+        // sole live writer of its axis (KSM is deleted).
         auditLogger?.logWrite(viewId, ownerTag, target, armed)
         return armed
     }

@@ -407,7 +407,42 @@ next_step: ready_for_closure        # auto-tier green + 0 Crit/0 Imp E2E issues;
 
 ## Phase 4.6 Documentation Update
 
-(Populated by Phase-4.6 final agent.)
+```yaml
+activation: full
+4.6a_discovery: ./reports/phase-4.6-discovery.md (done)
+classification (4.6b, orchestrator):
+  adr_decision_history: 3 appends (0 new ADRs) —
+    ADR-0001 (two-orchestrator coexistence COLLAPSED; the cross-cutting
+      INT-1/parallel-dormant-forbidden + 3×-recurred-and-resolved narrative
+      folds into its DH Reasoning — SSoT vs D7);
+    ADR-0003 (real PipelineNotificationCoordinator+PipelineActionRouter;
+      NOTIF_ID single-source; BT-SCO/audio-focus Preparing-lifecycle);
+    ADR-0005 (IME recording-trigger flipped to dispatch; render-path
+      cutover — 4 controllers deleted, RenderBackend sole driver,
+      staged RenderGate).
+  file_docs: 3 — docs/architecture/state-architecture/{state-and-actions.md
+    §1.1, README.md, rendering.md}. DATABASE-PATTERNS.md NOT affected.
+  spec_conversion: NONE (render-path-cutover.md = derivative spec,
+    plan-co-located, SSoT; decisions flow to rendering.md + ADR DH).
+  inline_anchors: ZERO gaps (IMPL agents already wrote headers+@see);
+    4.6c = confirm deleted-controller mentions in surviving files are
+    intentional historical anchors; post-archive @see-path resolution
+    deferred to Phase-5.
+run_at: 2026-05-17
+discovery_report: ./reports/phase-4.6-discovery.md
+final_report: ./reports/phase-4.6-report.md
+docs_updated: 6   # 3 ADR Decision-History appends + 3 architecture file-docs
+specs_converted: 0
+auto_fixes_applied: 0   # all new cross-doc links resolved on first write
+doc_on_doc_findings: 0
+gaps_detected: 1   # carried/pre-existing — preferences/ subsystem has no arch doc (NOT Epic-introduced)
+adr_flags: 0   # NO new ADR (correct — folds into ADR-0001/0003/0005 DH per Discovery + lifecycle-adr.md)
+knowledge_skill_flags: 1   # carried — no knowledge-kotlin/knowledge-android (flag only)
+flagged_non_auto_fixable: 1   # stale present-tense inline headers in 4 production render files (EditBarController/EmojiController/SpecialTouchHandlerInstaller/RenderGate) — doc-only phase cannot edit src; Phase-5 / follow-up owner
+deferred_to_phase5:
+  - "post-archive @see-path re-confirm (Epic archive_target = same folder name → expected no-op)"
+  - "inline-anchor re-tense of the 4 stale render-owner headers (needs src-edit rights)"
+status: complete
 
 ## Block-End Commits
 

@@ -473,11 +473,92 @@ per-slot `visibilityPredicate` would force every main-button slot
 to include a `state.layout.contentArea == ContentArea.MAIN_BUTTONS`
 gate — duplicate code in 9+ slots.
 
-## 13. Information Gaps
+## 13. Render-path cutover (post-Epic, 2026-05-17)
 
-(no gaps known at this time — Spec 2 §3 + §4 + §5 + §6 + §7 + §8 cover the rendering layer)
+The teaching material above describes the `RenderBackend` pattern.
+This section records its **cutover outcome**: as of the Epic
+`dictate-cutover-completion` (Theme-C-R), `RenderBackend` is the
+**sole** render driver and the legacy render controllers are gone.
 
-## 14. Change History
+### 13.1 What changed
+
+- **4 legacy render controllers deleted** — `MainButtonsController`,
+  `RecordingUiController`, `KeyboardUiController`, `KeyboardStateManager`
+  (and the legacy `LanguageController`). Before the Epic these were
+  attached **in parallel** to `RenderBackend` (the INT-1
+  parallel-dormant anti-pattern, render layer). They no longer exist;
+  every remaining mention in the source tree is a historical KDoc /
+  `@see` / XML anchor, not a live dependency.
+- **`RenderBackend` is the sole render driver** — `doubleWriteCount == 0`
+  (no axis written by both the new backend and a legacy controller).
+  The `KeyboardLayoutManager` multi-backend list (§6) is the only
+  render fan-out.
+- **~16 controller behaviour-groups ported to `RenderBackend` owners** —
+  `ImeViewBackend`, `SpecialTouchHandlerInstaller`,
+  `ContentAreaController`, `PromptVisibilityController`,
+  `OverlayResetHandler`, the extracted `EditBarController` /
+  `EmojiController` / `OverlayCharactersController`,
+  `QwertzRecordingController`, `PipelineStepRowRenderer`, and the
+  `EditNumbersAnimator` helper. The per-behaviour-group → owner mapping
+  is the **SoT table** in the Epic's
+  [`research/render-path-cutover.md` §3 + §11](../../plans/2026-05-15%20-%20dictate-cutover-completion/research/render-path-cutover.md)
+  — **not duplicated here** (SSoT: the spec is canonical for the 16-row
+  map; this doc points at it).
+
+### 13.2 The staged-cutover safety-net mechanic
+
+The cutover used a **build-but-dormant → `RenderGate`-armed → atomic
+per-axis flip → delete** mechanic (the safe answer to RR-1 "silent
+listener overwrite" / RR-2 "blank UI from premature drive-removal"):
+
+1. **CR1–CR3** — the new owners are attached but **dormant** behind a
+   `state/render/RenderGate` (they compute but do not write the view).
+2. **CR4** — `RenderGate.arm()` flips owners live **per axis,
+   atomically**; the legacy drive call for that axis is removed in the
+   **same chunk** (never both wired at once — RR-1).
+3. **CR-DEL** — the legacy controllers are deleted only after the
+   mandatory RR-3 per-class responsibility-trace is GREEN (every legacy
+   responsibility maps to a verified-present, IME-attached new owner).
+
+`core/audit/VisibilityWriteAuditLogger` is the strict-mode guard for
+RR-2: it detects double / zero writes per visibility axis during the
+staged window, so a premature drive-removal or a missed owner-attach
+is caught before the delete.
+
+> [!NOTE]
+> The `RenderGate` / `VisibilityWriteAuditLogger` class headers narrate
+> the RR-2 staged-cutover rationale at paragraph length — that is the
+> *mechanic's own* rationale (legitimately inline), and it does not
+> duplicate this section: this section is the architecture-level
+> outcome, the headers are the per-class "why". The SoT for the 16-row
+> behaviour-group map remains `render-path-cutover.md` §3.
+
+Decision trail:
+[ADR-0004](../../decisions/0004-ui-layout-catalog-motionlayout.md)
+(RenderBackend rendering side) and
+[ADR-0005 Decision History 2026-05-17](../../decisions/0005-ui-triangle-fsm-keyboard-widget-hover.md#decision-history)
+(the IME recording-trigger flip + render-path cutover).
+
+## 14. Information Gaps
+
+(no gaps known at this time — Spec 2 §3 + §4 + §5 + §6 + §7 + §8 cover
+the rendering layer; the post-cutover owner map is the SoT in
+`render-path-cutover.md` §3)
+
+## 15. Change History
+
+### 2026-05-17 — Render-path cutover outcome added (Epic dictate-cutover-completion)
+
+- **Trigger:** Phase-4.6 documentation update for the Epic
+  `dictate-cutover-completion`. The pre-Epic doc described the
+  `RenderBackend` pattern but did not record that the legacy
+  controllers are deleted and `RenderBackend` is the sole driver.
+- **Reasoning:** §13 records the cutover outcome (controllers deleted,
+  sole driver, the staged `RenderGate` / `VisibilityWriteAuditLogger`
+  safety-net) and points at `render-path-cutover.md` §3 as the SoT for
+  the 16-row behaviour-group → owner map (no duplication, per the SSoT
+  rule). The §1.1 pre-refactor narrative is intentionally left as-is —
+  it is the historical motivation; §13 is the post-cutover present.
 
 ### 2026-05-14 — Initial draft
 
@@ -488,7 +569,7 @@ gate — duplicate code in 9+ slots.
   the architectural-iteration fixes that landed during Spec-2
   review.
 
-## 15. References
+## 16. References
 
 - [ADR-0004 — ui-layout-catalog-motionlayout](../../decisions/0004-ui-layout-catalog-motionlayout.md)
 - [Spec 2 §3 — ButtonSlot / RowDescriptor / LayoutMode](../../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md)

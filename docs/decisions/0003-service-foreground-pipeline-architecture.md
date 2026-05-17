@@ -287,8 +287,10 @@ discipline. Out of scope:
 
 ## References
 
-- **Related Plan:** [dictate-keyboard-layout-refactor](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md) §3.2, §7 OPEN-4, §4.0.1.0
-- **Related Spec:** [Spec 1 — Pipeline-Service](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md) §1, §7 (FGS lifecycle), §7.2, §7.3, §7.4 (NotificationCoordinator), §7.5 (ActionRouter), §11.1 (FGS details), §11.3 (Bound-Service setup), §11.6 (OOM-Death recovery)
+- **Related Plans:**
+  - [dictate-keyboard-layout-refactor](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md) §3.2, §7 OPEN-4, §4.0.1.0 — the plan that motivated this ADR.
+  - [dictate-cutover-completion](../plans/2026-05-15%20-%20dictate-cutover-completion/dictate-cutover-completion.md) — the Epic that wired the real `PipelineNotificationCoordinator` + `PipelineActionRouter` and the BT-SCO/audio-focus Preparing-lifecycle (see Decision History 2026-05-17). §8 of that plan references this ADR (bidirectional).
+- **Related Spec:** [Spec 1 — Pipeline-Service](../plans/2026-05-07%20-%20dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md) §1, §7 (FGS lifecycle), §7.2, §7.3, §7.4 (NotificationCoordinator), §7.5 (ActionRouter), §7.6, §11.1 (FGS details), §11.1.2, §11.3 (Bound-Service setup), §11.6 (OOM-Death recovery)
 - **Related ADRs:**
   - **ADR-0001 — state-modular-orchestrator-pattern.** This ADR hosts ADR-0001's `DictateOrchestrator` + module registry inside a Foreground Service. The two ADRs compose: ADR-0001 says how state mutates; this ADR says where the mutation lives so that it survives keyboard switches.
   - **[ADR-0002 — Cross-Module Cascade](0002-state-cross-module-cascade.md)** — cascade-protocol the orchestrator running inside this FGS enforces.
@@ -325,6 +327,23 @@ moving the state container out of an Android Service entirely
 Not anticipated for Phase 2.
 
 ## Decision History
+
+### 2026-05-17 — Real notification coordinator + action-router; BT-SCO/audio-focus Preparing-lifecycle (Epic dictate-cutover-completion)
+
+**Trigger:** Epic `dictate-cutover-completion` Theme-B (the INT-1 cutover follow-up). The new-path notification surface was the dormant half of the parallel-dormant layer; B2-VAL-W1 additionally surfaced a Critical BT-SCO already-connected hang (F-1) + an audio-focus reacquire gap (F-2). Code-verified in `reports/integration-check.md` Central Verdict §1, `reports/B2-theme-b-recording-drive.md`.
+
+**Before:** `ModuleServices.notificationCoordinator` was a `Log.w` no-op stub. The Spec 1 §7.4 persistent FGS notification and §7.5 action-button back-channel were unimplemented on the new path; the **legacy** notification path was the only surface delivering Spec 1 §10 Block-2 acceptance — so the FGS-container ADR's whole point (recording survives a keyboard switch with a usable surface) was, in production, served only by the legacy path while the new coordinator was inert.
+
+**After:** Real `PipelineNotificationCoordinator` (Spec 1 §7.4/§7.6/§11.1.2 — single-source-of-truth `NOTIF_ID = 0xD1C7A7E`, `buildInitial()`, `show`/`dismiss`, channel-reuse) plus `PipelineActionRouter` (Spec 1 §7.5 — `[Pause]/[Stopp]/[Senden]` PendingIntents → `orchestrator.dispatch`, targeting the FGS so the buttons work while the IME-view is dead — the keyboard-switch-survival point of this ADR). Both are constructed and bound in `DictatePipelineService.onCreate` Step 4; the `notificationCoordinator` stub is demoted to `@Deprecated(WARNING)` test-only. The BT-SCO / audio-focus handshake is now confined to the `Preparing` state in `AudioModule`: the F-1 already-connected hang is fixed by priming to `Waiting` (so an already-connected SCO route does not deadlock the Preparing→Active transition) and F-2 adds a `ReacquireAudioFocus` step; see `research/recording-audiofocus-btsco-handshake.md` for the B2 R-1 handshake derivation.
+
+**Reasoning:** The FGS-container ADR exists so recording survives a keyboard switch *with a user-facing surface*; that guarantee was only delivered by the legacy notification path while the new coordinator was a no-op stub — the ADR-0003 contract was nominally met but production-inert (the INT-1 parallel-dormant anti-pattern, service half). This entry records the real coordinator/router as the production notification + back-channel surface and the BT-SCO/audio-focus lifecycle as Preparing-state-confined. This implements the ADR's §"Required mechanics" items 2/7 on the new path; it is an append, not a supersede — the lifecycle model is unchanged (no WorkManager, LocalBinder same-process, DB-replay recovery all stand).
+
+**References:**
+- `docs/plans/2026-05-15 - dictate-cutover-completion/dictate-cutover-completion.md` (Epic — §8 references this ADR, bidirectional)
+- `docs/plans/2026-05-15 - dictate-cutover-completion/reports/B2-theme-b-recording-drive.md` (B2-VAL-W1 F-1/F-2)
+- `docs/plans/2026-05-15 - dictate-cutover-completion/research/recording-audiofocus-btsco-handshake.md`
+- `docs/plans/2026-05-15 - dictate-cutover-completion/reports/integration-check.md` Central Verdict §1
+- Spec 1 §7.4 / §7.5 / §7.6 / §11.1.2
 
 ### 2026-05-15 — Cleanup-policy + FK-cascade semantics (B3-VAL-REPAIR)
 

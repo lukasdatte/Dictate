@@ -58,11 +58,17 @@ The state architecture introduces `DictateOrchestrator` — the
 (`Action → reducer → state-write → effects → cascade`). It is unrelated
 to the **legacy** `net.devemperor.dictate.core.PipelineOrchestrator`,
 which is the **audio-pipeline runner** (transcription/completion +
-DAO writes). The two co-exist during the Block 2 → Block 3 migration
-window; B3 absorbs the legacy `PipelineOrchestrator` into the new
-architecture as a `PipelineRunnerSubsystem` adapter behind the modular
-orchestrator (Spec 1 §11.2.2). Keep the distinction in mind when
-reading stack traces, KDoc references, and PR diffs.
+DAO writes). The two-orchestrator coexistence is **collapsed** (Epic
+`dictate-cutover-completion`, 2026-05-17): the legacy
+`PipelineOrchestrator` is now reachable **only** as the
+`PipelineRunnerSubsystem` adaptee behind
+`PipelineRunnerSubsystemAdapter` → `JobExecutor` (Spec 1 §9.6) — it is
+never a second live state-router. `DictateOrchestrator` is the sole
+state-router driving production recording (ADR-0001 Decision History
+2026-05-17). Keep the distinction in mind when reading stack traces,
+KDoc references, and PR diffs — `DictateOrchestrator` mutates state;
+`PipelineOrchestrator` only runs the audio pipeline when invoked
+through the subsystem adapter.
 
 ## High-level architecture in 60 seconds
 
@@ -83,6 +89,13 @@ reading stack traces, KDoc references, and PR diffs.
 │                                                             │
 │   Cross-module coordination via Mode-1 SideEffect / Mode-2  │
 │     Action-Cascade — ADR-0002                               │
+│                                                             │
+│   Real subsystem adapters (post-cutover, 2026-05-17):       │
+│     PipelineRunnerSubsystemAdapter → JobExecutor →          │
+│       PipelineOrchestrator (Spec 1 §9.6 adaptee) — ADR-0001 │
+│     PipelineNotificationCoordinator + PipelineActionRouter  │
+│       (real FGS notification + back-channel) — ADR-0003     │
+│     (the no-op StubSubsystems are @Deprecated test-only)    │
 └─────────────────────────────────────────────────────────────┘
                           ▲
                           │ LocalBinder (in-process)
@@ -96,8 +109,11 @@ reading stack traces, KDoc references, and PR diffs.
 │   KeyboardLayoutManager (Triangle-FSM render orchestrator)  │
 │     state.collect { backends.forEach { render(state) } }    │
 │                                                             │
-│   RenderBackends — ADR-0004                                 │
+│   RenderBackends — ADR-0004 — SOLE render driver            │
+│     (post-cutover: the 4 legacy controllers are deleted)    │
 │     ImeViewBackend (KEYBOARD), ContentAreaController,       │
+│     PromptVisibilityController, OverlayResetHandler,        │
+│     EditBar/Emoji/OverlayChars/Qwertz/StepRow owners,       │
 │     OverlayBackend (WIDGET + HOVER)                         │
 │                                                             │
 │   LayoutCatalog (declarative slot/predicate/resolver)       │

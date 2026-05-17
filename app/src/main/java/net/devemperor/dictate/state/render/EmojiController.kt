@@ -10,14 +10,25 @@ import net.devemperor.dictate.R
 
 /**
  * Owns the **emoji-picker** click/picked listeners — the listeners
- * `MainButtonsController.registerEmojiListeners()`
- * (`MainButtonsController.kt:278-295`) wires today.
+ * the legacy `MainButtonsController.registerEmojiListeners()`
+ * (`MainButtonsController.kt:278-295`) used to wire before the cutover.
+ *
+ * # Wiring status (post-CR-DEL — sole live owner)
+ *
+ * **Sole live owner of the emoji-picker listener axis.** [attachToViews]
+ * is the only writer of the emoji click/picked listeners now that
+ * `MainButtonsController` is **deleted** (CR-DEL completed the D-13
+ * migration). The "build-but-don't-attach / still LIVE until CR4"
+ * framing below is **historical** — there is no `MainButtonsController`
+ * and no parallel listener writer left; that staged mechanic is the
+ * *how* this controller became the live owner, not a current state.
+ * `EmojiControllerTest` covers the contract.
  *
  * # Why this class exists (CR4-IMPL-1 resolution)
  *
  * Spec 2 **§13.2** states the emoji listeners **"bleibt in
- * EmojiController"**. That class was never created — the listeners live
- * inside `MainButtonsController` (the class CR-DEL deletes). This is the
+ * EmojiController"**. That class was never created — the listeners lived
+ * inside `MainButtonsController` (the class CR-DEL deleted). This is the
  * sibling of [EditBarController]: the same A3 option-a extraction
  * (binding, CR3-recorded) applied to the emoji axis §3's 16-group
  * render map never enumerated. See [EditBarController] KDoc for the full
@@ -30,13 +41,16 @@ import net.devemperor.dictate.R
  *  - `emojiPickerView.setOnEmojiPickedListener` → vibrate +
  *    `inputConnectionProvider()?.commitText(emoji.emoji, 1)` (null-guarded)
  *
- * # RR-1 — build-but-don't-attach (identical to [EditBarController])
+ * # RR-1 — build-but-don't-attach (identical to [EditBarController]) — historical
  *
- * The legacy `MainButtonsController.registerEmojiListeners()` is still
- * LIVE until CR4. [installDormant] only **builds + caches** the
- * listeners + tags the single-owner ledger marker; **CR4** calls
- * [attachToViews] *in the same chunk* it removes the legacy wiring —
- * never both wired at once (RR-1, render-path-cutover.md §11 + §6 RR-1).
+ * The staged mechanic, recorded as history (`MainButtonsController` is
+ * deleted — see "Wiring status" above). During CR-EXTRACT the legacy
+ * `MainButtonsController.registerEmojiListeners()` was still LIVE until
+ * CR4. [installDormant] only **builds + caches** the listeners + tags
+ * the single-owner ledger marker; **CR4** called [attachToViews] *in
+ * the same chunk* it removed the legacy wiring and **CR-DEL** then
+ * deleted `MainButtonsController` — never both wired at once (RR-1,
+ * render-path-cutover.md §11 + §6 RR-1).
  *
  * @property views the emoji view-holder (non-null — built by the IME
  *   service from the inflated tree).

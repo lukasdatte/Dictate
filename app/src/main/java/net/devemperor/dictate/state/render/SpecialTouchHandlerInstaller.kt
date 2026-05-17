@@ -31,18 +31,32 @@ import net.devemperor.dictate.state.layout.LogicalButtonId
  *  - [buildEnterOverlayHandler] — `EnterOverlayHandler` on ENTER
  *    (overlay-character selection). Behaviour group **G5**.
  *
- * # RR-1 — the load-bearing single-owner model (build-but-don't-attach)
+ * # Wiring status (post-CR-DEL — sole live owner)
  *
- * The legacy `MainButtonsController` touch wiring
+ * **Sole live owner of the SPACE/BACKSPACE/ENTER special-touch axis.**
+ * [attachToViews] is the only writer of these three
+ * [View.OnTouchListener]s now that `MainButtonsController` is
+ * **deleted** (CR-DEL completed the D-13 migration). The
+ * "build-but-don't-attach / still LIVE in CR2 / CR4 flips it" framing
+ * below is **historical** — there is no `MainButtonsController` and no
+ * parallel touch writer left; that staged mechanic is the *how* this
+ * installer became the live owner, not a current state.
+ * `SpecialTouchHandlerInstallerTest` covers the contract.
+ *
+ * # RR-1 — the load-bearing single-owner model (build-but-don't-attach) — historical
+ *
+ * The staged mechanic, recorded as history (`MainButtonsController` is
+ * deleted — see "Wiring status" above). During CR2 the legacy
+ * `MainButtonsController` touch wiring
  * (`MainButtonsController.kt:203-208` BACKSPACE swipe,
- * `:217-246` SPACE cursor-swipe, `:268-273` ENTER overlay) is **still
- * LIVE** in CR2 — it is removed only by **CR4**. The wiring order is
+ * `:217-246` SPACE cursor-swipe, `:268-273` ENTER overlay) was **still
+ * LIVE** — it was removed only by **CR4**. The wiring order was
  * decisive:
  *
  * ```
  *   onCreateInputView:
  *     line 827  mainButtonsController.registerAllListeners()   ← legacy
- *                 → backspace/space/enter .setOnTouchListener(...)  (LIVE)
+ *                 → backspace/space/enter .setOnTouchListener(...)  (LIVE pre-CR4)
  *     line 1141 keyboardLayoutManager.attachBackend(imeViewBackend)
  *                 → ImeViewBackend.attach()
  *                   → staticHandlerInstaller.invoke(buttonViews)   ← us
@@ -50,10 +64,10 @@ import net.devemperor.dictate.state.layout.LogicalButtonId
  *
  * Android keeps **only the most-recent** `setOnXListener`. The installer
  * runs *after* the legacy wiring, so a naive
- * `space.setOnTouchListener(buildSpaceTouchHandler())` here would
- * **silently overwrite** the live legacy `CursorSwipeTouchHandler` /
+ * `space.setOnTouchListener(buildSpaceTouchHandler())` would have
+ * **silently overwritten** the live legacy `CursorSwipeTouchHandler` /
  * `BackspaceSwipeHandler` / `EnterOverlayHandler` — a half-broken
- * keyboard with **no error**. This is the exact F-1/F-2 trap
+ * keyboard with **no error**. This was the exact F-1/F-2 trap
  * (render-path-cutover.md §6 **RR-1**, the highest-severity risk of
  * Block B5).
  *
@@ -61,14 +75,15 @@ import net.devemperor.dictate.state.layout.LogicalButtonId
  * the IME wires as `staticHandlerInstaller`) only **builds** the three
  * handlers and caches them ([spaceHandler] / [backspaceHandler] /
  * [enterHandler]); it does **not** call `setOnTouchListener` on the live
- * Views. The legacy `MainButtonsController` therefore stays the **sole
- * LIVE owner** of SPACE/BACKSPACE/ENTER touch through CR2/CR3.
+ * Views. Through CR2/CR3 the legacy `MainButtonsController` therefore
+ * stayed the **sole LIVE owner** of SPACE/BACKSPACE/ENTER touch.
  *
- * **CR4 flips it** via [attachToViews], called *in the same chunk* that
- * removes the legacy `registerAllListeners()` touch wiring — never both
+ * **CR4 flipped it** via [attachToViews], called *in the same chunk* that
+ * removed the legacy `registerAllListeners()` touch wiring, then
+ * **CR-DEL** deleted `MainButtonsController` outright — never both
  * wired at once (RR-1 mitigation, identical to the CR1 long-press model
  * already accepted by the orchestrator: RESEND-only attach, RECORD
- * built-but-dormant). CR2 and CR4 separate cleanly — **no
+ * built-but-dormant). CR2 and CR4 separated cleanly — **no
  * architecture-conflict**.
  *
  * [installDormant] runs a single-owner-per-View **assertion/log**

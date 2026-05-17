@@ -9,8 +9,20 @@ import net.devemperor.dictate.state.layout.resolveAudioFocusIcon
 
 /**
  * Owns the **edit-bar** click/long-click listeners — the listeners
- * `MainButtonsController.registerEditBarListeners()`
- * (`MainButtonsController.kt:115-165`) wires today.
+ * the legacy `MainButtonsController.registerEditBarListeners()`
+ * (`MainButtonsController.kt:115-165`) used to wire before the cutover.
+ *
+ * # Wiring status (post-CR-DEL — sole live owner)
+ *
+ * **Sole live owner of the edit-bar listener axis.** [attachToViews]
+ * is the only writer of the edit-bar click/long-click listeners now
+ * that `MainButtonsController` is **deleted** (CR-DEL completed the
+ * D-13 migration). The earlier "build-but-don't-attach / legacy stays
+ * the sole LIVE owner through CR-EXTRACT / CR4 flips it" framing below
+ * is **historical**: there is no `MainButtonsController` and no
+ * parallel listener writer left — that staged mechanic is the *how*
+ * this controller became the live owner, not a current state.
+ * `EditBarControllerTest` covers the contract.
  *
  * # Why this class exists (CR4-IMPL-1 resolution)
  *
@@ -18,7 +30,7 @@ import net.devemperor.dictate.state.layout.resolveAudioFocusIcon
  * **"bleibt in einem separaten `EditBarController`, der sich nicht
  * ändert"** and the emoji listeners **"bleibt in EmojiController"**.
  * Neither class was ever created by the parent plan — the listeners
- * live *inside* `MainButtonsController` (the class CR-DEL deletes). When
+ * lived *inside* `MainButtonsController` (the class CR-DEL deleted). When
  * `B5-CR4-IMPL` went to remove `mainButtonsController.registerAllListeners()`
  * (AC-RR-6) it found three sub-registrations with **no new-path owner**
  * (edit-bar / emoji / overlay-chars init) — the exact INT-1 / F-1 / F-2
@@ -33,26 +45,30 @@ import net.devemperor.dictate.state.layout.resolveAudioFocusIcon
  * same `return true` long-press consumption, same shared
  * `audioFocusClickListener` semantics).
  *
- * # RR-1 — the load-bearing single-owner model (build-but-don't-attach)
+ * # RR-1 — the load-bearing single-owner model (build-but-don't-attach) — historical
  *
- * The legacy `MainButtonsController.registerEditBarListeners()` is
- * **still LIVE** in CR-EXTRACT — it is removed only by **CR4**. Android
- * keeps **only the most-recent** `setOnClickListener`. This installer
- * runs *after* the legacy wiring (the IME attach point is past
- * `registerAllListeners()`), so a naive `setOnClickListener` here would
- * **silently overwrite** the live legacy edit-bar listeners — a
- * half-broken edit row with **no error** (the exact F-1/F-2 trap,
- * render-path-cutover.md §6 RR-1).
+ * This is the **staged mechanic** by which this controller became the
+ * sole live owner; it is recorded as history, not a current state
+ * (`MainButtonsController` is deleted — see "Wiring status" above).
+ * During CR-EXTRACT the legacy
+ * `MainButtonsController.registerEditBarListeners()` was **still LIVE**
+ * — it was removed only by **CR4**. Android keeps **only the
+ * most-recent** `setOnClickListener`. The installer runs *after* the
+ * legacy wiring (the IME attach point was past `registerAllListeners()`),
+ * so a naive `setOnClickListener` would have **silently overwritten** the
+ * live legacy edit-bar listeners — a half-broken edit row with **no
+ * error** (the exact F-1/F-2 trap, render-path-cutover.md §6 RR-1).
  *
  * **Mitigation — build-but-don't-attach.** [installDormant] only
  * **builds + caches** the listener lambdas and tags the single-owner
  * ledger marker; it does **not** call `setOnClickListener` on the live
- * Views. The legacy `MainButtonsController` therefore stays the **sole
- * LIVE owner** of every edit-bar listener through CR-EXTRACT. **CR4**
- * calls [attachToViews] *in the same chunk* it removes the legacy
- * `registerAllListeners()` — never both wired at once (identical to the
- * CR2 [SpecialTouchHandlerInstaller] touch model and the CR1 RESEND-only
- * long-press model already accepted by the orchestrator).
+ * Views. Through CR-EXTRACT the legacy `MainButtonsController` therefore
+ * stayed the **sole LIVE owner** of every edit-bar listener. **CR4**
+ * called [attachToViews] *in the same chunk* it removed the legacy
+ * `registerAllListeners()`, then **CR-DEL** deleted
+ * `MainButtonsController` outright — never both wired at once (identical
+ * to the CR2 [SpecialTouchHandlerInstaller] touch model and the CR1
+ * RESEND-only long-press model already accepted by the orchestrator).
  *
  * @property views the edit-bar view-holder (non-null — built by the IME
  *   service from the inflated tree).

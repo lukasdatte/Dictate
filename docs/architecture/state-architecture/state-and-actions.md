@@ -26,14 +26,36 @@ parameters.
 Pre-refactor, the IME's UI state was scattered across
 `RecordingStateController`, `RecordingUiController`,
 `KeyboardUiController`, `KeyboardStateManager`, and the IME-Service
-itself. Five concrete production bugs (parent plan §1.1) traced to
-"multiple writers per logical state axis". The fix had to be
-structural — there is no naming convention or code-review process
-that consistently catches "five places mutate `resend_btn`".
+itself — each writing into the same logical state axes (visibility,
+layout, recording lifecycle). Five concrete production bugs (parent
+plan §1.1) traced to "multiple writers per logical state axis". The
+fix had to be structural — there is no naming convention or
+code-review process that consistently catches "five places mutate
+`resend_btn`".
 
 `DictateUiState` is the **single source of truth** for the UI
 state. The 13 sub-state axes have one owner module each.
 Mutation happens through one entry: `orchestrator.dispatch(action: Action)`.
+
+> [!NOTE]
+> **Post-cutover reality (Epic `dictate-cutover-completion`, 2026-05-17).**
+> The scattered render-and-mutation path described above is now
+> **retired**. `RecordingUiController`, `KeyboardUiController`, and
+> `KeyboardStateManager` are **deleted** (the legacy `LanguageController`
+> too); the IME-Service no longer mutates UI state directly — it
+> dispatches `Action`s. `RenderBackend` (`ImeViewBackend` +
+> `ContentAreaController` / `PromptVisibilityController` /
+> `OverlayResetHandler` and the extracted `EditBarController` /
+> `EmojiController` / `OverlayCharactersController` /
+> `QwertzRecordingController` / `PipelineStepRowRenderer` owners) is the
+> sole render driver, reading state never writing it (ADR-0004); the 13
+> modules driven by `DictateOrchestrator` single-dispatch are the sole
+> state owners (ADR-0001). `RecordingStateController` survives as a
+> non-scattered helper but is no longer a state writer for these axes.
+> The post-cutover behaviour-group → owner mapping is the SoT table in
+> the Epic's `research/render-path-cutover.md` §3 (not duplicated here);
+> the decision trail is ADR-0001 / ADR-0005 Decision History 2026-05-17.
+> Single-owner-per-axis is now enforced — not aspirational.
 
 ### 1.2 What problem this solves
 

@@ -10,10 +10,23 @@ import net.devemperor.dictate.R
 
 /**
  * Owns the **overlay-characters** strip — both the one-time structural
- * inflate (`MainButtonsController.initializeOverlayCharacters()`,
+ * inflate (legacy `MainButtonsController.initializeOverlayCharacters()`,
  * `MainButtonsController.kt:299-313`) and the per-call content/theme
- * update (`MainButtonsController.updateOverlayCharacters(characters,
+ * update (legacy `MainButtonsController.updateOverlayCharacters(characters,
  * accentColor)`, `:451-463`).
+ *
+ * # Wiring status (post-CR-DEL — sole live owner)
+ *
+ * **Sole live owner of the overlay-characters axis** (both *init*
+ * structural inflate and *update* content/theme). [initialize] /
+ * [update] are the only writers now that `MainButtonsController` is
+ * **deleted** (CR-DEL completed the D-13 migration). The
+ * "build-but-dormant (CR-EXTRACT default) / legacy stays the sole live
+ * owner / CR4 `arm()`" framing below is **historical** — there is no
+ * `MainButtonsController` and no parallel writer left; the staged
+ * [RenderGate] mechanic is the *how* this controller became the live
+ * owner, not a current state. `OverlayCharactersControllerTest` covers
+ * the contract.
  *
  * # Why this class exists (CR4-IMPL-1 resolution)
  *
@@ -37,31 +50,35 @@ import net.devemperor.dictate.R
  * `B5-CR4-IMPL` (CR4-IMPL-1) — see [EditBarController] KDoc for the
  * full narrative.
  *
- * # RR-2 — the staged-safety-net (build-but-dormant, [RenderGate])
+ * # RR-2 — the staged-safety-net (build-but-dormant, [RenderGate]) — historical
  *
- * Unlike the click-listener owners ([EditBarController]/[EmojiController]
- * use the CR2 `installDormant`/`attachToViews` listener-overwrite
- * model), the overlay-chars axis is a **repeated write** (the same 8
- * char-view `visibility`/`text`/tint fields, plus a one-time inflate).
- * It therefore reuses the **CR3 [RenderGate]** dormant/`arm()` model
- * (the same one [ContentAreaController] uses):
+ * The staged mechanic, recorded as history (`MainButtonsController` is
+ * deleted — see "Wiring status" above). Unlike the click-listener owners
+ * ([EditBarController]/[EmojiController] used the CR2
+ * `installDormant`/`attachToViews` listener-overwrite model), the
+ * overlay-chars axis is a **repeated write** (the same 8 char-view
+ * `visibility`/`text`/tint fields, plus a one-time inflate). It
+ * therefore reused the **CR3 [RenderGate]** dormant/`arm()` model (the
+ * same one [ContentAreaController] uses):
  *
- *  - **dormant (CR-EXTRACT default):** [initialize] does **not** inflate
- *    the 8 char views, [update] does **not** write — both report the
+ *  - **dormant (CR-EXTRACT phase):** [initialize] did **not** inflate
+ *    the 8 char views, [update] did **not** write — both reported the
  *    *intended* write to the audit ledger only. The legacy
  *    `MainButtonsController.initializeOverlayCharacters()` /
- *    `updateOverlayCharacters()` stay the **sole live owner**.
- *    (Inflating while the legacy also inflates would produce **16**
- *    child views — the structural analogue of a double-write, RR-2.)
+ *    `updateOverlayCharacters()` stayed the **sole live owner**.
+ *    (Inflating while the legacy also inflated would have produced
+ *    **16** child views — the structural analogue of a double-write,
+ *    RR-2.)
  *  - **armed (CR4 `arm()`):** [initialize] inflates (idempotent — a
  *    `childCount` guard prevents a double-inflate) and [update] writes
- *    for real. CR4 calls [arm] *in the same chunk* it removes the
- *    legacy `registerAllListeners()` / `updateOverlayCharacters` drive
- *    — never two live owners at once (RR-2,
- *    render-path-cutover.md §11 + §6 RR-2).
+ *    for real. CR4 called [arm] *in the same chunk* it removed the
+ *    legacy `registerAllListeners()` / `updateOverlayCharacters` drive,
+ *    then CR-DEL deleted `MainButtonsController` — never two live owners
+ *    at once (RR-2, render-path-cutover.md §11 + §6 RR-2). The armed
+ *    state is now the permanent production configuration.
  *
- * A `null` gate = legacy "always do it" (the pre-CR-EXTRACT contract;
- * keeps unit-test semantics simple — identical to
+ * A `null` gate = "always do it" (the pre-CR-EXTRACT contract; still
+ * the simplest unit-test configuration — identical to
  * [ContentAreaController]).
  *
  * @property views the overlay-chars view-holder (the same

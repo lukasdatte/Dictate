@@ -480,7 +480,26 @@ next: Phase 4.5 (INTEGRATION-W1 converged; INT-3+INT-4 fixed, INT-2 out-of-scope
 
 ## Implementation Report (Phase 4.7)
 
-(Populated by Phase-4.7 aggregator-agent.)
+```yaml
+run_at: 2026-05-17
+report_file: ./reports/implementation-report.md
+blocks: 6/6   # B1 Theme-A · B2 Theme-B+D2pre · B3 Theme-C · B5 Theme-C-R · B6 Theme-D (no B4 — render-cutover extension is B5)
+chunks: 12 base + 7 Theme-C-R (CR1/CR2/CR3/CR-EXTRACT/CR4/CR-RGATE/CR-DEL) all ✅
+issues_total: 33
+drifts_total: 26
+fixes_total: 24
+markers:
+  needs_research: 0      # 🔴 — EMPTY (Step 2 skipped; honest — not manufactured)
+  review_recommended: 13 # 🟠 — incl. the 3× INT-1-resolution arc, Epic-doc amendments, wave-drift, device-tier-manual-pending (env-constrained residual, auto-surrogate green)
+  informational: 20      # 🟢 — mechanical fixes, converged waves, green gates
+followup_research_files: none
+self_check: passed   # source-coverage ✓ (all 5 block-reports + all logs + integration + e2e + 4.6 + all research/validated-findings) · counters reconcile (33=13+20) · markers ✓ · drift-extraction ✓
+user_decision: accept_and_proceed   # autonomous default per "ohne Walkthrough": 0 🔴, no revisit-decision class, no skill-defined escalation (no Critical+blocking+unclear). User redirects if desired.
+decision_at: 2026-05-17
+decision_basis: "Run converged cleanly — INT-1 RESOLVED, 1180/0 both variants, all AC-1..10 PASS, D15 under threshold, every Critical caught+fixed in-run (both mid-triages iter1/cap2, no wave-drift≥5, no re-validate cascade). Phase-4.7 Step-3 presented as a plain-text report (non-blocking per ohne-Walkthrough); accept-default applied → Phase 5."
+```
+
+---
 
 ---
 

@@ -384,6 +384,25 @@ verification GATE — Phase 4.5 is the post-all-blocks holistic re-run.)
 
 ---
 
+## Phase 4 Integration Check
+
+```yaml
+run_at: 2026-05-17
+report: ./reports/integration-check.md
+INT-1_verdict: RESOLVED   # code-verified FALSE — the parent-plan INT-1 (parallel-dormant layer) that spawned this Epic no longer holds
+findings: 0 Critical / 0 Important / 4 Nice-to-have
+  - INT-1: resolved/informational (closed)
+  - INT-2: NTH — pre-existing out-of-scope HistoryDetailActivity:492 JobExecutor.start (History-reprocess feature, single-dispatch, does NOT violate AC-10; D3 out-of-scope-pre-existing carve-out — future follow-up, non-blocking)
+  - INT-3: NTH — optional AC-10 architecture-test guard not added (invariant holds by inspection) → INTEGRATION-W1 (D4 regression-lock)
+  - INT-4: NTH — per-block F-N ID namespace doc-hygiene → INTEGRATION-W1
+d15_postponed_aggregate: UNDER THRESHOLD (0 Crit / 0 open Imp / ~4-5 NTH total) — decisive contrast vs parent INT-1 (escalated on 7 open Imp); this Epic closed all + added none
+escalate_to_user: none
+ac9_verified: 1172/0/0 (+226 vs 946 baseline), clean --rerun-tasks
+next: INTEGRATION-W1 (INT-3 + INT-4 only; INT-2 out-of-scope-recorded) → Phase 4.5
+```
+
+---
+
 ## Implementation Report (Phase 4.7)
 
 (Populated by Phase-4.7 aggregator-agent.)

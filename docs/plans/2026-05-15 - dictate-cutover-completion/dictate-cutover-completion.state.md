@@ -333,8 +333,23 @@ triage armed for C3/C4/C5 (architecture-conflict / blocks-following-chunks).
 
 ## Repair-Sub-Phase Log (Iter 10)
 
+> **Issue-ID namespace (INT-4 doc-hygiene).** The `F-N` finding IDs in
+> this log and across every `reports/B*.md` are **block-local**: each
+> block's Block-Validate restarts numbering at `F-1`, so the same
+> `F-1`/`F-6` recur in B1/B2/B3/B5/B6 referring to *different* issues.
+> A bare `F-N` is therefore ambiguous on its own — always read it as
+> `B{X}-VAL F-N` (the Wave-ID column disambiguates which block).
+> Cross-block carries are spelled out inline ("F-6 RE-OPENED",
+> "(from B3)") rather than relying on the number. When grepping
+> `reports/` for an `F-N`, scope by block first; e.g. B3-F-6
+> (cross-carrier collapse, deferred → B5) and B5-F-6 (the reopened
+> collapse, properly closed) are the **same lineage** but a B6-F-1 is
+> unrelated to a B1-F-1. Same convention the parent-plan INT-4 noted;
+> no code impact, traceability-only.
+
 | Wave-ID | Caller | Iter | Findings (🟢/🟡/❌) | Outcome | Wave-commit |
 |---------|--------|------|---------------------|---------|-------------|
+| INTEGRATION-W1 | Phase 4 Integration Check (INT-3 + INT-4 only; INT-2 out-of-scope-recorded per D3) | 1 | 0 Crit / 0 Imp / 2 NTH → 🟢2 / 🟡0 / ❌0. INT-3 (🟢 NTH — D4 regression-lock): added `CutoverArchitectureInvariantTest` (pure-JVM source-scan, K-1/K-4, no Robolectric/Context) pinning the AC-10 single-architecture invariant — (a) exactly ONE functional `JobExecutor.INSTANCE.start(` in the IME and it is the RESUME carve-out (`startResumeJob`), (b) zero `USE_LEGACY_RECORDING_DRIVE` in `app/src/main` functional code, (c) zero functional refs to the 4 deleted render controllers (doc-anchors stripped, allowed), (d) `PipelineServiceStubSubsystems.pipelineRunner`/`.notificationCoordinator` not wired in `DictatePipelineService.onCreate` + the real adapter/coordinator ARE. Test strips comments+strings so the ~167 blessed historical anchors don't false-RED; each invariant paired with a `commentStripperIsSound*` self-test for non-vacuity. Non-vacuity also proven empirically: a temporarily-injected 2nd `JobExecutor.INSTANCE.start(` made the test go RED, reverted clean (src/main untouched). INT-4 (🟢 NTH doc-hygiene, text-only): added the block-local `F-N` namespace note to this log's header. **DISJOINT diff: test + state-file only — zero src/main change.** | ✓ converged 1 wave; 1180/0 both variants (1172 + 8 new INT-3 tests); CR-RGATE 5/5 + DictateCutoverE2ETest 10/10 stay green; assembleDebug green | (orchestrator wave-commit) |
 | B6-VAL-W1 | Block-Validate B6 (focused: AUDIT-TEST + VAL-SANITY; small pure-test block) | 1 | 0 Crit / 0 Imp / 1 NTH → 🟢1 / 🟡0 / ❌0. F-1 (🟢 NTH doc-honesty, text-only): UI-4/UI-10 §1.1#3a label over-claimed the SEND_MODE eliminator guard → re-worded (both files identically) to state actual mode-selection+structural-GONE coverage + pointer to VisibilityMatrixTest as the real eliminator guard; zero assertion-logic change. C12-D2 FINAL-LOCK confirmed non-vacuous (validated-no-residual: 1172/0/0 both variants ×2, RR-4 real-binder). Carried postponed C5-IMPL-2 + C10-C3-IMPL-1 unchanged → Phase 4.7. | ✓ converged 1 wave; 1172/0 both variants; CR-RGATE 5/5 + DictateCutoverE2ETest 10/10 + VisibilityMatrixTest 25/25 green | d6a1a84 |
 | B5-VAL-W1 | Block-Validate B5 (4 audits) — Theme-C-R render-cutover (largest block: 7 chunks + mid-triage + gate) | 1 | 2 Crit / ~6 Imp / ~7 NTH raw → 11 unique → 🟢9 / 🟡2 / ❌4. F-1 (🔴 SPACE double-commit real regression) → research §12 → option-(i) exclude SPACE from click loop (Spec2 §13.2 no SPACE row; legacy touch-only; one-tap-one-space, G4/§11.7 intact). F-2 (🔴 F-6 collapse incomplete — F-6 RE-OPENED) → research §13 → dispatchStagingOverride at 4 staging boundaries (entry-seed+exit-clear) + false :2132 KDoc fixed; **F-6 NOW actually closed**. F-3 EditBar audio-focus-icon §13.2-F-4 SSOT. R-7 LAST axis: JobExecutor.resetForTest() sentinel-drain → flake GONE (testRelease 7/7 ×3). 6 more 🟢; C5-IMPL-2 promoted→Issue-Index postponed. ❌4 accepted (bind-failure byte-identical-to-legacy/out-of-scope, uniform-TAG, KSP-env, recording-side-channel). AC-RR-7/8 PASS. | ✓ converged 1 wave; 1162/0 BOTH variants (debug×2+release×3 uncached); CR-RGATE 5/5 + DictateCutoverE2ETest 10/10 stay green | 4bcd1a7 |
 | B3-VAL-W1 | Block-Validate B3 (4 audits) — C8-C1 + C9-C2 (clean block) | 1 | 0 Crit / 1 Imp / ~7 NTH raw → 8 unique → 🟢5 / 🟡0 / ❌3. F-1 (Imp, C8-IMPL-1) DurationHealingJob async pollution → new DurationHealingScheduler holder + resetForTest() (Dev-5 D22: AUDIT-TEST's shutdownNow() regressed via Robolectric SQLite-native interrupt → switched to graceful shutdown()+awaitTermination(10s)). F-2 doc-trail-accuracy. F-3 dedup ReprocessStaging-override + guard-normalise. F-4/F-5 NTH doc. F-6 (cross-carrier collapse) deferred-with-tracking → B5/C10-IMPL-2. 2 ❌ (conv broad-catch FP, R-3 inherent IME gap). AC-5/AC-6 PASS, R-3 SOUND, R-5 GREEN, F-15-side-effect REAL+CORRECT, C10-only-OQ-1 CORRECT. | ✓ converged 1 wave; flake GONE (3× uncached both variants 1048/1048); assembleDebug green | 80cdda2 |
@@ -393,12 +408,14 @@ INT-1_verdict: RESOLVED   # code-verified FALSE — the parent-plan INT-1 (paral
 findings: 0 Critical / 0 Important / 4 Nice-to-have
   - INT-1: resolved/informational (closed)
   - INT-2: NTH — pre-existing out-of-scope HistoryDetailActivity:492 JobExecutor.start (History-reprocess feature, single-dispatch, does NOT violate AC-10; D3 out-of-scope-pre-existing carve-out — future follow-up, non-blocking)
-  - INT-3: NTH — optional AC-10 architecture-test guard not added (invariant holds by inspection) → INTEGRATION-W1 (D4 regression-lock)
-  - INT-4: NTH — per-block F-N ID namespace doc-hygiene → INTEGRATION-W1
-d15_postponed_aggregate: UNDER THRESHOLD (0 Crit / 0 open Imp / ~4-5 NTH total) — decisive contrast vs parent INT-1 (escalated on 7 open Imp); this Epic closed all + added none
+  - INT-2: out-of-scope-recorded (D3 carve-out — pre-existing non-IME HistoryDetailActivity:492, single-dispatch, AC-10 holds; NOT fixed this Epic by design; Phase-5 follow-up note)
+  - INT-3: FIXED — INTEGRATION-W1 added CutoverArchitectureInvariantTest (pure-JVM source-scan AC-10 regression-lock, non-vacuity self-tested + empirically RED-proven)
+  - INT-4: FIXED — INTEGRATION-W1 added block-local F-N namespace note to the Repair-Sub-Phase Log header (doc-only)
+INTEGRATION-W1: ✓ converged 1 wave (0 Crit / 0 Imp / 2 NTH → 🟢2; DISJOINT diff = test + state-file, zero src/main)
+d15_postponed_aggregate: UNDER THRESHOLD (0 Crit / 0 open Imp / ~3 NTH total — INT-3+INT-4 now resolved; INT-2 out-of-scope-recorded) — decisive contrast vs parent INT-1 (escalated on 7 open Imp); this Epic closed all + added none
 escalate_to_user: none
-ac9_verified: 1172/0/0 (+226 vs 946 baseline), clean --rerun-tasks
-next: INTEGRATION-W1 (INT-3 + INT-4 only; INT-2 out-of-scope-recorded) → Phase 4.5
+ac9_verified: 1180/0/0 both variants (1172 baseline + 8 new INT-3 tests; +234 vs 946 parent baseline), clean --rerun-tasks; CR-RGATE 5/5 + DictateCutoverE2ETest 10/10 green
+next: Phase 4.5 (INTEGRATION-W1 converged; INT-3+INT-4 fixed, INT-2 out-of-scope-recorded)
 ```
 
 ---

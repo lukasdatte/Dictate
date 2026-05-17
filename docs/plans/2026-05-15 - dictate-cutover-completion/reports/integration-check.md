@@ -135,9 +135,9 @@ the failure it existed to cure.
 | ID | Severity | File / Location | Description | Status | Suggested routing |
 |----|----------|-----------------|-------------|--------|-------------------|
 | INT-1 | **Resolved (informational)** | cross-Epic | The parent-plan INT-1 (Critical, escalate-to-user) is now code-verified FALSE — see Central Verdict. No action. | closed | None — record the resolution in Phase 5 closure + the ADR-0001/0003 Decision-History append (Doc-Plan already lists this). |
-| INT-2 | Nice-to-have | `app/src/main/java/.../history/HistoryDetailActivity.java:492` | A production `JobExecutor.INSTANCE.start` call-site exists **outside** the IME recording surface (the History-detail screen's "re-process a historical transcription" button, `JobRequest.TranscriptionPipeline` / `HISTORY_REPROCESS`). It is **pre-existing** (present unchanged at Epic baseline `65bb303`, zero Epic commits touch the file) and **outside the Epic's declared scope** (Epic §3/§4 scope = the IME recording trigger + the 3 IME `JobExecutor.start` sites). It is single-dispatch (a History Activity button, not a recording user-action) so it does **not** violate AC-10 (no user action both legacy-starts and orchestrator-dispatches the same pipeline). Not an INT-1 reopener — it is a separate, untouched, non-IME feature. | delegated-to-orchestrator | No repair this Epic (out of scope, AC-10 holds). Note in Phase 5 closure as a known follow-up: a future "collapse HistoryDetailActivity onto the orchestrator pipeline" item, if the team wants 100% single-driver. Non-blocking. |
-| INT-3 | Nice-to-have | `B3` C10-IMPL-3 / IMPL-3 (`reports/B3-theme-c-legacy-retire.md`) | The AC-10 "PipelineOrchestrator has no caller outside {C3 adapter, JobExecutor, RESUME carve-out}" invariant currently holds **by inspection** (this audit re-verified it by grep) but has **no automated architecture-test guard**. Optional regression-guard, flagged NTH-open in B3, deferred to "D1/D2 or follow-up". D2/B6 chose not to add it (Dev-1: a 3rd test file would be vacuous duplication, RR-4). | delegated-to-orchestrator | Phase 5: accept as a documented known-gap, or open a tiny follow-up to add an architecture-test (e.g. a grep-assertion test) so the single-driver invariant cannot silently regress. Non-blocking. |
-| INT-4 | Nice-to-have | Issue-ID namespace across `reports/B*.md` | `F-N` issue IDs are block-local; the same `F-1`/`F-6` numbers recur across B1/B2/B3/B5/B6 with the cross-block carries disambiguated by suffix ("(from B3)", "(B4 carry-over)"). Traceable but a future reader grepping `F-6` across `reports/` hits unrelated issues. Same hygiene observation the parent INT-4 made; carried convention, no code impact. | delegated-to-orchestrator | Phase 5 closure: note the per-block `F-N` namespace convention in the plan README. Documentation-hygiene only. |
+| INT-2 | Nice-to-have | `app/src/main/java/.../history/HistoryDetailActivity.java:492` | A production `JobExecutor.INSTANCE.start` call-site exists **outside** the IME recording surface (the History-detail screen's "re-process a historical transcription" button, `JobRequest.TranscriptionPipeline` / `HISTORY_REPROCESS`). It is **pre-existing** (present unchanged at Epic baseline `65bb303`, zero Epic commits touch the file) and **outside the Epic's declared scope** (Epic §3/§4 scope = the IME recording trigger + the 3 IME `JobExecutor.start` sites). It is single-dispatch (a History Activity button, not a recording user-action) so it does **not** violate AC-10 (no user action both legacy-starts and orchestrator-dispatches the same pipeline). Not an INT-1 reopener — it is a separate, untouched, non-IME feature. | **out-of-scope-recorded** | NOT fixed this Epic by design (D3 out-of-scope-pre-existing carve-out, AC-10 holds). Recorded as a Phase-5 known follow-up: a future "collapse HistoryDetailActivity onto the orchestrator pipeline" item, if the team wants 100% single-driver. Non-blocking. |
+| INT-3 | Nice-to-have | (was: no automated guard) → **`app/src/test/java/net/devemperor/dictate/core/CutoverArchitectureInvariantTest.kt`** | The AC-10 "PipelineOrchestrator/recording-drive single-architecture" invariant held **by inspection** but had **no automated architecture-test guard**. **FIXED in INTEGRATION-W1:** added `CutoverArchitectureInvariantTest` — a pure-JVM source-scanning test (K-1 handwritten / K-4 no Android Context, no Robolectric) that strips comments+strings then asserts: (a) exactly ONE functional `JobExecutor.INSTANCE.start(` in `DictateInputMethodService.java` and it is the documented RESUME carve-out (enclosing method `startResumeJob`); (b) ZERO `USE_LEGACY_RECORDING_DRIVE` in `app/src/main` functional code; (c) ZERO functional refs to the 4 deleted controllers (`MainButtonsController`/`RecordingUiController`/`KeyboardUiController`/`KeyboardStateManager`) — doc-anchors/XML-comments stripped & allowed; (d) `PipelineServiceStubSubsystems.pipelineRunner`/`.notificationCoordinator` NOT wired in `DictatePipelineService.onCreate`, and the real `PipelineRunnerSubsystemAdapter`/`PipelineNotificationCoordinator` ARE. Non-vacuity: each invariant paired with a `commentStripperIsSound*` self-test, and empirically RED-proven (a temporarily-injected 2nd `JobExecutor.INSTANCE.start(` made the test fail; reverted clean). 8 tests, deterministic+fast. | **fixed** | Resolved — the D4 regression-lock is now in place; the parallel-dormant/double-dispatch failure class cannot silently regress. |
+| INT-4 | Nice-to-have | Issue-ID namespace across `reports/B*.md` | `F-N` issue IDs are block-local; the same `F-1`/`F-6` numbers recur across B1/B2/B3/B5/B6 with the cross-block carries disambiguated by suffix ("(from B3)", "(B4 carry-over)"). Traceable but a future reader grepping `F-6` across `reports/` hits unrelated issues. Same hygiene observation the parent INT-4 made; carried convention, no code impact. **FIXED in INTEGRATION-W1:** added a one-paragraph block-local-`F-N`-namespace note to the state-file's `## Repair-Sub-Phase Log` header (clarifies a bare `F-N` reads as `B{X}-VAL F-N`, disambiguated by the Wave-ID column). | **fixed** | Resolved (doc-only — state-file header note). |
 
 **No Critical or Important integration findings.** All Critical/Important
 issues raised during the Epic were FIXED/closed within their block's
@@ -258,16 +258,70 @@ INT-1 escalation is **resolved**, not re-raised.
 
 ---
 
+## Repair Wave INTEGRATION-W1 (INTEGRATION-REPAIR-1 → -VERIFY)
+
+**Date:** 2026-05-17
+**Scope:** Phase-4 integration repair — INT-3 + INT-4 only (INT-2 left
+out-of-scope-recorded per D3; explicitly NOT touched).
+**Findings addressed:** 2 (🟢2 / 🟡0 / ❌0 — 0 Crit / 0 Imp / 2 NTH)
+
+| Finding ID | Severity | File | Status | Fix description |
+|------------|----------|------|--------|-----------------|
+| INT-3 | NTH | `app/src/test/java/net/devemperor/dictate/core/CutoverArchitectureInvariantTest.kt` (new) | fixed | Pure-JVM source-scan AC-10 regression-lock (8 tests = 4 invariant + 4 stripper-soundness self-tests). Strips comments+strings, then asserts (a) exactly one functional `JobExecutor.INSTANCE.start(` in the IME inside `startResumeJob` (the RESUME carve-out); (b) zero `USE_LEGACY_RECORDING_DRIVE` in `app/src/main` functional code; (c) zero functional refs to the 4 deleted controllers (doc-anchors stripped/allowed); (d) stub `pipelineRunner`/`notificationCoordinator` not wired in `DictatePipelineService.onCreate` + real adapter/coordinator are. |
+| INT-4 | NTH | `dictate-cutover-completion.state.md` (`## Repair-Sub-Phase Log` header) | fixed | One-paragraph note: `F-N` IDs are block-local; read a bare `F-N` as `B{X}-VAL F-N`, disambiguated by the Wave-ID column; cross-block carries spelled out inline. |
+
+**Cross-fix conflicts:** none.
+**Files modified:** `CutoverArchitectureInvariantTest.kt` (new, 1 file),
+`dictate-cutover-completion.state.md` (INT-4 note + log row + Phase-4
+YAML), `reports/integration-check.md` (this report).
+**Files in findings-scope:** the new test file + the state-file (the
+two finding targets).
+**Files outside findings-scope (drift):** none. The diff is **DISJOINT
+from `app/src/main`** — test + docs only, zero production-source change
+(verified by `git status app/src/main` = clean).
+
+**Non-vacuity argument (would it catch a reintroduced
+parallel-dormant/double-dispatch?):** Yes — proven two ways.
+(1) *Self-tests*: each of the four invariant assertions has a paired
+`commentStripperIsSound*` test that feeds the comment-stripper a
+synthetic snippet containing the banned construct once in code and
+once in a comment/string, asserting code survives and doc is dropped —
+so the comment-strip cannot mask a real regression.
+(2) *Empirical mutation*: a second `JobExecutor.INSTANCE.start(`
+recording-trigger was temporarily injected into
+`DictateInputMethodService.java` as real code; the
+`exactlyOneJobExecutorStartInIme_andItIsTheResumeCarveOut` test went
+**RED** (counted 2, expected 1) — the exact double-dispatch failure
+class the parent-plan INT-1 described. Mutation reverted clean
+(`git status app/src/main` empty). The same RED-on-regression holds
+for invariant (b) (re-added dead switch), (c) (re-wired deleted
+controller), and (d) (reverted-to-stub `onCreate` wiring).
+
+**Self-check (validate-fixes.resume.md):** `./gradlew assembleDebug`
+green; `./gradlew test --rerun-tasks` (testDebugUnitTest +
+testReleaseUnitTest) green at 1180/0/0 both variants (1172 baseline +
+8 new INT-3 tests); CR-RGATE `RenderPathCutoverGateTest` 5/5 +
+`DictateCutoverE2ETest` 10/10 stay green. Completeness: both in-scope
+findings addressed, none silently skipped; INT-2 deliberately left
+`out-of-scope-recorded` per the carve-out. No new issues forwarded.
+**Repair-sub-phase: ✓ converged.**
+
+---
+
 ## Disposition
 
-5 findings documented (1 = the resolved central verdict / informational;
-4 Nice-to-have, all non-blocking). **No fixes applied** (audit-class
-agent, D7). The original INT-1 — the reason this Epic exists — is
-**code-verified RESOLVED**: the new architecture is live in production,
-the legacy paths it rendered dormant are deleted, no parallel-dormant
-layer remains in the cutover surface. The two NTH follow-up observations
-(INT-2 pre-existing out-of-scope HistoryDetailActivity; INT-3 optional
-AC-10 architecture-test guard) and the two doc-hygiene NTH items ride
-along to Phase 5 closure as documented known-gaps — none blocks archival.
-Phase 5 may proceed (this is the substantive answer the parent INT-1
-escalation demanded: the Epic did what it set out to do).
+5 findings documented (INT-1 = the resolved central verdict /
+informational; 4 Nice-to-have). The original INT-1 — the reason this
+Epic exists — is **code-verified RESOLVED**: the new architecture is
+live in production, the legacy paths it rendered dormant are deleted,
+no parallel-dormant layer remains in the cutover surface.
+**INTEGRATION-W1 then closed the two actionable NTH follow-ups:**
+INT-3 is now guarded by `CutoverArchitectureInvariantTest` (the D4
+regression-lock, non-vacuity self-tested + empirically RED-proven), and
+INT-4's per-block `F-N` namespace is documented in the state-file
+Repair-Sub-Phase-Log header. **INT-2 remains out-of-scope-recorded by
+design** (D3 pre-existing non-IME carve-out, AC-10 holds) — a
+documented Phase-5 follow-up, non-blocking. No issue blocks archival.
+Phase 4.5 / Phase 5 may proceed (this is the substantive answer the
+parent INT-1 escalation demanded: the Epic did what it set out to do,
+and the single-architecture invariant is now regression-locked).

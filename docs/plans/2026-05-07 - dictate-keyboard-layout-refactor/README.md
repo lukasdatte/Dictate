@@ -115,8 +115,9 @@ Plan-review + quality-gate artefacts in `./plan-review/` and
 
 This plan is **genuinely German-native** (its plan file + 3 specs +
 several research files). See **Language Disposition (Phase 5b/5c)**
-below for the per-file audit, what received a real `.en.md`, and what
-remains a tracked outstanding sidecar deliverable.
+below for the per-file audit. **All genuinely-German plan-scope docs
+now have a complete, parity-verified `.en.md`** — the EN-sidecar
+deliverable is closed (no outstanding items).
 
 ## Language Disposition (Phase 5b/5c)
 
@@ -139,10 +140,10 @@ require** a real `.en.md`.
 
 | File | Lines | Prose language | Action |
 |------|------:|----------------|--------|
-| `dictate-keyboard-layout-refactor.reviewed.md` | 1717 | **german-native** (German body throughout — "Symptom-Geschichte", "Architektur-Vision", …) | real `.en.md` REQUIRED (split per D16 — `…-0-overview.en.md` … `…-N-{block}.en.md`) — **OUTSTANDING** |
-| `research/1-pipeline-service/1-pipeline-service.reviewed.md` (Spec 1) | 7023 | **german-native** ("Diese Spec beschreibt die Service-Schicht …") | real `.en.md` REQUIRED — **OUTSTANDING** |
-| `research/2-keyboard-layout/2-keyboard-layout.reviewed.md` (Spec 2) | 2613 | **german-native** | real `.en.md` REQUIRED — **OUTSTANDING** |
-| `research/3-floating-overlay/3-floating-overlay.reviewed.md` (Spec 3) | 2868 | **german-native** | real `.en.md` REQUIRED — **OUTSTANDING** |
+| `dictate-keyboard-layout-refactor.reviewed.md` | 1717 | **german-native** (German body throughout — "Symptom-Geschichte", "Architektur-Vision", …) | ✅ split per D16 — `dictate-keyboard-layout-refactor.reviewed-0-overview.en.md` / `…-1-building-blocks.en.md` / `…-2-specs-risks-references-iteration-log.en.md` (9 top-level + 67 sub-headings 1:1; 32/32 fenced blocks byte-identical) |
+| `research/1-pipeline-service/1-pipeline-service.reviewed.md` (Spec 1) | 7023 | **german-native** ("Diese Spec beschreibt die Service-Schicht …") | ✅ `research/1-pipeline-service/1-pipeline-service.reviewed.en.md` (152/152 headings; 79/79 fenced blocks byte-identical) |
+| `research/2-keyboard-layout/2-keyboard-layout.reviewed.md` (Spec 2) | 2613 | **german-native** | ✅ `research/2-keyboard-layout/2-keyboard-layout.reviewed.en.md` (75/75 headings; 29/29 fenced blocks byte-identical) |
+| `research/3-floating-overlay/3-floating-overlay.reviewed.md` (Spec 3) | 2868 | **german-native** | ✅ `research/3-floating-overlay/3-floating-overlay.reviewed.en.md` (94/94 headings; 49/49 fenced blocks byte-identical) |
 | `research/motionlayout-architecture-options.md` | 312 | **german-native** | ✅ `research/motionlayout-architecture-options.en.md` |
 | `research/main-button-area-inventory.md` | 536 | **german-native** | ✅ `research/main-button-area-inventory.en.md` |
 | `research/_pending-ime-lifecycle-view-recreation/_pending-ime-lifecycle-view-recreation.md` | 464 | **german-native** | ✅ `…/_pending-ime-lifecycle-view-recreation.en.md` |
@@ -153,24 +154,31 @@ require** a real `.en.md`.
 | `research/b5-ime-activation-wiring.md` | 801 | english-native (spec) | attested english-native — **no sidecar (SSoT)** |
 | `research/manual-paste-field-architecture.md` | 400 | english-native | attested english-native — **no sidecar (SSoT)** |
 
-**Real `.en.md` files produced this session: 6** — all six
-German-native research files were translated 1:1 (code blocks,
-identifiers, file paths, ASCII diagrams kept verbatim; only prose +
-headings translated):
-`research/motionlayout-architecture-options.en.md`,
-`research/main-button-area-inventory.en.md`, and the four
-`research/_pending-*/_pending-*.en.md` companions.
+**Real `.en.md` files produced: 12 (all German-native plan-scope
+docs — COMPLETE)** — every German-native doc was translated 1:1 (code
+blocks, identifiers, file paths, ASCII diagrams kept verbatim; only
+prose + headings + table cells translated):
 
-**Genuinely German, EN-sidecar OUTSTANDING (not skipped, not
-attested-English): 4** — the plan file (1717 lines) and the 3 specs
-(7023 / 2613 / 2868 lines, ~12,500 lines of dense technical German).
-These are real German work that the EN-sidecar convention requires;
-they are recorded here and in the state-file
-`plan_lifecycle.en_translation.outstanding-genuine-german` as a
-tracked, still-open deliverable rather than falsely closed. Honesty
-note: this Phase 5b/5c session completed the six tractable German
-research files; the plan + 3 specs were not produced in this session
-and remain owed.
+- *Phase 5b/5c wave 1 (6 research files):*
+  `research/motionlayout-architecture-options.en.md`,
+  `research/main-button-area-inventory.en.md`, and the four
+  `research/_pending-*/_pending-*.en.md` companions.
+- *Phase 5b/5c wave 2 (the plan + 3 specs, ~14,200 lines of dense
+  technical German):* the plan-file split into the three
+  `dictate-keyboard-layout-refactor.reviewed-{0,1,2}-*.en.md` files
+  (D16, >1500 lines), plus `1-pipeline-service.reviewed.en.md`,
+  `2-keyboard-layout.reviewed.en.md`,
+  `3-floating-overlay.reviewed.en.md`.
+
+**EN-sidecar deliverable: CLOSED — 0 outstanding.** Earlier in the
+Phase 5b/5c session the plan + 3 specs were honestly recorded as a
+tracked-outstanding deliverable (not falsely closed); wave 2 then
+produced and parity-verified them (heading-count, fenced-block-count,
+and code-block byte-identity each confirmed against source per file).
+ASCII diagrams inside fenced blocks retain German inner labels by the
+rule-mandated byte-identity of fenced content (translating them would
+have broken the code-block-invariance gate) — a deliberate,
+documented trade-off.
 
 **English-native, no sidecar (SSoT): 3** — `b3-cleanup-cascade-…`,
 `b5-ime-activation-wiring`, `manual-paste-field-architecture` are

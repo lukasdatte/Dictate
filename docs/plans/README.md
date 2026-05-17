@@ -89,12 +89,13 @@ dated-folder plans:
   **english-native** (authored by the implement-long-plan agents); **0
   sidecars**, correctly so.
 - `2026-05-07 - dictate-keyboard-layout-refactor` — genuinely
-  **German-native** (German working-language era). 6 German research
-  files translated (real `.en.md`); plan file + 3 specs (~12,500 lines
-  of German) recorded as a **tracked outstanding** EN-sidecar
-  deliverable (not skipped, not falsely closed); 3 English-native
-  research files attested with no sidecar. See that plan's README +
-  state-file `plan_lifecycle.en_translation`.
+  **German-native** (German working-language era). **All 12
+  German-native plan-scope docs translated to parity-verified `.en.md`
+  — EN-sidecar deliverable CLOSED, 0 outstanding** (wave 1: 6 research
+  files; wave 2: the plan-file split per D16 + the 3 specs, ~14,200
+  lines of dense technical German); 3 English-native research files
+  attested with no sidecar. See that plan's README + state-file
+  `plan_lifecycle.en_translation`.
 
 ## The `archive/` subdirectory
 

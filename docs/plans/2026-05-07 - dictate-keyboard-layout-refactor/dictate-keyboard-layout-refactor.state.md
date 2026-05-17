@@ -92,24 +92,25 @@ deferred_phases:
 en_translation:
   decided_at: 2026-05-17
   decided_by: PHASE5-TRANSLATE (Phase 5b/5c, D4 disposition)
+  status: CLOSED — all genuinely-German plan-scope docs translated, 0 outstanding
   done:
+    # wave 1 — 6 German research files
     - research/motionlayout-architecture-options.en.md
     - research/main-button-area-inventory.en.md
     - research/_pending-ime-lifecycle-view-recreation/_pending-ime-lifecycle-view-recreation.en.md
     - research/_pending-layout-container-architecture/_pending-layout-container-architecture.en.md
     - research/_pending-persistence-background-architecture/_pending-persistence-background-architecture.en.md
     - research/_pending-state-machine-visibility-owners/_pending-state-machine-visibility-owners.en.md
-  outstanding-genuine-german:
-    # NOT skipped, NOT attested-english — these are genuinely German-authored
-    # and DO require a real .en.md per language-conventions.md. The 5b/5c
-    # session translated the 6 tractable German research files; the plan
-    # file + 3 specs (~14,200 lines of dense technical German) remain a
-    # tracked outstanding EN-sidecar deliverable. See README "Language
-    # Disposition (Phase 5b/5c)".
-    - dictate-keyboard-layout-refactor.reviewed.md          # 1717 lines — split-output per D16 when produced
-    - research/1-pipeline-service/1-pipeline-service.reviewed.md       # 7023 lines
-    - research/2-keyboard-layout/2-keyboard-layout.reviewed.md         # 2613 lines
-    - research/3-floating-overlay/3-floating-overlay.reviewed.md       # 2868 lines
+    # wave 2 — the plan-file (split per D16, >1500 lines) + the 3 specs
+    # (~14,200 lines of dense technical German). Each parity-verified:
+    # heading-count, fenced-block-count, code-block byte-identity.
+    - dictate-keyboard-layout-refactor.reviewed-0-overview.en.md          # plan split 1/3
+    - dictate-keyboard-layout-refactor.reviewed-1-building-blocks.en.md   # plan split 2/3
+    - dictate-keyboard-layout-refactor.reviewed-2-specs-risks-references-iteration-log.en.md  # plan split 3/3
+    - research/1-pipeline-service/1-pipeline-service.reviewed.en.md       # 152/152 headings, 79/79 blocks byte-identical
+    - research/2-keyboard-layout/2-keyboard-layout.reviewed.en.md         # 75/75 headings, 29/29 blocks byte-identical
+    - research/3-floating-overlay/3-floating-overlay.reviewed.en.md       # 94/94 headings, 49/49 blocks byte-identical
+  outstanding-genuine-german: []   # CLOSED — wave 2 produced + parity-verified the plan + 3 specs
   english-native-no-sidecar:
     # german-only-headings / english-native prose — SSoT: a near-verbatim
     # sidecar is the redundant duplication the SSoT rule forbids; the

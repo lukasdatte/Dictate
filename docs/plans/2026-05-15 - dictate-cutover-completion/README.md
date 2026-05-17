@@ -187,11 +187,12 @@ SSoT rule.
 > **Note on the parent plan:** the parent
 > `2026-05-07 - dictate-keyboard-layout-refactor` is genuinely
 > **German-native** (its plan file + 3 specs + several research files).
-> This Phase 5b/5c session translated 6 of its German research files
-> (real `.en.md` produced); its plan file + 3 specs remain a tracked
-> outstanding EN-sidecar deliverable. See that plan's README "Language
-> Disposition (Phase 5b/5c)" + its state-file
-> `plan_lifecycle.en_translation`.
+> Phase 5b/5c translated **all 12** of its German-native plan-scope
+> docs to parity-verified `.en.md` (6 research files in wave 1; the
+> plan-file split per D16 + the 3 specs, ~14,200 lines, in wave 2) —
+> the parent's EN-sidecar deliverable is **CLOSED, 0 outstanding**. See
+> that plan's README "Language Disposition (Phase 5b/5c)" + its
+> state-file `plan_lifecycle.en_translation`.
 
 ## Related plans
 

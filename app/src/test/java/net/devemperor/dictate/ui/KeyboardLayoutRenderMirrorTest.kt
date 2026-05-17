@@ -2,9 +2,10 @@ package net.devemperor.dictate.ui
 
 import android.content.Context
 import android.view.View
+import androidx.appcompat.view.ContextThemeWrapper
 import androidx.test.core.app.ApplicationProvider
-import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.android.material.button.MaterialButton
+import net.devemperor.dictate.R
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.InsertionTarget
 import net.devemperor.dictate.state.LayoutState
@@ -24,60 +25,66 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.io.File
 
 /**
- * Espresso/instrumented UI tests covering Spec 2 §14.2 (UI-Test 1..10).
+ * **OQ-4 — the CI-green Robolectric mirror of [KeyboardLayoutUiTest].**
  *
- * # What these assert (Spec 2 §14.2 SoT — verbatim test-body table)
+ * `connectedAndroidTest` device infra is unavailable in this CI
+ * environment (Epic §6 R-6). Per OQ-4 each Spec 2 §14.2 UI-1..10 test
+ * also ships an equivalent Robolectric render-assertion: this class is
+ * that mirror. AC-8 is satisfied if **either** the Espresso device body
+ * **or** this mirror is green — and this mirror is the path that runs
+ * green here under `./gradlew test`.
  *
- * Each `ui{N}_*` test maps 1:1 to a row of the Spec 2 §14.2
- * Integration-Tests table and the §1.1 bug-symptom it guards:
+ * # 1:1 fidelity with the device body
  *
- * | Test  | §14.2 row | §1.1 bug-symptom |
- * |-------|-----------|------------------|
- * | UI-1  | Toggle Single-Row in Idle — all 8 buttons visible | §1.1 #1 |
- * | UI-2  | Recording → resend GONE, trash/pause VISIBLE      | coverage-baseline |
- * | UI-3  | Pipeline → record_btn counter text, trash/pause GONE | coverage-baseline (F-13) |
- * | UI-4  | Send-Mode + Single-Row → record_btn unobstructed  | §1.1 #3a |
- * | UI-5  | ReprocessStaging → pause VISIBLE+disabled+α 0.4   | coverage-baseline |
- * | UI-6  | Re-Inflate during Recording → correct mode 1st frame | coverage-baseline |
- * | UI-7  | Toggle Single-Row during Recording → pulse continues | §1.1 #2 |
- * | UI-8  | Toggle Two↔Single in Idle+lastAudio → resend stays VISIBLE | §1.1 #3b |
- * | UI-9  | Resend cooldown → VISIBLE+enabled=false+α 0.4      | §1.1 #3b |
- * | UI-10 | Active→Pipeline-Preparing → no trash/pause overlap | §1.1 #3a+#3b |
+ * Every `ui{N}_*` here drives the **same production render path** as the
+ * androidTest body — the real [KeyboardLayoutManager.computeLayoutMode]
+ * mode-selector + the production [applySlotToView] SSoT slot→view writer
+ * (`ImeViewBackend.render` calls exactly these per slot) — over real
+ * Robolectric `MaterialButton` Views, with byte-identical assertions.
+ * A divergence between the two is a real regression, not a harness
+ * artefact. Each test maps 1:1 to its UI-N + the §1.1 bug-symptom it
+ * guards (the resend-visibility bug-class §1.1 #3a/#3b, the
+ * single-row-toggle re-parenting bug-class §1.1 #1/#2, and the F-13
+ * live-counter coverage-baseline).
  *
- * # Why the render-path harness (not `InputMethodManager` launch)
+ * # Post-cutover sole-driver assumption
  *
- * The post-cutover render path is the **sole** driver: the 4 legacy
- * controllers (`KeyboardUiController` / `RecordingUiController` /
- * `MainButtonsController` / `KeyboardStateManager`) were deleted in
- * Theme-C-R (CR-DEL), so the IME renders **only** through
- * [KeyboardLayoutManager.computeLayoutMode] → [applySlotToView] over
- * the [LayoutCatalog]. These tests exercise that exact production
- * render path against real Android `MaterialButton` Views (Espresso's
- * `ViewMatchers` ultimately read the same `View.visibility` /
- * `isEnabled` / `alpha` / `text`). [applySlotToView] is the production
- * SSoT slot→view writer (`ImeViewBackend.render` calls it per slot);
- * driving it directly keeps the device test free of the
- * `ModuleServices` DI container (only the click path needs it — these
- * tests assert render output, not clicks; click wiring is
- * `ImeViewBackendTest`'s scope). Launching the full IME via
- * `InputMethodManager` is device-infra brittle (R-6) and orthogonal to
- * the §14.2 render-correctness assertions.
+ * The 4 legacy controllers (`KeyboardUiController` /
+ * `RecordingUiController` / `MainButtonsController` /
+ * `KeyboardStateManager`) were deleted in Theme-C-R (CR-DEL), so this
+ * IS the real post-cutover render path — there is no parallel legacy
+ * path left to accidentally assert against.
  *
- * OQ-4: AC-8 is satisfied if **either** this device body **or** its
- * Robolectric mirror ([net.devemperor.dictate.ui.KeyboardLayoutRenderMirrorTest])
- * is green. The mirror runs green under `./gradlew test` (the CI path);
- * this body is the `connectedAndroidTest` device path. The assertions
- * are intentionally identical so a divergence is a real regression.
+ * # R-7 tearDown discipline
  *
- * @see net.devemperor.dictate.ui.KeyboardLayoutRenderMirrorTest
+ * This mirror uses the lightweight direct render-path harness (real
+ * catalog + real `applySlotToView` over fresh per-test Views) — it does
+ * **not** boot `DictatePipelineService`, so the process-wide singletons
+ * the Epic R-7 discipline guards (`JobExecutor` / `ActiveJobRegistry` /
+ * `DurationHealingScheduler` / `DictateDatabase`) are never touched.
+ * The R-7 `resetForTest` seams therefore do not apply here (same shape
+ * as the existing `ImeViewBackendTest` / `LayoutCatalogTest`, which
+ * also drive the render path without a service boot and carry no such
+ * tearDown). No shared mutable state crosses tests; each test builds
+ * fresh Views in [setUp].
+ *
+ * **K-1 / K-4** — no mocking framework (real production catalog +
+ * `applySlotToView`); Robolectric is the justified opt-out per OQ-4 /
+ * Spec 2 §14.2 (the assertions read real `View.visibility` / `alpha` /
+ * `isEnabled` / `text`, only observable through real Android Views).
+ *
+ * @see net.devemperor.dictate.ui.KeyboardLayoutUiTest
  * @see net.devemperor.dictate.state.render.SlotRenderer
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §14.2
  */
-@RunWith(AndroidJUnit4::class)
-class KeyboardLayoutUiTest {
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class KeyboardLayoutRenderMirrorTest {
 
     private lateinit var ctx: Context
     private lateinit var catalog: LayoutCatalog
@@ -86,31 +93,21 @@ class KeyboardLayoutUiTest {
 
     @Before
     fun setUp() {
-        ctx = ApplicationProvider.getApplicationContext()
-        catalog = LayoutCatalog(uiTestLayoutStrings())
-        // Real Android MaterialButtons — Espresso reads the same
-        // View.visibility / isEnabled / alpha / text these resolvers write.
+        val app = ApplicationProvider.getApplicationContext<Context>()
+        ctx = ContextThemeWrapper(app, R.style.Theme_Dictate)
+        catalog = LayoutCatalog(mirrorLayoutStrings())
         buttons = LogicalButtonId.entries
             .filter { it.name.startsWith("OVERLAY_").not() }
             .associateWith { MaterialButton(ctx) }
-        // The real production mode-selector (KeyboardLayoutManager is
-        // what the bound service drives via onStateChanged).
         manager = KeyboardLayoutManager(catalog) { /* click-sink unused */ }
     }
 
-    // ─── Render harness — the production SSoT path ────────────────────
+    // ─── Render harness — the production SSoT path (mirror of the body) ─
 
-    /**
-     * Render [state] exactly as `ImeViewBackend.render` does: pick the
-     * mode via the real [KeyboardLayoutManager.computeLayoutMode], then
-     * apply every slot via the production [applySlotToView] SSoT writer.
-     * Returns the chosen [LayoutMode].
-     */
     private fun render(state: DictateUiState): LayoutMode {
         val mode = manager.computeLayoutMode(state)
         mode.slots.forEach { slot ->
-            val view = buttons.getValue(slot.logicalId)
-            applySlotToView(slot, view, state, ctx)
+            applySlotToView(slot, buttons.getValue(slot.logicalId), state, ctx)
         }
         return mode
     }
@@ -160,11 +157,7 @@ class KeyboardLayoutUiTest {
         LogicalButtonId.RESEND, LogicalButtonId.AUDIO_FOCUS,
     )
 
-    // ════════════════════════════════════════════════════════════════
-    // UI-1 — §1.1 #1: Toggle Single-Row in Idle. All 8 buttons present
-    //        in single-row layout. The §1.1 #1 bug (trash/pause
-    //        forgotten on the single-row toggle) is structurally absent.
-    // ════════════════════════════════════════════════════════════════
+    // ─── UI-1 — §1.1 #1 ───────────────────────────────────────────────
 
     @Test
     fun ui1_toggleSingleRowInIdle_showsAllButtons() {
@@ -176,9 +169,6 @@ class KeyboardLayoutUiTest {
             LayoutModeId.KEYBOARD_SINGLE_ROW,
             mode.id,
         )
-        // §1.1 #1: TRASH + PAUSE must NOT be dropped from the mode on
-        // the single-row toggle — all 8 original logical buttons stay
-        // present (subset check; the catalog later gained WIDGET_TOGGLE).
         assertTrue(
             "UI-1 (§1.1 #1): single-row mode must carry all 8 original " +
                 "logical buttons — none dropped on the toggle (esp. " +
@@ -187,8 +177,6 @@ class KeyboardLayoutUiTest {
             mode.slots.map { it.logicalId }.toSet()
                 .containsAll(originalSingleRowButtons),
         )
-        // RECORD / SPACE / BACKSPACE / ENTER / AUDIO_FOCUS are
-        // unconditionally visible in Idle single-row.
         assertEquals(View.VISIBLE, vis(LogicalButtonId.RECORD))
         assertEquals(View.VISIBLE, vis(LogicalButtonId.SPACE))
         assertEquals(View.VISIBLE, vis(LogicalButtonId.BACKSPACE))
@@ -196,10 +184,7 @@ class KeyboardLayoutUiTest {
         assertEquals(View.VISIBLE, vis(LogicalButtonId.AUDIO_FOCUS))
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // UI-2 — coverage-baseline: recording active hides resend, shows
-    //        trash + pause.
-    // ════════════════════════════════════════════════════════════════
+    // ─── UI-2 — coverage-baseline ──────────────────────────────────────
 
     @Test
     fun ui2_activeRecording_hidesResend_showsTrashPause() {
@@ -210,10 +195,7 @@ class KeyboardLayoutUiTest {
         assertEquals("UI-2: PAUSE VISIBLE while recording", View.VISIBLE, vis(LogicalButtonId.PAUSE))
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // UI-3 — coverage-baseline (F-13): Recording-Stop → Pipeline →
-    //        record_btn shows the live counter; trash/pause GONE.
-    // ════════════════════════════════════════════════════════════════
+    // ─── UI-3 — coverage-baseline (F-13) ───────────────────────────────
 
     @Test
     fun ui3_pipelineRunning_recordButtonShowsCounter() {
@@ -225,22 +207,16 @@ class KeyboardLayoutUiTest {
             LayoutModeId.KEYBOARD_TWO_ROW_SEND_MODE,
             mode.id,
         )
-        // F-13: record_btn text comes from formatPipelineLabel(1,3,..).
         assertEquals(
             "UI-3: record_btn must render the live F-13 counter",
             "1/3  1000ms",
             text(LogicalButtonId.RECORD).toString(),
         )
-        // SEND_MODE structurally hides trash + pause (bug #3a eliminator).
         assertEquals(View.GONE, vis(LogicalButtonId.TRASH))
         assertEquals(View.GONE, vis(LogicalButtonId.PAUSE))
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // UI-4 — §1.1 #3a (critical bug-fix verifier): Send-Mode +
-    //        Single-Row keeps the record_btn unobstructed (trash/pause
-    //        hardcoded GONE — they used to cover the send button).
-    // ════════════════════════════════════════════════════════════════
+    // ─── UI-4 — §1.1 #3a ──────────────────────────────────────────────
 
     @Test
     fun ui4_sendModeSingleRow_recordButtonFullyVisible() {
@@ -256,9 +232,6 @@ class KeyboardLayoutUiTest {
             View.VISIBLE,
             vis(LogicalButtonId.RECORD),
         )
-        // §1.1 #3a eliminator: TRASH + PAUSE are hardcoded `{ false }`
-        // in the SEND_MODE catalog entries so they cannot cover the
-        // send button.
         assertEquals(
             "UI-4 (§1.1 #3a): TRASH must be GONE in single-row send-mode",
             View.GONE,
@@ -271,10 +244,7 @@ class KeyboardLayoutUiTest {
         )
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // UI-5 — coverage-baseline: ReprocessStaging → pause VISIBLE,
-    //        disabled, alpha 0.4.
-    // ════════════════════════════════════════════════════════════════
+    // ─── UI-5 — coverage-baseline ──────────────────────────────────────
 
     @Test
     fun ui5_reprocessStaging_pauseDisabledAlpha04() {
@@ -292,20 +262,11 @@ class KeyboardLayoutUiTest {
         assertEquals("UI-5: PAUSE alpha 0.4 in staging", 0.4f, alpha(LogicalButtonId.PAUSE), 0.001f)
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // UI-6 — coverage-baseline: Re-Inflate (rotation) during Recording.
-    //        The correct LayoutMode is selected on the first frame after
-    //        re-render (the re-inflate analogue) — Recording stays the
-    //        driver.
-    // ════════════════════════════════════════════════════════════════
+    // ─── UI-6 — coverage-baseline ──────────────────────────────────────
 
     @Test
     fun ui6_rotationDuringRecording_animationContinues() {
         render(active())
-        // Rotation = IME view re-inflate = a fresh render of the same
-        // recording state. The first frame after re-inflate must select
-        // the correct (recording-driven) LayoutMode — the §14.2
-        // "korrekter LayoutMode auf erstem Frame" guarantee.
         val firstFrameMode = render(active())
 
         assertEquals(
@@ -314,17 +275,11 @@ class KeyboardLayoutUiTest {
             LayoutModeId.KEYBOARD_TWO_ROW,
             firstFrameMode.id,
         )
-        // Animation continues because the recording FSM stayed Active
-        // across the re-inflate (the controls reflect that).
         assertEquals(View.VISIBLE, vis(LogicalButtonId.TRASH))
         assertEquals(View.VISIBLE, vis(LogicalButtonId.PAUSE))
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // UI-7 — §1.1 #2: Toggle Single-Row during Recording. The send-btn
-    //        position changes (mode flips) but recording stays active
-    //        (the §1.1 #2 re-parenting bug used to drop the pulse).
-    // ════════════════════════════════════════════════════════════════
+    // ─── UI-7 — §1.1 #2 ───────────────────────────────────────────────
 
     @Test
     fun ui7_toggleSingleRowDuringRecording_pulseAnimationContinues() {
@@ -339,8 +294,6 @@ class KeyboardLayoutUiTest {
         )
         assertEquals(LayoutModeId.KEYBOARD_TWO_ROW, twoRow.id)
         assertEquals(LayoutModeId.KEYBOARD_SINGLE_ROW, singleRow.id)
-        // Recording survives the toggle — the controls stay shown
-        // (§1.1 #2: the old re-parenting code dropped them mid-toggle).
         assertEquals(View.VISIBLE, vis(LogicalButtonId.RECORD))
         assertEquals(
             "UI-7: TRASH stays VISIBLE across the toggle (recording active)",
@@ -349,10 +302,7 @@ class KeyboardLayoutUiTest {
         )
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // UI-8 — §1.1 #3b: Toggle Two-Row ↔ Single-Row in Idle+lastAudio.
-    //        The resend button stays visibility=VISIBLE in EVERY frame.
-    // ════════════════════════════════════════════════════════════════
+    // ─── UI-8 — §1.1 #3b ──────────────────────────────────────────────
 
     @Test
     fun ui8_resendStaysVisibleAcrossToggle() {
@@ -376,11 +326,7 @@ class KeyboardLayoutUiTest {
         )
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // UI-9 — §1.1 #3b: Resend cooldown. After a resend click the button
-    //        stays VISIBLE, becomes enabled=false, alpha 0.4. Visibility
-    //        is NOT cooldown-coupled (Spec 2 §8.5 forbidden-pattern).
-    // ════════════════════════════════════════════════════════════════
+    // ─── UI-9 — §1.1 #3b ──────────────────────────────────────────────
 
     @Test
     fun ui9_resendCooldown_visibleDisabledAlpha04() {
@@ -411,24 +357,14 @@ class KeyboardLayoutUiTest {
         )
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // UI-10 — §1.1 #3a + #3b cross-bug: Active → Pipeline-Preparing
-    //         transition. Across every frame neither trash nor pause is
-    //         rendered VISIBLE in the send-mode layout (so they can
-    //         never be drawn over record_btn).
-    // ════════════════════════════════════════════════════════════════
+    // ─── UI-10 — §1.1 #3a + #3b cross-bug ─────────────────────────────
 
     @Test
     fun ui10_activeToPipelinePreparing_noOverlap() {
-        // Frame 1: Active recording (trash/pause VISIBLE — expected).
         render(active())
         assertEquals(View.VISIBLE, vis(LogicalButtonId.TRASH))
         assertEquals(View.VISIBLE, vis(LogicalButtonId.PAUSE))
 
-        // Frame 2: stop → Pipeline Preparing. The mode flips to
-        // SEND_MODE where TRASH + PAUSE are hardcoded `{ false }` —
-        // they can NEVER be drawn over the record_btn (§1.1 #3a),
-        // and the resend button stays out of the way too (§1.1 #3b).
         val preparing = idle().copy(
             pipeline = PipelineUiState.Preparing(sessionId = "ui-sess"),
         )
@@ -460,13 +396,11 @@ class KeyboardLayoutUiTest {
 }
 
 /**
- * Deterministic [LayoutStrings] for the UI tests — literal English
- * strings + a counter formatter that surfaces the F-13 fields so UI-3
- * can assert the live record-button label. Kept local (not the
- * `state.layout`-internal `testLayoutStrings`) so the androidTest
- * source-set has no cross-package internal dependency.
+ * Deterministic [LayoutStrings] for the mirror — byte-identical to the
+ * androidTest body's `uiTestLayoutStrings` so UI-3's record-button
+ * counter assertion is the same string on both paths.
  */
-internal fun uiTestLayoutStrings(): LayoutStrings = LayoutStrings(
+internal fun mirrorLayoutStrings(): LayoutStrings = LayoutStrings(
     record = "Record",
     send = "Send (en)",
     sending = "Sending …",

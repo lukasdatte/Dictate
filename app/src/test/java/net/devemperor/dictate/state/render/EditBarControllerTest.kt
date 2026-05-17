@@ -317,4 +317,57 @@ class EditBarControllerTest {
             captured[v.pipelineCancelButton.id],
         )
     }
+
+    // ── 6. F-3 (B5-VAL) — edit-bar audio-focus icon twin tracks state ──
+
+    @Test
+    fun `F-3 refreshAudioFocusIcon enabled sets volume_off + state-on description`() {
+        val c = newController()
+
+        c.refreshAudioFocusIcon(true)
+
+        // Parity with the deleted legacy MainButtonsController
+        // refreshAudioFocusIcon edit-bar tier: enabled → volume_off +
+        // the "state on" contentDescription (shared resolveAudioFocusIcon
+        // SSoT — cannot drift from the AUDIO_FOCUS slot twin).
+        assertEquals(
+            ctx.getString(R.string.dictate_audio_focus_state_on),
+            views.editAudioFocusButton.contentDescription,
+        )
+        assertTrue(
+            "enabled → a foreground drawable must be set (no longer frozen)",
+            views.editAudioFocusButton.foreground != null,
+        )
+    }
+
+    @Test
+    fun `F-3 refreshAudioFocusIcon disabled sets volume_up + state-off description`() {
+        val c = newController()
+
+        c.refreshAudioFocusIcon(false)
+
+        assertEquals(
+            ctx.getString(R.string.dictate_audio_focus_state_off),
+            views.editAudioFocusButton.contentDescription,
+        )
+        assertTrue(
+            "disabled → a foreground drawable must be set",
+            views.editAudioFocusButton.foreground != null,
+        )
+    }
+
+    @Test
+    fun `F-3 refreshAudioFocusIcon toggles the description on state change`() {
+        val c = newController()
+
+        c.refreshAudioFocusIcon(true)
+        val onDesc = views.editAudioFocusButton.contentDescription
+        c.refreshAudioFocusIcon(false)
+        val offDesc = views.editAudioFocusButton.contentDescription
+
+        assertTrue(
+            "the edit-bar twin must track audio-focus state, not stay frozen",
+            onDesc != offDesc,
+        )
+    }
 }

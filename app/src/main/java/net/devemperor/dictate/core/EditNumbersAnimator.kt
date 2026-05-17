@@ -40,7 +40,8 @@ import android.view.animation.DecelerateInterpolator
  * @property isSmallMode supplier for the current small-mode flag (the
  *   rotation target depends on it: 180° in small-mode, 0° otherwise).
  *
- * @see net.devemperor.dictate.core.MainButtonsController
+ * Provenance: extracted from the (now deleted, CR-DEL) legacy
+ * `MainButtonsController` edit-numbers rotation-animation delegate.
  * @see net.devemperor.dictate.keyboard.KeyPressAnimator
  * @see docs/plans/2026-05-15 - dictate-cutover-completion/research/render-path-cutover.md §3 G15 / §7 A2
  */

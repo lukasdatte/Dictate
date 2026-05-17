@@ -1,0 +1,99 @@
+# Audit Report: convention (Block 5, scope: full-block)
+
+**Agent-ID:** B5-AUDIT-CONVENTION
+**Date:** 2026-05-17
+**Knowledge skills used:** knowledge-reference (TypeScript/plugin-pattern oriented — not directly applicable to this Kotlin/Android codebase; primary grounding was the project `CLAUDE.md` convention set + established sibling-class conventions in `state/render/`)
+**Files inspected:** 18
+- `app/src/main/java/net/devemperor/dictate/state/render/EditBarController.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/EmojiController.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/OverlayCharactersController.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/RenderGate.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/SpecialTouchHandlerInstaller.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/PipelineStepRowRenderer.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/QwertzRecordingController.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/ContentAreaController.kt` (sibling baseline + modified)
+- `app/src/main/java/net/devemperor/dictate/state/render/OverlayResetHandler.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/PromptVisibilityController.kt`
+- `app/src/main/java/net/devemperor/dictate/state/render/ImeViewBackend.kt`
+- `app/src/main/java/net/devemperor/dictate/core/audit/VisibilityWriteAuditLogger.kt`
+- `app/src/main/java/net/devemperor/dictate/core/EditNumbersAnimator.kt`
+- `app/src/main/res/values/ids.xml`
+- `docs/plans/2026-05-15 - dictate-cutover-completion/research/render-path-cutover.md` (§11)
+- `docs/plans/2026-05-15 - dictate-cutover-completion/dictate-cutover-completion.chunks.json`
+- `app/src/test/.../PipelineStepRowRendererTest.kt` / `QwertzRecordingControllerTest.kt` / `FakePipelineUiStateReader.kt` (K-1 spot-check)
+- `app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java` (deleted-class anchor scan)
+
+## Summary
+
+- Critical: 0
+- Important: 1
+- Nice-to-have: 4
+
+## Findings
+
+### AUDIT-CONVENTION-B5-1
+
+- **Severity:** Important
+- **File:** `app/src/main/java/net/devemperor/dictate/state/render/ContentAreaController.kt:14-21,57-67` (and analogous KDoc in `OverlayResetHandler.kt`, `PromptVisibilityController.kt`)
+- **Description:** The class-KDoc "Wiring status (IMPL-STATE post-C15, B4-VAL F-6)" block still states *"**Not yet attached in production.** `DictateInputMethodService` only attaches `ImeViewBackend` today; `KeyboardStateManager.applyContentAreaVisibility` continues to own this axis until the D-13 follow-up block migrates the IME-side wiring."* This is **stale and now actively wrong** after CR3 (controller attached), CR4 (KSM drive removed + gate armed) and CR-DEL (`KeyboardStateManager` *deleted entirely*). The KDoc references a class that no longer exists as the live owner and a "D-13 follow-up block [that] migrates the IME-side wiring" — the migration this block *just completed*. The same controller's later "# CR3 staged-safety-net" section is correct, so the file self-contradicts: one section says "not attached, KSM owns it", another says "attached in CR3, armed CR4". This is exactly the documentation-rot the convention audit + AC-RR-7 doc-anchor-intentionality rule guard against — a reader hits the stale "not yet attached" header first and is misled about the live architecture. `OverlayResetHandler` / `PromptVisibilityController` carry the structurally identical stale "not attached / D-13 follow-up" framing.
+- **Why it matters:** These three controllers are now the *sole live owners* of their visibility axes (KSM is gone). A future maintainer reading "Not yet attached in production. KeyboardStateManager continues to own this axis" will mis-model the system and may re-introduce a parallel writer — the precise failure class (parallel-dormant / silent double-write, RR-2) this entire block exists to eliminate. The Self-Code-Fix log (line 1739) claims dangling javadoc was fixed in the IME, but the *render-package controller KDocs* themselves were not refreshed.
+- **Suggested fix scope:** small (one-paragraph KDoc rewrite per file, 3 files — collapse the stale "Wiring status / not yet attached / D-13 follow-up" block; the accurate "# CR3 staged-safety-net" section already documents the real lifecycle and can absorb the post-CR-DEL end-state).
+- **Suggested fix:** Replace the "Wiring status (IMPL-STATE post-C15, B4-VAL F-6)" section in `ContentAreaController` / `OverlayResetHandler` / `PromptVisibilityController` with a current-state note: attached via `KeyboardLayoutManager.attachBackend` (CR3), armed CR4, sole live owner of the axis post-CR-DEL (KSM deleted). Keep the `gate`/`null` contract paragraph.
+
+### AUDIT-CONVENTION-B5-2
+
+- **Severity:** Nice-to-have
+- **File:** `EditBarController.kt:301`, `EmojiController.kt:191`, `SpecialTouchHandlerInstaller.kt:296`, `VisibilityWriteAuditLogger.kt:189` (all `private const val TAG = "DictateIME"`)
+- **Description:** Four new classes each redeclare `private const val TAG = "DictateIME"` as a per-class companion constant. This is internally consistent across the new B5 classes (good — same literal, same pattern) and matches the legacy `MainButtonsController` `Log.wtf(TAG, ...)` idiom they port. It is a minor DRY observation only: the same tag literal is now repeated in 4 places with no shared `Log` utility. Not a divergence between chunks — it is *uniform* — so it does not meet the "same operation done two different ways across chunks" convention-audit bar; flagged as a nice-to-have consistency note, not an inconsistency.
+- **Why it matters:** Low. If the app ever standardises a logging tag (none exists today — the codebase uses ad-hoc per-class tags), these 4 are easy to find (same literal). No action required for this block.
+- **Suggested fix scope:** small (or none — defer to a codebase-wide logging-tag decision; out of B5 scope).
+- **Suggested fix:** None for B5. Documented for awareness only.
+
+### AUDIT-CONVENTION-B5-3
+
+- **Severity:** Nice-to-have
+- **File:** `OverlayResetHandler.kt:106-112`, `PromptVisibilityController.kt:150-156`, `ContentAreaController.kt:148-156`, `OverlayCharactersController.kt:148-151`
+- **Description:** The gate-routing seam is implemented **four slightly different ways** across the CR3/CR-EXTRACT owners: `ContentAreaController` and `PromptVisibilityController` have a `private fun writeVisibility(view, target)` helper; `OverlayResetHandler` inlines the identical `if (gate == null) { write; return }; if (gate.shouldWrite(...)) write` block directly in `render()` with **no** extracted helper; `OverlayCharactersController` introduces a *third* shape — a `private fun shouldWrite(ll): Boolean` that returns a boolean the caller branches on (rather than a `writeVisibility` that performs the write). Three structurally different expressions of the one "route the write through the gate" convention. The block-report (CR3 IMPL-1) acknowledges the `writeVisibility` duplication and deliberately keeps it per-controller (no premature base class — defensible per engineering-principles). But the *shape* divergence (helper-that-writes vs. inline vs. boolean-returning-`shouldWrite`) is a mild "same operation done different ways" convention smell beyond the documented same-shape duplication.
+- **Why it matters:** Low–moderate. A maintainer touching the gate contract must recognise three idioms for one concept. `OverlayCharactersController`'s `shouldWrite` name also collides conceptually with `RenderGate.shouldWrite` (different return semantics: the gate's reports-to-ledger-and-returns-armed vs. the controller's null-gate-means-always-true wrapper) — a reader could conflate them.
+- **Suggested fix scope:** small (rename `OverlayCharactersController.shouldWrite` → `shouldWrite`-free, e.g. fold into a `writeIfGated`-style helper matching the sibling `writeVisibility` shape; optionally extract `OverlayResetHandler`'s inline block to a `writeVisibility` for shape-parity). Pure consistency; no behaviour change.
+- **Suggested fix:** Align the four owners on one seam shape — a `writeVisibility(view, target)` (or `writeGated`) that performs the write, matching the two CR3 controllers that already do. At minimum rename `OverlayCharactersController.shouldWrite` to avoid the `RenderGate.shouldWrite` name clash.
+
+### AUDIT-CONVENTION-B5-4
+
+- **Severity:** Nice-to-have
+- **File:** `EditBarController.kt:248`, `EmojiController.kt:153,160-162`
+- **Description:** Test/CR4-accessor surface is inconsistent between the two sibling click-owner classes. `EditBarController` exposes `val cachedEditNumbersClick: View.OnClickListener?` (a property). `EmojiController` exposes `val cachedEditEmojiClick: View.OnClickListener?` (property) **and** a `fun invokeEmojiPicked(emoji: String?)` (a method that *invokes* the cached lambda) — two different accessor idioms for "let the test reach the cached listener" within the same sibling pair extracted in the same chunk. `EditBarController` has no analogous `invoke…` for its long-press/edit-action lambdas; `EmojiController` mixes a getter and an invoker. The sibling-convention expectation (per the audit mandate: the ~9 new owner classes follow established sibling conventions) is for the two classes extracted together to expose the same accessor shape.
+- **Why it matters:** Low. Both work; it is a readability/symmetry nit between two classes the spec explicitly frames as siblings ("the sibling owner for the emoji listeners"). A reviewer comparing them must hold two accessor models.
+- **Suggested fix scope:** small (pick one idiom — expose the cached lambda as a property and let tests `?.invoke(...)`, or provide a uniform `invoke…` helper on both; ~5 lines).
+- **Suggested fix:** Standardise on the property-accessor idiom (already used for the click listeners in both) and drop `invokeEmojiPicked` (tests can do `cachedEmojiPicked?.invoke(e)`), or add the symmetric accessor to `EditBarController` — either way make the two siblings symmetric.
+
+### AUDIT-CONVENTION-B5-5
+
+- **Severity:** Nice-to-have
+- **File:** `EditNumbersAnimator.kt:43`, `VisibilityWriteAuditLogger.kt:65`, plus `@see`/KDoc anchors in `EditBarController.kt` / `EmojiController.kt` / `OverlayCharactersController.kt` / `QwertzRecordingController.kt` / `PipelineStepRowRenderer.kt` that reference `MainButtonsController` / `RecordingUiController` / `KeyboardUiController` / `KeyboardStateManager`
+- **Description:** The 4 deleted classes are referenced by name in surviving KDoc anchors in the new render-package classes (e.g. `EditNumbersAnimator.kt:43` `@see net.devemperor.dictate.core.MainButtonsController`; `VisibilityWriteAuditLogger.kt:65` `@see net.devemperor.dictate.core.KeyboardStateManager`; numerous `(MainButtonsController.kt:NNN)` line-pointers in the CR-EXTRACT owners). Per the AC-RR-7 doc-anchor-intentionality rule I assessed each: the **prose** anchors (e.g. "ported byte-equivalent from `MainButtonsController.kt:115-165`", "extracted from `RecordingUiController:130-356`") are **intentional historical provenance trail** — they document *where the relocated behaviour came from* and are the same accepted pattern as the parent-C15 `KeyboardLayoutModeController` comment anchors (block-report line 1708 explicitly invokes that precedent, accepted as PASS). These are NOT stale rot — they correctly point at "the now-deleted class this code was lifted from", which is load-bearing for a future archaeologist. **However**, the structured `@see net.devemperor.dictate.core.MainButtonsController` / `@see net.devemperor.dictate.core.KeyboardStateManager` Javadoc-link-style anchors (`EditNumbersAnimator.kt:43`, `VisibilityWriteAuditLogger.kt:65`) are a different category: a `@see <FQN>` is a *navigable cross-reference contract*, and the target type no longer exists. KDoc/Dokka will render these as dead links. The prose `(File.kt:NNN)` pointers are fine; the `@see <deleted FQN>` ones are mildly inconsistent with the "anchors must be intentional, not rot" convention because `@see` specifically promises a resolvable symbol.
+- **Why it matters:** Low. No compile impact (KDoc only; `assembleDebug` GREEN confirms zero *code* refs — verified: `compileDebugKotlin` EXIT=0, all 4 source files confirmed deleted). It is a doc-link-hygiene nit: `@see DeletedClass` is a broken navigation promise where a prose "(provenance: was DeletedClass.kt:NN)" would carry the same historical value without the dead-link contract. The block-report (C10-C3-IMPL-1, line 1726) already tracks the *test-string* residual but does not cover these production `@see` anchors.
+- **Suggested fix scope:** small (convert the two structured `@see <deleted-FQN>` lines to `@see` of the *relocated* owner or to plain prose provenance, e.g. `EditNumbersAnimator` → `@see` the IME call-site or drop the dead `@see MainButtonsController` and keep the existing prose "extracted from `MainButtonsController:424-477`"; `VisibilityWriteAuditLogger` → drop `@see ...KeyboardStateManager`, the prose already explains the KSM-vs-controller history).
+- **Suggested fix:** Replace `@see net.devemperor.dictate.core.MainButtonsController` / `@see net.devemperor.dictate.core.KeyboardStateManager` with prose provenance (the surrounding KDoc already carries the line-level history). Leave all `(MainButtonsController.kt:NNN)` prose pointers as-is — they are the intentional, accepted historical trail.
+
+## Coverage
+
+- **Files audited:** all 9 new owner classes (EditBarController, EmojiController, OverlayCharactersController, RenderGate, SpecialTouchHandlerInstaller, PipelineStepRowRenderer, QwertzRecordingController, VisibilityWriteAuditLogger, EditNumbersAnimator) + ImeViewBackend additions + the 3 CR3 gate-seam controllers (ContentAreaController/OverlayResetHandler/PromptVisibilityController) + ids.xml + chunks.json B5 + render-path-cutover.md §11 + K-1/K-4 test spot-check + DictateInputMethodService.java deleted-class-anchor scan.
+- **Files skipped (with reason):** Full body of `DictateInputMethodService.java` (Java, legacy, stays Java per CLAUDE.md — only scanned for deleted-class anchors + the new-owner wiring callbacks; deep Java-internal logic is AUDIT-LOGIC / AUDIT-PLAN-AND-API scope). Test-file *internal* convention is AUDIT-TEST scope — I only spot-checked K-1 (no mock framework) and K-4 (Robolectric justification).
+- **Knowledge-skill checkpoints applied:**
+  - **New code Kotlin / legacy Java stays Java:** PASS. All ~9 new owners are Kotlin in the correct package (`state.render` / `core.audit` / `core`); `DictateInputMethodService.java` heavily edited but NOT converted (correct per CLAUDE.md).
+  - **Sibling-convention adherence (ContentAreaController / *Controller — KDoc header, naming, ctor, SRP):** Largely PASS. The new owners follow the established `state/render/*Controller` + typed `*Views` data-class-holder + class-KDoc-with-`@see` pattern faithfully (EditBar/Emoji/OverlayChars/Qwertz/PipelineStepRow all mirror ContentAreaController's shape). Two minor symmetry nits flagged (B5-3 seam-shape, B5-4 accessor idiom).
+  - **K-1 handwritten fakes only (no mockk/Mockito/mock/@Mock):** PASS. Diff-wide grep over all changed/new test files: the only matches are KDoc strings *stating* "no Mockito" (PipelineStepRowRendererTest, QwertzRecordingControllerTest, FakePipelineUiStateReader) — false positives. Zero real mock-framework usage. No Critical.
+  - **K-4 Robolectric = justified opt-out only:** PASS. The 12 new/changed Robolectric test classes are all render/IME/touch/view-mutation subjects (justified per the mandate's "render/IME/touch justified" rule); per-class K-4 justification KDocs are reported present (block-report). The pure-logic logger/gate tests (VisibilityWriteAuditLoggerTest/RenderGateTest) correctly use pure JVM (explicit K-4 opt-out). No unjustified Robolectric in pure-logic tests.
+  - **ADR-0001 single-dispatch (OnRecordLongPress/ResendCooldownExpired pure data; long-press resolved in reducer):** PASS. `Action.RecordingAction.OnRecordLongPress` is a pure `data object`; the 2-mode is resolved in `RecordingModule.reduce` (Active/Paused arm) + the catalog `longClickResolver`, not in the Action. `ResendCooldownExpired` is pure data, idempotent in `ResendModule`. Consistent with single-dispatch.
+  - **ADR-0002 cascade Mode-1/2 (no Mode-3 in new visibility/audio cascades):** PASS — the new visibility cascade (RenderGate dormant/armed + VisibilityWriteAuditLogger live/dormant) is a 2-state model; no Mode-3 introduced.
+  - **KDoc on new public APIs incl. `@see` anchors to render-path-cutover.md/Spec 2 §:** Mostly PASS — every new owner carries a substantial class-KDoc with `@see docs/plans/.../render-path-cutover.md §..` + Spec 2 `§13.x` anchors and `@property` docs. (Anchor *hygiene* issue B5-5: two `@see <deleted-FQN>` dead links.)
+  - **Build-but-dormant staged-pattern documented consistently CR1-CR4:** PASS. The `installDormant`/`attachToViews` (listener axis) + `RenderGate` dormant/`arm()` (visibility axis) + ledger `dormant-cr-extract`/`dormant-cr2` → `attached-cr4` transition is documented uniformly across SpecialTouchHandlerInstaller / EditBarController / EmojiController / OverlayCharactersController / RenderGate / VisibilityWriteAuditLogger, each cross-referencing the others as the same accepted pattern.
+  - **VisibilityWriteAuditLogger/RenderGate match established seam conventions (resetForTest-style, BuildConfig.DEBUG guards):** PARTIAL/PASS. `BuildConfig.DEBUG` early-return guard is present + consistent in `VisibilityWriteAuditLogger` (`beginRenderGeneration`/`logWrite`). No `resetForTest`-named method — instead `beginRenderGeneration()` serves the per-generation reset role and is documented as the boundary call; the test-observable surface (`doubleWriteCount`/`soleLiveWriterOf`/`dormantReportersOf`) uses `private set` + test-only KDoc rather than `@VisibleForTesting`. The codebase has no enforced `@VisibleForTesting`/`resetForTest` convention, so this is acceptable (no divergence flagged); noted for completeness.
+  - **4 deleted classes leave ZERO dangling code refs:** PASS (code) — `compileDebugKotlin` EXIT=0, all 4 `.kt` sources confirmed absent, zero live `import`/code references in `app/src/main` or `app/src/test`. The only residual references are KDoc/comment anchors (assessed in B5-5: prose provenance = intentional/accepted; two `@see <FQN>` = minor doc-link nit) + pre-existing audit-ledger string-literal owner-tags in tests (block-report C10-C3-IMPL-1, correctly classified not-a-defect, D7 out-of-scope).
+  - **chunks.json / render-path-cutover.md §11 well-formed:** PASS. `chunks.json` is valid JSON; B5 block entry `chunk_ids` matches the documented CR1→CR2→CR3→CR-EXTRACT→CR4→CR-RGATE→CR-DEL sequence; `notes` records the mid-chunk-triage resolution coherently. render-path-cutover.md §11 has a clean nested heading structure (§11.1–§11.7), the D20 append-only `[!NOTE]` header, and well-formed tables.
+
+## Out-of-scope observations (for the consolidator — not convention-topic)
+
+- **(AUDIT-PLAN-AND-API / AUDIT-TEST)** Block-report "G9 amplitude/timer side-channel" overlooked-point (line 1767): `imeViewBackend.onAmplitude/onTimerTick` + `QwertzRecordingController.onAmplitude/onTimerTick` have no bound-path caller — flagged by the IMPL as an inherited C5-IMPL-2 cosmetic deferral, explicitly out of CR-DEL scope. Convention-clean; the *liveness* gap is a plan/logic concern, surfaced here only for consolidator routing.
+- **(AUDIT-LOGIC)** `RenderGate.shouldWrite` calls `auditLogger?.logWrite(...)` then returns `armed`; `OverlayCharactersController` additionally guards `initialize()` on `childCount` while dormant *also* short-circuits before the `childCount` guard — the dormant/idempotent interaction is logic-audit scope (not a convention divergence).

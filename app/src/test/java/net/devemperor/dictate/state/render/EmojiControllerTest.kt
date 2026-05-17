@@ -143,7 +143,7 @@ class EmojiControllerTest {
         val c = newController()
         c.installDormant()
 
-        c.invokeEmojiPicked("😀")  // 😀
+        c.cachedEmojiPicked?.invoke("😀")  // 😀
 
         assertEquals(listOf("vibrate"), rec.events)
         assertEquals(listOf("😀"), ic.committed)
@@ -154,7 +154,7 @@ class EmojiControllerTest {
         val c = newController()
         c.installDormant()
 
-        c.invokeEmojiPicked(null)
+        c.cachedEmojiPicked?.invoke(null)
 
         assertEquals(listOf("vibrate"), rec.events)
         assertEquals(emptyList<String>(), ic.committed)
@@ -165,7 +165,7 @@ class EmojiControllerTest {
         val c = newController(connection = null)
         c.installDormant()
 
-        c.invokeEmojiPicked("x")  // null-IC short-circuit
+        c.cachedEmojiPicked?.invoke("x")  // null-IC short-circuit
 
         assertEquals(listOf("vibrate"), rec.events)
         assertEquals(emptyList<String>(), ic.committed)

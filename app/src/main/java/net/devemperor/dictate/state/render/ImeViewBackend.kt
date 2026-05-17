@@ -332,25 +332,56 @@ class ImeViewBackend(
      */
     private fun wireStaticHandlers() {
         buttonViews.forEach { (id, view) ->
-            view.setOnClickListener {
-                onVibrate()
-                // CR4 (render-path-cutover.md §7 A1 / CR4-IMPL-3) — the
-                // RESEND click's real work (last-session DB lookup →
-                // insert / resume) has NO new-path implementation: the
-                // catalog `ResendLastAudio` → ResendModule only arms the
-                // cooldown. Fire the IME-side affordance (the exact
-                // legacy `onResendClicked` body) BEFORE the catalog
-                // dispatch so the resend feature survives the cutover.
-                // No-op for every other button (default callback).
-                if (id == LogicalButtonId.RESEND) {
-                    imeSideAffordance(id, false)
-                }
-                val s = stateRef ?: return@setOnClickListener
-                val slot = currentSlot(id) ?: return@setOnClickListener
-                // R.3 nullable-resolver-idiom: null = silent no-op,
-                // no Unrouted log-spam fires on the orchestrator.
-                slot.actionResolver(s, services)?.let { action ->
-                    onAction?.invoke(action)
+            // F-1 (B5-VAL) — SPACE is **touch-only** (legacy-parity +
+            // Spec 2 §13.2 Click-Listener-Audit: SPACE's sole new owner
+            // is `buildSpaceTouchHandler()` (§11.7), it has NO
+            // `setOnClickListener` row — legacy `MainButtonsController`
+            // had none either). The §11.7 `CursorSwipeTouchHandler`
+            // `onTap` is the single SPACE-commit path. Its
+            // `consumeTouchEvents = false` is load-bearing for the G4
+            // cursor-swipe MOVE-propagation invariant (ACTION_MOVE must
+            // keep arriving so the cursor keeps moving), which means the
+            // outer touch listener returns `false` → Android also fires
+            // `performClick()`. Wiring a click here too → ONE tap = TWO
+            // `commitText(" ")` (the double-space regression). The
+            // catalog SPACE `actionResolver = SpaceKey` stays correct
+            // for a backend that does NOT install the §11.7 touch
+            // handler (e.g. overlay) — for the IME backend it is simply
+            // not reached. Long-press / press-anim wiring stays uniform
+            // below (SPACE already skips press-anim; its no-resolver
+            // long-click is a harmless vibrate-and-consume).
+            if (id != LogicalButtonId.SPACE) {
+                view.setOnClickListener {
+                    onVibrate()
+                    // CR4 (render-path-cutover.md §7 A1 / CR4-IMPL-3) — the
+                    // RESEND click's real work (last-session DB lookup →
+                    // insert / resume) has NO new-path implementation: the
+                    // catalog `ResendLastAudio` → ResendModule only arms the
+                    // cooldown. Fire the IME-side affordance (the exact
+                    // legacy `onResendClicked` body) BEFORE the catalog
+                    // dispatch so the resend feature survives the cutover.
+                    // No-op for every other button (default callback).
+                    // F-10 (B5-VAL) — the RESEND double-fire/cooldown
+                    // safety is adequately mitigated (manual inCooldown
+                    // re-check + enabledResolver disabling the view +
+                    // PIPELINE-layout visibilityPredicate=false → GONE).
+                    // The residual implicit invariant: this affordance's
+                    // single-fire correctness relies on Android NOT
+                    // delivering clicks to GONE/disabled views. Robust
+                    // today; a future listener-wiring change that breaks
+                    // that assumption would silently reopen the
+                    // double-fire — keep the GONE/disabled suppression in
+                    // mind before rewiring this path.
+                    if (id == LogicalButtonId.RESEND) {
+                        imeSideAffordance(id, false)
+                    }
+                    val s = stateRef ?: return@setOnClickListener
+                    val slot = currentSlot(id) ?: return@setOnClickListener
+                    // R.3 nullable-resolver-idiom: null = silent no-op,
+                    // no Unrouted log-spam fires on the orchestrator.
+                    slot.actionResolver(s, services)?.let { action ->
+                        onAction?.invoke(action)
+                    }
                 }
             }
 

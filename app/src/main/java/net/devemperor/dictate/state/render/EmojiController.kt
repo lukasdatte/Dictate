@@ -153,13 +153,17 @@ class EmojiController(
     val cachedEditEmojiClick: View.OnClickListener? get() = cached?.editEmojiClick
 
     /**
-     * Test/CR4 accessor — the cached picked-emoji handler. Invokes
+     * Test/CR4 accessor — the cached picked-emoji handler (invokes
      * `onVibrate` + `commitText` exactly as the legacy
-     * `setOnEmojiPickedListener` body does (null-guarded).
+     * `setOnEmojiPickedListener` body does, null-guarded).
+     *
+     * F-8 (B5-VAL): exposed as a **property** (not an
+     * `invokeEmojiPicked(...)` method) so the EditBar/Emoji sibling
+     * pair share one test-accessor idiom — symmetric with
+     * [cachedEditEmojiClick] and [EditBarController.cachedEditNumbersClick].
+     * Tests call `cachedEmojiPicked?.invoke(e)`.
      */
-    fun invokeEmojiPicked(emoji: String?) {
-        cached?.emojiPicked?.invoke(emoji)
-    }
+    val cachedEmojiPicked: ((String?) -> Unit)? get() = cached?.emojiPicked
 
     private fun guardSingleOwner(view: View) {
         val existing = view.getTag(OWNER_TAG_KEY) as? String

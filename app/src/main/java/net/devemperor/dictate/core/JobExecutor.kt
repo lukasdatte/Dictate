@@ -63,9 +63,43 @@ object JobExecutor {
         this.orchestrator = runner
     }
 
-    /** Testing seam — clears state between tests. */
+    /**
+     * Testing seam — clears state between tests.
+     *
+     * R-7 3rd axis (B5-VAL F-6, after the B2 `ActiveJobRegistry` and
+     * B3 `DurationHealingScheduler` resetForTest seams). The
+     * [executor] is a **process-global single-thread** FIFO worker. A
+     * previous same-fork test's still-finishing job [Runnable] (its
+     * `finally` at the end of [start] still draining —
+     * `activeToken`/`activeThread`/registry cleanup) keeps the worker
+     * busy; the next test's `submit` then queues *behind* it →
+     * `PipelineRunnerSubsystemAdapterTest` "blocking runner did not
+     * start" within its 2 s await (testRelease-only — release
+     * co-locates forks more aggressively, the same R-7
+     * timing-amplification family). `ActiveJobRegistry.waitForRegistry-
+     * Empty()` waits on the registry, not on this executor's work
+     * queue, so the registry can be empty while the worker thread is
+     * still inside a predecessor's `finally`.
+     *
+     * Fix: submit a no-op sentinel and block until it runs. Because the
+     * single worker is FIFO, the sentinel can only run *after* every
+     * previously-submitted job [Runnable] — including its `finally` —
+     * has completed. This drains the queue deterministically without
+     * making [executor] mutable (rejected the recreate-executor
+     * alternative — a `val`→`var` production-mutability footgun for a
+     * test-only concern). The `@After` already calls `resetForTest()`
+     * first, so no test edit is needed.
+     */
     @JvmStatic
     internal fun resetForTest() {
+        // Drain the FIFO worker: the sentinel runs only after any
+        // in-flight job Runnable (incl. its finally) completes.
+        val drained = java.util.concurrent.CountDownLatch(1)
+        executor.submit { drained.countDown() }
+        check(drained.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+            "JobExecutor.resetForTest: executor quiescence drain timed out " +
+                "(5s) — a previous job Runnable did not finish"
+        }
         this.orchestrator = null
         this.activeToken = null
         this.activeThread = null

@@ -62,7 +62,9 @@ import net.devemperor.dictate.BuildConfig
  * cheap early-return (no allocation, no `Log` call) so the audit is
  * free in production.
  *
- * @see net.devemperor.dictate.core.KeyboardStateManager
+ * Provenance: this logger originally proved the legacy
+ * `KeyboardStateManager` (deleted in CR-DEL) was the sole live
+ * visibility writer during the staged cutover.
  * @see net.devemperor.dictate.state.render.ContentAreaController
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §10 + §11.8
  * @see docs/plans/2026-05-15 - dictate-cutover-completion/research/render-path-cutover.md §6 RR-2

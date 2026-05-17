@@ -304,14 +304,15 @@ public class DictateInputMethodService extends InputMethodService
     private SpecialTouchHandlerInstaller specialTouchHandlerInstaller;
     private KeyboardLayoutManager keyboardLayoutManager; // copy of the service-side instance, for detach
 
-    // CR3 (Theme C-R) — the three R.10 visibility controllers, attached
-    // via KeyboardLayoutManager.attachBackend but GATED DORMANT until
-    // CR4 (render-path-cutover.md §6 RR-2 — the legacy KSM
-    // applyVisibility() drive is still the sole LIVE writer of these
-    // axes until CR4; a real write here would double-write/flicker).
-    // The gate fields are retained so CR4 can arm() them (the one-line
-    // flip) and detach is symmetric. backendType=null multi-backends
-    // (ambiguity A4 — follow parent-B4 design).
+    // The three R.10 visibility controllers, attached via
+    // KeyboardLayoutManager.attachBackend and armed as the SOLE LIVE
+    // writers of these axes post-CR-DEL. Historical (render-path-cutover.md
+    // §6 RR-2): first attached gated-dormant in CR3 while the legacy
+    // `KeyboardStateManager` still drove these axes, armed in CR4 as
+    // that drive was removed, then KSM deleted in CR-DEL — no fallback
+    // writer remains. The gate fields are retained (arm()ed; detach
+    // stays symmetric). backendType=null multi-backends (ambiguity A4 —
+    // follow parent-B4 design).
     private ContentAreaController contentAreaController;
     private PromptVisibilityController promptVisibilityController;
     private OverlayResetHandler overlayResetHandler;
@@ -981,7 +982,14 @@ public class DictateInputMethodService extends InputMethodService
                 // mainButtonsController.refreshAudioFocusIcon unbound
                 // fallback is GONE (MainButtonsController deleted; the
                 // drive-call rollback surface collapses at the
-                // point-of-no-return).
+                // point-of-no-return). F-3 (B5-VAL): the edit-bar twin
+                // is NOT state-driven by the catalog AUDIO_FOCUS slot,
+                // so it must still be refreshed explicitly on an
+                // external Settings-screen toggle (parity with the
+                // legacy refreshAudioFocusIcon SP-listener call site).
+                if (editBarController != null) {
+                    editBarController.refreshAudioFocusIcon(newValue);
+                }
                 if (recordingStateController != null) {
                     recordingStateController.setAudioFocusRuntime(newValue);
                 }
@@ -1302,20 +1310,18 @@ public class DictateInputMethodService extends InputMethodService
             imeViewBackend = null;
         }
 
-        // CR3 (Theme C-R) — attach the three R.10 visibility controllers
-        // (G10/G11/G12) GATED DORMANT, and wire the shared Strict-Mode
-        // ledger into the legacy KSM (Spec 2 §10 / §11.8 5c). RR-2 (THE
-        // highest risk of B5): KSM.applyVisibility() is still the sole
-        // LIVE writer of the ContentArea/Promptbar/overlay-reset axes
-        // until CR4 — a real write from a controller here would
-        // double-write the same container every render-tick (silent
-        // flicker / wrong container, no error). The dormant gate makes
-        // the controllers report their *intended* write to the same
-        // ledger as KSM (proving KSM is the only writer that actually
-        // reaches the view) WITHOUT touching the view. CR4 arm()s the
-        // gates in the same chunk it removes the KSM drive — never two
-        // live writers at once (identical staged-safety-net to CR1's
-        // RESEND-only long-press + CR2's installDormant touch model).
+        // Attach the three R.10 visibility controllers (G10/G11/G12)
+        // and arm their gates — they are the SOLE LIVE writers of the
+        // ContentArea / Promptbar / overlay-reset axes (Spec 2 §10 /
+        // §11.8 5c). Historical (CR3/CR4 + CR-DEL, render-path-cutover.md
+        // §6 RR-2): these controllers were first attached gated-dormant
+        // (CR3) while the legacy `KeyboardStateManager` still drove
+        // these axes, then armed in CR4 as the legacy drive was removed
+        // (never two live writers at once — the RR-2 staged-safety-net),
+        // and `KeyboardStateManager` was finally deleted in CR-DEL.
+        // There is now no KSM and no fallback writer: see
+        // attachDormantVisibilityControllers() for the post-CR-DEL
+        // attach-failure mode.
         attachDormantVisibilityControllers();
 
         // CR-EXTRACT (Theme C-R) — build the three §13.2 owners
@@ -1418,31 +1424,36 @@ public class DictateInputMethodService extends InputMethodService
             keyboardLayoutManager.attachBackend(contentAreaController);
             keyboardLayoutManager.attachBackend(promptVisibilityController);
             keyboardLayoutManager.attachBackend(overlayResetHandler);
-            // CR4 (Theme C-R / RR-2 — THE flip): arm the three gates so
-            // the controllers become the SOLE LIVE writer of the
-            // ContentArea / Promptbar / overlay-reset axes. This is safe
-            // and atomic because the legacy KSM drive
-            // (stateManager.setContentArea / setSmallMode / refresh) is
-            // removed on the bound path in the SAME chunk (it runs only
-            // as the unbound fallback — see the per-call CR4 comments).
-            // arm()ing while the KSM still drove would double-write the
-            // same container every render-tick (silent flicker, no
-            // error); removing the KSM drive without arming would blank
-            // the UI — RR-2 requires both together, which CR4 does here.
-            // The state.layout.contentArea axis itself is now mutated via
-            // dispatch(LayoutAction.SetContentArea) at the former
-            // stateManager.setContentArea call-sites (LayoutModule is the
-            // SoT — contentArea is NOT pref-mirrored, so the dispatch is
-            // mandatory for the reactive ContentAreaController to render).
+            // Arm the three gates so the controllers are the SOLE LIVE
+            // writers of the ContentArea / Promptbar / overlay-reset
+            // axes. Post-CR-DEL there is no legacy `KeyboardStateManager`
+            // and no fallback writer — these controllers are the only
+            // drivers (historical RR-2 staged-safety-net: armed in CR4
+            // as the legacy drive was removed, KSM then deleted in
+            // CR-DEL). The state.layout.contentArea axis itself is
+            // mutated via dispatch(LayoutAction.SetContentArea) at the
+            // former stateManager.setContentArea call-sites (LayoutModule
+            // is the SoT — contentArea is NOT pref-mirrored, so the
+            // dispatch is mandatory for the reactive ContentAreaController
+            // to render).
             contentAreaGate.arm();
             promptVisibilityGate.arm();
             overlayResetGate.arm();
         } catch (Throwable t) {
             // Mirror the imeViewBackend attach failure handling: log +
-            // null out so detach paths stay consistent and the legacy
-            // KSM keeps driving (the staged-safety-net fallback).
+            // detach so the detach paths stay consistent. F-5 (B5-VAL):
+            // post-CR-DEL there is NO legacy KSM fallback — on a real
+            // attach/arm throw the ContentArea / Promptbar /
+            // overlay-reset axes have **no driver at all** (frozen /
+            // blank, silent) until the next successful view-recreate
+            // re-attaches the controllers. Attach failure here is rare;
+            // the honest failure mode is "these visibility axes are
+            // dead until the next attach", NOT a graceful KSM fallback
+            // (that safety net was deleted at the point-of-no-return).
             Log.w("DictateIME",
-                "Visibility-controller attach/arm failed — legacy KSM keeps driving", t);
+                "Visibility-controller attach/arm failed — ContentArea/Promptbar/"
+                    + "overlay-reset axes are dead until the next view-recreate attach "
+                    + "(no legacy KSM fallback post-CR-DEL)", t);
             detachDormantVisibilityControllers();
         }
     }
@@ -1537,6 +1548,14 @@ public class DictateInputMethodService extends InputMethodService
             this);
         editBarController.installDormant();
         editBarController.attachToViews();
+        // F-3 (B5-VAL): the edit-bar audio-focus twin is NOT covered by
+        // the catalog AUDIO_FOCUS slot (that drives only the
+        // main-button-area twin). Seed its icon + contentDescription
+        // from the persisted pref after (re-)inflate so it does not stay
+        // frozen at the static volume_off default (parity with the
+        // deleted legacy refreshAudioFocusIcon initial-render call).
+        editBarController.refreshAudioFocusIcon(
+                DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE));
 
         emojiController = new EmojiController(
             new EmojiViews(editEmojiButton, emojiPickerCloseButton, emojiPickerView),
@@ -1970,6 +1989,12 @@ public class DictateInputMethodService extends InputMethodService
             // prompt queue, and the selected language all survive.
             PipelineUiState.ReprocessStaging staging = restoreReprocessStaging;
             restoreReprocessStaging = null;
+            // F-6 (B5-VAL): re-seed the override carrier with the
+            // staging's (possibly user-overridden) language so
+            // resolveEffectiveLanguage() stays in lock-step after a
+            // view-recreate (rotation/theme). selectedLanguage carries
+            // the last value; seeding it back keeps read-fidelity.
+            dispatchStagingOverride(staging.getSelectedLanguage());
             pipelineStepRowRenderer.enterReprocessStaging(
                 staging.getTargetSessionId(),
                 staging.getAudioDurationSeconds(),
@@ -2126,17 +2151,29 @@ public class DictateInputMethodService extends InputMethodService
      * pref-resolved language, mirroring the deleted legacy
      * language-controller's effective-resolution semantics (D-13).
      *
-     * <p><b>F-6 collapsed (B3-VAL, this chunk = CR-DEL).</b> The
-     * ReprocessStaging override is now read from the <b>single</b>
-     * {@code LanguageState.override} carrier (the orchestrator's new SoT,
-     * written by {@code LanguageAction.SetOverride} from
-     * {@link #setLanguageFromPicker(String)} and cleared on staging exit),
+     * <p><b>F-6 collapsed (B3-VAL) &amp; lifecycle completed (B5-VAL).</b>
+     * The ReprocessStaging override is read from the <b>single</b>
+     * {@code LanguageState.override} carrier (the orchestrator's SoT),
      * <i>not</i> the legacy
      * {@code PipelineUiState.ReprocessStaging.selectedLanguage} carrier
-     * (owned by the deleted {@code KeyboardUiController}). The dual-carrier
-     * the parent B3 left transitional is collapsed now that the legacy
-     * carrier's owner is retired. The permanent value still comes from the
-     * static {@link net.devemperor.dictate.preferences.LanguageResolver}.
+     * (owned by the deleted {@code KeyboardUiController}). B5-VAL closed
+     * the gap left when the read-side collapsed without the write/clear
+     * side: that carrier's lifecycle is now fully wired via
+     * {@link #dispatchStagingOverride(String)} —
+     * <ul>
+     *   <li><b>seeded</b> with the session language on ReprocessStaging
+     *       entry ({@code onResendLongClicked} + the view-recreate
+     *       staging restore),</li>
+     *   <li><b>overridden</b> by an explicit re-pick
+     *       ({@code LanguageAction.SetOverride} from
+     *       {@link #setLanguageFromPicker(String)}),</li>
+     *   <li><b>cleared</b> ({@code SetOverride(null)}) on every staging
+     *       exit ({@code cancelReprocessStaging} + the reprocess-send →
+     *       Preparing transition) so it cannot leak into the next
+     *       staging session.</li>
+     * </ul>
+     * The permanent value still comes from the static
+     * {@link net.devemperor.dictate.preferences.LanguageResolver}.
      * R-3 boot-before-bind: when unbound the binder read returns null and
      * we fall through to the permanent resolver (never a stale cache or
      * NPE).</p>
@@ -2357,7 +2394,12 @@ public class DictateInputMethodService extends InputMethodService
      * language-controller's set-language routing (D-13):
      *
      * <ul>
-     *   <li><b>ReprocessStaging</b> → a <i>transient</i> override.
+     *   <li><b>ReprocessStaging</b> → a <i>transient</i> override
+     *       (an explicit re-pick that supersedes the session language
+     *       seeded on staging entry via
+     *       {@link #dispatchStagingOverride(String)}; the carrier is
+     *       cleared again on staging exit — see that method + F-6 in
+     *       {@link #resolveEffectiveLanguage()}).
      *       Dispatched as {@code LanguageAction.SetOverride(code)} —
      *       {@code LanguageState.override} is the <b>single</b> SoT the
      *       effective-language read now uses (F-6 collapsed, CR-DEL). The
@@ -2404,6 +2446,35 @@ public class DictateInputMethodService extends InputMethodService
             net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
                     .setLanguage(sp, code);
             pushPermanentLanguageToOrchestrator();
+        }
+    }
+
+    /**
+     * F-6 staging-override lifecycle (B5-VAL, re-opened &amp; closed).
+     * Seed / clear the <b>single</b> {@code LanguageState.override}
+     * carrier at the ReprocessStaging boundary so
+     * {@link #resolveEffectiveLanguage()} (chip + transcription-config
+     * snapshot) reflects the staging session's language without
+     * re-introducing the dual-carrier F-6 collapsed.
+     *
+     * <p>Mirrors the {@link #setLanguageFromPicker(String)} dispatch
+     * idiom ({@code pipelineBinder}-guarded, swallow + log on failure).
+     * {@code code == null} clears the override (the reducer treats null
+     * as "no override"; the read-side blank-guard in
+     * {@link #reprocessStagingOverrideOrNull()} is consistent with
+     * this). Called with the session language on staging entry, with
+     * {@code null} on every staging exit (cancel / discard /
+     * reprocess-send → Preparing). The explicit picker
+     * ({@link #setLanguageFromPicker}) still overrides a seeded value
+     * when the user re-picks.</p>
+     */
+    private void dispatchStagingOverride(@androidx.annotation.Nullable String code) {
+        if (pipelineBinder == null) return;
+        try {
+            pipelineBinder.dispatch(
+                    new net.devemperor.dictate.state.Action.LanguageAction.SetOverride(code));
+        } catch (Throwable t) {
+            Log.w("DictateIME", "Staging SetOverride dispatch failed", t);
         }
     }
 
@@ -4138,6 +4209,16 @@ public class DictateInputMethodService extends InputMethodService
             List<Integer> historicalQueue = sessionManager.getHistoricalQueuedPromptIds(lastSession.getId());
             mainHandler.post(() -> {
                 if (pipelineStepRowRenderer == null) return;
+                // F-6 (B5-VAL): seed the single LanguageState.override
+                // carrier with the session language BEFORE entering
+                // staging — the enterReprocessStaging state-change fires
+                // onPipelineUiStateChanged → refreshLanguageChip() →
+                // resolveEffectiveLanguage(), which must already see the
+                // seeded override (else the chip/config-snapshot show
+                // the wrong, permanent language for this staging
+                // session). Same thread (mainHandler.post) so ordering
+                // is deterministic.
+                dispatchStagingOverride(lastSession.getLanguage());
                 pipelineStepRowRenderer.enterReprocessStaging(
                         lastSession.getId(),
                         lastSession.getAudioDurationSeconds(),
@@ -4198,6 +4279,10 @@ public class DictateInputMethodService extends InputMethodService
         // ReprocessStaging: the trash button cancels back to Idle.
         if (pipelineStepRowRenderer != null && pipelineStepRowRenderer.getState() instanceof PipelineUiState.ReprocessStaging) {
             pipelineStepRowRenderer.cancelReprocessStaging();
+            // F-6 (B5-VAL): clear the override on staging exit
+            // (cancel / discard) so it does not leak into the next
+            // staging session (stale-override-leak fix).
+            dispatchStagingOverride(null);
             updatePromptButtonsEnabledState();
             return;
         }
@@ -4278,6 +4363,14 @@ public class DictateInputMethodService extends InputMethodService
                         new File(audioPath),
                         editableQueue,
                         selectedLanguage);
+
+                // F-6 (B5-VAL): clear the override now that staging is
+                // exiting (→ Preparing). selectedLanguage was already
+                // snapshotted (above) and passed to submitReprocess, so
+                // clearing here does NOT affect the in-flight reprocess
+                // job's language — it only resets the per-staging-session
+                // transient so the next staging session starts clean.
+                dispatchStagingOverride(null);
 
                 // Transition staging → Preparing → Running via the same path used by
                 // the fresh-recording flow (SEC-7-6).
@@ -4470,12 +4563,23 @@ public class DictateInputMethodService extends InputMethodService
         // 3. UI refresh — CR-DEL (Theme C-R / G14): the SP-write above is
         //    mirrored into state.audio.audioFocusEnabledPref by
         //    PipelinePrefMirror → a state emit → the catalog AUDIO_FOCUS
-        //    iconResolver re-renders the icon on the attached
-        //    ImeViewBackend. The legacy mainButtonsController.refreshAudioFocusIcon
-        //    + KSM refresh unbound fallbacks are GONE (both classes
-        //    deleted at the point-of-no-return — the armed visibility
-        //    controllers + the state-reactive iconResolver own every
-        //    axis).
+        //    iconResolver re-renders the **main-button-area**
+        //    `audioFocusButton` icon on the attached ImeViewBackend. The
+        //    legacy mainButtonsController.refreshAudioFocusIcon + KSM
+        //    refresh unbound fallbacks are GONE (both classes deleted at
+        //    the point-of-no-return).
+        // 3b. F-3 (B5-VAL): the catalog AUDIO_FOCUS slot drives ONLY the
+        //    main-button-area twin — the always-visible edit-bar
+        //    `editAudioFocusButton` is a SEPARATE view the catalog never
+        //    touches. The legacy refreshAudioFocusIcon drove BOTH twins;
+        //    only the main-button one became state-reactive. Refresh the
+        //    edit-bar twin explicitly here (shared resolveAudioFocusIcon
+        //    SSoT — the two twins cannot drift) so it is no longer
+        //    frozen at the static volume_off default + TalkBack
+        //    announces the state.
+        if (editBarController != null) {
+            editBarController.refreshAudioFocusIcon(newValue);
+        }
     }
 
     @Override

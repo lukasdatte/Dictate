@@ -143,4 +143,62 @@ class LanguageModuleTest {
         // now see "de" instead of the "system" sentinel.
         assertEquals("de", store.snapshot.language.effective)
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // F-2 / F-6 (B5-VAL) — ReprocessStaging override lifecycle
+    //
+    // The IME (DictateInputMethodService.dispatchStagingOverride, K-4
+    // justified opt-out for unit-testing the service itself; the
+    // wiring is E2E-covered by DictateCutoverE2ETest) now SEEDS the
+    // session language on staging entry and CLEARS it on staging exit.
+    // This locks the carrier-level contract that fix relies on:
+    // seed → (optional re-pick) → clear → next session is clean (no
+    // cross-session leak). resolveEffectiveLanguage() reads ONLY
+    // LanguageState.override (F-6 single-carrier), so this sequence is
+    // exactly what the chip + transcription-config snapshot observe.
+    // ════════════════════════════════════════════════════════════════
+
+    @Test
+    fun `F-2 staging override lifecycle — seed, re-pick, clear, next-session-clean`() {
+        val store = DictateUiStateStore(DictateUiState.initial())
+        val orchestrator = DictateOrchestrator(
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            store = store,
+            services = fakeModuleServices(),
+            registry = DictateModuleRegistry(listOf(LanguageModule)),
+            prefMirror = PipelinePrefMirror(FakeSharedPreferences()),
+            recovery = testPipelineRecovery(FakePipelineSessionRepo()),
+        )
+
+        // Staging session A entered with session language "de" (the
+        // entry-seed the IME now dispatches before enterReprocessStaging).
+        orchestrator.dispatch(Action.LanguageAction.SetOverride(code = "de"))
+        assertEquals(
+            "staging entry must seed the session language so the chip/" +
+                "config-snapshot show it (was the F-2 'lost staged language' bug)",
+            "de", store.snapshot.language.override,
+        )
+
+        // User explicitly re-picks "fr" in staging (setLanguageFromPicker).
+        orchestrator.dispatch(Action.LanguageAction.SetOverride(code = "fr"))
+        assertEquals("fr", store.snapshot.language.override)
+
+        // Staging A exits (cancel / reprocess-send → Preparing): the IME
+        // now clears the override.
+        orchestrator.dispatch(Action.LanguageAction.SetOverride(code = null))
+        assertNull(
+            "staging exit must clear the override (was the F-2 false KDoc " +
+                "'cleared on staging exit' that no code implemented)",
+            store.snapshot.language.override,
+        )
+
+        // Staging session B entered for an "en" session WITHOUT a manual
+        // re-pick: it must NOT inherit A's stale "fr"/"de" (the F-2
+        // cross-session leak). The IME's entry-seed dispatches "en".
+        orchestrator.dispatch(Action.LanguageAction.SetOverride(code = "en"))
+        assertEquals(
+            "no stale-override leak between staging sessions (F-2)",
+            "en", store.snapshot.language.override,
+        )
+    }
 }

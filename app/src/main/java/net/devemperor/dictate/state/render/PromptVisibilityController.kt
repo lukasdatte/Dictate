@@ -13,14 +13,16 @@ import net.devemperor.dictate.state.layout.RenderBackend
 /**
  * RenderBackend driving the prompt-area visibility (Spec 2 §4.1 / R.10).
  *
- * # Wiring status (IMPL-STATE post-C15, B4-VAL F-6)
+ * # Wiring status (post-CR-DEL — sole live owner)
  *
- * **Not yet attached in production.** `DictateInputMethodService` only
- * attaches [ImeViewBackend] today; [net.devemperor.dictate.core.KeyboardStateManager.applyPromptsVisibility]
- * continues to own this axis until the D-13 follow-up block migrates the
- * IME-side wiring. The unit tests in `PromptVisibilityControllerTest`
- * exercise the contract so the controller can be wired in one step once
- * the matching KSM method is removed.
+ * **Sole live owner of the prompt-area visibility axis.** Attached via
+ * `KeyboardLayoutManager.attachBackend` (CR3), armed in CR4. Now that
+ * `KeyboardStateManager` is **deleted** (CR-DEL completed the D-13
+ * migration), this controller is the **only** writer of the
+ * prompts/pipeline-progress/recording-controls visibility axis — there
+ * is no parallel KSM drive left. The earlier "not yet attached / KSM
+ * still owns it / D-13 follow-up" framing is historical.
+ * `PromptVisibilityControllerTest` covers the contract.
  *
  * The prompts container sits **above** the main buttons and shows one
  * of three faces depending on state:
@@ -62,14 +64,16 @@ import net.devemperor.dictate.state.layout.RenderBackend
  *
  * # CR3 staged-safety-net (render-path-cutover.md §6 RR-2)
  *
- * Attached in CR3 but [gate]d **dormant** until CR4: while
- * [net.devemperor.dictate.core.KeyboardStateManager.applyPromptsVisibility]
- * still drives this axis, a real write here would double-write
- * (silent flicker — RR-2). Dormant → report the intended write to the
- * audit ledger (proves KSM is the sole live writer, Spec 2 §10), do
- * not touch the view. CR4 [arm]s the gate in the same chunk it removes
- * the KSM drive. `null` gate = legacy always-write (unit-test
- * contract). Same pattern as [ContentAreaController].
+ * Attached in CR3 but [gate]d **dormant** until CR4: while the legacy
+ * `KeyboardStateManager.applyPromptsVisibility` still drove this axis
+ * (pre-CR-DEL), a real write here would have double-written (silent
+ * flicker — RR-2). Dormant → report the intended write to the audit
+ * ledger (the dormant-phase single-live-writer proof, Spec 2 §10), do
+ * not touch the view. CR4 [arm]ed the gate in the same chunk it
+ * removed the legacy drive; CR-DEL then deleted `KeyboardStateManager`
+ * (this controller is now the sole owner — see "Wiring status" above).
+ * `null` gate = legacy always-write (unit-test contract). Same pattern
+ * as [ContentAreaController].
  *
  * @property views the four prompt-area containers; some are nullable
  *   because the IME service can run in configurations where the prompt

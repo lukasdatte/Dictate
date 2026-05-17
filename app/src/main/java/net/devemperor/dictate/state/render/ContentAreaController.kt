@@ -11,14 +11,17 @@ import net.devemperor.dictate.state.layout.RenderBackend
 /**
  * Container-visibility RenderBackend (Spec 2 §4.1 / R.10).
  *
- * # Wiring status (IMPL-STATE post-C15, B4-VAL F-6)
+ * # Wiring status (post-CR-DEL — sole live owner)
  *
- * **Not yet attached in production.** `DictateInputMethodService` only
- * attaches [ImeViewBackend] today; [net.devemperor.dictate.core.KeyboardStateManager.applyContentAreaVisibility]
- * continues to own this axis until the D-13 follow-up block migrates the
- * IME-side wiring. The unit tests in `ContentAreaControllerTest` exercise
- * the contract so the controller can be wired in one step once the
- * matching KSM method is removed.
+ * **Sole live owner of the ContentArea visibility axis.** Attached via
+ * `KeyboardLayoutManager.attachBackend` (CR3), armed in CR4, and — now
+ * that `KeyboardStateManager` is **deleted** (CR-DEL completed the D-13
+ * migration) — this controller is the **only** writer of the
+ * `main`/`qwertz`/`emoji` (+ the `editButtonsLl`) ContentArea axis. The
+ * earlier "not yet attached / KSM still owns it / D-13 follow-up"
+ * framing is historical: there is no `KeyboardStateManager` and no
+ * parallel writer left. `ContentAreaControllerTest` covers the
+ * contract.
  *
  * # Why a separate backend?
  *
@@ -56,14 +59,17 @@ import net.devemperor.dictate.state.layout.RenderBackend
  *
  * # CR3 staged-safety-net (render-path-cutover.md §6 RR-2)
  *
- * The controller is **attached in CR3** but [gate]d **dormant** until
- * CR4: while [net.devemperor.dictate.core.KeyboardStateManager.applyContentAreaVisibility]
- * is still the live writer of this axis, a real write here would
- * double-write the container (silent flicker — RR-2). When [gate] is
- * dormant, [render] reports the *intended* write to the audit ledger
- * (proving KSM is the sole live writer, Spec 2 §10) but does NOT touch
- * the view. CR4 [arm]s the gate in the same chunk it removes the KSM
- * drive. A `null` gate = legacy "always write" (the pre-CR3 contract;
+ * The controller was **attached in CR3** but [gate]d **dormant** until
+ * CR4: while the legacy `KeyboardStateManager.applyContentAreaVisibility`
+ * was still the live writer of this axis (pre-CR-DEL), a real write
+ * here would have double-written the container (silent flicker —
+ * RR-2). When [gate] is dormant, [render] reports the *intended* write
+ * to the audit ledger (the dormant-phase single-live-writer proof,
+ * Spec 2 §10) but does NOT touch the view. CR4 [arm]ed the gate in the
+ * same chunk it removed the legacy drive; CR-DEL then deleted
+ * `KeyboardStateManager` entirely (this controller is now the sole
+ * owner — see "Wiring status" above). A `null` gate = legacy "always
+ * write" (the pre-CR3 contract;
  * keeps the existing unit tests' semantics).
  *
  * @property views container references — non-null for all three
@@ -120,10 +126,11 @@ class ContentAreaController(
             if (area == ContentArea.EMOJI_PICKER) View.VISIBLE else View.GONE,
         )
         // CR-DEL (RR-3 gap) — the 4th ContentArea axis Spec 2 §13 row 2
-        // marks `editButtonsLl` BLEIBT (ContentArea-Achse). The deleted
-        // `KeyboardStateManager.applyContentAreaVisibility` owned it
-        // (visible iff MAIN_BUTTONS || QWERTZ); relocated here verbatim so
-        // the kill-list class deletes with no stranded visibility axis.
+        // marks `editButtonsLl` BLEIBT (ContentArea-Achse). The (now
+        // deleted) `KeyboardStateManager.applyContentAreaVisibility`
+        // formerly owned it (visible iff MAIN_BUTTONS || QWERTZ);
+        // relocated here verbatim so the kill-list class deleted with no
+        // stranded visibility axis.
         // Nullable + null-skip so pre-CR-DEL tests constructing the 3-arg
         // holder stay byte-identical.
         views.editButtonsContainer?.let { editButtons ->
@@ -141,8 +148,9 @@ class ContentAreaController(
     /**
      * Route every visibility write through the [gate] (RR-2). When the
      * gate is dormant the intended write is recorded in the audit
-     * ledger (proving the legacy KSM is the sole live writer) but the
-     * view is left untouched; when armed (CR4) or absent (legacy
+     * ledger (the dormant-phase single-live-writer proof, used while
+     * the legacy KSM still drove this axis pre-CR-DEL) but the view is
+     * left untouched; when armed (CR4 onward) or absent (legacy
      * contract) the real mutation happens.
      */
     private fun writeVisibility(view: View, target: Int) {

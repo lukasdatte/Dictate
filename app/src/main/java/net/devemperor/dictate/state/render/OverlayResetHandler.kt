@@ -11,15 +11,17 @@ import net.devemperor.dictate.state.layout.RenderBackend
  * RenderBackend that resets IME-View widgets which the overlay surface
  * controls during WIDGET/HOVER mode (Spec 2 §4.1 / R.10).
  *
- * # Wiring status (IMPL-STATE post-C15, B4-VAL F-6)
+ * # Wiring status (post-CR-DEL — sole live owner)
  *
- * **Not yet attached in production.** The
- * `overlay_characters_ll.visibility = View.GONE` line inside
- * [net.devemperor.dictate.core.KeyboardStateManager.applyVisibility]
- * continues to own this defensive reset until the D-13 follow-up block
- * migrates the IME-side wiring. `OverlayResetHandlerTest` exercises the
- * contract so the handler can be wired in one step once the matching
- * KSM line is removed.
+ * **Sole live owner of the overlay-reset axis.** Attached via
+ * `KeyboardLayoutManager.attachBackend` (CR3), armed in CR4. Now that
+ * `KeyboardStateManager` is **deleted** (CR-DEL completed the D-13
+ * migration), the `overlay_characters_ll.visibility = View.GONE`
+ * defensive reset has no other writer — this handler is the only one.
+ * The earlier "not yet attached / KSM still owns the reset line / D-13
+ * follow-up" framing is historical: there is no `KeyboardStateManager`
+ * and no parallel writer left. `OverlayResetHandlerTest` covers the
+ * contract.
  *
  * # The reset concern
  *
@@ -54,13 +56,15 @@ import net.devemperor.dictate.state.layout.RenderBackend
  * # CR3 staged-safety-net (render-path-cutover.md §6 RR-2)
  *
  * Attached in CR3 but [gate]d **dormant** until CR4: the
- * `overlay_characters_ll.visibility = GONE` defensive reset is still
- * driven by [net.devemperor.dictate.core.KeyboardStateManager.applyVisibility]
- * (line ~142) until CR4. Dormant → report the intended reset to the
- * audit ledger (proves KSM is the sole live writer, Spec 2 §10), do
- * not touch the view. CR4 [arm]s the gate in the same chunk it removes
- * the KSM reset line. `null` gate = legacy always-write (unit-test
- * contract). Same pattern as [ContentAreaController].
+ * `overlay_characters_ll.visibility = GONE` defensive reset was driven
+ * by the legacy `KeyboardStateManager.applyVisibility` pre-CR-DEL.
+ * Dormant → report the intended reset to the audit ledger (the
+ * dormant-phase single-live-writer proof, Spec 2 §10), do not touch
+ * the view. CR4 [arm]ed the gate in the same chunk it removed the
+ * legacy reset line; CR-DEL then deleted `KeyboardStateManager`
+ * (this handler is now the sole owner — see "Wiring status" above).
+ * `null` gate = legacy always-write (unit-test contract). Same
+ * pattern as [ContentAreaController].
  *
  * @property views the IME-side widgets that need an overlay-aware
  *   reset. Nullable members are skipped (defensive — re-skin variants
@@ -103,12 +107,25 @@ class OverlayResetHandler(
         // interrupts the touch sequence and the handler never observes
         // the matching release event.
         val strip = views.overlayCharactersStrip ?: return
+        writeVisibility(strip, View.GONE)
+    }
+
+    /**
+     * Route the visibility write through the [gate] (RR-2). Aligned
+     * with the CR3 siblings' `writeVisibility(view, target)` helper
+     * shape (F-7 — one gate-routing convention across the
+     * render-package owners; pure consistency, no behaviour change):
+     * `null` gate = legacy always-write; a gate reports the intended
+     * write to the audit ledger and only mutates the view when armed
+     * (CR4 onward).
+     */
+    private fun writeVisibility(view: View, target: Int) {
         if (gate == null) {
-            strip.visibility = View.GONE
+            view.visibility = target
             return
         }
-        if (gate.shouldWrite(strip.id, View.GONE)) {
-            strip.visibility = View.GONE
+        if (gate.shouldWrite(view.id, target)) {
+            view.visibility = target
         }
     }
 }

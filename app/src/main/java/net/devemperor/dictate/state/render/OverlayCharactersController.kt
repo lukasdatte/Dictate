@@ -97,7 +97,7 @@ class OverlayCharactersController(
      */
     fun initialize() {
         val ll = views.overlayCharactersStrip
-        if (!shouldWrite(ll)) return
+        if (!gatePermitsWrite(ll)) return
         if (ll.childCount >= OVERLAY_CHAR_COUNT) return  // idempotent guard
         val context = ll.context
         val density = context.resources.displayMetrics.density
@@ -125,7 +125,7 @@ class OverlayCharactersController(
      */
     fun update(characters: String, accentColor: Int) {
         val ll = views.overlayCharactersStrip
-        if (!shouldWrite(ll)) return
+        if (!gatePermitsWrite(ll)) return
         for (i in 0 until ll.childCount) {
             val charView = ll.getChildAt(i) as TextView
             if (i >= characters.length) {
@@ -140,12 +140,17 @@ class OverlayCharactersController(
     }
 
     /**
-     * Gate-routing identical to the CR3 controllers'
-     * `writeVisibility` seam: `null` gate = always act (legacy
-     * contract); a gate reports the intended write to the audit ledger
-     * and returns `true` only when armed (CR4).
+     * Gate-routing identical to the CR3 controllers' `writeVisibility`
+     * seam: `null` gate = always act (legacy contract); a gate reports
+     * the intended write to the audit ledger and returns `true` only
+     * when armed (CR4).
+     *
+     * F-7 (B5-VAL): named `gatePermitsWrite` (not `shouldWrite`) to
+     * avoid the conceptual clash with [RenderGate.shouldWrite] — that
+     * is the raw gate predicate; this wrapper additionally applies the
+     * `null`-gate legacy-always-write contract and the ledger report.
      */
-    private fun shouldWrite(ll: LinearLayout): Boolean {
+    private fun gatePermitsWrite(ll: LinearLayout): Boolean {
         val g = gate ?: return true
         return g.shouldWrite(ll.id, View.VISIBLE)
     }

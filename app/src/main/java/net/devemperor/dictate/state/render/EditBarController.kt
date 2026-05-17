@@ -5,6 +5,7 @@ import android.view.View
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.R
+import net.devemperor.dictate.state.layout.resolveAudioFocusIcon
 
 /**
  * Owns the **edit-bar** click/long-click listeners — the listeners
@@ -233,6 +234,44 @@ class EditBarController(
         views.editNumbersButton.setBackgroundColor(accentMedium)
         views.editHistoryButton.setBackgroundColor(accentMedium)
         views.editAudioFocusButton.setBackgroundColor(accentMedium)
+    }
+
+    /**
+     * F-3 (B5-VAL) — re-paint the **edit-bar** audio-focus button's
+     * icon + contentDescription to track the audio-focus pref.
+     *
+     * The deleted legacy `MainButtonsController.refreshAudioFocusIcon`
+     * (Spec 2 §13.2 F-4) drove **two** sites: the main-button-area
+     * `audioFocusButton` AND the edit-bar `editAudioFocusButton`.
+     * Post-CR-DEL only the main-button-area twin is state-driven (the
+     * catalog AUDIO_FOCUS slot `iconResolver` →
+     * [resolveAudioFocusIconForSlot]). This edit-bar twin had **no**
+     * `foreground`/`contentDescription` writer and stayed frozen at the
+     * static `volume_off` default (TalkBack never announced the state)
+     * — the F-3 parity regression on the always-visible edit bar.
+     *
+     * Shares the [resolveAudioFocusIcon] SSoT (Spec 2 §13.5.c / Gap 1)
+     * with the AUDIO_FOCUS slot so the two twins can never drift. The
+     * `foreground` + `contentDescription` writes are byte-equivalent to
+     * the legacy edit-bar tier (`MainButtonsController.kt:368-385` — the
+     * edit-bar half only; the legacy `audioFocusButton` constantState
+     * clone is now the state-reactive slot's job, not duplicated here).
+     * Imperative (the IME calls it on the same trigger points the
+     * legacy method ran: user toggle, external SP change, initial
+     * render) — not state-driven, mirroring the §9.2 separate-axis
+     * model the edit bar already follows for theming.
+     */
+    fun refreshAudioFocusIcon(enabled: Boolean) {
+        val context = views.editAudioFocusButton.context
+        val drawable = androidx.core.content.ContextCompat.getDrawable(
+            context, resolveAudioFocusIcon(enabled),
+        )
+        val description = context.getString(
+            if (enabled) R.string.dictate_audio_focus_state_on
+            else R.string.dictate_audio_focus_state_off,
+        )
+        views.editAudioFocusButton.foreground = drawable
+        views.editAudioFocusButton.contentDescription = description
     }
 
     /**

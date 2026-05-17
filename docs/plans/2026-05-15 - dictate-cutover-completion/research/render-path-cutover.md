@@ -561,3 +561,338 @@ the live UI effect until CR4.
 - Plan: `dictate-cutover-completion.chunks.json` (Block B5)
 - Pattern precedent: this spec §6 RR-1 / §6.1 (CR2
   `SpecialTouchHandlerInstaller`), §6 RR-2 (CR3 `RenderGate`)
+
+---
+
+## 12. `space-touch-vs-click-double-commit` (F-1)
+
+**Date:** 2026-05-17
+**Triggered by:** F-1 (Critical — `validated-findings-B5.md`)
+**Block:** B5 (Theme-C-R render-path cutover)
+**Agent-ID:** B5-VAL-RES-1
+
+### 12.1 Sources
+
+1. **Live code trace** — `ImeViewBackend.wireStaticHandlers`
+   (`state/render/ImeViewBackend.kt:333-409`),
+   `SpecialTouchHandlerInstaller.buildSpaceTouchHandler`
+   (`state/render/SpecialTouchHandlerInstaller.kt:229-260`),
+   `CursorSwipeTouchHandler.onTouch`
+   (`keyboard/CursorSwipeTouchHandler.kt:45-78`),
+   `KeyboardInputModule` `SpaceKey → Effect.SendSpace → commitText(" ",1)`
+   (`state/modules/KeyboardInputModule.kt:80-99`),
+   catalog SPACE slot `actionResolver = { _, _ -> SpaceKey }`
+   (`state/layout/LayoutCatalog.kt:139,190,304,350,452`).
+2. **Legacy baseline** — `git show c92ebd1:.../MainButtonsController.kt`
+   lines 155-260: `spaceButton` has **only** `setOnTouchListener`
+   (CursorSwipe, `consumeTouchEvents=false`); **no**
+   `spaceButton.setOnClickListener`. BACKSPACE/ENTER have *both*
+   click+touch but their touch handlers do not commit on tap (Backspace
+   swipe / Enter overlay) so the click is the sole commit path there.
+3. **Spec 2 SoT §13.2 Click-Listener-Audit**
+   (`2-keyboard-layout.reviewed.md:2320-2349`) — the authoritative
+   legacy→new mapping. BACKSPACE (`:2330`) and ENTER (`:2338`)
+   explicitly map `setOnClickListener → actionResolver`. **SPACE has
+   exactly one row** (`:2334`): `spaceButton.setOnTouchListener` (Z. 225)
+   → `buildSpaceTouchHandler()` (§11.7). There is **no**
+   `spaceButton.setOnClickListener` row — because legacy had none.
+4. **Spec 2 §6 reference `wireStaticHandlers`**
+   (`2-keyboard-layout.reviewed.md:701-725`) — illustrative
+   `buttonViews.forEach { setOnClickListener }` loop **plus** a
+   separate `SPACE.setOnTouchListener(buildSpaceTouchHandler())`. This
+   reference is a simplified sketch; §13.2 is the prescriptive mapping.
+
+### 12.2 Findings
+
+**Defect reproduction (consensus, all sources agree).** One physical
+SPACE tap fires TWO space commits:
+
+1. `CursorSwipeTouchHandler.onTouch` `ACTION_UP` with `hasSwiped==false`
+   → `onTap()` → `inputConnectionProvider()?.commitText(" ", 1)`
+   (space #1). Returns `consumeTouchEvents == false`.
+2. Because the outer `OnTouchListener` returns `false`, Android's
+   `View` does not consume the touch → `View.performClick()` fires →
+   the `OnClickListener` wired by `wireStaticHandlers` for **every**
+   button (incl. SPACE) → `currentSlot(SPACE).actionResolver` →
+   `Action.KeyboardInputAction.SpaceKey` → `KeyboardInputModule` →
+   `Effect.SendSpace` → `commitText(" ", 1)` (space #2).
+
+The `:402-405` SPACE skip in `wireStaticHandlers` is
+`keyPressAnimator`-only — it does **not** skip the click loop. Legacy
+`consumeTouchEvents=false` was harmless because legacy SPACE had no
+click listener; the CR1 universal click-wiring + the CR4 catalog
+`SpaceKey` slot introduced the second path. BACKSPACE/ENTER unaffected
+(their §11.7 handlers have no commit-on-tap).
+
+**Spec-faithfulness analysis.** The §13.2 Click-Listener-Audit is the
+SoT for "what owns each legacy listener after the cutover". Every
+commit-key's `setOnClickListener` is explicitly mapped; SPACE's is
+**not present** because SPACE never had one — its commit is the §11.7
+`buildSpaceTouchHandler` `onTap`. The catalog `SpaceKey` resolver
+(`LayoutCatalog`) is therefore a spec-internal redundancy for the
+IME backend: it duplicates a commit the §11.7 touch handler already
+owns. The §6 reference loop is a simplified illustration, not a
+contradiction of §13.2 (the §6 sketch even shows the SPACE
+`setOnTouchListener` separately — the spec author kept the §11.7 owner
+and the catalog row both, without reconciling that two commit paths
+result; §13.2's per-listener audit resolves it: SPACE is touch-only).
+
+**Option evaluation:**
+
+| Option | Spec-faithful? | Risk | G4 / §11.7 impact |
+|---|---|---|---|
+| (i) exclude SPACE from the `wireStaticHandlers` click loop | **Yes** — §13.2 maps SPACE solely to `buildSpaceTouchHandler`; legacy-parity (touch-only) | Lowest — one `if` guard, no touch/state-machine change | None — `CursorSwipeTouchHandler` + `buildSpaceTouchHandler` untouched; `consumeTouchEvents=false` preserved → G4 MOVE-propagation intact |
+| (ii) make `onTap`/handler consume the tap (`return true` on ACTION_UP) | No — breaks §11.7 verbatim contract | High — `consumeTouchEvents=false` is load-bearing for G4: ACTION_MOVE must propagate so the cursor-swipe keeps moving; returning true on UP needs per-event branching that diverges from the verbatim builder | Breaks G4 invariant + §11.7 verbatim |
+| (iii) route SPACE click → no-op | Functionally = (i) but leaves a dead listener | Low | None, but more clutter + a dead resolver path |
+
+### 12.3 Implementation Hints
+
+**Chosen: Option (i) — exclude SPACE from the click-listener loop in
+`ImeViewBackend.wireStaticHandlers`.**
+
+- In `wireStaticHandlers` (`ImeViewBackend.kt:334`), inside
+  `buttonViews.forEach { (id, view) -> ... }`, guard the
+  `view.setOnClickListener { ... }` block so it is **not** wired for
+  `id == LogicalButtonId.SPACE`. The long-click listener and the
+  key-press-animation skip stay exactly as they are (SPACE already
+  skips press-animation; SPACE has no long-press resolver so the
+  long-click listener is a harmless vibrate-and-consume — leave it,
+  it matches the other no-resolver buttons and legacy SPACE had no
+  long-press anyway; removing it is out of scope and would diverge
+  from the uniform wiring).
+- Keep the `CursorSwipeTouchHandler` and `buildSpaceTouchHandler`
+  **byte-identical** (verbatim §11.7 contract — do not touch
+  `consumeTouchEvents`, `onTap`, `onCursorMove`). The G4 cursor-swipe
+  MOVE-propagation invariant (`consumeTouchEvents=false` so ACTION_MOVE
+  events keep arriving) is untouched: a swipe still moves the cursor;
+  only the spurious second commit on the TAP path is removed.
+- Leave the catalog `SPACE` slot `actionResolver = { _, _ -> SpaceKey }`
+  as-is. It stays correct for any future/overlay backend that does NOT
+  install the §11.7 touch handler; for the IME backend it is simply
+  not reached (no click listener). Add a short KDoc note in
+  `wireStaticHandlers` explaining the SPACE click-skip (legacy-parity:
+  SPACE is touch-only per §13.2; the §11.7 `buildSpaceTouchHandler`
+  `onTap` is the single commit path — wiring a click here double-commits
+  because `CursorSwipeTouchHandler` deliberately returns
+  `consumeTouchEvents=false` for G4 MOVE-propagation, so `performClick`
+  would also fire).
+- **Regression test** (`ImeViewBackendTest`): assert SPACE has **no**
+  `OnClickListener` after `attach()` (Robolectric `ShadowView`
+  `hasOnClickListeners()` is false / `getOnClickListener()` is null for
+  SPACE while non-null for e.g. RECORD), and that the other buttons
+  still have their click listener. Plus a touch-path test (can live in
+  `SpecialTouchHandlerInstallerTest` or `ImeViewBackendTest`) proving a
+  synthesized DOWN→UP (no MOVE) on SPACE produces exactly **one**
+  `commitText(" ", 1)` and a DOWN→MOVE(>threshold)→UP produces a cursor
+  move (`commitText("", ±)`) and **no** space commit — i.e. the swipe
+  still works and the tap commits exactly once.
+
+This is a small, one-file production fix (`ImeViewBackend.kt`) + test;
+no architecture change → **not escalated**.
+
+---
+
+## 13. `f6-staging-language-override-lifecycle` (F-2 — F-6 RE-OPENED)
+
+**Date:** 2026-05-17
+**Triggered by:** F-2 (Critical — `validated-findings-B5.md`); re-opens
+B3-VAL **F-6** (prematurely marked closed in CR-DEL)
+**Block:** B5 (Theme-C-R render-path cutover)
+**Agent-ID:** B5-VAL-RES-1
+
+### 13.1 Sources
+
+1. **`grep -rn SetOverride app/src/main`** — the **only**
+   `LanguageAction.SetOverride` dispatch in all of `app/src/main` is
+   `setLanguageFromPicker` (`DictateInputMethodService.java:2391`,
+   the explicit picker). No entry-seed, no clear.
+2. **Live code trace** — `resolveEffectiveLanguage`
+   (`:2144-2149`) → `reprocessStagingOverrideOrNull` (`:2181-2192`,
+   reads only `pipelineBinder.getState()...getLanguage().getOverride()`);
+   staging entry `onResendLongClicked` →
+   `pipelineStepRowRenderer.enterReprocessStaging(...lastSession.getLanguage())`
+   (`:4141-4145`) with **no** adjacent `SetOverride` dispatch;
+   view-recreate restore entry `:1973-1978` (same — no `SetOverride`);
+   staging exits: `onTrashClicked` → `cancelReprocessStaging()`
+   (`:4199-4202`) and `handleReprocessSend` → `preparePipeline()`
+   (`:4284`) — neither dispatches `SetOverride(null)`.
+3. **False KDoc** — `resolveEffectiveLanguage` KDoc (`:2129-2143`,
+   specifically the `:2133` clause) claims the override is "written by
+   `SetOverride` from `setLanguageFromPicker` **and cleared on staging
+   exit**" — no code clears it; the invariant is fictional and masks
+   the bug.
+4. **Chip-refresh wiring** — `servicePipelineCallback`
+   `onPipelineUiStateChanged` (`:1008-1029`) calls
+   `refreshLanguageChip()` on **every** pipeline-state change incl.
+   entering/leaving staging → `resolveEffectiveLanguage()` re-reads the
+   override. So seeding the override *before* `enterReprocessStaging`
+   makes the chip show the session language with no extra plumbing.
+5. **SoT** — Spec 1 §15.2 (RecordingModule / language carrier), Spec 2
+   §9.5 (`PipelineStepRowRenderer` ReprocessStaging carrier is the
+   View-side BLEIBT *display* state, not the language-read carrier),
+   the original B3-VAL F-6 collapse intent (single
+   `LanguageState.override` read-carrier), and the legacy
+   `KeyboardUiController.enterReprocessStaging` semantics (`git show
+   c92ebd1:`) where staging entry seeds the session's language as the
+   initial override.
+
+### 13.2 Findings
+
+**F-6 collapse is INCOMPLETE — F-6 is NOT closed.** B3-VAL F-6
+collapsed the effective-language *read* onto the single
+`LanguageState.override` carrier (good). CR-DEL marked F-6 "closed"
+(`B5` Issue Index `:53`, RR-3 trace `:1702`, CR-RGATE `:1565`). But
+the collapse removed the *read* side of the legacy
+`ReprocessStaging.selectedLanguage` carrier without wiring the
+*write/seed* and *clear* side onto the new carrier:
+
+1. **Lost staged language.** Staging entry sets only the View-side
+   `PipelineUiState.ReprocessStaging.selectedLanguage` (the §9.5 BLEIBT
+   display state). It does **not** dispatch
+   `SetOverride(sessionLanguage)`. The only `SetOverride` site is the
+   explicit picker. A staging session entered without a manual re-pick
+   → `reprocessStagingOverrideOrNull()` reads a null/stale
+   `LanguageState.override` → `resolveEffectiveLanguage()` falls
+   through to the **permanent** pref language → the language chip + the
+   transcription-config snapshot read show the **wrong** language for
+   that staging session.
+2. **Stale-override leak between sessions.** No `SetOverride(null)`
+   clear exists. The `reprocessStagingOrNull()` scope-guard in
+   `reprocessStagingOverrideOrNull` stops a stale value leaking
+   *outside* staging, but not *between* staging sessions: pick "de" in
+   staging A → exit → enter staging B for an "en" session without
+   re-picking → `LanguageState.override` still holds "de" → chip shows
+   stale "de".
+3. **False KDoc** (`:2133`) asserts a "cleared on staging exit"
+   invariant that no code implements — actively masks (1)+(2).
+
+**Scope (consensus).** The reprocess *job* itself is unaffected:
+`handleReprocessSend` (`:4223`) reads `staging.getSelectedLanguage()`
+directly off the View-side carrier, so the transcription uses the
+correct language. This is a **display / config-read fidelity** bug
+(language chip + the `resolveEffectiveLanguage()`-driven
+transcription-config snapshot at `:3197`/`:3846`) + a false-doc —
+**not** a wrong-transcription bug. But it is user-visible and
+**contradicts** the block-report's "F-6 closed, no regression" claim
+→ F-6 must be **re-opened and actually closed by this wave**.
+
+**Spec-faithful design (consensus, the audit's preferred + lowest-risk
++ genuinely single-carrier option).** Seed + clear the *single*
+`LanguageState.override` carrier at the staging lifecycle boundaries —
+do **not** re-introduce a `selectedLanguage` read-fallback (that
+partially re-introduces the dual-carrier F-6 exists to collapse; ruled
+out as spec-unfaithful). This matches the legacy
+`KeyboardUiController.enterReprocessStaging` semantics (session
+language is the initial override) and keeps `LanguageState.override`
+the sole read SoT (Spec 1 §15.2 / Spec 2 §9.5 / B3-VAL F-6 intent).
+
+### 13.3 Implementation Hints
+
+Add a small private helper mirroring the existing
+`setLanguageFromPicker` dispatch pattern (`:2389-2396`) — guarded
+`pipelineBinder != null`, `try/catch` `Log.w` on failure — to keep one
+dispatch idiom:
+
+```java
+/** F-6 lifecycle: seed/clear the single LanguageState.override carrier
+ *  at the ReprocessStaging boundary. `code==null` clears. */
+private void dispatchStagingOverride(@Nullable String code) {
+    if (pipelineBinder == null) return;
+    try {
+        pipelineBinder.dispatch(
+            new net.devemperor.dictate.state.Action.LanguageAction.SetOverride(code));
+    } catch (Throwable t) {
+        Log.w("DictateIME", "Staging SetOverride dispatch failed", t);
+    }
+}
+```
+
+(Confirm `LanguageAction.SetOverride` accepts a nullable code and the
+reducer treats `null`/blank as "no override" — `reprocessStagingOverrideOrNull`
+already blank-guards on the read side, so a `null` or blank clear is
+consistent. If `SetOverride` requires a non-null code, use the
+reducer's existing clear action; check `state/Action.kt` +
+`LanguageModule`/state during repair and pick the carrier's idiomatic
+clear. The read-side blank-guard at `:2190` means an empty-string
+override already reads as "none", so worst-case `SetOverride("")` is a
+safe clear — but prefer the explicit clear action if one exists.)
+
+**Wire it at all staging-entry and staging-exit boundaries:**
+
+- **Entry — seed the session language (BEFORE `enterReprocessStaging`):**
+  - `onResendLongClicked` (`:4141`): call
+    `dispatchStagingOverride(lastSession.getLanguage())` immediately
+    before `pipelineStepRowRenderer.enterReprocessStaging(...)`. (Both
+    run on `mainHandler.post` — same thread, ordering deterministic.
+    Seeding before the `enterReprocessStaging` state-change means the
+    `onPipelineUiStateChanged` → `refreshLanguageChip()` →
+    `resolveEffectiveLanguage()` already sees the seeded override → the
+    chip shows the session language with no extra refresh call.)
+  - View-recreate restore (`:1973`): call
+    `dispatchStagingOverride(staging.getSelectedLanguage())` before
+    `pipelineStepRowRenderer.enterReprocessStaging(...)`. (Preserves
+    the user's possibly-already-overridden language across rotation —
+    `selectedLanguage` on the restored staging carries the last value;
+    seeding it back into `LanguageState.override` keeps read-fidelity
+    after recreate.)
+- **Exit — clear (`SetOverride(null)`):**
+  - `onTrashClicked` cancel branch (`:4200`): call
+    `dispatchStagingOverride(null)` right after / before
+    `pipelineStepRowRenderer.cancelReprocessStaging()` (cancel /
+    discard).
+  - `handleReprocessSend` (`:4284`): call
+    `dispatchStagingOverride(null)` right before
+    `pipelineStepRowRenderer.preparePipeline()` (staging → Preparing).
+    NOTE: `handleReprocessSend` already snapshotted
+    `selectedLanguage` (`:4223`) and passed it to `submitReprocess`
+    (`:4280`) *before* this point, so clearing the override here does
+    **not** affect the in-flight reprocess job's language — it only
+    resets the per-staging-session transient so the next staging
+    session starts clean (fixes leak #2). Order: clear after the
+    `submitReprocess` call, before/with `preparePipeline()`.
+- **Picker (`setLanguageFromPicker` `:2386-2402`):** unchanged — it
+  already dispatches `SetOverride(code)` in the staging branch. It now
+  *overrides* the entry-seeded value (user explicitly re-picks) which
+  is exactly the desired behaviour.
+
+**Fix the false KDoc** (`resolveEffectiveLanguage` `:2129-2143`):
+correct the `:2133` clause to state the true lifecycle — the override
+is seeded with the session language on ReprocessStaging entry
+(`onResendLongClicked` / view-recreate restore), overridden by the
+explicit picker (`setLanguageFromPicker`), and cleared
+(`SetOverride(null)`) on staging exit (`cancelReprocessStaging` /
+reprocess-send → Preparing). Also reconcile the `setLanguageFromPicker`
+KDoc (`:2354-2377`) and the `reprocessStagingOverrideOrNull` KDoc
+(`:2169-2180`) so all three describe the now-real lifecycle (SSoT — no
+contradictory doc surface left).
+
+**Regression test** (new test in
+`DictateInputMethodServiceTest` or the closest staging-language test
+harness; if IME-service unit-testing is infeasible per K-4, test at
+the seam — assert the dispatched `SetOverride` actions on a fake
+binder):
+- Staging-entry with session language "de" (no manual pick) →
+  `resolveEffectiveLanguage()` / chip resolves to "de" (not the
+  permanent pref).
+- Staging-exit (cancel) → `LanguageState.override` cleared →
+  `resolveEffectiveLanguage()` returns the permanent pref.
+- Cross-session leak guard: enter staging A (de) → exit → enter
+  staging B (en) without re-pick → resolves "en" (not stale "de").
+- Re-open then close **F-6** in the block-report Issue Index.
+
+This is a medium fix (one helper + 4 call-sites + 3 KDoc corrections)
+in `DictateInputMethodService.java` (stays Java) — no architecture
+change → **not escalated**.
+
+### 13.4 References
+
+- Block-report: `reports/B5-theme-cr-render-cutover.md`
+  §"Block-Validate Repair Wave 1 (B5-VAL-REPAIR-1)" + Issue Index
+  (F-6 re-open→close)
+- Validated findings: `reports/validated-findings-B5.md` F-1, F-2
+- SoT: `../2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md`
+  §15.2; `.../2-keyboard-layout/2-keyboard-layout.reviewed.md`
+  §9.5, §13.2 (`:2334`)
+- Legacy baseline: `git show c92ebd1:.../MainButtonsController.kt`
+  (SPACE touch-only), `KeyboardUiController.enterReprocessStaging`
+  (session-language initial override)

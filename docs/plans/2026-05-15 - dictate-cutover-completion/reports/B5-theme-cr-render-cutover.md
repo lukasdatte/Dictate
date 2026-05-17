@@ -44,19 +44,30 @@ Spec 2 §9.x (SoT), then deletes the controllers.
 
 ## Issue Index (Orchestrator-Maintained)
 
-**Severity counts (post-CR-DEL):** Critical: 0 (CR4-IMPL-1 → fixed-via-CR-EXTRACT) · Important: 0 open (CR4-IMPL-2 fixed/verified · CR4-IMPL-3 → **closed CR-DEL** (edit-row theme retired to EditBar/EmojiController) · **F-6 → closed CR-DEL** (effective-language read collapsed to single `LanguageState.override` carrier)) · Nice-to-have: 2 (CR4-IMPL-4 — spec-mapped, not a defect, CR-RGATE awareness · C10-C3-IMPL-1 — stale ledger-label test strings, not a defect, D7 out-of-scope) · Postponed: 0
+**Severity counts (post-Block-Validate-W1):** Critical: 0 (CR4-IMPL-1 → fixed-via-CR-EXTRACT · **F-1 → fixed B5-VAL-W1** · **F-2 → fixed B5-VAL-W1**) · Important: 0 open (CR4-IMPL-2 fixed/verified · CR4-IMPL-3 → closed CR-DEL · **F-6 → re-opened B5-VAL-W1 (CR-DEL closed it prematurely) → properly closed B5-VAL-W1** · **F-3/F-4/F-5/F-6(R-7) → fixed B5-VAL-W1**) · Nice-to-have: 2 (CR4-IMPL-4 — BACKSPACE/ENTER simpler-than-legacy sub-clause stays spec-mapped not-a-defect; **its SPACE dual-commit sub-clause is now F-1, fixed B5-VAL-W1** · C10-C3-IMPL-1 — stale ledger-label test strings, not a defect, D7 out-of-scope · F-7/F-8/F-9/F-10 → fixed B5-VAL-W1) · Postponed: 1 (**C5-IMPL-2** amplitude/timer service-side bridge — pre-existing deferral, promoted from prose for carry-forward tracking)
 
 **CR-RGATE verdict (2026-05-16, `B5-CR-RGATE-IMPL`): RENDER-GATE: GREEN.** Auto-tier fully green (build + 1130 debug ×2 uncached different-order + 1130 release uncached + new `RenderPathCutoverGateTest` 5/5; full suite 1135/0/0). Every G2-G16 + EditBar/Emoji/OverlayChars/Resend-action fires through its new owner; `doubleWriteCount==0` with the new owners sole `live=true` writers; the sole un-guarded bound-path legacy drive (`mainButtonsController.applyTheme` edit-row theme, CR4-IMPL-3) is provably CR-DEL-scoped (chunks.json AC-RR-7 deliverable; loud compile-error not silent regression). CR4-IMPL-4 = spec-mapped target (not a defect); F-6 = genuinely CR-DEL-scoped. **CR-DEL AUTHORISED** (see `### Chunk CR-RGATE`).
 
 | ID | Source agent | Severity | Status | Title | Source phase |
 |----|--------------|----------|--------|-------|--------------|
-| F-6 (from B3) | B3-VAL-SANITY | Important | **closed** (CR-DEL) | Cross-carrier collapse: `resolveEffectiveLanguage()` now reads the **single** `LanguageState.override` carrier (not the legacy `ReprocessStaging.selectedLanguage`); the legacy carrier's owner (`KeyboardUiController`) is retired. The `selectedLanguage` field remains as relocated View-side BLEIBT staging-state (Spec 1 §9.2) but is no longer the language-read carrier — the dual-carrier is collapsed. | inherited from B3-VAL-W1 → closed B5-C10-C3-IMPL |
+| F-6 (from B3) | B3-VAL-SANITY | Important | **closed** (B5-VAL-W1) | Cross-carrier collapse. CR-DEL collapsed only the *read* side onto `LanguageState.override` and marked F-6 closed **prematurely** — the *seed/clear* side was never wired (B5-VAL F-2 found staging entry never seeded the override, no clear on exit, false `:2132` KDoc → wrong-language chip + stale-override leak). **F-6 RE-OPENED B5-VAL-W1 then properly CLOSED B5-VAL-W1**: `dispatchStagingOverride` seeds session-language on entry + clears (`SetOverride(null)`) on every exit; single-carrier preserved; false KDoc corrected. | inherited B3-VAL-W1 → premature-close CR-DEL → re-opened+closed B5-VAL-REPAIR-1 |
+| F-1 | B5-VAL-SANITY | Critical | **fixed** (B5-VAL-W1) | SPACE tap double-committed a space (`wireStaticHandlers` click-for-all + §11.7 `onTap`, `consumeTouchEvents=false` → `performClick` also fired). Fixed: SPACE excluded from the click loop (§13.2-faithful — SPACE is touch-only; legacy parity). §11.7 verbatim + G4 cursor-swipe MOVE-propagation intact. Regression tests ×5. | B5-VAL-SANITY 🟡 → research `space-touch-vs-click-double-commit` → fixed B5-VAL-REPAIR-1 |
+| F-2 | B5-VAL-SANITY | Critical | **fixed** (B5-VAL-W1) | F-6 collapse incomplete (write/clear side unwired) → wrong staging language + cross-session stale-override leak + false KDoc. Fixed: `dispatchStagingOverride` helper + 4 boundary wirings (2 seed / 2 clear) + 3 KDoc corrections. Display/config-read fidelity (reprocess job unaffected). **Re-opens & closes F-6.** | B5-VAL-SANITY 🟡 → research `f6-staging-language-override-lifecycle` → fixed B5-VAL-REPAIR-1 |
+| F-3 | B5-VAL-SANITY | Important | **fixed** (B5-VAL-W1) | Edit-bar audio-focus icon twin frozen at static `volume_off` + TalkBack silent (catalog AUDIO_FOCUS slot drives only the main-button twin). Fixed: `EditBarController.refreshAudioFocusIcon` via shared `resolveAudioFocusIcon` SSoT; wired from IME initial-render + SP-listener + toggle; false `:4470-4478` comment corrected. Tests ×3. | B5-VAL-SANITY 🟢 (merged PLAN-AND-API-B5-1+2) → fixed B5-VAL-REPAIR-1 |
+| F-4 | B5-VAL-SANITY | Important | **fixed** (B5-VAL-W1) | Stale "Not yet attached / KSM owns / D-13 follow-up" class-KDoc in ContentAreaController/OverlayResetHandler/PromptVisibilityController (KSM deleted). Headers rewritten to post-CR-DEL sole-owner; secondary "KSM is sole live writer" gate-paragraphs past-tensed. | B5-VAL-SANITY 🟢 → fixed B5-VAL-REPAIR-1 |
+| F-5 | B5-VAL-SANITY | Important | **fixed** (B5-VAL-W1) | Dead "legacy KSM keeps driving" fallback comments (`:1442-1445`/`:1300-1303`/field-KDoc `:309`) — KSM deleted, real failure mode is no driver until next view-recreate. Comments corrected to the honest post-CR-DEL failure mode. | B5-VAL-SANITY 🟢 → fixed B5-VAL-REPAIR-1 |
+| F-6 (R-7 3rd axis) | B5-VAL-SANITY | Important | **fixed** (B5-VAL-W1) | `JobExecutor.resetForTest()` never drained the process-global single-thread executor queue → `PipelineRunnerSubsystemAdapterTest` testRelease flake. Fixed: sentinel-submit-and-await quiescence drain (FIFO worker guarantees predecessors incl. `finally` complete first). Verified: flake gone ×3 uncached release runs (7/7 each). | B5-VAL-SANITY 🟢 (was AUDIT-TEST-B5-1, R-7 3rd/final axis) → fixed B5-VAL-REPAIR-1 |
+| F-7 | B5-VAL-SANITY | Nice-to-have | **fixed** (B5-VAL-W1) | Gate-routing 4 shapes + `OverlayCharactersController.shouldWrite` clash with `RenderGate.shouldWrite`. Renamed → `gatePermitsWrite`; `OverlayResetHandler` inline gate → `writeVisibility(view,target)` helper (4-owner shape aligned). | B5-VAL-SANITY 🟢 → fixed B5-VAL-REPAIR-1 |
+| F-8 | B5-VAL-SANITY | Nice-to-have | **fixed** (B5-VAL-W1) | Asymmetric test-accessor between EditBar/Emoji siblings. `EmojiController.invokeEmojiPicked(...)` → `val cachedEmojiPicked` property (symmetric); 3 test call-sites migrated. | B5-VAL-SANITY 🟢 → fixed B5-VAL-REPAIR-1 |
+| F-9 | B5-VAL-SANITY | Nice-to-have | **fixed** (B5-VAL-W1) | 2 dead `@see <deleted-FQN>` Javadoc links (EditNumbersAnimator → MainButtonsController, VisibilityWriteAuditLogger → KeyboardStateManager) → plain prose provenance. Prose `(File.kt:NNN)` pointers left as-is. | B5-VAL-SANITY 🟢 → fixed B5-VAL-REPAIR-1 |
+| F-10 | B5-VAL-SANITY | Nice-to-have | **fixed** (B5-VAL-W1) | RESEND double-fire safety relies on an undocumented implicit invariant (Android not delivering clicks to GONE/disabled views). No defect — one clarifying comment added in `wireStaticHandlers`. | B5-VAL-SANITY 🟢 → fixed B5-VAL-REPAIR-1 |
+| C5-IMPL-2 | C5-IMPL (carried via AUDIT-LOGIC-B5-5) | Important | **postponed** | Recording BorderGlow/amplitude/timer in-keyboard side-channel undriven — a pre-existing documented C5-IMPL-2 deferral (recording works E2E; only the cosmetic in-keyboard animation/timer is dead; the FGS notification is the authoritative recording-active surface). NOT a B5-introduced regression. Promoted from "Overlooked points" prose into this Index (B5-VAL-W1 mandatory tracking) so the amplitude/timer service-side bridge is not silently dropped at block close / Phase-4 carry-forward. | accepted-with-rationale (B5-VAL-SANITY ❌) → tracked B5-VAL-REPAIR-1 |
 | CR4-IMPL-3 (theme-residual half) | B5-CR4-IMPL (re-run) | Important | **closed** (CR-DEL) | The edit-row `mainButtonsController.applyTheme` residual is retired: `EditBarController.applyTheme` + `EmojiController.applyTheme` own the 12 edit-row/emoji buttons (byte-identical legacy tiers); no `mainButtonsController.applyTheme` remains (AC-RR-6/7). | B5-CR4-IMPL re-run → closed B5-C10-C3-IMPL |
 | C10-C3-IMPL-1 | B5-C10-C3-IMPL | Nice-to-have | **open** (not a defect) | Pre-existing audit-ledger test fixtures use `"KeyboardStateManager"`/`"MainButtonsController"` string literals as arbitrary owner-tag labels (cosmetically stale, NOT class refs — no compile dependency, tests green). Renaming = out-of-scope churn (D7). | B5-C10-C3-IMPL Step 1 |
 | CR4-IMPL-1 | B5-CR4-IMPL | Critical | **fixed** (via CR-EXTRACT, wave B5-CR4-MID-W1) | `registerAllListeners()` removal (AC-RR-6) strands edit-bar/emoji/overlay-chars — Spec 2 §13.2's `EditBarController`/`EmojiController` never created → **resolved**: CR-EXTRACT chunk inserted before CR4 (chunks.json); 3 owners (`EditBarController`/`EmojiController`/`OverlayCharactersController`) extracted build-but-dormant; CR4 flips per-axis atomically. Live keyboard unchanged (1129/0/0 debug). | B5-CR4-IMPL Step 1 → fixed B5-CR4-MID-REPAIR-1 |
 | CR4-IMPL-2 | B5-CR4-IMPL | Important | **fixed/verified** (wave B5-CR4-MID-W1) | G8 resend-cooldown *write-path*: state model verified fully present; the missing `ResendCooldownExpired` postDelayed-dispatch added in `onResendClicked` (additive, idempotent, `pipelineBinder`-guarded) so CR4 can remove `setResendEnabled` without re-opening the double-click race / latching the cooldown | B5-CR4-IMPL Step 1 → fixed B5-CR4-MID-REPAIR-1 |
 | CR4-IMPL-3 | B5-CR4-IMPL (re-run) | Important | **fixed** (inline, plan-deviation-resolved) + theme-residual **carried to CR-DEL** | Catalog RESEND `ResendLastAudio`/`Long` → `ResendModule` only arms the cooldown — the resend insertion (DB lookup → insert/resume) + long-press ReprocessStaging-entry have NO new-path impl (same §13.2 "assumed-an-owner" anti-pattern as CR4-IMPL-1, at the RESEND-action layer). Resolved via `ImeViewBackend.imeSideAffordance` firing the exact legacy `onResendClicked()`/`onResendLongClicked()` bodies (the §7-A1 IME-side-activation pattern the orchestrator already accepted for RECORD). The theme edit-row residual is the same root-cause cluster → CR-DEL fully retires `mainButtonsController` (AC-RR-6/7 zero-grep). | B5-CR4-IMPL re-run Step 1 → fixed inline (D22) |
-| CR4-IMPL-4 | B5-CR4-IMPL (re-run) | Nice-to-have | **open** (not a defect — CR-RGATE awareness) | `KeyboardInputModule` BACKSPACE/ENTER effects simpler than legacy `deleteOneCharacter()`/`performEnterAction()`; SPACE click+touch both commit a space. This is the **spec-mapped target** (Spec 2 §3.3/§13.2/§6, reviewed Phase-C) — NOT a CR4 regression. Flagged for CR-RGATE holistic-parity awareness only. | B5-CR4-IMPL re-run Step 1 |
+| CR4-IMPL-4 | B5-CR4-IMPL (re-run) | Nice-to-have | **open** (BACKSPACE/ENTER sub-clause only — not a defect, CR-RGATE awareness) | `KeyboardInputModule` BACKSPACE/ENTER effects simpler than legacy `deleteOneCharacter()`/`performEnterAction()` — the **spec-mapped target** (Spec 2 §3.3/§13.2, reviewed Phase-C), NOT a CR4 regression; stays Nice-to-have/awareness. **The SPACE click+touch dual-commit sub-clause is INVALIDATED** — B5-VAL-SANITY/F-1 reclassified it from "spec-mapped not-a-defect" to a Critical user regression (§13.2 maps SPACE touch-only, no click row); **fixed B5-VAL-W1 (see F-1)**. | B5-CR4-IMPL re-run Step 1 → SPACE sub-clause superseded by F-1 |
 
 ---
 
@@ -1777,18 +1788,181 @@ Requirement coverage complete — every CR-DEL deliverable has ≥1 direct asser
 
 | Topic | Agent-ID | Status | Output File | Findings |
 |-------|----------|--------|-------------|----------|
-| plan-and-api | `B5-AUDIT-PLAN-AND-API` | ⏳ | `./reports/audit-plan-and-api-B5.md` | — |
-| convention | `B5-AUDIT-CONVENTION` | ⏳ | `./reports/audit-convention-B5.md` | — |
-| logic | `B5-AUDIT-LOGIC` | ⏳ | `./reports/audit-logic-B5.md` | — |
-| test | `B5-AUDIT-TEST` | ⏳ | `./reports/audit-test-B5.md` | — |
+| plan-and-api | `B5-AUDIT-PLAN-AND-API` | ✅ | `./reports/audit-plan-and-api-B5.md` | C0 / Imp1 / NTH1 — AC-RR-7/8 PASS |
+| convention | `B5-AUDIT-CONVENTION` | ✅ | `./reports/audit-convention-B5.md` | C0 / Imp1 / NTH4 |
+| logic | `B5-AUDIT-LOGIC` | ✅ | `./reports/audit-logic-B5.md` | C2 / Imp3 / NTH1 |
+| test | `B5-AUDIT-TEST` | ✅ | `./reports/audit-test-B5.md` | Imp1 (R-7 3rd axis) / NTH1 — no non-R-7 regression |
 
-### Sanity-Check Consolidator
+### Block-Validate Sanity-Check (B5-VAL-SANITY)
 
-**Agent-ID:** `B5-VAL-SANITY` · **Output:** `./reports/validated-findings-B5.md`
+**Agent-ID:** `B5-VAL-SANITY` · **Date:** 2026-05-17 · **Output:** `./reports/validated-findings-B5.md`
+
+**What was done:** Read all 4 audit outputs in full, deduplicated
+(15 raw → 11 validated, 2 merge-maps), validated each against the live
+code + specs + the `c92ebd1` legacy baseline, classified 🟢/🟡/❌.
+
+**Counts:** 🟢 **9** (Imp 4, NTH 5) · 🟡 **2** (both Critical) ·
+❌ **4** (1 Imp re-scoped non-regression, 1 Imp pre-existing deferral,
+2 NTH accepted).
+
+**The 2 Criticals (both 🟡 research-needed — independent surfaces):**
+- **F-1 SPACE double-commit** (`space-touch-vs-click-double-commit`) —
+  verified real user regression: `wireStaticHandlers` wires a click on
+  *every* button incl. SPACE; the SPACE `CursorSwipeTouchHandler`
+  `onTap` commits a space and returns `false` → `performClick()` fires
+  the click → second space. Legacy had no SPACE click (touch-only).
+  3 candidate fixes interact with the §11.7 builder contract +
+  cursor-swipe G4 → research-gated. Gate-relevant for B5 close.
+- **F-2 F-6 collapse INCOMPLETE** (`f6-staging-language-override-lifecycle`)
+  — verified: the only `SetOverride` site in `app/src/main/` is the
+  explicit picker (`:2392`); staging entry never seeds it, no clear
+  on exit; the `:2132` KDoc falsely claims "cleared on staging exit".
+  Staging w/o manual re-pick shows the wrong language + stale-override
+  leaks between sessions. **F-6 is NOT actually closed — must be
+  re-opened** (display/config-read fidelity bug, not wrong-transcription).
+
+**RECORDED CONTRADICTION:** the Issue Index / RR-3 trace / CR-RGATE
+verdict assert "F-6 → closed CR-DEL, no regression" (`:1565`/`:1702`/
+`:1730`) and "CR4-IMPL-4 SPACE = spec-mapped target, not a defect"
+(`:1285`). F-2 invalidates the F-6-closed claim; F-1 invalidates the
+CR4-IMPL-4 SPACE "not a defect" sub-clause. Both prior verdicts are
+hereby explicitly contradicted.
+
+**boot-path bind-failure ruling (AUDIT-LOGIC-B5-3):** ❌
+accepted-with-rationale — the `bindService`-false handling is
+**byte-identical to the legacy `c92ebd1` baseline**; not a
+cutover-introduced regression. The CR-DEL delta (loss of the unbound
+listener fallback) is the spec-authorized point-of-no-return the audit
+itself classifies accepted. Out of cutover scope.
+
+**Mandatory tracking action (not a repair item):** AUDIT-LOGIC-B5-5
+(C5-IMPL-2 amplitude/timer side-channel) is an accepted pre-existing
+deferral, BUT it currently lives only in "Overlooked points" prose —
+the orchestrator must promote it into the Issue Index table so it is
+not silently dropped at block close.
+
+Validated context (AC-RR-7/8 PASS, extracted owners byte-equivalent,
+`doubleWriteCount==0`, RESEND double-fire closed, no non-R-7
+regression) + full classified table + repair routing → see
+`./reports/validated-findings-B5.md`.
 
 ### Mini-Triage + Repair-Wave(s)
 
 (Per iteration, max 3 per D5 soft-cap.)
+
+### Block-Validate Repair Wave 1 (B5-VAL-REPAIR-1)
+
+**Agent-IDs:** `B5-VAL-RES-1` (research) → `B5-VAL-REPAIR-1` (repair) →
+`B5-VAL-REPAIR-1-VERIFY` (self-check). **Date:** 2026-05-17.
+**Wave:** B5-VAL-W1, iter 1. **Scope:** all-validated (2 🟡 + 9 🟢).
+**Research:** `../research/render-path-cutover.md` §12
+(`space-touch-vs-click-double-commit`, F-1) + §13
+(`f6-staging-language-override-lifecycle`, F-2). Neither escalated.
+
+**F-1 design (chosen: option (i) — exclude SPACE from the click loop).**
+The §13.2 Click-Listener-Audit (SoT) maps every legacy commit-key's
+`setOnClickListener` to its new owner; **SPACE has no such row** —
+legacy SPACE was touch-only, its sole new owner is the §11.7
+`buildSpaceTouchHandler` `onTap`. The catalog `SpaceKey` resolver is a
+spec-internal redundancy for the IME backend. Fix: `wireStaticHandlers`
+no longer wires an `OnClickListener` for `LogicalButtonId.SPACE`
+(`ImeViewBackend.kt`). The §11.7 `CursorSwipeTouchHandler` /
+`buildSpaceTouchHandler` are **untouched** — `consumeTouchEvents=false`
+(the G4 MOVE-propagation invariant) is preserved; a swipe still moves
+the cursor, the tap commits exactly once. Options (ii)/(iii) rejected
+(break §11.7 verbatim / G4, or leave dead clutter). Proven: one SPACE
+tap → exactly one `commitText(" ")`; swipe → cursor move + zero space
+commits (`SpecialTouchHandlerInstallerTest` ×2 new + `ImeViewBackendTest`
+×3 new).
+
+**F-2 design + F-6 re-open→close.** B3-VAL F-6 collapsed the
+effective-language *read* onto the single `LanguageState.override`
+carrier but the *seed/clear* side was never wired — F-6 was
+prematurely marked closed in CR-DEL. **F-6 RE-OPENED then properly
+CLOSED this wave.** Added `dispatchStagingOverride(@Nullable String)`
+(mirrors the `setLanguageFromPicker` dispatch idiom) and wired it at
+all staging boundaries: **seed** the session language on entry
+(`onResendLongClicked` + view-recreate restore, before
+`enterReprocessStaging`), **clear** (`SetOverride(null)`) on every exit
+(`cancelReprocessStaging` + reprocess-send → Preparing, after the
+`submitReprocess` snapshot so the in-flight job's language is
+unaffected). Corrected the false `resolveEffectiveLanguage` `:2132`
+KDoc ("cleared on staging exit" was fictional) + reconciled the
+`setLanguageFromPicker` KDoc (SSoT — no contradictory doc surface).
+Single-carrier preserved (rejected re-introducing a `selectedLanguage`
+read-fallback). Proven: seed → re-pick → clear → next-session-clean
+sequence (`LanguageModuleTest` ×1 new, real-orchestrator dispatch; the
+IME wiring itself is E2E-covered by `DictateCutoverE2ETest`, K-4
+justified opt-out for unit-testing the service).
+
+**Per-finding what-was-done:**
+
+| Finding | Sev | Status | Fix |
+|---------|-----|--------|-----|
+| F-1 | Critical | fixed | SPACE excluded from `wireStaticHandlers` click loop (option i); §11.7/G4 intact; regression tests ×5 |
+| F-2 | Critical | fixed | `dispatchStagingOverride` helper + 4 boundary wirings (2 seed / 2 clear) + 3 KDoc corrections; **F-6 re-opened→closed** |
+| F-3 | Important | fixed | `EditBarController.refreshAudioFocusIcon(enabled)` via shared `resolveAudioFocusIcon` SSoT; wired from IME initial-render + `audioFocusListener` + `onAudioFocusToggled`; corrected the false `:4470-4478` "owns every axis" comment; tests ×3 |
+| F-4 | Important | fixed | "Wiring status" headers in ContentAreaController/OverlayResetHandler/PromptVisibilityController rewritten to post-CR-DEL sole-owner; secondary "KSM is sole live writer" gate-paragraphs past-tensed |
+| F-5 | Important | fixed | IME `:1442-1445`/`:1300-1303` + the field-KDoc `:309` corrected to the true post-CR-DEL failure mode (no KSM fallback; axes dead until next view-recreate attach) |
+| F-6 | Important | fixed | `JobExecutor.resetForTest()` sentinel-submit-and-await drain (FIFO single-worker quiescence); R-7 testRelease flake gone ×3 uncached |
+| F-7 | NTH | fixed | `OverlayCharactersController.shouldWrite`→`gatePermitsWrite` (RenderGate.shouldWrite clash) + `OverlayResetHandler` inline gate → `writeVisibility(view,target)` helper (4-owner shape aligned) |
+| F-8 | NTH | fixed | `EmojiController.invokeEmojiPicked(...)` → `val cachedEmojiPicked` property (symmetric with EditBar sibling); 3 test call-sites migrated |
+| F-9 | NTH | fixed | 2 dead `@see <deleted-FQN>` (EditNumbersAnimator / VisibilityWriteAuditLogger) → plain prose provenance |
+| F-10 | NTH | fixed | RESEND brittle-implicit-invariant clarifying comment added in `wireStaticHandlers` (GONE/disabled-view click-suppression dependency) |
+
+**Self-check (B5-VAL-REPAIR-1-VERIFY).** Build green; full suite
+**1162/0** both variants (debug ×2 + release ×3, uncached
+different-order; baseline ~1153 + 9 new tests, ≥ AC-9 ≥946). The
+`PipelineRunnerSubsystemAdapterTest` testRelease R-7 flake did **not**
+fire across all 3 uncached release runs (7/7 each). CR-RGATE
+`RenderPathCutoverGateTest` **5/5** + `DictateCutoverE2ETest` **10/10**
+stay green (the proven render path holds). One pre-existing test
+(`ImeViewBackendTest.onVibrate fires on every click`) encoded the F-1
+**buggy** expectation (SPACE click → vibrate); corrected to assert
+SPACE-click is a no-op (legacy parity) — documented as a
+finding-driven test correction, not new behaviour drift.
+
+**Deviations (D22):** none beyond the documented F-1 test-correction
+(small + locally-decidable: the old test asserted the very behaviour
+F-1 removes). F-4/F-5 also past-tensed the *secondary* "KSM is the
+sole live writer" gate-paragraphs (the sanity-check's suggested fix
+said "keep the gate/null-contract paragraph" — kept the gate
+semantics, only corrected the now-false present-tense KSM-liveness
+claims, same doc-rot class the block exists to eliminate).
+
+**Disjoint file lists for the wave-commit:**
+
+Production (12):
+`app/src/main/java/net/devemperor/dictate/state/render/ImeViewBackend.kt`,
+`.../core/DictateInputMethodService.java`,
+`.../state/render/EditBarController.kt`,
+`.../state/render/ContentAreaController.kt`,
+`.../state/render/OverlayResetHandler.kt`,
+`.../state/render/PromptVisibilityController.kt`,
+`.../state/render/OverlayCharactersController.kt`,
+`.../state/render/EmojiController.kt`,
+`.../core/EditNumbersAnimator.kt`,
+`.../core/audit/VisibilityWriteAuditLogger.kt`,
+`.../core/JobExecutor.kt`,
+`docs/plans/2026-05-15 - dictate-cutover-completion/research/render-path-cutover.md`.
+
+Test (4):
+`app/src/test/java/net/devemperor/dictate/state/render/ImeViewBackendTest.kt`,
+`.../state/render/SpecialTouchHandlerInstallerTest.kt`,
+`.../state/render/EditBarControllerTest.kt`,
+`.../state/render/EmojiControllerTest.kt`,
+`.../state/LanguageModuleTest.kt`.
+(Prod/test lists are disjoint; the research-md is documentation.)
+
+**Files outside findings-scope (drift):** none — every modified file
+is named in F-1..F-10 or is the D20 research file / its regression
+tests.
+
+**C5-IMPL-2 Issue-Index promotion (mandatory tracking):** the
+AUDIT-LOGIC-B5-5 C5-IMPL-2 amplitude/timer service-side bridge
+deferral is promoted from prose into the Issue Index below as an open
+`postponed` row so it is not dropped at block close / Phase-4
+carry-forward.
 
 ---
 
@@ -1796,7 +1970,8 @@ Requirement coverage complete — every CR-DEL deliverable has ≥1 direct asser
 
 | # | Plan Location | What changed | Why | Impact | Inline-fixed | Source-Agent | Source-Step |
 |---|---------------|--------------|-----|--------|--------------|--------------|--------------|
-| — | — | — | — | — | — | — | — |
+| D-W1-1 | F-1 fix (validated-findings-B5 §F-1) | `ImeViewBackendTest.onVibrate fires on every click` updated: SPACE `performClick` no longer expected to vibrate (asserted with ENTER instead) | The old test encoded the exact F-1 buggy behaviour (SPACE click → commit/vibrate); F-1 removes the SPACE click. Small + locally-decidable — the assertion was wrong, not the fix | none (test-only correction; the 3 new F-1 tests + 2 SpecialTouchHandler tests are the real coverage) | inline-fixed | B5-VAL-REPAIR-1 | repair |
+| D-W1-2 | F-4/F-5 sanity-fix ("keep the gate/null-contract paragraph") | Also past-tensed the *secondary* "KSM is the sole live writer" gate-contract paragraphs (not just the headers) in the 3 controllers + IME | Those paragraphs claimed KSM is *currently* the live writer (present tense) — the same now-false doc-rot class the block exists to eliminate. Kept the gate/null semantics intact; only corrected the KSM-liveness tense | none (doc-only; behaviour unchanged) | inline-fixed | B5-VAL-REPAIR-1 | repair |
 
 ---
 

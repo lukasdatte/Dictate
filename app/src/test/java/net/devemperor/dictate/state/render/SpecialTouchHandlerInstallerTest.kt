@@ -282,6 +282,62 @@ class SpecialTouchHandlerInstallerTest {
         assertEquals("", ic.committed.toString())
     }
 
+    // ── 5b. F-1 (B5-VAL) — exactly-one-commit + swipe still moves ─────
+
+    @Test
+    fun `F-1 single SPACE tap commits exactly one space (no double-commit)`() {
+        val installer = newInstaller()
+        installer.installDormant(buttons)
+        installer.attachToViews(buttons)
+        val handler = shadowOf(space).onTouchListener!!
+
+        // One physical tap (DOWN→UP, no swipe). The §11.7 onTap is the
+        // ONLY commit path now (ImeViewBackend no longer wires a SPACE
+        // click — F-1). The regression was TWO spaces (touch onTap +
+        // performClick→SpaceKey). Assert EXACTLY one.
+        handler.onTouch(space, motionEvent(android.view.MotionEvent.ACTION_DOWN, 0f))
+        handler.onTouch(space, motionEvent(android.view.MotionEvent.ACTION_UP, 0f))
+
+        assertEquals(
+            "one SPACE tap must commit exactly one space (F-1)",
+            " ",
+            ic.committed.toString(),
+        )
+    }
+
+    @Test
+    fun `F-1 SPACE swipe moves the cursor and commits no space (G4 intact)`() {
+        val installer = newInstaller()
+        installer.installDormant(buttons)
+        installer.attachToViews(buttons)
+        val handler = shadowOf(space).onTouchListener!!
+
+        // DOWN → MOVE past the swipe threshold → UP. CursorSwipe must
+        // still propagate MOVE (consumeTouchEvents=false, G4) → a cursor
+        // move (commitText("", 2)) and NO space commit on UP (hasSwiped).
+        handler.onTouch(space, motionEvent(android.view.MotionEvent.ACTION_DOWN, 0f))
+        handler.onTouch(
+            space,
+            motionEvent(
+                android.view.MotionEvent.ACTION_MOVE,
+                net.devemperor.dictate.keyboard.CursorSwipeTouchHandler
+                    .DEFAULT_SWIPE_THRESHOLD + 50f,
+            ),
+        )
+        handler.onTouch(space, motionEvent(android.view.MotionEvent.ACTION_UP, 0f))
+
+        assertEquals(
+            "a SPACE swipe must move the cursor, never commit a space (G4)",
+            "",
+            ic.committed.toString(),
+        )
+        assertEquals(
+            "the cursor-move must have fired (G4 MOVE-propagation intact)",
+            1,
+            ic.cursorMoves,
+        )
+    }
+
     // ── 6. G3 — accel-delete-cascade-cancel wire (the half F-1 dropped) ─
 
     @Test
@@ -314,8 +370,21 @@ class SpecialTouchHandlerInstallerTest {
     private class FakeInputConnection : InputConnection {
         val committed = StringBuilder()
 
+        /**
+         * F-1 (B5-VAL): the §11.7 cursor-move is a
+         * `commitText("", ±)` (empty text, cursor reposition). Count
+         * those separately from a real space commit so the swipe-vs-tap
+         * paths are distinguishable in tests.
+         */
+        var cursorMoves = 0
+            private set
+
         override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-            committed.append(text)
+            if (text.isNullOrEmpty()) {
+                cursorMoves++
+            } else {
+                committed.append(text)
+            }
             return true
         }
 

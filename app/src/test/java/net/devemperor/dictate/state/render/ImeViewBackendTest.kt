@@ -220,6 +220,62 @@ class ImeViewBackendTest {
         )
     }
 
+    // ─── F-1 (B5-VAL) — SPACE is touch-only, never click-wired ────────
+
+    @Test
+    fun `F-1 SPACE has no click listener — touch-only (legacy parity)`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+
+        // SPACE must NOT get a click listener: its commit is the §11.7
+        // CursorSwipe onTap. Wiring a click too → one tap = two spaces
+        // (CursorSwipe returns consumeTouchEvents=false for G4 MOVE
+        // propagation, so performClick also fires).
+        assertTrue(
+            "SPACE must be touch-only — no OnClickListener",
+            !buttons[LogicalButtonId.SPACE]!!.hasOnClickListeners(),
+        )
+    }
+
+    @Test
+    fun `F-1 other commit keys still have a click listener`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+
+        // Regression-guard: the SPACE skip must not have widened to the
+        // other buttons. BACKSPACE / ENTER / RECORD keep their click.
+        assertTrue(
+            "BACKSPACE must keep its click listener",
+            buttons[LogicalButtonId.BACKSPACE]!!.hasOnClickListeners(),
+        )
+        assertTrue(
+            "ENTER must keep its click listener",
+            buttons[LogicalButtonId.ENTER]!!.hasOnClickListeners(),
+        )
+        assertTrue(
+            "RECORD must keep its click listener",
+            buttons[LogicalButtonId.RECORD]!!.hasOnClickListeners(),
+        )
+    }
+
+    @Test
+    fun `F-1 SPACE performClick emits no action — single-commit path`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
+
+        // Even if something calls performClick() on SPACE (the Android
+        // touch→performClick fallthrough the real defect rode), no
+        // SpaceKey action is dispatched — the only commit path is the
+        // §11.7 touch onTap (covered by SpecialTouchHandlerInstallerTest).
+        buttons[LogicalButtonId.SPACE]!!.performClick()
+
+        assertTrue(
+            "SPACE performClick must emit no action (no SpaceKey), got: $captured",
+            captured.isEmpty(),
+        )
+    }
+
     @Test
     fun `detach clears onAction and stateRef — subsequent click is no-op`() {
         val backend = newBackend()
@@ -371,9 +427,17 @@ class ImeViewBackendTest {
 
         backend.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
         buttons[LogicalButtonId.BACKSPACE]!!.performClick()
+        buttons[LogicalButtonId.ENTER]!!.performClick()
+        // F-1 (B5-VAL): SPACE is touch-only — it has NO click listener,
+        // so performClick() on SPACE fires neither a click nor its
+        // onVibrate. The SPACE vibrate happens in the §11.7 CursorSwipe
+        // onTap (covered by SpecialTouchHandlerInstallerTest), not here.
         buttons[LogicalButtonId.SPACE]!!.performClick()
 
-        assertEquals(2, vibrations)
+        assertEquals(
+            "only the two real click buttons vibrate; SPACE click is a no-op (F-1)",
+            2, vibrations,
+        )
     }
 
     // ─── CR1 (Theme C-R) — long-press / key-press-anim / applyTheme ─────

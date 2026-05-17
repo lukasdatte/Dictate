@@ -1977,13 +1977,25 @@ carry-forward.
 
 ## Block Closeout (Orchestrator)
 
-- **All chunks complete (5-step, both commits):** ⏳
-- **CR-RGATE gate GREEN (authorises CR-DEL):** ⏳
-- **Block-Validate converged:** ⏳
-- **AUDIT-TEST: coverage + no cross-chunk regressions:** ⏳
-- **Build green at block-end (Spec 1 §9.6 cleanup-greps pass):** ⏳
-- **Issue index reconciled (incl. inherited F-6):** ⏳
-- **Cross-block-API consumer info forwarded to B6 (D1/D2 render-assumption restored):** ⏳
+- **All chunks complete (5-step, both commits):** ✅ CR1 (3d8b9f0+598534b) · CR2 (d53208c+590049e) · CR3 (f78af84+5765432) · CR-EXTRACT (bd74258, mid-triage W1) · CR4 (e1e754b+b5e224e, re-run post CR-EXTRACT) · CR-RGATE (282604b, GREEN) · CR-DEL (cc5803e+0c2c196)
+- **CR-RGATE gate GREEN (authorises CR-DEL):** ✅ independent verification GREEN; CR-DEL proceeded + the 4 controllers deleted
+- **Block-Validate converged:** ✅ 1 wave (B5-VAL-W1 4bcd1a7; soft-cap 3 not approached) — incl. 2 Criticals (SPACE double-commit; F-6 reopened→closed)
+- **AUDIT-TEST: coverage + no cross-chunk regressions:** ✅ 1162/0 both variants ×(2+3) uncached; **last R-7 axis CLOSED** (JobExecutor.resetForTest sentinel-drain — all 3 R-7 axes now fixed: B2 ActiveJobRegistry, B3 DurationHealingScheduler, B5 JobExecutor.executor); CR-RGATE 5/5 + DictateCutoverE2ETest 10/10 hold
+- **Build green at block-end:** ✅ assembleDebug + assembleRelease + test (AC-9 ≥946; AC-RR-7 grep-zero)
+- **Issue index reconciled:** ✅ F-6 (inherited B3 → reopened by B5-LOGIC-B5-2 → now properly closed), CR4-IMPL-1/2/3, all F-1..F-10 closed; C5-IMPL-2 + C10-C3-IMPL-1 NTH postponed (tracked)
+- **Cross-block consumer info forwarded to B6:** ✅ render path is the sole live driver (4 legacy controllers deleted; AC-RR-7/AC-RR-8 = Epic AC-7+AC-10 render half met). **D1/D2 (B6) sole-RenderBackend assumption is now RESTORED** — B6 Espresso/E2E test against the real (single) render path.
 
-**Block completed at:** ⏳
-**Block-End-Commit:** ⏳
+**Phase 4.7 note:** Theme C-R existed because the INT-1 parallel-dormant
+anti-pattern recurred at the render layer (C10-IMPL-2). Within this block
+the same anti-pattern was caught & spec-faithfully resolved **twice more**
+(CR4-IMPL-1 missing edit-bar/emoji owners → CR-EXTRACT; F-6 prematurely
+marked closed by CR-DEL → reopened+closed in VAL-W1) — the mandatory
+RR-3 per-class trace + the multi-agent audit are what surfaced each
+before irreversible deletion. The cutover is now CODE-COMPLETE: recording
+-drive (A/B) + legacy-retire (C: D-13/D-14) + render-path (C-R: 4
+controllers gone) — no parallel-dormant layer remains.
+
+**Block completed at:** 2026-05-17
+**Block-End-Commit:** 4bcd1a7
+**Cross-reference set in state file:** ✅
+**Postponed issues forwarded:** C5-IMPL-2 (NTH amplitude/timer), C10-C3-IMPL-1 (NTH)

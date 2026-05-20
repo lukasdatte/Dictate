@@ -75,71 +75,50 @@ class PipelineStepRowRendererTest {
         )
     }
 
-    // ── (a) Pipeline-state guard — non-Idle pipeline defers to refresh ──
+    // ── Phase 3 (cutover-vol2) — applyRecordButtonForRecording is no-op ──
+    //
+    // The legacy applyRecordButtonForRecording previously wrote record_btn
+    // text + enabled + compound drawables for each RecordingState branch.
+    // Phase 3 of dictate-render-cutover-completion-vol2 atomically flipped
+    // that ownership: the Catalog/SlotRenderer now owns text + enabled and
+    // the AutoEnterRenderer side-channel owns compound drawables. The
+    // legacy method body is empty and only kept as a compile-time shim
+    // until Phase 5.B deletes it.
 
     @Test
-    fun pipeline_preparing_defers_to_refreshFromState() {
+    fun `applyRecordButtonForRecording is no-op for every RecordingState branch`() {
+        val initialText = recordButton.text?.toString().orEmpty()
+        val initialEnabled = recordButton.isEnabled
+        listOf(
+            RecordingState.Idle,
+            RecordingState.Preparing(useBluetooth = false),
+            RecordingState.Active(useBluetooth = false),
+            RecordingState.Active(useBluetooth = true),
+            RecordingState.Paused,
+        ).forEach { state ->
+            renderer.applyRecordButtonForRecording(state)
+            assertEquals(
+                "Phase 3 no-op: applyRecordButtonForRecording must not mutate text — got '${recordButton.text}' for $state",
+                initialText, recordButton.text?.toString().orEmpty(),
+            )
+            assertEquals(
+                "Phase 3 no-op: applyRecordButtonForRecording must not mutate isEnabled for $state",
+                initialEnabled, recordButton.isEnabled,
+            )
+        }
+    }
+
+    @Test
+    fun `preparePipeline updates state but does NOT mutate record_btn directly`() {
+        val initialText = recordButton.text?.toString().orEmpty()
+        val initialEnabled = recordButton.isEnabled
         renderer.preparePipeline()
-        assertFalse(
-            "Preparing must disable the record button (pipeline owns it)",
-            recordButton.isEnabled,
-        )
-
-        renderer.applyRecordButtonForRecording(RecordingState.Idle)
-        assertFalse(
-            "Pipeline-guard must NOT let the Idle recording branch enable the button while Preparing",
-            recordButton.isEnabled,
-        )
-
-        renderer.applyRecordButtonForRecording(RecordingState.Active(useBluetooth = false))
-        assertFalse(
-            "Pipeline-guard must NOT let the Active recording branch enable the button while Preparing",
-            recordButton.isEnabled,
-        )
-    }
-
-    // ── (b) Idle pipeline → recording-state branches ──
-
-    @Test
-    fun recording_idle_when_pipeline_idle_paintsIdleLabel() {
-        renderer.applyRecordButtonForRecording(RecordingState.Idle)
-        assertEquals("Record", recordButton.text.toString())
-        assertTrue(recordButton.isEnabled)
-    }
-
-    @Test
-    fun recording_preparing_when_pipeline_idle_disables_button() {
-        renderer.applyRecordButtonForRecording(RecordingState.Preparing(useBluetooth = false))
-        assertFalse(recordButton.isEnabled)
-    }
-
-    @Test
-    fun recording_active_useBluetooth_true_when_pipeline_idle() {
-        renderer.applyRecordButtonForRecording(RecordingState.Active(useBluetooth = true))
-        assertTrue(recordButton.isEnabled)
-        assertTrue(
-            "Active branch must paint the send label, got '${recordButton.text}'",
-            recordButton.text.toString().startsWith("Send"),
-        )
-    }
-
-    @Test
-    fun recording_active_useBluetooth_false_when_pipeline_idle() {
-        renderer.applyRecordButtonForRecording(RecordingState.Active(useBluetooth = false))
-        assertTrue(recordButton.isEnabled)
-        assertTrue(recordButton.text.toString().startsWith("Send"))
-    }
-
-    @Test
-    fun recording_paused_when_pipeline_idle_keepsActiveButtonState() {
-        renderer.applyRecordButtonForRecording(RecordingState.Active(useBluetooth = false))
-        val textBeforePaused = recordButton.text.toString()
-        val enabledBeforePaused = recordButton.isEnabled
-
-        renderer.applyRecordButtonForRecording(RecordingState.Paused)
-
-        assertEquals(textBeforePaused, recordButton.text.toString())
-        assertEquals(enabledBeforePaused, recordButton.isEnabled)
+        // The renderer's internal `state` transitions to Preparing —
+        // testable via callbacks — but the record_btn itself is now
+        // owned by the Catalog/SlotRenderer, so no direct write here.
+        assertEquals(initialText, recordButton.text?.toString().orEmpty())
+        assertEquals(initialEnabled, recordButton.isEnabled)
+        assertTrue(renderer.state is PipelineUiState.Preparing)
     }
 
     // ── Pipeline-UI machinery (relocated) ──

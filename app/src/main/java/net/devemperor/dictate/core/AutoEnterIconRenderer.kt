@@ -28,18 +28,18 @@ import net.devemperor.dictate.R
  * next [get] rebuilds them from the current context — used by `stopPipeline()` to defend against
  * density/theme changes between pipeline runs.
  */
-class AutoEnterIconRenderer(private val context: Context) {
+open class AutoEnterIconRenderer(private val context: Context) {
     private var cachedActive: Drawable? = null
     private var cachedInactive: Drawable? = null
 
-    fun get(active: Boolean): Drawable =
+    open fun get(active: Boolean): Drawable =
         if (active) {
             cachedActive ?: buildActive().also { cachedActive = it }
         } else {
             cachedInactive ?: buildInactive().also { cachedInactive = it }
         }
 
-    fun invalidate() {
+    open fun invalidate() {
         cachedActive = null
         cachedInactive = null
     }

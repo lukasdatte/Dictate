@@ -137,6 +137,13 @@ class ImeViewBackend(
     private val ctx: Context,
     private val services: ModuleServices,
     private val recordingAnimationController: RecordingAnimationController? = null,
+    /**
+     * Phase 3 of dictate-render-cutover-completion-vol2 — single
+     * writer for the record-button compound drawables (left + right),
+     * including the dynamic auto-enter ↵ BitmapDrawable in Running.
+     * Optional so JVM tests that don't care about icons can skip it.
+     */
+    private val autoEnterRenderer: AutoEnterRenderer? = null,
     private val keyPressAnimator: KeyPressAnimator = KeyPressAnimator(),
     private val staticHandlerInstaller: ((Map<LogicalButtonId, View>) -> Unit)? = null,
     private val onVibrate: () -> Unit = {},
@@ -190,6 +197,7 @@ class ImeViewBackend(
         modeRef = null
         firstRender = true
         recordingAnimationController?.reset()
+        autoEnterRenderer?.reset()
         // Click-listeners stay wired on the Views — they short-circuit
         // because `onAction == null` and `stateRef == null`. The Views
         // themselves are released by the IME service's onCreateInputView
@@ -235,7 +243,15 @@ class ImeViewBackend(
             applySlotToView(slot, view, state, ctx)
         }
 
-        // 3 — Forward the recording-state transition into the
+        // 3 — Forward the pipeline-state into the record-button
+        //     compound-drawables side-channel (Phase 3 of
+        //     dictate-render-cutover-completion-vol2 §7 Q1). This is
+        //     the single writer for left + right compound drawables on
+        //     record_btn (including the dynamic auto-enter ↵
+        //     BitmapDrawable in Running). Idempotent.
+        autoEnterRenderer?.onState(state)
+
+        // 4 — Forward the recording-state transition into the
         //     animation controller (Spec 2 §11.5). The controller is
         //     idempotent — only the class transition triggers work.
         recordingAnimationController?.onState(state)

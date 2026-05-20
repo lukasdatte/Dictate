@@ -1207,6 +1207,11 @@ public class DictateInputMethodService extends InputMethodService
                 recordPulseLayout,
                 animationsEnabledLambda
             );
+        // Phase 3 of dictate-render-cutover-completion-vol2 — single
+        // writer for record_btn's left + right compound drawables
+        // (including the dynamic AutoEnter ↵ BitmapDrawable in Running).
+        net.devemperor.dictate.state.render.AutoEnterRenderer autoEnterRendererForBackend =
+            new net.devemperor.dictate.state.render.AutoEnterRenderer(recordButton);
 
         kotlin.jvm.functions.Function0<kotlin.Unit> vibrateLambda = () -> {
             vibrate();
@@ -1355,6 +1360,7 @@ public class DictateInputMethodService extends InputMethodService
             context,
             pipelineBinder.getModuleServices(),
             recordingAnimationCtrlForBackend,
+            autoEnterRendererForBackend,
             qwertzKeyboardView.getKeyPressAnimator(),
             staticHandlerInstaller,
             vibrateLambda,
@@ -4030,10 +4036,10 @@ public class DictateInputMethodService extends InputMethodService
         mainHandler.post(() -> {
             if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
             pipelineStepRowRenderer.stopPipeline();  // → updatePipelineState(Idle) → Callback → QWERTZ reset
-            pipelineStepRowRenderer.restoreRecordButtonIdle(
-                getDictateButtonText(),
-                R.drawable.ic_baseline_mic_20,
-                R.drawable.ic_baseline_folder_open_20);
+            // Phase 3 of dictate-render-cutover-completion-vol2 — the
+            // legacy restoreRecordButtonIdle is a no-op. The Catalog +
+            // AutoEnterRenderer are the single writers for record_btn;
+            // the next render-tick produces the Idle visual reactively.
             // QWERTZ-Reset happens automatically via onPipelineUiStateChanged callback
         });
     }
@@ -4912,10 +4918,9 @@ public class DictateInputMethodService extends InputMethodService
         pendingLivePromptChain = false;
 
         pipelineStepRowRenderer.stopPipeline();
-        pipelineStepRowRenderer.restoreRecordButtonIdle(
-            getDictateButtonText(),
-            R.drawable.ic_baseline_mic_20,
-            R.drawable.ic_baseline_folder_open_20);
+        // Phase 3 of dictate-render-cutover-completion-vol2 —
+        // restoreRecordButtonIdle is a no-op; the Catalog +
+        // AutoEnterRenderer reactively repaint Idle on the next render.
 
         dbExecutor.execute(() -> {
             String lastOutput = null;

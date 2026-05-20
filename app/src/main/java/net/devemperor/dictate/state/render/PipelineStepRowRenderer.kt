@@ -214,7 +214,10 @@ class PipelineStepRowRenderer(
         pipelineTotalTimer?.stop()
         pipelineTotalTimer = ElapsedTimer.start(views.mainHandler) { ms ->
             latestPipelineElapsedMs = ms
-            refreshRecordButtonFromState()
+            // Phase 3 of dictate-render-cutover-completion-vol2 — the
+            // 100 ms tick no longer drives a record-button refresh. The
+            // Catalog (text/enabled/alpha) + AutoEnterRenderer
+            // (compound-drawables) are the single writers for this view.
             val s = state
             if (s is PipelineUiState.Running) {
                 callbacks.forEach { it.onPipelineTimerTick(s, ms) }
@@ -397,112 +400,50 @@ class PipelineStepRowRenderer(
     }
 
     // ── Record button rendering from state ──
+    //
+    // Phase 3 of dictate-render-cutover-completion-vol2 — this whole
+    // section is a no-op after the atomic flip. The single writers on
+    // `record_btn` are:
+    //
+    //  - Catalog/`SlotRenderer.applySlotToView` for text / enabled /
+    //    alpha (Spec 2 §5.1).
+    //  - `AutoEnterRenderer` side-channel for left + right compound
+    //    drawables (Q1).
+    //  - `RecordButtonColorController` side-channel for setTextColor —
+    //    pending Phase 5.A (the `hasFailure` state migration).
+    //
+    // The methods below remain as compile-time call-site shims so the
+    // IME-Java call sites keep type-checking; the bodies are empty.
+    // Phase 5.B deletes them along with the renderer's imperative
+    // mutation API.
 
     /**
-     * Central resolver for the recording-axis side of the record-button
-     * appearance (Spec 1 §11.2.2 step 2). Behaviour preserved verbatim
-     * from the deleted `KeyboardUiController.applyRecordButtonForRecording`
-     * — only the call site moved.
+     * Phase 3 no-op shim. Body intentionally empty — the record-btn
+     * recording-axis is owned by the Catalog/SlotRenderer now (text /
+     * enabled) and by [AutoEnterRenderer] (compound drawables).
      */
+    @Suppress("UNUSED_PARAMETER")
     fun applyRecordButtonForRecording(state: RecordingState) {
-        if (this.state !is PipelineUiState.Idle) {
-            refreshRecordButtonFromState()
-            return
-        }
-        when (state) {
-            is RecordingState.Idle -> {
-                views.recordButton.text = dictateButtonTextProvider()
-                views.recordButton.isEnabled = true
-                views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                    R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0,
-                )
-            }
-            is RecordingState.Preparing -> {
-                views.recordButton.isEnabled = false
-            }
-            is RecordingState.Active -> {
-                views.recordButton.isEnabled = true
-                views.recordButton.setText(R.string.dictate_send)
-                if (state.useBluetooth) {
-                    views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                        R.drawable.ic_baseline_send_20, 0, R.drawable.ic_baseline_bluetooth_20, 0,
-                    )
-                } else {
-                    views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                        R.drawable.ic_baseline_send_20, 0, 0, 0,
-                    )
-                }
-            }
-            is RecordingState.Paused -> {
-                // No record-button mutation when entering Paused — text /
-                // isEnabled stay at the Active values until resume or stop
-                // (deleted `KeyboardUiController` parity).
-            }
-        }
+        // No-op — see section header above.
     }
 
     private fun refreshRecordButtonFromState() {
-        when (val s = state) {
-            is PipelineUiState.Idle -> {
-                views.recordButton.isEnabled = true
-                views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0)
-            }
-            is PipelineUiState.Preparing -> {
-                views.recordButton.isEnabled = false
-                views.recordButton.setText(R.string.dictate_sending)
-                views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                    R.drawable.ic_baseline_send_20, 0, 0, 0,
-                )
-                views.recordButton.setTextColor(Color.WHITE)
-            }
-            is PipelineUiState.Running -> {
-                views.recordButton.isEnabled = true
-                val counter = "${s.completedSteps}/${s.totalSteps}"
-                val timer = formatElapsedCompact(latestPipelineElapsedMs)
-                views.recordButton.text = if (s.currentStepName.isNotEmpty()) {
-                    "${s.currentStepName}  $counter  $timer"
-                } else {
-                    "$counter  $timer"
-                }
-                views.recordButton.setTextColor(
-                    if (s.hasFailure) 0xFFF44336.toInt() else Color.WHITE,
-                )
-                updateAutoEnterAppearance(s.autoEnterActive)
-            }
-            is PipelineUiState.ReprocessStaging -> {
-                views.recordButton.isEnabled = true
-                views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                    R.drawable.ic_baseline_play_arrow_24,
-                    0,
-                    R.drawable.ic_baseline_send_24,
-                    0,
-                )
-                val durationStr = formatDurationMinSec(s.audioDurationSeconds)
-                views.recordButton.text = views.recordButton.resources.getString(
-                    R.string.dictate_reprocess_audio_available, durationStr,
-                )
-                views.recordButton.setTextColor(Color.WHITE)
-            }
-        }
+        // No-op — see section header above. Method kept private so
+        // existing internal call sites compile; Phase 5.B removes it.
     }
 
-    private fun formatDurationMinSec(seconds: Long): String {
-        val m = seconds / 60
-        val s = seconds % 60
-        return String.format(Locale.getDefault(), "%d:%02d", m, s)
+    fun restoreRecordButtonIdle(
+        @Suppress("UNUSED_PARAMETER") text: String,
+        @Suppress("UNUSED_PARAMETER") leftIcon: Int,
+        @Suppress("UNUSED_PARAMETER") rightIcon: Int,
+    ) {
+        // No-op — see section header above. The Catalog drives the
+        // Idle visual on the next state emit; no manual restore needed.
     }
 
-    fun restoreRecordButtonIdle(text: String, leftIcon: Int, rightIcon: Int) {
-        views.recordButton.text = text
-        views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(leftIcon, 0, rightIcon, 0)
-        savedRecordButtonTextColors?.let { views.recordButton.setTextColor(it) }
-    }
-
-    // ── Auto-enter appearance (visual only, no click listener management) ──
-
-    private fun updateAutoEnterAppearance(active: Boolean) {
-        views.recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-            null, null, autoEnterRenderer.get(active), null,
-        )
-    }
+    // updateAutoEnterAppearance and formatDurationMinSec deleted in
+    // Phase 3 — the AutoEnterRenderer side-channel is the only place
+    // the dynamic ↵ BitmapDrawable is written. ReprocessStaging text
+    // formatting moved to `resolveRecordButtonTextStaging` + the
+    // `LayoutStrings.formatStagingLabel` lambda in TextResolvers.kt.
 }

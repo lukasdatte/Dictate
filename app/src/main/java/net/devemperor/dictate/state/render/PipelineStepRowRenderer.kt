@@ -241,6 +241,50 @@ class PipelineStepRowRenderer(
         updatePipelineState(s.copy(autoEnterActive = newConfig.autoEnterActive))
     }
 
+    /**
+     * Phase-2 cutover bridge — drive the renderer's pipeline-state from
+     * the orchestrator's `state.PipelineUiState` snapshot.
+     *
+     * Designed as an **additive** consumer pathway during the
+     * `2026-05-21 - dictate-render-cutover-completion-vol2` migration.
+     * Today the IME still calls the imperative methods
+     * (`preparePipeline`, `startPipeline`, `addRunningStep`,
+     * `completeStep`, `failStep`, `stopPipeline`,
+     * `enterReprocessStaging`, …) which mutate the renderer's legacy
+     * `state` directly. Phase 5 replaces those call sites with a single
+     * `StateFlow<DictateUiState>.collect { syncFromOrchestrator(it.pipeline) }`
+     * subscription and removes the imperative API + the legacy
+     * `state`-property entirely.
+     *
+     * The bridge ([toCoreLegacy]) is lossy — `currentStepName` and
+     * `hasFailure` are not present in the orchestrator state today
+     * (Phase 5.A introduces them via `stepHistory`/`hasFailure`).
+     * Until then the imperative `addRunningStep` / `failStep`
+     * callbacks continue to carry the step-level detail; this method
+     * only synchronises the **coarse FSM phase**
+     * (Idle / Preparing / Running / ReprocessStaging) and the
+     * `autoEnterActive` axis.
+     *
+     * @see PipelineUiStateBridge
+     */
+    fun syncFromOrchestrator(orchestratorState: net.devemperor.dictate.state.PipelineUiState) {
+        val mapped = orchestratorState.toCoreLegacy()
+        // Preserve the step-detail fields (currentStepName, hasFailure)
+        // on the Running branch — they are owned by the imperative
+        // legacy callbacks until Phase 5.A. The branch type + counters
+        // + autoEnterActive come from the orchestrator snapshot.
+        val merged = if (mapped is PipelineUiState.Running && state is PipelineUiState.Running) {
+            val existing = state as PipelineUiState.Running
+            mapped.copy(
+                currentStepName = existing.currentStepName,
+                hasFailure = existing.hasFailure,
+            )
+        } else {
+            mapped
+        }
+        if (merged != state) updatePipelineState(merged)
+    }
+
     // ── ReprocessStaging state mutations (Phase 7.3) ──
 
     fun enterReprocessStaging(

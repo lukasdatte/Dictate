@@ -3768,8 +3768,7 @@ public class DictateInputMethodService extends InputMethodService
 
     private void onStepStarted_dispatchOrchestratorSync(String stepName) {
         if (pipelineBinder == null) return;
-        net.devemperor.dictate.state.PipelineUiState p =
-                pipelineBinder.getState().getValue().getPipeline();
+        net.devemperor.dictate.state.PipelineUiState p = getPipelinePhase();
         // First step → transition Preparing → Running via StartPipeline.
         if (p instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
             net.devemperor.dictate.state.PipelineUiState.Preparing prep =
@@ -3807,8 +3806,7 @@ public class DictateInputMethodService extends InputMethodService
         // Then dispatch StepStarted (read sessionId off state.pipeline — may
         // be Running now after the StartPipeline above, or already-Running
         // for non-first steps).
-        net.devemperor.dictate.state.PipelineUiState p2 =
-                pipelineBinder.getState().getValue().getPipeline();
+        net.devemperor.dictate.state.PipelineUiState p2 = getPipelinePhase();
         if (p2 instanceof net.devemperor.dictate.state.PipelineUiState.Running) {
             String sid = ((net.devemperor.dictate.state.PipelineUiState.Running) p2).getSessionId();
             dispatchPipelineActionToOrchestrator(
@@ -3818,9 +3816,7 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private String currentPipelineSessionId() {
-        if (pipelineBinder == null) return null;
-        net.devemperor.dictate.state.PipelineUiState p =
-                pipelineBinder.getState().getValue().getPipeline();
+        net.devemperor.dictate.state.PipelineUiState p = getPipelinePhase();
         if (p instanceof net.devemperor.dictate.state.PipelineUiState.Running) {
             return ((net.devemperor.dictate.state.PipelineUiState.Running) p).getSessionId();
         }
@@ -3828,6 +3824,24 @@ public class DictateInputMethodService extends InputMethodService
             return ((net.devemperor.dictate.state.PipelineUiState.Preparing) p).getSessionId();
         }
         return null;
+    }
+
+    /**
+     * Phase-2 cutover helper — single accessor that returns the
+     * orchestrator's current {@code state.PipelineUiState} (returns
+     * {@code PipelineUiState.Idle} when the binder is not attached).
+     *
+     * <p>Bundles the ~8 call sites that today open-code
+     * {@code pipelineBinder.getState().getValue().getPipeline()} +
+     * {@code instanceof} casts in this file. Reduces the cutover
+     * surface area for Phase 5 of
+     * {@code 2026-05-21 - dictate-render-cutover-completion-vol2}, where
+     * every pipeline-read path consolidates onto the orchestrator
+     * sealed class.
+     */
+    private net.devemperor.dictate.state.PipelineUiState getPipelinePhase() {
+        if (pipelineBinder == null) return net.devemperor.dictate.state.PipelineUiState.Idle.INSTANCE;
+        return pipelineBinder.getState().getValue().getPipeline();
     }
 
     @Override
@@ -4039,17 +4053,14 @@ public class DictateInputMethodService extends InputMethodService
         // pipeline completes before Running was ever materialised
         // (very short jobs); the Preparing flag is then the only
         // surviving record of the user's toggle.
-        if (pipelineBinder != null) {
-            net.devemperor.dictate.state.PipelineUiState ps =
-                    pipelineBinder.getState().getValue().getPipeline();
-            if (ps instanceof net.devemperor.dictate.state.PipelineUiState.Running) {
-                return ((net.devemperor.dictate.state.PipelineUiState.Running) ps)
-                        .getAutoEnterActive();
-            }
-            if (ps instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
-                return ((net.devemperor.dictate.state.PipelineUiState.Preparing) ps)
-                        .getAutoEnterActive();
-            }
+        net.devemperor.dictate.state.PipelineUiState ps = getPipelinePhase();
+        if (ps instanceof net.devemperor.dictate.state.PipelineUiState.Running) {
+            return ((net.devemperor.dictate.state.PipelineUiState.Running) ps)
+                    .getAutoEnterActive();
+        }
+        if (ps instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
+            return ((net.devemperor.dictate.state.PipelineUiState.Preparing) ps)
+                    .getAutoEnterActive();
         }
         // Pipeline not Preparing/Running (Idle) — fall back to the
         // global pref so end-of-pipeline triggers that race ahead of
@@ -4088,8 +4099,7 @@ public class DictateInputMethodService extends InputMethodService
         // out of sync forever (the StartPipeline merge in PipelineModule
         // would then default it back to the global Pref.AutoEnter value).
         if (pipelineBinder != null) {
-            net.devemperor.dictate.state.PipelineUiState ps =
-                    pipelineBinder.getState().getValue().getPipeline();
+            net.devemperor.dictate.state.PipelineUiState ps = getPipelinePhase();
             if (ps instanceof net.devemperor.dictate.state.PipelineUiState.Running
                     || ps instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
                 pipelineBinder.dispatch(

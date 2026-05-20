@@ -1212,6 +1212,12 @@ public class DictateInputMethodService extends InputMethodService
         // (including the dynamic AutoEnter ↵ BitmapDrawable in Running).
         net.devemperor.dictate.state.render.AutoEnterRenderer autoEnterRendererForBackend =
             new net.devemperor.dictate.state.render.AutoEnterRenderer(recordButton);
+        // Phase 5.A of dictate-render-cutover-completion-vol2 — single
+        // writer for record_btn's setTextColor axis (red on hasFailure,
+        // white otherwise).
+        net.devemperor.dictate.state.render.RecordButtonColorController recordButtonColorControllerForBackend =
+            new net.devemperor.dictate.state.render.RecordButtonColorController(
+                recordButton, 0xFFF44336, android.graphics.Color.WHITE);
 
         kotlin.jvm.functions.Function0<kotlin.Unit> vibrateLambda = () -> {
             vibrate();
@@ -1361,6 +1367,7 @@ public class DictateInputMethodService extends InputMethodService
             pipelineBinder.getModuleServices(),
             recordingAnimationCtrlForBackend,
             autoEnterRendererForBackend,
+            recordButtonColorControllerForBackend,
             qwertzKeyboardView.getKeyPressAnimator(),
             staticHandlerInstaller,
             vibrateLambda,

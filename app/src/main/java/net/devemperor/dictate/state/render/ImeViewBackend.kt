@@ -144,6 +144,12 @@ class ImeViewBackend(
      * Optional so JVM tests that don't care about icons can skip it.
      */
     private val autoEnterRenderer: AutoEnterRenderer? = null,
+    /**
+     * Phase 5.A of dictate-render-cutover-completion-vol2 — single
+     * writer for the record-button `setTextColor` axis. Red while
+     * `Running.hasFailure == true`, white everywhere else.
+     */
+    private val recordButtonColorController: RecordButtonColorController? = null,
     private val keyPressAnimator: KeyPressAnimator = KeyPressAnimator(),
     private val staticHandlerInstaller: ((Map<LogicalButtonId, View>) -> Unit)? = null,
     private val onVibrate: () -> Unit = {},
@@ -198,6 +204,7 @@ class ImeViewBackend(
         firstRender = true
         recordingAnimationController?.reset()
         autoEnterRenderer?.reset()
+        recordButtonColorController?.reset()
         // Click-listeners stay wired on the Views — they short-circuit
         // because `onAction == null` and `stateRef == null`. The Views
         // themselves are released by the IME service's onCreateInputView
@@ -251,7 +258,13 @@ class ImeViewBackend(
         //     BitmapDrawable in Running). Idempotent.
         autoEnterRenderer?.onState(state)
 
-        // 4 — Forward the recording-state transition into the
+        // 4 — Forward the pipeline-state into the record-button
+        //     setTextColor side-channel (Phase 5.A of
+        //     dictate-render-cutover-completion-vol2 §7 Q2). Paints
+        //     red while `Running.hasFailure`, white elsewhere.
+        recordButtonColorController?.onState(state)
+
+        // 5 — Forward the recording-state transition into the
         //     animation controller (Spec 2 §11.5). The controller is
         //     idempotent — only the class transition triggers work.
         recordingAnimationController?.onState(state)

@@ -1,6 +1,7 @@
 package net.devemperor.dictate.state
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -147,11 +148,10 @@ class PipelineModuleTest {
 
     @Test
     fun `StepStarted in Running emits UpdateNotification and restamps elapsedMs (F-13)`() {
-        // F-13 (2026-05-15): StepStarted is a progress tick — it now
-        // restamps `elapsedMs` from ctx.now (previously a pure no-op state
-        // pass-through). The notification side-effect is unchanged. Only
-        // `elapsedMs` may differ from the input state; all other Running
-        // fields are preserved.
+        // F-13 (2026-05-15): StepStarted is a progress tick — restamps
+        // `elapsedMs` from ctx.now. Phase 5.A of
+        // dictate-render-cutover-completion-vol2 additionally appends a
+        // RUNNING StepRowItem to stepHistory.
         val state = PipelineUiState.Running(
             sid,
             InsertionTarget.INPUT_CONNECTION,
@@ -159,7 +159,13 @@ class PipelineModuleTest {
         )
         val result = module.reduce(state, Action.PipelineAction.StepStarted(sid, "transcribing"), ctx())
         val next = result!!.nextState as PipelineUiState.Running
-        assertEquals(state.copy(elapsedMs = 3_500L), next)   // 5_000 - 1_500
+        assertEquals(3_500L, next.elapsedMs)   // 5_000 - 1_500
+        assertEquals(1, next.stepHistory.size)
+        val row = next.stepHistory.first()
+        assertEquals("transcribing", row.stepName)
+        assertEquals(StepStatus.RUNNING, row.status)
+        assertEquals(5_000L, row.startedAtMs)
+        assertEquals(0L, row.durationMs)
         assertEquals(1, result.sideEffects.size)
     }
 
@@ -185,6 +191,97 @@ class PipelineModuleTest {
             result.sideEffects.contains(PipelineModule.Effect.MarkSessionFailed(sid, "rate-limit")),
         )
     }
+
+    // ─── Phase 5.A: stepHistory + hasFailure ─────────────────────────
+
+    @Test
+    fun `StartPipeline resets stepHistory and hasFailure on fresh run`() {
+        val prep = PipelineUiState.Preparing(sid, autoEnterActive = false)
+        val result = module.reduce(
+            prep,
+            Action.PipelineAction.StartPipeline(sid, totalSteps = 2, autoEnterActive = false),
+            ctx(),
+        )
+        val running = result!!.nextState as PipelineUiState.Running
+        assertTrue("fresh StartPipeline must produce an empty stepHistory", running.stepHistory.isEmpty())
+        assertFalse("fresh StartPipeline must clear hasFailure", running.hasFailure)
+    }
+
+    @Test
+    fun `StepCompleted finalises the last RUNNING row to COMPLETED with durationMs`() {
+        val started = PipelineUiState.Running(
+            sid, InsertionTarget.INPUT_CONNECTION,
+            stepHistory = kotlinx.collections.immutable.persistentListOf(
+                StepRowItem("transcribing", StepStatus.RUNNING, startedAtMs = 1_000L),
+            ),
+        )
+        val result = module.reduce(started, Action.PipelineAction.StepCompleted(sid), ctx())
+        val running = result!!.nextState as PipelineUiState.Running
+        assertEquals(1, running.stepHistory.size)
+        val row = running.stepHistory.first()
+        assertEquals(StepStatus.COMPLETED, row.status)
+        assertEquals(4_000L, row.durationMs)  // ctx.now (5_000) - startedAtMs (1_000)
+        assertEquals(1, running.completedSteps)
+    }
+
+    @Test
+    fun `StepFailed on Running keeps Running with hasFailure and FAILED row, no DismissNotification`() {
+        // Q6: StepFailed is NOT pipeline-ending.
+        val started = PipelineUiState.Running(
+            sid, InsertionTarget.INPUT_CONNECTION,
+            stepHistory = kotlinx.collections.immutable.persistentListOf(
+                StepRowItem("formatting", StepStatus.RUNNING, startedAtMs = 2_000L),
+            ),
+        )
+        val result = module.reduce(started, Action.PipelineAction.StepFailed(sid, "model-overloaded"), ctx())
+        val running = result!!.nextState as PipelineUiState.Running
+        assertTrue("hasFailure must flip to true on StepFailed in Running", running.hasFailure)
+        assertEquals(StepStatus.FAILED, running.stepHistory.first().status)
+        assertEquals(3_000L, running.stepHistory.first().durationMs)
+        assertTrue(
+            "MarkSessionFailed must still be dispatched",
+            result.sideEffects.contains(PipelineModule.Effect.MarkSessionFailed(sid, "model-overloaded")),
+        )
+        assertFalse(
+            "Q6: pipeline continues — DismissNotification must NOT be dispatched on Running.StepFailed",
+            result.sideEffects.contains(PipelineModule.Effect.DismissNotification),
+        )
+    }
+
+    @Test
+    fun `StepFailed on Preparing transitions to Idle and dispatches DismissNotification (upload fail)`() {
+        // Preparing-arm preserves the legacy semantics: an upload-time
+        // failure happens BEFORE any step row, so it ends the pipeline.
+        val prep = PipelineUiState.Preparing(sid)
+        val result = module.reduce(prep, Action.PipelineAction.StepFailed(sid, "upload-error"), ctx())
+        assertEquals(PipelineUiState.Idle, result!!.nextState)
+        assertTrue(result.sideEffects.contains(PipelineModule.Effect.DismissNotification))
+    }
+
+    @Test
+    fun `currentStepName extension reflects the last RUNNING row`() {
+        val running = PipelineUiState.Running(
+            sid, InsertionTarget.INPUT_CONNECTION,
+            stepHistory = kotlinx.collections.immutable.persistentListOf(
+                StepRowItem("step1", StepStatus.COMPLETED, startedAtMs = 0L, durationMs = 100L),
+                StepRowItem("step2", StepStatus.RUNNING, startedAtMs = 200L),
+            ),
+        )
+        assertEquals("step2", running.currentStepName)
+    }
+
+    @Test
+    fun `currentStepName is null when no row is RUNNING`() {
+        val running = PipelineUiState.Running(
+            sid, InsertionTarget.INPUT_CONNECTION,
+            stepHistory = kotlinx.collections.immutable.persistentListOf(
+                StepRowItem("step1", StepStatus.COMPLETED, startedAtMs = 0L, durationMs = 100L),
+            ),
+        )
+        assertNull(running.currentStepName)
+    }
+
+    // ────────────────────────────────────────────────────────────────────
 
     @Test
     fun `CancelPipeline drops to Idle + cancels job`() {

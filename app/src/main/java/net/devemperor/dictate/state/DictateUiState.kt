@@ -236,6 +236,51 @@ val RecordingState.audioFileOrNull: File?
  * so callers can disambiguate concurrent submissions. ReprocessStaging
  * is a sub-state of the pipeline FSM, not a separate axis.
  */
+/**
+ * Lifecycle status of one [StepRowItem] inside [PipelineUiState.Running.stepHistory].
+ *
+ * Phase 5.A of `2026-05-21 - dictate-render-cutover-completion-vol2`
+ * introduces the step-history list to absorb the per-step UI state the
+ * legacy renderer carried in its own `core.PipelineUiState.Running`.
+ * The orchestrator state becomes the SoT; the renderer becomes a
+ * reactive consumer in Phase 5.B.
+ */
+enum class StepStatus {
+    /** The step has started; ProgressBar is animating. */
+    RUNNING,
+
+    /** The step finished successfully; ✓ icon, duration recorded. */
+    COMPLETED,
+
+    /** The step failed; ✕ icon, duration recorded. The pipeline may
+     *  still continue (queued prompts keep running) — only the row
+     *  itself is marked failed. See `PipelineModule` `StepFailed` arm. */
+    FAILED,
+}
+
+/**
+ * One row of the running pipeline's step-row UI. Stored in
+ * [PipelineUiState.Running.stepHistory]; consumed by
+ * `PipelineStepRowRenderer` (Phase 5.B) to inflate / update the step
+ * rows reactively from the orchestrator state instead of via imperative
+ * `addRunningStep` / `completeStep` / `failStep` calls.
+ *
+ * @property stepName label rendered into the row's `nameTv`.
+ * @property status step lifecycle marker — drives the icon (✓ / ✕) and
+ *   the ProgressBar visibility.
+ * @property startedAtMs wall-clock ms (from `ReducerContext.now`) at
+ *   which the row entered [StepStatus.RUNNING]. Used to compute
+ *   [durationMs] on completion / failure.
+ * @property durationMs duration in ms once the step has finished (i.e.
+ *   `status != RUNNING`). Zero while the step is still RUNNING.
+ */
+data class StepRowItem(
+    val stepName: String,
+    val status: StepStatus,
+    val startedAtMs: Long,
+    val durationMs: Long = 0L,
+)
+
 sealed interface PipelineUiState {
     /** No pipeline running. */
     data object Idle : PipelineUiState
@@ -296,6 +341,38 @@ sealed interface PipelineUiState {
         val totalSteps: Int = 0,
         val startedAtMs: Long = 0L,
         val elapsedMs: Long = 0L,
+        /**
+         * Phase 5.A of `2026-05-21 - dictate-render-cutover-completion-vol2` —
+         * `true` once any [Action.PipelineAction.StepFailed] arm has fired
+         * during this run, `false` otherwise. Drives the
+         * `RecordButtonColorController` side-channel that paints the
+         * record-button text red while at least one step has failed in the
+         * current pipeline.
+         *
+         * **Important Q6 semantics:** a `StepFailed` event does NOT end
+         * the pipeline. `executeQueuedPrompts` continues with the next
+         * queued prompt; `hasFailure` stays `true` until the pipeline
+         * actually ends (`PipelineDone` / `PipelineFailed` / `CancelPipeline`
+         * → `Idle`), at which point the flag is wiped along with the
+         * branch transition.
+         */
+        val hasFailure: Boolean = false,
+        /**
+         * Phase 5.A of `2026-05-21 - dictate-render-cutover-completion-vol2` —
+         * append-only log of step-row items for this run. Each
+         * `StepStarted` appends a [StepStatus.RUNNING] entry;
+         * `StepCompleted` finalises the last `RUNNING` entry to
+         * `COMPLETED` + `durationMs`; `StepFailed` finalises to `FAILED`.
+         * `StartPipeline` resets the list to `persistentListOf()`.
+         *
+         * The renderer ([net.devemperor.dictate.state.render.PipelineStepRowRenderer],
+         * to be reduced to a reactive consumer in Phase 5.B) inflates
+         * the row views by diffing against this list — replacing the
+         * legacy imperative `addRunningStep` / `completeStep` /
+         * `failStep` API.
+         */
+        val stepHistory: kotlinx.collections.immutable.PersistentList<StepRowItem> =
+            kotlinx.collections.immutable.persistentListOf(),
     ) : PipelineUiState
 
     /**
@@ -321,6 +398,20 @@ sealed interface PipelineUiState {
         val transcript: String,
     ) : PipelineUiState
 }
+
+/**
+ * Name of the currently-running step in [PipelineUiState.Running], or
+ * `null` when no step is in progress (e.g. between two steps or right
+ * after [Action.PipelineAction.StartPipeline]).
+ *
+ * Derived from [PipelineUiState.Running.stepHistory] so the orchestrator
+ * state has a single source of truth — no separate `currentStepName`
+ * field that could drift out of sync with the history list. This is
+ * the Q3 decision from
+ * `2026-05-21 - dictate-render-cutover-completion-vol2/dictate-render-cutover-completion-vol2.md §7 Q3`.
+ */
+val PipelineUiState.Running.currentStepName: String?
+    get() = stepHistory.lastOrNull { it.status == StepStatus.RUNNING }?.stepName
 
 /**
  * Triangle-FSM mode. Owned by `ViewModeModule`. See ADR-0005 for the

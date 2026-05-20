@@ -160,6 +160,10 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                     // by `ToggleRunningAutoEnter` during the upload window).
                     // Either side being true wins, so the user's mid-upload
                     // toggle is never lost.
+                    //
+                    // Phase 5.A of dictate-render-cutover-completion-vol2 —
+                    // stepHistory + hasFailure reset to fresh baselines so
+                    // a previous run's leaks cannot bleed into this one.
                     nextState = PipelineUiState.Running(
                         sessionId = action.sessionId,
                         target = InsertionTarget.INPUT_CONNECTION,
@@ -168,6 +172,8 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                         totalSteps = action.totalSteps,
                         startedAtMs = ctx.now,
                         elapsedMs = 0L,
+                        hasFailure = false,
+                        stepHistory = kotlinx.collections.immutable.persistentListOf(),
                     ),
                     sideEffects = listOf(
                         Effect.UpdateNotification(
@@ -181,6 +187,17 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
 
         is Action.PipelineAction.StepStarted -> when (state) {
             is PipelineUiState.Running -> if (state.sessionId == action.sessionId) {
+                // Phase 5.A — append a RUNNING row to stepHistory; the
+                // legacy renderer used to materialise this row via the
+                // imperative `addRunningStep` callback, which Phase 5.B
+                // collapses into a state-flow consumer.
+                val nextHistory = state.stepHistory.add(
+                    StepRowItem(
+                        stepName = action.stepName,
+                        status = StepStatus.RUNNING,
+                        startedAtMs = ctx.now,
+                    ),
+                )
                 TransitionResult(
                     // F-13: a step boundary is a progress tick — restamp the
                     // elapsed timer so the live label advances even between
@@ -188,7 +205,10 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                     // `StepStarted` carries no total in its payload, and the
                     // authoritative total was already set by `StartPipeline`
                     // (see ### Deviations Dev-1).
-                    nextState = state.copy(elapsedMs = elapsedSince(state.startedAtMs, ctx.now)),
+                    nextState = state.copy(
+                        elapsedMs = elapsedSince(state.startedAtMs, ctx.now),
+                        stepHistory = nextHistory,
+                    ),
                     sideEffects = listOf(
                         Effect.UpdateNotification(
                             NotificationStatus.Pipeline(action.sessionId, step = action.stepName),
@@ -213,11 +233,28 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
             // a `completedSteps.coerceAtMost(totalSteps)` could live in
             // `formatPipelineLabel` in a later display-polish block —
             // forward-note only, not implemented in B1).
+            //
+            // Phase 5.A — finalise the last RUNNING row to COMPLETED
+            // with durationMs.
             is PipelineUiState.Running -> if (state.sessionId == action.sessionId) {
+                val lastIdx = state.stepHistory.indexOfLast { it.status == StepStatus.RUNNING }
+                val nextHistory = if (lastIdx >= 0) {
+                    val row = state.stepHistory[lastIdx]
+                    state.stepHistory.set(
+                        lastIdx,
+                        row.copy(
+                            status = StepStatus.COMPLETED,
+                            durationMs = ctx.now - row.startedAtMs,
+                        ),
+                    )
+                } else {
+                    state.stepHistory
+                }
                 TransitionResult(
                     nextState = state.copy(
                         completedSteps = state.completedSteps + 1,
                         elapsedMs = elapsedSince(state.startedAtMs, ctx.now),
+                        stepHistory = nextHistory,
                     ),
                 )
             } else null
@@ -225,16 +262,51 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         }
 
         is Action.PipelineAction.StepFailed -> when (state) {
-            is PipelineUiState.Running, is PipelineUiState.Preparing ->
-                if (sessionIdOf(state) == action.sessionId) {
-                    TransitionResult(
-                        nextState = PipelineUiState.Idle,
-                        sideEffects = listOf(
-                            Effect.MarkSessionFailed(action.sessionId, action.reason),
-                            Effect.DismissNotification,
+            // Q6 (cutover-vol2 §7): StepFailed is NOT pipeline-ending —
+            // executeQueuedPrompts continues with the next queued prompt.
+            // The Running arm keeps the pipeline in Running with
+            // hasFailure=true, marks the last row as FAILED, and does NOT
+            // dispatch DismissNotification (FGS stays alive for the next
+            // step). Only PipelineFailed / PipelineDone / CancelPipeline
+            // actually end the pipeline.
+            is PipelineUiState.Running -> if (state.sessionId == action.sessionId) {
+                val lastIdx = state.stepHistory.indexOfLast { it.status == StepStatus.RUNNING }
+                val nextHistory = if (lastIdx >= 0) {
+                    val row = state.stepHistory[lastIdx]
+                    state.stepHistory.set(
+                        lastIdx,
+                        row.copy(
+                            status = StepStatus.FAILED,
+                            durationMs = ctx.now - row.startedAtMs,
                         ),
                     )
-                } else null
+                } else {
+                    state.stepHistory
+                }
+                TransitionResult(
+                    nextState = state.copy(
+                        hasFailure = true,
+                        elapsedMs = elapsedSince(state.startedAtMs, ctx.now),
+                        stepHistory = nextHistory,
+                    ),
+                    sideEffects = listOf(
+                        Effect.MarkSessionFailed(action.sessionId, action.reason),
+                        // NO DismissNotification — pipeline continues.
+                    ),
+                )
+            } else null
+            // The Preparing arm preserves the pre-Q6 behaviour: an
+            // upload-time failure happens BEFORE any step row exists, so
+            // it ends the pipeline and dismisses the notification.
+            is PipelineUiState.Preparing -> if (state.sessionId == action.sessionId) {
+                TransitionResult(
+                    nextState = PipelineUiState.Idle,
+                    sideEffects = listOf(
+                        Effect.MarkSessionFailed(action.sessionId, action.reason),
+                        Effect.DismissNotification,
+                    ),
+                )
+            } else null
             else -> null
         }
 

@@ -157,14 +157,26 @@
             <PropertySet motion:visibilityMode="ignore" />
         </Constraint>
 
+        <!-- Phase 4 of dictate-render-cutover-completion-vol2 — space_btn,
+             pause_btn, enter_btn anchor their Top edge on
+             `record_pulse_layout` (Row 1's always-visible PulseLayout),
+             NOT on `trash_btn`. Pre-fix the three siblings carried Top
+             AND Bottom anchors on `trash_btn`; when the catalog hides
+             `trash_btn` (Send/Idle), ConstraintLayout collapsed the
+             anchor to 0×0 and re-centred the wrap_content siblings
+             around the collapsed line — visible as a state-dependent
+             Row 1 ↔ Row 2 overlap. Anchoring on `record_pulse_layout`
+             eliminates the collapse class entirely (the PulseLayout is
+             never GONE in any KEYBOARD_*_STATE). Bottom anchor is
+             omitted on all three; wrap_content + Top resolves the
+             vertical position deterministically. -->
         <Constraint
             android:id="@+id/space_btn"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:layout_marginEnd="8dp"
-            motion:layout_constraintTop_toTopOf="@+id/trash_btn"
-            motion:layout_constraintBottom_toBottomOf="@+id/trash_btn"
+            motion:layout_constraintTop_toBottomOf="@+id/record_pulse_layout"
             motion:layout_constraintStart_toEndOf="@+id/trash_btn"
             motion:layout_constraintEnd_toStartOf="@+id/pause_btn"
             motion:layout_goneMarginStart="0dp">
@@ -176,8 +188,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginEnd="8dp"
-            motion:layout_constraintTop_toTopOf="@+id/trash_btn"
-            motion:layout_constraintBottom_toBottomOf="@+id/trash_btn"
+            motion:layout_constraintTop_toBottomOf="@+id/record_pulse_layout"
             motion:layout_constraintStart_toEndOf="@+id/space_btn"
             motion:layout_constraintEnd_toStartOf="@+id/enter_btn">
             <PropertySet motion:visibilityMode="ignore" />
@@ -188,8 +199,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
-            motion:layout_constraintTop_toTopOf="@+id/trash_btn"
-            motion:layout_constraintBottom_toBottomOf="@+id/trash_btn"
+            motion:layout_constraintTop_toBottomOf="@+id/record_pulse_layout"
             motion:layout_constraintStart_toEndOf="@+id/pause_btn"
             motion:layout_constraintEnd_toEndOf="parent">
             <PropertySet motion:visibilityMode="ignore" />

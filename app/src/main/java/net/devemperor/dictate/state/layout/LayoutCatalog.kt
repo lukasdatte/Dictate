@@ -260,7 +260,21 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         widthPolicy = WidthPolicy.FillRemaining,
                         visibilityPredicate = { true },
                         textResolver = { state -> resolveRecordButtonTextPipeline(state, strings) },
-                        enabledResolver = { state -> state.pipeline !is PipelineUiState.Preparing },
+                        // Post-cutover hotfix #AE-OPTIK2 — `enabledResolver`
+                        // intentionally OMITTED (defaults to { true }). An
+                        // earlier `{ state.pipeline !is Preparing }` gate
+                        // disabled the button during the 500ms–2s upload
+                        // window — and Android's View.onTouchEvent swallows
+                        // touches on `isEnabled=false`, so the click listener
+                        // never fired. That meant the double-tap-to-toggle
+                        // auto-enter feature was unreachable in Preparing
+                        // (the most common landing zone), the per-run
+                        // `autoEnterActive` flag stayed false, and neither
+                        // the ↵ indicator nor the end-of-pipeline Enter
+                        // were produced. `resolveRecordActionPipeline` is
+                        // the single source of truth for "is this click
+                        // meaningful?" — post-#AE-DEEP2 it accepts both
+                        // Preparing and Running and returns null elsewhere.
                         actionResolver = ::resolveRecordActionPipeline,
                     ),
                     ButtonSlot(
@@ -340,7 +354,11 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     widthPolicy = WidthPolicy.WrapContent,
                     visibilityPredicate = { true },
                     textResolver = { state -> resolveRecordButtonTextPipeline(state, strings) },
-                    enabledResolver = { state -> state.pipeline !is PipelineUiState.Preparing },
+                    // Post-cutover hotfix #AE-OPTIK2 — `enabledResolver`
+                    // intentionally OMITTED. See the TWO_ROW_SEND_MODE
+                    // record slot above for the full rationale (Android
+                    // swallows clicks on disabled views, killing the
+                    // double-tap auto-enter in the Preparing window).
                     actionResolver = ::resolveRecordActionPipeline,
                 ),
                 ButtonSlot(

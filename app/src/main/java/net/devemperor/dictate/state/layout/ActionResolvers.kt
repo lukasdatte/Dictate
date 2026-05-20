@@ -158,7 +158,20 @@ fun resolveRecordActionPipeline(
     @Suppress("UNUSED_PARAMETER") services: ModuleServices,
 ): Action? =
     when (state.pipeline) {
-        is PipelineUiState.Running -> Action.FeatureToggleAction.ToggleAutoEnter
+        // Per-run auto-enter toggle — distinct from
+        // FeatureToggleAction.ToggleAutoEnter (which would flip the
+        // global Pref.AutoEnter). The in-pipeline toggle must NOT
+        // mutate the global pref; it only flips the per-run
+        // autoEnterActive flag for this one run. See
+        // Action.PipelineAction.ToggleRunningAutoEnter.
+        //
+        // #AE-DEEP2: also dispatch during Preparing — the second
+        // SEND-tap typically lands in the 500ms–2s upload window
+        // before the runner emits StartPipeline (Preparing → Running).
+        // Pre-fix the resolver returned null for Preparing, so taps in
+        // that window were silently swallowed.
+        is PipelineUiState.Preparing -> Action.PipelineAction.ToggleRunningAutoEnter
+        is PipelineUiState.Running -> Action.PipelineAction.ToggleRunningAutoEnter
         else -> null
     }
 

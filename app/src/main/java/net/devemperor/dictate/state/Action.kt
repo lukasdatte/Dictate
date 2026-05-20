@@ -276,6 +276,24 @@ sealed class Action {
         /** `sessionId == null` cancels the **currently-active** pipeline (UI-slot use). */
         data class CancelPipeline(val sessionId: String? = null) : PipelineAction()
 
+        /**
+         * Toggle the per-run "auto-enter" flag while the pipeline is
+         * `Running` (second tap of the record button during send).
+         *
+         * **Distinct from [FeatureToggleAction.ToggleAutoEnter]** —
+         * that action toggles the *global* `Pref.AutoEnter` setting
+         * (the user-level "always send Enter after every dictation"
+         * preference). This action toggles **only** the in-flight
+         * `Running.autoEnterActive` flag for the current pipeline run:
+         * the next pipeline starts again from the global pref.
+         *
+         * Reducer arm: flips `Running.autoEnterActive`; no-op when the
+         * pipeline is not `Running` (the button is hidden / has no
+         * meaningful action outside Running anyway — see
+         * `ActionResolvers.resolveRecordActionPipeline`).
+         */
+        data object ToggleRunningAutoEnter : PipelineAction()
+
         // ─── Reprocess-Staging sub-FSM ───
         data class StartReprocessStaging(val sessionId: String) : PipelineAction()
         data class UpdateReprocessQueue(val sessionId: String, val newQueue: List<Int>) : PipelineAction()

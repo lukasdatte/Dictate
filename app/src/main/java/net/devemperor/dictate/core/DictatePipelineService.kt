@@ -157,6 +157,13 @@ class DictatePipelineService : Service() {
     private lateinit var audioFocusGateImpl: AudioFocusGate
     private var bluetoothScoSubsystemAdapterImpl: BluetoothScoSubsystemAdapter? = null
 
+    // Post-cutover hotfix #3+#4 — service-owned RecordingHardwareAdapter so
+    // the LocalBinder can expose its [maxAmplitudeOrNull] poll for the IME's
+    // recording-animation side-channel (the legacy 100ms MediaRecorder
+    // amplitude polling). Pre-hotfix the adapter was a local `val` in
+    // onCreate; the IME had no access to the active MediaRecorder.
+    private lateinit var recordingHardwareAdapterImpl: RecordingHardwareAdapter
+
     // ── C3-B1 — real PipelineRunnerSubsystem (Spec 1 §9.6/§13.3.11) ────
     //
     // Thin JobExecutor.INSTANCE delegation. `lateinit` (set in onCreate
@@ -340,10 +347,14 @@ class DictatePipelineService : Service() {
 
         // RecordingHardware + Timer + Amplitude + BorderGlow adapters are
         // service-owned. They emit follow-up actions via the orchestrator
-        // (forward-reference captured below).
-        val recordingHardware = RecordingHardwareAdapter(emitAction = { action ->
+        // (forward-reference captured below). The RecordingHardwareAdapter
+        // is also held as a service field [recordingHardwareAdapterImpl] so
+        // the LocalBinder can expose [RecordingHardwareAdapter.maxAmplitudeOrNull]
+        // for the IME's amplitude-polling side-channel (post-cutover #3+#4).
+        recordingHardwareAdapterImpl = RecordingHardwareAdapter(emitAction = { action ->
             orchestrator.emitAction(action)
         })
+        val recordingHardware = recordingHardwareAdapterImpl
         val recordingTimer = RecordingTimerAdapter()
         val amplitudeStream = AmplitudeStreamAdapter()
         val borderGlow = BorderGlowAdapter()
@@ -825,6 +836,17 @@ class DictatePipelineService : Service() {
                 String.format(Locale.US, "%d/%d %d:%02d", completedSteps, totalSteps, mm, ss)
             }
         },
+        formatPreparingLabel = { autoEnterActive ->
+            // #AE-DEEP2 — Preparing carries an autoEnter-toggle too; append
+            // the same ↵ marker the formatPipelineLabel formatter uses so
+            // the two upload phases (Preparing then Running) read the same
+            // visual cue. Localised base via R.string.dictate_sending.
+            if (autoEnterActive) {
+                getString(R.string.dictate_sending) + " ↵"
+            } else {
+                getString(R.string.dictate_sending)
+            }
+        },
     )
 
     /**
@@ -1143,6 +1165,25 @@ class DictatePipelineService : Service() {
         /** The service-owned production [AudioFocusGate]. */
         val audioFocusGate: AudioFocusGate
             get() = audioFocusGateImpl
+
+        /**
+         * Post-cutover hotfix #3+#4 — current peak amplitude from the
+         * service-owned [RecordingHardwareAdapter], for the IME's
+         * recording-animation / waveform side-channel polling.
+         *
+         * Returns `null` when no recording is in flight or the
+         * MediaRecorder is in a non-polling state (the wrapper inside
+         * [RecordingHardwareAdapter.maxAmplitudeOrNull] absorbs the
+         * `IllegalStateException` MediaRecorder can throw at the
+         * start/stop boundaries). The IME calls this every ~100ms while
+         * `state.recording` is Active|Paused (see
+         * [RecordingActivityTickerObserver]) and forwards the value to
+         * [ImeViewBackend.onAmplitude]. Pre-hotfix the orchestrator-side
+         * [AmplitudeStreamAdapter] was a deliberate no-op (per its own
+         * KDoc) and the IME had no path to the active MediaRecorder.
+         */
+        fun pollRecordingMaxAmplitude(): Int? =
+            recordingHardwareAdapterImpl.maxAmplitudeOrNull()
 
         /**
          * The service-owned [AudioFileFactory] (Spec 1 §4.11 — Pre-Dispatch).

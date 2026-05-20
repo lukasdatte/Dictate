@@ -152,10 +152,18 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                     // elapsed-timer origin; `totalSteps` comes from the runner
                     // via the action payload (the only place the total is
                     // known). `completedSteps`/`elapsedMs` start at zero.
+                    //
+                    // #AE-DEEP2: merge `autoEnterActive` from BOTH the
+                    // runner-supplied default (`action.autoEnterActive`,
+                    // captured at the SEND-tap from Pref.AutoEnter) AND any
+                    // in-Preparing user-toggle (`state.autoEnterActive`, set
+                    // by `ToggleRunningAutoEnter` during the upload window).
+                    // Either side being true wins, so the user's mid-upload
+                    // toggle is never lost.
                     nextState = PipelineUiState.Running(
                         sessionId = action.sessionId,
                         target = InsertionTarget.INPUT_CONNECTION,
-                        autoEnterActive = action.autoEnterActive,
+                        autoEnterActive = action.autoEnterActive || state.autoEnterActive,
                         completedSteps = 0,
                         totalSteps = action.totalSteps,
                         startedAtMs = ctx.now,
@@ -255,6 +263,27 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                         ),
                     )
                 } else null
+            else -> null
+        }
+
+        is Action.PipelineAction.ToggleRunningAutoEnter -> when (state) {
+            // Per-run auto-enter toggle (second record-button tap during
+            // Preparing OR Running). Distinct from
+            // FeatureToggleAction.ToggleAutoEnter (which flips the global
+            // Pref.AutoEnter).
+            //
+            // #AE-DEEP2: BOTH Preparing and Running accept the toggle —
+            // the user's "double-tap to enable auto-enter" typically lands
+            // during the 500ms–2s upload window (Preparing). Pre-fix
+            // Preparing returned null, so the tap silently no-op'd. The
+            // Preparing-side flag carries forward on the Preparing→Running
+            // transition (see the StartPipeline arm above).
+            is PipelineUiState.Preparing -> TransitionResult(
+                nextState = state.copy(autoEnterActive = !state.autoEnterActive),
+            )
+            is PipelineUiState.Running -> TransitionResult(
+                nextState = state.copy(autoEnterActive = !state.autoEnterActive),
+            )
             else -> null
         }
 

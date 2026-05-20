@@ -61,6 +61,13 @@ import net.devemperor.dictate.state.RecordingState
  * @property formatPipelineLabel mapper producing the running-pipeline
  *   label, e.g. `"2/3 ↵  0:08"`. Receives `(completedSteps, totalSteps,
  *   autoEnterActive, elapsedMs)`.
+ * @property formatPreparingLabel mapper producing the upload-window label,
+ *   e.g. `"Sending …"` or `"Sending … ↵"` when the user pre-armed
+ *   auto-enter during the Preparing-window. #AE-DEEP2: without this, a
+ *   double-tap during the 500ms–2s upload window flipped
+ *   `Preparing.autoEnterActive` correctly but produced no visual feedback
+ *   — the label stayed plain "Sending …" until the Preparing→Running
+ *   transition (often too late to confirm the tap registered).
  * @property overlaySend short literal for the overlay-surface SEND button
  *   (`R.string.overlay_send` — "Send"). Distinct from [send] because the
  *   keyboard-surface label is language-suffixed
@@ -79,6 +86,7 @@ data class LayoutStrings(
         autoEnterActive: Boolean,
         elapsedMs: Long,
     ) -> CharSequence,
+    val formatPreparingLabel: (autoEnterActive: Boolean) -> CharSequence,
     val overlaySend: CharSequence = "Send",
 )
 
@@ -121,7 +129,11 @@ fun resolveRecordButtonText(state: DictateUiState, strings: LayoutStrings): Char
  */
 fun resolveRecordButtonTextPipeline(state: DictateUiState, strings: LayoutStrings): CharSequence =
     when (val pipe = state.pipeline) {
-        is PipelineUiState.Preparing -> strings.sending
+        // #AE-DEEP2: read Preparing.autoEnterActive so a double-tap during
+        // the upload window gets immediate visual confirmation. Previously
+        // this arm returned a flag-blind `strings.sending`, which made the
+        // tap feel like it had no effect.
+        is PipelineUiState.Preparing -> strings.formatPreparingLabel(pipe.autoEnterActive)
         is PipelineUiState.Running ->
             strings.formatPipelineLabel(
                 pipe.completedSteps,

@@ -29,26 +29,70 @@
          set visibilityMode="ignore" on each, so Catalog predicates win at
          render time.
          ════════════════════════════════════════════════════════════ -->
+    <!-- Post-cutover hotfix (R1) — paddingBottom restores the bottom safe-area
+         the legacy `input_row.layout_marginBottom="16dp"` provided (Spec 2 §11.1
+         deleted the container without rebuilding the spacing). Without it, the
+         Row-2 chain (trash/space/pause/enter) sits flush against the keyboard's
+         bottom edge → gets pushed under the gesture-nav bezel on modern devices.
+         Row-1 ↔ Row-2 inter-row gap is restored on trash_btn's layout_marginTop
+         in motion_scene_keyboard.xml two_row_state. -->
+    <!-- Post-cutover hotfix #R1-DEEP3 — `app:currentState` MUST be set
+         declaratively. The Row-2 buttons (`trash_btn`, `space_btn`,
+         `pause_btn`, `enter_btn`) have NO inline child constraints in this
+         XML; their `Top_toBottomOf=record_pulse_layout` chain lives only
+         in `motion_scene_keyboard.xml` `two_row_state`. Without
+         `app:currentState`, MotionLayout's internal `mModel` is empty
+         until the first `onMeasure` — and `motionSurface.jumpToState(...)`
+         called from `ImeViewBackend.render(firstRender=true)` runs BEFORE
+         `onAttachedToWindow`, so it merely stamps `mCurrentState=id`
+         without populating constraints. ConstraintLayout then falls back
+         to placing every unconstrained child at position (0, 0), so
+         `trash_btn` lands directly on top of `record_pulse_layout` (the
+         "Row 1 ↔ Row 2 overlap on boot" symptom). Recording later
+         triggers `requestLayout()` via `BorderGlowAnimation.start()`
+         (foreground/background/text writes on `record_btn`), forcing
+         `onMeasure`, populating `mModel` from `two_row_state`, and
+         snapping the layout into the correct geometry — that is why
+         "starting a recording fixes it" but a cold boot does not.
+         Setting `app:currentState` makes `mModel` populate on the FIRST
+         measure pass — the layout is correct from frame zero. -->
     <androidx.constraintlayout.motion.widget.MotionLayout
         android:id="@+id/main_buttons_cl"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:paddingStart="72dp"
         android:paddingEnd="16dp"
+        android:paddingBottom="16dp"
         android:clipChildren="false"
         android:clipToPadding="false"
         app:layoutDescription="@xml/motion_scene_keyboard"
+        app:currentState="@+id/two_row_state"
         app:layout_constraintTop_toBottomOf="@id/edit_buttons_keyboard_ll"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
         <!-- record_pulse_layout — PulseLayout wrapper around record_btn (L7).
              The wrapper is the direct MotionLayout child; record_btn lives
-             inside it. -->
+             inside it.
+
+             Post-cutover hotfix #R1-DEEP2 — the inline `layout_marginBottom`
+             here is the **boot-state** anchor for the Row 1 ↔ Row 2 16dp
+             gap. MotionLayout only applies its ConstraintSet margins after
+             the first `transitionToState`; before that, the inline XML
+             LayoutParams are authoritative. Without this attribute the
+             very first render of Idle has 0dp gap and only later
+             transitions (Idle → Recording → Idle, or Send → Idle) pick up
+             the 16dp from `motion_scene_keyboard.xml` `two_row_state`. The
+             value is duplicated intentionally: the MotionScene carries
+             the same 16dp on `record_pulse_layout.marginBottom` in
+             `two_row_state` (and derived states inherit) — keeping the
+             two values identical is the simplest way to make the boot
+             frame look the same as every subsequent transition frame. -->
         <net.devemperor.dictate.widget.PulseLayout
             android:id="@+id/record_pulse_layout"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
             app:pulseCount="3"
             app:pulseDuration="2000"
             app:pulseStartAlpha="0.3"

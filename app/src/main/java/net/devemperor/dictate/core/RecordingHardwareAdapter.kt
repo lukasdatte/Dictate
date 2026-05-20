@@ -167,6 +167,32 @@ class RecordingHardwareAdapter(
      */
     internal fun activeRecorder(): MediaRecorder? = recorder
 
+    /**
+     * Post-cutover hotfix #3+#4 — read the current peak amplitude from
+     * the active MediaRecorder for the IME-side recording-animation /
+     * waveform side-channel ([ImeViewBackend.onAmplitude]).
+     *
+     * Returns `null` when no recording is in flight or the MediaRecorder
+     * is not in a state that accepts `getMaxAmplitude()` (between
+     * `start()` and `stop()`). Wraps the underlying call in try/catch
+     * because `MediaRecorder.getMaxAmplitude` can throw
+     * `IllegalStateException` on race conditions (e.g. polled
+     * concurrently with stop) — the polling side-channel must never
+     * crash the IME process.
+     *
+     * This is the bridge the legacy `RecordingManager`'s 100ms
+     * amplitude-polling loop is built around; on the new path the
+     * orchestrator-side [RecordingActivityTickerObserver] polls this
+     * function at the same cadence and forwards into the side-channel.
+     */
+    fun maxAmplitudeOrNull(): Int? = try {
+        recorder?.maxAmplitude
+    } catch (e: IllegalStateException) {
+        null
+    } catch (e: RuntimeException) {
+        null
+    }
+
     private companion object {
         const val TAG: String = "RecordingHwAdapter"
     }

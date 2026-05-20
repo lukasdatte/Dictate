@@ -83,6 +83,69 @@ class PipelineModuleTest {
     }
 
     @Test
+    fun `ToggleRunningAutoEnter flips autoEnterActive in Running (post-cutover #AE)`() {
+        // Per-run toggle — distinct from the global Pref.AutoEnter that
+        // FeatureToggleAction.ToggleAutoEnter would mutate. The second
+        // SEND-tap during Running must dispatch THIS action so a transient
+        // user override doesn't silently leak into the global preference.
+        val running = PipelineUiState.Running(
+            sid,
+            InsertionTarget.INPUT_CONNECTION,
+            autoEnterActive = false,
+        )
+        val result = module.reduce(running, Action.PipelineAction.ToggleRunningAutoEnter, ctx())
+        val next = result!!.nextState as PipelineUiState.Running
+        assertEquals(true, next.autoEnterActive)
+
+        val again = module.reduce(next, Action.PipelineAction.ToggleRunningAutoEnter, ctx())
+        assertEquals(false, (again!!.nextState as PipelineUiState.Running).autoEnterActive)
+    }
+
+    @Test
+    fun `ToggleRunningAutoEnter is a no-op in Idle (post-cutover #AE-DEEP2)`() {
+        // Pre-#AE-DEEP2 this also rejected Preparing — but the
+        // double-tap-during-upload race lands in Preparing, so the action
+        // must be accepted there. Idle stays a no-op: there is no pipeline
+        // to toggle against.
+        assertNull(module.reduce(PipelineUiState.Idle, Action.PipelineAction.ToggleRunningAutoEnter, ctx()))
+    }
+
+    @Test
+    fun `ToggleRunningAutoEnter flips autoEnterActive in Preparing (#AE-DEEP2)`() {
+        // The 500ms–2s upload window between StopRecordingAndSend
+        // (state.pipeline → Preparing) and the first runner StepStarted
+        // callback (Preparing → Running) is exactly where the user's
+        // double-tap typically lands. Pre-fix the reducer returned null
+        // here and the tap was silently lost; post-fix it flips the
+        // Preparing-side flag which then carries forward via the
+        // StartPipeline merge.
+        val prep = PipelineUiState.Preparing(sid, autoEnterActive = false)
+        val result = module.reduce(prep, Action.PipelineAction.ToggleRunningAutoEnter, ctx())
+        val next = result!!.nextState as PipelineUiState.Preparing
+        assertEquals(true, next.autoEnterActive)
+
+        val again = module.reduce(next, Action.PipelineAction.ToggleRunningAutoEnter, ctx())
+        assertEquals(false, (again!!.nextState as PipelineUiState.Preparing).autoEnterActive)
+    }
+
+    @Test
+    fun `StartPipeline carries Preparing autoEnterActive into Running (#AE-DEEP2)`() {
+        // If the user toggled auto-enter during the upload window
+        // (Preparing.autoEnterActive = true), the runner's StartPipeline
+        // must NOT silently overwrite it with the action-supplied default
+        // (which is read off Pref.AutoEnter, typically false). Merge with
+        // OR so either side being true wins.
+        val prep = PipelineUiState.Preparing(sid, autoEnterActive = true)
+        val result = module.reduce(
+            state = prep,
+            action = Action.PipelineAction.StartPipeline(sid, totalSteps = 1, autoEnterActive = false),
+            ctx = ctx(),
+        )
+        val running = result!!.nextState as PipelineUiState.Running
+        assertEquals(true, running.autoEnterActive)
+    }
+
+    @Test
     fun `StepStarted in Running emits UpdateNotification and restamps elapsedMs (F-13)`() {
         // F-13 (2026-05-15): StepStarted is a progress tick — it now
         // restamps `elapsedMs` from ctx.now (previously a pure no-op state

@@ -178,7 +178,18 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             } else null
 
         Action.OverlayAction.RequestOverlayPermission -> TransitionResult(
-            nextState = state,
+            // Post-cutover hotfix #HINT — clear `onboardingPending` on
+            // "Grant" so the explainer bar disappears even if the user
+            // never returns via the WIDGET-toggle path (the only other
+            // self-clearing seam, see §3 + the WIDGET→HOVER transition
+            // observer below). Without this clear, the explainer
+            // stayed VISIBLE permanently and the IME's inline
+            // `setVisibility(GONE)` hack at the click site was the
+            // only thing hiding it — a true single-source-of-truth
+            // violation. The hack is removed in the same wave.
+            // Distinct from DismissOverlayOnboarding: that path also
+            // writes a persistent "Later" pref; Grant doesn't.
+            nextState = state.copy(onboardingPending = false),
             sideEffects = listOf(Effect.OpenOverlayPermissionSettings),
         )
 

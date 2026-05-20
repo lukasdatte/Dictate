@@ -163,6 +163,19 @@ class OverlayModuleTest {
         assertTrue(result!!.sideEffects.contains(OverlayModule.Effect.OpenOverlayPermissionSettings))
     }
 
+    @Test
+    fun `RequestOverlayPermission clears onboardingPending (post-cutover #HINT)`() {
+        // Pre-fix the reducer left `onboardingPending = true` and relied
+        // on the IME's inline setVisibility(GONE) at the click site to
+        // hide the explainer bar. That hack was the only thing hiding
+        // a permanent VISIBLE state — single-source-of-truth violation.
+        // Post-fix the state clears here so OverlayOnboardingObserver
+        // is the sole visibility writer.
+        val state = OverlayState(onboardingPending = true)
+        val result = module.reduce(state, Action.OverlayAction.RequestOverlayPermission, ctx())
+        assertEquals(false, result!!.nextState.onboardingPending)
+    }
+
     // ─── Cross-module cascade ───────────────────────────────────────────
 
     @Test

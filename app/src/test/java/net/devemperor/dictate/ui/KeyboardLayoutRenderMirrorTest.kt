@@ -418,4 +418,7 @@ internal fun mirrorLayoutStrings(): LayoutStrings = LayoutStrings(
         val mark = if (autoEnter) " ↵" else ""
         "$done/$total$mark  ${elapsedMs}ms"
     },
+    formatPreparingLabel = { autoEnter ->
+        if (autoEnter) "Sending … ↵" else "Sending …"
+    },
 )

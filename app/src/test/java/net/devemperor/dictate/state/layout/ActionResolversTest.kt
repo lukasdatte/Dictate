@@ -167,7 +167,12 @@ class ActionResolversTest {
     // ─── resolveRecordActionPipeline ──────────────────────────────────
 
     @Test
-    fun `resolveRecordActionPipeline returns ToggleAutoEnter while Running`() {
+    fun `resolveRecordActionPipeline returns ToggleRunningAutoEnter while Running (post-cutover #AE)`() {
+        // Per-run flag (distinct from the global Pref.AutoEnter pref
+        // that FeatureToggleAction.ToggleAutoEnter would write). The
+        // catalog must dispatch the in-pipeline action so the second
+        // SEND-tap during Running does NOT silently flip the global
+        // setting for every future dictation.
         val s = state.copy(
             pipeline = PipelineUiState.Running(
                 sessionId = "s1",
@@ -175,15 +180,21 @@ class ActionResolversTest {
             ),
         )
         assertEquals(
-            Action.FeatureToggleAction.ToggleAutoEnter,
+            Action.PipelineAction.ToggleRunningAutoEnter,
             resolveRecordActionPipeline(s, fakeModuleServices()),
         )
     }
 
     @Test
-    fun `resolveRecordActionPipeline returns null when pipeline is Preparing`() {
+    fun `resolveRecordActionPipeline returns ToggleRunningAutoEnter while Preparing (#AE-DEEP2)`() {
+        // The upload window (Preparing) is the most common landing zone
+        // for the double-tap — pre-#AE-DEEP2 the resolver returned null
+        // here and the catalog click was silently swallowed.
         val s = state.copy(pipeline = PipelineUiState.Preparing("s1"))
-        assertNull(resolveRecordActionPipeline(s, fakeModuleServices()))
+        assertEquals(
+            Action.PipelineAction.ToggleRunningAutoEnter,
+            resolveRecordActionPipeline(s, fakeModuleServices()),
+        )
     }
 
     @Test
@@ -374,10 +385,25 @@ class ActionResolversTest {
     }
 
     @Test
-    fun `resolveRecordButtonTextPipeline returns sending while Preparing`() {
+    fun `resolveRecordButtonTextPipeline returns formatPreparingLabel while Preparing (#AE-DEEP2)`() {
+        // The Preparing arm now reads `autoEnterActive` so a double-tap
+        // during the upload window gets visual confirmation. The flag-blind
+        // `strings.sending` literal is no longer the right answer — it's
+        // the `false`-branch of `formatPreparingLabel` (which the default
+        // test formatter renders as "Sending …", same surface text).
         val strings = testLayoutStrings()
-        val s = state.copy(pipeline = PipelineUiState.Preparing("s1"))
-        assertEquals(strings.sending, resolveRecordButtonTextPipeline(s, strings))
+        val s = state.copy(pipeline = PipelineUiState.Preparing("s1", autoEnterActive = false))
+        assertEquals(strings.formatPreparingLabel(false), resolveRecordButtonTextPipeline(s, strings))
+    }
+
+    @Test
+    fun `resolveRecordButtonTextPipeline appends ↵ during Preparing with autoEnterActive (#AE-DEEP2)`() {
+        // Direct regression for the "tap toggles but no visual feedback"
+        // bug — pre-fix this returned plain "Sending …" regardless of the
+        // flag, post-fix it returns the autoEnter-decorated label.
+        val strings = testLayoutStrings()
+        val s = state.copy(pipeline = PipelineUiState.Preparing("s1", autoEnterActive = true))
+        assertEquals(strings.formatPreparingLabel(true), resolveRecordButtonTextPipeline(s, strings))
     }
 
     @Test

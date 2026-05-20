@@ -114,7 +114,7 @@ class OverlayCharactersController(
      */
     fun initialize() {
         val ll = views.overlayCharactersStrip
-        if (!gatePermitsWrite(ll)) return
+        if (!isLiveOwner()) return
         if (ll.childCount >= OVERLAY_CHAR_COUNT) return  // idempotent guard
         val context = ll.context
         val density = context.resources.displayMetrics.density
@@ -142,7 +142,7 @@ class OverlayCharactersController(
      */
     fun update(characters: String, accentColor: Int) {
         val ll = views.overlayCharactersStrip
-        if (!gatePermitsWrite(ll)) return
+        if (!isLiveOwner()) return
         for (i in 0 until ll.childCount) {
             val charView = ll.getChildAt(i) as TextView
             if (i >= characters.length) {
@@ -157,20 +157,38 @@ class OverlayCharactersController(
     }
 
     /**
-     * Gate-routing identical to the CR3 controllers' `writeVisibility`
-     * seam: `null` gate = always act (legacy contract); a gate reports
-     * the intended write to the audit ledger and returns `true` only
-     * when armed (CR4).
+     * Post-cutover RR-2 fix (#6) — gate predicate **without** an
+     * audit-ledger report on `ll.id`.
      *
-     * F-7 (B5-VAL): named `gatePermitsWrite` (not `shouldWrite`) to
-     * avoid the conceptual clash with [RenderGate.shouldWrite] — that
-     * is the raw gate predicate; this wrapper additionally applies the
-     * `null`-gate legacy-always-write contract and the ledger report.
+     * Pre-fix `gatePermitsWrite(ll)` reported an intended `VISIBLE`
+     * write to `overlay_characters_ll.id` to the
+     * [VisibilityWriteAuditLogger] on every [initialize] / [update]
+     * call. The audit ledger then saw both this controller AND
+     * [OverlayResetHandler] (which writes `ll.visibility = GONE` per
+     * render-tick) as live writers to the same view in the same render
+     * generation and flagged the RR-2 double-write violation (Spec 2
+     * §10 forbids two subsystems on one visibility axis — the
+     * "silent-flicker / wrong-container F-1/F-2-class regression at
+     * the visibility layer").
+     *
+     * **The report was a false positive.** Neither [initialize] (which
+     * inflates child TextViews via `addView` and only mutates the
+     * child list, not `ll.visibility`) nor [update] (which writes
+     * `charView.visibility` / `.text` / background per slot) actually
+     * mutates `ll.visibility`. The misleading report to `ll.id` was a
+     * misuse of the gate as a generic "should I run at all" predicate
+     * rather than a visibility-write tracker.
+     *
+     * Post-CR-DEL there is no contention to track: the legacy
+     * `MainButtonsController.updateOverlayCharacters` /
+     * `initializeOverlayCharacters` are deleted and this controller is
+     * the permanent sole inflater + updater of the overlay-chars strip.
+     * The dormant/armed staged-safety-net survives only as a
+     * cutover-historical contract (kept for unit-test parity); reading
+     * [RenderGate.armed] directly preserves the "skip-when-dormant"
+     * behaviour without polluting the audit ledger.
      */
-    private fun gatePermitsWrite(ll: LinearLayout): Boolean {
-        val g = gate ?: return true
-        return g.shouldWrite(ll.id, View.VISIBLE)
-    }
+    private fun isLiveOwner(): Boolean = gate?.armed ?: true
 
     companion object {
         /**

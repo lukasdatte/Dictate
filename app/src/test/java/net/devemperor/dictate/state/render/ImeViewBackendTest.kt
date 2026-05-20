@@ -563,6 +563,58 @@ class ImeViewBackendTest {
     }
 
     @Test
+    fun `RECORD click fires the IME-side affordance (post-cutover R2 hotfix — catalog symmetry to RESEND)`() {
+        // Post-cutover hotfix — symmetric to the RESEND test above.
+        //
+        // The catalog RECORD click (Active|Paused) returns
+        // `Action.RecordingAction.StopRecordingAndSend`. Before this
+        // hotfix the backend dispatched that action via `onAction` but
+        // never gave the IME a chance to run its R-1 JobRequest snapshot
+        // (`captureFreshConfigSnapshot`) or prime the pipeline-step-row
+        // UI (`primePipelineUiForNewPath`). The orchestrator's
+        // `PipelineRunnerSubsystemAdapter.submit → resolveFresh` then
+        // ran asynchronously against an empty snapshot → loud
+        // `UnsupportedOperationException` (R-1 silent-data-loss
+        // tripwire) caught as `EffectFailure` → `state.pipeline` stuck
+        // in `Preparing` forever → endless "Sending…" with no progress
+        // bar / no step-rows (R2 + R3 + R4 reproduced on a real device).
+        //
+        // The fix wires RECORD into the SAME click-branch the RESEND
+        // affordance lives in (`ImeViewBackend.wireStaticHandlers` —
+        // `id == RESEND || id == RECORD`). The IME-side
+        // `imeSideAffordance` lambda self-gates on Active|Paused via
+        // `prepareCatalogStopRecordingIfActive()`, so this hook is safe
+        // to fire universally for the catalog RECORD click.
+        //
+        // This test locks the backend half of the symmetry. The state-
+        // gating lives in `DictateInputMethodService.prepareCatalog…`.
+        // The structural cross-button-symmetry invariant is in
+        // `CutoverArchitectureInvariantTest.affordanceHookSymmetry…`.
+        val recBtns = buttons.keys.associateWith { RecordingButton(ctx) }
+        val affordances = mutableListOf<Pair<LogicalButtonId, Boolean>>()
+        val backend = ImeViewBackend(
+            motionSurface = motion,
+            buttonViews = recBtns.mapValues { it.value as View },
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            recordingAnimationController = controller,
+            imeSideAffordance = { id, long -> affordances += id to long },
+        )
+        backend.attach { captured += it }
+        backend.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
+
+        val record = recBtns[LogicalButtonId.RECORD]!!
+        record.performClick()
+
+        assertEquals(
+            "RECORD click MUST fire imeSideAffordance(RECORD, false) " +
+                "(post-cutover R2/R3/R4 hotfix — catalog symmetry to RESEND).",
+            listOf(LogicalButtonId.RECORD to false),
+            affordances,
+        )
+    }
+
+    @Test
     fun `keyPressAnimator is applied to non-special buttons and skips SPACE BACKSPACE ENTER (RR-1)`() {
         // G7 + RR-1: press-animation is wired per owned button EXCEPT the
         // three special-touch buttons whose OnTouchListener is the

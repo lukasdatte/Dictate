@@ -181,6 +181,34 @@ class LayoutCatalogTest {
     }
 
     @Test
+    fun `SEND_MODE record button stays ENABLED during Preparing (#AE-OPTIK2 regression)`() {
+        // Pre-fix the record-slot's enabledResolver disabled the view during
+        // Preparing (the 500ms–2s upload window). Android's onTouchEvent
+        // swallows touches on isEnabled=false views — the result was that
+        // the double-tap-to-toggle-auto-enter feature was silently
+        // unreachable in the most common landing window. The fix removed
+        // the enabledResolver entirely; resolveRecordActionPipeline (post
+        // #AE-DEEP2) is the single source of truth for "is this click
+        // meaningful?" and already accepts both Preparing and Running.
+        for ((label, mode) in listOf(
+            "TWO_ROW_SEND_MODE" to catalog.KEYBOARD_TWO_ROW_SEND_MODE,
+            "SINGLE_ROW_SEND_MODE" to catalog.KEYBOARD_SINGLE_ROW_SEND_MODE,
+        )) {
+            val recordSlot = mode.slots.first { it.logicalId == LogicalButtonId.RECORD }
+            val preparingState = stateWithPipeline(
+                PipelineUiState.Preparing("s1"),
+                singleRow = label == "SINGLE_ROW_SEND_MODE",
+            )
+            assertEquals(
+                "$label record-slot must be ENABLED during Preparing — Android " +
+                    "swallows clicks on disabled views, killing the auto-enter toggle.",
+                true,
+                recordSlot.enabledResolver(preparingState),
+            )
+        }
+    }
+
+    @Test
     fun `forKeyboard returns SEND_MODE_SINGLE_ROW for pipeline-running single-row state`() {
         val state = stateWithPipeline(PipelineUiState.Preparing("s1"), singleRow = true)
         assertSame(catalog.KEYBOARD_SINGLE_ROW_SEND_MODE, catalog.forKeyboard(state))
@@ -279,6 +307,11 @@ internal fun testLayoutStrings(): LayoutStrings = LayoutStrings(
     formatPipelineLabel = { done, total, autoEnter, elapsedMs ->
         val mark = if (autoEnter) " ↵" else ""
         "$done/$total$mark  ${elapsedMs}ms"
+    },
+    formatPreparingLabel = { autoEnter ->
+        // #AE-DEEP2: mirrors the production lambda's " ↵" suffix so tests
+        // exercising the upload-window double-tap see the same visual.
+        if (autoEnter) "Sending … ↵" else "Sending …"
     },
 )
 

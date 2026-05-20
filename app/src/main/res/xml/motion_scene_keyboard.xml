@@ -51,11 +51,29 @@
              wrapper. Dormant today (nobody toggles its android:visibility) but
              keeps the catalog-owned-visibility invariant intact for any future
              consumer. Derive-from carries this to single_row_state + variants. -->
+        <!-- Inter-row gap (Row 1 ↔ Row 2): the 16dp `layout_marginBottom`
+             here is the single anchor for the vertical spacing. It lives on
+             `record_pulse_layout` rather than on a Row-2 button because
+             `record_pulse_layout` is the only Row-1 view that is **never
+             GONE** in any State (Idle / Recording / Sending). Putting the
+             margin on `trash_btn` (or any other Row-2 sibling that the
+             Catalog can hide) causes a ConstraintLayout chain-anchor
+             collapse: when the anchor view is GONE, its size collapses
+             to 0×0 at its position and the `wrap_content` siblings that
+             reference its `Top` AND `Bottom` re-center around the
+             collapsed line — visible to the user as a state-dependent
+             gap (16dp in Recording, ~0dp in Idle/Sending). Anchoring on
+             `record_pulse_layout.marginBottom` sidesteps that completely:
+             the bottom edge of Row 1 is always present, so the 16dp gap
+             is state-independent. Derived states (`single_row_state`,
+             `two_row_send_mode_state`, `reprocess_staging_state`)
+             inherit via `deriveConstraintsFrom`. -->
         <Constraint
             android:id="@+id/record_pulse_layout"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginEnd="8dp"
+            android:layout_marginBottom="16dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintStart_toStartOf="parent"
             motion:layout_constraintEnd_toStartOf="@+id/resend_btn">
@@ -116,6 +134,19 @@
         </Constraint>
 
         <!-- ── Row 2 (formerly input_row): trash — space — pause — enter ── -->
+        <!-- Post-cutover hotfix (R1-DEEP): the inter-row 16dp gap lives on
+             `record_pulse_layout.layout_marginBottom` (Row 1, above). It
+             does NOT live here on `trash_btn`, despite trash_btn being
+             the Row-2 chain root — because the Catalog can drive trash_btn
+             to GONE in Idle and Sending. A GONE chain-anchor collapses
+             to 0×0, and ConstraintLayout then re-centers the wrap_content
+             siblings (space_btn / pause_btn / enter_btn — all top/bottom
+             anchored to trash_btn) around the collapsed line. Visible to
+             the user as 0dp gap in Idle/Sending vs. 16dp gap in Recording.
+             `motion:layout_goneMarginTop` only fixes trash_btn's own
+             position; it does not rescue the siblings' geometry.
+             Anchoring the gap on record_pulse_layout (which is never
+             GONE in any State) makes the spacing state-independent. -->
         <Constraint
             android:id="@+id/trash_btn"
             android:layout_width="wrap_content"
@@ -200,16 +231,28 @@
             <PropertySet motion:visibilityMode="ignore" />
         </Constraint>
 
+        <!-- Single-Row override of `record_pulse_layout`. `deriveConstraintsFrom`
+             is a **per-id replace**, not a property-level merge: re-declaring
+             `record_pulse_layout` here discards the parent state's
+             `layout_marginBottom="16dp"` unless this constraint also sets one.
+             Single-Row has no Row 2, so the correct value is **0dp** — without
+             the explicit zero a transition from `two_row_state` would
+             temporarily inherit the 16dp margin (briefly visible as a phantom
+             gap under Row 1) and an inline boot-state margin (`activity_…xml`)
+             would also leak through until the first transition. -->
         <Constraint
             android:id="@+id/record_pulse_layout"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="4dp"
             android:layout_marginEnd="4dp"
+            android:layout_marginBottom="0dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
             motion:layout_constraintStart_toEndOf="@+id/trash_btn"
-            motion:layout_constraintEnd_toStartOf="@+id/space_btn" />
+            motion:layout_constraintEnd_toStartOf="@+id/space_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
 
         <Constraint
             android:id="@+id/space_btn"

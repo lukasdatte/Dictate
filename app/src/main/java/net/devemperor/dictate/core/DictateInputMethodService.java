@@ -291,6 +291,24 @@ public class DictateInputMethodService extends InputMethodService
     private View overlayPermissionInfobar;
     private OverlayOnboardingObserver overlayOnboardingObserver;
 
+    // Post-cutover hotfix #3+#4 — drives the recording-animation
+    // side-channel (timer + amplitude polling on Active|Paused) from
+    // state.recording transitions. See RecordingActivityTickerObserver
+    // KDoc for the full pre-/post-cutover diagnosis.
+    private RecordingActivityTickerObserver recordingTickerObserver;
+
+    // Post-cutover hotfix #AMP — normalizes the raw 0..32767 MediaRecorder
+    // amplitude into the 0..1 contract that AmplitudeVisualizerDrawable /
+    // BorderGlowAnimation expect (log-normalize + asymmetric EMA). Without
+    // this step the waveform pegs at maximum on every tick because the
+    // raw int gets float-casted and immediately clamped to 1.0 by the
+    // renderer. The cutover dropped the legacy
+    // RecordingStateController.onAmplitudeUpdate normalization hop; this
+    // reintroduces it on the new ticker-driven path. Separate instance
+    // from recordingStateController's processor — that one is on the
+    // dormant legacy path and would mix EMA state between two recorders.
+    private final AmplitudeProcessor recordingTickerAmplitudeProcessor = new AmplitudeProcessor();
+
     // C15 — New keyboard-layout render path (Spec 2 §11.8 5c). Constructed in
     // onCreateInputView() once the View tree is inflated; attached to the
     // service-side KeyboardLayoutManager via the LocalBinder. Detached in
@@ -479,6 +497,18 @@ public class DictateInputMethodService extends InputMethodService
             // is the ONLY place this matters; subsequent pref changes
             // already re-push via inputLanguagesListener.
             pushPermanentLanguageToOrchestrator();
+            // Post-cutover hotfix #R3 — close the bind→reload race.
+            // setupPromptsAdapter → reloadPrompts may have fired during
+            // onCreateInputView while promptQueueManager was still null;
+            // the gate in reloadPrompts() early-returns in that case so
+            // the prompts data array stays empty and only the
+            // Language-Chip shows. Kick the reload now that the binder
+            // (and therefore promptQueueManager via
+            // bindAiInfrastructureFromService) is in place. Idempotent
+            // on re-binds.
+            if (promptsAdapter != null) {
+                reloadPrompts();
+            }
         }
 
         // ── onServiceDisconnected ──
@@ -829,14 +859,22 @@ public class DictateInputMethodService extends InputMethodService
                 pipelineBinder.dispatch(
                         net.devemperor.dictate.state.Action.OverlayAction.RequestOverlayPermission.INSTANCE);
             }
-            overlayPermissionInfobar.setVisibility(View.GONE);
+            // Post-cutover hotfix #HINT — the inline setVisibility(GONE)
+            // here used to be the only thing hiding the explainer bar
+            // because the RequestOverlayPermission reducer did NOT clear
+            // `onboardingPending`. The reducer now does, and
+            // OverlayOnboardingObserver collapses the view on the next
+            // emission — no inline write needed, single source of truth.
         });
         overlayPermDismissBtn.setOnClickListener(v -> {
             if (pipelineBinder != null) {
                 pipelineBinder.dispatch(
                         net.devemperor.dictate.state.Action.OverlayAction.DismissOverlayOnboarding.INSTANCE);
             }
-            overlayPermissionInfobar.setVisibility(View.GONE);
+            // Same single-source-of-truth rationale as the grant-click
+            // above: DismissOverlayOnboarding already clears
+            // `onboardingPending` (see OverlayModule.kt:144) so the
+            // observer-driven update is authoritative.
         });
 
         // History button
@@ -1287,6 +1325,26 @@ public class DictateInputMethodService extends InputMethodService
                     if (!inCooldown) {
                         onResendClicked();
                     }
+                } else if (id == LogicalButtonId.RECORD) {
+                    // Post-cutover hotfix (symmetric to RESEND above; see
+                    // ADR-0005 Decision-History "catalog-click affordance
+                    // hook symmetry"). The RECORD-click "stop & send"
+                    // (state Active|Paused → catalog returns
+                    // StopRecordingAndSend) needs the IME-side R-1
+                    // JobRequest snapshot + the pipeline-step-row prime
+                    // BEFORE the catalog dispatches, because the
+                    // orchestrator's PipelineModule.SubmitPipeline →
+                    // PipelineRunnerSubsystemAdapter → resolveFresh runs
+                    // asynchronously off the dispatch and would otherwise
+                    // hit an empty snapshot (the loud
+                    // UnsupportedOperationException tripwire fires; the
+                    // pipeline FSM hangs in Preparing; the user sees
+                    // endless "Sending…" with no step-rows / no
+                    // progress-bar — the R-1 silent-data-loss class).
+                    // Self-gating helper: no-op when state is not
+                    // Active|Paused (mirrors the catalog resolver's null
+                    // for those states).
+                    prepareCatalogStopRecordingIfActive();
                 }
                 return kotlin.Unit.INSTANCE;
             };
@@ -1353,6 +1411,43 @@ public class DictateInputMethodService extends InputMethodService
                 });
             overlayOnboardingObserver.start();
         }
+
+        // Post-cutover hotfix #3+#4 — start the recording-animation
+        // side-channel ticker. Drives ImeViewBackend.onTimerTick/onAmplitude
+        // + QwertzRecordingController.onTimerTick/onAmplitude from
+        // state.recording transitions. See RecordingActivityTickerObserver
+        // KDoc for the diagnosis (legacy RecordingManager polling loop
+        // never starts on the new path).
+        final DictatePipelineService.LocalBinder binderForAmplitude = pipelineBinder;
+        if (recordingTickerObserver != null) {
+            recordingTickerObserver.stop();
+        }
+        recordingTickerObserver = new RecordingActivityTickerObserver(
+                pipelineBinder.getState(),
+                elapsedMs -> {
+                    if (imeViewBackend != null) imeViewBackend.onTimerTick(elapsedMs);
+                    if (qwertzRecordingController != null) {
+                        qwertzRecordingController.onTimerTick(elapsedMs);
+                    }
+                    return kotlin.Unit.INSTANCE;
+                },
+                amplitude -> {
+                    // Post-cutover hotfix #AMP — normalize 0..32767 raw
+                    // MediaRecorder amplitude into the 0..1 contract the
+                    // renderer expects. See processor-field KDoc.
+                    float level = recordingTickerAmplitudeProcessor.process(amplitude);
+                    if (imeViewBackend != null) imeViewBackend.onAmplitude(level);
+                    if (qwertzRecordingController != null) {
+                        qwertzRecordingController.onAmplitude(level);
+                    }
+                    return kotlin.Unit.INSTANCE;
+                },
+                () -> binderForAmplitude.pollRecordingMaxAmplitude());
+        // Clean EMA-history before the next ticker cycle so a fresh
+        // session starts at silence instead of inheriting the smoothed
+        // tail of the previous one.
+        recordingTickerAmplitudeProcessor.reset();
+        recordingTickerObserver.start();
     }
 
     /**
@@ -1724,6 +1819,13 @@ public class DictateInputMethodService extends InputMethodService
         if (overlayOnboardingObserver != null) {
             overlayOnboardingObserver.stop();
             overlayOnboardingObserver = null;
+        }
+
+        // Post-cutover hotfix #3+#4 — cancel the recording-animation
+        // ticker collector scope.
+        if (recordingTickerObserver != null) {
+            recordingTickerObserver.stop();
+            recordingTickerObserver = null;
         }
 
         // Clean up long-lived objects
@@ -2125,6 +2227,17 @@ public class DictateInputMethodService extends InputMethodService
             }
         };
         dictateDb.getInvalidationTracker().addObserver(promptsInvalidationObserver);
+
+        // Post-cutover hotfix #5 — defensive: fill the adapter as soon as
+        // it is constructed. Without this, the first frame after a
+        // force-stop / service-re-init shows only the language-chip control
+        // sentinel because the InvalidationTracker has not fired yet AND
+        // the next onStartInputView reloadPrompts may early-return when
+        // promptDao is still null mid-bind. This direct call carries its
+        // own promptDao guard inside `reloadPrompts()` so it is a no-op
+        // when the DB is genuinely not ready (the InvalidationTracker
+        // will then take over on first table change).
+        reloadPrompts();
     }
 
     /**
@@ -3225,6 +3338,105 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
+     * Post-cutover hotfix — IME-side affordance for the catalog-driven
+     * RECORD click on Active|Paused (the "Stop &amp; Send" tap).
+     *
+     * <p>Captures the IME-runtime {@code JobRequest} snapshot and primes
+     * the pipeline-step-row UI <em>before</em> the catalog dispatches
+     * {@code StopRecordingAndSend}. Symmetric to the RESEND affordance
+     * (see {@code ImeViewBackend.wireStaticHandlers} click branch +
+     * the {@code imeSideAffordance} lambda above; render-path-cutover.md
+     * §7 A1 — "IME-side affordances with no FSM/dispatch
+     * representation").</p>
+     *
+     * <p>Without this affordance the orchestrator's
+     * {@code PipelineModule.SubmitPipeline} →
+     * {@code PipelineRunnerSubsystemAdapter} → {@code resolveFresh}
+     * runs asynchronously off the catalog dispatch and finds no
+     * snapshot — the loud
+     * {@link ImePipelineConfigResolver}{@code .resolveFresh}
+     * {@code UnsupportedOperationException} tripwire fires (R-1
+     * silent-data-loss class), gets caught as an {@code EffectFailure},
+     * and {@code state.pipeline} hangs in {@code Preparing} forever:
+     * endless "Sending…" with no step-rows and no progress UI.</p>
+     *
+     * <p><strong>sessionId source (post-hotfix root-cause fix).</strong>
+     * The sessionId is read from {@code state.recording.{Active,Paused}}
+     * — the orchestrator-authoritative id — NOT from the IME's private
+     * {@code newPathRecordingSessionId} field. Reason: the catalog
+     * resolver ({@code ActionResolvers.resolveRecordAction} for Idle →
+     * StartRecording) mints its OWN UUID via {@code newSessionId()}
+     * (`ActionResolvers.kt:99-103`); the IME's
+     * {@link #startRecording()} method (which IS what sets
+     * {@code newPathRecordingSessionId}) is called <strong>only by the
+     * QWERTZ path</strong>, never by the catalog click. So on the
+     * catalog path {@code newPathRecordingSessionId} stays {@code null}
+     * for the whole recording session, and a helper that gated on it
+     * would early-return → no snapshot → the R-1 tripwire fires anyway.
+     * The orchestrator's {@code state.recording.Active.sessionId} is
+     * the single id the catalog dispatch carries forward into
+     * {@code state.pipeline.Preparing.sessionId} and then
+     * {@code Effect.SubmitPipeline(sessionId)}, so it is the only id
+     * the helper can match.</p>
+     *
+     * <p><strong>Self-gating</strong> — when state is not Active|Paused
+     * (catalog resolver returns null for those states), or when the
+     * binder / config-resolver / audioFile / sessionId are missing
+     * (binder-dropped / preparing-race), this is a no-op. The
+     * defensive bail-outs mirror {@link #stopRecording()}'s pre-dispatch
+     * guards so a stale tap cannot orphan the recording.</p>
+     *
+     * <p><strong>Dispatch ownership</strong> — this helper performs the
+     * IME-side imperative work only; the catalog driver
+     * ({@code ImeViewBackend} click handler) is the sole dispatcher of
+     * {@code StopRecordingAndSend}. The {@link #stopRecording()} method
+     * still does both (snapshot + prime + dispatch) because the QWERTZ
+     * onSend path bypasses the catalog and needs all three.</p>
+     *
+     * @see CutoverArchitectureInvariantTest the architecture-invariant
+     *     test that locks against re-introducing the asymmetry by
+     *     requiring every catalog-emitting RECORD/RESEND click-site to
+     *     also fire an affordance hook.
+     */
+    private void prepareCatalogStopRecordingIfActive() {
+        if (pipelineBinder == null || imePipelineConfigResolver == null) {
+            return;
+        }
+        net.devemperor.dictate.state.RecordingState rs =
+                pipelineBinder.getState().getValue().getRecording();
+        String sessionId;
+        File recordingAudioFile;
+        if (rs instanceof net.devemperor.dictate.state.RecordingState.Active) {
+            net.devemperor.dictate.state.RecordingState.Active active =
+                    (net.devemperor.dictate.state.RecordingState.Active) rs;
+            sessionId = active.getSessionId();
+            recordingAudioFile = active.getAudioFile();
+        } else if (rs instanceof net.devemperor.dictate.state.RecordingState.Paused) {
+            net.devemperor.dictate.state.RecordingState.Paused paused =
+                    (net.devemperor.dictate.state.RecordingState.Paused) rs;
+            sessionId = paused.getSessionId();
+            recordingAudioFile = paused.getAudioFile();
+        } else {
+            // Not Active|Paused — catalog resolver returns null too; nothing to do.
+            return;
+        }
+        if (sessionId == null || recordingAudioFile == null) {
+            return;
+        }
+
+        Log.d("DictateIME",
+                "prepareCatalogStopRecordingIfActive: snapshot for sessionId="
+                        + sessionId + " (audioFile=" + recordingAudioFile.getName() + ")");
+        captureFreshConfigSnapshot(sessionId, recordingAudioFile);
+        primePipelineUiForNewPath();
+        // Defensive — keep newPathRecordingSessionId in sync with the legacy
+        // stopRecording() invariant (`newPathRecordingSessionId == sessionId
+        // → null` after a successful send). On the catalog path the field
+        // may already be null (the catalog mint's its own id) — no-op then.
+        newPathRecordingSessionId = null;
+    }
+
+    /**
      * C5 (R-1) — compute the 8 IME-runtime-only fresh-recording
      * {@code JobRequest} fields exactly as the legacy pre-C7 inline
      * {@code JobRequest.TranscriptionPipeline} construction did
@@ -3507,10 +3719,126 @@ public class DictateInputMethodService extends InputMethodService
 
     // ===== PipelineOrchestrator.PipelineCallback =====
 
+    /**
+     * Post-cutover D4 hotfix — bridge the legacy
+     * {@link PipelineOrchestrator.PipelineCallback} events into the
+     * orchestrator's {@code state.pipeline} FSM via Action dispatches.
+     *
+     * <p>Pre-hotfix the cutover left this bridge missing: the legacy
+     * {@code PipelineOrchestrator} ran its steps and called back into the
+     * IME, but no code path translated those calls into
+     * {@code Action.PipelineAction.StartPipeline / StepStarted /
+     * StepCompleted / PipelineDone / PipelineFailed}. Consequence:
+     * {@code state.pipeline} was driven into {@code Preparing} by the
+     * catalog's send-tap and then froze there forever (no actor advanced
+     * it). Two independent pipeline FSMs co-existed: (a) the imperative
+     * {@code PipelineStepRowRenderer.state} (driven via
+     * {@code primePipelineUiForNewPath} + the {@code addRunningStep /
+     * completeStep / failStep} calls below) and (b) the orchestrator's
+     * {@code state.pipeline} (driven by Action dispatches and consumed by
+     * every {@code LayoutCatalog} resolver). Without sync, the catalog
+     * label stayed "Sende" forever, the next recording's RECORD tap hit
+     * a stuck FSM, the FGS notification stuck on "preparing".
+     *
+     * <p>The fix invokes the existing imperative renderer paths AND
+     * dispatches mirror Actions to the orchestrator. The dispatches read
+     * {@code sessionId} off {@code state.pipeline} (the orchestrator's
+     * authoritative id, set by the {@code TriggerPipeline → Preparing}
+     * reducer arm); {@code totalSteps} / {@code autoEnterActive} are
+     * taken from the renderer's own {@code Running} snapshot (it was
+     * just primed with these by {@link #primePipelineUiForNewPath()} on
+     * the same main thread). All dispatches are wrapped in defensive
+     * try/catch — a misbehaving dispatch must NOT abort the existing
+     * imperative UI path (the imperative renderer is what the user
+     * actually sees today; the orchestrator-state sync is additive).
+     *
+     * <p>Architecture lock: a follow-up
+     * {@code CutoverArchitectureInvariantTest} assertion (g) will pin
+     * the existence of these dispatches so future refactors cannot
+     * silently re-introduce the "imperative-only" half-cutover.
+     */
+    private void dispatchPipelineActionToOrchestrator(net.devemperor.dictate.state.Action action, String tag) {
+        if (pipelineBinder == null) return;
+        try {
+            pipelineBinder.dispatch(action);
+        } catch (Throwable t) {
+            Log.w("DictateIME", tag + " dispatch failed (orchestrator-sync best-effort)", t);
+        }
+    }
+
+    private void onStepStarted_dispatchOrchestratorSync(String stepName) {
+        if (pipelineBinder == null) return;
+        net.devemperor.dictate.state.PipelineUiState p =
+                pipelineBinder.getState().getValue().getPipeline();
+        // First step → transition Preparing → Running via StartPipeline.
+        if (p instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
+            net.devemperor.dictate.state.PipelineUiState.Preparing prep =
+                    (net.devemperor.dictate.state.PipelineUiState.Preparing) p;
+            int totalSteps;
+            boolean autoEnter;
+            // The imperative pipelineStepRowRenderer was just primed by
+            // primePipelineUiForNewPath() with these two values; read them
+            // back so the orchestrator-dispatch carries the same total +
+            // autoEnter the renderer already shows. Note: the renderer
+            // uses the LEGACY core.PipelineUiState class (different from
+            // the orchestrator's state.PipelineUiState — same name, two
+            // namespaces; cf. CutoverArchitectureInvariantTest doc).
+            net.devemperor.dictate.core.PipelineUiState legacyRendererState =
+                    pipelineStepRowRenderer != null
+                            ? pipelineStepRowRenderer.getState()
+                            : net.devemperor.dictate.core.PipelineUiState.Idle.INSTANCE;
+            if (legacyRendererState instanceof net.devemperor.dictate.core.PipelineUiState.Running) {
+                net.devemperor.dictate.core.PipelineUiState.Running rr =
+                        (net.devemperor.dictate.core.PipelineUiState.Running) legacyRendererState;
+                totalSteps = rr.getTotalSteps();
+                autoEnter = rr.getAutoEnterActive();
+            } else {
+                // Fallback recompute — mirrors primePipelineUiForNewPath.
+                totalSteps = 1;
+                if (autoFormattingService.isEnabled()) totalSteps++;
+                totalSteps += promptQueueManager.getQueuedIds().size();
+                autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
+            }
+            dispatchPipelineActionToOrchestrator(
+                    new net.devemperor.dictate.state.Action.PipelineAction.StartPipeline(
+                            prep.getSessionId(), totalSteps, autoEnter),
+                    "StartPipeline");
+        }
+        // Then dispatch StepStarted (read sessionId off state.pipeline — may
+        // be Running now after the StartPipeline above, or already-Running
+        // for non-first steps).
+        net.devemperor.dictate.state.PipelineUiState p2 =
+                pipelineBinder.getState().getValue().getPipeline();
+        if (p2 instanceof net.devemperor.dictate.state.PipelineUiState.Running) {
+            String sid = ((net.devemperor.dictate.state.PipelineUiState.Running) p2).getSessionId();
+            dispatchPipelineActionToOrchestrator(
+                    new net.devemperor.dictate.state.Action.PipelineAction.StepStarted(sid, stepName),
+                    "StepStarted");
+        }
+    }
+
+    private String currentPipelineSessionId() {
+        if (pipelineBinder == null) return null;
+        net.devemperor.dictate.state.PipelineUiState p =
+                pipelineBinder.getState().getValue().getPipeline();
+        if (p instanceof net.devemperor.dictate.state.PipelineUiState.Running) {
+            return ((net.devemperor.dictate.state.PipelineUiState.Running) p).getSessionId();
+        }
+        if (p instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
+            return ((net.devemperor.dictate.state.PipelineUiState.Preparing) p).getSessionId();
+        }
+        return null;
+    }
+
     @Override
     public void onStepStarted(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
-            if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
+            // Orchestrator-sync (D4 hotfix) — dispatch StartPipeline (first
+            // step) + StepStarted so state.pipeline tracks the live FSM.
+            onStepStarted_dispatchOrchestratorSync(stepName);
+            // Existing imperative renderer drive (the user-visible path
+            // until the Catalog reads off the orchestrator state).
+            if (pipelineStepRowRenderer == null) return;
             if (pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
                 pipelineStepRowRenderer.addRunningStep(stepName);
             }
@@ -3520,6 +3848,14 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStepCompleted(@androidx.annotation.NonNull String stepName, long durationMs) {
         mainHandler.post(() -> {
+            // Orchestrator-sync (D4 hotfix) — StepCompleted advances
+            // state.pipeline.completedSteps + restamps elapsedMs.
+            String sid = currentPipelineSessionId();
+            if (sid != null) {
+                dispatchPipelineActionToOrchestrator(
+                        new net.devemperor.dictate.state.Action.PipelineAction.StepCompleted(sid),
+                        "StepCompleted");
+            }
             if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
             if (pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
                 pipelineStepRowRenderer.completeStep(stepName, durationMs);
@@ -3530,6 +3866,14 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStepFailed(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
+            // Orchestrator-sync (D4 hotfix) — StepFailed moves
+            // state.pipeline → Idle + Effect.MarkSessionFailed.
+            String sid = currentPipelineSessionId();
+            if (sid != null) {
+                dispatchPipelineActionToOrchestrator(
+                        new net.devemperor.dictate.state.Action.PipelineAction.StepFailed(sid, stepName),
+                        "StepFailed");
+            }
             if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
             if (pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
                 pipelineStepRowRenderer.failStep(stepName);
@@ -3540,14 +3884,45 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onPipelineCompleted(@androidx.annotation.NonNull String text, @androidx.annotation.NonNull InsertionSource source) {
         mainHandler.post(() -> {
+            // Capture `sid` before any dispatch — `currentPipelineSessionId()`
+            // reads from `state.pipeline`, which the PipelineDone dispatch
+            // below resets to Idle.
+            String sid = currentPipelineSessionId();
             if (pendingLivePromptChain) {
-                // Live prompt: transcription result becomes the prompt for a completion call
+                // Live prompt: transcription result becomes the prompt for a completion call.
+                // Dispatch PipelineDone first so the chained completion's
+                // primePipelineUiForNewPath sees a clean Idle state.
+                if (sid != null) {
+                    dispatchPipelineActionToOrchestrator(
+                            new net.devemperor.dictate.state.Action.PipelineAction.PipelineDone(sid, text),
+                            "PipelineDone");
+                }
                 pendingLivePromptChain = false;
                 if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
                 PromptEntity liveEntity = new PromptEntity(-1, Integer.MIN_VALUE, "", text, true, false);
                 runStandalonePromptViaOrchestrator(liveEntity);
             } else {
+                // Post-cutover hotfix #AE-DEEP — commit text BEFORE the
+                // PipelineDone dispatch. `commitTextToInputConnection`
+                // calls `isAutoEnterActive()`, which (post-#AE) reads from
+                // `state.pipeline.Running.autoEnterActive`. If we dispatch
+                // PipelineDone first, state.pipeline transitions to Idle
+                // and `isAutoEnterActive()` falls back to the global
+                // `Pref.AutoEnter` — the per-run override the user just
+                // toggled is silently lost. Doing the commit while
+                // state.pipeline is still Running keeps the per-run flag
+                // load-bearing. The PipelineDone-after-commit ordering
+                // preserves the D4-hotfix invariant (CRITICAL: dispatch
+                // must happen so the keyboard doesn't stick in SEND_MODE
+                // and the next StartRecording isn't rejected by a stale
+                // pipeline FSM — see git history) — the dispatch still
+                // fires, just 1-2 ms later.
                 commitTextToInputConnection(text, source);
+                if (sid != null) {
+                    dispatchPipelineActionToOrchestrator(
+                            new net.devemperor.dictate.state.Action.PipelineAction.PipelineDone(sid, text),
+                            "PipelineDone");
+                }
             }
         });
     }
@@ -3555,6 +3930,17 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onPipelineError(@androidx.annotation.NonNull String errorInfoKey, boolean vibrate, @androidx.annotation.Nullable String providerName) {
         mainHandler.post(() -> {
+            // Orchestrator-sync (D4 hotfix) — PipelineFailed moves
+            // state.pipeline → Idle + Effect.MarkSessionFailed.
+            String sid = currentPipelineSessionId();
+            if (sid != null) {
+                String reason = providerName != null
+                        ? errorInfoKey + " (" + providerName + ")"
+                        : errorInfoKey;
+                dispatchPipelineActionToOrchestrator(
+                        new net.devemperor.dictate.state.Action.PipelineAction.PipelineFailed(sid, reason),
+                        "PipelineFailed");
+            }
             if (infoBarController == null) return;  // View recreation not yet complete
             showInfo(errorInfoKey, providerName);
         });
@@ -3639,8 +4025,37 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private boolean isAutoEnterActive() {
-        PipelineStepRowRenderer.AutoEnterConfig cfg = pipelineStepRowRenderer != null ? pipelineStepRowRenderer.getAutoEnterConfig() : null;
-        if (cfg != null) return cfg.getAutoEnterActive();
+        // Post-cutover hotfix #AE — read from the orchestrator's
+        // PipelineUiState.{Preparing,Running}.autoEnterActive. That is
+        // the source of truth since PipelineAction.ToggleRunningAutoEnter
+        // flips it on the second SEND-tap. The legacy
+        // pipelineStepRowRenderer.getAutoEnterConfig() path was never
+        // wired to the catalog click-dispatch so it stayed stale.
+        //
+        // #AE-DEEP2: also accept Preparing — a tap landing in the
+        // upload window (Preparing) carries the override into Running
+        // via the StartPipeline reducer (autoEnterActive merge). The
+        // Preparing read here covers the equally-real case where the
+        // pipeline completes before Running was ever materialised
+        // (very short jobs); the Preparing flag is then the only
+        // surviving record of the user's toggle.
+        if (pipelineBinder != null) {
+            net.devemperor.dictate.state.PipelineUiState ps =
+                    pipelineBinder.getState().getValue().getPipeline();
+            if (ps instanceof net.devemperor.dictate.state.PipelineUiState.Running) {
+                return ((net.devemperor.dictate.state.PipelineUiState.Running) ps)
+                        .getAutoEnterActive();
+            }
+            if (ps instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
+                return ((net.devemperor.dictate.state.PipelineUiState.Preparing) ps)
+                        .getAutoEnterActive();
+            }
+        }
+        // Pipeline not Preparing/Running (Idle) — fall back to the
+        // global pref so end-of-pipeline triggers that race ahead of
+        // the state.pipeline=Idle transition still respect the user's
+        // setting. The legacy AutoEnterConfig fallback is intentionally
+        // gone (out-of-sync with the catalog).
         return DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
     }
 
@@ -3648,8 +4063,39 @@ public class DictateInputMethodService extends InputMethodService
         // Only meaningful during Running — during Preparing the auto-enter chip is not visible,
         // and during Idle there is no pipeline to toggle against.
         if (pipelineStepRowRenderer == null || !pipelineStepRowRenderer.isPipelineRunning()) return;
-        // Controller owns the PipelineConfig; it atomically flips config + Running.autoEnterActive.
+        // Controller owns the PipelineConfig; it atomically flips config + Running.autoEnterActive
+        // on the legacy `net.devemperor.dictate.core.PipelineUiState` sealed class.
         pipelineStepRowRenderer.toggleAutoEnter();
+        // Post-cutover hotfix #AE-DEEP — the QWERTZ keyboard's RECORD-key
+        // press path lands here (via onRecordClicked → isPipelineActive
+        // branch), NOT through the LayoutCatalog action-resolver. Without
+        // an additional orchestrator-side dispatch the legacy renderer
+        // state and the orchestrator's
+        // `net.devemperor.dictate.state.PipelineUiState.{Preparing,Running}.autoEnterActive`
+        // diverge — `isAutoEnterActive()` (which now reads from the
+        // orchestrator after #AE) would always see the un-flipped value.
+        // The two PipelineUiState sealed classes (one in `core`, one in
+        // `state`) are a known coexistence artefact of the half-finished
+        // cutover; this dispatch is the bridge that keeps them aligned
+        // for the auto-enter axis.
+        //
+        // #AE-DEEP2: accept BOTH Preparing and Running. The legacy
+        // renderer flips to Running on the SEND-tap synchronously, but
+        // the orchestrator only reaches Running once the runner emits
+        // StartPipeline (typically 500ms–2s later). A double-tap in
+        // that window hits Preparing — pre-fix the strict `is Running`
+        // guard rejected it and the orchestrator-side state stayed
+        // out of sync forever (the StartPipeline merge in PipelineModule
+        // would then default it back to the global Pref.AutoEnter value).
+        if (pipelineBinder != null) {
+            net.devemperor.dictate.state.PipelineUiState ps =
+                    pipelineBinder.getState().getValue().getPipeline();
+            if (ps instanceof net.devemperor.dictate.state.PipelineUiState.Running
+                    || ps instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
+                pipelineBinder.dispatch(
+                        net.devemperor.dictate.state.Action.PipelineAction.ToggleRunningAutoEnter.INSTANCE);
+            }
+        }
     }
 
     /**

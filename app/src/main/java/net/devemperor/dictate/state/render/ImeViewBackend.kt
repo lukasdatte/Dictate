@@ -353,14 +353,34 @@ class ImeViewBackend(
             if (id != LogicalButtonId.SPACE) {
                 view.setOnClickListener {
                     onVibrate()
-                    // CR4 (render-path-cutover.md §7 A1 / CR4-IMPL-3) — the
-                    // RESEND click's real work (last-session DB lookup →
-                    // insert / resume) has NO new-path implementation: the
-                    // catalog `ResendLastAudio` → ResendModule only arms the
-                    // cooldown. Fire the IME-side affordance (the exact
-                    // legacy `onResendClicked` body) BEFORE the catalog
-                    // dispatch so the resend feature survives the cutover.
-                    // No-op for every other button (default callback).
+                    // CR4 (render-path-cutover.md §7 A1 / CR4-IMPL-3) +
+                    // post-cutover hotfix (ADR-0005 Decision-History,
+                    // "catalog-click affordance hook symmetry"):
+                    //
+                    //  - **RESEND** click — the real work (last-session
+                    //    DB lookup → insert / resume) has NO new-path
+                    //    implementation: the catalog `ResendLastAudio`
+                    //    → ResendModule only arms the cooldown. The
+                    //    affordance carries the legacy `onResendClicked`
+                    //    body.
+                    //  - **RECORD** click (Active|Paused = "stop & send")
+                    //    — the IME-runtime R-1 `JobRequest` snapshot +
+                    //    pipeline-step-row prime must happen BEFORE the
+                    //    catalog dispatches `StopRecordingAndSend`,
+                    //    because `PipelineRunnerSubsystemAdapter`'s
+                    //    `resolveFresh` runs async off the dispatch and
+                    //    would otherwise hit an empty snapshot → loud
+                    //    `UnsupportedOperationException` (R-1
+                    //    silent-data-loss tripwire) → pipeline FSM hangs
+                    //    in `Preparing` → endless "Sending…" with no
+                    //    step-rows / no progress UI. The affordance is
+                    //    self-gating on Active|Paused (no-op otherwise).
+                    //
+                    // The symmetry is locked structurally by
+                    // CutoverArchitectureInvariantTest's
+                    // affordance-hook-symmetry assertion. No-op for every
+                    // other button id (default lambda fall-through).
+                    //
                     // F-10 (B5-VAL) — the RESEND double-fire/cooldown
                     // safety is adequately mitigated (manual inCooldown
                     // re-check + enabledResolver disabling the view +
@@ -372,7 +392,7 @@ class ImeViewBackend(
                     // that assumption would silently reopen the
                     // double-fire — keep the GONE/disabled suppression in
                     // mind before rewiring this path.
-                    if (id == LogicalButtonId.RESEND) {
+                    if (id == LogicalButtonId.RESEND || id == LogicalButtonId.RECORD) {
                         imeSideAffordance(id, false)
                     }
                     val s = stateRef ?: return@setOnClickListener

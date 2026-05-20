@@ -240,8 +240,24 @@ sealed interface PipelineUiState {
     /** No pipeline running. */
     data object Idle : PipelineUiState
 
-    /** Audio uploaded, waiting for the first `StepStarted`. */
-    data class Preparing(val sessionId: String) : PipelineUiState
+    /**
+     * Audio uploaded, waiting for the first `StepStarted`.
+     *
+     * **[autoEnterActive] (Post-cutover #AE-DEEP2):** The per-run auto-enter
+     * override is carried already in `Preparing`, not only in `Running`. The
+     * "second SEND-tap" the user makes to toggle auto-enter typically lands
+     * during the 500ms–2s upload window between `Preparing` and the first
+     * runner-callback that triggers `StartPipeline` (`Preparing → Running`).
+     * Without a Preparing-side flag the tap silently no-ops in both click
+     * paths (catalog `resolveRecordActionPipeline` returns null for Preparing;
+     * the legacy QWERTZ path's orchestrator-dispatch guard rejects Preparing).
+     * Defaults to `false`; the `Preparing → Running` reducer arm merges this
+     * value with the runner-provided default (whichever is `true` wins).
+     */
+    data class Preparing(
+        val sessionId: String,
+        val autoEnterActive: Boolean = false,
+    ) : PipelineUiState
 
     /**
      * Pipeline running; progress UI is active.

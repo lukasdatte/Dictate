@@ -91,25 +91,44 @@ class OverlayCharactersControllerTest {
     }
 
     @Test
-    fun dormant_report_does_not_conflict_with_legacy_live_writer_RR2() {
+    fun dormant_initialize_does_not_report_to_strip_id_audit_RR2() {
+        // Post-cutover RR-2 fix (#6) — neither initialize() nor update()
+        // actually mutates the ll.visibility axis (initialize adds child
+        // TextViews; update writes child text/visibility/color), so this
+        // controller MUST NOT report any "intended write" to ll.id to
+        // the audit ledger. Pre-fix the gate's shouldWrite() call falsely
+        // reported a VISIBLE write to ll.id per call → the ledger flagged
+        // a double-write vs OverlayResetHandler's real ll.visibility=GONE
+        // write in the same render-generation (RR-2 silent-flicker class).
+        // Post-fix the controller participates in the audit only for the
+        // child views it actually writes — not for ll.id.
         assumeTrue("audit logger is DEBUG-guarded", BuildConfig.DEBUG)
         val logger = VisibilityWriteAuditLogger()
         val gate = RenderGate("OverlayCharactersController", logger)
         val c = controller(gate)
 
         logger.beginRenderGeneration()
-        // The legacy MainButtonsController is the live writer this gen.
-        logger.logWrite(strip.id, "MainButtonsController", View.VISIBLE, live = true)
+        // OverlayResetHandler is the live ll.visibility=GONE writer this gen
+        // (defensive overlay-chars reset, runs on every render tick).
+        logger.logWrite(strip.id, "OverlayResetHandler", View.GONE, live = true)
 
-        c.initialize()  // dormant → reports suppressed write only
+        c.initialize()  // dormant — and no longer reports to ll.id
 
         assertEquals(
-            "dormant report must not be a double-write vs the legacy live writer",
+            "no double-write recorded (post-fix the controller no longer " +
+                "reports to ll.id, eliminating the false RR-2 positive)",
             0, logger.doubleWriteCount,
         )
-        assertEquals("MainButtonsController", logger.soleLiveWriterOf(strip.id))
+        assertEquals(
+            "OverlayResetHandler stays the sole live writer of ll.id (unchanged)",
+            "OverlayResetHandler",
+            logger.soleLiveWriterOf(strip.id),
+        )
         assertTrue(
-            logger.dormantReportersOf(strip.id).contains("OverlayCharactersController"),
+            "the controller must NOT appear as a dormant reporter of ll.id " +
+                "(post-fix it doesn't touch ll.visibility — the spurious report " +
+                "was the RR-2 false-positive that triggered #6).",
+            !logger.dormantReportersOf(strip.id).contains("OverlayCharactersController"),
         )
     }
 

@@ -89,6 +89,7 @@ class PipelineStepRowRendererTest {
     fun `applyRecordButtonForRecording is no-op for every RecordingState branch`() {
         val initialText = recordButton.text?.toString().orEmpty()
         val initialEnabled = recordButton.isEnabled
+        val initialDrawables = recordButton.compoundDrawablesRelative.toList()
         listOf(
             RecordingState.Idle,
             RecordingState.Preparing(useBluetooth = false),
@@ -104,6 +105,11 @@ class PipelineStepRowRendererTest {
             assertEquals(
                 "Phase 3 no-op: applyRecordButtonForRecording must not mutate isEnabled for $state",
                 initialEnabled, recordButton.isEnabled,
+            )
+            assertEquals(
+                "Phase 3 no-op: applyRecordButtonForRecording must not mutate compound drawables for $state " +
+                    "— AutoEnterRenderer is the single writer for that axis",
+                initialDrawables, recordButton.compoundDrawablesRelative.toList(),
             )
         }
     }

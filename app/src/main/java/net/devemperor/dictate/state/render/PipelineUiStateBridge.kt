@@ -36,18 +36,21 @@ import net.devemperor.dictate.state.PipelineUiState as StatePipelineUiState
  * source-of-truth state.
  *
  * **Orchestrator → Legacy:** the legacy `Running` carries
- * `currentStepName` and `hasFailure`; the orchestrator state has
- * neither (Phase 5.A introduces `stepHistory: PersistentList<StepRowItem>`
- * + `hasFailure: Boolean` and derives `currentStepName` as an extension
- * property — see §7 Q3 + Q6 of the plan). Until then, the bridge
- * defaults `currentStepName = ""` and `hasFailure = false`. Real
- * values still flow through the legacy renderer's imperative API
- * (`addRunningStep`, `failStep`); the bridge only provides a baseline
- * snapshot. The legacy `ReprocessStaging` carries audio-duration,
- * queue, language, model, isStarting — orchestrator only has
- * `(sessionId, transcript)`. The bridge defaults these to neutral
- * values; the IME hydrates them through their dedicated callbacks
- * (the same path that exists today).
+ * `currentStepName` and `hasFailure`. As of Phase 5.A the orchestrator
+ * `Running` has both — `hasFailure` as a direct field, `currentStepName`
+ * as the derived extension property
+ * `Running.currentStepName: String?`. However the bridge **does not
+ * propagate them** — it sets `currentStepName = ""` and
+ * `hasFailure = false` regardless. That is intentional and harmless
+ * today because `syncFromOrchestrator` is **not yet called from
+ * production code**; Phase 5.B replaces both the bridge and the
+ * legacy state with a direct StateFlow subscription
+ * (`stepHistory`-diff renderer), at which point this lossy mapping
+ * is removed entirely. The legacy `ReprocessStaging` carries
+ * audio-duration, queue, language, model, isStarting — orchestrator
+ * only has `(sessionId, transcript)`. The bridge defaults these to
+ * neutral values; the IME hydrates them through their dedicated
+ * callbacks (the same path that exists today).
  *
  * **Legacy → Orchestrator:** the orchestrator state carries `sessionId`
  * (on `Preparing` + `Running`) + `target` (on `Running`); the legacy

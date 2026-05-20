@@ -2725,8 +2725,17 @@ public class DictateInputMethodService extends InputMethodService
                         RecordingState.Idle.INSTANCE,
                         PipelineUiState.Idle.INSTANCE));
 
-                // get the currently selected input language
-                recordButton.setText(getDictateButtonText());
+                // Phase 3 of dictate-render-cutover-completion-vol2 — the
+                // Catalog `resolveRecordButtonText` is the single writer
+                // for `record_btn.text`. In the unbound-fallback path the
+                // catalog hasn't fanned out yet, but the XML-inflated
+                // default (`@string/dictate_record`) is already visible
+                // and gets overwritten by the catalog on the first
+                // render-tick after `attachImeViewBackendIfReady`. The
+                // previous `recordButton.setText(getDictateButtonText())`
+                // here was a transient violation of the single-writer
+                // invariant (AC-A1); removed as part of the C-1
+                // post-validation fix.
             }
         }
 

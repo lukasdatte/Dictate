@@ -525,15 +525,24 @@ der Renderer noch Phase-3-Stand hat):**
    ```
 3. **Reducer-Arms überarbeiten** in `PipelineModule.kt`:
    - `StartPipeline` Reducer-Arm → setzt `stepHistory =
-     persistentListOf()` (frischer Reset, kein Leak).
+     persistentListOf()` und `hasFailure = false` (frischer Reset,
+     kein Leak).
    - `StepStarted` (`:182-193`) → appendet `StepRowItem(action.stepName,
      RUNNING, ctx.now)` zu `stepHistory`. Restamping `elapsedMs` bleibt.
    - `StepCompleted` (`:208-217`) → finalisiert letzte `RUNNING`-Row
      auf `COMPLETED` + `durationMs = ctx.now - lastRow.startedAtMs`.
-     Increment `completedSteps` bleibt.
-   - `StepFailed` (`:219-231`) → **Q6-Entscheidung erforderlich vor
-     Implementation** (siehe §7 Q6, Vorab-Tendenz: neuer `Failed`-Sub-State
-     mit Auto-Cleanup-Effect).
+     `completedSteps` wird Extension-Property: `stepHistory.count {
+     it.status != RUNNING }` (siehe Q3 + Q6).
+   - `StepFailed` (`:219-231`) → **Q6-Entscheidung 2026-05-21:
+     Option (a) `Running(hasFailure=true)`.** `Running`-Arm:
+     finalisiert letzte `RUNNING`-Row auf `FAILED` + setzt
+     `hasFailure=true` + restamping `elapsedMs`. `Effect.MarkSessionFailed`
+     fliegt; **KEIN** `Effect.DismissNotification` (Pipeline läuft
+     visuell weiter, FGS bleibt, weil `executeQueuedPrompts` mit dem
+     nächsten queued Prompt weitermacht). `Preparing`-Arm behält die
+     heutige `→ Idle + MarkSessionFailed + DismissNotification`-
+     Semantik (Upload-Fail vor jeder Row). `PipelineFailed` und
+     `PipelineDone` unverändert → `Idle` (wipen den Marker natürlich).
 4. **`RecordButtonColorController` (Q2-Side-Channel) implementieren:**
    ```kotlin
    class RecordButtonColorController(
@@ -687,14 +696,27 @@ Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 5 ──► Phase 6
 Phase 4 (Constraint-Fix) ist orthogonal zum Render-SoT-Fix und kann
 parallel zu Phase 2/3 laufen — sie touchiert nur XML.
 
-### 4.2 Soak-Window
+### 4.2 Zwischen-Phase-3-und-Phase-5: mandatorischer E2E-Run
 
-Zwischen Phase 3 (atomic flip) und Phase 5 (delete) **mind. 24 h
-Soak-Window** auf dem Dev-Device. Während dieser Zeit kein Cutover-Code
-gemerged. User testet auf dem SM-S948B die Regressionsliste §6.2 und
-Edge-Cases aus dem Daily Use. Wenn ein R-A bis R-G-Symptom auftaucht:
-Phase 3 revert, Phase 1-Snapshot erweitern, re-do. Erst nach grünem
-Soak-Window → Phase 5.
+**Q4-Entscheidung 2026-05-21: KEIN Tage-Soak-Window.** Phase 3 → Phase 5
+laufen direkt nacheinander, ABER zwischen den beiden Commits **muss**
+die §6.2-Regressionsliste auf dem Dev-Device (SM-S948B) vollständig
+durchlaufen. Reichweite:
+
+- 12 Punkte der §6.2-Liste manuell abarbeiten.
+- Nach Phase-3-Commit: APK bauen, installieren, IME force-stoppen,
+  Logcat clearen, Liste durchgehen.
+- Wenn ein Punkt fehlschlägt → Phase 3 revert, Phase 1-Snapshot
+  erweitern um den fehlenden Branch, re-do.
+- Erst nach grünem E2E-Run → Phase 5.A starten.
+
+**NICHT in Phase 5 hineinarbeiten**, wenn Phase 3 nicht grün ist —
+Bisectability wäre sonst kompromittiert.
+
+**Risiko-Akzeptanz:** Ohne Tage-Soak werden subtile Edge-Cases (Long-Press-
+Recording-Pausen während Wochenend-Nutzung, BT-SCO-Reconnect-Loops, etc.)
+nicht entdeckt. Der User akzeptiert das Risiko für schnelleres
+Durchziehen.
 
 ## §5 Spec-References
 
@@ -741,19 +763,20 @@ Soak-Window → Phase 5.
 7. ReprocessStaging Queue-Edit → Button-Text reflektiert.
 8. Rotation während Running → Counter survived, Timer survived.
 9. Rotation während ReprocessStaging → Queue + Language survived.
-10. Pipeline-Fail (API-Error) → rote Counter-Farbe auf record_btn UND
-    Cross-Icon in Step-Row.
-11. Keyboard-Switch DURING Recording → Recording bleibt alive
+10. **Per-Step-Fail** (z.B. ein queued Rewording-Prompt schlägt fehl): letzte Step-Row mit Cross-Icon (rot) markiert, `record_btn`-Text rot, **Pipeline läuft weiter** mit nächstem queued Prompt (Q6-Klarstellung). Beim Pipeline-Ende (`onPipelineFinished`) wird der Marker natürlich gewipet.
+11. **Pipeline-Failure** (z.B. Netzwerk-Komplettausfall) → `PipelineFailed`-Reducer transitioniert zu `Idle`, FGS-Notification verschwindet, Marker mit der Step-Row-Liste gewipet.
+12. Keyboard-Switch DURING Recording → Recording bleibt alive
     (Theme-B-Acceptance, sollte nicht regress) + Notification visible.
-12. Pause-During-Recording: Timer friert ein (Hotfix-Wave aus
+13. Pause-During-Recording: Timer friert ein (Hotfix-Wave aus
     `e7d4b2e` — bleibt).
 
 ### 6.3 Rollback-Strategie
 
 - **Atomic-Commit pro 🔴-Phase.** Phase 3 = ein Commit. Phase 5 = ein
   Commit (oder 5a+5b wenn Größe untragbar).
-- **Soak-Window zwischen Phase 3 und Phase 5** (24-48 h) — keine
-  weiteren Cutover-Commits in der Zeit.
+- **Q4-Entscheidung 2026-05-21: KEIN Tage-Soak-Window.** Zwischen
+  Phase 3 und Phase 5 läuft der mandatorische §6.2-E2E-Run (siehe §4.2).
+  Wenn der grün ist → Phase 5.A starten. Wenn nicht → Phase 3 revert.
 - **Roll-back per `git revert`** auf Phasen-Commit-Ebene; Bisectability
   über `git bisect` möglich für jede Phase.
 - **Soft-Roll-back via Bridge-Re-Aktivierung:** Phase 2 lässt die
@@ -772,9 +795,9 @@ Q1-Q3 sind entschieden; Q4-Q6 stehen noch offen.
 | **Q1** ✅ | Auto-Enter-↵-Icon-Migration: Catalog-`iconResolver` (a) oder Side-Channel-Renderer (b)? | **(b) Side-Channel `AutoEnterRenderer`.** Catalog (`ButtonSlot.iconResolver: (state) -> Int?`) ist per KDoc-Konvention auf `@DrawableRes Int` festgelegt; `AutoEnterIconRenderer` liefert dynamische `BitmapDrawable`s (PorterDuff-Knockout, density-skaliert). `SlotRenderer.applySlotToView` schreibt auf `MaterialButton.icon` (linke Position), das Compound-Drawable lebt aber rechts. Side-Channel folgt dem etablierten `RecordingAnimationController`-Pattern. **Vor Phase 3 implementieren; Phase 3 ersetzt `updateAutoEnterAppearance`-Call durch `AutoEnterRenderer.onState()`-Hook in `ImeViewBackend.render`.** Lifecycle-Hinweis: `AutoEnterIconRenderer` ist context-gebunden — der `AutoEnterRenderer`-Wrapper muss bei `ImeViewBackend.attach()` neu instanziiert oder per `invalidate()` gerefresht werden (Theme/Density-Cache-Boundary). | Phase 3 |
 | **Q2** ✅ | `hasFailure`-Color-Pfad: `colorResolver` (a), Theming-Achse (b), oder side-channel `RecordButtonColorController` (c)? | **(c) Side-Channel `RecordButtonColorController`.** Theming-Achse ist prefs-getrieben (Themen) und passt nicht zum ephemeren `hasFailure`-Flip; Catalog `colorResolver` würde ein erstes Color-Field in das pure-Resolver-Modell einführen (`SlotRenderer` schreibt heute *keine* `setTextColor`-Werte). Side-Channel konsistent mit Q1. **PLAN-LÜCKE entdeckt:** `state.PipelineUiState.Running.hasFailure` existiert **NICHT** im Orchestrator-State — nur in `core.PipelineUiState.Running`. **Phase-Verschiebung von Phase 1 → Phase 5**, weil die State-Migration in Phase 5 stattfindet (siehe Phase 5 Scope-Erweiterung unten und neue Q6). | **Phase 5** (vorher fälschlich Phase 1) |
 | **Q3** ✅ | Sollten `currentStepName` + `stepHistory` als zwei Felder in `state.PipelineUiState.Running` modelliert werden, oder als separate state-Achse (z. B. `state.pipelineSteps: PipelineStepsState`), oder view-internal? | **(a) Felder in `Running` — aber NUR `stepHistory: PersistentList<StepRowItem>`, nicht zusätzlich `currentStepName`.** Doppel-Buchhaltung war ein Plan-Fehler (genau das Anti-Pattern, das dieser Plan eliminiert). `currentStepName` wird Extension-Property: `val Running.currentStepName: String? get() = stepHistory.lastOrNull { it.status == StepStatus.RUNNING }?.stepName`. `PersistentList` (kotlinx.collections.immutable) ist im Repo bereits belegt (`PipelineRecovery.kt:5`). Begleit-Typen: `enum class StepStatus { RUNNING, COMPLETED, FAILED }`, `data class StepRowItem(stepName, status, durationMs, startedAtMs)`. Per-Step-`ElapsedTimer` bleibt View-internal (Spec 1 §9.2 explizit). | Phase 5 |
-| **Q4** ⏳ | Soak-Window-Länge zwischen Phase 3 und Phase 5: 24 h oder 48 h? | User-Entscheidung (Daily-Use-Volumen). | nach Phase 3 |
-| **Q5** ⏳ | Timing relativ zum Single-Row-Feature-Branch: vor oder nach dem Merge? Vorab-Empfehlung: Phase 1+2+4 VOR, Phase 3+5+6 NACH. | User-Entscheidung. | vor Phase 1 |
-| **Q6** ⏳ | **NEU vom Q3-Audit:** `StepFailed`-Reducer transitioniert heute direkt nach `Idle`. Wenn die rote Fail-Markierung (Q2) auf der letzten Step-Row visuell sichtbar bleiben soll, brauchen wir EINE der drei Optionen: (a) `Running(hasFailure=true)` lässt die Pipeline visuell weiterlaufen (semantisch falsch — Pipeline ist tot, aber State sagt Running); (b) **neuer Sub-State `PipelineUiState.Failed(sessionId, stepHistory, reason)`** mit Auto-Cleanup-Effect nach 2 s → `Idle`; (c) Fail-Marker lebt im `pendingSession`-Repo-Pfad (nicht im Pipeline-State), Renderer zieht ihn aus dem Repo. | Sub-Recherche-Agent vor Phase 5. **Vorab-Tendenz: (b)** — sauber state-modelliert, Renderer braucht keine zusätzliche Subscription, Auto-Cleanup macht das Verhalten deterministisch. Risiko: kollidiert mit `Effect.MarkSessionFailed`/`Effect.DismissNotification`-Reihenfolge — muss klargestellt werden. | Phase 5 |
+| **Q4** ✅ | Soak-Window-Länge zwischen Phase 3 und Phase 5: 24 h oder 48 h? | **KEIN Soak-Window — direkt Phase 5.** User-Entscheidung 2026-05-21. **Mandatorisch zwischen Phase 3 und Phase 5.A:** die §6.2-Regressionsliste muss auf dem Dev-Gerät vollständig durchlaufen. Wenn ein Test fehlschlägt → Phase 3 reverten, Phase 1 nachschärfen, re-do. **Nicht in Phase 5 hineinarbeiten.** | nach Phase 3 |
+| **Q5** ✅ | Timing relativ zum Single-Row-Feature-Branch | **Entfällt.** Der Migrationsplan-Bericht hat dies fälschlich als "Feature-Branch" interpretiert. Single-Row ist eine **bestehende UI-Variante** im aktuellen Code (`LayoutCatalog.KEYBOARD_SINGLE_ROW`, MotionScene-State `single_row_state`) — kein paralleler Branch. Phase 1 deckt Single-Row mit ab (siehe §Phase 1 Acceptance, "5 KEYBOARD_*_STATE-Modi"). Aktueller Branch ist `feature/language-chip-curation` — orthogonal zum Cutover. | — |
+| **Q6** ✅ | `StepFailed`-Reducer-Semantik nach Q2/Q3-State-Migrationen | **(a) `Running(hasFailure=true)`** mit gleichzeitiger Markierung der letzten `stepHistory`-Row als `FAILED`. **Wichtige Klarstellung des Q6-Audit:** der Plan-Text war auf falscher Prämisse aufgebaut. `StepFailed` ist **kein** Pipeline-Ende — `executeQueuedPrompts` (Orchestrator) läuft mit dem nächsten queued Prompt weiter. Nur `PipelineFailed` (top-level fatal), `PipelineDone` und `CancelPipeline` enden die Pipeline. Die rote Visual-Markierung lebt heute exakt von `onStepFailed` bis `onPipelineFinished`. Option (b) (neuer Failed-Sub-State + 2-s-Auto-Cleanup) war über-engineered für ein Verhalten, das schlechter wäre als heute (Marker würde während laufender Chain auto-verschwinden). Option (c) verstößt gegen das reaktive Pattern. **Konkret:** `Preparing → StepFailed`-Arm behält die heutige `→ Idle + DismissNotification`-Semantik (Upload-Fail vor jeder Row); `Running → StepFailed`-Arm setzt `stepHistory.last.copy(FAILED) + hasFailure=true` ohne `DismissNotification` (FGS bleibt, Pipeline läuft weiter); `PipelineFailed`/`PipelineDone` unverändert → `Idle` (wipest Marker natürlich). | Phase 5 |
 
 ## §8 Referenzen
 
@@ -812,3 +835,4 @@ Q1-Q3 sind entschieden; Q4-Q6 stehen noch offen.
 |---|---|---|
 | 2026-05-21 | Plan-Erstellung | Initialer Plan basierend auf dem Migrationsplan-Bericht (`research/d-migration-plan.md`), den drei Audit-Berichten, und der Hotfix-Wave-Konsolidierung in Commit `e7d4b2e`. |
 | 2026-05-21 | Sub-Recherche Q1-Q3 + Plan-Iteration | Drei Sub-Recherche-Agenten haben Q1 (Auto-Enter-Migration), Q2 (hasFailure-Color), Q3 (Step-State-Modell) tief beantwortet. **Entscheidungen:** Q1 → Side-Channel `AutoEnterRenderer`; Q2 → Side-Channel `RecordButtonColorController` **+ State-Migration** (`Running.hasFailure` existiert nicht im Orchestrator-State); Q3 → `stepHistory: PersistentList<StepRowItem>` mit `currentStepName` als Extension-Property (nicht als zweites Feld). **Plan-Lücken entdeckt:** Q2 von Phase 1 → Phase 5 verschoben (State-Migration), R-C entsprechend umverortet, Phase 5 in 5.A (State-Migrationen) + 5.B (Renderer-Flip + Delete) gesplittet, neue Q6 für `StepFailed`-Reducer-Semantik eingeführt. Phase 1 verkleinert. Phase 3 erweitert um `AutoEnterRenderer`-Skizze. Aufwandsschätzung Phase 5 erhöht (4-8 h → 6-10 h). |
+| 2026-05-21 | Q4-Q6 final + Plan-Closure für Implementation-Start | **Q4-Entscheidung:** kein Tage-Soak-Window. Phase 3 → Phase 5 direkt nacheinander; zwischen den Phasen läuft mandatorisch der §6.2-E2E-Run. **Q5-Klärung:** entfällt — Single-Row ist eine bestehende UI-Variante, kein Feature-Branch (Missverständnis im Migrationsplan-Bericht). **Q6-Entscheidung (Sub-Recherche-Agent):** `StepFailed` → Option (a) `Running(hasFailure=true)` mit letzter Step-Row als FAILED markiert. Wichtige Klarstellung: `StepFailed` ist **kein** Pipeline-Ende — `executeQueuedPrompts` macht mit dem nächsten queued Prompt weiter. Nur `PipelineFailed`/`PipelineDone`/`CancelPipeline` enden die Pipeline. Plan §4.2 (Soak-Window) durch mandatorischen E2E-Run ersetzt; §6.2 Regressionsliste um "Per-Step-Fail" vs. "Pipeline-Failure" differenziert (Punkt 10 + 11); §6.3 Rollback-Strategie aktualisiert; Phase 5.A StepFailed-Reducer-Arm präzisiert. **Plan ist Implementer-ready.** |

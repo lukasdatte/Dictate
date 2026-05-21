@@ -91,4 +91,41 @@ class InfoBarSelectorTest {
         assertEquals(listOf<Any>("OpenAI"), msg.textArgs)
         assertEquals(InfoBarStyle.ERROR, msg.style)
     }
+
+    // ── Overlay-Permission-Onboarding producer (Block D) ───────────────
+
+    @Test
+    fun `overlay onboardingPending surfaces a single info item`() {
+        val state = defaultState().copy(
+            overlay = defaultState().overlay.copy(onboardingPending = true),
+        )
+        val items = InfoBarSelector.select(state)
+        assertEquals("expected exactly one item", 1, items.size)
+        val item = items.first()
+        assertEquals("overlay-permission:onboarding", item.id)
+        assertEquals(Action.OverlayAction.RequestOverlayPermission, item.confirmAction)
+        assertEquals(Action.OverlayAction.DismissOverlayOnboarding, item.dismissAction)
+        assertEquals(InfoBarStyle.INFO, item.message.style)
+    }
+
+    @Test
+    fun `overlay onboardingPending false produces empty list`() {
+        val state = defaultState().copy(
+            overlay = defaultState().overlay.copy(onboardingPending = false),
+        )
+        assertTrue(InfoBarSelector.select(state).isEmpty())
+    }
+
+    @Test
+    fun `overlay onboarding item pinned to top with createdAt 0`() {
+        // Block D.2 + E will add later-timestamped items; the
+        // overlay-onboarding item must sort first so its explainer
+        // outranks transient errors. This test fixes that invariant
+        // before later producers can accidentally invert it.
+        val state = defaultState().copy(
+            overlay = defaultState().overlay.copy(onboardingPending = true),
+        )
+        val item = InfoBarSelector.select(state).first()
+        assertEquals(0L, item.createdAt)
+    }
 }

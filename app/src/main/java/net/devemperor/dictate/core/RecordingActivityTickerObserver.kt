@@ -106,7 +106,7 @@ import net.devemperor.dictate.state.RecordingState
  * `onServiceConnected` / `onUnbind`). Idempotent — duplicate calls are
  * no-ops.
  *
- * @see OverlayOnboardingObserver — sibling observer pattern for the
+ * @see InfoBarRenderer — sibling observer pattern for the
  *   `state.overlay.onboardingPending` axis.
  */
 class RecordingActivityTickerObserver(

@@ -28,7 +28,7 @@ import net.devemperor.dictate.state.DictateUiState
  * this observer's first emit (the `StateFlow` carries the current value
  * on subscribe).
  *
- * The observer is a thin Java-bridge in the [OverlayOnboardingObserver]
+ * The observer is a thin Java-bridge in the [InfoBarRenderer]
  * mould: it watches a single sub-axis with `distinctUntilChanged` and
  * forwards the boolean to a [Listener] callback (the IME passes a
  * lambda that calls `EditBarController.refreshAudioFocusIcon`). Using a
@@ -46,7 +46,7 @@ import net.devemperor.dictate.state.DictateUiState
  * already running is a no-op; [stop] on an already-stopped observer is
  * safe.
  *
- * @see net.devemperor.dictate.core.OverlayOnboardingObserver — sibling
+ * @see net.devemperor.dictate.core.InfoBarRenderer — sibling
  *   Java-bridge pattern.
  * @see docs/plans/2026-05-21 - dictate-indirection-cleanup/dictate-indirection-cleanup.md §4 Block 3 Chunk 3.3
  */

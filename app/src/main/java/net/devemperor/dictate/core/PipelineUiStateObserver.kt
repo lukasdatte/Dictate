@@ -27,12 +27,12 @@ import net.devemperor.dictate.state.PipelineUiState
  * still need to fire on `state.pipeline` transitions; this observer is the
  * single Service-side subscription that delivers them.
  *
- * Mirrors [OverlayOnboardingObserver] structurally: a private
+ * Mirrors [InfoBarRenderer] structurally: a private
  * [Dispatchers.Main] [CoroutineScope] that collects a
  * `distinctUntilChanged()` slice of the orchestrator [StateFlow] and
  * forwards transitions to a Java-friendly [Listener].
  *
- * @see OverlayOnboardingObserver — sibling Java-bridge pattern.
+ * @see InfoBarRenderer — sibling Java-bridge pattern.
  * @see net.devemperor.dictate.state.render.PipelineStepRowRenderer — the
  *   reactive renderer that supersedes the legacy callback mechanic.
  */

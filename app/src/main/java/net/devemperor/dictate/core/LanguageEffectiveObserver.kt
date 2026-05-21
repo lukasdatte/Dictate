@@ -28,7 +28,7 @@ import net.devemperor.dictate.state.DictateUiState
  * `state.language.effective` changes (whether from the mirror or from
  * a `RefreshFromPref` dispatch), the chip label re-resolves.
  *
- * The observer follows the [OverlayOnboardingObserver] / [EditBarAudioFocusObserver]
+ * The observer follows the [InfoBarRenderer] / [EditBarAudioFocusObserver]
  * pattern — a [Listener] callback (not a controller reference) so the
  * collector stays JVM-testable.
  *
@@ -39,7 +39,7 @@ import net.devemperor.dictate.state.DictateUiState
  * the sibling observers and stops it in `onDestroy` symmetrically.
  * Idempotent.
  *
- * @see net.devemperor.dictate.core.OverlayOnboardingObserver — sibling
+ * @see net.devemperor.dictate.core.InfoBarRenderer — sibling
  *   Java-bridge pattern.
  * @see docs/plans/2026-05-21 - dictate-indirection-cleanup/dictate-indirection-cleanup.md §6.2 OQ-1
  */

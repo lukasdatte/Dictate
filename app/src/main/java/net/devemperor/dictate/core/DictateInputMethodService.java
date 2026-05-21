@@ -339,12 +339,14 @@ public class DictateInputMethodService extends InputMethodService
     // view's visibility; it is (re)started in onCreateInputView once
     // the views + binder exist and stopped in onDestroyInputView.
     private View overlayPermissionInfobar;
-    // 2026-05-21 indirection-cleanup Chunk 4.1 (B-1) — visibility writer
-    // for the overlay-permission info-bar. Owns the single View mutation
-    // outside the inline observer-lambda; the OverlayOnboardingObserver
-    // feeds its `apply(pending)` instead of `setVisibility` directly.
-    private net.devemperor.dictate.state.render.overlay.OverlayPermissionInfobarRenderer overlayPermissionInfobarRenderer;
-    private OverlayOnboardingObserver overlayOnboardingObserver;
+    // 2026-05-21 ADR-0006 — state-driven info-bar renderer. Replaces
+    // the legacy OverlayPermissionInfobarRenderer + OverlayOnboardingObserver
+    // duo with a single generic component that observes
+    // `InfoBarSelector.select(state)` and renders the top item into the
+    // overlay_permission_infobar views (container + text + two buttons).
+    // The container ID retains its legacy `overlay_permission_*` name
+    // for now; renaming is a cosmetic follow-up tracked in ADR-0006.
+    private net.devemperor.dictate.state.infobar.InfoBarRenderer infoBarRenderer;
 
     // 2026-05-21 indirection-cleanup Chunk 3.3 — reactive bridge for the
     // edit-bar audio-focus-twin (`editAudioFocusButton`). Listens to
@@ -973,46 +975,23 @@ public class DictateInputMethodService extends InputMethodService
         // picked up by F-3's onStartInputView refresh() on return.
         // "Later" permanently dismisses via DismissOverlayOnboarding.
         overlayPermissionInfobar = dictateKeyboardView.findViewById(R.id.overlay_permission_infobar);
-        // 2026-05-21 indirection-cleanup Chunk 4.1 — single visibility
-        // writer for the info-bar; consumed by the OverlayOnboardingObserver
-        // callback below (replaces the inline `setVisibility` lambda).
-        overlayPermissionInfobarRenderer = overlayPermissionInfobar != null
-                ? new net.devemperor.dictate.state.render.overlay.OverlayPermissionInfobarRenderer(
-                        overlayPermissionInfobar)
-                : null;
-        View overlayPermGrantBtn = dictateKeyboardView.findViewById(R.id.overlay_perm_grant_btn);
-        View overlayPermDismissBtn = dictateKeyboardView.findViewById(R.id.overlay_perm_dismiss_btn);
-        overlayPermGrantBtn.setOnClickListener(v -> {
-            try {
-                Intent intent = new Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:" + getPackageName()));
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(intent);
-            } catch (Exception e) {
-                Log.w("DictateIME", "Failed to launch overlay-permission settings", e);
-            }
-            if (pipelineBinder != null) {
-                pipelineBinder.dispatch(
-                        net.devemperor.dictate.state.Action.OverlayAction.RequestOverlayPermission.INSTANCE);
-            }
-            // Post-cutover hotfix #HINT — the inline setVisibility(GONE)
-            // here used to be the only thing hiding the explainer bar
-            // because the RequestOverlayPermission reducer did NOT clear
-            // `onboardingPending`. The reducer now does, and
-            // OverlayOnboardingObserver collapses the view on the next
-            // emission — no inline write needed, single source of truth.
-        });
-        overlayPermDismissBtn.setOnClickListener(v -> {
-            if (pipelineBinder != null) {
-                pipelineBinder.dispatch(
-                        net.devemperor.dictate.state.Action.OverlayAction.DismissOverlayOnboarding.INSTANCE);
-            }
-            // Same single-source-of-truth rationale as the grant-click
-            // above: DismissOverlayOnboarding already clears
-            // `onboardingPending` (see OverlayModule.kt:144) so the
-            // observer-driven update is authoritative.
-        });
+        // 2026-05-21 ADR-0006 — info-bar surface is now state-driven.
+        // InfoBarRenderer subscribes to `InfoBarSelector.select(state)`
+        // and renders the top item into the existing overlay_permission_*
+        // views (container + text + two buttons). The button click
+        // listeners are owned by InfoBarRenderer; the imperative
+        // setOnClickListener calls + the OverlayPermissionInfobarRenderer
+        // visibility-writer are gone (replaced by the reactive collector).
+        //
+        // Settings-Activity launch side-channel: when the dispatched
+        // action is RequestOverlayPermission, the IME also starts the
+        // overlay-permission settings activity. This is unavoidable
+        // imperative because Service contexts cannot startActivity
+        // (FLAG_ACTIVITY_NEW_TASK helps but the launcher seam has to
+        // live somewhere with a real Context — the IME service IS that
+        // context). ADR-0005 Decision-History 2026-05-15 acknowledges
+        // this seam.
+        infoBarRenderer = null;  // built below if all views inflated
 
         // History button
         editHistoryButton = dictateKeyboardView.findViewById(R.id.edit_history_btn);
@@ -1599,30 +1578,58 @@ public class DictateInputMethodService extends InputMethodService
         // onCreateInputView and onServiceConnected (race-safe).
         attachDormantEditBarEmojiOwners();
 
-        // B5 F-2 — (re)start the onboarding info-bar observer now that
-        // both the binder and the inflated info-bar view exist. This is
-        // the single consolidation point (called from both
-        // onCreateInputView and onServiceConnected), so the observer is
-        // wired regardless of the bind↔inflate race. stop() the prior
-        // observer first so a view-recreate doesn't leak the old
-        // collector scope.
-        if (overlayOnboardingObserver != null) {
-            overlayOnboardingObserver.stop();
+        // 2026-05-21 ADR-0006 — (re)start the state-driven info-bar
+        // renderer now that both the binder and the inflated views exist.
+        // Single consolidation point called from onCreateInputView and
+        // onServiceConnected, so the renderer is wired regardless of the
+        // bind↔inflate race. stop() the prior renderer first so a
+        // view-recreate doesn't leak the old collector scope.
+        if (infoBarRenderer != null) {
+            infoBarRenderer.stop();
         }
         if (overlayPermissionInfobar != null) {
-            overlayOnboardingObserver = new OverlayOnboardingObserver(
-                pipelineBinder.getState(),
-                pending -> {
-                    // 2026-05-21 indirection-cleanup Chunk 4.1 — route
-                    // through the dedicated renderer (B-1: no direct View
-                    // mutation in the observer lambda; AC-6 owners-list
-                    // gets `OverlayPermissionInfobarRenderer` as the
-                    // single legitimate writer for this axis).
-                    if (overlayPermissionInfobarRenderer != null) {
-                        overlayPermissionInfobarRenderer.apply(pending);
-                    }
-                });
-            overlayOnboardingObserver.start();
+            android.widget.TextView infoBarText =
+                    dictateKeyboardView.findViewById(R.id.overlay_permission_message);
+            android.widget.Button infoBarYes =
+                    dictateKeyboardView.findViewById(R.id.overlay_perm_grant_btn);
+            android.widget.Button infoBarNo =
+                    dictateKeyboardView.findViewById(R.id.overlay_perm_dismiss_btn);
+            if (infoBarText != null && infoBarYes != null && infoBarNo != null) {
+                infoBarRenderer = new net.devemperor.dictate.state.infobar.InfoBarRenderer(
+                        (androidx.constraintlayout.widget.ConstraintLayout) overlayPermissionInfobar,
+                        infoBarText,
+                        infoBarYes,
+                        infoBarNo,
+                        pipelineBinder.getState(),
+                        action -> {
+                            // State-mutation pass: every click dispatches
+                            // its action through the single sink, so the
+                            // selector re-renders into the new state.
+                            pipelineBinder.dispatch(action);
+                            // Side-channel: RequestOverlayPermission ALSO
+                            // launches the system settings activity (the
+                            // pure state layer cannot startActivity — the
+                            // IME is the Context-bearing seam). All other
+                            // actions are state-only.
+                            if (action == net.devemperor.dictate.state.Action.OverlayAction
+                                    .RequestOverlayPermission.INSTANCE) {
+                                try {
+                                    Intent intent = new Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:" + getPackageName()));
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                    startActivity(intent);
+                                } catch (Exception e) {
+                                    Log.w("DictateIME",
+                                            "Failed to launch overlay-permission settings", e);
+                                }
+                            }
+                            return kotlin.Unit.INSTANCE;
+                        },
+                        getResources(),
+                        () -> getTheme());
+                infoBarRenderer.start();
+            }
         }
 
         // 2026-05-21 indirection-cleanup Chunk 3.3 — start the reactive
@@ -2021,11 +2028,14 @@ public class DictateInputMethodService extends InputMethodService
         // CR-EXTRACT owners (rebuilt against the fresh tree by
         // attachDormantEditBarEmojiOwners()).
         editNumbersAnimator = null;
-        // 2026-05-21 indirection-cleanup Chunk 4.1 — the info-bar
-        // renderer holds a direct View reference too; clear symmetric
-        // with editNumbersAnimator (rebuilt by `findInflatedViews` on
-        // the next view-creation).
-        overlayPermissionInfobarRenderer = null;
+        // 2026-05-21 ADR-0006 — the state-driven InfoBarRenderer holds
+        // direct View references too; stop the collector + clear the
+        // reference symmetric with editNumbersAnimator (rebuilt by the
+        // next view-creation).
+        if (infoBarRenderer != null) {
+            infoBarRenderer.stop();
+            infoBarRenderer = null;
+        }
     }
 
     // method is called if the user closed the keyboard
@@ -2116,11 +2126,13 @@ public class DictateInputMethodService extends InputMethodService
         detachDormantEditBarEmojiOwners();
         keyboardLayoutManager = null;
 
-        // B5 F-2 — cancel the onboarding info-bar collector scope so
-        // the SupervisorJob does not outlive the service.
-        if (overlayOnboardingObserver != null) {
-            overlayOnboardingObserver.stop();
-            overlayOnboardingObserver = null;
+        // 2026-05-21 ADR-0006 — cancel the state-driven info-bar
+        // collector scope so the SupervisorJob does not outlive the
+        // service. Replaces the legacy OverlayOnboardingObserver
+        // tear-down (B5 F-2 + Chunk 4.1).
+        if (infoBarRenderer != null) {
+            infoBarRenderer.stop();
+            infoBarRenderer = null;
         }
 
         // 2026-05-21 indirection-cleanup Chunk 3.3 — symmetric tear-down

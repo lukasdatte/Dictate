@@ -1,5 +1,7 @@
 package net.devemperor.dictate.state.infobar
 
+import net.devemperor.dictate.R
+import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 
 /**
@@ -23,14 +25,19 @@ import net.devemperor.dictate.state.DictateUiState
  * **Producer integration model (ADR-0006 §"Cross-Module Producer pattern"):**
  *
  *   "Producers" are not classes; they are reads against the state.
- *   Each branch below extracts items from one logical source. Block D
- *   adds the nine legacy `InfoBarController` cases plus
- *   `overlay_permission_infobar`; Block E adds Pending-Insert,
- *   Pending-Recording, Recovery-Acknowledge, and API-Key-missing.
+ *   Each branch below extracts items from one logical source.
  *
- *   This skeleton-body keeps the contract live during the rollout —
- *   downstream renderer + tests can subscribe to the selector without
- *   waiting for the first producer.
+ *   - **Overlay-Permission-Onboarding** (Block D) — pinned to top
+ *     with `createdAt = 0L` so the explainer outranks any later
+ *     transient item. Replaces the legacy
+ *     `overlay_permission_infobar` surface + `OverlayPermissionInfobarRenderer`
+ *     + `OverlayOnboardingObserver`.
+ *   - **Pipeline-Errors** (planned Block D.2) — transient network /
+ *     quota / model / api-key error surfaces. Replaces the nine
+ *     `InfoBarController.showInfo(type)` cases.
+ *   - **Pending-Insert / Pending-Recording / Recovery / API-Key**
+ *     (Block E) — new producers driven by `pendingSessions`,
+ *     recovery acknowledgements, and pref-mirror flags.
  *
  * @see InfoBarItem
  * @see InfoBarMessage
@@ -39,24 +46,33 @@ import net.devemperor.dictate.state.DictateUiState
 object InfoBarSelector {
 
     /**
-     * Compute the current info-bar items from [state]. Returns an
-     * empty list while no producer has surfaced a trigger.
-     *
-     * **Implementation roadmap:**
-     *
-     *  - **Block D** (legacy migration): nine SharedPreferences-flag
-     *    -driven items (update / rate / donate / timeout / invalid-api-
-     *    key / quota-exceeded / model-not-found / bad-request /
-     *    internet-error) + the overlay-permission onboarding hint.
-     *  - **Block E** (new producers): pending-insert (COMPLETED +
-     *    inserted_at IS NULL), pending-recording (RECORDED), recovery-
-     *    acknowledge (after `PipelineRecovery` ran), api-key-missing
-     *    (no provider key configured).
+     * Compute the current info-bar items from [state]. The list is
+     * sorted ascending by `createdAt`; an empty list means the
+     * info-bar surface is hidden.
      */
     fun select(state: DictateUiState): List<InfoBarItem> = buildList<InfoBarItem> {
-        // Empty during Block C — producers populate in Block D + E.
-        // The function intentionally stays a pure pass-through: the
-        // renderer and its tests can subscribe and verify the empty-
-        // case behaviour before any item-producing logic lands.
+        // ── Overlay-Permission-Onboarding (ADR-0005 §5.4 + ADR-0006) ──
+        // The user toggled the widget without SYSTEM_ALERT_WINDOW
+        // permission; the explainer surfaces with two actions:
+        //   - Confirm → RequestOverlayPermission (opens Settings)
+        //   - Dismiss → DismissOverlayOnboarding (persists "Later")
+        // `createdAt = 0L` pins this item at the top so a later
+        // transient error never visually covers the explainer.
+        if (state.overlay.onboardingPending) {
+            add(
+                InfoBarItem(
+                    id = "overlay-permission:onboarding",
+                    createdAt = 0L,
+                    message = InfoBarMessage(
+                        textResId = R.string.overlay_perm_explainer,
+                        style = InfoBarStyle.INFO,
+                    ),
+                    confirmAction = Action.OverlayAction.RequestOverlayPermission,
+                    dismissAction = Action.OverlayAction.DismissOverlayOnboarding,
+                )
+            )
+        }
+
+        // Block D.2 + E producers will add their branches below.
     }.sortedBy { it.createdAt }
 }

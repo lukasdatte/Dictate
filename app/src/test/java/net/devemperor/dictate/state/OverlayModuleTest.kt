@@ -169,7 +169,7 @@ class OverlayModuleTest {
         // on the IME's inline setVisibility(GONE) at the click site to
         // hide the explainer bar. That hack was the only thing hiding
         // a permanent VISIBLE state — single-source-of-truth violation.
-        // Post-fix the state clears here so OverlayOnboardingObserver
+        // Post-fix the state clears here so InfoBarRenderer
         // is the sole visibility writer.
         val state = OverlayState(onboardingPending = true)
         val result = module.reduce(state, Action.OverlayAction.RequestOverlayPermission, ctx())

@@ -10,7 +10,7 @@ import kotlin.reflect.KClass
  * Owns the **floating-overlay axis** ([WidgetState]) and the
  * **IME-View-visibility axis** ([DictateUiState.imeViewVisible]) per
  * ADR-0008 (B3 / Plan §4 Block 3). Replaces the legacy
- * [ViewModeModule] once B3.2 — B3.5 finish migrating reducers,
+ * [ViewModeModule] once B3.3 — B3.5 finish migrating reducers,
  * resolvers, layout predicates, and the Java IME service.
  *
  * # Why two axes in one module
@@ -23,24 +23,44 @@ import kotlin.reflect.KClass
  * `WidgetSubState` projection lets a single reducer mutate both
  * axes atomically.
  *
- * # B3.1 — skeleton only
+ * # Transition table (W1-W8 per plan §3)
  *
- * This commit introduces the module class, lens, and `initialState`
- * so the orchestrator can register it alongside [ViewModeModule]
- * without conflict. The reducer returns `null` for every action
- * (default Rejected — no state mutation). B3.2 fills in the W1-W8
- * transitions defined in the plan §3 transition table.
+ * | ID | Trigger                                       | Pre               | Result                                    |
+ * |----|-----------------------------------------------|-------------------|-------------------------------------------|
+ * | W1 | `ToggleWidget`                                | `Hidden`          | `Visible(USER)`                           |
+ * | W2 | `CloseWidget`                                 | `Visible`         | `Hidden` + suppressBit=true + (Active→Paused) |
+ * | W3 | `OnImeViewHidden` + (rec/pipe active)         | `Hidden && !supp` | `Visible(PIPELINE)`                       |
+ * | W4 | `OnImeViewShown`                              | `Visible(PIPELINE)` | `Hidden`                                |
+ * | W5 | `OnImeViewShown`                              | `Visible(USER)`   | stays — sticky                            |
+ * | W6 | `OnPipelineDone` (rec=Idle && pipe=Idle)      | `Visible(PIPELINE)` | `Hidden`                                |
+ * | W7 | rec `Idle→Preparing`                          | suppressBit       | suppressBit=false (via RecordingModule observer) |
+ * | W8 | rec `Paused→Active`                           | suppressBit       | suppressBit=false (via observer below)    |
+ *
+ * # Cross-module cascade emissions
+ *
+ * - **W2** — `CloseWidget` emits [Effect.DispatchCloseWidgetCascade]
+ *   which fans into `OverlayAction.SuppressAutoOverlayUntilNextSession`
+ *   (suppress-bit on) plus an optional `RecordingAction.PauseRecording`
+ *   when the current recording is `Active`. The pipeline is
+ *   deliberately NOT cancelled — it keeps running in the FGS and the
+ *   result surfaces as a Pending-Insert info-bar (B4).
+ * - **W6** observed via [onCrossModuleStateChange] — emits
+ *   [Action.WidgetAction.OnPipelineDone] only when the state-diff
+ *   shows the boundary from any non-Idle pipeline/recording state to
+ *   simultaneous Idle.
+ * - **W8** observed via [onCrossModuleStateChange] — emits
+ *   [Action.OverlayAction.ResetSuppressBit] on `Paused → Active`.
+ *   The complementary `Idle → Preparing` (W7) is emitted by
+ *   `RecordingModule`'s own observer; both edges clear the bit so
+ *   the next IME-hide can re-auto-show the PIPELINE widget.
  *
  * # Migration safety
  *
  * Both [ViewModeModule] and [WidgetModule] are registered in parallel
  * during the B3 rollout. The new axes ([DictateUiState.widget] /
- * [DictateUiState.imeViewVisible]) ship with stable defaults
- * (`Hidden` / `true`) so consumers that don't yet read them see no
- * change. The legacy [DictateUiState.viewMode] keeps its existing
- * truth-table semantics. Once B3.3 — B3.5 retire the resolvers /
- * layout predicates that read `viewMode`, [ViewModeModule] is
- * removed and `viewMode` is dropped from the state class.
+ * [DictateUiState.imeViewVisible]) carry the same information as
+ * `viewMode + overlay.userPrefersWidget`; consumers migrate one by
+ * one in B3.3.
  *
  * @see net.devemperor.dictate.state.WidgetState
  * @see net.devemperor.dictate.state.WidgetOrigin
@@ -84,39 +104,213 @@ object WidgetModule :
     )
 
     /**
-     * No effects in B3.1. The reducer is pure state-mutation and emits
-     * no `SideEffect`s. B3.2 may introduce explicit cascade-trigger
-     * effects (symmetric to [ViewModeModule.Effect.DispatchCloseOverlayCascade])
-     * if a transition needs to fan an external action; for the W1-W8
-     * core table no such cascade is required.
+     * Effects emitted by [WidgetModule].
      *
-     * Kept as a sealed marker so the module signature remains stable
-     * across the B3.1 → B3.2 expansion.
+     * **Why an effect for W2 and not direct cascade-observer:** the
+     * user-close cascade carries a runtime decision (whether the
+     * Active-recording arm needs `PauseRecording`) that depends on
+     * the **pre-transition** state. `onCrossModuleStateChange` only
+     * sees `(prev, next)` *after* the reducer ran — by which time
+     * the action that triggered W2 has no remaining trace except
+     * `widget=Hidden`. An explicit effect emitted from the reducer
+     * arm captures the pre-state snapshot and dispatches at
+     * `depth+1` (Spec 1 §4.3) with the right action shape.
      */
-    sealed interface Effect : SideEffect
+    sealed interface Effect : SideEffect {
+        /**
+         * Emitted by the `CloseWidget` reducer arm (W2). Re-dispatches
+         * the two cascade actions in order: the suppress-bit setter
+         * (always), then [Action.RecordingAction.PauseRecording] when
+         * the snapshot saw `Recording.Active`. Pipeline is **not**
+         * touched — it keeps running per the user-requirement
+         * "Pipeline läuft im FGS fertig" (plan §3 W2).
+         *
+         * @property shouldPauseRecording snapshot of `recording.Active`
+         *   captured at reducer-time; the effect handler dispatches
+         *   [Action.RecordingAction.PauseRecording] iff true.
+         */
+        data class DispatchCloseWidgetCascade(
+            val shouldPauseRecording: Boolean,
+        ) : Effect
+    }
 
     override fun reduce(
         state: WidgetSubState,
         action: Action.WidgetAction,
         ctx: ReducerContext,
-    ): TransitionResult<WidgetSubState, Effect>? {
-        // B3.1 — skeleton: every action returns null (Rejected). B3.2
-        // fills in W1-W8 transitions. Until then, all WidgetAction.*
-        // dispatches no-op; the legacy ViewModeAction.* path continues
-        // to drive the existing ViewMode axis.
-        return null
+    ): TransitionResult<WidgetSubState, Effect>? = when (action) {
+
+        // ── W1: user clicks Widget-Toggle ───────────────────────────────
+        // Only fires from Hidden. From Visible the user would close (W2),
+        // not re-toggle — the legacy ToggleViewModeWidget action conflated
+        // both directions, the new surface is a strict one-way trigger.
+        Action.WidgetAction.ToggleWidget ->
+            if (state.widget == WidgetState.Hidden) {
+                TransitionResult(
+                    nextState = state.copy(
+                        widget = WidgetState.Visible(WidgetOrigin.USER),
+                    ),
+                )
+            } else {
+                // Already visible — the close-button (CloseWidget) is the
+                // path. Returning null logs Rejected("reducer-null") which
+                // is the correct semantic outcome.
+                null
+            }
+
+        // ── W2: user clicks Close-Btn while widget visible ──────────────
+        // widget = Hidden + suppressBit = true + (Active → Paused).
+        // Pipeline keeps running in the FGS; its result will surface as a
+        // Pending-Insert info-bar (B4) once it completes.
+        Action.WidgetAction.CloseWidget ->
+            if (state.widget is WidgetState.Visible) {
+                val activeRecording = ctx.global.recording is RecordingState.Active
+                TransitionResult(
+                    nextState = state.copy(widget = WidgetState.Hidden),
+                    sideEffects = listOf(
+                        Effect.DispatchCloseWidgetCascade(
+                            shouldPauseRecording = activeRecording,
+                        ),
+                    ),
+                )
+            } else {
+                null
+            }
+
+        // ── W3: IME-View hidden ─────────────────────────────────────────
+        // Always flips imeViewVisible. Auto-shows a PIPELINE widget iff:
+        //   widget == Hidden
+        //   AND !overlay.suppressAutoOverlayUntilNextSession
+        //   AND (recording.isActiveOrPaused || pipeline !is Idle)
+        //
+        // The suppress-bit guard is what makes W2 stick: after a user
+        // close-during-recording, the IME-tear-down would otherwise
+        // immediately re-show the PIPELINE widget the user just dismissed.
+        // Once the next session starts (RecordingModule's Idle→Preparing
+        // cascade emits OverlayAction.ResetSuppressBit), the guard
+        // releases.
+        Action.WidgetAction.OnImeViewHidden -> {
+            val shouldAutoShow = state.widget == WidgetState.Hidden &&
+                !ctx.global.overlay.suppressAutoOverlayUntilNextSession &&
+                (ctx.global.recording.isActiveOrPaused ||
+                    ctx.global.pipeline !is PipelineUiState.Idle)
+            val nextWidget = if (shouldAutoShow) {
+                WidgetState.Visible(WidgetOrigin.PIPELINE)
+            } else {
+                state.widget
+            }
+            TransitionResult(
+                nextState = state.copy(
+                    widget = nextWidget,
+                    imeViewVisible = false,
+                ),
+            )
+        }
+
+        // ── W4 / W5: IME-View shown ─────────────────────────────────────
+        // Always flips imeViewVisible. The widget axis depends on
+        // its current origin:
+        //   - Visible(PIPELINE) → Hidden (W4: the IME is back, the
+        //     auto-shown overlay is no longer needed)
+        //   - Visible(USER) → stays (W5: sticky — user explicitly wants
+        //     both surfaces visible side-by-side until they close one)
+        //   - Hidden → stays Hidden (default; no auto-show on IME-show,
+        //     the user didn't ask for the widget)
+        Action.WidgetAction.OnImeViewShown -> {
+            val nextWidget = when (val w = state.widget) {
+                is WidgetState.Visible ->
+                    if (w.origin == WidgetOrigin.PIPELINE) WidgetState.Hidden else w
+                WidgetState.Hidden -> WidgetState.Hidden
+            }
+            TransitionResult(
+                nextState = state.copy(
+                    widget = nextWidget,
+                    imeViewVisible = true,
+                ),
+            )
+        }
+
+        // ── W6: pipeline / recording both Idle ──────────────────────────
+        // Cross-module cascade target — emitted by onCrossModuleStateChange
+        // when (prev: any non-Idle) → (next: both Idle). Closes a
+        // PIPELINE-origin widget; leaves USER-origin sticky (the user
+        // still wants their widget).
+        Action.WidgetAction.OnPipelineDone -> {
+            val w = state.widget
+            if (w is WidgetState.Visible && w.origin == WidgetOrigin.PIPELINE) {
+                TransitionResult(nextState = state.copy(widget = WidgetState.Hidden))
+            } else {
+                null
+            }
+        }
+
+        // ── W7 / W8: suppress-bit reset ─────────────────────────────────
+        // Reserved no-op until the suppress-bit migrates from
+        // OverlayState to WidgetSubState (B5 cleanup). The actual
+        // mutation lives on `OverlayModule.reduce(ResetSuppressBit)`,
+        // dispatched by RecordingModule's observer (W7) and by this
+        // module's observer (W8 — see onCrossModuleStateChange).
+        Action.WidgetAction.ResetSuppressBit -> null
+    }
+
+    /**
+     * Cross-module observers — W6 (pipeline-done widget auto-close) and
+     * W8 (suppress-bit reset on resume).
+     *
+     * **W6 trigger:** the boundary from any non-Idle pipeline / recording
+     * state to simultaneous Idle. Emits
+     * [Action.WidgetAction.OnPipelineDone] so the reducer's W6 arm runs
+     * with the post-Idle ctx and the auto-close decision sees the right
+     * `widget.origin`.
+     *
+     * **W8 trigger:** `Paused → Active` recording-FSM edge. Emits
+     * [Action.OverlayAction.ResetSuppressBit] to mirror the W7 cascade
+     * that `RecordingModule.onCrossModuleStateChange` already emits on
+     * `Idle → Preparing`. Together W7 + W8 ensure the suppress-bit
+     * releases at every meaningful "fresh recording activity" boundary.
+     */
+    override fun onCrossModuleStateChange(
+        prev: DictateUiState,
+        next: DictateUiState,
+    ): List<Action> {
+        val cascade = mutableListOf<Action>()
+
+        // W6 — pipeline+recording quiesced ──────────────────────────────
+        val prevActive = prev.pipeline !is PipelineUiState.Idle ||
+            prev.recording.isActiveOrPaused ||
+            prev.recording is RecordingState.Preparing
+        val nextQuiesced = next.pipeline is PipelineUiState.Idle &&
+            next.recording is RecordingState.Idle
+        if (prevActive && nextQuiesced) {
+            cascade += Action.WidgetAction.OnPipelineDone
+        }
+
+        // W8 — Paused → Active resume ───────────────────────────────────
+        if (prev.recording is RecordingState.Paused &&
+            next.recording is RecordingState.Active
+        ) {
+            cascade += Action.OverlayAction.ResetSuppressBit
+        }
+
+        return cascade
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices) {
-        // B3.1 — no effects defined; the sealed Effect marker is empty.
-        // B3.2 may add cascade-trigger effects (e.g. for a Trash-cascade
-        // on user-CloseWidget); until then this is unreachable.
-        //
-        // The narrow Nothing-cast plays into Kotlin's exhaustiveness
-        // check: Effect has no leaves yet so `effect as Nothing` proves
-        // to the compiler that this branch is unreachable, and adding
-        // a future leaf forces a real `when` body without an `else`.
-        @Suppress("CAST_NEVER_SUCCEEDS")
-        effect as Nothing
+        when (effect) {
+            is Effect.DispatchCloseWidgetCascade -> {
+                // Suppress-bit first — sets the gate that blocks W3's
+                // auto-show until the next recording starts. Order
+                // matters: PauseRecording's reducer arm may indirectly
+                // re-emit cross-module actions that read the suppress
+                // bit (rare path, but the dispatch-order guarantee
+                // keeps the invariant).
+                services.emitAction(
+                    Action.OverlayAction.SuppressAutoOverlayUntilNextSession
+                )
+                if (effect.shouldPauseRecording) {
+                    services.emitAction(Action.RecordingAction.PauseRecording)
+                }
+            }
+        }
     }
 }

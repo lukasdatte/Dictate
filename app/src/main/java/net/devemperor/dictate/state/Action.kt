@@ -497,8 +497,35 @@ sealed class Action {
          * cross-module observer in reaction to the [RecordingState]
          * FSM transition. Clears the suppress-bit so the next
          * `OnImeViewHidden` can re-auto-show the PIPELINE widget.
+         *
+         * **B3.2 note:** the suppress-bit currently lives on
+         * `OverlayState.suppressAutoOverlayUntilNextSession`; the
+         * RecordingModule's own observer already emits
+         * [OverlayAction.ResetSuppressBit] on `Idle → Preparing` (W7)
+         * — kept as the source-of-truth path. This action is reserved
+         * for the future suppress-bit migration to WidgetSubState
+         * (B5 cleanup) and currently no-ops in the reducer.
          */
         data object ResetSuppressBit : WidgetAction()
+
+        /**
+         * Cross-module cascade target — emitted by `WidgetModule`'s
+         * observer when `recording=Idle && pipeline=Idle` is reached
+         * from any non-Idle state. Drives **W6**: auto-close a
+         * `Visible(PIPELINE)` widget once nothing is in flight any
+         * more (the pipeline that motivated the auto-show is done,
+         * the floating UI is no longer needed). Symmetric to the
+         * legacy [ViewModeAction.OnPipelineDone] cascade that drives
+         * the T7 HOVER→KEYBOARD fall-back.
+         *
+         * Not in the plan's literal WidgetAction surface (§4 B3 lists
+         * five actions); added during B3.2 implementation because the
+         * W6 transition needs an action-shaped trigger and routing
+         * through the observer keeps WidgetModule the single owner of
+         * the widget axis. The deviation is documented here for the
+         * archival readers.
+         */
+        data object OnPipelineDone : WidgetAction()
     }
 
     // ════════════════════════════════════════════════════════════════

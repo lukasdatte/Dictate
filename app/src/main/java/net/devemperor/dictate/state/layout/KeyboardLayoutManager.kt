@@ -12,15 +12,23 @@ import net.devemperor.dictate.state.ViewMode
  *
  * 1. **Subscribes** to the orchestrator-emitted `DictateUiState` flow
  *    (wired in C15) and re-renders on every emit.
- * 2. **Picks** the active [LayoutMode] per emit via
- *    [LayoutCatalog.forKeyboard] for KEYBOARD mode, falling back to
- *    [LayoutCatalog.OVERLAY_5BUTTON] for WIDGET/HOVER.
+ * 2. **Picks** the [LayoutMode] **per backend** (not per emit). Since the
+ *    bidirectional render-sync change on 2026-05-21:
+ *    - `BackendType.IME_VIEW` backends always receive
+ *      [LayoutCatalog.forKeyboard]`(state)`.
+ *    - `BackendType.OVERLAY_WINDOW` backends always receive
+ *      [LayoutCatalog.OVERLAY_5BUTTON].
+ *    - `backendType == null` cross-cutting backends (e.g.
+ *      [net.devemperor.dictate.state.render.ContentAreaController])
+ *      receive [computeLayoutMode]`(state)`.
+ *
+ *    `state.viewMode` no longer gates which surface renders. Both
+ *    surfaces render on every state-emit and reflect the same live
+ *    `DictateUiState`. See ADR-0005 Decision-History 2026-05-21.
  * 3. **Fans** each render-tick out to every attached [RenderBackend]
  *    (Spec 2 §4.1 / R.10 — multi-backend list, NOT a single
- *    `activeBackend` slot). A backend opts in to a specific
- *    [BackendType] via [RenderBackend.backendType]; backends whose type
- *    doesn't match the picked mode get skipped (a `null`-type backend
- *    sees every render, the `ContentAreaController` use-case).
+ *    `activeBackend` slot). Every backend gets its render-tick; the
+ *    [BackendType] only chooses *which* mode each backend sees.
  *
  * # Why a list of backends (not a single active one)?
  *
@@ -143,13 +151,25 @@ class KeyboardLayoutManager(
     }
 
     /**
-     * Pick the active mode for the given state, considering ViewMode:
+     * Pick the "primary" mode for the given state, considering ViewMode:
      *
      * - KEYBOARD → [LayoutCatalog.forKeyboard]
-     * - WIDGET / HOVER → [LayoutCatalog.overlay5Button] (Spec 3)
+     * - WIDGET / HOVER → [LayoutCatalog.OVERLAY_5BUTTON] (Spec 3)
      *
-     * Exposed for tests and for backends that need to peek the mode
-     * without going through a render-tick (e.g. instrumented testing).
+     * Since the bidirectional render-sync change on 2026-05-21, the
+     * render-fan-out no longer goes through this function — it picks
+     * a mode per backend via [modeForBackend]. This function is still
+     * exposed because:
+     *
+     * 1. `backendType == null` cross-cutting backends (the
+     *    [net.devemperor.dictate.state.render.ContentAreaController]
+     *    pattern) want a single "current" mode; they consume whatever
+     *    the manager considers active for the global `viewMode`.
+     * 2. Instrumented tests and external callers may want to peek the
+     *    active mode without going through a render-tick.
+     *
+     * The semantic shift: this is now an "informational" selector, not
+     * the gate that decides whether a typed backend renders.
      */
     fun computeLayoutMode(state: DictateUiState): LayoutMode = when (state.viewMode) {
         ViewMode.KEYBOARD -> catalog.forKeyboard(state)
@@ -166,12 +186,23 @@ class KeyboardLayoutManager(
     // ─── Internal ─────────────────────────────────────────────────────
 
     private fun renderTo(backend: RenderBackend, state: DictateUiState) {
-        val mode = computeLayoutMode(state)
-        // A backend with `backendType == null` consumes every mode
-        // (ContentAreaController). Otherwise only the matching surface
-        // receives the render-tick.
-        if (backend.backendType == null || backend.backendType == mode.backend) {
-            backend.render(state, mode)
-        }
+        // Per backend, pick the mode the backend was built to consume.
+        // The pre-2026-05-21 design gated rendering on `state.viewMode`
+        // matching `backend.backendType`, which was the structural
+        // implementation of ADR-0005's "KEYBOARD ↔ WIDGET mutually
+        // exclusive" assumption. The user-confirmed UX model now wants
+        // both surfaces visible and interactive simultaneously, so the
+        // global viewMode no longer chooses *whether* a backend renders
+        // — only *which* mode it receives. See ADR-0005 §"Decision
+        // History" 2026-05-21.
+        val mode = modeForBackend(backend, state)
+        backend.render(state, mode)
     }
+
+    private fun modeForBackend(backend: RenderBackend, state: DictateUiState): LayoutMode =
+        when (backend.backendType) {
+            BackendType.IME_VIEW -> catalog.forKeyboard(state)
+            BackendType.OVERLAY_WINDOW -> catalog.OVERLAY_5BUTTON
+            null -> computeLayoutMode(state)
+        }
 }

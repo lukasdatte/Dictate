@@ -351,6 +351,30 @@ entries with a new T-ID. The truth table form is stable.
 
 ## Decision History
 
+### 2026-05-21 — Bidirectional render-sync: viewMode no longer gates the render-fan-out
+
+**Trigger:** On-device verification (Samsung SM-S948B, Android 16) of the dictate-widget-integration + dictate-pipeline-render-and-state-unification plans showed that while the widget is open and the keyboard is visibly still on-screen, the keyboard surface is "frozen": pipeline-label updates do not appear on the keyboard's `record_btn`, click resolvers on keyboard buttons read a stale state snapshot, and the pause/SEND buttons on the keyboard tile do nothing (or do something based on stale state). Symmetric inverse exists for keyboard-only renders to an open overlay backend. The user's UX expectation is that both surfaces are simultaneously visible AND simultaneously live: clicking a button on either surface dispatches the same orchestrator action; both surfaces re-render the resulting state.
+
+**Before:** `KeyboardLayoutManager.renderTo` selected a single `mode = computeLayoutMode(state)` per render-tick, then filtered each attached backend with `if (backend.backendType == null || backend.backendType == mode.backend)`. Since `computeLayoutMode` returns `forKeyboard(state)` (→ `BackendType.IME_VIEW`) for `ViewMode.KEYBOARD` and `OVERLAY_5BUTTON` (→ `BackendType.OVERLAY_WINDOW`) for `ViewMode.{WIDGET, HOVER}`, the filter excluded the IME backend whenever the widget was up. `ImeViewBackend.render()` never ran → side-channel renderers (`PipelineStepRowRenderer`, `AutoEnterRenderer`, `RecordButtonColorController`, `RecordingAnimationController`) had no `onState` call → `stateRef` (read by keyboard-side click listeners) stayed frozen on the last KEYBOARD-mode snapshot. This was the structural implementation of the "KEYBOARD ↔ WIDGET mutually exclusive" assumption baked into the 2026-05-14 accepted form of this ADR.
+
+**After:** `KeyboardLayoutManager.renderTo` picks the mode **per backend** via a new `modeForBackend(backend, state)` helper:
+
+```kotlin
+when (backend.backendType) {
+    BackendType.IME_VIEW       -> catalog.forKeyboard(state)
+    BackendType.OVERLAY_WINDOW -> catalog.OVERLAY_5BUTTON
+    null                       -> computeLayoutMode(state)
+}
+```
+
+Every attached backend now renders on every state-emit. `state.viewMode` retains its role as a discriminator for click-conditioning (HOVER-SEND-block, overlay-action-resolvers etc.) and for the cross-cutting `ContentAreaController` (`backendType == null` consumes `computeLayoutMode`), but it no longer chooses *which* surface participates in a given render tick. `computeLayoutMode` stays as a public "informational" selector for legacy and external callers, but the render-fan-out no longer routes through it.
+
+**Reasoning:** The "mutually exclusive" KEYBOARD-vs-WIDGET premise was a UX heuristic the original ADR adopted because no concrete product-driven counter-requirement existed at the time. The 2026-05-21 device session made the counter-requirement explicit: with the Triangle-FSM giving the user a WIDGET surface that *floats over* the keyboard (not replaces it), the keyboard surface must keep tracking live state — otherwise the user faces a half-frozen UI where buttons either silently do nothing (stale `actionResolver(state) == null`) or do the wrong thing (stale Active when state is Idle, etc.). The fix removes a single artificial gate; the wider state-flow architecture (Single SoT + per-backend renderer-bundles + Single-Writer-per-Axis) is already designed for this — every renderer-class is parameterised on its View instance, so two backends with their own bundles co-exist without writer collision.
+
+The Triangle-FSM remains semantically valid: KEYBOARD/WIDGET/HOVER still describe distinct *user-intent* states, and they still drive cross-module concerns (overlay-permission gating, HOVER-Send-block, overlay-position persistence). What changes is only that the render-fan-out no longer reads `viewMode` as a participation gate. The seven transitions T1–T7 are unchanged.
+
+**Reference:** `app/src/main/java/net/devemperor/dictate/state/layout/KeyboardLayoutManager.kt` (modeForBackend + renderTo); `app/src/test/java/net/devemperor/dictate/state/layout/KeyboardLayoutManagerTest.kt` (four new regression-locks: IME backend rendered in WIDGET/HOVER, overlay backend rendered in KEYBOARD, all-backends-on-every-emit fan-out).
+
 ### 2026-05-21 — A3 disposition flip: extract-and-preserve → extract-and-re-architect (Plan dictate-render-cutover-completion-vol2)
 
 **Trigger:** Post-Epic device verification on Samsung SM-S948B uncovered two visible regressions (AE-↵ icon never paints; Row 1 ↔ Row 2 spacing collapses in Idle / Send mode) plus a partially-absent rote text-color on `Running.hasFailure`. Five hotfix-iterations per symptom (documented in commit `e7d4b2e`) each fixed the catalog path correctly while the legacy 100 ms-tick renderer kept overwriting the same view a frame later. Three audit agents (`research/d-audit-r1.md`, `research/d-audit-ae.md`, `research/d-legacy-map.md`) traced the root cause to the still-active A3-option-a "extract-and-preserve" disposition: the 4 legacy controllers were deleted (AC-RR-7 grep-zero) but their `BLEIBT`-halves were relocated into `PipelineStepRowRenderer` / `QwertzRecordingController` carrying a parallel `core.PipelineUiState` sealed class with its own 100 ms ElapsedTimer + direct `record_btn` writer — a dual-writer with the Catalog/`SlotRenderer` that the Epic intentionally kept (option-a is preserve-behaviour by definition).

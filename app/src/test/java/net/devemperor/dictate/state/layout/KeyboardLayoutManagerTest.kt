@@ -107,7 +107,10 @@ class KeyboardLayoutManagerTest {
     // ─── Fan-out ───────────────────────────────────────────────────────
 
     @Test
-    fun `onStateChanged renders to every backend whose backendType matches`() {
+    fun `onStateChanged renders to every attached backend regardless of viewMode`() {
+        // Bidirectional render-sync (2026-05-21): every state-emit
+        // reaches every attached backend. Each backend gets its
+        // type-appropriate mode; viewMode no longer gates participation.
         val ime = TestRenderBackend(backendType = BackendType.IME_VIEW)
         val crossCutting = TestRenderBackend(backendType = null)
         val overlay = TestRenderBackend(backendType = BackendType.OVERLAY_WINDOW)
@@ -115,17 +118,25 @@ class KeyboardLayoutManagerTest {
         manager.attachBackend(crossCutting)
         manager.attachBackend(overlay)
 
-        // KEYBOARD ViewMode → IME_VIEW mode.
         manager.onStateChanged(stateForKeyboard(singleRow = false))
 
-        // ime + crossCutting both see the render; overlay skipped.
+        // All three render — IME and crossCutting on KEYBOARD_TWO_ROW,
+        // overlay on OVERLAY_5BUTTON (its type-appropriate mode).
         assertEquals(1, ime.renderCount)
         assertEquals(1, crossCutting.renderCount)
-        assertEquals(0, overlay.renderCount)
+        assertEquals(1, overlay.renderCount)
+        assertSame(catalog.KEYBOARD_TWO_ROW, ime.lastMode)
+        assertSame(catalog.KEYBOARD_TWO_ROW, crossCutting.lastMode)
+        assertSame(catalog.OVERLAY_5BUTTON, overlay.lastMode)
     }
 
     @Test
-    fun `onStateChanged routes WIDGET viewMode to OVERLAY_WINDOW backends`() {
+    fun `onStateChanged in WIDGET mode still renders IME backend with keyboard mode`() {
+        // Bidirectional render-sync regression-lock: the original
+        // mutually-exclusive design suppressed IME-side rendering while
+        // viewMode == WIDGET, which froze keyboard buttons (no live
+        // pipeline label, stale click resolvers). The IME backend now
+        // receives `forKeyboard(state)` even when the widget is open.
         val ime = TestRenderBackend(backendType = BackendType.IME_VIEW)
         val overlay = TestRenderBackend(backendType = BackendType.OVERLAY_WINDOW)
         manager.attachBackend(ime)
@@ -133,17 +144,38 @@ class KeyboardLayoutManagerTest {
 
         manager.onStateChanged(DictateUiState.initial().copy(viewMode = ViewMode.WIDGET))
 
-        assertEquals(0, ime.renderCount)
+        assertEquals(1, ime.renderCount)
         assertEquals(1, overlay.renderCount)
+        assertSame(catalog.KEYBOARD_TWO_ROW, ime.lastMode)
         assertSame(catalog.OVERLAY_5BUTTON, overlay.lastMode)
     }
 
     @Test
-    fun `onStateChanged routes HOVER viewMode to OVERLAY_WINDOW backends`() {
+    fun `onStateChanged in HOVER mode still renders IME backend with keyboard mode`() {
+        // Symmetric to the WIDGET regression-lock: HOVER must not freeze
+        // the keyboard renderer either.
+        val ime = TestRenderBackend(backendType = BackendType.IME_VIEW)
         val overlay = TestRenderBackend(backendType = BackendType.OVERLAY_WINDOW)
+        manager.attachBackend(ime)
         manager.attachBackend(overlay)
 
         manager.onStateChanged(DictateUiState.initial().copy(viewMode = ViewMode.HOVER))
+
+        assertEquals(1, ime.renderCount)
+        assertEquals(1, overlay.renderCount)
+        assertSame(catalog.KEYBOARD_TWO_ROW, ime.lastMode)
+        assertSame(catalog.OVERLAY_5BUTTON, overlay.lastMode)
+    }
+
+    @Test
+    fun `onStateChanged in KEYBOARD mode still renders OVERLAY backend with overlay mode`() {
+        // The mirror of the above: an overlay backend attached during
+        // KEYBOARD mode (e.g. when WIDGET was just toggled off and the
+        // overlay-detach is pending) must keep receiving renders too.
+        val overlay = TestRenderBackend(backendType = BackendType.OVERLAY_WINDOW)
+        manager.attachBackend(overlay)
+
+        manager.onStateChanged(stateForKeyboard(singleRow = false))
 
         assertEquals(1, overlay.renderCount)
         assertSame(catalog.OVERLAY_5BUTTON, overlay.lastMode)

@@ -197,14 +197,66 @@ public class DictateInputMethodService extends InputMethodService
 
     /**
      * W1: Transient bridge for restoring ReprocessStaging across view-recreation.
-     * Captured in {@link #cleanupOldControllers()} when the active
-     * {@link PipelineUiState} is a {@link PipelineUiState.ReprocessStaging},
-     * consumed (and reset to null) in {@link #restoreUiState()} by re-entering
-     * the staging mode on the fresh controller. Without this bridge, a rotation
-     * or theme change during staging drops the user's edited queue/language
-     * silently back to Idle.
+     * Captured in {@link #cleanupOldControllers()} when the active pipeline
+     * phase is in staging, consumed (and reset to null) in
+     * {@link #restoreUiState()} by re-entering the staging mode on the
+     * fresh controller. Without this bridge, a rotation or theme change
+     * during staging drops the user's edited queue/language silently back
+     * to Idle.
+     *
+     * <p>Post-Phase-5.B (Vol 2): the orchestrator's
+     * {@code state.PipelineUiState.ReprocessStaging} only carries
+     * {@code (sessionId, transcript)} — the auxiliary fields
+     * (audio duration, editable queue, selected language, selected model)
+     * are mirrored into dedicated IME fields below
+     * ({@link #reprocessAudioDurationSeconds},
+     * {@link #reprocessEditableQueue}, {@link #reprocessSelectedLanguage},
+     * {@link #reprocessSelectedModel}). The restoreReprocessStaging-flag
+     * field now signals "we were staging" while the field-snapshots carry
+     * the data; the flag is captured/consumed identically to the
+     * pre-Phase-5.B shape.</p>
      */
-    private PipelineUiState.ReprocessStaging restoreReprocessStaging = null;
+    private boolean restoreReprocessStaging = false;
+
+    /**
+     * Phase 5.B of `2026-05-21 - dictate-render-cutover-completion-vol2`:
+     * IME-Java mirror of the legacy
+     * {@code core.PipelineUiState.ReprocessStaging.audioDurationSeconds}
+     * payload, which the orchestrator's `state.PipelineUiState.ReprocessStaging`
+     * does not carry. Written by {@link #enterReprocessStagingFromSession}
+     * (and the restore-from-view-recreate path), read by the View-side
+     * staging UI helpers.
+     */
+    private long reprocessAudioDurationSeconds = 0L;
+
+    /**
+     * Phase 5.B IME-Java mirror of the legacy
+     * {@code core.PipelineUiState.ReprocessStaging.editableQueue} payload.
+     * Holds the user-editable prompt-id queue while in ReprocessStaging.
+     */
+    private List<Integer> reprocessEditableQueue = new ArrayList<>();
+
+    /**
+     * Phase 5.B IME-Java mirror of the legacy
+     * {@code core.PipelineUiState.ReprocessStaging.selectedLanguage} payload.
+     * Holds the staging-scoped language override (separate from the
+     * orchestrator's permanent {@code LanguageState.override}).
+     */
+    private String reprocessSelectedLanguage = null;
+
+    /**
+     * Phase 5.B IME-Java mirror of the legacy
+     * {@code core.PipelineUiState.ReprocessStaging.selectedModel} payload
+     * (forward-compat for the future model-selector chip).
+     */
+    private String reprocessSelectedModel = null;
+
+    /**
+     * Phase 5.B IME-Java mirror of the legacy
+     * {@code core.PipelineUiState.ReprocessStaging.targetSessionId} payload —
+     * the session-id of the recording being reprocessed.
+     */
+    private String reprocessTargetSessionId = null;
 
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private PipelineOrchestrator pipelineOrchestrator;
@@ -257,15 +309,18 @@ public class DictateInputMethodService extends InputMethodService
     private SharedPreferences.OnSharedPreferenceChangeListener audioFocusListener;
 
     /**
-     * Service-side pipeline observer. Held as a field so it can be detached
-     * via {@link net.devemperor.dictate.state.render.PipelineStepRowRenderer#removeCallback(PipelineUiCallback)} on
-     * view recreate. Phase 1 cross-phase refactor (Quality-Gate K-2): the
-     * Service registers via {@code addCallback}, not the deprecated
-     * single-slot {@code setCallback}, so multiple {@code PipelineUiCallback}
-     * consumers can coexist without a Composite-Wrapper (D-13: the legacy
-     * effective-language controller consumer was removed).
+     * Phase 5.B of `2026-05-21 - dictate-render-cutover-completion-vol2`:
+     * Service-side pipeline-state observer. Subscribes to
+     * {@code state.pipeline} (distinctUntilChanged) and drives the
+     * IME-side side-effects that the legacy
+     * {@code PipelineStepRowRenderer.addCallback(PipelineUiCallback)}
+     * mechanic previously delivered (queue-order sync, language-chip
+     * enable, language-chip refresh, QWERTZ rec-button updates). The
+     * reactive {@link net.devemperor.dictate.state.render.PipelineStepRowRenderer}
+     * owns step-row rendering directly via {@code onState}; this observer
+     * carries only the non-renderer responsibilities.
      */
-    private PipelineUiCallback servicePipelineCallback;
+    private PipelineUiStateObserver pipelineUiStateObserver;
     private Vibrator vibrator;
     private SharedPreferences sp;
     private AudioManager am;
@@ -800,16 +855,17 @@ public class DictateInputMethodService extends InputMethodService
             () -> { hideQwertzKeyboard(); return kotlin.Unit.INSTANCE; },
             () -> { onRecordClicked(); return kotlin.Unit.INSTANCE; },
             () -> {
-                // Re-apply recording/pipeline icon after layout rebuild (shift toggle, layout switch)
+                // Re-apply recording/pipeline icon after layout rebuild (shift toggle, layout switch).
+                // Phase 5.B: read the pipeline phase off the orchestrator state (single SoT).
                 if (qwertzRecordingController != null && recordingStateController != null) {
-                    if (pipelineStepRowRenderer != null
-                            && pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
+                    net.devemperor.dictate.state.PipelineUiState phase = getPipelinePhase();
+                    if (phase instanceof net.devemperor.dictate.state.PipelineUiState.Running) {
                         // Pipeline active — layout rebuild: we need a fresh one-shot setup AND
                         // an immediate timer text update so the button isn't stale until the next tick.
-                        PipelineUiState.Running s = (PipelineUiState.Running) pipelineStepRowRenderer.getState();
+                        net.devemperor.dictate.state.PipelineUiState.Running s =
+                                (net.devemperor.dictate.state.PipelineUiState.Running) phase;
                         qwertzRecordingController.enterPipelineDisplay(s);
-                        qwertzRecordingController.updatePipelineTimer(
-                            s, pipelineStepRowRenderer.getLatestPipelineElapsedMs());
+                        qwertzRecordingController.updatePipelineTimer(s, s.getElapsedMs());
                     } else {
                         qwertzRecordingController.updateQwertzRecButton(
                             recordingStateController.getState().isRecordingOrPaused()
@@ -907,6 +963,11 @@ public class DictateInputMethodService extends InputMethodService
         // state.pipeline; the renderer owns only the step-row CONTENT +
         // the record-button-from-pipeline-state, not container
         // visibility).
+        // Phase 5.B (Vol 2): PipelineStepRowRenderer is now a reactive
+        // consumer driven by `ImeViewBackend.render` via `onState`. The
+        // legacy callback-shape ctor args (Unit-lambda + dictate-button-text
+        // provider) are gone — the renderer reads `state.pipeline.stepHistory`
+        // directly off `DictateUiState`.
         pipelineStepRowRenderer = new PipelineStepRowRenderer(new PipelineStepRowRenderer.PipelineViews(
             dictateKeyboardView.findViewById(R.id.pipeline_steps_container),
             dictateKeyboardView.findViewById(R.id.pipeline_scroll_view),
@@ -914,7 +975,7 @@ public class DictateInputMethodService extends InputMethodService
             infoCl,
             LayoutInflater.from(context),
             mainHandler
-        ), () -> kotlin.Unit.INSTANCE, () -> getDictateButtonText());
+        ));
 
         StaggeredGridLayoutManager promptsLayoutManager =
                 new StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.HORIZONTAL);
@@ -1035,67 +1096,66 @@ public class DictateInputMethodService extends InputMethodService
         };
         sp.registerOnSharedPreferenceChangeListener(audioFocusListener);
 
-        // Pipeline UI callbacks: QWERTZ button updates from pipeline state.
-        // Phase 1 cross-phase refactor: Service uses addCallback() rather than
-        // the deprecated setCallback() so multiple PipelineUiCallback consumers
-        // can coexist on the same KeyboardUiController without a
-        // Composite-Wrapper (D-13: the legacy language-controller consumer
-        // is gone; the chip/label refresh on staging-override change now
-        // runs inside this servicePipelineCallback's onPipelineUiStateChanged).
-        servicePipelineCallback = new PipelineUiCallback() {
-            @Override
-            public void onPipelineTimerTick(@NonNull PipelineUiState.Running state, long elapsedMs) {
-                if (qwertzRecordingController != null) {
-                    qwertzRecordingController.updatePipelineTimer(state, elapsedMs);
-                }
-            }
+        // Pipeline UI side-effects driven reactively from the orchestrator
+        // state (Phase 5.B of `2026-05-21 - dictate-render-cutover-completion-vol2`).
+        // The reactive PipelineStepRowRenderer owns the step-row UI directly
+        // via ImeViewBackend.render → onState; this observer carries only the
+        // non-renderer responsibilities that the legacy PipelineUiCallback
+        // mechanic delivered (queue-order sync, language-chip enable + label
+        // refresh, QWERTZ rec-button updates). distinctUntilChanged on the
+        // pipeline-phase guarantees one fire per transition.
+        if (pipelineUiStateObserver != null) {
+            pipelineUiStateObserver.stop();
+        }
+        if (pipelineBinder != null) {
+            // Defensive — onCreateInputView may race with onServiceConnected
+            // (the binder might still be null on the first inflate; the
+            // post-bind call site re-runs the wiring once the binder
+            // arrives). Without the guard the observer would launch against
+            // a null StateFlow.
+            pipelineUiStateObserver = new PipelineUiStateObserver(
+                pipelineBinder.getState(),
+                pipeline -> {
+                    // Phase 2: language chip is permanently visible; only the
+                    // editable-queue order tracks ReprocessStaging.
+                    syncQueueOrder(pipeline);
 
-            @Override
-            public void onPipelineUiStateChanged(@NonNull PipelineUiState oldState, @NonNull PipelineUiState newState) {
-                // Phase 2: language chip is permanently visible; only the
-                // editable-queue order tracks ReprocessStaging now (the
-                // chip's *enabled* state follows pipeline-running below).
-                syncQueueOrder(newState);
-
-                // Phase 2 Quality-Gate W-6: chip stays clickable except while
-                // a transcription is in flight (Running / Preparing).
-                if (promptsAdapter != null) {
-                    boolean pipelineRunning = newState instanceof PipelineUiState.Running
-                                          || newState instanceof PipelineUiState.Preparing;
-                    promptsAdapter.setLanguageChipEnabled(!pipelineRunning);
-                }
-
-                // D-13: the deleted legacy language-controller used to
-                // refresh the chip label on every pipeline-state change
-                // (so the chip shows the ReprocessStaging override vs the
-                // permanent language). That responsibility moved here —
-                // entering / leaving staging, or a staging override write,
-                // flips what resolveEffectiveLanguage() returns, so the
-                // label must re-resolve. Idempotent (same code → same label).
-                refreshLanguageChip();
-
-                if (qwertzRecordingController == null) return;
-                if (newState instanceof PipelineUiState.Idle) {
-                    qwertzRecordingController.updateQwertzRecButton(false);  // QWERTZ → Mic-Icon
-                } else if (newState instanceof PipelineUiState.Running) {
-                    // One-shot setup only on the actual Idle/Preparing → Running transition.
-                    // Running → Running transitions (step completion, auto-enter toggle) skip
-                    // enterPipelineDisplay() to avoid redundant setPadding()/re-layout calls;
-                    // a trailing updatePipelineTimer() keeps the text in sync.
-                    PipelineUiState.Running runningState = (PipelineUiState.Running) newState;
-                    if (!(oldState instanceof PipelineUiState.Running)) {
-                        qwertzRecordingController.enterPipelineDisplay(runningState);
+                    // Phase 2 Quality-Gate W-6: chip stays clickable except while
+                    // a transcription is in flight (Running / Preparing).
+                    if (promptsAdapter != null) {
+                        boolean pipelineRunning =
+                            pipeline instanceof net.devemperor.dictate.state.PipelineUiState.Running
+                                || pipeline instanceof net.devemperor.dictate.state.PipelineUiState.Preparing;
+                        promptsAdapter.setLanguageChipEnabled(!pipelineRunning);
                     }
-                    qwertzRecordingController.updatePipelineTimer(
-                        runningState, pipelineStepRowRenderer.getLatestPipelineElapsedMs());
-                } else if (newState instanceof PipelineUiState.Preparing) {
-                    // Upload phase: make sure the QWERTZ button shows the idle mic icon
-                    // (clears any leftover recording-state rendering).
-                    qwertzRecordingController.updateQwertzRecButton(false);
-                }
-            }
-        };
-        pipelineStepRowRenderer.addCallback(servicePipelineCallback);
+
+                    // D-13: entering / leaving staging or any pipeline transition can
+                    // change what resolveEffectiveLanguage() returns, so the chip
+                    // label must re-resolve. Idempotent (same code → same label).
+                    refreshLanguageChip();
+
+                    if (qwertzRecordingController == null) return;
+                    if (pipeline instanceof net.devemperor.dictate.state.PipelineUiState.Idle) {
+                        qwertzRecordingController.updateQwertzRecButton(false);  // QWERTZ → Mic-Icon
+                    } else if (pipeline instanceof net.devemperor.dictate.state.PipelineUiState.Running) {
+                        // Phase 5.B: enterPipelineDisplay + updatePipelineTimer are
+                        // idempotent enough to call on every transition (one fire
+                        // per phase via distinctUntilChanged). The per-step elapsedMs
+                        // ticking happens via state.pipeline emits — every step start/
+                        // complete carries a fresh elapsedMs, and Running→Running
+                        // transitions land here as a new pipeline phase only when the
+                        // elapsedMs (and stepHistory) actually changed.
+                        net.devemperor.dictate.state.PipelineUiState.Running runningState =
+                                (net.devemperor.dictate.state.PipelineUiState.Running) pipeline;
+                        qwertzRecordingController.enterPipelineDisplay(runningState);
+                        qwertzRecordingController.updatePipelineTimer(runningState, runningState.getElapsedMs());
+                    } else if (pipeline instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
+                        // Upload phase: clear any leftover recording-state rendering.
+                        qwertzRecordingController.updateQwertzRecButton(false);
+                    }
+                });
+            pipelineUiStateObserver.start();
+        }
 
         // ── 5. Rewire callbacks (connect long-lived objects to new UI controllers) ──
         // INVARIANT: Order is controllers (above) → rewireCallbacks() → restoreUiState()
@@ -1368,6 +1428,9 @@ public class DictateInputMethodService extends InputMethodService
             recordingAnimationCtrlForBackend,
             autoEnterRendererForBackend,
             recordButtonColorControllerForBackend,
+            // Phase 5.B (Vol 2): reactive step-row renderer driven by
+            // ImeViewBackend.render → onState.
+            pipelineStepRowRenderer,
             qwertzKeyboardView.getKeyPressAnimator(),
             staticHandlerInstaller,
             vibrateLambda,
@@ -1786,7 +1849,11 @@ public class DictateInputMethodService extends InputMethodService
             // GONE (KeyboardStateManager deleted). The SetContentArea
             // dispatch above re-emits state → the armed visibility
             // controllers re-render every axis reactively.
-            pipelineStepRowRenderer.stopPipeline();
+            // Phase 5.B: PipelineStepRowRenderer is reactive — Idle is
+            // already reflected because this branch is gated on
+            // `!pipelineOrchestrator.isRunning()`. The legacy imperative
+            // stopPipeline() was the View-side echo of that fact; no
+            // longer needed.
             livePrompt = false;
             updatePromptButtonsEnabledState();
         }
@@ -1903,34 +1970,37 @@ public class DictateInputMethodService extends InputMethodService
      * (mode reset, state change callbacks on old controllers).
      */
     private void cleanupOldControllers() {
-        // Stop only the elapsed timer — no mode reset, no side-effects
+        // Stop only the elapsed timer — no mode reset, no side-effects.
         if (pipelineStepRowRenderer != null) {
-            // Capture the current auto-enter value so the upcoming fresh renderer
-            // (created in onCreateInputView) can re-adopt it in restoreUiState() — otherwise
-            // a user's in-pipeline toggle would silently revert to the pref default on rotation.
-            PipelineStepRowRenderer.AutoEnterConfig cfg = pipelineStepRowRenderer.getAutoEnterConfig();
-            restoreAutoEnter = (cfg != null) ? cfg.getAutoEnterActive() : null;
+            // Phase 5.B (Vol 2): the per-run auto-enter override now lives
+            // on the orchestrator's `state.pipeline.Running.autoEnterActive`
+            // (D6 §4.5 of the plan). A view-recreate during Running does
+            // NOT lose the toggle because the orchestrator state survives
+            // the IME view tear-down. The legacy `restoreAutoEnter` bridge
+            // is therefore a no-op on Phase-5.B; keep it cleared so it
+            // cannot leak into a fresh pipeline.
+            restoreAutoEnter = null;
 
-            // W1: Capture the active ReprocessStaging so we can re-enter it on
-            // the fresh renderer. Only the data matters — the state itself
-            // is owned by the old renderer and gets discarded.
-            PipelineUiState oldState = pipelineStepRowRenderer.getState();
-            if (oldState instanceof PipelineUiState.ReprocessStaging) {
-                restoreReprocessStaging = (PipelineUiState.ReprocessStaging) oldState;
-            } else {
-                restoreReprocessStaging = null;
-            }
+            // W1: Capture "we were in staging" so we re-enter it on the
+            // fresh renderer. The data lives in dedicated IME fields
+            // (reprocess* below); they survive the view tear-down naturally.
+            net.devemperor.dictate.state.PipelineUiState phase = getPipelinePhase();
+            restoreReprocessStaging =
+                    phase instanceof net.devemperor.dictate.state.PipelineUiState.ReprocessStaging;
 
-            // Phase 1 cross-phase: detach Service-side pipeline observer so the
-            // CopyOnWriteArrayList in the soon-to-be-discarded renderer does
-            // not retain a reference. The new pipelineStepRowRenderer will get
-            // a fresh servicePipelineCallback in onCreateInputView.
-            if (servicePipelineCallback != null) {
-                pipelineStepRowRenderer.removeCallback(servicePipelineCallback);
-                servicePipelineCallback = null;
-            }
-
+            // Phase 5.B: stop the per-row timer so the discarded renderer's
+            // ElapsedTimer thread does not leak (the new renderer rebuilds
+            // its own per-row timer from `state.pipeline.stepHistory`).
             pipelineStepRowRenderer.stopActiveTimer();
+        }
+
+        // Phase 5.B: tear down the Service-side pipeline observer so its
+        // coroutine scope does not retain a reference to the soon-to-be-
+        // discarded view tree. The fresh onCreateInputView re-creates and
+        // re-starts it.
+        if (pipelineUiStateObserver != null) {
+            pipelineUiStateObserver.stop();
+            pipelineUiStateObserver = null;
         }
         // D-13: deregister the input-languages prefs listener bound to the
         // old view. The fresh onCreateInputView re-registers a new one.
@@ -2097,50 +2167,41 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         // 2. Pipeline state → UI
-        if (restoreReprocessStaging != null) {
-            // W1: The user was editing the reprocess queue when the view was
-            // recreated (rotation / theme change). Re-enter staging on the
-            // fresh renderer so the record-button label, the editable
-            // prompt queue, and the selected language all survive.
-            PipelineUiState.ReprocessStaging staging = restoreReprocessStaging;
-            restoreReprocessStaging = null;
-            // F-6 (B5-VAL): re-seed the override carrier with the
-            // staging's (possibly user-overridden) language so
-            // resolveEffectiveLanguage() stays in lock-step after a
-            // view-recreate (rotation/theme). selectedLanguage carries
-            // the last value; seeding it back keeps read-fidelity.
-            dispatchStagingOverride(staging.getSelectedLanguage());
-            pipelineStepRowRenderer.enterReprocessStaging(
-                staging.getTargetSessionId(),
-                staging.getAudioDurationSeconds(),
-                staging.getEditableQueue(),
-                staging.getSelectedLanguage()
-            );
-        } else if (pipelineOrchestrator != null && pipelineOrchestrator.isRunning()) {
-            int total = pipelineOrchestrator.getTotalSteps();
-            int completedSoFar = pipelineOrchestrator.getCompletedSteps();
-            String stepName = pipelineOrchestrator.getCurrentStepName();
-
-            // Restore the user's in-pipeline auto-enter toggle if we have one from the
-            // about-to-be-discarded old controller; otherwise fall back to the pref default.
-            // NOTE: hasFailure is intentionally NOT restored — the orchestrator doesn't
-            // track past-failure state, so a rotated pipeline that had already failed loses
-            // the red button color until the next failStep. Accepted per refactor plan O-1.
-            boolean autoEnter = restoreAutoEnter != null
-                ? restoreAutoEnter
-                : DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-            restoreAutoEnter = null;
-            pipelineStepRowRenderer.startPipeline(
-                total > 0 ? total : 1,
-                new PipelineStepRowRenderer.AutoEnterConfig(autoEnter),
-                completedSoFar);
-
-            // Show the currently running step
-            pipelineStepRowRenderer.addRunningStep(stepName != null ? stepName : "\u2026");
-        } else {
-            // No pipeline active — clear any stale bridge value so it can't leak into a later run.
-            restoreAutoEnter = null;
+        if (restoreReprocessStaging) {
+            // W1: The user was editing the reprocess queue when the view
+            // was recreated (rotation / theme change). The IME-Java mirror
+            // fields (reprocessTargetSessionId / reprocessEditableQueue /
+            // reprocessSelectedLanguage / reprocessAudioDurationSeconds /
+            // reprocessSelectedModel) carry the staging payload across
+            // view tear-down; re-dispatch EnterReprocessStaging to the
+            // orchestrator so the canonical state.pipeline is back in
+            // staging and downstream listeners (queue order, language
+            // chip) refresh via the pipelineUiStateObserver.
+            restoreReprocessStaging = false;
+            if (pipelineBinder != null && reprocessTargetSessionId != null) {
+                // F-6 (B5-VAL): re-seed the override carrier with the
+                // staging's (possibly user-overridden) language so
+                // resolveEffectiveLanguage() stays in lock-step.
+                dispatchStagingOverride(reprocessSelectedLanguage);
+                // Orchestrator state's ReprocessStaging carries only
+                // (sessionId, transcript). The transcript is not
+                // re-snapshotable at restore time -- the View-side staging
+                // UI reads from the IME mirror fields directly via
+                // reprocessStagingOrNull().
+                pipelineBinder.dispatch(
+                        new net.devemperor.dictate.state.Action.PipelineAction.StartReprocessStaging(
+                                reprocessTargetSessionId));
+            }
         }
+        // Phase 5.B (Vol 2): the legacy else-if Running branch imperatively
+        // re-drove pipelineStepRowRenderer.startPipeline + addRunningStep
+        // to redraw Running after a view tear-down. The reactive renderer
+        // repaints Running from state.pipeline.stepHistory on the very
+        // first ImeViewBackend.render after re-attach, so no IME-side
+        // bookkeeping is required. The restoreAutoEnter bridge is dead too
+        // (state.pipeline.Running.autoEnterActive is the SoT and outlives
+        // the view tree).
+        restoreAutoEnter = null;
 
         // 3. Small mode from preferences. CR-DEL (Theme C-R / RR-2):
         // Pref.SmallMode is mirrored into state.layout.smallMode by
@@ -2162,9 +2223,10 @@ public class DictateInputMethodService extends InputMethodService
                 PromptEntity model = promptsAdapter.getItem(position);
 
                 // ReprocessStaging: prompt clicks toggle into/out of the editable queue.
-                PipelineUiState currentState = pipelineStepRowRenderer != null ? pipelineStepRowRenderer.getState() : null;
-                if (currentState instanceof PipelineUiState.ReprocessStaging) {
-                    handleReprocessPromptToggle(model, (PipelineUiState.ReprocessStaging) currentState);
+                // Phase 5.B: phase comes from the orchestrator state, not the (now-reactive) renderer.
+                net.devemperor.dictate.state.PipelineUiState currentState = getPipelinePhase();
+                if (currentState instanceof net.devemperor.dictate.state.PipelineUiState.ReprocessStaging) {
+                    handleReprocessPromptToggle(model);
                     return;
                 }
 
@@ -2261,11 +2323,14 @@ public class DictateInputMethodService extends InputMethodService
      * responsibility — keep the editable queue or the regular queue in
      * the adapter, depending on the active state.
      */
-    private void syncQueueOrder(PipelineUiState newState) {
+    private void syncQueueOrder(net.devemperor.dictate.state.PipelineUiState newState) {
         if (promptsAdapter == null) return;
-        if (newState instanceof PipelineUiState.ReprocessStaging) {
-            PipelineUiState.ReprocessStaging s = (PipelineUiState.ReprocessStaging) newState;
-            promptsAdapter.setQueuedPromptOrder(s.getEditableQueue());
+        // Phase 5.B (Vol 2): the orchestrator's
+        // `state.PipelineUiState.ReprocessStaging` carries only
+        // `(sessionId, transcript)`; the editable queue lives in the
+        // IME-Java mirror field `reprocessEditableQueue`.
+        if (newState instanceof net.devemperor.dictate.state.PipelineUiState.ReprocessStaging) {
+            promptsAdapter.setQueuedPromptOrder(reprocessEditableQueue);
         } else if (promptQueueManager != null) {
             promptsAdapter.setQueuedPromptOrder(promptQueueManager.getQueuedIds());
         }
@@ -2312,19 +2377,25 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * The current {@link PipelineUiState.ReprocessStaging} staging state,
-     * or {@code null} when not in ReprocessStaging (or the renderer is not
-     * attached). Reads the relocated
-     * {@link net.devemperor.dictate.state.render.PipelineStepRowRenderer}
-     * (the View-side BLEIBT owner, Spec 1 §9.2). Used for the editable
-     * queue / staging-session needs — NOT for the language override
-     * (which is the collapsed {@code LanguageState.override} carrier; see
-     * {@link #reprocessStagingOverrideOrNull()}).
+     * The current {@link net.devemperor.dictate.state.PipelineUiState.ReprocessStaging}
+     * staging state, or {@code null} when the orchestrator's
+     * {@code state.pipeline} is not in ReprocessStaging.
+     *
+     * <p>Phase 5.B (Vol 2): the orchestrator's
+     * {@code state.PipelineUiState.ReprocessStaging} now carries only
+     * {@code (sessionId, transcript)}. The View-side payload
+     * (audio-duration, editable-queue, selected-language, selected-model)
+     * lives in dedicated IME mirror fields ({@link #reprocessTargetSessionId},
+     * {@link #reprocessAudioDurationSeconds}, {@link #reprocessEditableQueue},
+     * {@link #reprocessSelectedLanguage}, {@link #reprocessSelectedModel}).
+     * Used for the staging-session detection — NOT for the language
+     * override (which is the collapsed {@code LanguageState.override}
+     * carrier; see {@link #reprocessStagingOverrideOrNull()}).</p>
      */
-    private PipelineUiState.ReprocessStaging reprocessStagingOrNull() {
-        if (pipelineStepRowRenderer != null
-                && pipelineStepRowRenderer.getState() instanceof PipelineUiState.ReprocessStaging) {
-            return (PipelineUiState.ReprocessStaging) pipelineStepRowRenderer.getState();
+    private net.devemperor.dictate.state.PipelineUiState.ReprocessStaging reprocessStagingOrNull() {
+        net.devemperor.dictate.state.PipelineUiState phase = getPipelinePhase();
+        if (phase instanceof net.devemperor.dictate.state.PipelineUiState.ReprocessStaging) {
+            return (net.devemperor.dictate.state.PipelineUiState.ReprocessStaging) phase;
         }
         return null;
     }
@@ -2412,22 +2483,26 @@ public class DictateInputMethodService extends InputMethodService
      * Toggles a prompt into/out of the editable queue while in ReprocessStaging.
      * Skips sentinel/control items (id < 0).
      *
-     * W6: Single source of truth — we write the new queue onto
-     * {@link PipelineUiState.ReprocessStaging} via
-     * {@code pipelineStepRowRenderer.updateReprocessQueue}, and the state-change
-     * callback routes back through {@link #syncQueueOrder}
-     * which updates the adapter. No direct adapter write here.
+     * <p>Phase 5.B (Vol 2): the editable queue lives in the IME-Java
+     * mirror field {@link #reprocessEditableQueue} (the orchestrator's
+     * {@code state.PipelineUiState.ReprocessStaging} does not carry it).
+     * After mutation we fan out the new queue to the adapter directly
+     * (the old callback-driven syncQueueOrder loop went through the
+     * renderer; the renderer is now reactive).</p>
      */
-    private void handleReprocessPromptToggle(PromptEntity model, PipelineUiState.ReprocessStaging staging) {
+    private void handleReprocessPromptToggle(PromptEntity model) {
         if (model.getId() < 0) return;  // sentinel items have no meaning here
-        List<Integer> queue = new ArrayList<>(staging.getEditableQueue());
+        List<Integer> queue = new ArrayList<>(reprocessEditableQueue);
         int promptId = model.getId();
         if (queue.contains(promptId)) {
             queue.removeIf(id -> id == promptId);
         } else {
             queue.add(promptId);
         }
-        pipelineStepRowRenderer.updateReprocessQueue(queue);
+        reprocessEditableQueue = queue;
+        if (promptsAdapter != null) {
+            promptsAdapter.setQueuedPromptOrder(reprocessEditableQueue);
+        }
     }
 
     /**
@@ -2562,12 +2637,13 @@ public class DictateInputMethodService extends InputMethodService
                     Log.w("DictateIME", "SetOverride dispatch failed", t);
                 }
             }
-            // Mirror into the View-side ReprocessStaging staging state so
-            // the record-button label + queue-restore stay correct (the
-            // BLEIBT staging state, Spec 1 §9.2 — NOT the language read
-            // carrier any more). Its state-change callback refreshes the
-            // chip; nothing persisted for a transient override.
-            pipelineStepRowRenderer.updateReprocessLanguage(code);
+            // Phase 5.B (Vol 2): mirror into the IME-Java staging field
+            // (the orchestrator's `state.PipelineUiState.ReprocessStaging`
+            // does not carry the selected language). The chip label
+            // refreshes via the pipelineUiStateObserver's refreshLanguageChip
+            // hook on the next LanguageAction.SetOverride emit above.
+            reprocessSelectedLanguage = code;
+            refreshLanguageChip();
         } else {
             net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
                     .setLanguage(sp, code);
@@ -2719,11 +2795,17 @@ public class DictateInputMethodService extends InputMethodService
             // for the record-button label (RECORD textResolver owns it
             // on the bound path).
             if (pipelineBinder == null) {
+                // Phase 5.B (Vol 2): the legacy resolveResendVisibility
+                // predicate still consumes the deprecated
+                // `core.PipelineUiState` (Phase 6 deletes the predicate +
+                // its sealed class). Qualify the Idle.INSTANCE reference
+                // explicitly so the IME-Java side no longer relies on a
+                // same-package bare-name resolution.
                 resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
                         new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
                         DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
                         RecordingState.Idle.INSTANCE,
-                        PipelineUiState.Idle.INSTANCE));
+                        net.devemperor.dictate.core.PipelineUiState.Idle.INSTANCE));
 
                 // Phase 3 of dictate-render-cutover-completion-vol2 — the
                 // Catalog `resolveRecordButtonText` is the single writer
@@ -3546,30 +3628,18 @@ public class DictateInputMethodService extends InputMethodService
      */
     private void primePipelineUiForNewPath() {
         try {
-            // G13 BLEIBT (CR-DEL — the binding A3 option-a extraction):
-            // the pipeline-step-row UI is the relocated
-            // PipelineStepRowRenderer. The orchestrator owns the
-            // authoritative state.pipeline; this is thin UI bookkeeping
-            // the step-row render still needs.
-            pipelineStepRowRenderer.preparePipeline();
-            // CR-DEL (Theme C-R / §9.6 — Spec 2 §13.1 row 27): the
-            // pipeline-start resend setVisibility is owned reactively by
-            // the RESEND-slot predicate (pipeline → Preparing →
-            // predResendVisible=false). The legacy imperative unbound
-            // fallback is GONE (point-of-no-return).
+            // Phase 5.B (Vol 2): step-row priming was the legacy View-side
+            // echo of `state.pipeline` transitions. The reactive renderer
+            // now paints Preparing/Running directly from
+            // `state.pipeline.stepHistory`; the orchestrator's
+            // PipelineModule reduces `TriggerPipeline → Preparing` and
+            // (on the first runner-callback) `Preparing → Running` via the
+            // `onStepStarted_dispatchOrchestratorSync` bridge. No
+            // imperative step-row drive remains.
             infoBarController.dismiss();
             updatePromptButtonsEnabledState();
-            // CR-DEL (RR-2): the armed visibility controllers own every
-            // axis (the pipeline state-emit re-renders them); the legacy
-            // KSM refresh unbound fallback is GONE.
-
-            int totalSteps = 1;
-            if (autoFormattingService.isEnabled()) totalSteps++;
-            totalSteps += promptQueueManager.getQueuedIds().size();
-            boolean autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-            pipelineStepRowRenderer.startPipeline(totalSteps, new PipelineStepRowRenderer.AutoEnterConfig(autoEnter));
         } catch (RuntimeException e) {
-            // UI bookkeeping is best-effort — a view-recreation race must
+            // UI bookkeeping is best-effort -- a view-recreation race must
             // not abort the (already-dispatched) recording stop. The
             // orchestrator state is authoritative regardless.
             Log.w("DictateIME", "primePipelineUiForNewPath failed (non-fatal)", e);
@@ -3711,21 +3781,15 @@ public class DictateInputMethodService extends InputMethodService
         }
         String selStr = selectedText != null ? selectedText.toString() : null;
 
-        // Set UI mode BEFORE calling orchestrator.
-        // Guard removed intentionally (plan §4e): in the live-prompt-chain case the previous
-        // pipeline's state is still Running with completedSteps == totalSteps. Calling
-        // startPipeline(1, ..., 0) unconditionally resets the counter to "0/1" — without this
-        // the stale counter of the prior transcription would remain on screen.
-        //
-        // Auto-enter handling: the previous pipeline's controller-owned AutoEnterConfig is the
-        // authoritative source (it reflects any in-pipeline user toggle). Direct-prompt-button
-        // callers have no previous config — we seed from prefs in that case.
-        String displayName = model.getId() == -1 ? getString(R.string.dictate_live_prompt) : model.getName();
-        PipelineStepRowRenderer.AutoEnterConfig prevCfg = pipelineStepRowRenderer.getAutoEnterConfig();
-        boolean autoEnter = (prevCfg != null)
-            ? prevCfg.getAutoEnterActive()
-            : DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-        pipelineStepRowRenderer.startPipeline(1, new PipelineStepRowRenderer.AutoEnterConfig(autoEnter), 0);
+        // Phase 5.B (Vol 2): the legacy imperative
+        // `pipelineStepRowRenderer.startPipeline(1, ..., 0)` reset is gone.
+        // Step-row repaint is driven by `state.pipeline.stepHistory` via
+        // the reactive renderer; the orchestrator's Preparing/Running FSM
+        // transitions are dispatched by `onStepStarted_dispatchOrchestratorSync`
+        // (it reads the previous pipeline's `Running.autoEnterActive`
+        // automatically and falls back to `Pref.AutoEnter` when the
+        // previous renderer state is not Running -- which is the
+        // direct-prompt-button entry case).
 
         EditorInfo editorInfo = getCurrentInputEditorInfo();
         PipelineOrchestrator.StandaloneConfig config = new PipelineOrchestrator.StandaloneConfig(
@@ -3791,41 +3855,27 @@ public class DictateInputMethodService extends InputMethodService
     private void onStepStarted_dispatchOrchestratorSync(String stepName) {
         if (pipelineBinder == null) return;
         net.devemperor.dictate.state.PipelineUiState p = getPipelinePhase();
-        // First step → transition Preparing → Running via StartPipeline.
+        // First step -> transition Preparing -> Running via StartPipeline.
+        //
+        // Phase 5.B (Vol 2): the legacy reader of the imperative renderer
+        // state is gone -- the renderer is reactive and has no totalSteps /
+        // autoEnter accessor. Recompute the values directly from the same
+        // sources the legacy `primePipelineUiForNewPath` used (the
+        // `auto-format +1` rule + Pref.AutoEnter). This is byte-equivalent
+        // to the pre-Phase-5.B fallback arm.
         if (p instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
             net.devemperor.dictate.state.PipelineUiState.Preparing prep =
                     (net.devemperor.dictate.state.PipelineUiState.Preparing) p;
-            int totalSteps;
-            boolean autoEnter;
-            // The imperative pipelineStepRowRenderer was just primed by
-            // primePipelineUiForNewPath() with these two values; read them
-            // back so the orchestrator-dispatch carries the same total +
-            // autoEnter the renderer already shows. Note: the renderer
-            // uses the LEGACY core.PipelineUiState class (different from
-            // the orchestrator's state.PipelineUiState — same name, two
-            // namespaces; cf. CutoverArchitectureInvariantTest doc).
-            net.devemperor.dictate.core.PipelineUiState legacyRendererState =
-                    pipelineStepRowRenderer != null
-                            ? pipelineStepRowRenderer.getState()
-                            : net.devemperor.dictate.core.PipelineUiState.Idle.INSTANCE;
-            if (legacyRendererState instanceof net.devemperor.dictate.core.PipelineUiState.Running) {
-                net.devemperor.dictate.core.PipelineUiState.Running rr =
-                        (net.devemperor.dictate.core.PipelineUiState.Running) legacyRendererState;
-                totalSteps = rr.getTotalSteps();
-                autoEnter = rr.getAutoEnterActive();
-            } else {
-                // Fallback recompute — mirrors primePipelineUiForNewPath.
-                totalSteps = 1;
-                if (autoFormattingService.isEnabled()) totalSteps++;
-                totalSteps += promptQueueManager.getQueuedIds().size();
-                autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-            }
+            int totalSteps = 1;
+            if (autoFormattingService.isEnabled()) totalSteps++;
+            totalSteps += promptQueueManager.getQueuedIds().size();
+            boolean autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
             dispatchPipelineActionToOrchestrator(
                     new net.devemperor.dictate.state.Action.PipelineAction.StartPipeline(
                             prep.getSessionId(), totalSteps, autoEnter),
                     "StartPipeline");
         }
-        // Then dispatch StepStarted (read sessionId off state.pipeline — may
+        // Then dispatch StepStarted (read sessionId off state.pipeline -- may
         // be Running now after the StartPipeline above, or already-Running
         // for non-first steps).
         net.devemperor.dictate.state.PipelineUiState p2 = getPipelinePhase();
@@ -3869,32 +3919,32 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStepStarted(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
-            // Orchestrator-sync (D4 hotfix) — dispatch StartPipeline (first
-            // step) + StepStarted so state.pipeline tracks the live FSM.
+            // Phase 5.B (Vol 2): dispatch StartPipeline (first step) +
+            // StepStarted so state.pipeline tracks the live FSM. The
+            // reactive PipelineStepRowRenderer paints the inflated step
+            // row on the next ImeViewBackend.render emit -- no imperative
+            // renderer drive remains.
             onStepStarted_dispatchOrchestratorSync(stepName);
-            // Existing imperative renderer drive (the user-visible path
-            // until the Catalog reads off the orchestrator state).
-            if (pipelineStepRowRenderer == null) return;
-            if (pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
-                pipelineStepRowRenderer.addRunningStep(stepName);
-            }
         });
     }
 
     @Override
     public void onStepCompleted(@androidx.annotation.NonNull String stepName, long durationMs) {
         mainHandler.post(() -> {
-            // Orchestrator-sync (D4 hotfix) — StepCompleted advances
-            // state.pipeline.completedSteps + restamps elapsedMs.
+            // Phase 5.B (Vol 2): orchestrator-sync only -- StepCompleted
+            // advances state.pipeline.completedSteps + restamps elapsedMs;
+            // the reactive renderer finalises the row + duration column
+            // from the new state.pipeline.stepHistory emit. The legacy
+            // imperative completeStep call is gone (the stepName +
+            // durationMs payload reaches the renderer through the
+            // StepCompleted reducer arm, which finalises the last RUNNING
+            // entry to COMPLETED with the duration; see DictateUiState
+            // KDoc on stepHistory).
             String sid = currentPipelineSessionId();
             if (sid != null) {
                 dispatchPipelineActionToOrchestrator(
                         new net.devemperor.dictate.state.Action.PipelineAction.StepCompleted(sid),
                         "StepCompleted");
-            }
-            if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
-            if (pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
-                pipelineStepRowRenderer.completeStep(stepName, durationMs);
             }
         });
     }
@@ -3902,17 +3952,16 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStepFailed(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
-            // Orchestrator-sync (D4 hotfix) — StepFailed moves
-            // state.pipeline → Idle + Effect.MarkSessionFailed.
+            // Phase 5.B (Vol 2): orchestrator-sync only -- StepFailed
+            // finalises the last RUNNING entry in state.pipeline.stepHistory
+            // to FAILED + sets Running.hasFailure=true. The reactive
+            // renderer repaints the row + the record-button colour
+            // (RecordButtonColorController side-channel) on the next emit.
             String sid = currentPipelineSessionId();
             if (sid != null) {
                 dispatchPipelineActionToOrchestrator(
                         new net.devemperor.dictate.state.Action.PipelineAction.StepFailed(sid, stepName),
                         "StepFailed");
-            }
-            if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
-            if (pipelineStepRowRenderer.getState() instanceof PipelineUiState.Running) {
-                pipelineStepRowRenderer.failStep(stepName);
             }
         });
     }
@@ -4049,15 +4098,12 @@ public class DictateInputMethodService extends InputMethodService
         // Clear the transient current-session tracking (DB is source of truth
         // for "last keyboard session" — see SessionTracker.getLastKeyboardSession).
         sessionTracker.clearCurrent();
-        mainHandler.post(() -> {
-            if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
-            pipelineStepRowRenderer.stopPipeline();  // → updatePipelineState(Idle) → Callback → QWERTZ reset
-            // Phase 3 of dictate-render-cutover-completion-vol2 — the
-            // legacy restoreRecordButtonIdle is a no-op. The Catalog +
-            // AutoEnterRenderer are the single writers for record_btn;
-            // the next render-tick produces the Idle visual reactively.
-            // QWERTZ-Reset happens automatically via onPipelineUiStateChanged callback
-        });
+        // Phase 5.B (Vol 2): no imperative renderer drive remains -- the
+        // orchestrator's PipelineDone/PipelineFailed/CancelPipeline reducer
+        // arms move state.pipeline to Idle, the reactive PipelineStepRowRenderer
+        // clears its rows on the next render-tick, and the catalog +
+        // AutoEnterRenderer repaint the record-button. QWERTZ reset fires
+        // via the pipelineUiStateObserver's Idle branch.
     }
 
     private boolean isAutoEnterActive() {
@@ -4093,40 +4139,24 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void toggleAutoEnterOverride() {
-        // Only meaningful during Running — during Preparing the auto-enter chip is not visible,
-        // and during Idle there is no pipeline to toggle against.
-        if (pipelineStepRowRenderer == null || !pipelineStepRowRenderer.isPipelineRunning()) return;
-        // Controller owns the PipelineConfig; it atomically flips config + Running.autoEnterActive
-        // on the legacy `net.devemperor.dictate.core.PipelineUiState` sealed class.
-        pipelineStepRowRenderer.toggleAutoEnter();
-        // Post-cutover hotfix #AE-DEEP — the QWERTZ keyboard's RECORD-key
-        // press path lands here (via onRecordClicked → isPipelineActive
-        // branch), NOT through the LayoutCatalog action-resolver. Without
-        // an additional orchestrator-side dispatch the legacy renderer
-        // state and the orchestrator's
-        // `net.devemperor.dictate.state.PipelineUiState.{Preparing,Running}.autoEnterActive`
-        // diverge — `isAutoEnterActive()` (which now reads from the
-        // orchestrator after #AE) would always see the un-flipped value.
-        // The two PipelineUiState sealed classes (one in `core`, one in
-        // `state`) are a known coexistence artefact of the half-finished
-        // cutover; this dispatch is the bridge that keeps them aligned
-        // for the auto-enter axis.
+        // Phase 5.B (Vol 2): the orchestrator's
+        // `state.pipeline.{Preparing,Running}.autoEnterActive` is the single
+        // SoT; dispatch ToggleRunningAutoEnter and the reducer flips it
+        // (Preparing OR Running). The pre-Phase-5.B dual-write bridge to
+        // the legacy core.PipelineUiState carrier is gone.
         //
-        // #AE-DEEP2: accept BOTH Preparing and Running. The legacy
-        // renderer flips to Running on the SEND-tap synchronously, but
-        // the orchestrator only reaches Running once the runner emits
-        // StartPipeline (typically 500ms–2s later). A double-tap in
-        // that window hits Preparing — pre-fix the strict `is Running`
-        // guard rejected it and the orchestrator-side state stayed
-        // out of sync forever (the StartPipeline merge in PipelineModule
-        // would then default it back to the global Pref.AutoEnter value).
-        if (pipelineBinder != null) {
-            net.devemperor.dictate.state.PipelineUiState ps = getPipelinePhase();
-            if (ps instanceof net.devemperor.dictate.state.PipelineUiState.Running
-                    || ps instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
-                pipelineBinder.dispatch(
-                        net.devemperor.dictate.state.Action.PipelineAction.ToggleRunningAutoEnter.INSTANCE);
-            }
+        // #AE-DEEP2: accept BOTH Preparing and Running. The orchestrator
+        // only reaches Running once the runner emits StartPipeline
+        // (typically 500ms-2s after the SEND-tap). A double-tap in that
+        // window hits Preparing -- pre-fix the strict `is Running` guard
+        // rejected it and the autoEnterActive stayed defaulted in the
+        // Preparing -> Running reducer arm.
+        if (pipelineBinder == null) return;
+        net.devemperor.dictate.state.PipelineUiState ps = getPipelinePhase();
+        if (ps instanceof net.devemperor.dictate.state.PipelineUiState.Running
+                || ps instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
+            pipelineBinder.dispatch(
+                    net.devemperor.dictate.state.Action.PipelineAction.ToggleRunningAutoEnter.INSTANCE);
         }
     }
 
@@ -4442,18 +4472,23 @@ public class DictateInputMethodService extends InputMethodService
     public void onRecordClicked() {
         infoBarController.dismiss();
 
-        // ReprocessStaging: the big record button becomes a Send trigger for the
-        // currently staged queue (Phase 9.3).
-        PipelineUiState state = pipelineStepRowRenderer != null ? pipelineStepRowRenderer.getState() : null;
-        if (state instanceof PipelineUiState.ReprocessStaging) {
-            handleReprocessSend((PipelineUiState.ReprocessStaging) state);
+        // Phase 5.B (Vol 2): read the active pipeline phase off the
+        // orchestrator state (the renderer is reactive and no longer
+        // exposes its own state).
+        net.devemperor.dictate.state.PipelineUiState phase = getPipelinePhase();
+        if (phase instanceof net.devemperor.dictate.state.PipelineUiState.ReprocessStaging) {
+            // ReprocessStaging: the big record button becomes a Send trigger for the
+            // currently staged queue (Phase 9.3).
+            handleReprocessSend();
             return;
         }
 
-        if (pipelineStepRowRenderer.isPipelineActive()) {
-            // Pipeline running or preparing → toggle auto-enter (no-op during Preparing).
-            // Using isPipelineActive() closes the Preparing-window race on the QWERTZ record
-            // button, which otherwise fell through to startRecording() during audio upload.
+        if (phase instanceof net.devemperor.dictate.state.PipelineUiState.Running
+                || phase instanceof net.devemperor.dictate.state.PipelineUiState.Preparing) {
+            // Pipeline running or preparing -> toggle auto-enter (no-op
+            // during Preparing). The Preparing-window check closes the
+            // race on the QWERTZ record button (which otherwise fell
+            // through to startRecording() during audio upload).
             toggleAutoEnterOverride();
         } else if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             openSettingsActivity();
@@ -4671,7 +4706,9 @@ public class DictateInputMethodService extends InputMethodService
     // imeSideAffordance(RESEND, isLongPress=true).
     public void onResendLongClicked() {
         // Phase 9.2 — enter ReprocessStaging with the last keyboard session.
-        if (pipelineStepRowRenderer.isBusy()) return;
+        // Phase 5.B (Vol 2): isBusy() check reads the orchestrator state
+        // (not the renderer); busy means anything other than Idle.
+        if (!(getPipelinePhase() instanceof net.devemperor.dictate.state.PipelineUiState.Idle)) return;
 
         dbExecutor.execute(() -> {
             SessionEntity lastSession = sessionTracker.getLastKeyboardSession();
@@ -4686,22 +4723,28 @@ public class DictateInputMethodService extends InputMethodService
 
             List<Integer> historicalQueue = sessionManager.getHistoricalQueuedPromptIds(lastSession.getId());
             mainHandler.post(() -> {
-                if (pipelineStepRowRenderer == null) return;
+                if (pipelineBinder == null) return;
                 // F-6 (B5-VAL): seed the single LanguageState.override
-                // carrier with the session language BEFORE entering
-                // staging — the enterReprocessStaging state-change fires
-                // onPipelineUiStateChanged → refreshLanguageChip() →
+                // carrier with the session language BEFORE dispatching
+                // StartReprocessStaging — the state.pipeline emit triggers
+                // the pipelineUiStateObserver -> refreshLanguageChip() ->
                 // resolveEffectiveLanguage(), which must already see the
-                // seeded override (else the chip/config-snapshot show
-                // the wrong, permanent language for this staging
-                // session). Same thread (mainHandler.post) so ordering
-                // is deterministic.
+                // seeded override (else the chip / config-snapshot show
+                // the wrong, permanent language for this staging session).
+                // Same thread (mainHandler.post) so ordering is deterministic.
                 dispatchStagingOverride(lastSession.getLanguage());
-                pipelineStepRowRenderer.enterReprocessStaging(
-                        lastSession.getId(),
-                        lastSession.getAudioDurationSeconds(),
-                        historicalQueue,
-                        lastSession.getLanguage());
+                // Phase 5.B (Vol 2): mirror the staging payload into the
+                // IME fields BEFORE the StartReprocessStaging dispatch so
+                // the syncQueueOrder() fan-out (fires off the state emit)
+                // reads the populated queue.
+                reprocessTargetSessionId = lastSession.getId();
+                reprocessAudioDurationSeconds = lastSession.getAudioDurationSeconds();
+                reprocessEditableQueue = new ArrayList<>(historicalQueue);
+                reprocessSelectedLanguage = lastSession.getLanguage();
+                reprocessSelectedModel = null;
+                pipelineBinder.dispatch(
+                        new net.devemperor.dictate.state.Action.PipelineAction.StartReprocessStaging(
+                                lastSession.getId()));
                 updatePromptButtonsEnabledState();
             });
         });
@@ -4754,13 +4797,28 @@ public class DictateInputMethodService extends InputMethodService
     // CR-DEL: was MainButtonsController.Callback (deleted). TRASH is the
     // catalog actionResolver on the bound path; body kept for parity.
     public void onTrashClicked() {
-        // ReprocessStaging: the trash button cancels back to Idle.
-        if (pipelineStepRowRenderer != null && pipelineStepRowRenderer.getState() instanceof PipelineUiState.ReprocessStaging) {
-            pipelineStepRowRenderer.cancelReprocessStaging();
+        // Phase 5.B (Vol 2): the trash button cancels staging back to Idle
+        // via the CancelReprocessStaging action; the reactive renderer +
+        // catalog repaint Idle on the next state emit.
+        net.devemperor.dictate.state.PipelineUiState phase = getPipelinePhase();
+        if (phase instanceof net.devemperor.dictate.state.PipelineUiState.ReprocessStaging) {
+            net.devemperor.dictate.state.PipelineUiState.ReprocessStaging stage =
+                    (net.devemperor.dictate.state.PipelineUiState.ReprocessStaging) phase;
+            if (pipelineBinder != null) {
+                pipelineBinder.dispatch(
+                        new net.devemperor.dictate.state.Action.PipelineAction.CancelReprocessStaging(
+                                stage.getSessionId()));
+            }
             // F-6 (B5-VAL): clear the override on staging exit
             // (cancel / discard) so it does not leak into the next
             // staging session (stale-override-leak fix).
             dispatchStagingOverride(null);
+            // Phase 5.B: clear the IME-Java staging mirror too.
+            reprocessTargetSessionId = null;
+            reprocessEditableQueue = new ArrayList<>();
+            reprocessSelectedLanguage = null;
+            reprocessSelectedModel = null;
+            reprocessAudioDurationSeconds = 0L;
             updatePromptButtonsEnabledState();
             return;
         }
@@ -4779,16 +4837,20 @@ public class DictateInputMethodService extends InputMethodService
      * the job, matching startHistoryReprocess so the user gets a specific
      * error instead of a generic pipeline failure.
      */
-    private void handleReprocessSend(PipelineUiState.ReprocessStaging staging) {
-        // Snapshot UI-owned data on the main thread so the worker sees a
-        // stable view — staging is mutable via the UI controller.
-        final String targetSessionId = staging.getTargetSessionId();
-        final String selectedLanguage = staging.getSelectedLanguage();
-        final String selectedModel = staging.getSelectedModel();
-        final List<Integer> editableQueue = staging.getEditableQueue();
+    private void handleReprocessSend() {
+        // Phase 5.B (Vol 2): snapshot staging payload from the IME-Java
+        // mirror fields (the orchestrator's state.PipelineUiState.ReprocessStaging
+        // carries only sessionId/transcript; the editable queue + language
+        // override live IME-side).
+        final String targetSessionId = reprocessTargetSessionId;
+        final String selectedLanguage = reprocessSelectedLanguage;
+        final String selectedModel = reprocessSelectedModel;
+        final List<Integer> editableQueue = new ArrayList<>(reprocessEditableQueue);
         final EditorInfo info = getCurrentInputEditorInfo();
         final String targetAppPackage = info != null && info.packageName != null
                 ? info.packageName.toString() : null;
+
+        if (targetSessionId == null) return;  // defensive — should never happen in ReprocessStaging
 
         dbExecutor.execute(() -> {
             SessionEntity session = sessionManager.getSessionById(targetSessionId);
@@ -4810,13 +4872,13 @@ public class DictateInputMethodService extends InputMethodService
 
                 // REPROCESS_STAGING routes through the orchestrator's C3
                 // PipelineRunnerSubsystemAdapter.submitReprocess (which
-                // calls JobExecutor.start internally — that is the adapter,
+                // calls JobExecutor.start internally -- that is the adapter,
                 // not an IME call-site). The reprocess modelOverride /
                 // targetAppPackage / AutoFormatting-+1 are threaded via the
                 // ImePipelineConfigResolver reprocess snapshot so the
                 // adapter's resolver rebuilds the JobRequest faithfully
-                // (C3-IMPL-2). Single-dispatch — no double-run.
-                // B2-VAL-W1 F-9 — the not-bound condition is "service not
+                // (C3-IMPL-2). Single-dispatch -- no double-run.
+                // B2-VAL-W1 F-9 -- the not-bound condition is "service not
                 // yet ready", NOT "a job is already active". Surface the
                 // correct message, consistent with the sibling
                 // transcribeImportedAudioFileViaOrchestrator() not-bound
@@ -4836,6 +4898,13 @@ public class DictateInputMethodService extends InputMethodService
                         targetSessionId,
                         new ImePipelineConfigResolver.ReprocessConfig(
                                 totalSteps, selectedModel, targetAppPackage));
+                // Phase 5.B (Vol 2): dispatch SendStaging so the
+                // orchestrator transitions ReprocessStaging -> Preparing
+                // BEFORE the runner submits. The PipelineModule reducer
+                // arm is the single-submit guard (a second tap arrives
+                // with `pipeline is Preparing` and is a reducer no-op).
+                pipelineBinder.dispatch(
+                        new net.devemperor.dictate.state.Action.PipelineAction.SendStaging(targetSessionId));
                 pipelineBinder.getModuleServices().getPipelineRunner().submitReprocess(
                         targetSessionId,
                         new File(audioPath),
@@ -4843,18 +4912,19 @@ public class DictateInputMethodService extends InputMethodService
                         selectedLanguage);
 
                 // F-6 (B5-VAL): clear the override now that staging is
-                // exiting (→ Preparing). selectedLanguage was already
+                // exiting (-> Preparing). selectedLanguage was already
                 // snapshotted (above) and passed to submitReprocess, so
                 // clearing here does NOT affect the in-flight reprocess
-                // job's language — it only resets the per-staging-session
+                // job's language -- it only resets the per-staging-session
                 // transient so the next staging session starts clean.
                 dispatchStagingOverride(null);
-
-                // Transition staging → Preparing → Running via the same path used by
-                // the fresh-recording flow (SEC-7-6).
-                pipelineStepRowRenderer.preparePipeline();
-                boolean autoEnter = DictatePrefsKt.get(sp, Pref.AutoEnter.INSTANCE);
-                pipelineStepRowRenderer.startPipeline(totalSteps, new PipelineStepRowRenderer.AutoEnterConfig(autoEnter));
+                // Phase 5.B: also clear the IME-Java staging mirror once
+                // the payload has been handed off to the runner.
+                reprocessTargetSessionId = null;
+                reprocessEditableQueue = new ArrayList<>();
+                reprocessSelectedLanguage = null;
+                reprocessSelectedModel = null;
+                reprocessAudioDurationSeconds = 0L;
             });
         });
     }
@@ -4933,10 +5003,15 @@ public class DictateInputMethodService extends InputMethodService
 
         pendingLivePromptChain = false;
 
-        pipelineStepRowRenderer.stopPipeline();
-        // Phase 3 of dictate-render-cutover-completion-vol2 —
-        // restoreRecordButtonIdle is a no-op; the Catalog +
-        // AutoEnterRenderer reactively repaint Idle on the next render.
+        // Phase 5.B (Vol 2): dispatch CancelPipeline so the orchestrator
+        // FSM moves state.pipeline -> Idle; the reactive PipelineStepRowRenderer
+        // clears its rows on the next render-tick, and the Catalog +
+        // AutoEnterRenderer repaint the record-button Idle visual reactively.
+        if (pipelineBinder != null) {
+            String activeSid = currentPipelineSessionId();
+            pipelineBinder.dispatch(
+                    new net.devemperor.dictate.state.Action.PipelineAction.CancelPipeline(activeSid));
+        }
 
         dbExecutor.execute(() -> {
             String lastOutput = null;

@@ -5,7 +5,8 @@ import androidx.appcompat.view.ContextThemeWrapper
 import androidx.test.core.app.ApplicationProvider
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.R
-import net.devemperor.dictate.core.PipelineUiState
+import net.devemperor.dictate.state.InsertionTarget
+import net.devemperor.dictate.state.PipelineUiState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -72,11 +73,17 @@ class QwertzRecordingControllerTest {
 
     @Test
     fun enterPipelineDisplay_andUpdateTimer_paintCounterAndTimer() {
+        // Phase 5.B (Vol 2): switched to the orchestrator's PipelineUiState.Running
+        // (state.PipelineUiState). The Running data class no longer carries
+        // currentStepName -- that field is derived from stepHistory and not
+        // read by the controller's enterPipelineDisplay / updatePipelineTimer
+        // path (which uses totalSteps + completedSteps + autoEnterActive only).
         val running = PipelineUiState.Running(
-            totalSteps = 3,
-            completedSteps = 1,
-            currentStepName = "Step",
+            sessionId = "test-sid",
+            target = InsertionTarget.INPUT_CONNECTION,
             autoEnterActive = true,
+            completedSteps = 1,
+            totalSteps = 3,
         )
         controller.enterPipelineDisplay(running)
         // enterPipelineDisplay seeds an initial timer text (elapsed 0).
@@ -129,7 +136,13 @@ class QwertzRecordingControllerTest {
         // Must not throw when the QWERTZ view is not inflated.
         safe.updateQwertzRecButton(true)
         safe.updatePipelineTimer(
-            PipelineUiState.Running(1, 0, "", false), 0L,
+            PipelineUiState.Running(
+                sessionId = "test-sid",
+                target = InsertionTarget.INPUT_CONNECTION,
+                totalSteps = 1,
+                completedSteps = 0,
+            ),
+            0L,
         )
         safe.onTimerTick(1000L)
         safe.onAmplitude(0.5f)

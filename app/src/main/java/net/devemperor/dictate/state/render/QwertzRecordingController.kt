@@ -6,7 +6,7 @@ import android.graphics.Color
 import androidx.appcompat.content.res.AppCompatResources
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.R
-import net.devemperor.dictate.core.PipelineUiState
+import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.core.formatElapsedCompact
 import net.devemperor.dictate.widget.AmplitudeVisualizerDrawable
 import net.devemperor.dictate.widget.computeVisualizerBarColor

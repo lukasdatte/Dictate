@@ -150,6 +150,13 @@ class ImeViewBackend(
      * `Running.hasFailure == true`, white everywhere else.
      */
     private val recordButtonColorController: RecordButtonColorController? = null,
+    /**
+     * Phase 5.B of dictate-render-cutover-completion-vol2 — reactive
+     * step-row consumer. Diffs `state.pipeline.stepHistory` against
+     * its inflated row views, replaces the legacy imperative
+     * `addRunningStep` / `completeStep` / `failStep` callbacks.
+     */
+    private val pipelineStepRowRenderer: PipelineStepRowRenderer? = null,
     private val keyPressAnimator: KeyPressAnimator = KeyPressAnimator(),
     private val staticHandlerInstaller: ((Map<LogicalButtonId, View>) -> Unit)? = null,
     private val onVibrate: () -> Unit = {},
@@ -205,6 +212,7 @@ class ImeViewBackend(
         recordingAnimationController?.reset()
         autoEnterRenderer?.reset()
         recordButtonColorController?.reset()
+        pipelineStepRowRenderer?.reset()
         // Click-listeners stay wired on the Views — they short-circuit
         // because `onAction == null` and `stateRef == null`. The Views
         // themselves are released by the IME service's onCreateInputView
@@ -264,7 +272,14 @@ class ImeViewBackend(
         //     red while `Running.hasFailure`, white elsewhere.
         recordButtonColorController?.onState(state)
 
-        // 5 — Forward the recording-state transition into the
+        // 5 — Diff the orchestrator's stepHistory into the step-row
+        //     view children (Phase 5.B of
+        //     dictate-render-cutover-completion-vol2). Replaces the
+        //     legacy imperative addRunningStep / completeStep / failStep
+        //     callback chain. Idempotent.
+        pipelineStepRowRenderer?.onState(state)
+
+        // 6 — Forward the recording-state transition into the
         //     animation controller (Spec 2 §11.5). The controller is
         //     idempotent — only the class transition triggers work.
         recordingAnimationController?.onState(state)

@@ -1,7 +1,5 @@
 package net.devemperor.dictate.state.render
 
-import android.content.res.ColorStateList
-import android.graphics.Color
 import android.os.Handler
 import android.view.LayoutInflater
 import android.view.View
@@ -11,114 +9,87 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.R
-import net.devemperor.dictate.core.AutoEnterIconRenderer
 import net.devemperor.dictate.core.ElapsedTimer
-import net.devemperor.dictate.core.PipelineUiCallback
-import net.devemperor.dictate.core.PipelineUiState
-import net.devemperor.dictate.core.PipelineUiStateReader
-import net.devemperor.dictate.core.RecordingState
 import net.devemperor.dictate.core.formatElapsedCompact
-import java.util.Locale
-import java.util.concurrent.CopyOnWriteArrayList
+import net.devemperor.dictate.state.DictateUiState
+import net.devemperor.dictate.state.PipelineUiState
+import net.devemperor.dictate.state.StepRowItem
+import net.devemperor.dictate.state.StepStatus
 
 /**
- * Owns the pipeline **step-row** progress UI + the `PipelineUiState`
- * machinery (the View-side that **BLEIBT** per Spec 1 §9.2 / Spec 2
- * §9.5).
+ * Reactive consumer for the pipeline **step-row** progress UI.
  *
- * # Why this class exists (CR-DEL / RR-3 / A3 option-a)
+ * # The Phase-5.B re-architecture
  *
- * Spec 1 §9.2 says *"stepRows bleibt im `KeyboardUiController`
- * View-side"* and Spec 2 §9.5 maps the record-button-from-pipeline-state
- * to resolvers but leaves the step-row inflate/complete/fail rendering +
- * the per-step / total live timers + the `PipelineUiState` ownership in
- * place. The C10-C3 kill-list deletes `KeyboardUiController`, so — per
- * the **binding A3 option-a** disposition the orchestrator recorded in
- * CR3 (extract the BLEIBT parts into a small new owner so the kill-list
- * class fully deletes and AC-RR-7 stays a clean zero-grep) — that
- * View-side is **relocated here verbatim**, into the render package
- * (sibling to `ContentAreaController` / `RecordingAnimationController`).
+ * Pre-cutover (and through Phases 1-5.A) this class owned its own
+ * `core.PipelineUiState` sealed class, accepted imperative mutator
+ * calls (`preparePipeline`, `startPipeline`, `addRunningStep`,
+ * `completeStep`, `failStep`, `stopPipeline`, …) from the IME service,
+ * and ran a 100 ms `ElapsedTimer` driving a parallel
+ * `record_btn` writer. Phase 3 stopped the record-btn writes
+ * (`refreshRecordButtonFromState` → no-op + `AutoEnterRenderer`
+ * side-channel); Phase 5.A migrated the FSM-of-step rows into
+ * [PipelineUiState.Running.stepHistory] inside the orchestrator
+ * state. **This Phase 5.B reduction** completes the cutover:
  *
- * It is **not** a `RenderBackend`: the pipeline-progress drive is
- * imperative (the IME service calls `startPipeline`/`addRunningStep`/…
- * from the orchestrator's pipeline callbacks), exactly as the legacy
- * `KeyboardUiController` was driven — preserving the drive cadence
- * (per-step inflate is a structural mutation, not a per-state-tick
- * render). The behaviour is byte-equivalent to the deleted
- * `KeyboardUiController` — only the call site (and package) moved.
+ *  - The legacy `state`-property and the entire `PipelineUiStateReader`
+ *    / `PipelineUiCallback` surface are gone.
+ *  - The imperative mutator API (`preparePipeline`, `startPipeline`,
+ *    `addRunningStep`, `completeStep`, `failStep`, `stopPipeline`,
+ *    `toggleAutoEnter`, `enterReprocessStaging`, `cancelReprocessStaging`,
+ *    `updateReprocessQueue`, `updateReprocessLanguage`) is gone.
+ *  - The renderer becomes a **pure View-side consumer** of
+ *    [DictateUiState] — driven from [ImeViewBackend.render] via
+ *    [onState], just like [AutoEnterRenderer] and
+ *    [RecordButtonColorController].
  *
- * It implements [PipelineUiStateReader] — the narrow read/observe
- * surface for the ReprocessStaging language carrier (Spec 1 §9.6 —
- * adapt, not delete: the interface now points at this relocated owner).
+ * # What the renderer still owns
  *
- * Does NOT handle threading — all methods must be called on the main
- * thread. Does NOT make pipeline/orchestration decisions — the service
- * controls when to switch modes.
+ * Step-row inflate + per-row ElapsedTimer remain View-side per Spec 1
+ * §9.2 (an explicit "BLEIBT" disposition). The only difference is the
+ * **trigger**: the reducer (`PipelineModule.StepStarted` / `…Completed`
+ * / `…Failed`) appends / finalises [StepRowItem] entries on
+ * [PipelineUiState.Running.stepHistory], and this renderer diffs the
+ * list against its inflated view children on every state emit.
  *
- * @see PipelineUiStateReader
- * @see QwertzRecordingController — the sibling G9 BLEIBT extraction.
- * @see docs/plans/2026-05-15 - dictate-cutover-completion/reports/B5-theme-cr-render-cutover.md "Chunk C10-C3 (CR-DEL)"
- * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §9.2
+ * # Idempotency
+ *
+ * [onState] is a no-op when the resolved `(sessionId, stepHistory)`
+ * snapshot matches the last applied one — same discipline as
+ * [AutoEnterRenderer] / [RecordButtonColorController] /
+ * [RecordingAnimationController].
+ *
+ * # Lifecycle
+ *
+ * One instance per [ImeViewBackend] attach interval. [reset] on
+ * detach clears the row cache + stops the active per-step timer so a
+ * re-attach (rotation / view-recreate) re-inflates from a fresh
+ * baseline.
+ *
+ * @see AutoEnterRenderer — sibling side-channel for record_btn compound drawables.
+ * @see RecordButtonColorController — sibling side-channel for record_btn setTextColor.
+ * @see RecordingAnimationController — sibling side-channel for the recording-axis animation.
+ * @see docs/plans/2026-05-21 - dictate-render-cutover-completion-vol2/dictate-render-cutover-completion-vol2.md §4 Phase 5.B
  */
 class PipelineStepRowRenderer(
     private val views: PipelineViews,
-    private val onPipelineUiStateChanged: () -> Unit,
-    /**
-     * Supplies the dictate-button label for the Idle recording branch so
-     * the central resolver in [applyRecordButtonForRecording] can paint
-     * text without owning the language / preferences plumbing
-     * (relocated verbatim from the deleted `KeyboardUiController`).
-     */
-    private val dictateButtonTextProvider: () -> String = { "" },
-) : PipelineUiStateReader {
-
-    /**
-     * Controller-owned per-run UI configuration for the record button.
-     *
-     * Relocated from `KeyboardUiController.AutoEnterConfig` (the name and
-     * lifecycle are unchanged). Holds the `autoEnterActive` flag for the
-     * keyboard record-button rendering; non-null from [startPipeline]
-     * until [stopPipeline].
-     */
-    data class AutoEnterConfig(val autoEnterActive: Boolean)
+) {
 
     data class PipelineViews(
         val pipelineStepsContainer: LinearLayout,
         val pipelineScrollView: ScrollView,
+        /**
+         * Kept on the data class for binary-compat with the IME-Java
+         * caller; the renderer no longer writes to it. The
+         * [AutoEnterRenderer] + [RecordButtonColorController] side-channels
+         * are the sole writers on the `record_btn` axes after Phase 5.B.
+         */
+        @Suppress("unused")
         val recordButton: MaterialButton,
         val infoCl: View,
         val layoutInflater: LayoutInflater,
         val mainHandler: Handler,
     )
-
-    // ── Pipeline UI State ──
-
-    override var state: PipelineUiState = PipelineUiState.Idle
-        private set
-
-    /** Active auto-enter configuration; null iff no pipeline run is in progress. */
-    private var config: AutoEnterConfig? = null
-
-    /** @return the active [AutoEnterConfig], or null if no pipeline run is in progress. */
-    fun getAutoEnterConfig(): AutoEnterConfig? = config
-
-    /**
-     * Registered pipeline-state observers (Quality-Gate K-2 +
-     * Design-Prinzip 7). `CopyOnWriteArrayList` — a callback may add or
-     * remove other callbacks during a `forEach` dispatch.
-     */
-    private val callbacks = CopyOnWriteArrayList<PipelineUiCallback>()
-
-    override fun addCallback(callback: PipelineUiCallback) {
-        callbacks.addIfAbsent(callback)
-    }
-
-    override fun removeCallback(callback: PipelineUiCallback) {
-        callbacks.remove(callback)
-    }
-
-    private var pipelineTotalTimer: ElapsedTimer? = null
-    private var latestPipelineElapsedMs: Long = 0
 
     private data class StepRowBinding(
         val root: View,
@@ -129,210 +100,121 @@ class PipelineStepRowRenderer(
     )
 
     private val stepRows = mutableListOf<StepRowBinding>()
-    private var totalSteps = 0
-    private var currentStep = 0
+
+    /**
+     * Per-RUNNING-row live timer — driven by an [ElapsedTimer] anchored
+     * at the row's `startedAtMs`. Stopped when the row finalises to
+     * COMPLETED / FAILED, restarted when a new RUNNING row is appended.
+     */
     private var activeTimer: ElapsedTimer? = null
 
-    private var savedRecordButtonTextColors: ColorStateList? = null
+    /**
+     * Cache key for the idempotency short-circuit. Two snapshots with
+     * the same `(sessionId, stepHistory-content)` produce identical
+     * views; skipping the diff avoids tear-down of running per-row
+     * animations.
+     */
+    private data class AppliedKey(val sessionId: String?, val stepHistory: List<StepRowItem>)
 
-    private val autoEnterRenderer by lazy { AutoEnterIconRenderer(views.recordButton.context) }
+    private var lastApplied: AppliedKey? = null
 
-    // ── State mutation ──
-
-    private fun updatePipelineState(newState: PipelineUiState) {
-        val old = state
-        state = newState
-        refreshRecordButtonFromState()
-        if (old != newState) {
-            callbacks.forEach { it.onPipelineUiStateChanged(old, newState) }
-            onPipelineUiStateChanged()
+    /**
+     * Idempotent reactive entry point. Called from
+     * [ImeViewBackend.render] after the slot-renderer fan-out and the
+     * record-button side-channels.
+     */
+    fun onState(state: DictateUiState) {
+        val pipe = state.pipeline
+        val key = when (pipe) {
+            is PipelineUiState.Running -> AppliedKey(pipe.sessionId, pipe.stepHistory)
+            else -> AppliedKey(sessionId = null, stepHistory = emptyList())
         }
-    }
+        if (key == lastApplied) return
 
-    private inline fun updateRunningState(transform: (PipelineUiState.Running) -> PipelineUiState.Running) {
-        val s = state
-        if (s is PipelineUiState.Running) {
-            updatePipelineState(transform(s))
+        when (pipe) {
+            is PipelineUiState.Running -> applyRunning(pipe)
+            else -> applyNonRunning()
         }
-    }
-
-    // ── Convenience read-only accessors (Tell-don't-ask for the Service) ──
-
-    fun isPipelineRunning(): Boolean = state is PipelineUiState.Running
-
-    fun isPipelineActive(): Boolean =
-        state is PipelineUiState.Running || state is PipelineUiState.Preparing
-
-    fun isBusy(): Boolean = state !is PipelineUiState.Idle
-
-    fun isReprocessStaging(): Boolean = state is PipelineUiState.ReprocessStaging
-
-    fun getLatestPipelineElapsedMs(): Long = latestPipelineElapsedMs
-
-    // ── Timer cleanup (for view-recreation without side-effects) ──
-
-    fun stopActiveTimer() {
-        activeTimer?.stop()
-        activeTimer = null
-        pipelineTotalTimer?.stop()
-        pipelineTotalTimer = null
-    }
-
-    // ── New pipeline API ──
-
-    fun preparePipeline() {
-        if (savedRecordButtonTextColors == null) {
-            savedRecordButtonTextColors = views.recordButton.textColors
-        }
-        updatePipelineState(PipelineUiState.Preparing)
-    }
-
-    @JvmOverloads
-    fun startPipeline(totalSteps: Int, config: AutoEnterConfig, initialCompletedSteps: Int = 0) {
-        if (savedRecordButtonTextColors == null) {
-            savedRecordButtonTextColors = views.recordButton.textColors
-        }
-
-        this.config = config
-
-        views.pipelineStepsContainer.removeAllViews()
-        views.infoCl.visibility = View.GONE
-        stepRows.clear()
-        this.totalSteps = totalSteps
-        currentStep = 0
-
-        updatePipelineState(
-            PipelineUiState.Running(
-                totalSteps = totalSteps,
-                completedSteps = initialCompletedSteps,
-                currentStepName = "",
-                autoEnterActive = config.autoEnterActive,
-            ),
-        )
-
-        latestPipelineElapsedMs = 0
-        pipelineTotalTimer?.stop()
-        pipelineTotalTimer = ElapsedTimer.start(views.mainHandler) { ms ->
-            latestPipelineElapsedMs = ms
-            // Phase 3 of dictate-render-cutover-completion-vol2 — the
-            // 100 ms tick no longer drives a record-button refresh. The
-            // Catalog (text/enabled/alpha) + AutoEnterRenderer
-            // (compound-drawables) are the single writers for this view.
-            val s = state
-            if (s is PipelineUiState.Running) {
-                callbacks.forEach { it.onPipelineTimerTick(s, ms) }
-            }
-        }
-    }
-
-    fun stopPipeline() {
-        pipelineTotalTimer?.stop()
-        pipelineTotalTimer = null
-        activeTimer?.stop()
-        activeTimer = null
-        autoEnterRenderer.invalidate()
-        updatePipelineState(PipelineUiState.Idle)
-        config = null
-    }
-
-    fun toggleAutoEnter() {
-        val c = config ?: return
-        val s = state
-        if (s !is PipelineUiState.Running) return
-        val newConfig = c.copy(autoEnterActive = !c.autoEnterActive)
-        config = newConfig
-        updatePipelineState(s.copy(autoEnterActive = newConfig.autoEnterActive))
+        lastApplied = key
     }
 
     /**
-     * Phase-2 cutover bridge — drive the renderer's pipeline-state from
-     * the orchestrator's `state.PipelineUiState` snapshot.
-     *
-     * Designed as an **additive** consumer pathway during the
-     * `2026-05-21 - dictate-render-cutover-completion-vol2` migration.
-     * Today the IME still calls the imperative methods
-     * (`preparePipeline`, `startPipeline`, `addRunningStep`,
-     * `completeStep`, `failStep`, `stopPipeline`,
-     * `enterReprocessStaging`, …) which mutate the renderer's legacy
-     * `state` directly. Phase 5 replaces those call sites with a single
-     * `StateFlow<DictateUiState>.collect { syncFromOrchestrator(it.pipeline) }`
-     * subscription and removes the imperative API + the legacy
-     * `state`-property entirely.
-     *
-     * The bridge ([toCoreLegacy]) is lossy — `currentStepName` and
-     * `hasFailure` are not present in the orchestrator state today
-     * (Phase 5.A introduces them via `stepHistory`/`hasFailure`).
-     * Until then the imperative `addRunningStep` / `failStep`
-     * callbacks continue to carry the step-level detail; this method
-     * only synchronises the **coarse FSM phase**
-     * (Idle / Preparing / Running / ReprocessStaging) and the
-     * `autoEnterActive` axis.
-     *
-     * @see PipelineUiStateBridge
+     * Drop the cache + stop the timer + wipe inflated rows. Call from
+     * [ImeViewBackend.detach] so a re-attach re-inflates from scratch.
      */
-    fun syncFromOrchestrator(orchestratorState: net.devemperor.dictate.state.PipelineUiState) {
-        val mapped = orchestratorState.toCoreLegacy()
-        // Preserve the step-detail fields (currentStepName, hasFailure)
-        // on the Running branch — they are owned by the imperative
-        // legacy callbacks until Phase 5.A. The branch type + counters
-        // + autoEnterActive come from the orchestrator snapshot.
-        val merged = if (mapped is PipelineUiState.Running && state is PipelineUiState.Running) {
-            val existing = state as PipelineUiState.Running
-            mapped.copy(
-                currentStepName = existing.currentStepName,
-                hasFailure = existing.hasFailure,
-            )
-        } else {
-            mapped
-        }
-        if (merged != state) updatePipelineState(merged)
-    }
-
-    // ── ReprocessStaging state mutations (Phase 7.3) ──
-
-    fun enterReprocessStaging(
-        targetSessionId: String,
-        audioDurationSeconds: Long,
-        initialQueue: List<Int>,
-        language: String?,
-    ) {
-        updatePipelineState(
-            PipelineUiState.ReprocessStaging(
-                targetSessionId = targetSessionId,
-                audioDurationSeconds = audioDurationSeconds,
-                editableQueue = initialQueue,
-                selectedLanguage = language,
-            ),
-        )
-    }
-
-    fun cancelReprocessStaging() {
-        if (state is PipelineUiState.ReprocessStaging) {
-            updatePipelineState(PipelineUiState.Idle)
-        }
-    }
-
-    fun updateReprocessQueue(queue: List<Int>) {
-        val s = state
-        if (s is PipelineUiState.ReprocessStaging) {
-            updatePipelineState(s.copy(editableQueue = queue))
-        }
-    }
-
-    override fun updateReprocessLanguage(code: String) {
-        val s = state
-        if (s is PipelineUiState.ReprocessStaging) {
-            updatePipelineState(s.copy(selectedLanguage = code))
-        }
-    }
-
-    // ── Pipeline steps (Running state only, main thread) ──
-
-    fun addRunningStep(stepName: String) {
-        currentStep++
-
+    fun reset() {
         activeTimer?.stop()
+        activeTimer = null
+        stepRows.clear()
+        views.pipelineStepsContainer.removeAllViews()
+        lastApplied = null
+    }
 
+    /**
+     * Stop the per-row timer without touching the cache or the inflated
+     * row views. Used by the IME service in
+     * `cleanupOldControllers` when the View tree gets recreated but the
+     * renderer wants to leave UI in its current state (the next
+     * `reset()` from `detach()` will clear it properly).
+     */
+    fun stopActiveTimer() {
+        activeTimer?.stop()
+        activeTimer = null
+    }
+
+    // ── Branch handlers ─────────────────────────────────────────────────
+
+    private fun applyRunning(running: PipelineUiState.Running) {
+        // First emit of a new session — wipe whatever rows the previous
+        // session left behind (rotation, cancel + retry, etc.).
+        if (lastApplied?.sessionId != running.sessionId) {
+            views.pipelineStepsContainer.removeAllViews()
+            views.infoCl.visibility = View.GONE
+            stepRows.clear()
+            activeTimer?.stop()
+            activeTimer = null
+        }
+        diffStepHistory(running.stepHistory)
+    }
+
+    private fun applyNonRunning() {
+        // Idle / Preparing / ReprocessStaging — wipe the rows from the
+        // previous Running. ReprocessStaging shows its own UI (the
+        // editable queue + language chip); it does not own pipeline
+        // step rows.
+        if (stepRows.isNotEmpty()) {
+            views.pipelineStepsContainer.removeAllViews()
+            stepRows.clear()
+        }
+        activeTimer?.stop()
+        activeTimer = null
+    }
+
+    private fun diffStepHistory(target: List<StepRowItem>) {
+        // 1) Inflate any new rows beyond the current view count.
+        while (stepRows.size < target.size) {
+            val item = target[stepRows.size]
+            inflateRow(item)
+        }
+        // 2) Re-apply the visual state to every existing row (idempotent
+        //    re-write of icon/progressbar/duration text, even if it
+        //    matches the previous render — cheap, no animation tear-down).
+        for (i in target.indices) {
+            applyRowState(stepRows[i], target[i])
+        }
+        // 3) Wire the per-row live timer to the last RUNNING row, if any.
+        val lastRunningIdx = target.indexOfLast { it.status == StepStatus.RUNNING }
+        if (lastRunningIdx >= 0) {
+            startActiveTimerFor(stepRows[lastRunningIdx])
+        } else {
+            activeTimer?.stop()
+            activeTimer = null
+        }
+        // 4) Auto-scroll to the latest row.
+        views.pipelineScrollView.post { views.pipelineScrollView.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun inflateRow(item: StepRowItem) {
         val row = views.layoutInflater.inflate(
             R.layout.item_pipeline_step_row,
             views.pipelineStepsContainer,
@@ -345,105 +227,44 @@ class PipelineStepRowRenderer(
             nameTv = row.findViewById(R.id.pipeline_step_name_tv),
             durationTv = row.findViewById(R.id.pipeline_step_duration_tv),
         )
-
-        binding.iconTv.visibility = View.GONE
-        binding.pb.visibility = View.VISIBLE
-        binding.nameTv.text = stepName
-
-        binding.durationTv.visibility = View.VISIBLE
-        binding.durationTv.text = formatElapsedCompact(0)
-
+        binding.nameTv.text = item.stepName
         views.pipelineStepsContainer.addView(row)
         stepRows.add(binding)
+        applyRowState(binding, item)
+    }
 
-        activeTimer = ElapsedTimer.start(views.mainHandler) { ms ->
-            binding.durationTv.text = formatElapsedCompact(ms)
+    private fun applyRowState(binding: StepRowBinding, item: StepRowItem) {
+        binding.nameTv.text = item.stepName
+        when (item.status) {
+            StepStatus.RUNNING -> {
+                binding.iconTv.visibility = View.GONE
+                binding.pb.visibility = View.VISIBLE
+                binding.durationTv.visibility = View.VISIBLE
+                binding.durationTv.text = formatElapsedCompact(0)
+            }
+            StepStatus.COMPLETED -> {
+                binding.pb.visibility = View.GONE
+                binding.iconTv.visibility = View.VISIBLE
+                binding.iconTv.text = "✓"
+                binding.iconTv.setTextColor(0xFF4CAF50.toInt())  // Material Green 500
+                binding.durationTv.visibility = View.VISIBLE
+                binding.durationTv.text = formatElapsedCompact(item.durationMs)
+            }
+            StepStatus.FAILED -> {
+                binding.pb.visibility = View.GONE
+                binding.iconTv.visibility = View.VISIBLE
+                binding.iconTv.text = "✕"
+                binding.iconTv.setTextColor(0xFFF44336.toInt())  // Material Red 500
+                binding.durationTv.visibility = View.VISIBLE
+                binding.durationTv.text = formatElapsedCompact(item.durationMs)
+            }
         }
-
-        views.pipelineScrollView.post { views.pipelineScrollView.fullScroll(View.FOCUS_DOWN) }
-
-        updateRunningState { it.copy(currentStepName = stepName) }
     }
 
-    fun completeStep(stepName: String, durationMs: Long) {
+    private fun startActiveTimerFor(targetBinding: StepRowBinding) {
         activeTimer?.stop()
-        activeTimer = null
-
-        if (stepRows.isEmpty()) return
-        val binding = stepRows.last()
-
-        binding.pb.visibility = View.GONE
-        binding.iconTv.visibility = View.VISIBLE
-        binding.iconTv.text = "✓" // ✓
-        binding.iconTv.setTextColor(0xFF4CAF50.toInt()) // Material Green 500
-        binding.nameTv.text = stepName
-        binding.durationTv.visibility = View.VISIBLE
-        binding.durationTv.text = formatElapsedCompact(durationMs)
-
-        updateRunningState { it.copy(completedSteps = it.completedSteps + 1) }
+        activeTimer = ElapsedTimer.start(views.mainHandler) { ms ->
+            targetBinding.durationTv.text = formatElapsedCompact(ms)
+        }
     }
-
-    fun failStep(stepName: String) {
-        activeTimer?.stop()
-        activeTimer = null
-
-        if (stepRows.isEmpty()) return
-        val binding = stepRows.last()
-
-        binding.pb.visibility = View.GONE
-        binding.iconTv.visibility = View.VISIBLE
-        binding.iconTv.text = "✕" // ✕
-        binding.iconTv.setTextColor(0xFFF44336.toInt()) // Material Red 500
-        binding.nameTv.text = stepName
-
-        updateRunningState { it.copy(completedSteps = it.completedSteps + 1, hasFailure = true) }
-    }
-
-    // ── Record button rendering from state ──
-    //
-    // Phase 3 of dictate-render-cutover-completion-vol2 — this whole
-    // section is a no-op after the atomic flip. The single writers on
-    // `record_btn` are:
-    //
-    //  - Catalog/`SlotRenderer.applySlotToView` for text / enabled /
-    //    alpha (Spec 2 §5.1).
-    //  - `AutoEnterRenderer` side-channel for left + right compound
-    //    drawables (Q1).
-    //  - `RecordButtonColorController` side-channel for setTextColor —
-    //    pending Phase 5.A (the `hasFailure` state migration).
-    //
-    // The methods below remain as compile-time call-site shims so the
-    // IME-Java call sites keep type-checking; the bodies are empty.
-    // Phase 5.B deletes them along with the renderer's imperative
-    // mutation API.
-
-    /**
-     * Phase 3 no-op shim. Body intentionally empty — the record-btn
-     * recording-axis is owned by the Catalog/SlotRenderer now (text /
-     * enabled) and by [AutoEnterRenderer] (compound drawables).
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun applyRecordButtonForRecording(state: RecordingState) {
-        // No-op — see section header above.
-    }
-
-    private fun refreshRecordButtonFromState() {
-        // No-op — see section header above. Method kept private so
-        // existing internal call sites compile; Phase 5.B removes it.
-    }
-
-    fun restoreRecordButtonIdle(
-        @Suppress("UNUSED_PARAMETER") text: String,
-        @Suppress("UNUSED_PARAMETER") leftIcon: Int,
-        @Suppress("UNUSED_PARAMETER") rightIcon: Int,
-    ) {
-        // No-op — see section header above. The Catalog drives the
-        // Idle visual on the next state emit; no manual restore needed.
-    }
-
-    // updateAutoEnterAppearance and formatDurationMinSec deleted in
-    // Phase 3 — the AutoEnterRenderer side-channel is the only place
-    // the dynamic ↵ BitmapDrawable is written. ReprocessStaging text
-    // formatting moved to `resolveRecordButtonTextStaging` + the
-    // `LayoutStrings.formatStagingLabel` lambda in TextResolvers.kt.
 }

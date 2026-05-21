@@ -305,9 +305,19 @@ internal fun testLayoutStrings(): LayoutStrings = LayoutStrings(
     // code passed by `resolveRecordButtonText` (state.language.effective).
     dictateButtonText = { effectiveLanguage -> "Dictate ($effectiveLanguage)" },
     formatStagingLabel = { secs -> "Audio 0:${"%02d".format(secs)} · Send" },
-    formatPipelineLabel = { done, total, autoEnter, elapsedMs ->
+    formatPipelineLabel = { stepName, done, total, autoEnter, elapsedMs ->
+        // Mirrors the production formatter's two-line layout for tests
+        // that exercise B-D-1: when stepName is non-blank, the test
+        // fixture renders "<stepName>\n<N>/<M>[ ↵] <ms>ms"; otherwise
+        // the single-line legacy shape. Tests asserting on the exact
+        // String shape pin which arm they want.
         val mark = if (autoEnter) " ↵" else ""
-        "$done/$total$mark  ${elapsedMs}ms"
+        val phase = stepName?.takeIf { it.isNotBlank() }
+        if (phase != null) {
+            "$phase\n$done/$total$mark  ${elapsedMs}ms"
+        } else {
+            "$done/$total$mark  ${elapsedMs}ms"
+        }
     },
     formatPreparingLabel = { autoEnter ->
         // #AE-DEEP2: mirrors the production lambda's " ↵" suffix so tests

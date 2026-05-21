@@ -884,18 +884,43 @@ class DictatePipelineService : Service() {
             val seconds = audioDurationSeconds % 60
             String.format(Locale.US, "Audio %d:%02d · Send", minutes, seconds)
         },
-        formatPipelineLabel = { completedSteps, totalSteps, autoEnterActive, elapsedMs ->
-            // Live `completedSteps/totalSteps/elapsedMs` come from
-            // `PipelineUiState.Running` via `resolveRecordButtonTextPipeline`
-            // (F-13, Epic §4 Block A1). This lambda only formats them as
-            // `N/M ↵ M:SS`.
+        formatPipelineLabel = { stepName, completedSteps, totalSteps, autoEnterActive, elapsedMs ->
+            // Live `stepName / completedSteps / totalSteps / elapsedMs`
+            // come from `PipelineUiState.Running` via
+            // `resolveRecordButtonTextPipeline` (F-13, Epic §4 Block A1
+            // + B-D-1, dictate-pipeline-render-and-state-unification §5.1).
+            //
+            // Layout (OQ-1 Variante A — two-line):
+            //   - With a non-empty stepName:
+            //     `"<stepName>\n<N>/<M>[ ↵] <M>:<SS>"`
+            //   - Without a step name (between steps / right after
+            //     StartPipeline before first StepStarted): single-line
+            //     legacy shape `"<N>/<M>[ ↵] <M>:<SS>"` so the empty-name
+            //     window doesn't shrink the button to one line + back
+            //     to two on every step boundary (a UX-jitter the
+            //     Variante-A two-line layout otherwise causes).
+            //
+            // Locale.US: technical format — keeps ASCII digits
+            // regardless of device locale (B4-VAL F-5, mirrors
+            // RecordingAnimationController + the F-13 formatter
+            // contract).
             val seconds = (elapsedMs / 1000L).toInt()
             val mm = seconds / 60
             val ss = seconds % 60
-            if (autoEnterActive) {
-                String.format(Locale.US, "%d/%d ↵ %d:%02d", completedSteps, totalSteps, mm, ss)
+            val arrow = if (autoEnterActive) " ↵" else ""
+            val phase = stepName?.takeIf { it.isNotBlank() }
+            if (phase != null) {
+                String.format(
+                    Locale.US,
+                    "%s\n%d/%d%s %d:%02d",
+                    phase, completedSteps, totalSteps, arrow, mm, ss,
+                )
             } else {
-                String.format(Locale.US, "%d/%d %d:%02d", completedSteps, totalSteps, mm, ss)
+                String.format(
+                    Locale.US,
+                    "%d/%d%s %d:%02d",
+                    completedSteps, totalSteps, arrow, mm, ss,
+                )
             }
         },
         formatPreparingLabel = { autoEnterActive ->

@@ -89,4 +89,105 @@ class TextResolversTest {
             resolveOverlayRecordButtonText(s, strings),
         )
     }
+
+    // ─── B-D-1: step-name in pipeline label ──────────────────────────
+
+    @Test
+    fun `Running with no stepHistory falls back to single-line label`() {
+        // Right after StartPipeline (before the first StepStarted)
+        // there is no RUNNING row in `stepHistory` → `currentStepName`
+        // is null → the formatter falls back to the single-line legacy
+        // shape so the button height does not flicker.
+        val s = baseState.copy(
+            pipeline = PipelineUiState.Running(
+                sessionId = "sid-x",
+                target = InsertionTarget.INPUT_CONNECTION,
+                completedSteps = 0,
+                totalSteps = 2,
+                elapsedMs = 100L,
+            ),
+        )
+        val text = resolveRecordButtonTextPipeline(s, strings).toString()
+        // testLayoutStrings format with null step → "$done/$total$mark  ${elapsedMs}ms"
+        assertEquals("0/2  100ms", text)
+    }
+
+    @Test
+    fun `Running with currentStepName renders two-line label with phase on first line`() {
+        // AC-D-1: live step name appears in the button label.
+        val runningWithStep = PipelineUiState.Running(
+            sessionId = "sid-x",
+            target = InsertionTarget.INPUT_CONNECTION,
+            completedSteps = 1,
+            totalSteps = 2,
+            elapsedMs = 8000L,
+            stepHistory = kotlinx.collections.immutable.persistentListOf(
+                net.devemperor.dictate.state.StepRowItem(
+                    stepName = "Transcribe",
+                    status = net.devemperor.dictate.state.StepStatus.RUNNING,
+                    startedAtMs = 0L,
+                ),
+            ),
+        )
+        val s = baseState.copy(pipeline = runningWithStep)
+        val text = resolveRecordButtonTextPipeline(s, strings).toString()
+        // testLayoutStrings format with non-null step:
+        //   "<phase>\n<done>/<total><mark>  <elapsedMs>ms"
+        assertEquals("Transcribe\n1/2  8000ms", text)
+        // Bonus: the overlay backend's composition pulls the same text.
+        assertEquals(text, resolveOverlayRecordButtonText(s, strings).toString())
+    }
+
+    @Test
+    fun `Running with multiple completed plus running step picks last RUNNING`() {
+        // currentStepName picks `stepHistory.lastOrNull { status == RUNNING }`
+        // — pin that contract so a regression in DictateUiState.kt's
+        // extension property reflects here.
+        val running = PipelineUiState.Running(
+            sessionId = "sid-x",
+            target = InsertionTarget.INPUT_CONNECTION,
+            completedSteps = 1,
+            totalSteps = 3,
+            elapsedMs = 12000L,
+            stepHistory = kotlinx.collections.immutable.persistentListOf(
+                net.devemperor.dictate.state.StepRowItem(
+                    stepName = "Transcribe",
+                    status = net.devemperor.dictate.state.StepStatus.COMPLETED,
+                    startedAtMs = 0L,
+                    durationMs = 4000L,
+                ),
+                net.devemperor.dictate.state.StepRowItem(
+                    stepName = "Reword: Casual",
+                    status = net.devemperor.dictate.state.StepStatus.RUNNING,
+                    startedAtMs = 4000L,
+                ),
+            ),
+        )
+        val s = baseState.copy(pipeline = running)
+        val text = resolveRecordButtonTextPipeline(s, strings).toString()
+        assertEquals("Reword: Casual\n1/3  12000ms", text)
+    }
+
+    @Test
+    fun `Running with autoEnterActive renders the arrow marker`() {
+        val running = PipelineUiState.Running(
+            sessionId = "sid-x",
+            target = InsertionTarget.INPUT_CONNECTION,
+            autoEnterActive = true,
+            completedSteps = 1,
+            totalSteps = 2,
+            elapsedMs = 500L,
+            stepHistory = kotlinx.collections.immutable.persistentListOf(
+                net.devemperor.dictate.state.StepRowItem(
+                    stepName = "Format",
+                    status = net.devemperor.dictate.state.StepStatus.RUNNING,
+                    startedAtMs = 0L,
+                ),
+            ),
+        )
+        val s = baseState.copy(pipeline = running)
+        val text = resolveRecordButtonTextPipeline(s, strings).toString()
+        // testLayoutStrings includes ` ↵` when autoEnter is true.
+        assertEquals("Format\n1/2 ↵  500ms", text)
+    }
 }

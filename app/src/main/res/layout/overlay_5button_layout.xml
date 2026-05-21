@@ -62,6 +62,13 @@
         app:pulseMaxRadiusFactor="1.4"
         app:pulseStyle="fill">
 
+        <!-- B-D-1 (dictate-pipeline-render-and-state-unification §5.1
+             + §9.1 OQ-1 Variante A): `maxLines="2"` lets the
+             pipeline-phase label render the step name on its own line
+             above the counter+timer, identical to the keyboard's
+             `record_btn`. The Idle/Active/Paused labels remain
+             single-line and the button height grows only during
+             Running (wrap_content absorbs the delta). -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/overlay_record_btn"
             style="@style/OverlayButton.Primary"
@@ -70,7 +77,7 @@
             android:minWidth="200dp"
             android:text="@string/dictate_record"
             android:textSize="14sp"
-            android:maxLines="1"
+            android:maxLines="2"
             android:contentDescription="@string/overlay_record_cd" />
 
     </net.devemperor.dictate.widget.PulseLayout>

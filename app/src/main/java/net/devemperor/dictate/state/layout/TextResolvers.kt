@@ -5,6 +5,7 @@ package net.devemperor.dictate.state.layout
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
+import net.devemperor.dictate.state.currentStepName
 
 /**
  * Shared `ButtonSlot.textResolver` helpers consumed by the
@@ -59,8 +60,22 @@ import net.devemperor.dictate.state.RecordingState
  *   `"Audio 0:23 · Send"` label for the reprocess-staging record button.
  *   Receives the staging audio duration in seconds.
  * @property formatPipelineLabel mapper producing the running-pipeline
- *   label, e.g. `"2/3 ↵  0:08"`. Receives `(completedSteps, totalSteps,
- *   autoEnterActive, elapsedMs)`.
+ *   label, e.g. `"Transkribiert\n2/3 ↵  0:08"`. Receives
+ *   `(stepName, completedSteps, totalSteps, autoEnterActive, elapsedMs)`.
+ *
+ *   **B-D-1 (dictate-pipeline-render-and-state-unification §5.1 +
+ *   §9.1 OQ-1 Variante A):** the leading `stepName: String?` slot is
+ *   the live `currentStepName` derived from
+ *   `PipelineUiState.Running.stepHistory` (Q3 / §3.5). When non-null
+ *   and non-empty the formatter renders the step name on a first line
+ *   above the counter+timer line — same shape as QWERTZ's
+ *   `"$counter$enterIndicator\n$timer"` mini-record-button. When
+ *   `null` (between steps / immediately after `StartPipeline` before
+ *   the first `StepStarted`) the formatter falls back to the
+ *   single-line `"N/M ↵ M:SS"` legacy shape.
+ *   §9.2 OQ-2 Variante A: the step name is forwarded 1:1 from the
+ *   pipeline runner (`Action.PipelineAction.StepStarted.stepName`) —
+ *   no i18n indirection.
  * @property formatPreparingLabel mapper producing the upload-window label,
  *   e.g. `"Sending …"` or `"Sending … ↵"` when the user pre-armed
  *   auto-enter during the Preparing-window. #AE-DEEP2: without this, a
@@ -85,6 +100,7 @@ data class LayoutStrings(
     val dictateButtonText: (effectiveLanguage: String) -> CharSequence,
     val formatStagingLabel: (audioDurationSeconds: Int) -> CharSequence,
     val formatPipelineLabel: (
+        stepName: String?,
         completedSteps: Int,
         totalSteps: Int,
         autoEnterActive: Boolean,
@@ -144,7 +160,15 @@ fun resolveRecordButtonTextPipeline(state: DictateUiState, strings: LayoutString
         // tap feel like it had no effect.
         is PipelineUiState.Preparing -> strings.formatPreparingLabel(pipe.autoEnterActive)
         is PipelineUiState.Running ->
+            // B-D-1 (dictate-pipeline-render-and-state-unification §5.1):
+            // forward the live `currentStepName` derived from
+            // `Running.stepHistory` so the button label carries the step
+            // name on its own line above the N/M ↵ M:SS counter — both
+            // backends (Keyboard via SEND_MODE selection, Widget via
+            // `resolveOverlayRecordButtonText` composition) reuse this
+            // single resolver, so the step name appears in both surfaces.
             strings.formatPipelineLabel(
+                pipe.currentStepName,
                 pipe.completedSteps,
                 pipe.totalSteps,
                 pipe.autoEnterActive,

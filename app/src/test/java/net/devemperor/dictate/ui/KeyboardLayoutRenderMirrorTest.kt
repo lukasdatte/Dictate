@@ -414,9 +414,17 @@ internal fun mirrorLayoutStrings(): LayoutStrings = LayoutStrings(
     sending = "Sending …",
     dictateButtonText = { lang -> "Dictate ($lang)" },
     formatStagingLabel = { secs -> "Audio 0:${"%02d".format(secs)} · Send" },
-    formatPipelineLabel = { done, total, autoEnter, elapsedMs ->
+    formatPipelineLabel = { stepName, done, total, autoEnter, elapsedMs ->
+        // Mirrors `testLayoutStrings()` in LayoutCatalogTest.kt — two-line
+        // shape when stepName is non-blank, single-line legacy shape
+        // otherwise (B-D-1).
         val mark = if (autoEnter) " ↵" else ""
-        "$done/$total$mark  ${elapsedMs}ms"
+        val phase = stepName?.takeIf { it.isNotBlank() }
+        if (phase != null) {
+            "$phase\n$done/$total$mark  ${elapsedMs}ms"
+        } else {
+            "$done/$total$mark  ${elapsedMs}ms"
+        }
     },
     formatPreparingLabel = { autoEnter ->
         if (autoEnter) "Sending … ↵" else "Sending …"

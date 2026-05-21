@@ -76,8 +76,8 @@ class DictatePipelineServicePreApi34Test {
             shadow.lastForegroundNotificationId,
         )
         assertEquals(
-            "Service must return START_NOT_STICKY on pre-API-34 too",
-            Service.START_NOT_STICKY,
+            "Service must return START_REDELIVER_INTENT on pre-API-34 too (B1.4)",
+            Service.START_REDELIVER_INTENT,
             result,
         )
     }

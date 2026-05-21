@@ -21,6 +21,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+        B1.4 (FGS Crash-Resilience): BootCompletedReceiver runs a
+        DB-only recovery pass after a reboot, so stale RECORDING /
+        TRANSCRIBING rows are promoted before the user opens the
+        keyboard the first time.
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
         TODO(Block 6): keyboard-floating overlay (Spec 3 §5.7).
@@ -71,6 +78,21 @@
             android:exported="false"
             android:foregroundServiceType="microphone"
             android:description="@string/dictate_pipeline_service_description" />
+
+        <!--
+            B1.4 (FGS Crash-Resilience): runs PipelineRecovery.recoverDbOnly()
+            after device boot so stale recording / transcribing rows are
+            cleaned up before the keyboard is first opened. exported=false:
+            only the system sends ACTION_BOOT_COMPLETED.
+        -->
+        <receiver
+            android:name=".core.BootCompletedReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".settings.DictateSettingsActivity"

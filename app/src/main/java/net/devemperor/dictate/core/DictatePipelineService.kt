@@ -1077,7 +1077,13 @@ class DictatePipelineService : Service() {
             }
             throw e
         }
-        return START_NOT_STICKY
+        // B1.4 (FGS Crash-Resilience): `START_REDELIVER_INTENT` so the
+        // system re-delivers the last `startForegroundService` Intent
+        // after an OOM-kill. Combined with `PipelineRecovery.recover()`
+        // in `DictateOrchestrator.init`, this gives the service a
+        // chance to resume its work on the row it was processing when
+        // it died, instead of starting blank.
+        return START_REDELIVER_INTENT
     }
 
     override fun onBind(intent: Intent?): IBinder = binder

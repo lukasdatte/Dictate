@@ -198,17 +198,25 @@ class DictatePipelineServiceTest {
     }
 
     @Test
-    fun onStartCommand_returnsStartNotSticky() {
+    fun onStartCommand_returnsStartRedeliverIntent() {
         controller.create()
 
         val result = controller.get().onStartCommand(Intent(), 0, 0)
 
-        // START_NOT_STICKY is the documented return value (Spec 1 §7.3 +
-        // ADR-0003: OOM-killed service does NOT auto-restart; recovery is
-        // user-triggered via DB-replay).
+        // B1.4 (FGS Crash-Resilience): the service returns
+        // START_REDELIVER_INTENT so the system re-delivers the last
+        // `startForegroundService` Intent after an OOM-kill. Combined
+        // with `PipelineRecovery.recover()` in DictateOrchestrator.init,
+        // this lets the service resume the row it was processing
+        // when it died instead of starting blank.
+        //
+        // (Failure-path branches that bail before the final return —
+        // SecurityException + ForegroundServiceStartNotAllowedException
+        // — still return START_NOT_STICKY because retry-after-OOM is
+        // wrong for them.)
         assertEquals(
-            "Service must return START_NOT_STICKY so OOM-killed instances do not auto-restart",
-            Service.START_NOT_STICKY,
+            "Service must return START_REDELIVER_INTENT for FGS crash-resilience",
+            Service.START_REDELIVER_INTENT,
             result,
         )
     }

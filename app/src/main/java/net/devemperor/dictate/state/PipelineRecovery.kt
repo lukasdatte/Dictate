@@ -80,7 +80,7 @@ import java.io.File
  */
 class PipelineRecovery(
     private val sessionDao: SessionDao,
-    private val sessionRepo: PipelineSessionRepoSubsystem,
+    private val sessionRepo: PipelineSessionRepoSubsystem? = null,
     private val emitAction: (Action) -> Unit = {},
     /**
      * Dispatcher used for the DB-IO blocks. Production code passes
@@ -136,7 +136,11 @@ class PipelineRecovery(
             // `findPendingInsertion(freshnessFloor)` — the second query
             // is the canonical adapter contract; the dedup is internal
             // here so Phase 4 doesn't issue a third SELECT.
-            val pending = sessionRepo.loadPending()
+            val repo = requireNotNull(sessionRepo) {
+                "recover() requires a sessionRepo — use recoverDbOnly() for boot-time " +
+                    "DB-cleanup without a Store."
+            }
+            val pending = repo.loadPending()
 
             // ── Phase 3: merge into store (idempotent on sessionId) ─
             store.update { current ->
@@ -157,6 +161,30 @@ class PipelineRecovery(
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Recovery failed", t)
+        }
+    }
+
+    /**
+     * Boot-time recovery — runs only Phase 1 (DB status-promotion).
+     *
+     * Does not require a [DictateUiStateStore] or a real
+     * [PipelineSessionRepoSubsystem], so it can run from a
+     * [android.content.BroadcastReceiver] context where the
+     * orchestrator is not constructed. Idempotent with [recover] —
+     * when the IME later binds and calls the full `recover(store)`,
+     * the second status-promotion pass is a no-op (no
+     * RECORDING/TRANSCRIBING rows remain).
+     *
+     * **Threading:** dispatches onto [ioContext] internally; callers
+     * pass any dispatcher (typically `Dispatchers.IO`).
+     */
+    suspend fun recoverDbOnly() {
+        try {
+            withContext(ioContext) {
+                runStatusPromotion()
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Boot DB recovery failed", t)
         }
     }
 

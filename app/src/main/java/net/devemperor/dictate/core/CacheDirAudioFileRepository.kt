@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.devemperor.dictate.audio.AudioFileRepository
+import net.devemperor.dictate.audio.PipelineAudioResult
 import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -110,39 +111,43 @@ class CacheDirAudioFileRepository(
             ?: emptyList()
     }
 
-    override suspend fun readForPipeline(sessionId: String): File? =
+    override suspend fun readForPipeline(sessionId: String): PipelineAudioResult? =
         withContext(ioDispatcher) {
             val segs = segments(sessionId)
             when {
                 segs.isEmpty() -> null
-                segs.size == 1 -> segs.first()
+                segs.size == 1 -> PipelineAudioResult.Complete(segs.first())
                 else -> mergeSegments(sessionId, segs)
             }
         }
 
-    private fun mergeSegments(sessionId: String, segs: List<File>): File? {
+    private fun mergeSegments(sessionId: String, segs: List<File>): PipelineAudioResult? {
         val merged = mergedFile(sessionId)
         runCatching { merged.delete() }  // start fresh; ignored when missing
         var muxer: MediaMuxer? = null
         var trackIndex = -1
         var ptsOffsetUs = 0L
         val buffer = ByteBuffer.allocate(BUFFER_SIZE_BYTES)
+        val ignoredIndices = mutableListOf<Int>()
         try {
             muxer = MediaMuxer(merged.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            for (seg in segs) {
+            for ((index, seg) in segs.withIndex()) {
                 val extractor = MediaExtractor()
                 try {
                     extractor.setDataSource(seg.absolutePath)
                     if (extractor.trackCount == 0) {
-                        Log.w(TAG, "Segment has no tracks: ${seg.name}; skipped")
+                        Log.w(TAG, "Segment has no tracks: ${seg.name} (index $index); skipped")
+                        ignoredIndices.add(index)
                         continue
                     }
                     extractor.selectTrack(0)
                     if (trackIndex < 0) {
-                        // Register the audio track once, using the FIRST
-                        // segment's format. ADR-0007 assumes all segments
-                        // share codec parameters (same RecordingHardwareAdapter
-                        // configuration).
+                        // Register the audio track once, using the
+                        // FIRST readable segment's format. ADR-0007
+                        // assumes all segments share codec parameters
+                        // (same RecordingHardwareAdapter configuration —
+                        // B.3 mitigation in B1.2 captures and replays
+                        // these on allocateNext).
                         trackIndex = muxer.addTrack(extractor.getTrackFormat(0))
                         muxer.start()
                     }
@@ -163,23 +168,43 @@ class CacheDirAudioFileRepository(
                         muxer.writeSampleData(trackIndex, buffer, info)
                         extractor.advance()
                     }
-                    // PTS offset for the next segment = end of this one
-                    // + 1 ms safety gap (avoids exact-duplicate PTS when
-                    // two segments end on the same timestamp tick).
+                    // PTS offset for the next segment = end of this
+                    // one + 1 ms safety gap (avoids exact-duplicate
+                    // PTS when two segments end on the same tick).
                     ptsOffsetUs = maxPtsThisSeg + PTS_GAP_US
+                } catch (e: Exception) {
+                    // Per-segment failure: skip and record. Most
+                    // common cause is a partial segment produced by a
+                    // Rolling-Segment crash (no `moov` atom) — see
+                    // ADR-0007 §"Activation + Rolling-Segments".
+                    Log.w(
+                        TAG,
+                        "Segment ${seg.name} (index $index) unreadable; skipped",
+                        e,
+                    )
+                    ignoredIndices.add(index)
                 } finally {
-                    extractor.release()
+                    runCatching { extractor.release() }
                 }
             }
-            // Edge case: every segment was empty / track-less. Bail
-            // out — the merged file has no track and is unusable.
+            // Edge case: no segment was readable. Bail — the merged
+            // file has no track and is unusable.
             if (trackIndex < 0) {
-                Log.w(TAG, "All segments empty for session $sessionId; no merged file")
+                Log.w(TAG, "All segments unreadable for session $sessionId; no merged file")
                 runCatching { merged.delete() }
                 return null
             }
             muxer.stop()
-            return merged
+            return if (ignoredIndices.isEmpty()) {
+                PipelineAudioResult.Complete(merged)
+            } else {
+                PipelineAudioResult.PartialRecovery(
+                    file = merged,
+                    ignoredSegmentIndices = ignoredIndices.toList(),
+                    estimatedLostSeconds =
+                        ignoredIndices.size * DEFAULT_LOST_SECONDS_PER_SEGMENT,
+                )
+            }
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to merge ${segs.size} segments for session $sessionId", t)
             runCatching { merged.delete() }
@@ -255,5 +280,16 @@ class CacheDirAudioFileRepository(
         internal const val BUFFER_SIZE_BYTES = 1024 * 1024
         /** 1 ms PTS gap between segments — avoids exact-duplicate timestamps. */
         internal const val PTS_GAP_US = 1_000L
+
+        /**
+         * Heuristic — estimated seconds of audio lost per unreadable
+         * segment in [PipelineAudioResult.PartialRecovery]. Matches
+         * the Rolling-Segment default interval (Pref.RollingSegmentIntervalSec,
+         * B1.3). A skipped segment lost at most one rolling cycle of
+         * audio; the actual value is somewhere between 0 and this
+         * upper bound, but per-segment introspection of partial mdat
+         * frames is not worth the complexity for a status message.
+         */
+        internal const val DEFAULT_LOST_SECONDS_PER_SEGMENT = 30.0
     }
 }

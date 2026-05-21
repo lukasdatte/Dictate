@@ -73,21 +73,35 @@ interface AudioFileRepository {
     fun segments(sessionId: String): List<File>
 
     /**
-     * Return one [File] the Pipeline layer can upload. The semantic
-     * contract: regardless of segment count, the returned file holds
-     * the full audio for [sessionId].
+     * Return a [PipelineAudioResult] the Pipeline layer can upload.
+     * The semantic contract: regardless of segment count, the
+     * result's `file` holds the readable audio for [sessionId].
      *
-     *  - **Single segment:** the segment file itself (zero-copy).
-     *  - **Multiple segments:** a transient `{prefix}{sessionId}{merged}{ext}`
-     *    file produced by MediaMuxer-level concatenation. The transient
-     *    is owned by the repository — [deleteAll] removes it alongside
-     *    the segments.
-     *  - **No segments:** `null` (the caller propagates an audio-missing
-     *    error — see `PipelineRecovery` ghost-cleanup).
+     *  - **Single segment:** [PipelineAudioResult.Complete] with
+     *    the segment file itself (zero-copy, no validation —
+     *    corrupted single segments surface as Whisper-upload 4xx
+     *    errors, not as a recovery decision).
+     *  - **Multiple segments, all readable:**
+     *    [PipelineAudioResult.Complete] with a transient
+     *    `{prefix}{sessionId}{merged}{ext}` file produced by
+     *    MediaMuxer-level concatenation. The transient is owned by
+     *    the repository — [deleteAll] removes it alongside the
+     *    segments.
+     *  - **Multiple segments, some unreadable:**
+     *    [PipelineAudioResult.PartialRecovery] with the merged file
+     *    (readable segments only) plus the indices of skipped
+     *    segments and an estimate of lost audio duration. The
+     *    caller persists the metadata into the session's
+     *    `lastErrorMessage` so the Partial-Recovery InfoBar
+     *    producer (B4) can surface a warning after pipeline
+     *    completion.
+     *  - **No segments OR every segment unreadable:** `null` (the
+     *    caller propagates an audio-missing error — see
+     *    `PipelineRecovery` ghost-cleanup).
      *
      * Concatenation runs on `Dispatchers.IO`.
      */
-    suspend fun readForPipeline(sessionId: String): File?
+    suspend fun readForPipeline(sessionId: String): PipelineAudioResult?
 
     /**
      * Delete every segment and any transient merged file for

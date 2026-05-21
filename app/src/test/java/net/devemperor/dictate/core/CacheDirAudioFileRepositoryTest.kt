@@ -1,6 +1,7 @@
 package net.devemperor.dictate.core
 
 import kotlinx.coroutines.runBlocking
+import net.devemperor.dictate.audio.PipelineAudioResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -146,17 +147,31 @@ class CacheDirAudioFileRepositoryTest {
     // ── readForPipeline() — single-segment fast path + null path ────────
 
     @Test
-    fun `readForPipeline returns the single segment directly`() = runBlocking {
+    fun `readForPipeline returns Complete with the single segment`() = runBlocking {
         audioDir.mkdirs()
         val single = File(audioDir, "sess_x_seg1.m4a").also { it.createNewFile() }
         val result = repo.readForPipeline("x")
-        assertEquals(single, result)
+        assertTrue("expected Complete, got $result", result is PipelineAudioResult.Complete)
+        assertEquals(single, (result as PipelineAudioResult.Complete).file)
     }
 
     @Test
     fun `readForPipeline returns null when no segments`() = runBlocking {
         audioDir.mkdirs()
         assertNull(repo.readForPipeline("nonexistent"))
+    }
+
+    @Test
+    fun `readForPipeline single-segment fast path skips track validation`() = runBlocking {
+        // Empty file would be rejected by MediaExtractor — but the
+        // single-segment fast path is zero-copy by design. Corrupted
+        // single segments surface as Whisper 4xx errors, not as a
+        // recovery decision. This locks the fast-path contract.
+        audioDir.mkdirs()
+        val single = File(audioDir, "sess_x_seg1.m4a").also { it.createNewFile() }
+        val result = repo.readForPipeline("x")
+        assertTrue(result is PipelineAudioResult.Complete)
+        assertEquals(single, (result as PipelineAudioResult.Complete).file)
     }
 
     // ── deleteAll() ─────────────────────────────────────────────────────

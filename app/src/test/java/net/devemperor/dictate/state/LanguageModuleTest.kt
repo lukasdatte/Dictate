@@ -130,7 +130,22 @@ class LanguageModuleTest {
         )
 
         // Boot sentinel before any RefreshFromPref.
-        assertEquals("system", store.snapshot.language.effective)
+        //
+        // 2026-05-21 indirection-cleanup Chunk 4.5a — the
+        // PipelinePrefMirror now computed-mirrors
+        // (Pref.InputLanguages, Pref.InputLanguagePos) → state.language.effective
+        // via LanguageResolver. The mirror's attach runs resolution on
+        // the empty SP; with the test fixture's LanguageLabelResolver
+        // initialized (codes ["detect", "en", ...]) the resolver returns
+        // the head of the curated default — typically "detect" because
+        // "Auto-Detect" sorts before "English" by display label. The
+        // exact head is fixture-dependent; the assertion is that the
+        // mirror landed *some* real code, not "system".
+        val initial = store.snapshot.language.effective
+        org.junit.Assert.assertTrue(
+            "PrefMirror computed-mirror should resolve a real code on empty SP, not the boot sentinel: $initial",
+            initial.isNotBlank() && initial != "system",
+        )
 
         // Settings activity changed the language to "de"; the IME resolved
         // it and dispatched. The reducer must write it through.
@@ -140,7 +155,7 @@ class LanguageModuleTest {
 
         assertEquals(DispatchOutcome.Applied, outcome)
         // The next transcription-config snapshot + F-15 RenderBackend read
-        // now see "de" instead of the "system" sentinel.
+        // now see "de".
         assertEquals("de", store.snapshot.language.effective)
     }
 

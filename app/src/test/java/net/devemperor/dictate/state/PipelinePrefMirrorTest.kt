@@ -328,9 +328,19 @@ class PipelinePrefMirrorTest {
 
     @Test
     fun `attach preserves non-mirror sub-states like recording and pipeline`() {
-        // pendingSessions, recording, pipeline, viewMode, livePrompt,
-        // language: NONE of these are mirrored. If attach() touched them
-        // we would lose recovery-supplied + module-supplied state.
+        // pendingSessions, recording, pipeline, viewMode, livePrompt:
+        // NONE of these are mirrored. If attach() touched them we would
+        // lose recovery-supplied + module-supplied state.
+        //
+        // 2026-05-21 indirection-cleanup Chunk 4.5a — `language` is now
+        // a *computed* mirror (Pref.InputLanguages + Pref.InputLanguagePos
+        // → state.language.effective). It is therefore explicitly
+        // expected to change post-attach when the SP has non-default
+        // input-language data. With an empty SP the resolver default
+        // ("detect" on the test fixture / "en" on production where the
+        // resolver fallback returns "en") replaces `LanguageState.initial`
+        // ("system") — value-equal but not same-reference. The override
+        // field is preserved.
         val sp = FakeSharedPreferences()
         val store = DictateUiStateStore(DictateUiState.initial())
 
@@ -343,9 +353,10 @@ class PipelinePrefMirrorTest {
         assertSame(before.recording, after.recording)
         assertSame(before.pipeline, after.pipeline)
         assertEquals(before.viewMode, after.viewMode)
-        assertSame(before.language, after.language)
         assertSame(before.livePrompt, after.livePrompt)
         assertSame(before.pendingSessions, after.pendingSessions)
+        // override is not touched by the mirror — only effective.
+        assertEquals(before.language.override, after.language.override)
         // F-1 — `lastResultNeedsManualPaste` moved from a top-level
         // field to `ResendState.lastResultNeedsManualPaste`. PrefMirror
         // does not touch this field; the resend axis as a whole is
@@ -372,5 +383,72 @@ class PipelinePrefMirrorTest {
         val after = store.snapshot.layout
 
         assertEquals(before, after)
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // OQ-1 Option A — computed-mirror for InputLanguages/InputLanguagePos
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `applyChange on InputLanguagePos updates LanguageState_effective`() {
+        // The setup (InputLanguagesPlugin registration, fixture languages)
+        // mirrors LanguageResolverTest — both consume the same resolver.
+        net.devemperor.dictate.preferences.LanguageLabelResolver.initializeForTest(
+            codes = arrayOf("detect", "en", "de", "fr"),
+            labels = arrayOf("Auto-Detect", "English", "Deutsch", "Français"),
+        )
+        net.devemperor.dictate.preferences.versioned.VersionedPluginRegistry.register(
+            net.devemperor.dictate.preferences.InputLanguagesPlugin,
+        )
+
+        val sp = FakeSharedPreferences()
+        // Seed curated list (sorted alphabetically by label): de, detect, en, fr
+        net.devemperor.dictate.preferences.versioned.VersionedPrefs.save(
+            sp,
+            net.devemperor.dictate.preferences.InputLanguagesPlugin,
+            listOf("en", "de", "fr"),
+        )
+        val store = DictateUiStateStore(DictateUiState.initial())
+        val mirror = PipelinePrefMirror(sp)
+        mirror.attach(store)
+
+        // Move pos to 2 → curated[2] in label order.
+        val resolved = mirror.applyChange(store.snapshot, Pref.InputLanguagePos.key)
+        val expected = net.devemperor.dictate.preferences.LanguageResolver.effectiveLanguage(sp)
+        assertEquals(expected, resolved.language.effective)
+    }
+
+    @Test
+    fun `applyChange on InputLanguages updates LanguageState_effective`() {
+        net.devemperor.dictate.preferences.LanguageLabelResolver.initializeForTest(
+            codes = arrayOf("detect", "en", "de"),
+            labels = arrayOf("Auto-Detect", "English", "Deutsch"),
+        )
+        net.devemperor.dictate.preferences.versioned.VersionedPluginRegistry.register(
+            net.devemperor.dictate.preferences.InputLanguagesPlugin,
+        )
+
+        val sp = FakeSharedPreferences()
+        // Start with only English curated.
+        net.devemperor.dictate.preferences.versioned.VersionedPrefs.save(
+            sp,
+            net.devemperor.dictate.preferences.InputLanguagesPlugin,
+            listOf("en"),
+        )
+        val store = DictateUiStateStore(DictateUiState.initial())
+        val mirror = PipelinePrefMirror(sp)
+        mirror.attach(store)
+
+        // Switch curated set entirely — Settings Activity write.
+        net.devemperor.dictate.preferences.versioned.VersionedPrefs.save(
+            sp,
+            net.devemperor.dictate.preferences.InputLanguagesPlugin,
+            listOf("de"),
+        )
+        val resolved = mirror.applyChange(store.snapshot, Pref.InputLanguages.key)
+        assertEquals(
+            net.devemperor.dictate.preferences.LanguageResolver.effectiveLanguage(sp),
+            resolved.language.effective,
+        )
     }
 }

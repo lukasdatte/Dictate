@@ -1,6 +1,7 @@
 package net.devemperor.dictate.state
 
 import android.content.SharedPreferences
+import net.devemperor.dictate.preferences.LanguageResolver
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 
@@ -25,6 +26,7 @@ import net.devemperor.dictate.preferences.get
  * | [FeatureToggles] | 4 | `RewordingEnabled`, `AutoFormattingEnabled`, `InstantOutput`, `AutoEnter` |
  * | [ThemingState] | 4 | `Theme`, `AccentColor`, `OverlayCharacters`, `OutputSpeed` |
  * | [OverlayState] | 4 | `Pref.OverlayPositionPortraitX/Y`, `Pref.OverlayPositionLandscapeX/Y` (typed since F-4; mirrors [OverlayModule.Effect.PersistOverlayPosition] write site) |
+ * | [LanguageState] | 2 (computed) | `Pref.InputLanguages` + `Pref.InputLanguagePos` together resolve to `LanguageState.effective` via `LanguageResolver.effectiveLanguage(sp)` (indirection-cleanup 2026-05-21, OQ-1 Option A). Both keys fan into the same `effective`-write because either changes the resolved code. |
  *
  * **Lifecycle contract:** [attach] is called from
  * [DictateOrchestrator]'s `init { … }` block **synchronously**, before
@@ -160,6 +162,17 @@ class PipelinePrefMirror(
             positionLandscapeX = sp.get(Pref.OverlayPositionLandscapeX),
             positionLandscapeY = sp.get(Pref.OverlayPositionLandscapeY),
         ),
+        // 2026-05-21 indirection-cleanup Chunk 4.5a (OQ-1 Option A) —
+        // computed mirror: Pref.InputLanguages + Pref.InputLanguagePos
+        // resolve via LanguageResolver.effectiveLanguage to
+        // state.language.effective. Mirrors the SP→State direction
+        // formerly held by the IME-side `inputLanguagesListener` (which
+        // dispatched RefreshFromPref); now an integral part of the
+        // mirror so external Settings-Activity writes are picked up
+        // without a custom listener.
+        language = current.language.copy(
+            effective = LanguageResolver.effectiveLanguage(sp),
+        ),
     )
 
     /**
@@ -242,6 +255,24 @@ class PipelinePrefMirror(
         Pref.OverlayPositionLandscapeY.key -> current.copy(
             overlay = current.overlay.copy(
                 positionLandscapeY = sp.get(Pref.OverlayPositionLandscapeY),
+            ),
+        )
+
+        // 2026-05-21 indirection-cleanup Chunk 4.5a (OQ-1 Option A) —
+        // computed mirror for the curated-language axis. `InputLanguages`
+        // (the Set<String>) and `InputLanguagePos` (the Int) together
+        // resolve to a single `effective: String` via
+        // `LanguageResolver.effectiveLanguage(sp)` (the same algorithm
+        // the IME and Settings-Activity use directly). Both keys fan
+        // into the same write because either side can change the
+        // effective code (e.g. a new language added to the set, or the
+        // position moved within an unchanged set). The reducer's
+        // distinct-emission contract suppresses re-emits when the
+        // effective code is unchanged after the SP write
+        // (LanguageModule.reduce on RefreshFromPref also gates).
+        Pref.InputLanguages.key, Pref.InputLanguagePos.key -> current.copy(
+            language = current.language.copy(
+                effective = LanguageResolver.effectiveLanguage(sp),
             ),
         )
 

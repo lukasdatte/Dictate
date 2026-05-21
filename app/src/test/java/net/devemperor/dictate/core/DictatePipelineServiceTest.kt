@@ -298,12 +298,34 @@ class DictatePipelineServiceTest {
         val binder = controller.get().onBind(Intent()) as DictatePipelineService.LocalBinder
 
         val snapshot = binder.state.value
-        assertEquals(
-            "Empty SP + PrefMirror.attach must yield a snapshot equal to " +
-                "DictateUiState.initial() — any sub-state delta indicates either " +
-                "a pref-default mismatch or the orchestrator was not wired.",
-            net.devemperor.dictate.state.DictateUiState.initial(),
-            snapshot,
+        // 2026-05-21 indirection-cleanup Chunk 4.5a — `LanguageState.effective`
+        // is now a computed mirror (Pref.InputLanguages + Pref.InputLanguagePos
+        // → LanguageResolver.effectiveLanguage). On empty SP the resolver
+        // returns its default head ("detect" in the production
+        // LanguageLabelResolver fixture). Compare every sub-state except
+        // `language.effective` against `initial()`, and assert the
+        // computed mirror landed a non-empty resolved code.
+        val expected = net.devemperor.dictate.state.DictateUiState.initial()
+        // Sub-states unchanged by Chunk 4.5a:
+        assertEquals(expected.recording, snapshot.recording)
+        assertEquals(expected.pipeline, snapshot.pipeline)
+        assertEquals(expected.viewMode, snapshot.viewMode)
+        assertEquals(expected.layout, snapshot.layout)
+        assertEquals(expected.overlay, snapshot.overlay)
+        assertEquals(expected.audio, snapshot.audio)
+        assertEquals(expected.resend, snapshot.resend)
+        assertEquals(expected.livePrompt, snapshot.livePrompt)
+        assertEquals(expected.features, snapshot.features)
+        assertEquals(expected.theming, snapshot.theming)
+        assertEquals(expected.pendingSessions, snapshot.pendingSessions)
+        assertEquals(expected.interruption, snapshot.interruption)
+        // language.override is unchanged (mirror only writes effective).
+        assertEquals(expected.language.override, snapshot.language.override)
+        // language.effective is computed from the resolver — assert
+        // the mirror landed a real ISO code (non-blank, non-"system").
+        org.junit.Assert.assertTrue(
+            "language.effective should be resolver-supplied, not the boot sentinel: ${snapshot.language.effective}",
+            snapshot.language.effective.isNotBlank() && snapshot.language.effective != "system",
         )
     }
 

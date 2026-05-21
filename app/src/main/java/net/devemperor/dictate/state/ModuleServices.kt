@@ -4,6 +4,8 @@ import android.content.ClipboardManager
 import android.content.SharedPreferences
 import android.view.inputmethod.InputConnection
 import kotlinx.coroutines.CoroutineScope
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.put
 
 /**
  * Dependency-injection container for the per-module side-effect handlers.
@@ -64,7 +66,19 @@ import kotlinx.coroutines.CoroutineScope
  *   effect handlers treat `null` as no-op).
  * @property sharedPrefs the app's default `SharedPreferences`; modules
  *   may read but the canonical Pref-mirror lives in
- *   `PipelinePrefMirror` (C7).
+ *   `PipelinePrefMirror` (C7). For the **State→SP write direction** use
+ *   [prefs] instead — it is the single, typed write seam every module
+ *   should route through.
+ * @property prefs typed `SharedPreferences` write seam (indirection-cleanup
+ *   2026-05-21, Chunk 3.0). Modules that own a `Pref`-mirrored axis emit
+ *   an `Effect.PersistPref<T>` (or module-local equivalent) and their
+ *   `runEffect` calls `services.prefs.persist(pref, value)`. The
+ *   production implementation [SharedPrefsPersistenceService] forwards to
+ *   the same [sharedPrefs] this field is built from; the indirection
+ *   exists to a) keep the write seam testable without an Android
+ *   `SharedPreferences.Editor` mock, and b) document the canonical
+ *   "State → SP" direction (the SP → State direction stays with
+ *   [net.devemperor.dictate.state.PipelinePrefMirror]).
  * @property toastSink Android `Toast` indirection (nullable backend
  *   for test environments).
  * @property audioFileFactory Pre-Dispatch-Allocator for audio cache
@@ -97,11 +111,83 @@ class ModuleServices(
     val inputConnectionProvider: () -> InputConnection?,
     val clipboard: ClipboardManager?,
     val sharedPrefs: SharedPreferences,
+    val prefs: PrefPersistenceService,
     val toastSink: ToastSink,
     val audioFileFactory: AudioFileFactory,
     val scope: CoroutineScope,
     val emitAction: (Action) -> Unit,
 )
+
+/**
+ * Typed `SharedPreferences` **write seam** for module Effects
+ * (indirection-cleanup 2026-05-21, Chunk 3.0 — generic Pref-persistence
+ * foundation, per plan §4 Block 3 Chunk 3.0).
+ *
+ * **Why this exists.** Before Chunk 3.0 the State → SP direction lived
+ * in two places: a) module effects writing directly through
+ * `services.sharedPrefs.edit().put(Pref.X, ...).apply()` (e.g.
+ * [LayoutModule], [OverlayModule]), and b) click-handler imperative SP
+ * writes inside `DictateInputMethodService.java` (the original
+ * "7-stage SP-roundtrip" anti-pattern). Routing all module-side writes
+ * through this interface gives the architecture a single canonical
+ * write seam — symmetric to [PipelinePrefMirror] on the SP → State
+ * direction. Click-handlers no longer write SP at all (they
+ * `dispatch(Action.X)` and the reducer emits an Effect that lands here).
+ *
+ * **Threading.** Modules call [persist] from `runEffect`, which the
+ * orchestrator runs on `services.scope` (Main-immediate). The
+ * underlying `SharedPreferences.Editor.apply()` is async-write to disk
+ * but the in-memory pref value is visible to the next reader on the
+ * same thread immediately. The `PipelinePrefMirror`
+ * `OnSharedPreferenceChangeListener` re-emits the just-written value
+ * back into the store; the resulting `current.copy(...)` is structurally
+ * identical and the `MutableStateFlow` distinct-emission contract
+ * absorbs the no-op — no feedback loop.
+ *
+ * **Not a coalescer.** Every call writes once. If a reducer needs to
+ * batch (e.g. write two related prefs atomically) it emits two effects
+ * — the call site can build a single `Editor` if needed, but the
+ * canonical entry is one effect per pref. Coalescing across effects
+ * would risk a race with the [PipelinePrefMirror] listener (see its
+ * KDoc).
+ *
+ * @see SharedPrefsPersistenceService
+ * @see net.devemperor.dictate.state.PipelinePrefMirror
+ * @see docs/plans/2026-05-21 - dictate-indirection-cleanup/dictate-indirection-cleanup.md §4 Block 3 Chunk 3.0
+ */
+interface PrefPersistenceService {
+
+    /**
+     * Persist `value` under the typed `pref` key. The default
+     * implementation forwards to the `DictatePrefsKt`-extension
+     * `SharedPreferences.Editor.put(pref, value).apply()`.
+     *
+     * Idempotent at the persistence level — writing the same value
+     * twice produces the same on-disk + in-memory state and the
+     * mirror-listener absorbs the no-op via distinct-emission.
+     */
+    fun <T> persist(pref: Pref<T>, value: T)
+}
+
+/**
+ * Production [PrefPersistenceService] backed by a real
+ * [SharedPreferences] instance. Used in
+ * [net.devemperor.dictate.core.DictatePipelineService.onCreate] to
+ * wire the orchestrator's [ModuleServices].
+ *
+ * Tests substitute either a recording fake (for assertions on what
+ * the module wrote) or the [SharedPrefsPersistenceService] itself
+ * with a [net.devemperor.dictate.testutil.FakeSharedPreferences]
+ * underneath — the latter is the cheapest path because it exercises
+ * the same `DictatePrefsKt` extension functions production runs.
+ */
+class SharedPrefsPersistenceService(
+    private val sp: SharedPreferences,
+) : PrefPersistenceService {
+    override fun <T> persist(pref: Pref<T>, value: T) {
+        sp.edit().put(pref, value).apply()
+    }
+}
 
 /**
  * Declarative SharedPreferences ↔ sub-state mirror entry.

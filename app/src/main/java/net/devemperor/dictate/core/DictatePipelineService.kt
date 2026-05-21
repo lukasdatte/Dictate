@@ -46,6 +46,7 @@ import net.devemperor.dictate.state.PipelinePrefMirror
 import net.devemperor.dictate.state.PipelineRecovery
 import net.devemperor.dictate.state.PipelineServiceStubSubsystems
 import net.devemperor.dictate.state.PipelineSessionRepoAdapter
+import net.devemperor.dictate.state.SharedPrefsPersistenceService
 import net.devemperor.dictate.state.layout.KeyboardLayoutManager
 import net.devemperor.dictate.state.layout.LayoutCatalog
 import net.devemperor.dictate.state.layout.LayoutStrings
@@ -512,6 +513,11 @@ class DictatePipelineService : Service() {
             inputConnectionProvider = { binder.delegateInputConnectionProvider?.invoke() },
             clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager,
             sharedPrefs = sharedPrefs,
+            // Chunk 3.0 (indirection-cleanup) — typed State → SP write
+            // seam for module Effects. Production wraps the same
+            // `sharedPrefs` reference used elsewhere; tests substitute a
+            // recording fake.
+            prefs = SharedPrefsPersistenceService(sharedPrefs),
             toastSink = realToastSink(applicationContext),
             audioFileFactory = audioFileFactoryImpl,
             scope = serviceScope,

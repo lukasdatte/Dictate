@@ -4,9 +4,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.testutil.FakeSharedPreferences
 import net.devemperor.dictate.testutil.NoopAudioFileFactory
 import net.devemperor.dictate.testutil.NoopRecordingHardware
+import net.devemperor.dictate.testutil.RecordingPrefPersistenceService
 import net.devemperor.dictate.testutil.fakeModuleServices
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -126,5 +129,43 @@ class ModuleServicesTest {
         assertTrue(services.sharedPrefs.getBoolean("dictate.test.key", false))
         assertEquals("abc", services.sharedPrefs.getString("dictate.test.name", null))
         assertFalse(services.sharedPrefs.getBoolean("missing.key", false))
+    }
+
+    // ─── PrefPersistenceService (Chunk 3.0 — Foundation-Vorlauf) ─────────
+
+    @Test
+    fun `default prefs service writes through to sharedPrefs (production wiring shape)`() {
+        // Production wires `prefs = SharedPrefsPersistenceService(sharedPrefs)`
+        // — a single backing store on the read + write direction. Test
+        // that the default `fakeModuleServices(prefs = …)` matches that
+        // shape: a `persist(...)` call MUST be readable back through
+        // `services.sharedPrefs.get(pref)` (closing the SP→State mirror
+        // loop a real test path exercises end-to-end).
+        val prefs = FakeSharedPreferences()
+        val services = fakeModuleServices(sharedPrefs = prefs)
+
+        services.prefs.persist(Pref.SmallMode, true)
+        assertTrue(prefs.get(Pref.SmallMode))
+
+        services.prefs.persist(Pref.AudioFocus, false)
+        assertFalse(prefs.get(Pref.AudioFocus))
+    }
+
+    @Test
+    fun `RecordingPrefPersistenceService captures persist calls in order`() {
+        // The recording fake is what tests-with-assertions use when they
+        // want to assert "this Effect produced exactly these SP writes,
+        // in this order, and no others".
+        val recording = RecordingPrefPersistenceService()
+        val services = fakeModuleServices(prefs = recording)
+
+        services.prefs.persist(Pref.SmallMode, true)
+        services.prefs.persist(Pref.SingleRowMode, false)
+        services.prefs.persist(Pref.AudioFocus, true)
+
+        assertEquals(3, recording.writes.size)
+        assertEquals(Pref.SmallMode to true, recording.writes[0])
+        assertEquals(Pref.SingleRowMode to false, recording.writes[1])
+        assertEquals(Pref.AudioFocus to true, recording.writes[2])
     }
 }

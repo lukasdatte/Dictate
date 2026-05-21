@@ -18,7 +18,9 @@ import net.devemperor.dictate.state.PendingSession
 import net.devemperor.dictate.state.PipelineNotificationCoordinatorSubsystem
 import net.devemperor.dictate.state.PipelineRunnerSubsystem
 import net.devemperor.dictate.state.PipelineSessionRepoSubsystem
+import net.devemperor.dictate.state.PrefPersistenceService
 import net.devemperor.dictate.state.RecordingHardwareSubsystem
+import net.devemperor.dictate.state.SharedPrefsPersistenceService
 import net.devemperor.dictate.state.RecordingTimerSubsystem
 import net.devemperor.dictate.state.ToastSink
 import java.io.File
@@ -56,6 +58,11 @@ fun fakeModuleServices(
     inputConnectionProvider: () -> InputConnection? = { null },
     clipboard: ClipboardManager? = null,
     sharedPrefs: SharedPreferences = FakeSharedPreferences(),
+    // Chunk 3.0 — defaults to a service backed by the same `sharedPrefs`
+    // so tests that don't care about persistence keep working unchanged
+    // (writes round-trip through the same fake). Tests asserting on
+    // PrefPersistenceService calls pass a `RecordingPrefPersistenceService`.
+    prefs: PrefPersistenceService = SharedPrefsPersistenceService(sharedPrefs),
     toastSink: ToastSink = NoopToastSink,
     audioFileFactory: AudioFileFactory = NoopAudioFileFactory,
 ): ModuleServices = ModuleServices(
@@ -71,11 +78,26 @@ fun fakeModuleServices(
     inputConnectionProvider = inputConnectionProvider,
     clipboard = clipboard,
     sharedPrefs = sharedPrefs,
+    prefs = prefs,
     toastSink = toastSink,
     audioFileFactory = audioFileFactory,
     scope = scope,
     emitAction = emitAction,
 )
+
+/**
+ * Test fake for [PrefPersistenceService] that captures every
+ * `persist` call without writing anywhere. Useful for tests asserting
+ * an Effect emitted a specific Pref write without also touching the
+ * SP-listener mirror.
+ */
+class RecordingPrefPersistenceService : PrefPersistenceService {
+    val writes: MutableList<Pair<net.devemperor.dictate.preferences.Pref<*>, Any?>> = mutableListOf()
+
+    override fun <T> persist(pref: net.devemperor.dictate.preferences.Pref<T>, value: T) {
+        writes += pref to value
+    }
+}
 
 // ──── No-op fakes ────────────────────────────────────────────────────
 

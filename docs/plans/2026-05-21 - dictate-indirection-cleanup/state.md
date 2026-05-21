@@ -274,6 +274,133 @@ braucht" — AC-4 wird damit konsistent.
 hinzukommt, ist Chunk 2.4 als implementations-bereiter Mini-Plan
 verfügbar.
 
+### D-7 (Review-fix G2, AC-5) — Pre-Bind-SP-Write-Fallback als legitimes Pattern B anerkannt
+
+**Plan-Text** (§5 Worked-Example, vor diesem Fix): Der Pre-Bind-Branch
+zeigte `if (pipelineBinder == null) return;` als Default-Pattern. AC-5
+schrieb: „kein stiller SP-Write mehr, der den State später inkonsistent
+macht".
+
+**Realität (Implementer-Wahl)**: In 5 Click-Handlern wurde der
+SP-Write-Fallback bewusst beibehalten:
+- `:5152-5154` SmallMode
+- `:5169-5171` SingleRowMode
+- `:5202-5205` AudioFocus
+- `:3037-3043` LastFileName / TranscriptionAudioFile (Import-Pfad)
+- `:2715-2727` Language
+
+Implementer-Rationale (in den Inline-Kommentaren): „user's choice
+survives the narrow window before the binder attaches". Diese Begründung
+ist UX-richtig: `bindService` ist asynchron (gleich-Prozess, aber
+Main-Thread-Runnable-Delivery), das narrow Window zwischen
+`onCreateInputView` und `onServiceConnected` ist real. Click-Events im
+Window ohne Fallback wären silent no-op.
+
+**Architekturkonflikt**: AC-1 / AC-5 sprachen wörtlich von "kein
+SP-Write hits"; das Implementer-Pattern bricht den Wortlaut, ist aber
+semantisch sinnvoll. Reviewer hat das richtigerweise als
+Wording-Inkonsistenz geflagged.
+
+**Resolution (Option B aus Aufgabenstellung — Pattern legitimieren)**:
+- Plan §2 AC-5 erweitert um zwei Patterns:
+  - **Pattern A** — defensive return (Default für nicht-User-Intent-Sites).
+  - **Pattern B** — getaggter SP-Write-Fallback mit dem exakten Tag-
+    Kommentar `// PRE-BIND-FALLBACK` als Whitelist-Marker.
+- Alle 5 Click-Handler-Else-Zweige mit dem Tag versehen
+  (review-fix-G2-Commit).
+- Begründung im Plan-Body: analog zu AC-6 / B-2 / B-6 pre-bind
+  View-Fallbacks — legitimer Architektur-Erkennungs-Tag, kein
+  Plan-Verletzung.
+
+**Lock-Mechanismus**: Der `CutoverArchitectureInvariantTest`-Lock
+(G5) grept nach `sp.edit().put(...)` / `DictatePrefsKt.put(...)` auf
+gespiegelten Prefs und allow-listet ausschließlich Stellen, deren
+Vor-Zeile den exakten Tag-String trägt. Ungetaggte SP-Writes failen
+den Test.
+
+**Warum konform zur Plan-Intention**: §1 Ziel "Single-Dispatch-
+Invariante" gilt für die **Live-Path-Mutationen** (binder verfügbar);
+Pre-Bind ist explizit als degenerative Phase außerhalb des Live-Pfads
+markiert. AC-7 (kein Custom-SP-Listener) ist orthogonal und bleibt
+erfüllt.
+
+**Follow-up**: Keine. Pattern B ist jetzt explizit erlaubt + getestet.
+
+### D-8 (Review-fix G5) — CutoverArchitectureInvariantTest-Locks für AC-7 + AC-5
+
+**Plan-Text** (§2 AC-7): „Keine Custom-`OnSharedPreferenceChangeListener`
+außerhalb von `PipelinePrefMirror`." (§2 AC-5 nach D-7: getaggte
+SP-Write-Fallbacks erlaubt, ungetaggte verboten.)
+
+**Realität (vor diesem Fix)**: Beide ACs waren als grep-Kommandos im
+Plan dokumentiert, hatten aber keinen automatisierten Lock. Reviewer
+hat das richtigerweise als „Anti-Drift fehlt" geflagged.
+
+**Resolution**: Zwei neue Lock-Tests in `CutoverArchitectureInvariantTest.kt`
+(stilistisch analog zu den existierenden (a)..(g)-Locks):
+- **(h) `noOnSharedPreferenceChangeListenerOutsidePipelinePrefMirror`**:
+  Greppt alle `*.kt`/`*.java`-Files unter `src/main` nach
+  `(set|register)OnSharedPreferenceChangeListener\(`. Allow-List: nur
+  `PipelinePrefMirror.kt`. Stripper-Soundness-Self-Test inklusive
+  (RR-4 false-GREEN-Mitigation).
+- **(i) `directSharedPrefsWritesInImeAreTaggedAsPreBindFallback`**:
+  Scannt die Raw-Source von `DictateInputMethodService.java` (Comments
+  KEPT — der Tag lebt in einem `//`-Comment) nach
+  `DictatePrefsKt.put(` / `sp.edit().put(` / `sp.edit().remove(` für eine
+  Liste von 23 mirrored-oder-modul-besitzten Prefs. Allow-Mechanismus:
+  Tag-String `PRE-BIND-FALLBACK` in einer der 8 Zeilen über dem Write.
+  Window-Größe 8 ist groß genug für einen multi-line Comment-Block,
+  klein genug für Locality. Non-Vacuity-Self-Test
+  (`preBindFallbackTagLockIsNonVacuous`) verifiziert beide Richtungen
+  (tagged → pass, untagged → fail).
+
+**Warum konform zur Plan-Intention**: Die Locks operationalisieren AC-5
+und AC-7 als CI-überprüfbare Invarianten statt manueller grep-Checks.
+Das Testfile war explizit als „die D4 regression-lock the integration
+agent asked for" deklariert (Klassen-KDoc) — die G5-Locks erweitern das
+Muster konsistent.
+
+**Verifikation**: 18 Tests im `CutoverArchitectureInvariantTest`-File,
+BUILD SUCCESSFUL nach Hinzufügen der `PRE-BIND-FALLBACK`-Tags an den
+5 IME-Sites (G2).
+
+**Follow-up**: Keine.
+
+### D-9 (Review-fix G6) — KDoc Atomic-Pair-Framing korrigiert
+
+**Code-Text** (`RecordingModule.kt:147-156`, vor diesem Fix):
+„Atomic pair: persist `Pref.LastFileName` AND clear `Pref.TranscriptionAudioFile`"
+
+**Realität**: Die SP-Schreibe ist **nicht** atomar. Im Effect-Handler
+(`runEffect`-Body) werden zwei sequentielle `services.prefs.persist(...)`-
+Calls abgesetzt. Atomar ist nur die **State-Seite** (eine Action, ein
+Reducer-Pass).
+
+**Resolution**: KDoc neu geschrieben mit zwei expliziten Fakten:
+1. State-Update ist atomar (eine Reducer-Pass — gilt theoretisch auch
+   wenn die Action zukünftig State mutieren würde; aktuell ist sie
+   effect-only).
+2. SP-Writes sind sequenziell. Der zweite Write betrifft
+   `Pref.TranscriptionAudioFile`, das **nicht** im Mirror ist — Consumer
+   liest es nur beim nächsten `onStartInputView`, gated auf
+   Action-Completion. Daher hat fehlende SP-Atomicity keine
+   beobachtbaren Auswirkungen.
+- Auch der Inline-Comment im `runEffect`-Handler entsprechend
+  präzisiert.
+- Das Wort „atomic pair" in `PersistLastFileName`-KDoc referenz
+  entfernt und durch SoT-Verweis auf die `PersistImportedAudioFileName`-
+  KDoc ersetzt.
+
+**Warum konform zur Plan-Intention**: User-Direktive „Document
+consistently so later programmers have an easier time than you did" —
+die alte KDoc würde einen späteren Leser zu der Annahme verleiten,
+SP-Writes seien atomic, was bei einer zukünftigen Refactor-Annahme zu
+fehlerhafter Begründung führen könnte.
+
+**Verifikation**: Test-Compile erfolgreich; KDoc-Verifikation visuell.
+
+**Follow-up**: Keine.
+
 ## Open issues / postponed
 
 - Block 5 (RecordingStateController retire) ist als Folge-Plan-Stub markiert (OQ-3) — wird in diesem Lauf **nicht** ausgeführt.

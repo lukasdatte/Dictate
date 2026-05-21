@@ -135,23 +135,61 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
          * predicate).
          *
          * **Why a separate effect (not a generic `PersistPref<String>`):**
-         * the same effect arm also handles the imported-audio-file
-         * variant which needs to clear `Pref.TranscriptionAudioFile`
-         * atomically. Bundling both writes into the effect keeps the
-         * atomic-pair semantic local to one handler (vs. emitting two
+         * the imported-audio-file branch uses a sibling effect
+         * ([PersistImportedAudioFileName]) that also clears
+         * `Pref.TranscriptionAudioFile` — see that effect's KDoc for the
+         * SP-vs-State atomicity semantics (review-fix G6, 2026-05-21).
+         * Bundling the two writes into a sibling effect keeps the
+         * sequencing local to one handler (vs. emitting two
          * `PersistPref` effects whose ordering would have to be
          * preserved by the orchestrator).
          */
         data class PersistLastFileName(val fileName: String) : Effect
 
         /**
-         * Atomic pair: persist `Pref.LastFileName` AND clear
+         * Persist `Pref.LastFileName` (the imported file name) AND clear
          * `Pref.TranscriptionAudioFile` (indirection-cleanup 2026-05-21,
          * Chunk 4.4 — A-5 import-audio-file branch). The Settings
          * Activity writes the imported audio file to
          * `Pref.TranscriptionAudioFile`; on the next keyboard view the
          * IME picks it up, threads it through the orchestrator, and
          * MUST clear the SP slot so the import does not loop.
+         *
+         * **Atomicity semantics (review-fix G6, 2026-05-21):** the earlier
+         * KDoc claimed an "atomic pair" — that framing is misleading
+         * because the atomicity is **State-side only**, not SP-side. Two
+         * precise facts:
+         *
+         *  1. **State is updated atomically.** The action that emits this
+         *     effect (`Action.RecordingAction.OnAudioFileImported`)
+         *     produces a single reducer pass; if the import flow ever
+         *     observed `RecordingState` it would see one transition, not
+         *     two. (Today the import-path does not mutate
+         *     `RecordingState`; it is effect-only — but the principle
+         *     stands for any future state coupling.)
+         *  2. **SP writes are sequential, not atomic.** This effect's
+         *     `runEffect` handler calls `services.prefs.persist(...)`
+         *     twice in sequence (once for `Pref.LastFileName`, once for
+         *     `Pref.TranscriptionAudioFile`). Each call fires the
+         *     `PipelinePrefMirror` listener for `Pref.LastFileName`
+         *     (which is mirrored) and writes the empty-string canonical
+         *     form for `Pref.TranscriptionAudioFile` (which is **not**
+         *     mirrored — purely IME-side persistence). Because the
+         *     second write targets a non-mirrored key, consumer-side
+         *     observability is unaffected by the lack of SP-side
+         *     atomicity: a reader that races between the two writes
+         *     either sees the old-or-new mirrored-state (governed by
+         *     the first write's mirror cascade) and the
+         *     non-mirrored key's value is only consumed at
+         *     `onStartInputView`-start, which is gated by the action
+         *     having already completed.
+         *
+         * Bundling both writes into a single effect (vs. emitting two
+         * `PersistPref<...>` effects whose ordering would have to be
+         * preserved by the orchestrator) keeps this sequencing local to
+         * one handler — a reader can see the two `services.prefs.persist`
+         * calls in one place rather than tracing two effect emissions
+         * across the reducer.
          */
         data class PersistImportedAudioFileName(val fileName: String) : Effect
 
@@ -661,13 +699,16 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
             services.prefs.persist(Pref.LastFileName, effect.fileName)
 
         is Effect.PersistImportedAudioFileName -> {
-            // Atomic pair: persist LastFileName + clear
-            // TranscriptionAudioFile. Both writes go through the same
+            // Sequential SP writes (review-fix G6, 2026-05-21 — the
+            // earlier "atomic pair" framing was misleading; the
+            // atomicity is State-side only — see Effect.
+            // PersistImportedAudioFileName KDoc for the precise
+            // semantics). Both writes go through the same
             // SharedPreferences instance via the persistence service so
-            // the mirror-listener fires for each in turn; the
-            // distinct-emission contract on the resulting state copies
-            // is irrelevant here (TranscriptionAudioFile is NOT in the
-            // PipelinePrefMirror mirror — purely IME-side persistence).
+            // the mirror-listener fires for the first (mirrored)
+            // write; the second targets `Pref.TranscriptionAudioFile`
+            // which is NOT in the PipelinePrefMirror mirror — purely
+            // IME-side persistence consumed at `onStartInputView`.
             services.prefs.persist(Pref.LastFileName, effect.fileName)
             // `TranscriptionAudioFile`'s default is `""`; persisting
             // the empty string is the canonical "cleared" representation

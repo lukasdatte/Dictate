@@ -144,6 +144,75 @@ LanguageResolverTest-Suite.
 verbleibendes `LanguageResolver.setLanguage` nur im pre-bind-Fallback
 (durch Chunk-4.5c-Kommentar dokumentiert).
 
+### D-4 (Review-fix G3, Chunk 3.5) — Cross-Module-Observer-Cascade aus dem Mirror-Pfad
+
+**Plan-Text** (§6.1 R-5): „External Settings-Activity-Writes (z.B. `Pref.AudioFocus`)
+gehen weiterhin durch PipelinePrefMirror SP→State. … Wenn die Settings-
+Activity einen Live-Hook für laufende Aufnahme erwartet (heute via
+`audioFocusListener`), muss AudioModule.onCrossModuleStateChange dem
+Live-Hook-Verhalten entsprechen (Chunk 3.2)."
+
+**Realität (vor diesem Fix)**: D-1 hat den Cascade-Arm
+`audioFocusEnabledPref-delta && Active → ApplyAudioFocusRuntimeFromPref`
+in `AudioModule.onCrossModuleStateChange` ergänzt — der Arm war korrekt,
+**aber unerreichbar aus dem Mirror-Pfad**:
+- `PipelinePrefMirror.sync(key)` rief `store.update { applyChange(...) }`
+  **direkt** auf — ein State-Write am Orchestrator vorbei.
+- `DictateOrchestrator.dispatchInternal` Step 5 (Cross-Module-Cascade)
+  läuft **nur** nach Action-getriebenen Writes.
+- Folge: Eine externe Settings-Activity-SP-Mutation auf `Pref.AudioFocus`
+  während Aufnahme=Active aktualisierte den State (`audioFocusEnabledPref = false`),
+  **erreichte aber nie** den Live-AudioManager — exakt das R-5-Regress-Szenario,
+  das §6.1 verhindern sollte.
+
+**Recherche (Architektur-Optionen erwogen)**:
+1. **Synthetisches `Action.MirrorSync(key)`** — bricht die "Actions sind
+   Module-besitzbar"-Invariante; eine Action ohne Reducer + ohne Modul
+   wäre Platzhalter ohne Domänen-Bedeutung (anti-SOLID).
+2. **Mirror ruft Observer direkt via neuer Orchestrator-API** — clean SoT,
+   bewahrt "Mirror schreibt State"-Invariante, fügt eine fokussierte
+   öffentliche API hinzu.
+3. **Hybrid (`MirrorSync(prev,next)` reducer-lose Action)** — verschmilzt
+   den semantischen Mangel von (1) mit der Komplexität von (2).
+
+**Resolution (sustainable, Option 2 mit Dispatcher-Abstraktion)**:
+- Neues `fun interface MirrorSyncDispatcher` als Mirror→Orchestrator-Sink.
+- `PipelinePrefMirror.attach(store, dispatcher)` — der Mirror hält keinen
+  Store-Reference mehr; Runtime-Sync geht durch den Dispatcher.
+- `DictateOrchestrator.runMirrorSync(reducer)` — captures prev, applies
+  reducer to store, captures next, läuft Cross-Module-Observer-Cascade
+  (selbe frozen-snapshot-Semantik wie `dispatchInternal` Step 5),
+  dispatcht jede Cascade-Action via `dispatchInternal(action, depth=0)`.
+  Depth=0, weil eine externe SP-Mutation ein **frischer** Dispatch-Pass
+  ist (kein In-Flight-Action-Continuation); der MAX_CASCADE_DEPTH-Guard
+  schützt den inneren Pass.
+- Orchestrator-Init wired den Mirror via Method-Reference:
+  `prefMirror?.attach(store, ::runMirrorSync)` — keine Lambda-Allokation
+  pro Dispatch, Cascade-Engine bleibt im Orchestrator gekapselt.
+- Initial-Snapshot in `attach` schreibt direkt via `store.update` (kein
+  Cascade nötig — nichts ist noch subscribed, Module-Reducer + Recovery
+  laufen erst danach).
+
+**Warum konform zur Plan-Intention**: §1 Ziel "Single-Dispatch-Invariante"
++ §6.1 R-5 sind erfüllt: jede State-Mutation läuft entweder durch
+`dispatch(Action)` (User-Actions) oder durch `runMirrorSync` (SP-Mirror),
+beide produzieren die selbe `(prev, next) → onCrossModuleStateChange →
+dispatch(cascade)`-Kette. SoT für Cross-Module-Reaktionen bleibt der
+Orchestrator.
+
+**Verifikation**: Neuer `PipelinePrefMirrorCascadeTest` lockt das
+Verhalten: external SP-Toggle (`Pref.AudioFocus = false`) während
+Recording=Active mit `audioFocusGranted=true` triggert
+`AudioFocusSubsystem.release()` (`audioFocus.releases == 1`) end-to-end
+durch den Mirror→runMirrorSync→AudioModule.onCrossModuleStateChange→
+ApplyAudioFocusRuntimeFromPref→ApplyAudioFocusRuntime(false)→release()-Pfad.
+Companion-Tests: Idle-Pfad triggert keine Live-Calls; in-IME-Click-Pfad
+funktioniert weiterhin (≥1 release).
+
+**Follow-up**: Keine. `PipelineRecovery.store.update`-Call bleibt
+direkt — Recovery läuft beim Boot bevor irgendetwas subscribed ist,
+Cascades hätten keinen wirksamen Konsumenten.
+
 ## Open issues / postponed
 
 - Block 5 (RecordingStateController retire) ist als Folge-Plan-Stub markiert (OQ-3) — wird in diesem Lauf **nicht** ausgeführt.

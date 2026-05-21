@@ -168,7 +168,12 @@ class DictateOrchestrator(
      * always supplies both.
      */
     init {
-        prefMirror?.attach(store)
+        // Review-fix G3 (2026-05-21) — wire the mirror to a sink that
+        // runs cross-module observers on every external SP-driven state
+        // mutation. Method-reference avoids a fresh lambda allocation
+        // per dispatch and keeps the cascade engine encapsulated within
+        // the orchestrator. See [runMirrorSync] for the dispatch shape.
+        prefMirror?.attach(store, ::runMirrorSync)
         if (recovery != null) {
             scope.launch { recovery.recover(store) }
         }
@@ -386,6 +391,68 @@ class DictateOrchestrator(
         }
 
         return DispatchOutcome.Applied
+    }
+
+    /**
+     * Mirror-sync entry — apply [reducer] to the store and run
+     * cross-module observers against the resulting `(prev, next)` tuple,
+     * recursively dispatching any cascade actions.
+     *
+     * **Review-fix G3 (2026-05-21) — closes the SP→State→Cascade gap.**
+     * Before this method, [PipelinePrefMirror] called `store.update`
+     * directly. That bypassed [dispatchInternal] Step 5 (cross-module
+     * observation), so an external Settings-Activity SP write could
+     * change `audio.audioFocusEnabledPref` mid-recording without ever
+     * reaching [AudioModule.onCrossModuleStateChange]'s
+     * `ApplyAudioFocusRuntimeFromPref` cascade arm — the live
+     * `AudioManager` would stay stale. This was the exact R-5 latent
+     * regression the indirection-cleanup plan §6.1 was supposed to
+     * prevent (and that the D-1 mitigation depended on).
+     *
+     * **Why this shape (not a synthetic Action.MirrorSync):** the mirror
+     * is **not** semantically a user action — there is no reducer to call,
+     * no module that owns "the mirror" as an action axis, no
+     * `actionClass` to register. Creating a pseudo-action with a
+     * pseudo-module would be a placeholder-with-no-domain-meaning
+     * (anti-SOLID). The mirror IS state authority for a slice of state
+     * (the 19 SP-mirrored axes); it produces a (prev, next) directly,
+     * and the cascade-engine is the right tool to react to that diff.
+     *
+     * **Dispatch shape — mirrors [dispatchInternal] Steps 3/5/6:**
+     * 1. Snapshot `prev` (`store.snapshot`).
+     * 2. Apply [reducer] via `store.update`.
+     * 3. Snapshot `next` (`store.snapshot`).
+     * 4. Compute cascade via `registry.all.flatMap { it.onCrossModuleStateChange(prev, next) }`
+     *    — same loop, same frozen-snapshot semantics as Step 5.
+     * 5. Recursively dispatch each cascade action through
+     *    [dispatchInternal] at `depth = 0`. An external SP change is a
+     *    **fresh dispatch pass**, not a continuation of an in-flight
+     *    action's cascade, so the depth counter resets. The
+     *    `MAX_CASCADE_DEPTH` guard still protects the inner cascade
+     *    chain.
+     *
+     * **Thread safety:** the SP listener fires on the thread that called
+     * `apply()` (typically a background disk thread). `store.update` is
+     * CAS-safe; `dispatchInternal` calls are serialised through the same
+     * store-mutation channel.
+     */
+    internal fun runMirrorSync(reducer: (DictateUiState) -> DictateUiState) {
+        val prev = store.snapshot
+        store.update(reducer)
+        val next = store.snapshot
+
+        // Same frozen-snapshot semantics as dispatchInternal Step 5:
+        // every observer in this pass sees the same (prev, next) tuple.
+        val cascadeActions = registry.all.flatMap { observer ->
+            observer.onCrossModuleStateChange(prev, next)
+        }
+
+        // Each cascade action starts its own dispatch pass at depth = 0
+        // (fresh external trigger, not a continuation). The cascade
+        // depth guard still applies inside each pass.
+        cascadeActions.forEach { cascadeAction ->
+            dispatchInternal(cascadeAction, depth = 0)
+        }
     }
 
     companion object {

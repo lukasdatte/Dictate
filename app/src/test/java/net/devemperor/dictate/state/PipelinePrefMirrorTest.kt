@@ -19,6 +19,21 @@ import org.junit.Test
  *
  * @see net.devemperor.dictate.state.PipelinePrefMirror
  */
+/**
+ * Test-only [MirrorSyncDispatcher] that writes the reducer's result
+ * directly to the store **without** running the cross-module cascade.
+ *
+ * Most pure-mapping tests in this file only need the mapping semantics
+ * (key X → axis Y) and don't construct a registry of modules; the
+ * production code path (orchestrator-backed dispatcher) is exercised in
+ * [PipelinePrefMirrorCascadeTest] which verifies the G3 cascade
+ * integration end-to-end.
+ *
+ * Review-fix G3 (2026-05-21).
+ */
+private fun storeOnlyDispatcher(store: DictateUiStateStore): MirrorSyncDispatcher =
+    MirrorSyncDispatcher { reducer -> store.update(reducer) }
+
 class PipelinePrefMirrorTest {
 
     // ────────────────────────────────────────────────────────────────
@@ -30,7 +45,7 @@ class PipelinePrefMirrorTest {
         val sp = FakeSharedPreferences()
         val store = DictateUiStateStore(DictateUiState.initial())
 
-        PipelinePrefMirror(sp).attach(store)
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
 
         // Pref defaults match the initial-state defaults — verifying
         // this guards against drift between `DictateUiState.initial()`
@@ -63,7 +78,7 @@ class PipelinePrefMirrorTest {
         sp.edit().put(Pref.SingleRowMode, true).put(Pref.SmallMode, true).put(Pref.Animations, false).apply()
         val store = DictateUiStateStore(DictateUiState.initial())
 
-        PipelinePrefMirror(sp).attach(store)
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
 
         val s = store.snapshot
         assertTrue(s.layout.singleRowMode)
@@ -77,7 +92,7 @@ class PipelinePrefMirrorTest {
         sp.edit().put(Pref.AudioFocus, false).put(Pref.UseBluetoothMic, true).put(Pref.Vibration, false).apply()
         val store = DictateUiStateStore(DictateUiState.initial())
 
-        PipelinePrefMirror(sp).attach(store)
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
 
         val s = store.snapshot
         assertFalse(s.audio.audioFocusEnabledPref)
@@ -91,7 +106,7 @@ class PipelinePrefMirrorTest {
         sp.edit().put(Pref.ResendButton, true).apply()
         val store = DictateUiStateStore(DictateUiState.initial())
 
-        PipelinePrefMirror(sp).attach(store)
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
 
         assertTrue(store.snapshot.resend.resendEnabled)
     }
@@ -107,7 +122,7 @@ class PipelinePrefMirrorTest {
             .apply()
         val store = DictateUiStateStore(DictateUiState.initial())
 
-        PipelinePrefMirror(sp).attach(store)
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
 
         val s = store.snapshot
         assertFalse(s.features.rewordingEnabled)
@@ -127,7 +142,7 @@ class PipelinePrefMirrorTest {
             .apply()
         val store = DictateUiStateStore(DictateUiState.initial())
 
-        PipelinePrefMirror(sp).attach(store)
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
 
         val s = store.snapshot
         assertEquals("dark", s.theming.theme)
@@ -147,7 +162,7 @@ class PipelinePrefMirrorTest {
             .apply()
         val store = DictateUiStateStore(DictateUiState.initial())
 
-        PipelinePrefMirror(sp).attach(store)
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
 
         val o = store.snapshot.overlay
         assertEquals(0.25f, o.positionPortraitX, 0.0001f)
@@ -296,7 +311,7 @@ class PipelinePrefMirrorTest {
     fun `listener fires sync on Editor apply and updates the store`() {
         val sp = FakeSharedPreferences()
         val store = DictateUiStateStore(DictateUiState.initial())
-        PipelinePrefMirror(sp).attach(store)
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
 
         // Sanity: initial mirror produced default vibration = true.
         assertTrue(store.snapshot.audio.vibrationEnabled)
@@ -312,7 +327,7 @@ class PipelinePrefMirrorTest {
         val sp = FakeSharedPreferences()
         val store = DictateUiStateStore(DictateUiState.initial())
         val mirror = PipelinePrefMirror(sp)
-        mirror.attach(store)
+        mirror.attach(store, storeOnlyDispatcher(store))
         mirror.detach()
 
         sp.edit().put(Pref.Vibration, false).apply()
@@ -345,7 +360,7 @@ class PipelinePrefMirrorTest {
         val store = DictateUiStateStore(DictateUiState.initial())
 
         val before = store.snapshot
-        PipelinePrefMirror(sp).attach(store)
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
         val after = store.snapshot
 
         // Same identity for the un-mirrored axes (data-class copy()
@@ -379,7 +394,7 @@ class PipelinePrefMirrorTest {
         val store = DictateUiStateStore(DictateUiState.initial())
 
         val before = store.snapshot.layout
-        PipelinePrefMirror(sp).attach(store)
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
         val after = store.snapshot.layout
 
         assertEquals(before, after)
@@ -410,7 +425,7 @@ class PipelinePrefMirrorTest {
         )
         val store = DictateUiStateStore(DictateUiState.initial())
         val mirror = PipelinePrefMirror(sp)
-        mirror.attach(store)
+        mirror.attach(store, storeOnlyDispatcher(store))
 
         // Move pos to 2 → curated[2] in label order.
         val resolved = mirror.applyChange(store.snapshot, Pref.InputLanguagePos.key)
@@ -437,7 +452,7 @@ class PipelinePrefMirrorTest {
         )
         val store = DictateUiStateStore(DictateUiState.initial())
         val mirror = PipelinePrefMirror(sp)
-        mirror.attach(store)
+        mirror.attach(store, storeOnlyDispatcher(store))
 
         // Switch curated set entirely — Settings Activity write.
         net.devemperor.dictate.preferences.versioned.VersionedPrefs.save(

@@ -6,13 +6,50 @@ import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 
 /**
+ * Sink the mirror calls to apply a state mutation that **also runs
+ * cross-module observers** (review-fix G3, 2026-05-21).
+ *
+ * The mirror used to call `store.update { applyChange(...) }` directly,
+ * which mutated the store but bypassed `DictateOrchestrator.dispatchInternal`
+ * Step 5 (cross-module cascade). The result was a latent regression:
+ * `AudioModule.onCrossModuleStateChange` already contains an
+ * `audioFocusEnabledPref-delta && Active → ApplyAudioFocusRuntimeFromPref`
+ * cascade (Chunk 3.5 D-1), but that cascade was unreachable from external
+ * SP writes — the very R-5 scenario the plan called out.
+ *
+ * This abstraction lets the orchestrator own the cascade-engine without
+ * leaking the store to the mirror. The orchestrator implements it as
+ * a method that mirrors `dispatchInternal` Steps 3 (state write) + 5/6
+ * (observer cascade + recursive dispatch), starting at `depth = 0` (an
+ * external SP change is a fresh pass, not a continuation of an in-flight
+ * action dispatch).
+ *
+ * @see PipelinePrefMirror.sync
+ * @see DictateOrchestrator.runMirrorSync
+ */
+fun interface MirrorSyncDispatcher {
+    /**
+     * Apply [reducer] to the current state, then run cross-module
+     * observers against the resulting (prev, next) tuple and dispatch
+     * any cascade actions through the orchestrator's normal pipeline.
+     *
+     * Idempotent against value-equal mutations: if `reducer(prev) == prev`
+     * the observers still run, but the
+     * `prev != next` gates in `onCrossModuleStateChange` arms suppress
+     * any cascade work.
+     */
+    fun apply(reducer: (DictateUiState) -> DictateUiState)
+}
+
+/**
  * SharedPreferences ↔ [DictateUiStateStore] mirror.
  *
  * **Phase 1 (today) — hardcoded.** [attach] writes a one-shot snapshot
  * of 19 UI-state-relevant prefs into the store on startup, then
  * registers an [SharedPreferences.OnSharedPreferenceChangeListener]
  * that translates every subsequent pref change into a focused
- * `store.update { … }` call on the matching sub-state axis. The
+ * `dispatcher.apply { … }` call on the matching sub-state axis (which
+ * runs cross-module observers — see [MirrorSyncDispatcher] KDoc). The
  * mapping is hand-rolled here because [DictateModule.prefBindings]
  * is Phase-2 surface — see [PrefBinding] KDoc.
  *
@@ -77,10 +114,20 @@ class PipelinePrefMirror(
      * memory model doesn't guarantee `detach()`'s `null` write is
      * visible to a concurrent reader, which could let a late
      * listener-fire mutate a logically-dead store. The
-     * `targetStore = store ?: return` read-once-into-local pattern
-     * in [sync] is already correct under the `@Volatile` guarantee.
+     * `currentDispatcher = dispatcher ?: return` read-once-into-local
+     * pattern in [sync] is already correct under the `@Volatile`
+     * guarantee.
+     *
+     * **Review-fix G3 (2026-05-21):** field renamed from `store` to
+     * `dispatcher`. The mirror no longer holds a raw store reference —
+     * runtime sync goes through [MirrorSyncDispatcher] so cross-module
+     * observers fire on external SP writes. [attach] still receives a
+     * [DictateUiStateStore] for the initial-snapshot one-shot write,
+     * which is held in a separate local + then released — observers do
+     * not need to fire for the boot-time snapshot (nothing else is
+     * subscribed yet, and recovery / module reducers have not run).
      */
-    @Volatile private var store: DictateUiStateStore? = null
+    @Volatile private var dispatcher: MirrorSyncDispatcher? = null
 
     /**
      * Listener instance — stored as a field so [detach] can unregister
@@ -90,31 +137,46 @@ class PipelinePrefMirror(
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key -> sync(key) }
 
     /**
-     * Snapshot all 19 prefs into [store], then register the change
-     * listener. Idempotent against double-attach (a second [attach]
-     * with a different [store] would silently replace — the listener
-     * holds `this` not a per-store reference, so re-registering the
-     * same listener is a no-op on Android).
+     * Snapshot all 19 prefs into [store] (one-shot), wire [dispatcher]
+     * for runtime sync, then register the change listener. Idempotent
+     * against double-attach (a second [attach] with a different
+     * dispatcher silently replaces — the listener holds `this`, not a
+     * per-dispatcher reference, so re-registering the same listener is
+     * a no-op on Android).
      *
      * **Must be called from [DictateOrchestrator]'s `init { … }` block
      * before the async `recovery.recover` launch** so the initial
      * mirror is in place when the IME first reads `state.value`.
+     *
+     * **G3 (2026-05-21):** the boot-snapshot mutation goes directly via
+     * `store.update` (no cascade) because nothing else is subscribed yet
+     * — observer cascades on the snapshot would be a no-op against the
+     * initial state. Runtime [sync] mutations route through [dispatcher]
+     * so cross-module observers fire on external SP writes (Settings
+     * Activity etc.).
+     *
+     * @param store the [DictateUiStateStore] for the one-shot
+     *   initial-snapshot write. Not retained — the mirror only keeps
+     *   the [dispatcher] reference for the lifecycle.
+     * @param dispatcher the orchestrator's mirror-sink. Every runtime
+     *   listener-fire is routed through this so cross-module observers
+     *   run against the (prev, next) tuple.
      */
-    fun attach(store: DictateUiStateStore) {
-        this.store = store
+    fun attach(store: DictateUiStateStore, dispatcher: MirrorSyncDispatcher) {
+        this.dispatcher = dispatcher
         store.update { initialMirror(it) }
         sp.registerOnSharedPreferenceChangeListener(listener)
     }
 
     /**
-     * Unregister the listener and drop the [store] reference. Called
-     * from [DictateOrchestrator.shutdown] before per-module
+     * Unregister the listener and drop the [dispatcher] reference.
+     * Called from [DictateOrchestrator.shutdown] before per-module
      * `terminate()` — ensures no late SP listener writes into a
      * logically-dead store.
      */
     fun detach() {
         sp.unregisterOnSharedPreferenceChangeListener(listener)
-        store = null
+        dispatcher = null
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -177,7 +239,7 @@ class PipelinePrefMirror(
 
     /**
      * Translate a single pref-change event into a focused
-     * `store.update { … }` call. Unknown keys are ignored — the
+     * `dispatcher.apply { … }` call. Unknown keys are ignored — the
      * `else`-branch is a no-op (NOT a `Log.w`) because production prefs
      * include many keys we deliberately don't mirror (API keys, prompt
      * selection, etc.) and noisy logs would mask real bugs.
@@ -189,10 +251,18 @@ class PipelinePrefMirror(
      * the listener would let one drag-end event coalesce with another
      * after the state already reflects the new position, masking real
      * regressions in tests).
+     *
+     * **G3 (2026-05-21):** routed through [MirrorSyncDispatcher] so the
+     * orchestrator's cross-module observer cascade fires against the
+     * (prev, next) state tuple. Without this, an external Settings-
+     * Activity write to a pref like `Pref.AudioFocus` mid-recording would
+     * update the state but never reach `AudioModule.onCrossModuleStateChange`
+     * → no `ApplyAudioFocusRuntimeFromPref` cascade → stale live
+     * `AudioManager` (the latent regression R-5 described in plan §6.1).
      */
     private fun sync(key: String?) {
-        val targetStore = store ?: return
-        targetStore.update { current -> applyChange(current, key) }
+        val currentDispatcher = dispatcher ?: return
+        currentDispatcher.apply { current -> applyChange(current, key) }
     }
 
     /**

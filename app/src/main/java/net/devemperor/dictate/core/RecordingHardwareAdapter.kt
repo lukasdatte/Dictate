@@ -2,6 +2,7 @@ package net.devemperor.dictate.core
 
 import android.media.MediaRecorder
 import android.util.Log
+import net.devemperor.dictate.audio.CodecParams
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.InsertionTarget
 import net.devemperor.dictate.state.ModuleId
@@ -51,7 +52,12 @@ class RecordingHardwareAdapter(
 
     private var recorder: MediaRecorder? = null
 
-    override fun allocate(target: InsertionTarget, useBluetooth: Boolean, audioFile: File) {
+    override fun allocate(
+        target: InsertionTarget,
+        useBluetooth: Boolean,
+        audioFile: File,
+        codecParams: CodecParams?,
+    ) {
         if (recorder != null) {
             Log.w(TAG, "allocate() called with existing recorder — releasing previous instance")
             releaseRecorder()
@@ -61,12 +67,20 @@ class RecordingHardwareAdapter(
         } else {
             MediaRecorder.AudioSource.MIC
         }
+        // codecParams==null = fresh session (no previous segment to
+        // inherit from) → use the historic defaults. Cold-Resume passes
+        // params read from the previous segment so the eventual
+        // MediaMuxer concat does not reject heterogeneous formats.
+        val params = codecParams ?: CodecParams.DEFAULT_AAC_M4A
         val mr = MediaRecorder().apply {
             setAudioSource(source)
             setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setAudioEncodingBitRate(64_000)
-            setAudioSamplingRate(44_100)
+            setAudioEncodingBitRate(params.bitRate)
+            setAudioSamplingRate(params.sampleRate)
+            if (params.channelCount > 1) {
+                setAudioChannels(params.channelCount)
+            }
             setOutputFile(audioFile)
         }
         recorder = mr

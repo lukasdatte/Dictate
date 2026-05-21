@@ -262,8 +262,20 @@ interface RecordingHardwareSubsystem {
      * @param target the insertion target captured at start-time.
      * @param useBluetooth whether to wire the SCO mic route.
      * @param audioFile pre-allocated output file (R.2).
+     * @param codecParams codec params to configure the MediaRecorder
+     *   with. `null` selects [net.devemperor.dictate.audio.CodecParams.DEFAULT_AAC_M4A]
+     *   (the historic defaults — used for fresh sessions). Cold-Resume
+     *   passes the params read from the previous segment so the eventual
+     *   MediaMuxer concat in `AudioFileRepository.readForPipeline` does
+     *   not reject heterogeneous formats (ADR-0007 §"Failure-Modes §1",
+     *   B1.2 mitigation).
      */
-    fun allocate(target: InsertionTarget, useBluetooth: Boolean, audioFile: java.io.File)
+    fun allocate(
+        target: InsertionTarget,
+        useBluetooth: Boolean,
+        audioFile: java.io.File,
+        codecParams: net.devemperor.dictate.audio.CodecParams? = null,
+    )
 
     /** Begin recording — must follow a successful `allocate`. */
     fun start()

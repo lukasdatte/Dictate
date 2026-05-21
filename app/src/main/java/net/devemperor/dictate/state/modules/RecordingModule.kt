@@ -93,11 +93,18 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
          * @property target the insertion destination captured at start time.
          * @property useBluetooth whether to wire the SCO mic route.
          * @property audioFile pre-allocated cache file path (R.2).
+         * @property codecParams audio codec params to configure the
+         *   MediaRecorder with. `null` selects [net.devemperor.dictate.audio.CodecParams.DEFAULT_AAC_M4A]
+         *   (the historic defaults — used for fresh sessions, the only
+         *   case the orchestrator-side path supports today). The
+         *   B2 Cold-Resume path will populate this from the previous
+         *   segment via [net.devemperor.dictate.audio.AudioCodecReader].
          */
         data class AllocateMediaRecorder(
             val target: InsertionTarget,
             val useBluetooth: Boolean,
             val audioFile: File,
+            val codecParams: net.devemperor.dictate.audio.CodecParams? = null,
         ) : Effect
 
         /**
@@ -652,7 +659,12 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
 
     override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
         is Effect.AllocateMediaRecorder ->
-            services.recordingHardware.allocate(effect.target, effect.useBluetooth, effect.audioFile)
+            services.recordingHardware.allocate(
+                target = effect.target,
+                useBluetooth = effect.useBluetooth,
+                audioFile = effect.audioFile,
+                codecParams = effect.codecParams,
+            )
         // B3-VAL-W1 F-10 — bridge the new Effect.StartMediaRecorder.
         Effect.StartMediaRecorder -> services.recordingHardware.start()
         Effect.ReleaseMediaRecorder -> services.recordingHardware.release()

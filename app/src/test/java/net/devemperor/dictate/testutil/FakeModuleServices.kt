@@ -102,7 +102,12 @@ class RecordingPrefPersistenceService : PrefPersistenceService {
 // ──── No-op fakes ────────────────────────────────────────────────────
 
 object NoopRecordingHardware : RecordingHardwareSubsystem {
-    override fun allocate(target: InsertionTarget, useBluetooth: Boolean, audioFile: File) = Unit
+    override fun allocate(
+        target: InsertionTarget,
+        useBluetooth: Boolean,
+        audioFile: File,
+        codecParams: net.devemperor.dictate.audio.CodecParams?,
+    ) = Unit
     override fun start() = Unit
     override fun pause() = Unit
     override fun resume() = Unit

@@ -242,54 +242,109 @@ fun resolveCancelStagingAction(
         ?.let { Action.PipelineAction.CancelReprocessStaging(it.sessionId) }
 
 /**
- * OVERLAY_RECORD click resolver — Pre-Dispatch-Allocation in WIDGET mode.
+ * OVERLAY_RECORD click resolver — Variante 2a merged RECORD+SEND slot
+ * (dictate-widget-integration §6.5, §8.2 Chunk 2.2).
  *
- * Mirrors [resolveRecordAction] for the keyboard surface, but only emits
- * when [DictateUiState.viewMode] is [ViewMode.WIDGET] (HOVER has no
- * InputConnection target — the visibility predicate hides the button
- * there, and this defensive `null` returns nothing if a stale click
- * arrives during a ViewMode transition).
+ * The user-requirement (2026-05-21) is that the overlay record-button is
+ * "exakt der gleiche Button" as the keyboard `record_btn`. That means
+ * one single slot drives all four recording sub-states **and** both
+ * live pipeline sub-states:
  *
- * # IOException side-channel
+ * | viewMode | recording   | pipeline             | Action returned                          |
+ * |----------|-------------|----------------------|------------------------------------------|
+ * | WIDGET   | Idle        | Idle                 | `StartRecording(...)`                    |
+ * | WIDGET   | Active      | Idle                 | `StopRecordingAndSend`                   |
+ * | WIDGET   | Paused      | Idle                 | `StopRecordingAndSend`                   |
+ * | WIDGET   | Preparing   | Idle                 | `null` (recorder warming up)             |
+ * | WIDGET   | any         | Preparing / Running  | `ToggleRunningAutoEnter` (auto-enter ↵)  |
+ * | HOVER    | any         | any                  | `null` (no InputConnection target)       |
  *
- * Identical to [resolveRecordAction]: `services.audioFileFactory.allocate()`
- * may fail; the resolver fires a toast on `services.toastSink` and
- * returns `null`. The reducer never sees the failure (R.2 Pure-Reducer
- * invariant). See Spec 3 §3.1 + §4.2.
+ * **HOVER gate.** User-Requirement §2 verbatim: "Senden darf nicht
+ * möglich sein, während gerade kein Tastaturinput verfügbar ist". HOVER
+ * is the only ViewMode where the IME-View is hidden and
+ * `getCurrentInputConnection()` returns `null`; structurally any
+ * SEND-class action would commit text into nothing. The
+ * `enabledResolver` already disables the button visually
+ * ([resolveOverlayRecordEnabled]); this defensive `null`-return is the
+ * second layer per R.3 (a Race-Window click that slips through during a
+ * ViewMode transition is also a no-op).
  *
- * @see resolveRecordAction
- * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §3.1
+ * **Reuse of the keyboard-surface bodies.** Both branches delegate to
+ * the existing keyboard-surface resolvers:
+ *
+ *  - non-pipeline branch → [resolveRecordAction] (the SAME body —
+ *    `audioFileFactory.allocate()`, fresh UUID, IOException → toast).
+ *  - pipeline branch → [resolveRecordActionPipeline] (the SAME body —
+ *    `ToggleRunningAutoEnter` for Preparing/Running, `null` else).
+ *
+ * Side-effect parity is therefore guaranteed by composition — no
+ * separate IOException-handling, no separate UUID-mint.
+ *
+ * @see resolveRecordAction (keyboard non-pipeline body)
+ * @see resolveRecordActionPipeline (keyboard pipeline body)
+ * @see resolveOverlayRecordEnabled (matching enabled-state predicate)
+ * @see docs/plans/2026-05-21 - dictate-widget-integration/dictate-widget-integration.md §8.2 Chunk 2.2
  */
 fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices): Action? {
+    // HOVER-gate — User-Req: "Senden darf nicht möglich sein, während
+    // gerade kein Tastaturinput verfügbar ist". Catches both the
+    // pipeline auto-enter toggle (which would no-op against a missing
+    // InputConnection downstream anyway) and the StopRecordingAndSend
+    // case (which would commit transcript into nothing).
     if (state.viewMode != ViewMode.WIDGET) return null
-    if (state.recording !is RecordingState.Idle) return null
-    val file = try {
-        services.audioFileFactory.allocate()
-    } catch (e: java.io.IOException) {
-        services.toastSink.show(R.string.dictate_storage_full)
-        Log.w(TAG, "audioFileFactory.allocate failed (overlay record)", e)
-        return null
+
+    // While the pipeline is live, the button is a per-run auto-enter
+    // toggle (symmetric to the keyboard SEND_MODE record button).
+    if (state.pipeline is PipelineUiState.Preparing ||
+        state.pipeline is PipelineUiState.Running
+    ) {
+        return resolveRecordActionPipeline(state, services)
     }
-    return Action.RecordingAction.StartRecording(
-        target = InsertionTarget.INPUT_CONNECTION,
-        audioFile = file,
-        sessionId = newSessionId(),
-    )
+
+    // Otherwise: same Start/Stop semantics as the keyboard surface —
+    // delegate so IOException handling + UUID minting stay byte-identical
+    // (R.3 / single-source-of-side-effect).
+    return resolveRecordAction(state, services)
 }
 
 /**
- * OVERLAY_PAUSE click resolver — toggles Pause / Resume on the current
- * recording. `null` outside Active / Paused.
+ * `enabledResolver` for the OVERLAY_RECORD slot (Variante 2a, §8.2
+ * Chunk 2.3).
  *
- * @see resolvePauseAction (keyboard-side sibling)
+ * Symmetric to [resolveOverlayRecordAction]: the button is enabled iff
+ * the resolver would return a non-null action. Centralised so the
+ * `enabledResolver` / `alphaResolver` / `actionResolver` slot fields
+ * cannot drift apart — and so HOVER-disabled is **one** branch in
+ * **one** function (the user requirement).
+ *
+ * | viewMode | recording               | pipeline             | enabled |
+ * |----------|-------------------------|----------------------|---------|
+ * | HOVER    | any                     | any                  | `false` |
+ * | KEYBOARD | any                     | any                  | `false` |
+ * | WIDGET   | Preparing               | Idle                 | `false` |
+ * | WIDGET   | any other recording     | Preparing / Running  | `true`  |
+ * | WIDGET   | Idle / Active / Paused  | Idle                 | `true`  |
+ *
+ * Note that the *visibility* predicate stays simple (`true`) — the
+ * button is always present in the overlay layout; the `enabled` /
+ * `alpha` axes carry the WIDGET vs HOVER distinction. This matches the
+ * keyboard surface's `record_btn`, which is also always-visible.
  */
-fun resolveOverlayPauseAction(
-    state: DictateUiState,
-    @Suppress("UNUSED_PARAMETER") services: ModuleServices,
-): Action? = when (state.recording) {
-    is RecordingState.Paused -> Action.RecordingAction.ResumeRecording
-    is RecordingState.Active -> Action.RecordingAction.PauseRecording
-    else -> null
+fun resolveOverlayRecordEnabled(state: DictateUiState): Boolean {
+    if (state.viewMode != ViewMode.WIDGET) return false
+    if (state.pipeline is PipelineUiState.Preparing ||
+        state.pipeline is PipelineUiState.Running
+    ) {
+        // Auto-enter toggle is available throughout the live pipeline,
+        // matching the keyboard SEND_MODE behaviour
+        // (#AE-OPTIK2 / #AE-DEEP2 — enabledResolver intentionally true
+        // even in Preparing so the double-tap-to-toggle is reachable).
+        return true
+    }
+    // Outside the live pipeline the recorder state alone gates: the
+    // <100 ms Preparing window is the only spot where the click is
+    // structurally meaningless (recorder warming up; same as keyboard).
+    return state.recording !is RecordingState.Preparing
 }
 
 /**

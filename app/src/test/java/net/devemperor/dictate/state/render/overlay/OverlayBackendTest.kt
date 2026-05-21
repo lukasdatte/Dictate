@@ -484,10 +484,10 @@ class OverlayBackendTest {
         // Walk the inflated tree to find the button by tag-id. We rely
         // on Robolectric's real inflate having run during the previous
         // render() call.
-        // Use a workaround — search for known R.id.* per LogicalButtonId.
+        // Variante 2a (dictate-widget-integration §6.5): OVERLAY_SEND was
+        // merged into OVERLAY_RECORD; only four overlay views remain.
         val resId = when (id) {
             LogicalButtonId.OVERLAY_RECORD -> R.id.overlay_record_btn
-            LogicalButtonId.OVERLAY_SEND -> R.id.overlay_send_btn
             LogicalButtonId.OVERLAY_PAUSE -> R.id.overlay_pause_btn
             LogicalButtonId.OVERLAY_TRASH -> R.id.overlay_trash_btn
             LogicalButtonId.OVERLAY_CLOSE -> R.id.overlay_close_btn

@@ -52,23 +52,24 @@ class LayoutCatalogTest {
     }
 
     @Test
-    fun `OVERLAY_5BUTTON has all five overlay slots in row order`() {
-        // Spec 3 §3.1: two rows × (3, 2) buttons.
-        //   Row 1: RECORD / SEND / PAUSE
-        //   Row 2: TRASH / CLOSE
+    fun `OVERLAY_5BUTTON has all four overlay slots in row order (Variante 2a)`() {
+        // dictate-widget-integration §6.5 Variante 2a:
+        //   Row 1: RECORD (merged ex-RECORD + ex-SEND, FillRemaining)
+        //   Row 2: TRASH / PAUSE / CLOSE
+        // The previous standalone OVERLAY_SEND was deleted per
+        // §8.2 Chunk 2.4 / §10.2 OQ-1 (user-decision).
         val rows = catalog.OVERLAY_5BUTTON.rows
         assertEquals("OVERLAY_5BUTTON must have exactly two rows.", 2, rows.size)
         assertEquals(
-            listOf(
-                LogicalButtonId.OVERLAY_RECORD,
-                LogicalButtonId.OVERLAY_SEND,
-                LogicalButtonId.OVERLAY_PAUSE,
-            ),
+            "Row 1 must be the single merged RECORD slot (Variante 2a).",
+            listOf(LogicalButtonId.OVERLAY_RECORD),
             rows[0].slots.map { it.logicalId },
         )
         assertEquals(
+            "Row 2 must be TRASH / PAUSE / CLOSE in left-to-right order.",
             listOf(
                 LogicalButtonId.OVERLAY_TRASH,
+                LogicalButtonId.OVERLAY_PAUSE,
                 LogicalButtonId.OVERLAY_CLOSE,
             ),
             rows[1].slots.map { it.logicalId },

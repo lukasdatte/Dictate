@@ -79,8 +79,10 @@ class ImeViewBackendTest {
         motion = FakeMotionSurface()
         buttons = LogicalButtonId.entries
             .filter { id ->
+                // Skip overlay-surface ids (dictate-widget-integration §6.5
+                // removed OVERLAY_SEND; the remaining four overlay ids
+                // belong to the OverlayBackend, not this IME-View backend).
                 id != LogicalButtonId.OVERLAY_RECORD &&
-                    id != LogicalButtonId.OVERLAY_SEND &&
                     id != LogicalButtonId.OVERLAY_PAUSE &&
                     id != LogicalButtonId.OVERLAY_TRASH &&
                     id != LogicalButtonId.OVERLAY_CLOSE

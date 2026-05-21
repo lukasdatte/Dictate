@@ -1,22 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Floating-overlay 5-button layout (Spec 3 §3.2).
+    Floating-overlay layout — Variante 2a (dictate-widget-integration §6.5).
 
-    Two-row 3+2 arrangement:
-      Row 1: [Record] [Send] [Pause]   — primary controls
-      Row 2: [Trash]  (spacer)  [Close] — destructive + dismiss
+    User-Requirement (2026-05-21): "exakt den gleichen Aufzeichnen-Button
+    wie in der normalen Tastaturansicht, mit Timer und allem Drum und
+    Dran". OVERLAY_RECORD and OVERLAY_SEND are MERGED into a single rich
+    record button (`overlay_record_btn`) — the text is state-driven via
+    LayoutCatalog resolvers (Idle: "Dictate (xx)", Active/Paused: "Send",
+    Preparing: "Sending …", Running: "2/3 ↵ 0:08"), the click action is
+    state-driven (`resolveOverlayRecordAction`), and the button is wrapped
+    in a `PulseLayout` so the BorderGlow + amplitude animation matches the
+    keyboard `record_btn` exactly. This is the SAME wiring as the
+    keyboard surface — different View instances, same controller classes.
+
+    Two-row arrangement:
+      Row 1: [PulseLayout > MaterialButton(record_btn, FillRemaining)]
+             — state-driven text/icons; in WIDGET it is fully enabled,
+               in HOVER the Active|Paused branch returns null (no
+               InputConnection target — User-Req: "Senden darf nicht
+               möglich sein, während gerade kein Tastaturinput
+               verfügbar ist").
+      Row 2: [Trash 48dp] [Spacer w=1] [Pause 48dp] [Spacer 6dp]
+             [Close 48dp]
+             — destructive (left) + dismiss (right), with Pause docked
+               next to Close (same pattern as the keyboard SEND_MODE
+               row's [Trash][Pause][Close] grouping).
 
     Layout is `wrap_content` so the WindowManager positions a compact
-    card; the visual size lands at ~270–310 dp wide × ~110 dp tall and
-    docks into any screen corner without obscuring app content. The
-    `OverlayBackend` finds each MaterialButton by id and drives its
-    visibility / icon / text / enabled state through the resolvers on
-    [LayoutCatalog.OVERLAY_5BUTTON].
+    card; the visual size lands at ~280 dp wide × ~120 dp tall and docks
+    into any screen corner without obscuring app content.
 
     Shared between WIDGET and HOVER ViewModes per Spec 3 §3.1 — the
     `LayoutMode` is the same, only the resolvers differ on
     `state.viewMode`.
 
+    @see docs/plans/2026-05-21 - dictate-widget-integration/dictate-widget-integration.md §6.5 (Variante 2a)
     @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §3.2
     @see net.devemperor.dictate.state.layout.LayoutCatalog (OVERLAY_5BUTTON)
     @see net.devemperor.dictate.state.render.overlay.OverlayBackend
@@ -31,49 +49,33 @@
     android:elevation="8dp"
     android:padding="6dp">
 
-    <!-- Row 1: Record + Send + Pause -->
-    <LinearLayout
-        android:layout_width="wrap_content"
+    <!-- Row 1: Record-mit-Pulse (replaces former OVERLAY_RECORD + OVERLAY_SEND).
+         PulseLayout matches activity_dictate_keyboard_view.xml:91-114 1:1
+         so the BorderGlow / amplitude visuals are byte-identical. -->
+    <net.devemperor.dictate.widget.PulseLayout
+        android:id="@+id/overlay_pulse_layout"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical">
+        app:pulseCount="3"
+        app:pulseDuration="2000"
+        app:pulseStartAlpha="0.3"
+        app:pulseMaxRadiusFactor="1.4"
+        app:pulseStyle="fill">
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/overlay_record_btn"
-            style="@style/OverlayButton.Icon"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            app:icon="@drawable/ic_baseline_mic_24"
-            app:iconGravity="textStart"
-            app:iconPadding="0dp"
+            style="@style/OverlayButton.Primary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minWidth="200dp"
+            android:text="@string/dictate_record"
+            android:textSize="14sp"
+            android:maxLines="1"
             android:contentDescription="@string/overlay_record_cd" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/overlay_send_btn"
-            style="@style/OverlayButton.Primary"
-            android:layout_width="0dp"
-            android:layout_height="48dp"
-            android:layout_weight="1"
-            android:layout_marginStart="6dp"
-            android:minWidth="100dp"
-            android:text="@string/overlay_send"
-            app:icon="@drawable/ic_baseline_send_24"
-            app:iconGravity="textStart"
-            android:contentDescription="@string/overlay_send_cd" />
+    </net.devemperor.dictate.widget.PulseLayout>
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/overlay_pause_btn"
-            style="@style/OverlayButton.Icon"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_marginStart="6dp"
-            app:icon="@drawable/ic_baseline_pause_24"
-            app:iconGravity="textStart"
-            app:iconPadding="0dp"
-            android:contentDescription="@string/overlay_pause_cd" />
-    </LinearLayout>
-
-    <!-- Row 2: Trash on the left, Close in the bottom-right (user preference) -->
+    <!-- Row 2: Trash on the left, Pause and Close on the right. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -97,10 +99,21 @@
             android:layout_weight="1" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlay_pause_btn"
+            style="@style/OverlayButton.Icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            app:icon="@drawable/ic_baseline_pause_24"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/overlay_pause_cd" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/overlay_close_btn"
             style="@style/OverlayButton.Icon"
             android:layout_width="48dp"
             android:layout_height="48dp"
+            android:layout_marginStart="6dp"
             app:icon="@drawable/ic_baseline_close_24"
             app:iconGravity="textStart"
             app:iconPadding="0dp"

@@ -68,11 +68,15 @@ import net.devemperor.dictate.state.RecordingState
  *   `Preparing.autoEnterActive` correctly but produced no visual feedback
  *   — the label stayed plain "Sending …" until the Preparing→Running
  *   transition (often too late to confirm the tap registered).
- * @property overlaySend short literal for the overlay-surface SEND button
- *   (`R.string.overlay_send` — "Send"). Distinct from [send] because the
- *   keyboard-surface label is language-suffixed
- *   (`R.string.dictate_send` = "Send (en)") while the overlay surface is
- *   space-constrained and uses the icon for language hinting.
+ * @property overlaySend **Deprecated** — short literal for the standalone
+ *   overlay SEND button. Unused since dictate-widget-integration §6.5
+ *   Variante 2a merged the overlay RECORD+SEND into a single rich
+ *   `overlay_record_btn` whose label is computed by
+ *   [resolveOverlayRecordButtonText] using the same keyboard-surface
+ *   labels ([send], [sending], [formatPipelineLabel],
+ *   [formatPreparingLabel]). Field kept for backwards-compatible
+ *   construction calls; safe to drop together with `R.string.overlay_send`
+ *   once no external caller passes it explicitly.
  */
 data class LayoutStrings(
     val record: String,
@@ -87,6 +91,11 @@ data class LayoutStrings(
         elapsedMs: Long,
     ) -> CharSequence,
     val formatPreparingLabel: (autoEnterActive: Boolean) -> CharSequence,
+    @Deprecated(
+        "Variante 2a (dictate-widget-integration §6.5) merged OVERLAY_SEND " +
+            "into OVERLAY_RECORD; this field is no longer read by any " +
+            "catalog slot. Remove once external callers stop passing it.",
+    )
     val overlaySend: CharSequence = "Send",
 )
 
@@ -142,6 +151,38 @@ fun resolveRecordButtonTextPipeline(state: DictateUiState, strings: LayoutString
                 pipe.elapsedMs,
             )
         else -> strings.record
+    }
+
+/**
+ * Record-button text for the **overlay-surface** record button (the
+ * Variante-2a merged RECORD+SEND slot, dictate-widget-integration §6.5).
+ *
+ * Composition of the two keyboard-surface resolvers:
+ *
+ *  - When the pipeline is `Preparing` or `Running` → defer to
+ *    [resolveRecordButtonTextPipeline] (shows "Sending …", `"N/M ↵ M:SS"`,
+ *    same labels as the keyboard `SEND_MODE` layouts).
+ *  - Otherwise → defer to [resolveRecordButtonText] (Idle / Active /
+ *    Paused / Preparing — same labels as the standard keyboard
+ *    `RECORD` slot).
+ *
+ * **Why a separate resolver instead of inlining one of the two?** The
+ * keyboard surface branches between `TWO_ROW` (uses
+ * [resolveRecordButtonText]) and `TWO_ROW_SEND_MODE` (uses
+ * [resolveRecordButtonTextPipeline]) at the LayoutMode-selector level —
+ * `KeyboardLayoutManager.forKeyboard(state)` picks the mode. The
+ * overlay surface has only one mode (`OVERLAY_5BUTTON`, shared between
+ * WIDGET and HOVER), so the branching has to happen inside the resolver
+ * instead.
+ *
+ * @see resolveRecordButtonText (keyboard-surface non-pipeline sibling)
+ * @see resolveRecordButtonTextPipeline (keyboard-surface pipeline sibling)
+ */
+fun resolveOverlayRecordButtonText(state: DictateUiState, strings: LayoutStrings): CharSequence =
+    when (state.pipeline) {
+        is PipelineUiState.Preparing,
+        is PipelineUiState.Running -> resolveRecordButtonTextPipeline(state, strings)
+        else -> resolveRecordButtonText(state, strings)
     }
 
 /**

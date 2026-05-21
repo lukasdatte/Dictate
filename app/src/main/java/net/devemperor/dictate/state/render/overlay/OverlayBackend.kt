@@ -286,9 +286,10 @@ class OverlayBackend(
         val themedCtx = ContextThemeWrapper(ctx, R.style.Theme_Dictate)
         val inflater = LayoutInflater.from(themedCtx)
         val view = inflater.inflate(R.layout.overlay_5button_layout, null)
+        // Variante 2a (dictate-widget-integration §6.5): OVERLAY_SEND was
+        // merged into OVERLAY_RECORD; only four buttons remain.
         val views = mapOf(
             LogicalButtonId.OVERLAY_RECORD to view.findViewById<View>(R.id.overlay_record_btn),
-            LogicalButtonId.OVERLAY_SEND to view.findViewById<View>(R.id.overlay_send_btn),
             LogicalButtonId.OVERLAY_PAUSE to view.findViewById<View>(R.id.overlay_pause_btn),
             LogicalButtonId.OVERLAY_TRASH to view.findViewById<View>(R.id.overlay_trash_btn),
             LogicalButtonId.OVERLAY_CLOSE to view.findViewById<View>(R.id.overlay_close_btn),

@@ -66,11 +66,19 @@ enum class LogicalButtonId {
     ENTER,
 
     // ─── OVERLAY-modus slots (OverlayBackend, Spec 3 — B5/C16) ───────
-    /** Overlay-5-button: record-button. */
+    /**
+     * Overlay floating-widget record-button.
+     *
+     * **Variante 2a (dictate-widget-integration §6.5):** this single
+     * slot covers both record-start (Idle → Active) and send (Active|
+     * Paused → StopRecordingAndSend) in the WIDGET ViewMode — exactly
+     * mirroring the keyboard `RECORD` slot. The previous standalone
+     * `OVERLAY_SEND` was merged into this slot per the 2026-05-21
+     * user-decision ("exakt den gleichen Button … reichen Button …
+     * wiederverwendbar"). In HOVER the Active|Paused branch returns
+     * `null` because no `InputConnection` target exists.
+     */
     OVERLAY_RECORD,
-
-    /** Overlay-5-button: send-button (disabled in HOVER per ADR-0005). */
-    OVERLAY_SEND,
 
     /** Overlay-5-button: pause / resume. */
     OVERLAY_PAUSE,

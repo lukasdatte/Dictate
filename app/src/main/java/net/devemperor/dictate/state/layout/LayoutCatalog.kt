@@ -5,7 +5,6 @@ import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
-import net.devemperor.dictate.state.ViewMode
 import net.devemperor.dictate.state.isActiveOrPaused
 
 /**
@@ -488,20 +487,27 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         )
 
     // ════════════════════════════════════════════════════════════════
-    // OVERLAY_5BUTTON (Spec 3 §3.1)
+    // OVERLAY_5BUTTON — Variante 2a (dictate-widget-integration §6.5)
     // ════════════════════════════════════════════════════════════════
     //
     // **Shared between WIDGET and HOVER** — both ViewModes render via the
     // same [LayoutMode]. The differences live inside the resolvers,
     // which branch on `state.viewMode`:
     //
-    // - RECORD + SEND: enabled only in WIDGET (HOVER has no
-    //   InputConnection target — disabled at 0.4 alpha, OPEN-2).
+    // - RECORD: state-driven text/action covering all recording states
+    //   AND both live pipeline sub-states (Preparing / Running) — i.e.
+    //   start, send, auto-enter-toggle. The previous standalone
+    //   OVERLAY_SEND was merged into this slot per the 2026-05-21
+    //   user-decision ("exakt den gleichen Button … reichen Button …
+    //   wiederverwendbar"). Enabled only in WIDGET (HOVER has no
+    //   InputConnection target).
     // - CLOSE: ViewMode-driven action (WIDGET → toggle back to
     //   KEYBOARD; HOVER → cascade-dismiss the overlay with
     //   SuppressAutoOverlayUntilNextSession).
     // - PAUSE + TRASH: identical behaviour in both ViewModes (recording
-    //   lifecycle is independent of ViewMode).
+    //   lifecycle is independent of ViewMode); resolvers point directly
+    //   at the keyboard-surface bodies (`::resolvePauseAction`,
+    //   `::resolveTrashAction`) — DRY-Cleanup per §8.2 Chunks 2.5+2.7.
     //
     // # `sceneStateId = null` — no MotionLayout transition
     //
@@ -516,71 +522,30 @@ class LayoutCatalog(private val strings: LayoutStrings) {
             backend = BackendType.OVERLAY_WINDOW,
             sceneStateId = null,
             rows = listOf(
-                // Row 1: Record + Send + Pause
+                // Row 1: Record (merged RECORD+SEND, FillRemaining width
+                //        for the textual SEND state — mirrors the
+                //        keyboard `record_btn` layout 1:1).
                 RowDescriptor(slots = listOf(
                     ButtonSlot(
                         logicalId = LogicalButtonId.OVERLAY_RECORD,
-                        widthPolicy = WidthPolicy.WrapContent,
-                        // OPEN-2: visible only when the user can actually
-                        // start a recording (no active recording, no live
-                        // pipeline). The HOVER-vs-WIDGET distinction is
-                        // handled by the enabledResolver below.
-                        visibilityPredicate = { state ->
-                            state.recording is RecordingState.Idle &&
-                                state.pipeline is PipelineUiState.Idle
+                        widthPolicy = WidthPolicy.FillRemaining,
+                        // Always visible — the WIDGET vs HOVER distinction
+                        // lives on the `enabled` / `alpha` axes
+                        // (resolveOverlayRecordEnabled) so HOVER shows the
+                        // disabled SEND label rather than hiding the button
+                        // entirely. Same shape as the keyboard RECORD slot.
+                        visibilityPredicate = { true },
+                        textResolver = { state ->
+                            resolveOverlayRecordButtonText(state, strings)
                         },
-                        enabledResolver = { state -> state.viewMode == ViewMode.WIDGET },
+                        enabledResolver = ::resolveOverlayRecordEnabled,
                         alphaResolver = { state ->
-                            if (state.viewMode == ViewMode.WIDGET) 1f else 0.4f
+                            if (resolveOverlayRecordEnabled(state)) 1f else 0.4f
                         },
-                        iconResolver = { R.drawable.ic_baseline_mic_24 },
                         actionResolver = ::resolveOverlayRecordAction,
                     ),
-                    ButtonSlot(
-                        logicalId = LogicalButtonId.OVERLAY_SEND,
-                        widthPolicy = WidthPolicy.FillRemaining,
-                        visibilityPredicate = { true },
-                        // Enabled only when (a) WIDGET (HOVER has no
-                        // InputConnection target), and (b) a recording is
-                        // active or paused (nothing to send otherwise).
-                        enabledResolver = { state ->
-                            state.viewMode == ViewMode.WIDGET &&
-                                state.recording.isActiveOrPaused
-                        },
-                        alphaResolver = { state ->
-                            if (state.viewMode == ViewMode.WIDGET &&
-                                state.recording.isActiveOrPaused
-                            ) 1f else 0.4f
-                        },
-                        textResolver = { strings.overlaySend },
-                        // F-10 — StopRecordingAndSend carries no payload;
-                        // the RecordingModule reducer reads the sessionId
-                        // off the live FSM (the id minted at
-                        // StartRecording). Same as the keyboard-surface
-                        // SEND in `resolveRecordAction`.
-                        actionResolver = { _, _ ->
-                            Action.RecordingAction.StopRecordingAndSend
-                        },
-                    ),
-                    ButtonSlot(
-                        logicalId = LogicalButtonId.OVERLAY_PAUSE,
-                        widthPolicy = WidthPolicy.WrapContent,
-                        visibilityPredicate = { true },
-                        enabledResolver = { state -> state.recording.isActiveOrPaused },
-                        alphaResolver = { state ->
-                            if (state.recording.isActiveOrPaused) 1f else 0.4f
-                        },
-                        iconResolver = { state ->
-                            // Mirror the keyboard-surface PAUSE icon
-                            // convention via the shared helper —
-                            // `resolvePauseIcon` swaps mic / pause based
-                            // on `RecordingState.Paused`.
-                            resolvePauseIcon(state)
-                        },
-                        actionResolver = ::resolveOverlayPauseAction,
-                    ),
                 )),
-                // Row 2: Trash on the left, Close on the right
+                // Row 2: Trash on the left, Pause + Close on the right.
                 RowDescriptor(slots = listOf(
                     ButtonSlot(
                         logicalId = LogicalButtonId.OVERLAY_TRASH,
@@ -591,7 +556,31 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                             state.recording.isActiveOrPaused ||
                                 state.pipeline !is PipelineUiState.Idle
                         },
-                        actionResolver = { _, _ -> Action.RecordingAction.CancelRecording },
+                        // DRY: same body as the keyboard TRASH slot — the
+                        // ReprocessStaging branch is structurally
+                        // unreachable in the overlay (staging is
+                        // KEYBOARD-only per Spec 3 §10) but referencing
+                        // the keyboard resolver keeps the two surfaces in
+                        // lockstep (§8.2 Chunk 2.7).
+                        actionResolver = ::resolveTrashAction,
+                    ),
+                    ButtonSlot(
+                        logicalId = LogicalButtonId.OVERLAY_PAUSE,
+                        widthPolicy = WidthPolicy.WrapContent,
+                        visibilityPredicate = { true },
+                        enabledResolver = { state -> state.recording.isActiveOrPaused },
+                        alphaResolver = { state ->
+                            if (state.recording.isActiveOrPaused) 1f else 0.4f
+                        },
+                        // Mirror the keyboard-surface PAUSE icon convention
+                        // via the shared helper — `resolvePauseIcon` swaps
+                        // mic / pause based on `RecordingState.Paused`.
+                        iconResolver = ::resolvePauseIcon,
+                        // DRY: same body as the keyboard PAUSE slot — the
+                        // previous `resolveOverlayPauseAction` was a
+                        // byte-identical duplicate; deleted in §8.2 Chunk
+                        // 2.6 / §10.2 OQ-2.
+                        actionResolver = ::resolvePauseAction,
                     ),
                     ButtonSlot(
                         logicalId = LogicalButtonId.OVERLAY_CLOSE,

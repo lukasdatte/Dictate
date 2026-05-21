@@ -275,20 +275,20 @@ public class DictateInputMethodService extends InputMethodService
      * axis, written via {@code LanguageAction.SetOverride}. The IME
      * resolves the effective code via {@link #resolveEffectiveLanguage()}
      * and pushes it to the bound orchestrator via
-     * {@link #pushPermanentLanguageToOrchestrator()}
-     * (Pre-Dispatch-Resolution, Spec 1 §4.11).
+     * {@link #pushPermanentLanguageToOrchestrator()} on the
+     * boot-cold-start path (Pre-Dispatch-Resolution, Spec 1 §4.11).
      *
-     * <p>Cross-instance refresh: when the Settings activity writes the
-     * {@code input_languages} / {@code input_language_pos} keys, the IME
-     * listener below re-resolves freshly from prefs and re-pushes — no
-     * stale-cache invalidation needed (the old {@code lastEffective}
-     * cross-instance bug is gone because there is no cache; R-3).</p>
-     *
-     * <p>Registered in {@link #onCreateInputView()}; deregistered in
-     * {@link #cleanupOldControllers()} (view-recreate) and
-     * {@link #onDestroy()} (process tear-down).</p>
+     * <p>Cross-instance refresh (post Chunk 4.5b): the custom
+     * {@code inputLanguagesListener} SP-listener is REMOVED. External
+     * Settings-Activity writes to {@code input_languages} /
+     * {@code input_language_pos} are picked up by the
+     * {@code PipelinePrefMirror} computed-mirror (Chunk 4.5a) which
+     * resolves them to {@code state.language.effective}; the
+     * {@link LanguageEffectiveObserver} below re-runs
+     * {@link #refreshLanguageChip()} on the state-emit. No private
+     * listener field, no per-view register/unregister — gone.
      */
-    private SharedPreferences.OnSharedPreferenceChangeListener inputLanguagesListener;
+    private LanguageEffectiveObserver languageEffectiveObserver;
 
     // 2026-05-21 indirection-cleanup Chunk 3.5 (C-3) — the custom
     // `audioFocusListener` SP-listener is REMOVED. PipelinePrefMirror
@@ -555,7 +555,9 @@ public class DictateInputMethodService extends InputMethodService
             // see the resolved language. Idempotent — the reducer reduces
             // a no-change refresh to null. The unbound→bound transition
             // is the ONLY place this matters; subsequent pref changes
-            // already re-push via inputLanguagesListener.
+            // are picked up by the PipelinePrefMirror computed-mirror
+            // (Chunk 4.5a) and reflected via the
+            // LanguageEffectiveObserver (Chunk 4.5b).
             pushPermanentLanguageToOrchestrator();
             // Post-cutover hotfix #R3 — close the bind→reload race.
             // setupPromptsAdapter → reloadPrompts may have fired during
@@ -1099,22 +1101,22 @@ public class DictateInputMethodService extends InputMethodService
         // no cache, so a fresh read already reflects the external write
         // (the old per-instance lastEffective cross-instance staleness bug
         // is structurally gone — R-3).
-        inputLanguagesListener = (changedPrefs, key) -> {
-            if (Pref.InputLanguages.INSTANCE.getKey().equals(key)
-                    || Pref.InputLanguagePos.INSTANCE.getKey().equals(key)) {
-                // F-4 (B3-VAL): if the IME is in ReprocessStaging with an
-                // active override, the chip/label still show the override
-                // (resolveEffectiveLanguage() honours it); this listener
-                // only moves the *permanent* `effective` axis underneath
-                // via RefreshFromPref. override and effective are
-                // orthogonal LanguageState fields — the silent `effective`
-                // move is NOT a clobber of the override (see
-                // LanguageModuleTest "RefreshFromPref does not clear an
-                // active override").
-                pushPermanentLanguageToOrchestrator();
-            }
-        };
-        sp.registerOnSharedPreferenceChangeListener(inputLanguagesListener);
+        // 2026-05-21 indirection-cleanup Chunk 4.5b — the custom
+        // `inputLanguagesListener` SP-listener is GONE. PipelinePrefMirror
+        // computed-mirrors Pref.InputLanguages/InputLanguagePos →
+        // state.language.effective (Chunk 4.5a); the
+        // LanguageEffectiveObserver re-renders the chip on the state-emit.
+        // Start the observer here (after the binder is non-null + the
+        // chip view is inflated; same site as the other state observers).
+        if (languageEffectiveObserver != null) {
+            languageEffectiveObserver.stop();
+        }
+        if (pipelineBinder != null) {
+            languageEffectiveObserver = new LanguageEffectiveObserver(
+                    pipelineBinder.getState(),
+                    effective -> refreshLanguageChip());
+            languageEffectiveObserver.start();
+        }
 
         // 2026-05-21 indirection-cleanup Chunk 3.5 (C-3) — the custom
         // `audioFocusListener` SP-listener registration is REMOVED.
@@ -2007,15 +2009,14 @@ public class DictateInputMethodService extends InputMethodService
             dictateDb.getInvalidationTracker().removeObserver(promptsInvalidationObserver);
         }
         if (bluetoothScoManager != null) bluetoothScoManager.unregisterReceiver();
-        // D-13: deregister the input-languages prefs listener. The Service
-        // may be destroyed without a preceding view-recreate (the IME
-        // process can be torn down by the OS while a view is still
-        // attached), in which case cleanupOldControllers() is never called
-        // and the listener would leak through the SharedPreferences.
-        // Idempotent with cleanupOldControllers() (both null the field).
-        if (inputLanguagesListener != null && sp != null) {
-            sp.unregisterOnSharedPreferenceChangeListener(inputLanguagesListener);
-            inputLanguagesListener = null;
+        // 2026-05-21 indirection-cleanup Chunk 4.5b — the
+        // `inputLanguagesListener` unregistration is GONE with the
+        // listener itself (PipelinePrefMirror computed-mirror replaces
+        // it). Stop the LanguageEffectiveObserver symmetric with the
+        // other observers below.
+        if (languageEffectiveObserver != null) {
+            languageEffectiveObserver.stop();
+            languageEffectiveObserver = null;
         }
         // 2026-05-21 indirection-cleanup Chunk 3.5 — the audioFocusListener
         // unregistration is GONE with the listener itself (the C-3 cascade
@@ -2081,13 +2082,14 @@ public class DictateInputMethodService extends InputMethodService
             pipelineUiStateObserver.stop();
             pipelineUiStateObserver = null;
         }
-        // D-13: deregister the input-languages prefs listener bound to the
-        // old view. The fresh onCreateInputView re-registers a new one.
-        // (No legacy controller to dispose — the resolver is stateless and
-        // the orchestrator state survives the view-recreate.)
-        if (inputLanguagesListener != null) {
-            sp.unregisterOnSharedPreferenceChangeListener(inputLanguagesListener);
-            inputLanguagesListener = null;
+        // 2026-05-21 indirection-cleanup Chunk 4.5b — the
+        // inputLanguagesListener is gone (PipelinePrefMirror does the
+        // SP→state half via computed-mirror); the
+        // LanguageEffectiveObserver stops here so the next
+        // onCreateInputView builds a fresh one against the new view tree.
+        if (languageEffectiveObserver != null) {
+            languageEffectiveObserver.stop();
+            languageEffectiveObserver = null;
         }
         // 2026-05-21 indirection-cleanup Chunk 3.5 — audioFocusListener
         // removed entirely; the view-recreate path no longer needs to

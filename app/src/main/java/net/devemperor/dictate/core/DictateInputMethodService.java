@@ -147,7 +147,11 @@ public class DictateInputMethodService extends InputMethodService
     // define variables and objects
     private boolean isDeleting = false;
     private long startDeleteTime = 0;
-    private int currentDeleteDelay = 50;
+    // Initial value comes from the pure-Kotlin speed-curve helper so
+    // there is exactly one source of truth for the 50→25→10→5 ms cascade
+    // (BackspaceDeleteSpeedCurve). The cascade thresholds + step sizes
+    // are covered by BackspaceLongPressIntegrationTest.
+    private int currentDeleteDelay = BackspaceDeleteSpeedCurve.INITIAL_DELAY_MS;
     private boolean livePrompt = false;
     private volatile boolean pendingLivePromptChain = false; // true when transcription result should be chained into live prompt
     private boolean vibrationEnabled = true;
@@ -5059,22 +5063,22 @@ public class DictateInputMethodService extends InputMethodService
     public void onBackspaceLongClicked() {
         isDeleting = true;
         startDeleteTime = System.currentTimeMillis();
-        currentDeleteDelay = 50;
+        currentDeleteDelay = BackspaceDeleteSpeedCurve.INITIAL_DELAY_MS;
         deleteRunnable = new Runnable() {
             @Override
             public void run() {
                 if (isDeleting) {
                     deleteOneCharacter();
+                    // The 50→25→10→5 ms cascade lives in the pure-Kotlin
+                    // BackspaceDeleteSpeedCurve helper (B-C). Keeping the
+                    // threshold logic out of this Handler-loop is what
+                    // makes the cascade JVM-testable without Robolectric.
                     long diff = System.currentTimeMillis() - startDeleteTime;
-                    if (diff > 1500 && currentDeleteDelay == 50) {
+                    BackspaceDeleteSpeedCurve.StepTransition step =
+                            BackspaceDeleteSpeedCurve.INSTANCE.nextDelay(diff, currentDeleteDelay);
+                    if (step.getAdvanced()) {
                         vibrate();
-                        currentDeleteDelay = 25;
-                    } else if (diff > 3000 && currentDeleteDelay == 25) {
-                        vibrate();
-                        currentDeleteDelay = 10;
-                    } else if (diff > 5000 && currentDeleteDelay == 10) {
-                        vibrate();
-                        currentDeleteDelay = 5;
+                        currentDeleteDelay = step.getNextDelayMs();
                     }
                     deleteHandler.postDelayed(this, currentDeleteDelay);
                 }

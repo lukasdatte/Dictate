@@ -78,6 +78,16 @@ object ResendStatusDispatcher {
             SessionStatus.RECORDING,
             SessionStatus.TRANSCRIBING ->
                 ResendAction.NoOp
+
+            // B2 / ADR-0008: a RECORDING_INTERRUPTED session is the
+            // Cold-Resume hook — the user resumes via the Record-button
+            // (which `ActionResolvers.resolveRecordAction` routes into
+            // Continuation), not via the Resend-button. Same NoOp
+            // discipline as RECORDING/TRANSCRIBING — the resend
+            // dispatcher must not surface a stale "resume" intent for
+            // a session that's already eligible for live continuation.
+            SessionStatus.RECORDING_INTERRUPTED ->
+                ResendAction.NoOp
         }
     }
 }

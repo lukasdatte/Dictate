@@ -88,10 +88,14 @@ class PipelineRecoveryFullTest {
         )
     }
 
-    // ─── Case 2: RECORDING → FAILED ──────────────────────────────────
+    // ─── Case 2: RECORDING with audio present → RECORDING_INTERRUPTED ──
 
     @Test
-    fun `recover promotes RECORDING to FAILED with process-death reason and clears path`() {
+    fun `recover promotes RECORDING with audio present to RECORDING_INTERRUPTED keeping the file`() {
+        // B2 / ADR-0008 — non-destructive recovery. The Rolling-Segments
+        // machinery finalised at least one segment; the user can resume
+        // on the next Record-click via Continuation. No error marker,
+        // no file deletion.
         val tmpFile = File.createTempFile("dictate-rec", ".m4a").also { it.deleteOnExit() }
         seed("rec-1", SessionStatus.RECORDING, audioFilePath = tmpFile.absolutePath)
         val store = DictateUiStateStore(DictateUiState.initial())
@@ -100,13 +104,14 @@ class PipelineRecoveryFullTest {
 
         val row = dao.getById("rec-1")
         assertNotNull(row)
-        assertEquals(SessionStatus.FAILED.name, row!!.status)
-        assertEquals(AIProviderException.ErrorType.UNKNOWN.name, row.lastErrorType)
-        assertEquals("recording-interrupted-by-process-death", row.lastErrorMessage)
-        assertNull("audio_file_path must be cleared", row.audioFilePath)
-        // Opportunistic file-delete attempted; file may or may not exist depending on permissions.
-        assertFalse("audio file should be deleted opportunistically", tmpFile.exists())
-        assertTrue(store.snapshot.pendingSessions.isEmpty())
+        assertEquals(SessionStatus.RECORDING_INTERRUPTED.name, row!!.status)
+        assertNull("no error marker on RECORDING_INTERRUPTED", row.lastErrorType)
+        assertNull("no error message on RECORDING_INTERRUPTED", row.lastErrorMessage)
+        assertEquals(
+            "audio_file_path must be preserved for Continuation",
+            tmpFile.absolutePath, row.audioFilePath,
+        )
+        assertTrue("audio file must NOT be deleted", tmpFile.exists())
     }
 
     @Test
@@ -261,8 +266,8 @@ class PipelineRecoveryFullTest {
         val store = DictateUiStateStore(DictateUiState.initial())
         runBlocking { recovery().recover(store) }
 
-        // RECORDING → FAILED
-        assertEquals(SessionStatus.FAILED.name, dao.getById("rec")!!.status)
+        // RECORDING with audio present → RECORDING_INTERRUPTED (B2)
+        assertEquals(SessionStatus.RECORDING_INTERRUPTED.name, dao.getById("rec")!!.status)
         // TRANSCRIBING (with file) → RECORDED
         assertEquals(SessionStatus.RECORDED.name, dao.getById("trans-ok")!!.status)
         // RECORDED stays

@@ -176,6 +176,18 @@ sealed class Pref<T>(val key: String, val default: T) {
     // @see net.devemperor.dictate.core.RecordingHardwareAdapter
     object RollingSegmentIntervalSec :
         Pref<Long>("net.devemperor.dictate.rolling_segment_interval_sec", 30L)
+
+    // Continuation freshness window — how long a RECORDING_INTERRUPTED
+    // session stays eligible for auto-continuation on the next
+    // Record-click (B2 / ADR-0008 §"Auto-Continuation"). Beyond this
+    // window the next PipelineRecovery pass promotes it to FAILED and
+    // deletes the audio. Default: 24 h (a comfortable single-day cap
+    // — long enough for "I'll get back to this after lunch", short
+    // enough that stale state doesn't accumulate forever).
+    //
+    // Unit: milliseconds (matches `System.currentTimeMillis()` math).
+    object ContinuationFreshnessMs :
+        Pref<Long>("net.devemperor.dictate.continuation_freshness_ms", 86_400_000L)
 }
 
 // ── Extension Functions ──

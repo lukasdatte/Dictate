@@ -24,6 +24,7 @@ class SessionStatusTest {
      */
     private val expectedValues = setOf(
         "RECORDING",
+        "RECORDING_INTERRUPTED",
         "RECORDED",
         "TRANSCRIBING",
         "COMPLETED",
@@ -32,10 +33,10 @@ class SessionStatusTest {
     )
 
     @Test
-    fun `enum has exactly six variants matching the M4 CHECK constraint`() {
+    fun `enum has exactly seven variants matching the M5_6 CHECK constraint`() {
         val actualNames = SessionStatus.values().map { it.name }.toSet()
         assertEquals(
-            "SessionStatus.values() must match the CHECK list in MIGRATION_3_4 — " +
+            "SessionStatus.values() must match the CHECK list in MIGRATION_5_6 — " +
                 "see docs/DATABASE-PATTERNS.md 'Adding a new enum value'",
             expectedValues,
             actualNames
@@ -65,7 +66,11 @@ class SessionStatusTest {
         // Documentation contract — the State-Machine in §6.1 treats
         // these two groups differently: live states get downgraded by
         // PipelineRecovery on cold-start; terminal states stay put.
-        val live = setOf(SessionStatus.RECORDING, SessionStatus.TRANSCRIBING)
+        val live = setOf(
+            SessionStatus.RECORDING,
+            SessionStatus.RECORDING_INTERRUPTED,
+            SessionStatus.TRANSCRIBING,
+        )
         val terminal = setOf(
             SessionStatus.RECORDED,
             SessionStatus.COMPLETED,

@@ -28,9 +28,29 @@ enum class SessionStatus {
     /**
      * Recording is in progress — microphone is open, the audio file is
      * being written. Persisted at recording-start (Spec 1 §6.2).
-     * Recovery on cold-start downgrades to FAILED (audio is half-written).
+     * Recovery on cold-start:
+     *   - audio segments still on disk and Rolling-Segments finalised at
+     *     least one of them → promote to [RECORDING_INTERRUPTED] for
+     *     auto-continuation (B2 + ADR-0008).
+     *   - audio missing or partial-only → fall back to [FAILED].
      */
     RECORDING,
+
+    /**
+     * Recording was in progress when the process died, but the
+     * Rolling-Segments machinery left at least one readable segment
+     * on disk. On the next Record-click within the
+     * `ContinuationFreshnessMs` window the recorder reuses this
+     * session-id and appends a fresh segment via
+     * `AudioFileRepository.allocateNext`; the final
+     * `readForPipeline` concatenates everything. Stale rows
+     * (older than the freshness floor) are demoted to [FAILED] +
+     * audio deleted on the next recovery pass.
+     *
+     * Introduced by B2 of `dictate-widget-state-and-recovery`
+     * (ADR-0008 §"Auto-Continuation"). Schema-version 6.
+     */
+    RECORDING_INTERRUPTED,
 
     /**
      * Audio file is closed and persistent; the pipeline has either not

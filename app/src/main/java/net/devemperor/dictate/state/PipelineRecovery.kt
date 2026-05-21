@@ -105,6 +105,15 @@ class PipelineRecovery(
      * pre-M4 COMPLETED row as a pending-paste candidate.
      */
     private val pendingInsertionFreshnessFloor: () -> Long = { 0L },
+    /**
+     * Continuation-freshness supplier (B2 / ADR-0008). Returns the
+     * `Pref.ContinuationFreshnessMs` value at recovery time; the
+     * supplier indirection lets tests inject a deterministic value
+     * (e.g. `24 * 60 * 60 * 1000L`) without going through
+     * SharedPreferences. Defaults to 24 h so a recovery pass without
+     * an explicit supplier has the documented behaviour.
+     */
+    private val continuationFreshnessMs: () -> Long = { 86_400_000L },
 ) {
 
     /**
@@ -197,6 +206,7 @@ class PipelineRecovery(
             sessionDao.getSessionsByStatuses(
                 listOf(
                     SessionStatus.RECORDING.name,
+                    SessionStatus.RECORDING_INTERRUPTED.name,
                     SessionStatus.TRANSCRIBING.name,
                     SessionStatus.RECORDED.name,
                     SessionStatus.COMPLETED.name,
@@ -207,20 +217,53 @@ class PipelineRecovery(
             return
         }
 
-        // 1. RECORDING → FAILED. Recording-phase doesn't survive OOM-death.
-        //    Ordering: DB-promote FIRST, opportunistic File.delete SECOND.
-        //    See §6.3 Z. 3333-3341 for the rationale.
+        // 1. RECORDING → RECORDING_INTERRUPTED (audio present) OR
+        //    FAILED (audio missing). The Rolling-Segments machinery
+        //    finalises segments every N seconds, so a recording that
+        //    died mid-flight typically leaves at least one readable
+        //    segment behind — that audio is recoverable via the
+        //    Auto-Continuation path (ADR-0008 §"Auto-Continuation"),
+        //    not lost.
         //
         //    ADR-0007 Phase 1 — read through `effectiveAudioFilePaths`
-        //    so the dual-column window is transparent. Multi-segment
-        //    sessions delete every segment in the list.
+        //    so the dual-column window is transparent. The promotion
+        //    target depends on whether every recorded segment is still
+        //    on disk (partial loss falls back to FAILED + delete because
+        //    MediaMuxer concat would fail downstream anyway).
         candidates.filter { it.statusEnum == SessionStatus.RECORDING }.forEach { row ->
-            safeUpdateStatus(row.id, SessionStatus.FAILED)
-            safeUpdateError(row.id, AIProviderException.ErrorType.UNKNOWN.name,
-                "recording-interrupted-by-process-death")
-            row.effectiveAudioFilePaths.forEach { deleteAudioOpportunistic(it) }
-            safeClearAudioPath(row.id)
+            val paths = row.effectiveAudioFilePaths
+            val audioOk = paths.isNotEmpty() && paths.all { File(it).exists() }
+            if (audioOk) {
+                // Auto-Continuation candidate — keep audio, keep paths,
+                // no error marker. The next Record-click reuses this
+                // session via `ActionResolvers.resolveRecordAction`.
+                safeUpdateStatus(row.id, SessionStatus.RECORDING_INTERRUPTED)
+            } else {
+                safeUpdateStatus(row.id, SessionStatus.FAILED)
+                safeUpdateError(row.id, AIProviderException.ErrorType.UNKNOWN.name,
+                    "recording-interrupted-by-process-death")
+                paths.forEach { deleteAudioOpportunistic(it) }
+                safeClearAudioPath(row.id)
+            }
         }
+
+        // 1b. Stale RECORDING_INTERRUPTED → FAILED + delete. Once a
+        //     session has been "interrupted" longer than the freshness
+        //     window, the user has moved on and the on-disk segments
+        //     are dead weight. Same UNKNOWN-error pattern as the legacy
+        //     RECORDING-fail branch — surfaces in the history.
+        val staleFloor = System.currentTimeMillis() -
+            continuationFreshnessMs()
+        candidates.filter { it.statusEnum == SessionStatus.RECORDING_INTERRUPTED }
+            .forEach { row ->
+                if (row.createdAt < staleFloor) {
+                    safeUpdateStatus(row.id, SessionStatus.FAILED)
+                    safeUpdateError(row.id, AIProviderException.ErrorType.UNKNOWN.name,
+                        "stale-recording-interrupted-cleaned-up")
+                    row.effectiveAudioFilePaths.forEach { deleteAudioOpportunistic(it) }
+                    safeClearAudioPath(row.id)
+                }
+            }
 
         // 2. TRANSCRIBING — downgrade to RECORDED if audio exists, else FAILED.
         //    Clear stale errors on downgrade (Spec 1 §6.3 Z. 3389-3394).

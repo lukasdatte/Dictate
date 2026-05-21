@@ -323,20 +323,24 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             cascade += Action.OverlayAction.SetUserPrefersWidget(prefers = false)
         }
 
-        // ─── HOVER → KEYBOARD (CloseOverlay-cascade, Spec 3 §6.2 + §4.8) ─
-        if (prev.viewMode == ViewMode.HOVER && next.viewMode == ViewMode.KEYBOARD) {
-            cascade += Action.OverlayAction.SuppressAutoOverlayUntilNextSession
-            // F-7 — additive list (was `when { … }` priority-chain).
-            // Both Recording and Pipeline can be cancelled in the same
-            // pass when both are in-flight. Recording-first is the C-3
-            // priority preserved by list order.
-            if (next.recording.isActiveOrPaused || next.recording is RecordingState.Preparing) {
-                cascade += Action.RecordingAction.CancelRecording
-            }
-            if (next.pipeline !is PipelineUiState.Idle) {
-                cascade += Action.PipelineAction.CancelPipeline(sessionId = null)
-            }
-        }
+        // ─── HOVER → KEYBOARD (CloseOverlay-cascade) ───────────────────
+        //
+        // 2026-05-21 — this cascade USED to live here, firing on every
+        // HOVER → KEYBOARD state-diff. That was incorrect: the same
+        // diff is produced both by an explicit user-close
+        // (`CloseOverlay` action) AND by the automatic Triangle-FSM
+        // transition T5 (`OnImeViewShown` with `userPrefersWidget=false`).
+        // The automatic path silently cancelled in-flight recordings
+        // every time the user reopened the IME after an app-switch
+        // (verified via BUG-AUDIT logcat 2026-05-21).
+        //
+        // The cascade now lives in `ViewModeModule.Effect.DispatchCloseOverlayCascade`
+        // and is emitted only from the explicit `CloseOverlay`
+        // reducer arm. The automatic T5 transition still moves state
+        // to KEYBOARD but no longer carries the destructive cascade.
+        //
+        // See ViewModeModule.kt §"Effects emitted from explicit
+        // user-driven transitions".
 
         // ─── Permission revoked at runtime (Issue 3.1.3 / Spec 3 §9) ────
         if (prev.overlay.hasPermission &&

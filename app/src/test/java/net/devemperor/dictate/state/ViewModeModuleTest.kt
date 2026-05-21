@@ -3,6 +3,7 @@ package net.devemperor.dictate.state
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
@@ -282,7 +283,92 @@ class ViewModeModuleTest {
         assertEquals(ViewMode.KEYBOARD, result!!.nextState)
     }
 
-    // ─── No cascade emitted by this module ──────────────────────────────
+    // ─── CloseOverlay cascade effects (moved from OverlayModule, 2026-05-21) ───
+    //
+    // The destructive cascade — SuppressAutoOverlay + (conditional)
+    // CancelRecording / CancelPipeline — used to fire from
+    // `OverlayModule.onCrossModuleStateChange` on every HOVER → KEYBOARD
+    // state-diff. That swept up the automatic T5 transition too
+    // (`OnImeViewShown` with `userPrefersWidget=false`), silently
+    // cancelling in-flight recordings when the user reopened the IME
+    // after an app-switch. The cascade now lives in
+    // `ViewModeModule.Effect.DispatchCloseOverlayCascade` and is emitted
+    // ONLY from this explicit user-action arm.
+
+    @Test
+    fun `CloseOverlay from HOVER emits DispatchCloseOverlayCascade with active recording`() {
+        val ctx = ctx(global(recordingActive = true))
+        val result = module.reduce(ViewMode.HOVER, Action.ViewModeAction.CloseOverlay, ctx)
+        val effects = result!!.sideEffects.filterIsInstance<ViewModeModule.Effect.DispatchCloseOverlayCascade>()
+        assertEquals(1, effects.size)
+        assertEquals(true, effects.single().shouldCancelRecording)
+        assertEquals(false, effects.single().shouldCancelPipeline)
+    }
+
+    @Test
+    fun `CloseOverlay from HOVER with active pipeline emits cascade with pipeline-cancel`() {
+        val ctx = ctx(global(pipelineActive = true))
+        val result = module.reduce(ViewMode.HOVER, Action.ViewModeAction.CloseOverlay, ctx)
+        val cascade = result!!.sideEffects.filterIsInstance<ViewModeModule.Effect.DispatchCloseOverlayCascade>().single()
+        assertEquals(false, cascade.shouldCancelRecording)
+        assertEquals(true, cascade.shouldCancelPipeline)
+    }
+
+    @Test
+    fun `CloseOverlay from HOVER with BOTH in-flight emits cascade with BOTH cancels`() {
+        // The both-in-flight case: HOVER closed during the brief Send-
+        // cascade window. Cascade carries both cancel flags;
+        // runEffect dispatches them serially via services.emitAction.
+        val ctx = ctx(global(recordingActive = true, pipelineActive = true))
+        val result = module.reduce(ViewMode.HOVER, Action.ViewModeAction.CloseOverlay, ctx)
+        val cascade = result!!.sideEffects.filterIsInstance<ViewModeModule.Effect.DispatchCloseOverlayCascade>().single()
+        assertEquals(true, cascade.shouldCancelRecording)
+        assertEquals(true, cascade.shouldCancelPipeline)
+    }
+
+    @Test
+    fun `CloseOverlay from HOVER with NOTHING in-flight still emits cascade (suppress only)`() {
+        // The suppress bit must always fire on explicit close — it's
+        // the architectural marker that the user opted out of the
+        // overlay this session. Recording/Pipeline cancels are
+        // conditional; suppress is unconditional.
+        val ctx = ctx(global())  // nothing in flight
+        val result = module.reduce(ViewMode.HOVER, Action.ViewModeAction.CloseOverlay, ctx)
+        val cascade = result!!.sideEffects.filterIsInstance<ViewModeModule.Effect.DispatchCloseOverlayCascade>().single()
+        assertEquals(false, cascade.shouldCancelRecording)
+        assertEquals(false, cascade.shouldCancelPipeline)
+    }
+
+    @Test
+    fun `CloseOverlay from WIDGET emits cascade too (Spec 3 §6_2 — WIDGET close acts like HOVER close)`() {
+        // The WIDGET-close path also triggers the cascade — it's a
+        // user-driven overlay-dismiss as well. Symmetric with
+        // ToggleViewModeWidget for the no-recording case, but
+        // CloseOverlay carries the cascade.
+        val ctx = ctx(global(recordingActive = true))
+        val result = module.reduce(ViewMode.WIDGET, Action.ViewModeAction.CloseOverlay, ctx)
+        val cascade = result!!.sideEffects.filterIsInstance<ViewModeModule.Effect.DispatchCloseOverlayCascade>().single()
+        assertEquals(true, cascade.shouldCancelRecording)
+    }
+
+    @Test
+    fun `OnImeViewShown auto-transition HOVER to KEYBOARD does NOT emit cascade`() {
+        // The regression-lock for the bug fixed on 2026-05-21:
+        // automatic T5 produces the same state-diff (HOVER → KEYBOARD)
+        // as CloseOverlay, but MUST NOT carry the destructive cascade.
+        // Recording stays alive across IME-reopen.
+        val ctx = ctx(global(recordingActive = true, pipelineActive = false))
+        val result = module.reduce(ViewMode.HOVER, Action.ViewModeAction.OnImeViewShown, ctx)
+        // T5 produces KEYBOARD transition
+        assertEquals(ViewMode.KEYBOARD, result!!.nextState)
+        // ... but NO DispatchCloseOverlayCascade effect
+        assertTrue(
+            "OnImeViewShown must NOT emit CloseOverlay cascade — that's the bug from 2026-05-21",
+            result.sideEffects.none { it is ViewModeModule.Effect.DispatchCloseOverlayCascade }
+        )
+    }
+
+    // ─── No cross-module cascade emitted by this module ─────────────────
 
     @Test
     fun `ViewModeModule emits NO cross-module cascade (other modules observe ViewMode themselves)`() {

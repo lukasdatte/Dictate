@@ -74,11 +74,40 @@ object ViewModeModule : DictateModule<ViewMode, Action.ViewModeAction, ViewModeM
     override fun initialState(): ViewMode = ViewMode.KEYBOARD
 
     /**
-     * ViewModeModule emits **no** side-effects — the FSM mutation alone
-     * is the entirety of its responsibility. The empty sealed interface
-     * keeps the [DictateModule] contract type-parameterised correctly.
+     * Effects emitted from explicit user-driven transitions.
+     *
+     * **Why this exists (2026-05-21 fix):** the legacy
+     * `HOVER → KEYBOARD` cross-module cascade in [OverlayModule]
+     * fired indiscriminately whenever any state-diff produced that
+     * transition. That included both the intentional user-close
+     * (`CloseOverlay` action) AND the automatic Triangle-FSM transition
+     * (T5 — `OnImeViewShown` with `userPrefersWidget=false`). The
+     * automatic path silently cancelled an in-flight recording every
+     * time the user reopened the IME after an app-switch — see the
+     * `BUG-AUDIT` trace 2026-05-21.
+     *
+     * The fix routes the cancel cascade through an explicit effect
+     * emitted **only** from the `CloseOverlay` reducer arm. T5 still
+     * transitions state to KEYBOARD; it just doesn't carry the
+     * destructive cascade.
      */
-    sealed interface Effect : SideEffect
+    sealed interface Effect : SideEffect {
+        /**
+         * Emitted by the `CloseOverlay` reducer arm when an explicit
+         * user-close was the source of the HOVER/WIDGET → KEYBOARD
+         * transition. Re-dispatches the three cascade actions that
+         * `OverlayModule.onCrossModuleStateChange` used to emit.
+         *
+         * State snapshot captured at reducer time so [runEffect] can
+         * decide whether the recording / pipeline cancels should fire
+         * without re-reading the live state (which has already moved
+         * on by the time the effect runs).
+         */
+        data class DispatchCloseOverlayCascade(
+            val shouldCancelRecording: Boolean,
+            val shouldCancelPipeline: Boolean,
+        ) : Effect
+    }
 
     override fun reduce(
         state: ViewMode,
@@ -132,13 +161,28 @@ object ViewModeModule : DictateModule<ViewMode, Action.ViewModeAction, ViewModeM
 
         // CloseOverlay — used by both the WIDGET-close button (acts like
         // ToggleViewModeWidget) and the HOVER-close button (drops back to
-        // KEYBOARD). Recording / Pipeline cancellation is handled by
-        // OverlayModule's onCrossModuleStateChange on the
-        // HOVER → KEYBOARD boundary (Spec 3 §4.8 + §6.2).
+        // KEYBOARD).
+        //
+        // 2026-05-21 — the recording/pipeline cancel cascade is now
+        // emitted ONLY from this reducer arm via
+        // [Effect.DispatchCloseOverlayCascade], no longer via
+        // OverlayModule's cross-module state-diff observer. The diff
+        // observer fired on every HOVER → KEYBOARD transition,
+        // including the automatic T5 (OnImeViewShown with
+        // !userPrefersWidget) — which silently cancelled in-flight
+        // recordings whenever the user reopened the IME after an
+        // app-switch. Routing the cascade through this explicit
+        // user-action arm prevents that.
         Action.ViewModeAction.CloseOverlay -> when (state) {
             ViewMode.WIDGET, ViewMode.HOVER -> TransitionResult(
                 nextState = ViewMode.KEYBOARD,
-                sideEffects = emptyList(),
+                sideEffects = listOf(
+                    Effect.DispatchCloseOverlayCascade(
+                        shouldCancelRecording = ctx.global.recording.isActiveOrPaused
+                            || ctx.global.recording is RecordingState.Preparing,
+                        shouldCancelPipeline = ctx.global.pipeline !is PipelineUiState.Idle,
+                    )
+                ),
             )
             ViewMode.KEYBOARD -> null
         }
@@ -166,9 +210,26 @@ object ViewModeModule : DictateModule<ViewMode, Action.ViewModeAction, ViewModeM
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices) {
-        // No effects — see [Effect] KDoc. The when-block over a sealed
-        // interface with no members is implicitly exhaustive; this body
-        // is intentionally empty.
+        when (effect) {
+            is Effect.DispatchCloseOverlayCascade -> {
+                // Always-on side of the cascade: the suppress bit
+                // blocks auto-reopen of the floating overlay until the
+                // next Idle→Preparing transition (per RecordingModule's
+                // reset observer).
+                services.emitAction(Action.OverlayAction.SuppressAutoOverlayUntilNextSession)
+                // Optional sides — only if the user-close happened
+                // while work was in flight. The snapshot was captured
+                // at reducer time so concurrent state changes between
+                // reducer and effect dispatch don't influence the
+                // decision.
+                if (effect.shouldCancelRecording) {
+                    services.emitAction(Action.RecordingAction.CancelRecording)
+                }
+                if (effect.shouldCancelPipeline) {
+                    services.emitAction(Action.PipelineAction.CancelPipeline(sessionId = null))
+                }
+            }
+        }
     }
 
     /**

@@ -195,29 +195,22 @@ class OverlayModuleTest {
     }
 
     @Test
-    fun `cascade HOVER to KEYBOARD emits SuppressBit + CancelRecording (when active)`() {
-        val prev = DictateUiState.initial().copy(
-            viewMode = ViewMode.HOVER,
-            recording = RecordingState.Active(false, testFile, sessionId = "sid-test"),
-        )
-        val next = prev.copy(viewMode = ViewMode.KEYBOARD)
-        val cascade = module.onCrossModuleStateChange(prev, next)
-        assertTrue(cascade.contains(Action.OverlayAction.SuppressAutoOverlayUntilNextSession))
-        assertTrue(cascade.contains(Action.RecordingAction.CancelRecording))
-        // Pipeline-cancel must NOT also fire here — pipeline is Idle.
-        // (F-7: both-in-flight case is covered separately below.)
-        assertTrue(cascade.none { it is Action.PipelineAction.CancelPipeline })
-    }
-
-    @Test
-    fun `F-7 — cascade HOVER to KEYBOARD with BOTH recording and pipeline in-flight emits BOTH cancels`() {
-        // The both-in-flight case: HOVER closed during the brief Send-
-        // cascade window (recording stopping while pipeline already
-        // preparing). The earlier `if/else if/else` chain dropped the
-        // pipeline cancel silently, leaving the pipeline running and
-        // producing a transcript the user opted out of. The F-7
-        // additive list emits both cancels; the orchestrator dispatches
-        // them serially at depth+1 with re-snapshotting.
+    fun `HOVER to KEYBOARD state-diff emits NO cascade (cascade lives in ViewModeModule CloseOverlay)`() {
+        // 2026-05-21: the destructive `HOVER → KEYBOARD` cascade
+        // (SuppressBit + CancelRecording + CancelPipeline) moved out of
+        // this cross-module observer into
+        // `ViewModeModule.Effect.DispatchCloseOverlayCascade`. The
+        // state-diff alone is no longer sufficient — the same diff is
+        // produced both by an explicit `CloseOverlay` action AND by the
+        // automatic Triangle-FSM T5 (`OnImeViewShown` with
+        // `userPrefersWidget=false`). The previous, state-diff-driven
+        // cascade silently cancelled in-flight recordings every time
+        // the user reopened the IME after an app-switch
+        // (verified via BUG-AUDIT logcat 2026-05-21).
+        //
+        // Equivalent coverage now lives in `ViewModeModuleTest` —
+        // `CloseOverlay`-driven cascade tests assert SuppressBit +
+        // recording/pipeline cancels under the same in-flight matrix.
         val prev = DictateUiState.initial().copy(
             viewMode = ViewMode.HOVER,
             recording = RecordingState.Active(false, testFile, sessionId = "sid-test"),
@@ -225,63 +218,10 @@ class OverlayModuleTest {
         )
         val next = prev.copy(viewMode = ViewMode.KEYBOARD)
         val cascade = module.onCrossModuleStateChange(prev, next)
-        assertTrue(cascade.contains(Action.OverlayAction.SuppressAutoOverlayUntilNextSession))
-        assertTrue(cascade.contains(Action.RecordingAction.CancelRecording))
-        assertTrue(cascade.any { it is Action.PipelineAction.CancelPipeline })
-        // C-3 priority preserved by list order: Recording before Pipeline.
-        val recordingIdx = cascade.indexOf(Action.RecordingAction.CancelRecording)
-        val pipelineIdx = cascade.indexOfFirst { it is Action.PipelineAction.CancelPipeline }
-        assertTrue(
-            "C-3 ordering: CancelRecording must precede CancelPipeline",
-            recordingIdx in 0..<pipelineIdx,
-        )
-    }
-
-    @Test
-    fun `cascade HOVER to KEYBOARD with Paused recording emits SuppressBit + CancelRecording`() {
-        val prev = DictateUiState.initial().copy(
-            viewMode = ViewMode.HOVER,
-            recording = RecordingState.Paused(false, testFile, sessionId = "sid-test"),
-        )
-        val next = prev.copy(viewMode = ViewMode.KEYBOARD)
-        val cascade = module.onCrossModuleStateChange(prev, next)
-        assertTrue(cascade.contains(Action.RecordingAction.CancelRecording))
-    }
-
-    @Test
-    fun `cascade HOVER to KEYBOARD with Preparing recording emits SuppressBit + CancelRecording`() {
-        val prev = DictateUiState.initial().copy(
-            viewMode = ViewMode.HOVER,
-            recording = RecordingState.Preparing(false, testFile, sessionId = "sid-test"),
-        )
-        val next = prev.copy(viewMode = ViewMode.KEYBOARD)
-        val cascade = module.onCrossModuleStateChange(prev, next)
-        assertTrue(cascade.contains(Action.RecordingAction.CancelRecording))
-    }
-
-    @Test
-    fun `cascade HOVER to KEYBOARD with no recording but pipeline running emits CancelPipeline`() {
-        val prev = DictateUiState.initial().copy(
-            viewMode = ViewMode.HOVER,
-            pipeline = PipelineUiState.Running("sid", InsertionTarget.INPUT_CONNECTION),
-        )
-        val next = prev.copy(viewMode = ViewMode.KEYBOARD)
-        val cascade = module.onCrossModuleStateChange(prev, next)
-        assertTrue(cascade.contains(Action.OverlayAction.SuppressAutoOverlayUntilNextSession))
-        assertTrue(cascade.any { it is Action.PipelineAction.CancelPipeline })
-        // Recording-cancel must NOT also fire
+        // No SuppressBit, no CancelRecording, no CancelPipeline.
+        assertTrue(cascade.none { it == Action.OverlayAction.SuppressAutoOverlayUntilNextSession })
         assertTrue(cascade.none { it == Action.RecordingAction.CancelRecording })
-    }
-
-    @Test
-    fun `cascade HOVER to KEYBOARD with nothing active emits SuppressBit only`() {
-        val prev = DictateUiState.initial().copy(viewMode = ViewMode.HOVER)
-        val next = prev.copy(viewMode = ViewMode.KEYBOARD)
-        val cascade = module.onCrossModuleStateChange(prev, next)
-        assertEquals(
-            listOf<Action>(Action.OverlayAction.SuppressAutoOverlayUntilNextSession),
-            cascade,
-        )
+        assertTrue(cascade.none { it is Action.PipelineAction.CancelPipeline })
     }
 
     @Test

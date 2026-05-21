@@ -2721,6 +2721,11 @@ public class DictateInputMethodService extends InputMethodService
                 }
                 refreshLanguageChip();
             } else {
+                // PRE-BIND-FALLBACK: SP-write authorized because dispatcher
+                // unavailable (review-fix G2, 2026-05-21). LanguageResolver
+                // is the SoT for the curated-list-write algorithm (same call
+                // the dispatched Effect.PersistEffectiveLanguage delegates
+                // to — see RecordingModule / LanguageModule D-3 in state.md).
                 net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
                         .setLanguage(sp, code);
                 pushPermanentLanguageToOrchestrator();
@@ -3038,6 +3043,12 @@ public class DictateInputMethodService extends InputMethodService
                 pipelineBinder.dispatch(
                         new net.devemperor.dictate.state.Action.RecordingAction.OnAudioFileImported(importedAudio));
             } else {
+                // PRE-BIND-FALLBACK: SP-write authorized because dispatcher
+                // unavailable (review-fix G2, 2026-05-21). The two writes
+                // are sequential — the State-side atomicity guaranteed by
+                // the dispatched action's reducer arm cannot be reproduced
+                // outside the orchestrator (see RecordingModule
+                // PersistImportedAudioFileName KDoc + review-fix G6).
                 DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, importedAudio.getName()).apply();
                 sp.edit().remove(Pref.TranscriptionAudioFile.INSTANCE.getKey()).apply();
             }
@@ -5150,6 +5161,10 @@ public class DictateInputMethodService extends InputMethodService
             pipelineBinder.dispatch(
                     net.devemperor.dictate.state.Action.LayoutAction.ToggleSmallMode.INSTANCE);
         } else {
+            // PRE-BIND-FALLBACK: SP-write authorized because dispatcher
+            // unavailable (review-fix G2, 2026-05-21). The
+            // CutoverArchitectureInvariantTest lock-grep allow-lists
+            // SP-writes only at lines carrying this exact tag string.
             boolean current = DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE);
             DictatePrefsKt.put(sp.edit(), Pref.SmallMode.INSTANCE, !current).apply();
         }
@@ -5167,6 +5182,8 @@ public class DictateInputMethodService extends InputMethodService
             pipelineBinder.dispatch(
                     net.devemperor.dictate.state.Action.LayoutAction.ToggleSingleRowMode.INSTANCE);
         } else {
+            // PRE-BIND-FALLBACK: SP-write authorized because dispatcher
+            // unavailable (review-fix G2, 2026-05-21).
             boolean current = DictatePrefsKt.get(sp, Pref.SingleRowMode.INSTANCE);
             DictatePrefsKt.put(sp.edit(), Pref.SingleRowMode.INSTANCE, !current).apply();
         }
@@ -5201,6 +5218,8 @@ public class DictateInputMethodService extends InputMethodService
             pipelineBinder.dispatch(
                     net.devemperor.dictate.state.Action.AudioAction.ToggleAudioFocusPref.INSTANCE);
         } else {
+            // PRE-BIND-FALLBACK: SP-write authorized because dispatcher
+            // unavailable (review-fix G2, 2026-05-21).
             boolean current = DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE);
             DictatePrefsKt.put(sp.edit(), Pref.AudioFocus.INSTANCE, !current).apply();
         }

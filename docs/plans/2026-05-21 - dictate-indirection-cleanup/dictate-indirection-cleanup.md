@@ -158,10 +158,35 @@ Jedes Kriterium ist als **technisch verifizierbarer Invariant** formuliert.
   bereiter Mini-Plan verfügbar.
 
 - **AC-5: Pre-Bind-Verhalten.** Ein Click vor `pipelineBinder != null`
-  ist ein No-Op-Toast oder eine deterministische Defensive (kein
-  stiller SP-Write mehr, der den State später inkonsistent macht).
-  Validation: jeder migrierte Handler beginnt mit
-  `if (pipelineBinder == null) { …no-op… return; }`.
+  ist entweder eine deterministische Defensive (No-Op-Toast / early
+  return) **oder** ein explizit als legitim markierter SP-Write-Fallback.
+
+  **Pattern A — defensive return** (Default für alle Sites, deren
+  click-handler-Body keinen User-zugesicherten Outcome hat): jeder
+  migrierte Handler beginnt mit `if (pipelineBinder == null) { …no-op… return; }`.
+
+  **Pattern B — getaggter SP-Write-Fallback** (review-fix G2 / D-7,
+  2026-05-21): Wenn der Click-Handler einen User-Intent kodiert, dessen
+  Verlust UX-degradiert wäre (z.B. Toggle, der per User-Klick "passieren
+  soll"), bleibt der SP-Write-Fallback im `else`-Zweig erhalten und wird
+  mit dem exakten Tag `// PRE-BIND-FALLBACK` markiert. Das Tag ist die
+  Whitelist für den `CutoverArchitectureInvariantTest`-Lock (siehe G5):
+  ungetaggte `sp.edit().put(...)` / `DictatePrefsKt.put(...)` auf
+  gespiegelten Prefs in `DictateInputMethodService.java` failen den Lock;
+  getaggte Stellen sind erlaubt.
+
+  Begründung Pattern B: `bindService` ist asynchron (gleich-Prozess,
+  aber Main-Thread-Runnable-Delivery), also gibt es ein narrow Window
+  zwischen `onCreateInputView` (View instanziiert) und `onServiceConnected`
+  (Binder eintreffend). Click-Events im Window ohne Fallback wären
+  silent no-op (User klickt, nichts passiert) — ein Bug aus User-Sicht.
+  Der Fallback ist semantisch identisch zu B-2 / B-6 (pre-bind
+  View-Fallbacks in AC-6) — ein legitimer Architektur-Erkennungs-Tag,
+  kein Plan-Verletzung.
+
+  **Aktuelle Pattern-B-Sites:** SmallMode (`:5152`), SingleRowMode
+  (`:5169`), AudioFocus (`:5202`), LastFileName (`:3037`), Language
+  (`:2715`).
 
 - **AC-6: Keine direkte View-Mutation außerhalb der zugelassenen
   Render-Owner.** Liste der zugelassenen Owner (Stand Vol2 Phase 6):

@@ -3,6 +3,7 @@ package net.devemperor.dictate.state.render.overlay
 import android.content.Context
 import android.content.res.Configuration
 import android.util.Log
+import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
@@ -274,7 +275,16 @@ class OverlayBackend(
      * captured.
      */
     private fun inflateAndAttach() {
-        val inflater = ctx.getSystemService(Context.LAYOUT_INFLATER_SERVICE) as LayoutInflater
+        // overlay_5button_layout uses MaterialButton, which requires a
+        // Material3 theme. The Service Context inherits the system default
+        // (`Theme.DeviceDefault.*`), so inflating against it throws
+        // `IllegalArgumentException("The style on this component requires
+        // your app theme to be Theme.MaterialComponents (or a descendant)")`.
+        // Wrap in a ContextThemeWrapper to match the IME view's theming —
+        // same R.style.Theme_Dictate the IME service uses for its own
+        // ContextThemeWrapper sites (DictateInputMethodService:539/766/2540).
+        val themedCtx = ContextThemeWrapper(ctx, R.style.Theme_Dictate)
+        val inflater = LayoutInflater.from(themedCtx)
         val view = inflater.inflate(R.layout.overlay_5button_layout, null)
         val views = mapOf(
             LogicalButtonId.OVERLAY_RECORD to view.findViewById<View>(R.id.overlay_record_btn),

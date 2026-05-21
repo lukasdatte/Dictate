@@ -5110,43 +5110,32 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onAudioFocusToggled() {
-        // Block 2 (Quality-Gate W "Race Window"): the order
-        //   1. SP-write   2. live-hook   3. icon refresh   4. KSM.refresh
-        // matters. Other components reading Pref.AudioFocus on a trigger (the
-        // SP listener registered above, the next startRecording() pass) must
-        // see the new value already; the icon only follows after the runtime
-        // state has been adjusted so a torn frame cannot show stale state.
-        boolean newValue = !DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE);
-
-        // 1. Persist FIRST.
-        DictatePrefsKt.put(sp.edit(), Pref.AudioFocus.INSTANCE, newValue).apply();
-
-        // 2. Live-Hook on a running recording (no-op in Idle, only mutates
-        //    AudioManager when state is Active — see RecordingStateController
-        //    .setAudioFocusRuntime KDoc). Also covers Block 3c.
-        if (recordingStateController != null) {
-            recordingStateController.setAudioFocusRuntime(newValue);
-        }
-
-        // 3. UI refresh — CR-DEL (Theme C-R / G14): the SP-write above is
-        //    mirrored into state.audio.audioFocusEnabledPref by
-        //    PipelinePrefMirror → a state emit → the catalog AUDIO_FOCUS
-        //    iconResolver re-renders the **main-button-area**
-        //    `audioFocusButton` icon on the attached ImeViewBackend. The
-        //    legacy mainButtonsController.refreshAudioFocusIcon + KSM
-        //    refresh unbound fallbacks are GONE (both classes deleted at
-        //    the point-of-no-return).
-        // 3b. F-3 (B5-VAL): the catalog AUDIO_FOCUS slot drives ONLY the
-        //    main-button-area twin — the always-visible edit-bar
-        //    `editAudioFocusButton` is a SEPARATE view the catalog never
-        //    touches. The legacy refreshAudioFocusIcon drove BOTH twins;
-        //    only the main-button one became state-reactive. Refresh the
-        //    edit-bar twin explicitly here (shared resolveAudioFocusIcon
-        //    SSoT — the two twins cannot drift) so it is no longer
-        //    frozen at the static volume_off default + TalkBack
-        //    announces the state.
-        if (editBarController != null) {
-            editBarController.refreshAudioFocusIcon(newValue);
+        // 2026-05-21 indirection-cleanup A-3 Final / Chunk 3.4 — the
+        // legacy 4-step imperative path (SP-write → setAudioFocusRuntime
+        // → edit-bar-twin refresh → main-twin via mirror) collapses to
+        // a single dispatch. The AudioModule reducer flips
+        // state.audio.audioFocusEnabledPref and emits:
+        //   1. Effect.PersistAudioFocusPref → SharedPrefs.AudioFocus
+        //      (Chunk 3.1).
+        //   2. Effect.ApplyAudioFocusRuntime → live-AudioManager update
+        //      only when recording is Active (Chunk 3.2). Replaces
+        //      RecordingStateController.setAudioFocusRuntime, scheduled
+        //      for retire in the Block-5 RecordingStateController
+        //      Folge-Plan.
+        // Edit-bar twin re-renders via EditBarAudioFocusObserver
+        // (Chunk 3.3) on the state-emit. Main-button-area twin
+        // re-renders via the catalog AUDIO_FOCUS slot iconResolver.
+        //
+        // Pre-bind fallback: when pipelineBinder is null (narrow
+        // window before service-bind during onCreateInputView), write
+        // SP directly so the user's choice survives. The mirror picks
+        // it up on bind.
+        if (pipelineBinder != null) {
+            pipelineBinder.dispatch(
+                    net.devemperor.dictate.state.Action.AudioAction.ToggleAudioFocusPref.INSTANCE);
+        } else {
+            boolean current = DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE);
+            DictatePrefsKt.put(sp.edit(), Pref.AudioFocus.INSTANCE, !current).apply();
         }
     }
 

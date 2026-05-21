@@ -539,6 +539,32 @@ sealed class Action {
     // ════════════════════════════════════════════════════════════════
 
     sealed class LanguageAction : Action() {
+
+        /**
+         * Set the **permanent** effective language (curated-list +
+         * `Pref.InputLanguagePos` write path).
+         *
+         * (indirection-cleanup 2026-05-21, Chunk 4.5c — A-6 / OQ-1
+         * Option A.)
+         *
+         * Replaces the legacy IME `setLanguageFromPicker(code)` two-step
+         * (`LanguageResolver.setLanguage(sp, code)` +
+         * `pushPermanentLanguageToOrchestrator()`). The LanguageModule
+         * reducer arm writes `state.language.effective = code` and
+         * emits a persistence effect that delegates to
+         * `LanguageResolver.setLanguage(sp, code)` (which curates +
+         * persists). The Settings Activity continues to write the
+         * curated list directly via `LanguageResolver`; this action
+         * is the **in-IME** picker path.
+         *
+         * **Why a distinct action (not reuse [RefreshFromPref])**:
+         * `RefreshFromPref` is the *read-back* of an already-persisted
+         * value (no SP write); `SetEffectiveLanguage` is the picker
+         * **write** that mutates the curated list + position before
+         * the read-back lands.
+         */
+        data class SetEffectiveLanguage(val code: String) : LanguageAction()
+
         /** Reprocess-Staging override; `null` clears the override. */
         data class SetOverride(val code: String?) : LanguageAction()
 

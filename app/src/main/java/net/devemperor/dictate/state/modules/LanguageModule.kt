@@ -5,6 +5,7 @@
 package net.devemperor.dictate.state
 
 import kotlin.reflect.KClass
+import net.devemperor.dictate.preferences.LanguageResolver
 
 /**
  * Owns the [LanguageState] axis — the effective transcription language
@@ -60,12 +61,41 @@ object LanguageModule : DictateModule<LanguageState, Action.LanguageAction, Lang
     override fun initialState(): LanguageState = LanguageState(effective = "system")
 
     /**
-     * No effects. The SharedPreferences read/write surface lives in
-     * [net.devemperor.dictate.preferences.LanguageResolver]; the caller
-     * resolves before dispatch and this module only mutates state, so no
-     * effect channel is needed.
+     * Module-local effects.
+     *
+     * **Pre-Chunk-4.5c**: the module had no effects — every state mutation
+     * was driven by an action whose caller had already resolved /
+     * persisted to SP (Pre-Dispatch-Resolution pattern). Chunk 4.5c adds
+     * one effect: the **in-IME picker** write path. The Settings Activity
+     * (a separate process actor) continues to write the curated list
+     * directly through `LanguageResolver`; only the in-IME path uses
+     * dispatch.
      */
-    sealed interface Effect : SideEffect
+    sealed interface Effect : SideEffect {
+        /**
+         * Persist `code` as the new permanent effective language —
+         * curated-list-aware
+         * (indirection-cleanup 2026-05-21, Chunk 4.5c — A-6).
+         *
+         * Delegates to
+         * [net.devemperor.dictate.preferences.LanguageResolver.setLanguage]
+         * which appends `code` to the curated list if absent, sanitizes
+         * + sorts via `InputLanguagesPlugin.sanitize`, and re-anchors
+         * `Pref.InputLanguagePos` to `code`. The same algorithm Settings
+         * Activity uses on its picker; the in-IME picker dispatches an
+         * action that lands in this effect so the SP write goes through
+         * a single dispatch path (Single-Dispatch-Invariante / AC-1).
+         *
+         * **Why delegate to LanguageResolver, not in-line the curation
+         * logic in the effect handler?** SRP: `LanguageResolver` and the
+         * `InputLanguagesPlugin.sanitize` family already own the
+         * curation algorithm and its tests; duplicating the logic in
+         * `runEffect` would create a second source of truth that drifts
+         * out of sync with the Settings-Activity path. The effect is
+         * a thin orchestration over the existing seam.
+         */
+        data class PersistEffectiveLanguage(val code: String) : Effect
+    }
 
     override fun reduce(
         state: LanguageState,
@@ -94,9 +124,28 @@ object LanguageModule : DictateModule<LanguageState, Action.LanguageAction, Lang
                     sideEffects = emptyList(),
                 )
             } else null
+
+        // 2026-05-21 indirection-cleanup Chunk 4.5c — in-IME picker path.
+        // Mutate `effective` AND emit the curate+persist effect. The
+        // state write is the user-facing change (chip label, record-button
+        // text, transcription-config snapshot); the effect closes the
+        // SP-write loop so the next read (Settings, cross-instance) sees
+        // the new value. Idempotent on the state half — a same-code
+        // pick still emits the persist effect because the curated list
+        // may have changed (LanguageResolver.setLanguage auto-adds if
+        // missing).
+        is Action.LanguageAction.SetEffectiveLanguage -> TransitionResult(
+            nextState = if (action.code != state.effective) {
+                state.copy(effective = action.code)
+            } else state,
+            sideEffects = listOf(Effect.PersistEffectiveLanguage(action.code)),
+        )
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices) {
-        // No effects — see [Effect] KDoc. Empty sealed interface.
+        when (effect) {
+            is Effect.PersistEffectiveLanguage ->
+                LanguageResolver.setLanguage(services.sharedPrefs, effect.code)
+        }
     }
 }

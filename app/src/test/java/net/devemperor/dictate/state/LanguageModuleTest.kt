@@ -88,6 +88,63 @@ class LanguageModuleTest {
         assertEquals("fr", result.nextState.override)
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // SetEffectiveLanguage (Chunk 4.5c) — in-IME picker write path
+    // ════════════════════════════════════════════════════════════════
+
+    @Test
+    fun `SetEffectiveLanguage flips effective AND emits PersistEffectiveLanguage`() {
+        val state = LanguageState(effective = "en")
+        val result = module.reduce(
+            state,
+            Action.LanguageAction.SetEffectiveLanguage("de"),
+            ctx(),
+        )
+        assertEquals("de", result!!.nextState.effective)
+        assertEquals(
+            listOf<LanguageModule.Effect>(
+                LanguageModule.Effect.PersistEffectiveLanguage("de"),
+            ),
+            result.sideEffects,
+        )
+    }
+
+    @Test
+    fun `SetEffectiveLanguage with same code leaves effective alone but still persists`() {
+        // The curated list may have changed underneath — auto-add is a
+        // Settings-Activity concern that the in-IME picker has no
+        // visibility into. Persist runs unconditionally so the curated
+        // list converges; the state-write is idempotent.
+        val state = LanguageState(effective = "de")
+        val result = module.reduce(
+            state,
+            Action.LanguageAction.SetEffectiveLanguage("de"),
+            ctx(),
+        )
+        assertEquals("de", result!!.nextState.effective)
+        assertEquals(state, result.nextState)  // same instance OK
+        assertEquals(
+            listOf<LanguageModule.Effect>(
+                LanguageModule.Effect.PersistEffectiveLanguage("de"),
+            ),
+            result.sideEffects,
+        )
+    }
+
+    @Test
+    fun `SetEffectiveLanguage preserves an active override`() {
+        // The picker mutates `effective` (permanent axis) only; the
+        // ReprocessStaging override is orthogonal and untouched.
+        val state = LanguageState(effective = "en", override = "fr")
+        val result = module.reduce(
+            state,
+            Action.LanguageAction.SetEffectiveLanguage("de"),
+            ctx(),
+        )
+        assertEquals("de", result!!.nextState.effective)
+        assertEquals("fr", result.nextState.override)
+    }
+
     @Test
     fun `module id is Language`() {
         assertEquals(ModuleId.Language, module.id)

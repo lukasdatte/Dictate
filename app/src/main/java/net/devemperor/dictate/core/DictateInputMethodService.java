@@ -2722,9 +2722,34 @@ public class DictateInputMethodService extends InputMethodService
             reprocessSelectedLanguage = code;
             refreshLanguageChip();
         } else {
-            net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
-                    .setLanguage(sp, code);
-            pushPermanentLanguageToOrchestrator();
+            // 2026-05-21 indirection-cleanup Chunk 4.5c (A-6) — the
+            // legacy two-step
+            //   1. LanguageResolver.setLanguage(sp, code) — curate+persist
+            //   2. pushPermanentLanguageToOrchestrator() — dispatch
+            //      RefreshFromPref so the orchestrator picks up the SP
+            //      write
+            // collapses to a single dispatch. The LanguageModule reducer
+            // arm writes state.language.effective and emits
+            // Effect.PersistEffectiveLanguage; the effect delegates the
+            // curate+persist to LanguageResolver.setLanguage (no
+            // duplication of the curation algorithm).
+            //
+            // Pre-bind fallback retained — when pipelineBinder is null
+            // (narrow service-not-yet-bound window) write through the
+            // resolver directly so the user's pick survives.
+            if (pipelineBinder != null) {
+                try {
+                    pipelineBinder.dispatch(
+                            new net.devemperor.dictate.state.Action.LanguageAction.SetEffectiveLanguage(code));
+                } catch (Throwable t) {
+                    Log.w("DictateIME", "SetEffectiveLanguage dispatch failed", t);
+                }
+                refreshLanguageChip();
+            } else {
+                net.devemperor.dictate.preferences.LanguageResolver.INSTANCE
+                        .setLanguage(sp, code);
+                pushPermanentLanguageToOrchestrator();
+            }
         }
     }
 

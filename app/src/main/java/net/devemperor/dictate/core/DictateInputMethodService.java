@@ -1454,6 +1454,18 @@ public class DictateInputMethodService extends InputMethodService
                 return kotlin.Unit.INSTANCE;
             };
 
+        // 2026-05-21 indirection-cleanup Chunk 4.2 — pass the container
+        // + accent-text view lists so the backend owns the
+        // `setBackgroundColor` + `setTextColor` passes that the IME's
+        // `onStartInputView` previously inlined (B-3 + B-4).
+        java.util.List<View> themedContainers = new java.util.ArrayList<>();
+        if (dictateKeyboardView != null) themedContainers.add(dictateKeyboardView);
+        if (emojiPickerCl != null) themedContainers.add(emojiPickerCl);
+        if (qwertzContainer != null) themedContainers.add(qwertzContainer);
+        java.util.List<TextView> accentTextViews = new java.util.ArrayList<>();
+        if (infoTv != null) accentTextViews.add(infoTv);
+        if (emojiPickerTitleTv != null) accentTextViews.add(emojiPickerTitleTv);
+
         imeViewBackend = new ImeViewBackend(
             new RealMotionSurface(motionLayout),
             buttonViews,
@@ -1468,7 +1480,9 @@ public class DictateInputMethodService extends InputMethodService
             qwertzKeyboardView.getKeyPressAnimator(),
             staticHandlerInstaller,
             vibrateLambda,
-            imeSideAffordance
+            imeSideAffordance,
+            themedContainers,
+            accentTextViews
         );
 
         try {
@@ -2912,17 +2926,30 @@ public class DictateInputMethodService extends InputMethodService
         } else {
             keyboardBackgroundColor = getResources().getColor(R.color.dictate_keyboard_background_light, getTheme());
         }
-        dictateKeyboardView.setBackgroundColor(keyboardBackgroundColor);
-        emojiPickerCl.setBackgroundColor(keyboardBackgroundColor);
-        qwertzContainer.setBackgroundColor(keyboardBackgroundColor);
-
-        TextView[] textColorViews = { infoTv, emojiPickerTitleTv };
-        for (TextView tv : textColorViews) tv.setTextColor(accentColor);
+        // 2026-05-21 indirection-cleanup Chunk 4.2 (B-3 + B-4) — the
+        // container background + accent-text-view passes are now owned
+        // by `ImeViewBackend.applyKeyboardBackground` / `applyTheme`.
+        // The inline `setBackgroundColor` + `setTextColor` loops here
+        // are gone — the backend is the single writer for these axes.
+        // Pre-bind fallback: if the backend is null (narrow window), do
+        // the writes inline so the first-frame paint is correct.
+        if (imeViewBackend != null) {
+            imeViewBackend.applyKeyboardBackground(keyboardBackgroundColor);
+            imeViewBackend.applyTheme(accentColor);
+        } else {
+            // pre-bind fallback — backend not constructed yet
+            dictateKeyboardView.setBackgroundColor(keyboardBackgroundColor);
+            emojiPickerCl.setBackgroundColor(keyboardBackgroundColor);
+            qwertzContainer.setBackgroundColor(keyboardBackgroundColor);
+            TextView[] textColorViews = { infoTv, emojiPickerTitleTv };
+            for (TextView tv : textColorViews) tv.setTextColor(accentColor);
+        }
         // CR-DEL (Theme C-R / G6 — Spec 2 §9.2 "Theme-Mutation ist eine
         // separate Achse, nicht state-getrieben"): the theme axis now has
         // THREE faithful owners, no `mainButtonsController.applyTheme`
         // remains (AC-RR-6/AC-RR-7 zero-grep):
-        //  - ImeViewBackend.applyTheme — the 8 logical buttons (§9.2 set).
+        //  - ImeViewBackend.applyTheme — the 8 logical buttons + the
+        //    container background pass + accent-text pass (Chunk 4.2).
         //  - EditBarController.applyTheme — the 10 edit-row residual
         //    buttons (CR-RGATE's flagged residual; owned by the class
         //    that owns the edit-bar views — sibling-faithful to the §9.2
@@ -2931,9 +2958,6 @@ public class DictateInputMethodService extends InputMethodService
         //  - EmojiController.applyTheme — editEmoji + emojiPickerClose.
         // Theme is a non-state, non-double-write-sensitive axis (§9.2);
         // imperative call after re-inflate / accent change.
-        if (imeViewBackend != null) {
-            imeViewBackend.applyTheme(accentColor);
-        }
         if (editBarController != null) {
             editBarController.applyTheme(accentColor);
         }

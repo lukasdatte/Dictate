@@ -131,7 +131,7 @@ import net.devemperor.dictate.state.layout.RenderBackend
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §6
  * @see docs/decisions/0004-ui-layout-catalog-motionlayout.md §3
  */
-class ImeViewBackend(
+class ImeViewBackend @JvmOverloads constructor(
     private val motionSurface: MotionSurface,
     private val buttonViews: Map<LogicalButtonId, View>,
     private val ctx: Context,
@@ -161,6 +161,24 @@ class ImeViewBackend(
     private val staticHandlerInstaller: ((Map<LogicalButtonId, View>) -> Unit)? = null,
     private val onVibrate: () -> Unit = {},
     private val imeSideAffordance: (LogicalButtonId, Boolean) -> Unit = { _, _ -> },
+    /**
+     * Container Views themed alongside the button set
+     * (indirection-cleanup 2026-05-21, Chunk 4.2 — B-3). The IME's
+     * `onStartInputView` theme block previously wrote
+     * `setBackgroundColor(keyboardBackgroundColor)` on these directly;
+     * folding them into [applyKeyboardBackground] keeps the
+     * keyboard-background-color axis behind a single writer. Optional
+     * so unit tests that don't care about container theming skip it.
+     */
+    private val themedContainers: List<View> = emptyList(),
+    /**
+     * `TextView`s tinted with the **accent** colour during [applyTheme]
+     * (indirection-cleanup 2026-05-21, Chunk 4.2 — B-4). Previously the
+     * IME's `onStartInputView` looped over `{ infoTv, emojiPickerTitleTv }`
+     * with `setTextColor(accentColor)`; the same pass now happens here.
+     * Empty default — non-IME backends may have no such views.
+     */
+    private val accentTextViews: List<android.widget.TextView> = emptyList(),
 ) : RenderBackend {
 
     override val backendType: BackendType = BackendType.IME_VIEW
@@ -538,6 +556,29 @@ class ImeViewBackend(
             }
             button.setBackgroundColor(tier)
         }
+        // 2026-05-21 indirection-cleanup Chunk 4.2 — accent-tint pass for
+        // the registered TextViews (B-4). InfoBar + emoji-picker title
+        // both pick up the accent colour exactly as the legacy
+        // `for (TextView tv : textColorViews) tv.setTextColor(accentColor)`
+        // loop did.
+        accentTextViews.forEach { it.setTextColor(accentColor) }
+    }
+
+    /**
+     * Apply the **keyboard background** colour to every registered
+     * container View (indirection-cleanup 2026-05-21, Chunk 4.2 — B-3).
+     *
+     * Separate from [applyTheme] because the keyboard-background colour
+     * is computed from `Pref.Theme` (light/dark/system) — a different
+     * axis than the accent colour. The IME calls both passes from
+     * `onStartInputView` after recomputing the per-theme colours.
+     *
+     * Idempotent (calling with the same colour twice is a framework
+     * no-op). Containers that are not in [themedContainers] are
+     * unaffected — the IME's view-tree owns the registration.
+     */
+    fun applyKeyboardBackground(keyboardBackgroundColor: Int) {
+        themedContainers.forEach { it.setBackgroundColor(keyboardBackgroundColor) }
     }
 
     /**

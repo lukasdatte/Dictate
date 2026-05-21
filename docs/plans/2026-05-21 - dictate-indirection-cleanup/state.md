@@ -213,6 +213,67 @@ funktioniert weiterhin (≥1 release).
 direkt — Recovery läuft beim Boot bevor irgendetwas subscribed ist,
 Cascades hätten keinen wirksamen Konsumenten.
 
+### D-5 (Review-fix G1, Chunk 4.3) — Postponement explizit im Plan-Body markiert + Folge-Plan-Stub erzeugt
+
+**Plan-Text** (§4 Chunk 4.3, vor diesem Fix): „**Chunk 4.3 (B-5)** —
+Enter-Icon als Catalog-`foregroundResolver`. … **Effort: M.**" — kein
+Postponement-Marker im Plan-Body.
+
+**Realität (Implementation-Lauf D-2)**: Chunk 4.3 wurde als POSTPONED
+implementiert (Refactor-Scope >> Plan-Effort). D-2 in state.md hat das
+dokumentiert, aber ein Reviewer ohne Zugriff auf state.md (z.B. ein
+zukünftiger Plan-Reader, der nur die Plan-Datei liest) hätte den Status
+als Lücke gelesen.
+
+**Resolution**:
+- Plan §4 Chunk 4.3 explizit `⛔ Postponed (D-2)` markiert + Cross-Ref
+  zum Folge-Plan-Stub.
+- Plan §2 AC-6 Postponed-Ausnahme dokumentiert (der ENTER-`setForeground`-
+  Treffer ist bekanntes Postponed-Item, nicht silent gap).
+- Plan §8 Change History Entry für die Review-fix-Edits.
+- Folge-Plan-Stub erzeugt:
+  `docs/plans/2026-05-21 - dictate-keyboard-input-state-elaboration/dictate-keyboard-input-state-elaboration.md`
+  enthält §1 Ziel + §2 Acceptance Criteria + §3 TBD-Hinweise, destilliert
+  aus dem postponed Chunk 4.3 + D-2-Reasoning. Status: Skeleton (kein
+  Implementer-ready) — Plan-Author muss Detail-Architektur ergänzen.
+
+**Warum kein Code-Fix**: Per User-Direktive akzeptiere die Postponement
+(Effort/Scope-Mismatch ist real, 🟡 Severity = nicht-bug-aktiv).
+Plan-Edit ist die richtige Aktion, nicht 2-4h Implementation in einer
+Review-fix-Wave.
+
+**Follow-up**: Folge-Plan
+`dictate-keyboard-input-state-elaboration` aufrufen sobald
+Vol4-Material aktuell wird (gemeinsam mit Block 5 RecordingStateController
++ OQ-2 PromptQueue-Migration).
+
+### D-6 (Review-fix G4, AC-4) — AC-4 Wording an Realität angepasst
+
+**Plan-Text** (§2 AC-4, vor diesem Fix): „Jeder in AC-1 genannte Pref-
+Toggle hat einen Reducer-Arm in `state/modules/`. Heute fehlen:
+`Action.FeatureToggleAction.ToggleVibration` …, indem dieser Action-Arm
+zu `AudioAction.ToggleVibration` umzieht und seinen Reducer-Body bekommt."
+
+**Realität (verifiziert via grep)**:
+`grep -n "ToggleVibration\|Pref\.Vibration" app/src/main/java/.../DictateInputMethodService.java`
+zeigt nur **Read**-Sites für `Pref.Vibration`. Keine In-IME-Click-Site,
+die `ToggleVibration` dispatchen würde. Der Vibration-Toggle existiert
+ausschließlich in Settings Activity (außerhalb des IME-Service-Scopes).
+
+**Resolution**: Plan §2 AC-4 Wording präzisiert: Action-Umzug bleibt
+contingent auf eine zukünftige In-IME-Toggle-Site. AC-4 ist
+informational — der Umzug ist sinnvoll vorbereitet (Reducer-Stub + Action),
+aber nicht implementations-blockierend für den aktuellen Plan-Lauf.
+
+**Warum konform zur Plan-Intention**: Plan §3.1 A-Liste enthält
+ToggleVibration nicht (kein A-Site). Chunk 2.4 im Plan-Body sagt bereits
+„falls Settings-Activity-Hooks oder zukünftige In-IME-Toggle-Buttons sie
+braucht" — AC-4 wird damit konsistent.
+
+**Follow-up**: Keine. Wenn jemals eine In-IME-Vibration-Toggle-Site
+hinzukommt, ist Chunk 2.4 als implementations-bereiter Mini-Plan
+verfügbar.
+
 ## Open issues / postponed
 
 - Block 5 (RecordingStateController retire) ist als Folge-Plan-Stub markiert (OQ-3) — wird in diesem Lauf **nicht** ausgeführt.

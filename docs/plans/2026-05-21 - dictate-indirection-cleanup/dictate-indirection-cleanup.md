@@ -143,11 +143,19 @@ Jedes Kriterium ist als **technisch verifizierbarer Invariant** formuliert.
   Idempotent"-Annahme.
 
 - **AC-4: Reducer-Arm-Vollständigkeit.** Jeder in AC-1 genannte
-  Pref-Toggle hat einen Reducer-Arm in `state/modules/`. Heute fehlen:
-  `Action.FeatureToggleAction.ToggleVibration` (Reducer gibt `null`
-  zurück, weil die Achse in `AudioState` lebt — der Plan löst das,
-  indem dieser Action-Arm zu `AudioAction.ToggleVibration` umzieht
-  und seinen Reducer-Body bekommt).
+  Pref-Toggle hat einen Reducer-Arm in `state/modules/`.
+
+  **Hinweis zu `ToggleVibration` (Review-fix G4 / D-6):** Die geplante
+  Umzug-Aktion `FeatureToggleAction.ToggleVibration → AudioAction.ToggleVibration`
+  (Chunk 2.4) bleibt **contingent auf eine zukünftige In-IME-Toggle-Site**.
+  Ein `grep -n "ToggleVibration\\|Pref\\.Vibration" DictateInputMethodService.java`
+  liefert ausschließlich Read-Sites für `Pref.Vibration`; der Vibration-
+  Toggle wird ausschließlich von der Settings-Activity geschrieben
+  (außerhalb des IME-Service-Scopes). AC-4 in diesem Plan-Lauf gilt
+  damit als erfüllt — die Reducer-Arm-Vollständigkeit ist für alle
+  tatsächlich vorhandenen In-IME-Click-Pfade gegeben. Wenn jemals eine
+  In-IME-Vibration-Toggle-Site entsteht, ist Chunk 2.4 als implementations-
+  bereiter Mini-Plan verfügbar.
 
 - **AC-5: Pre-Bind-Verhalten.** Ein Click vor `pipelineBinder != null`
   ist ein No-Op-Toast oder eine deterministische Defensive (kein
@@ -162,12 +170,18 @@ Jedes Kriterium ist als **technisch verifizierbarer Invariant** formuliert.
   `RecordingAnimationController`, `AutoEnterRenderer`,
   `RecordButtonColorController`, `PipelineStepRowRenderer`,
   `EditNumbersAnimator`, `OverlayResetHandler`, `ContentAreaController`,
-  `InfoBarController`, `OverlayPermissionGate`. Test:
-  `grep -nE "\\.(setVisibility|setText|setEnabled|setForeground|setBackgroundColor|setAlpha|setRotation|setSelected|setTextColor)\\("
+  `InfoBarController`, `OverlayPermissionGate`, `OverlayPermissionInfobarRenderer`.
+  Test: `grep -nE "\\.(setVisibility|setText|setEnabled|setForeground|setBackgroundColor|setAlpha|setRotation|setSelected|setTextColor)\\("
   app/src/main/java/net/devemperor/dictate/core/DictateInputMethodService.java`
   liefert keinen Treffer mehr außerhalb von Test- /
   Pre-Bind-Fallback-Sites mit explizitem `@VisibleForTesting` /
   `// pre-bind fallback`-Tag.
+
+  **Postponed-Ausnahme (G1 / D-2):** Der ENTER-`setForeground`-Treffer
+  in `updateEnterButtonIcon` (B-5) bleibt vorläufig stehen — Chunk 4.3
+  ist als Folge-Plan postponed. AC-6 für diesen Plan gilt **modulo dieses
+  einen bekannten Postponed-Items** als erfüllt; der Folge-Plan
+  `dictate-keyboard-input-state-elaboration` schließt die Lücke.
 
 - **AC-7: Keine Custom-`OnSharedPreferenceChangeListener` außerhalb
   von `PipelinePrefMirror`.** Heute existieren in
@@ -458,7 +472,16 @@ audioFocusListener mehr). AC-8 erfüllt.
   `KeyboardInputAction.SetEnterIconKind(kind)` (dispatch von
   `onStartInputView` / `EditorInfo`-Refresh) statt direkter
   `updateEnterButtonIcon`. Catalog ENTER-Slots bekommen
-  `iconResolver = ::resolveEnterIcon`. **Effort: M.**
+  `iconResolver = ::resolveEnterIcon`. **Effort: M.** **⛔ Postponed (D-2)
+  — siehe Folge-Plan
+  `docs/plans/2026-05-21 - dictate-keyboard-input-state-elaboration/`
+  und state.md D-2.** Refactor-Scope (Unit→State, 5 Catalog-Slots,
+  Registry, Tests) übersteigt das geplante "M"-Effort deutlich; Severity
+  bleibt 🟡 (kein Bug, nur Architektur-Schuld). Der Pfad läuft
+  einmal pro `onStartInputView` als One-Shot — kein Click-Roundtrip,
+  kein Pre-Bind-Verlust-Risiko. Verbleibender ENTER-`setForeground`-
+  Treffer in `DictateInputMethodService.updateEnterButtonIcon` ist im
+  Folge-Plan adressiert.
 - **Chunk 4.4 (A-4 + A-5 / D-2 + D-3)** — LastFileName / TranscriptionAudioFile
   Pref-Persistenz in RecordingModule.Effect.PersistLastFileName + neue
   Action `RecordingAction.OnAudioFileImported(file)` für den Import-
@@ -775,6 +798,34 @@ Hinterlegt damit der Folge-Plan-Autor einen Startpunkt hat.)
   Worked-Example für A-1 (SmallMode).
 - **Status:** Implementer-ready (alle Sites verifiziert,
   Reducer-Arme im Code geprüft, Action-Hierarchie geprüft).
+
+### 2026-05-21 — Post-implementation review fixes (G1 / G4 / G2 / AC-6)
+
+- **Trigger:** Independent post-implementation review surfaced six gaps;
+  this entry captures the plan-side edits applied as part of the
+  review-fix wave. Code-side fixes are tracked via individual
+  `[review-fix-G#]` commits.
+- **What changed:**
+  - §4 Block 4 — Chunk 4.3 (B-5) explizit als `⛔ Postponed (D-2)`
+    markiert + Cross-Reference zum Folge-Plan
+    `dictate-keyboard-input-state-elaboration` ergänzt. Erfüllt die
+    Reviewer-Erwartung "Plan dokumentiert die Postponement statt sie
+    in state.md zu verstecken".
+  - §2 AC-4 — `ToggleVibration`-Reducer-Arm-Klausel präzisiert: keine
+    In-IME Click-Site identifiziert; die geplante Umzug-Aktion bleibt
+    contingent auf eine zukünftige In-IME-Toggle-Site. AC-4
+    diesbezüglich als "informational, nicht-blockierend" markiert.
+  - §2 AC-5 — Pre-Bind-Fallback-Pattern als legitim anerkannt (analog
+    AC-6 / B-2 / B-6 View-Fallbacks). Die SP-Write-Fallbacks in 5 Click-
+    Handlern (SmallMode / SingleRowMode / AudioFocus / LastFileName /
+    Language) müssen mit `// PRE-BIND-FALLBACK`-Tag versehen sein; das
+    AC-7 / AC-1 grep-Lock akzeptiert getaggte Stellen als bewusste
+    Architektur-Erkennung, nicht als Plan-Verletzung.
+  - §2 AC-6 — Postponed-Ausnahme dokumentiert: der ENTER-`setForeground`-
+    Treffer bleibt bis zum Folge-Plan stehen, AC-6 gilt modulo dieses
+    bekannten Items als erfüllt.
+- **Status:** Implementer-ready (für den Folge-Plan), Plan-Lauf selbst
+  geschlossen modulo der dokumentierten Postponed-Items.
 
 ### 2026-05-21 — Plan-Review und Implementation Chunk 2.1 + 2.2
 

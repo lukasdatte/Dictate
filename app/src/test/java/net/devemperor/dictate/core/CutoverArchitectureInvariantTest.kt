@@ -956,6 +956,93 @@ class CutoverArchitectureInvariantTest {
         )
     }
 
+    // ---- (l) IME affordance lambda handles BOTH RECORD and OVERLAY_RECORD
+    //         (dictate-pipeline-render-and-state-unification §5.4 / AC-P-4).
+    //
+    // Failure mode this locks against: the IME's `imeSideAffordance`
+    // lambda matched only `LogicalButtonId.RECORD` — an OVERLAY_RECORD
+    // click in the floating widget fired the affordance hook with
+    // `id = OVERLAY_RECORD`, but the lambda body dropped through
+    // without calling `prepareCatalogStopRecordingIfActive()`. The
+    // catalog `StopRecordingAndSend` then dispatched with no R-1
+    // snapshot → pipeline FSM hangs in Preparing forever → endless
+    // "sendet" (B-A Critical bug).
+    //
+    // The lock requires that the lambda's body — specifically the call
+    // site of `prepareCatalogStopRecordingIfActive()` — sits inside a
+    // gate that names BOTH `RECORD` and `OVERLAY_RECORD`.
+
+    @Test
+    fun affordanceHookHandlesBothRecordIds() {
+        val code = functionalCode(imeFile)
+        val callRegex = Regex("""prepareCatalogStopRecordingIfActive\s*\(\s*\)""")
+        val calls = callRegex.findAll(code).toList()
+        assertTrue(
+            "AC-P-4 invariant: the IME's `imeSideAffordance` lambda MUST " +
+                "invoke `prepareCatalogStopRecordingIfActive()` from at " +
+                "least one branch. Without it, OVERLAY_RECORD (and RECORD) " +
+                "clicks dispatch StopRecordingAndSend with no R-1 snapshot " +
+                "→ pipeline FSM hangs in Preparing forever (B-A regression).",
+            calls.isNotEmpty(),
+        )
+        // Each invocation of `prepareCatalogStopRecordingIfActive()` MUST
+        // sit in a gate that names BOTH `LogicalButtonId.RECORD` and
+        // `LogicalButtonId.OVERLAY_RECORD`. The window is generous
+        // (1500 chars) because the post-strip lambda body still spans a
+        // tall `else if` ladder with multi-paragraph KDocs stripped to
+        // whitespace between branches — narrower windows missed the
+        // RECORD gate on the OVERLAY_RECORD branch and vice-versa.
+        val windowChars = 1500
+        val symmetricGateCount = calls.count { m ->
+            val start = (m.range.first - windowChars).coerceAtLeast(0)
+            val end = (m.range.last + windowChars).coerceAtMost(code.length - 1)
+            val nearby = code.substring(start, end)
+            nearby.contains("LogicalButtonId.RECORD") &&
+                nearby.contains("LogicalButtonId.OVERLAY_RECORD")
+        }
+        assertTrue(
+            "AC-P-4 invariant: at least one " +
+                "`prepareCatalogStopRecordingIfActive()` call-site MUST sit " +
+                "in a gate that names BOTH `LogicalButtonId.RECORD` AND " +
+                "`LogicalButtonId.OVERLAY_RECORD` within a 1500-char window. " +
+                "Without ID-symmetry, the widget SEND click drops through " +
+                "without a R-1 snapshot — the B-A Critical regression " +
+                "returns (endless 'sendet' in the widget).",
+            symmetricGateCount >= 1,
+        )
+    }
+
+    @Test
+    fun commentStripperIsSound_affordanceHookOverlayRecordSymmetry() {
+        val codeSample = """
+            } else if (id == LogicalButtonId.RECORD
+                    || id == LogicalButtonId.OVERLAY_RECORD) {
+                prepareCatalogStopRecordingIfActive();
+            }
+        """.trimIndent()
+        val stripped = stripCommentsAndStrings(codeSample)
+        assertTrue(
+            "A real symmetric RECORD/OVERLAY_RECORD gate around the helper " +
+                "call MUST survive stripping (proves (l) non-vacuity).",
+            stripped.contains("LogicalButtonId.RECORD") &&
+                stripped.contains("LogicalButtonId.OVERLAY_RECORD") &&
+                Regex("""prepareCatalogStopRecordingIfActive\s*\(\s*\)""")
+                    .containsMatchIn(stripped),
+        )
+        val docOnly = """
+            // historical: id == LogicalButtonId.RECORD || id == LogicalButtonId.OVERLAY_RECORD →
+            //   prepareCatalogStopRecordingIfActive() — the symmetric snapshot
+            /* val ref = "LogicalButtonId.OVERLAY_RECORD" */
+        """.trimIndent()
+        val docStripped = stripCommentsAndStrings(docOnly)
+        assertTrue(
+            "Doc-only mention of the symmetric gate must NOT survive " +
+                "stripping (proves (l) does not false-GREEN).",
+            !docStripped.contains("LogicalButtonId.RECORD") &&
+                !docStripped.contains("LogicalButtonId.OVERLAY_RECORD"),
+        )
+    }
+
     @Test
     fun commentStripperIsSound_backspaceLongPressAffordance() {
         val codeSample = """

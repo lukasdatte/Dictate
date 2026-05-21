@@ -1416,6 +1416,16 @@ public class DictateInputMethodService extends InputMethodService
             imeSideAffordance = (id, isLongPress) -> {
                 if (id == LogicalButtonId.RECORD && isLongPress) {
                     onRecordLongClicked();
+                } else if (id == LogicalButtonId.OVERLAY_RECORD && isLongPress) {
+                    // B-A / OQ-5 (dictate-pipeline-render-and-state-unification
+                    // §5.4 + §9.5 Variante A): overlay-record long-press is a
+                    // deliberate no-op. The catalog has no `longClickResolver`
+                    // on OVERLAY_RECORD today, and the keyboard
+                    // RECORD-long-press affordance (Settings + file-picker
+                    // launch) is UX-inconsistent from a floating widget
+                    // (Activity-launch would obscure / kill the widget).
+                    // Documenting the no-op explicitly so a future reader
+                    // doesn't add the keyboard-RECORD body here by accident.
                 } else if (id == LogicalButtonId.BACKSPACE && isLongPress) {
                     // B-C (dictate-pipeline-render-and-state-unification §5.5
                     // Variante B): the accelerating-delete cascade
@@ -1449,7 +1459,8 @@ public class DictateInputMethodService extends InputMethodService
                     if (!inCooldown) {
                         onResendClicked();
                     }
-                } else if (id == LogicalButtonId.RECORD) {
+                } else if (id == LogicalButtonId.RECORD
+                        || id == LogicalButtonId.OVERLAY_RECORD) {
                     // Post-cutover hotfix (symmetric to RESEND above; see
                     // ADR-0005 Decision-History "catalog-click affordance
                     // hook symmetry"). The RECORD-click "stop & send"
@@ -1468,6 +1479,20 @@ public class DictateInputMethodService extends InputMethodService
                     // Self-gating helper: no-op when state is not
                     // Active|Paused (mirrors the catalog resolver's null
                     // for those states).
+                    //
+                    // B-A fix (dictate-pipeline-render-and-state-unification
+                    // §5.4): OVERLAY_RECORD is the merged RECORD+SEND
+                    // catalog slot in the floating-widget overlay (see
+                    // LayoutCatalog OVERLAY_5BUTTON.OVERLAY_RECORD). The
+                    // OverlayBackend click branch already fires
+                    // `imeSideAffordance(OVERLAY_RECORD, false)` BEFORE
+                    // dispatching, but pre-fix this lambda only matched
+                    // `RECORD` — so the OVERLAY_RECORD click dropped
+                    // through to the catalog `StopRecordingAndSend`
+                    // dispatch with no R-1 snapshot → pipeline FSM hung
+                    // in Preparing → endless "sendet" with no editor
+                    // commit. Treating both IDs identically keeps the
+                    // RECORD-Single-SoT (one helper, two click-sites).
                     prepareCatalogStopRecordingIfActive();
                 }
                 return kotlin.Unit.INSTANCE;
@@ -3566,6 +3591,30 @@ public class DictateInputMethodService extends InputMethodService
     /**
      * Post-cutover hotfix — IME-side affordance for the catalog-driven
      * RECORD click on Active|Paused (the "Stop &amp; Send" tap).
+     *
+     * <p><strong>Two call-sites (B-A symmetry).</strong> This helper is
+     * the IME-side R-1 snapshot trigger for the {@code Stop &amp; Send}
+     * gesture, regardless of which catalog slot the user tapped:
+     * <ul>
+     *   <li>{@link LogicalButtonId#RECORD} — the keyboard's record button
+     *       click on {@code Active|Paused} (catalog returns
+     *       {@code StopRecordingAndSend}).</li>
+     *   <li>{@link LogicalButtonId#OVERLAY_RECORD} — the floating-widget
+     *       merged record/send button click on {@code Active|Paused}
+     *       (catalog returns the same {@code StopRecordingAndSend} via
+     *       {@code resolveOverlayRecordAction} composition).</li>
+     * </ul>
+     * Both IDs fan in through the {@code imeSideAffordance} lambda
+     * (declared once in {@code onCreateInputView}, registered both on
+     * {@code ImeViewBackend} and {@code OverlayBackend} so the lambda is
+     * a single behavioural seam). The {@code ImeViewBackend} click branch
+     * fires {@code imeSideAffordance(RECORD, false)} and the
+     * {@code OverlayBackend} click branch fires
+     * {@code imeSideAffordance(OVERLAY_RECORD, false)}; the lambda
+     * matches both IDs and dispatches into this helper. The structural
+     * symmetry is regression-locked by
+     * {@code CutoverArchitectureInvariantTest.affordanceHookHandlesBothRecordIds}
+     * (dictate-pipeline-render-and-state-unification §5.4 / AC-P-4).</p>
      *
      * <p>Captures the IME-runtime {@code JobRequest} snapshot and primes
      * the pipeline-step-row UI <em>before</em> the catalog dispatches

@@ -2131,85 +2131,23 @@ public class DictateInputMethodService extends InputMethodService
      * Must be called AFTER view-dependent controllers are created, BEFORE restoreUiState().
      */
     private void rewireCallbacks() {
-        // 1. RecordingStateController → new UI owners.
-        //    CR-DEL: the legacy RecordingUiController is deleted. On the
-        //    bound path the legacy recordingStateController is NEVER
-        //    started (C5 — the orchestrator's RecordingModule owns
-        //    recording end-to-end; isEffectiveRecordingIdle KDoc), so
-        //    these callbacks never fire on the new path — the recording
-        //    BorderGlow/amplitude/timer is owned reactively by
-        //    RecordingAnimationController + the catalog resolvers (the
-        //    documented cosmetic C5-IMPL-2 side-channel gap; the FGS
-        //    notification is the authoritative recording-active surface).
-        //    The QWERTZ rec-button + visualizer half (the still-live
-        //    surface, G9 BLEIBT) is forwarded to QwertzRecordingController
-        //    for behaviour-equivalence parity should any legacy caller
-        //    reach these (kept compiling + routed through the relocated
-        //    owner — byte-equivalent to the deleted RecordingUiController
-        //    QWERTZ path).
-        recordingStateController.setCallback(new RecordingStateController.Callback() {
-            @Override
-            public void onStateChanged(RecordingState oldState, RecordingState newState) {
-                mainHandler.post(() -> {
-                    if (qwertzRecordingController != null) {
-                        qwertzRecordingController.updateQwertzRecButton(
-                            newState.isRecordingOrPaused());
-                    }
-                    updatePromptButtonsEnabledState();
-                });
-            }
-
-            @Override
-            public void onAmplitudeUpdate(float level) {
-                mainHandler.post(() -> {
-                    if (qwertzRecordingController != null) {
-                        qwertzRecordingController.onAmplitude(level);
-                    }
-                });
-            }
-
-            @Override
-            public void onTimerTick(long elapsedMs) {
-                mainHandler.post(() -> {
-                    if (qwertzRecordingController != null) {
-                        qwertzRecordingController.onTimerTick(elapsedMs);
-                    }
-                });
-            }
-
-            @Override
-            public void onRecordingCompleted(File file) {
-                // Dead on the new path: C7 deleted the legacy
-                // recordingStateController record-button branches, so the
-                // controller is never started and this completion callback
-                // never fires (the orchestrator's RecordingModule owns
-                // recording end-to-end). Kept compiling + routed through
-                // the same orchestrator entry-point for behavioural
-                // equivalence should any future legacy caller reach it
-                // (the legacy-controller retire is Theme-C/C3 scope —
-                // C5-IMPL-2, not this mid-chunk-triage wave).
-                mainHandler.post(() ->
-                        transcribeImportedAudioFileViaOrchestrator(file));
-            }
-
-            @Override
-            public void onRecordingError(String errorKey) {
-                mainHandler.post(() -> showInfo(errorKey));
-            }
-
-            @Override
-            public void onKeepScreenAwakeChanged(boolean keepAwake) {
-                updateKeepScreenAwake(keepAwake);
-            }
-
-            @Override
-            public void onAutoStopTimeout() {
-                mainHandler.post(() -> {
-                    livePrompt = false;
-                    updatePromptButtonsEnabledState();
-                });
-            }
-        });
+        // 2026-05-21 indirection-cleanup Chunk 4.6 (C-4) — the
+        // `recordingStateController.setCallback(new Callback() { ... })`
+        // block is REMOVED. On the bound path (all production paths
+        // post-C5/CR-DEL) the legacy `recordingStateController` is never
+        // started (`isEffectiveRecordingIdle` KDoc), so its callbacks
+        // never fired anyway. The block was kept compiling-and-dead-on-
+        // arrival as a behaviour-equivalence safety net for the import
+        // path's `onRecordingCompleted` — Chunk 4.4 (A-5) closed that
+        // hatch by dispatching `OnAudioFileImported` directly from
+        // `onStartInputView`, so the safety net has no surviving caller.
+        //
+        // `RecordingStateController.setCallback` itself stays in the
+        // controller until Block 5 (the RecordingStateController retire
+        // follow-up plan) collapses the whole class into a thin
+        // hardware-adapter. The controller's callback field is nullable
+        // and every emission site uses `callback?.…` — leaving it
+        // un-set is safe.
 
         // 2. Re-register BT receiver (was de-registered in cleanupOldControllers)
         bluetoothScoManager.registerReceiver();

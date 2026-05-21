@@ -77,12 +77,17 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
         )
         db.execSQL("DROP TABLE sessions")
         db.execSQL("ALTER TABLE sessions_new RENAME TO sessions")
-        // Indexes re-created against the new table — parity with
-        // MIGRATION_3_4 / MIGRATION_4_5.
-        db.execSQL("CREATE INDEX IF NOT EXISTS index_sessions_status ON sessions(status)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS index_sessions_origin ON sessions(origin)")
+        // Indexes re-created against the new table — full parity with
+        // MIGRATION_3_4 (the canonical CREATE INDEX block). All five
+        // are required by the Entity definition; omitting any of them
+        // makes Room's open-time validateMigration() throw
+        // "Migration didn't properly handle: sessions".
         db.execSQL(
             "CREATE INDEX IF NOT EXISTS index_sessions_parent_session_id ON sessions(parent_session_id)"
         )
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_sessions_type ON sessions(type)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_sessions_created_at ON sessions(created_at)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_sessions_origin ON sessions(origin)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_sessions_status ON sessions(status)")
     }
 }

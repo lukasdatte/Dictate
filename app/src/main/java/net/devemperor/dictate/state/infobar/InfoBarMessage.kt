@@ -1,0 +1,38 @@
+package net.devemperor.dictate.state.infobar
+
+import androidx.annotation.StringRes
+
+/**
+ * The display payload for a single [InfoBarItem] (ADR-0006 §"Hybrid —
+ * sealed `InfoBarMessage` (Inhalt+Style) plus `confirmAction/dismissAction`").
+ *
+ * **Why a plain data class, not a sealed hierarchy?** ADR-0006's chosen
+ * trade-off: items are added by [InfoBarSelector] from existing state,
+ * and the set of producers grows over time as new state-axes are
+ * introduced. A sealed hierarchy would force a central schema edit per
+ * new case — the plain-data form lets each producer construct its own
+ * `InfoBarMessage` instance locally without coupling to the renderer.
+ *
+ * Renderer reads only [textResId] + [textArgs] + [style]; everything
+ * else (titles, sub-titles, icons specific to the case) is encoded in
+ * the string resources themselves (i18n-aware).
+ *
+ * @property textResId Android string resource id for the message body.
+ *   Producers MUST use a `@StringRes` literal; the renderer resolves
+ *   the resource against the IME service's context at render time so
+ *   the message text follows the user's locale.
+ * @property textArgs format arguments for parameterised strings
+ *   (e.g. `dictate_quota_exceeded_msg` carries the provider's display
+ *   name). Pass an empty list for un-parameterised strings — the
+ *   default avoids common-case verbosity at the call site.
+ * @property style visual tone — see [InfoBarStyle].
+ *
+ * @see InfoBarItem
+ * @see InfoBarSelector
+ * @see docs/decisions/0006-ui-info-bar-state-derived-items.md
+ */
+data class InfoBarMessage(
+    @StringRes val textResId: Int,
+    val textArgs: List<Any> = emptyList(),
+    val style: InfoBarStyle = InfoBarStyle.INFO,
+)

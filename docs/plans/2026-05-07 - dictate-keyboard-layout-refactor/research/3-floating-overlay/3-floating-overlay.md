@@ -1,6 +1,8 @@
 # Spec 3 — Floating-Overlay (WIDGET + HOVER): OverlayBackend + Window-Lifecycle + Permission
 
-**Status:** Detail-Research erweitert (2026-05-08) — Architektur fixiert, Implementierungs-Details ausgearbeitet
+**Status:** **Superseded by [ADR-0008](../../../../decisions/0008-ui-surface-axes-widget-state-and-ime-view.md) (2026-05-22)**. The Triangle-FSM model (KEYBOARD/WIDGET/HOVER) is replaced by two orthogonal surface axes: [WidgetState] (Hidden | Visible(USER) | Visible(PIPELINE)) and [imeViewVisible]. The plan that drives the migration is [`docs/plans/2026-05-21 - dictate-widget-state-and-recovery/dictate-widget-state-and-recovery.md`](../../../../plans/2026-05-21%20-%20dictate-widget-state-and-recovery/dictate-widget-state-and-recovery.md). Document retained as historical context for the OverlayBackend window-lifecycle + permission-flow details, which remain valid under the new axes.
+
+Previously: Detail-Research erweitert (2026-05-08) — Architektur fixiert, Implementierungs-Details ausgearbeitet.
 **Hauptplan:** [→ keyboard-layout-refactor.md](../../keyboard-layout-refactor.md)
 **Geschwister-Specs:**
 - [Spec 1 — Pipeline-Service-Layer](../1-pipeline-service/1-pipeline-service.md)

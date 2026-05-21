@@ -187,11 +187,81 @@ class OverlayModuleTest {
     }
 
     @Test
+    fun `B3-3 bridge T1 KEYBOARD-WIDGET also emits WidgetAction-ToggleWidget when widget Hidden`() {
+        // B3.3 bridge — the legacy T1 viewMode diff now also drives
+        // the new widget axis. Guard on prev.widget == Hidden so the
+        // W1 reducer contract (Hidden → Visible(USER)) is satisfied;
+        // already-Visible would be Rejected.
+        val prev = DictateUiState.initial().copy(
+            viewMode = ViewMode.KEYBOARD,
+            widget = WidgetState.Hidden,
+        )
+        val next = prev.copy(viewMode = ViewMode.WIDGET)
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertTrue(
+            "T1 bridge must emit WidgetAction.ToggleWidget alongside SetUserPrefersWidget",
+            cascade.contains(Action.WidgetAction.ToggleWidget),
+        )
+    }
+
+    @Test
+    fun `B3-3 bridge T1 does NOT emit ToggleWidget when widget already Visible`() {
+        // Defensive — the bridge skips redundant dispatch when the new
+        // axis is already in the target state (would be reducer-null).
+        val prev = DictateUiState.initial().copy(
+            viewMode = ViewMode.KEYBOARD,
+            widget = WidgetState.Visible(WidgetOrigin.USER),
+        )
+        val next = prev.copy(viewMode = ViewMode.WIDGET)
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertTrue(
+            "Already-Visible widget must not receive ToggleWidget",
+            cascade.none { it is Action.WidgetAction.ToggleWidget },
+        )
+    }
+
+    @Test
     fun `cascade T2 WIDGET to KEYBOARD emits SetUserPrefersWidget(false)`() {
         val prev = DictateUiState.initial().copy(viewMode = ViewMode.WIDGET)
         val next = prev.copy(viewMode = ViewMode.KEYBOARD)
         val cascade = module.onCrossModuleStateChange(prev, next)
         assertTrue(cascade.contains(Action.OverlayAction.SetUserPrefersWidget(false)))
+    }
+
+    @Test
+    fun `B3-3 bridge T2 emits WidgetAction-CloseWidget when prev widget Visible(USER)`() {
+        // T2 = WIDGET→KEYBOARD diff produced by user toggle. The
+        // bridge maps that to WidgetAction.CloseWidget (W2 — user-close
+        // semantics: suppress-bit + Pause cascade).
+        val prev = DictateUiState.initial().copy(
+            viewMode = ViewMode.WIDGET,
+            widget = WidgetState.Visible(WidgetOrigin.USER),
+        )
+        val next = prev.copy(viewMode = ViewMode.KEYBOARD)
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertTrue(
+            "T2 bridge must emit WidgetAction.CloseWidget when widget was USER-origin",
+            cascade.contains(Action.WidgetAction.CloseWidget),
+        )
+    }
+
+    @Test
+    fun `B3-3 bridge T2 does NOT emit CloseWidget when prev widget was already Hidden`() {
+        // Edge: permission-revoke path also produces a WIDGET→KEYBOARD
+        // diff but prev.widget would already be Hidden (no user
+        // toggle put it Visible). The bridge skips the CloseWidget
+        // dispatch in that case so the suppress-bit + Pause cascade
+        // doesn't fire spuriously on permission-revoke.
+        val prev = DictateUiState.initial().copy(
+            viewMode = ViewMode.WIDGET,
+            widget = WidgetState.Hidden,
+        )
+        val next = prev.copy(viewMode = ViewMode.KEYBOARD)
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertTrue(
+            "Permission-revoke style T2 (widget was Hidden) must not emit CloseWidget",
+            cascade.none { it is Action.WidgetAction.CloseWidget },
+        )
     }
 
     @Test

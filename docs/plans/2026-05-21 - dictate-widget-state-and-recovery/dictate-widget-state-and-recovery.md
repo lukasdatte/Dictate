@@ -1,13 +1,19 @@
 ---
 name: dictate-widget-state-and-recovery
 archive_target: "2026-05-21 - dictate-widget-state-and-recovery"
-status: Proposed
+status: Implemented
 language: de
 ---
 
 # Dictate — WidgetState + Crash-Recovery Refactor
 
-**Status:** Proposed
+**Status:** Implemented (2026-05-22) — see B5 commit for the
+completion summary. Two follow-ups remain documented as carry-overs:
+(a) Legacy→Repo cutover for the multi-segment pipeline upload path
+(blocks M6/M7/M10 verification on device); (b) ViewMode/ViewModeAction/
+ViewModeModule removal (282 reader migrations, deferred to a
+dedicated cleanup commit).
+
 **Created:** 2026-05-21
 **Author:** Lukas + Claude Code
 **Related ADRs:** [[ADR-0008]] (Surface-Axes, supersedes [[ADR-0005]]), [[ADR-0007]] (Multi-File-Repository, erweitert)

@@ -48,7 +48,34 @@ class HandlerPauseTimeoutScheduler(private val handler: Handler) : PauseTimeoutS
  * Threading: all public methods must be called on the main thread.
  * RecordingManager's timer already runs on the main thread, so amplitude
  * and timer callbacks arrive without thread-switching.
+ *
+ * # Post-cutover status (dictate-pipeline-render-and-state-unification §9.3 OQ-3)
+ *
+ * After the render-cutover-vol2 + indirection-cleanup waves, this
+ * controller is **post-cutover dead code on the bound path** — the
+ * orchestrator's [net.devemperor.dictate.state.modules.RecordingHardwareAdapter]
+ * owns `MediaRecorder` directly, and `startRecording()` / `cancelRecording()`
+ * / `togglePause()` are never invoked while the IME is bound. A
+ * handful of read-sites in `DictateInputMethodService` still call
+ * `recordingStateController.getState()` as a defensive pre-bind
+ * fallback (the field is only `null` for the narrow `bindService`
+ * window). The plan §9.3 decided to leave the controller in place and
+ * mark it deprecated rather than delete it in scope — a follow-up
+ * plan `dictate-recording-state-controller-removal` carries the
+ * deletion.
+ *
+ * Do not add new readers / writers. The orchestrator state
+ * (`pipelineBinder.getState().value.recording`) is the
+ * single source of truth.
  */
+@Deprecated(
+    message = "Post-cutover dead code on the bound path. The orchestrator's " +
+        "RecordingHardwareAdapter owns MediaRecorder + the FSM; read " +
+        "recording state from `pipelineBinder.getState().value.recording`. " +
+        "Pre-bind fallback callers in DictateInputMethodService.java are the " +
+        "only legitimate remaining users. Slated for deletion in a " +
+        "follow-up plan (dictate-recording-state-controller-removal).",
+)
 class RecordingStateController(
     private val gate: AudioFocusGate,
     private val amplitudeProcessor: AmplitudeProcessor,

@@ -1012,6 +1012,111 @@ class CutoverArchitectureInvariantTest {
         )
     }
 
+    // ---- (m) updatePromptButtonsEnabledState reads orchestrator state
+    //         (dictate-pipeline-render-and-state-unification §5.7 / AC-E + AC-P-1).
+    //
+    // Failure mode this locks against: the legacy implementation read
+    // `recordingStateController.getState()` (a legacy controller that
+    // post-cutover stays permanently Idle) which made the
+    // `disableNonSelectionPrompts` flag permanently `false` (B-E
+    // regression). The fix routes the predicate through the
+    // orchestrator state — `pipelineBinder.getState().value.recording`
+    // / `.pipeline`.
+    //
+    // The lock asserts the IME function body does NOT contain
+    // `recordingStateController.getState()` — i.e. the legacy read is
+    // gone from THIS function (other in-file readers may persist; OQ-3
+    // leaves them in scope for a follow-up plan
+    // `dictate-recording-state-controller-removal`).
+
+    @Test
+    fun updatePromptButtonsEnabledStateReadsOrchestratorNotLegacyController() {
+        val code = functionalCode(imeFile)
+        // Locate the method body: from the signature
+        // `updatePromptButtonsEnabledState() {` to its matching `}` at
+        // brace depth 0 from the opening brace. Hand-rolled bracket
+        // matcher (the comment-stripper has already removed comments
+        // + strings so braces are real).
+        val sigRegex = Regex(
+            """\bprivate\s+void\s+updatePromptButtonsEnabledState\s*\(\s*\)\s*\{"""
+        )
+        val sigMatch = sigRegex.find(code)
+        assertTrue(
+            "AC-E regression-lock: DictateInputMethodService MUST declare " +
+                "`private void updatePromptButtonsEnabledState()` — the " +
+                "single entry-point for re-evaluating the prompt-chips " +
+                "disable bit. Signature missing → method renamed / " +
+                "removed; update this lock to match.",
+            sigMatch != null,
+        )
+        val bodyStart = sigMatch!!.range.last + 1
+        var depth = 1
+        var i = bodyStart
+        while (i < code.length && depth > 0) {
+            when (code[i]) {
+                '{' -> depth++
+                '}' -> depth--
+            }
+            i++
+        }
+        val body = code.substring(bodyStart, (i - 1).coerceAtLeast(bodyStart))
+        assertTrue(
+            "AC-E + AC-P-1 invariant: " +
+                "`updatePromptButtonsEnabledState()` MUST NOT read " +
+                "`recordingStateController.getState()` — the legacy " +
+                "controller is post-cutover dead code (its state stays " +
+                "permanently Idle on the new path → the chips were " +
+                "always tappable, the B-E regression). Read the " +
+                "orchestrator-authoritative `pipelineBinder.getState()" +
+                ".value.recording / .pipeline` instead. Body snippet: " +
+                "${body.lines().filter { it.isNotBlank() }.take(8)}",
+            !Regex("""recordingStateController\s*\.\s*getState\s*\(""")
+                .containsMatchIn(body),
+        )
+        // Positive symmetry — the new implementation MUST read the
+        // orchestrator state. Pin the read so a future "revert to
+        // legacy" cannot silently pass.
+        assertTrue(
+            "AC-E positive lock: " +
+                "`updatePromptButtonsEnabledState()` MUST consult " +
+                "`pipelineBinder.getState()` (the orchestrator's " +
+                "authoritative StateFlow). Without it, the flag would " +
+                "be a constant — the legacy bug returns.",
+            Regex("""pipelineBinder\s*\.\s*getState\s*\(""").containsMatchIn(body),
+        )
+    }
+
+    @Test
+    fun commentStripperIsSound_promptButtonsLegacyControllerRead() {
+        val codeSample = """
+            private void updatePromptButtonsEnabledState() {
+                RecordingState s = recordingStateController.getState();
+                disableNonSelectionPrompts = s.isRecordingOrPaused();
+            }
+        """.trimIndent()
+        val stripped = stripCommentsAndStrings(codeSample)
+        assertTrue(
+            "A real legacy-controller read in the method body MUST survive " +
+                "stripping (proves (m) is non-vacuous — a regression WOULD " +
+                "fail loud).",
+            Regex("""recordingStateController\s*\.\s*getState\s*\(""")
+                .containsMatchIn(stripped),
+        )
+        val docOnly = """
+            // historical: recordingStateController.getState() was the
+            //   legacy read — removed in B-E (AC-E + AC-P-1).
+            /* val s = "recordingStateController.getState()" */
+        """.trimIndent()
+        val docStripped = stripCommentsAndStrings(docOnly)
+        assertTrue(
+            "Doc-only mentions of the legacy read in KDoc/anchors MUST be " +
+                "stripped (proves (m) does NOT false-RED on the " +
+                "documented replacement-trail).",
+            !Regex("""recordingStateController\s*\.\s*getState\s*\(""")
+                .containsMatchIn(docStripped),
+        )
+    }
+
     @Test
     fun commentStripperIsSound_affordanceHookOverlayRecordSymmetry() {
         val codeSample = """

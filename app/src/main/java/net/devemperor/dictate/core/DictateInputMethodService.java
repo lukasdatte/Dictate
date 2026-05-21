@@ -351,6 +351,17 @@ public class DictateInputMethodService extends InputMethodService
     // Chunks 3.4 / 3.5).
     private EditBarAudioFocusObserver editBarAudioFocusObserver;
 
+    // dictate-pipeline-render-and-state-unification §5.7 — reactive
+    // bridge for the prompt-chips disable-bit. Listens to a derived
+    // boolean over `state.recording` + `state.pipeline` and fires
+    // `updatePromptButtonsEnabledState()` when the bit flips
+    // (distinctUntilChanged). Replaces the legacy read of
+    // `recordingStateController.getState()` which post-cutover stayed
+    // permanently Idle (B-E regression). The observer is the IME-side
+    // half of the AC-P-1 single-source-of-truth invariant: the disable
+    // bit follows the orchestrator state, not the legacy controller.
+    private PromptChipsBusyObserver promptChipsBusyObserver;
+
     // Post-cutover hotfix #3+#4 — drives the recording-animation
     // side-channel (timer + amplitude polling on Active|Paused) from
     // state.recording transitions. See RecordingActivityTickerObserver
@@ -1618,6 +1629,23 @@ public class DictateInputMethodService extends InputMethodService
                 });
         editBarAudioFocusObserver.start();
 
+        // dictate-pipeline-render-and-state-unification §5.7 — start the
+        // reactive prompt-chips-busy observer. Listens to the derived
+        // `recording is Active|Paused|Preparing OR pipeline is
+        // Preparing|Running` predicate and re-runs
+        // `updatePromptButtonsEnabledState()` when it flips
+        // (distinctUntilChanged on the boolean → one call per genuine
+        // transition, not per tick). Replaces the legacy
+        // `recordingStateController.getState()` read which never fired
+        // on the new path (B-E regression).
+        if (promptChipsBusyObserver != null) {
+            promptChipsBusyObserver.stop();
+        }
+        promptChipsBusyObserver = new PromptChipsBusyObserver(
+                pipelineBinder.getState(),
+                busy -> updatePromptButtonsEnabledState());
+        promptChipsBusyObserver.start();
+
         // Post-cutover hotfix #3+#4 — start the recording-animation
         // side-channel ticker. Drives ImeViewBackend.onTimerTick/onAmplitude
         // + QwertzRecordingController.onTimerTick/onAmplitude from
@@ -2058,6 +2086,13 @@ public class DictateInputMethodService extends InputMethodService
         if (editBarAudioFocusObserver != null) {
             editBarAudioFocusObserver.stop();
             editBarAudioFocusObserver = null;
+        }
+
+        // dictate-pipeline-render-and-state-unification §5.7 — symmetric
+        // tear-down of the prompt-chips-busy reactive observer.
+        if (promptChipsBusyObserver != null) {
+            promptChipsBusyObserver.stop();
+            promptChipsBusyObserver = null;
         }
 
         // Post-cutover hotfix #3+#4 — cancel the recording-animation
@@ -4536,9 +4571,54 @@ public class DictateInputMethodService extends InputMethodService
         });
     }
 
+    /**
+     * Refresh the non-selection-prompt-chip disable predicate from the
+     * orchestrator's [DictateUiState].
+     *
+     * <p>B-E fix (dictate-pipeline-render-and-state-unification §5.7 +
+     * AC-E + AC-P-1): the pre-fix body read
+     * {@code recordingStateController.getState()}, which is the legacy
+     * controller. Post-cutover the orchestrator's
+     * {@link RecordingHardwareAdapter} owns MediaRecorder directly and
+     * the legacy controller is never started — its {@code state} stays
+     * permanently {@code Idle}, so the predicate was permanently
+     * {@code false} and every chip was tappable during Recording /
+     * Pipeline (the user-reported B-E regression).</p>
+     *
+     * <p>New predicate reads the orchestrator-authoritative
+     * {@code state.recording} AND {@code state.pipeline} axes:
+     * <ul>
+     *   <li>{@code state.recording is Active|Paused|Preparing} —
+     *       covers the recording-in-flight window.</li>
+     *   <li>{@code state.pipeline is Preparing|Running} — covers the
+     *       upload + step-execution window (formerly out of scope for
+     *       the legacy predicate because the legacy controller didn't
+     *       know about the pipeline FSM at all).</li>
+     * </ul>
+     * Either axis being busy disables the non-selection chips.</p>
+     *
+     * <p>The actual {@code RecyclerView} {@code notifyDataSetChanged}
+     * fan-out still goes through the existing
+     * {@code mainHandler.post(...)} bridge so this method can be safely
+     * called from any thread (including the {@code PipelineUiStateObserver}
+     * collect-coroutine on {@code Dispatchers.Main}).</p>
+     */
     private void updatePromptButtonsEnabledState() {
-        RecordingState state = recordingStateController != null ? recordingStateController.getState() : RecordingState.Idle.INSTANCE;
-        disableNonSelectionPrompts = state.isRecordingOrPaused() || state instanceof RecordingState.Preparing;
+        boolean recordingBusy = false;
+        boolean pipelineBusy = false;
+        if (pipelineBinder != null) {
+            net.devemperor.dictate.state.DictateUiState ui =
+                    pipelineBinder.getState().getValue();
+            net.devemperor.dictate.state.RecordingState rec = ui.getRecording();
+            recordingBusy =
+                    net.devemperor.dictate.state.DictateUiStateKt.isActiveOrPaused(rec)
+                            || rec instanceof net.devemperor.dictate.state.RecordingState.Preparing;
+            net.devemperor.dictate.state.PipelineUiState pipe = ui.getPipeline();
+            pipelineBusy =
+                    pipe instanceof net.devemperor.dictate.state.PipelineUiState.Preparing
+                            || pipe instanceof net.devemperor.dictate.state.PipelineUiState.Running;
+        }
+        disableNonSelectionPrompts = recordingBusy || pipelineBusy;
         if (promptsAdapter == null) return;
         if (mainHandler != null) {
             mainHandler.post(() -> {

@@ -1,6 +1,7 @@
 package net.devemperor.dictate.state.infobar
 
 import net.devemperor.dictate.R
+import net.devemperor.dictate.database.entity.SessionStatus
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 
@@ -73,6 +74,52 @@ object InfoBarSelector {
             )
         }
 
-        // Block D.2 + E producers will add their branches below.
+        // ── Pending-Insert (ADR-0006 §"Cross-Module Producer pattern") ──
+        // Session whose pipeline COMPLETED but whose result text was
+        // never surfaced to a live `InputConnection`. Confirm =
+        // AcceptAndInsert → IME service side-channel calls commitText;
+        // Dismiss = plain Dismiss → session leaves the list with
+        // `inserted_at` stamped, the result text is forfeited.
+        state.pendingSessions
+            .filter { it.status == SessionStatus.COMPLETED && it.transcribedText != null }
+            .forEach { session ->
+                add(
+                    InfoBarItem(
+                        id = "pending-insert:${session.sessionId}",
+                        createdAt = session.createdAt,
+                        message = InfoBarMessage(
+                            textResId = R.string.dictate_pending_insert_msg,
+                            style = InfoBarStyle.ACTION,
+                        ),
+                        confirmAction = Action.PendingSessionsAction.AcceptAndInsert(session.sessionId),
+                        dismissAction = Action.PendingSessionsAction.Dismiss(session.sessionId),
+                    )
+                )
+            }
+
+        // ── Pending-Recording (ADR-0006, MVP) ───────────────────────────
+        // Session in RECORDED status (recording finished, pipeline not
+        // started yet). MVP-cut: single Dismiss-button ("Verwerfen")
+        // removes the session from the list and stamps inserted_at.
+        // 3-button affordance (Fortsetzen / Senden / Verwerfen) requires
+        // a layout that supports a third button and additional Pipeline
+        // actions — scheduled for a follow-up commit. The MVP keeps the
+        // user from being stuck with a stale RECORDED entry.
+        state.pendingSessions
+            .filter { it.status == SessionStatus.RECORDED }
+            .forEach { session ->
+                add(
+                    InfoBarItem(
+                        id = "pending-recording:${session.sessionId}",
+                        createdAt = session.createdAt,
+                        message = InfoBarMessage(
+                            textResId = R.string.dictate_pending_recording_msg,
+                            style = InfoBarStyle.ACTION,
+                        ),
+                        confirmAction = null,
+                        dismissAction = Action.PendingSessionsAction.Dismiss(session.sessionId),
+                    )
+                )
+            }
     }.sortedBy { it.createdAt }
 }

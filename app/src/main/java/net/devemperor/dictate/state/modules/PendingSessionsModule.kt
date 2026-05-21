@@ -81,17 +81,32 @@ object PendingSessionsModule : DictateModule<PersistentList<PendingSession>, Act
             } else null
         }
 
-        is Action.PendingSessionsAction.Dismiss -> {
-            // Optimistic local removal + DB-persist effect. If the
-            // session isn't in the list (already dismissed), no-op.
-            val idx = state.indexOfFirst { it.sessionId == action.sessionId }
-            if (idx >= 0) {
-                TransitionResult(
-                    nextState = state.removeAt(idx),
-                    sideEffects = listOf(Effect.PersistDismissal(action.sessionId)),
-                )
-            } else null
+        is Action.PendingSessionsAction.Dismiss -> dismiss(state, action.sessionId)
+
+        is Action.PendingSessionsAction.AcceptAndInsert -> {
+            // State-mutation identical to Dismiss — the imperative
+            // commitText() side-channel that distinguishes "accept"
+            // from "dismiss" lives at the IME service (the side-channel
+            // is unavoidable because the reducer cannot reach the
+            // current InputConnection). See Action.PendingSessionsAction.AcceptAndInsert
+            // KDoc + ADR-0006 §"Cross-Module Producer pattern".
+            dismiss(state, action.sessionId)
         }
+    }
+
+    private fun dismiss(
+        state: PersistentList<PendingSession>,
+        sessionId: String,
+    ): TransitionResult<PersistentList<PendingSession>, Effect>? {
+        // Optimistic local removal + DB-persist effect. If the
+        // session isn't in the list (already dismissed), no-op.
+        val idx = state.indexOfFirst { it.sessionId == sessionId }
+        return if (idx >= 0) {
+            TransitionResult(
+                nextState = state.removeAt(idx),
+                sideEffects = listOf(Effect.PersistDismissal(sessionId)),
+            )
+        } else null
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {

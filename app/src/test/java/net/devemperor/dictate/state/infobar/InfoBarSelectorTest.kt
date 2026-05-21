@@ -118,14 +118,98 @@ class InfoBarSelectorTest {
 
     @Test
     fun `overlay onboarding item pinned to top with createdAt 0`() {
-        // Block D.2 + E will add later-timestamped items; the
-        // overlay-onboarding item must sort first so its explainer
-        // outranks transient errors. This test fixes that invariant
-        // before later producers can accidentally invert it.
+        // Block E adds later-timestamped pending items; the overlay-
+        // onboarding item must sort first so its explainer outranks
+        // transient errors. This test fixes the invariant.
         val state = defaultState().copy(
             overlay = defaultState().overlay.copy(onboardingPending = true),
         )
         val item = InfoBarSelector.select(state).first()
         assertEquals(0L, item.createdAt)
+    }
+
+    // ── Pending-Insert / Pending-Recording producers (Block E) ─────────
+
+    @Test
+    fun `pending COMPLETED session with text surfaces a pending-insert item`() {
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "hello world",
+            createdAt = 1_000L,
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        val items = InfoBarSelector.select(state)
+        assertEquals(1, items.size)
+        val item = items.first()
+        assertEquals("pending-insert:abc", item.id)
+        assertEquals(
+            Action.PendingSessionsAction.AcceptAndInsert("abc"),
+            item.confirmAction,
+        )
+        assertEquals(
+            Action.PendingSessionsAction.Dismiss("abc"),
+            item.dismissAction,
+        )
+        assertEquals(InfoBarStyle.ACTION, item.message.style)
+    }
+
+    @Test
+    fun `pending COMPLETED session without text does not surface an item`() {
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = null,
+            createdAt = 1_000L,
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        assertTrue(InfoBarSelector.select(state).isEmpty())
+    }
+
+    @Test
+    fun `pending RECORDED session surfaces a dismiss-only item`() {
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "xyz",
+            status = net.devemperor.dictate.database.entity.SessionStatus.RECORDED,
+            transcribedText = null,
+            createdAt = 2_000L,
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        val items = InfoBarSelector.select(state)
+        assertEquals(1, items.size)
+        val item = items.first()
+        assertEquals("pending-recording:xyz", item.id)
+        assertNull("MVP — Pending-Recording has no confirm action", item.confirmAction)
+        assertEquals(
+            Action.PendingSessionsAction.Dismiss("xyz"),
+            item.dismissAction,
+        )
+    }
+
+    @Test
+    fun `pending items sort ascending by createdAt`() {
+        val s1 = net.devemperor.dictate.state.PendingSession(
+            "a", net.devemperor.dictate.database.entity.SessionStatus.COMPLETED, "x", 3_000L,
+        )
+        val s2 = net.devemperor.dictate.state.PendingSession(
+            "b", net.devemperor.dictate.database.entity.SessionStatus.RECORDED, null, 1_000L,
+        )
+        val s3 = net.devemperor.dictate.state.PendingSession(
+            "c", net.devemperor.dictate.database.entity.SessionStatus.COMPLETED, "y", 2_000L,
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(s1, s2, s3),
+        )
+        val items = InfoBarSelector.select(state)
+        assertEquals(
+            listOf("pending-recording:b", "pending-insert:c", "pending-insert:a"),
+            items.map { it.id },
+        )
     }
 }

@@ -734,6 +734,27 @@ sealed class Action {
     sealed class PendingSessionsAction : Action() {
         data class Refresh(val sessions: List<PendingSession>) : PendingSessionsAction()
         data class Dismiss(val sessionId: String) : PendingSessionsAction()
+
+        /**
+         * User confirmed a Pending-Insert item — equivalent to [Dismiss]
+         * on the state side (the session leaves `pendingSessions`, the
+         * DB's `inserted_at` is stamped), with one additional imperative
+         * side-channel at the IME service: the IME reads
+         * `state.pendingSessions[...].transcribedText` and invokes
+         * `currentInputConnection.commitText(...)` so the wartender
+         * text lands at the cursor.
+         *
+         * **Why a distinct Action, not a Dismiss alias?** The state
+         * mutation is identical, but the click source must be
+         * unambiguous so the side-channel can fire selectively
+         * (Dismiss-click means "verwerfen", AcceptAndInsert means
+         * "einfügen"). Producer in `InfoBarSelector` emits this as the
+         * Pending-Insert item's `confirmAction`; `Dismiss` stays the
+         * `dismissAction`.
+         *
+         * ADR-0006 §"Cross-Module Producer pattern".
+         */
+        data class AcceptAndInsert(val sessionId: String) : PendingSessionsAction()
     }
 
     // ════════════════════════════════════════════════════════════════

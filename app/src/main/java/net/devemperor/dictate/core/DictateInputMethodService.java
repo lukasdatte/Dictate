@@ -1605,12 +1605,31 @@ public class DictateInputMethodService extends InputMethodService
                             // State-mutation pass: every click dispatches
                             // its action through the single sink, so the
                             // selector re-renders into the new state.
+                            //
+                            // Side-channels (ADR-0006 §"Failure Modes"):
+                            // imperative operations that the pure state
+                            // layer cannot reach (Activity launches,
+                            // InputConnection.commitText) fire alongside
+                            // dispatch. The IME service IS the Context-
+                            // bearing seam.
+                            //
+                            // Read out the side-channel parameters BEFORE
+                            // dispatch (the state mutation removes the
+                            // session from pendingSessions, so reading
+                            // .transcribedText after dispatch would race).
+                            String pendingInsertText = null;
+                            if (action instanceof net.devemperor.dictate.state.Action.PendingSessionsAction.AcceptAndInsert) {
+                                String sid = ((net.devemperor.dictate.state.Action.PendingSessionsAction.AcceptAndInsert) action).getSessionId();
+                                for (net.devemperor.dictate.state.PendingSession s : pipelineBinder.getState().getValue().getPendingSessions()) {
+                                    if (s.getSessionId().equals(sid) && s.getTranscribedText() != null) {
+                                        pendingInsertText = s.getTranscribedText();
+                                        break;
+                                    }
+                                }
+                            }
+
                             pipelineBinder.dispatch(action);
-                            // Side-channel: RequestOverlayPermission ALSO
-                            // launches the system settings activity (the
-                            // pure state layer cannot startActivity — the
-                            // IME is the Context-bearing seam). All other
-                            // actions are state-only.
+
                             if (action == net.devemperor.dictate.state.Action.OverlayAction
                                     .RequestOverlayPermission.INSTANCE) {
                                 try {
@@ -1622,6 +1641,21 @@ public class DictateInputMethodService extends InputMethodService
                                 } catch (Exception e) {
                                     Log.w("DictateIME",
                                             "Failed to launch overlay-permission settings", e);
+                                }
+                            } else if (pendingInsertText != null) {
+                                // Pending-Insert confirm: drop the
+                                // transcribed text at the current
+                                // cursor. If the InputConnection went
+                                // away between dispatch and this call,
+                                // the commitText is silently ignored —
+                                // the session is already marked
+                                // inserted_at via the dispatched
+                                // AcceptAndInsert action, so the user
+                                // sees the dismiss outcome (item gone)
+                                // even when the paste itself failed.
+                                android.view.inputmethod.InputConnection ic = getCurrentInputConnection();
+                                if (ic != null) {
+                                    ic.commitText(pendingInsertText, 1);
                                 }
                             }
                             return kotlin.Unit.INSTANCE;

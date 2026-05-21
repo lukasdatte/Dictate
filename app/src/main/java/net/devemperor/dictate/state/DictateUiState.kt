@@ -29,7 +29,9 @@ import java.io.File
  * |---|-------|--------------|-------|
  * | 1 | [recording] | RecordingModule | sealed FSM with audioFile/useBluetooth payload |
  * | 2 | [pipeline] | PipelineModule | sealed FSM with sessionId payload |
- * | 3 | [viewMode] | ViewModeModule | KEYBOARD / WIDGET / HOVER (Triangle-FSM, ADR-0005) |
+ * | 3 | [viewMode] | ViewModeModule | KEYBOARD / WIDGET / HOVER (Triangle-FSM, ADR-0005 — superseded by ADR-0008, to be removed in B3) |
+ * | 3a | [widget] | WidgetModule | floating-overlay axis (Hidden/Visible+origin), B3 / ADR-0008 |
+ * | 3b | [imeViewVisible] | WidgetModule | IME-View visibility (orthogonal to widget), B3 / ADR-0008 |
  * | 4 | [layout] | LayoutModule | contentArea + 3 booleans (Pref-mirror) |
  * | 5 | [overlay] | OverlayModule | 4 floats (positions) + 4 booleans (perm / pref / suppress / onboarding) |
  * | 6 | [audio] | AudioModule | AudioFocus + BluetoothSco + vibration |
@@ -50,7 +52,30 @@ data class DictateUiState(
     // ─── Hot-path FSMs (sealed classes, dedicated reducer modules) ───
     val recording: RecordingState,
     val pipeline: PipelineUiState,
+
+    /**
+     * **Legacy** Triangle-FSM (KEYBOARD / WIDGET / HOVER) per ADR-0005.
+     * Owned by `ViewModeModule`. **Superseded by ADR-0008 — kept live
+     * until B3.2-B3.5 finish migrating reducers + resolvers + predicates.**
+     * Do not introduce new readers; consume the new [widget] /
+     * [imeViewVisible] axes instead.
+     */
     val viewMode: ViewMode,
+
+    /**
+     * Floating-overlay axis (B3 / ADR-0008). Replaces [viewMode]'s
+     * WIDGET / HOVER. Owned by `WidgetModule`.
+     */
+    val widget: WidgetState,
+
+    /**
+     * Is the IME-View currently rendered? Orthogonal to [widget] —
+     * both can be true simultaneously during transitions. Owned by
+     * `WidgetModule`. The IME-Service flips this via
+     * `Action.WidgetAction.OnImeViewShown` / `OnImeViewHidden`
+     * dispatched from `onStartInputView` / `onFinishInputView`.
+     */
+    val imeViewVisible: Boolean,
 
     // ─── Layout / UI-mode ───
     val layout: LayoutState,
@@ -81,6 +106,8 @@ data class DictateUiState(
             recording = RecordingState.Idle,
             pipeline = PipelineUiState.Idle,
             viewMode = ViewMode.KEYBOARD,
+            widget = WidgetState.Hidden,
+            imeViewVisible = true,
             layout = LayoutState(),
             overlay = OverlayState(),
             audio = AudioState(),
@@ -427,6 +454,104 @@ enum class ViewMode {
 
     /** Auto-mode after IME-View hidden during pipeline — Send disabled. */
     HOVER,
+}
+
+// ════════════════════════════════════════════════════════════════════
+// WidgetState (B3 / ADR-0008 — Surface-Axes)
+// ════════════════════════════════════════════════════════════════════
+//
+// The legacy [ViewMode] enum collapsed three orthogonal facts —
+// "which surface is rendered", "who triggered the surface", "is a
+// pipeline / recording in flight" — into a single field. [computeViewMode]
+// then untangled them per dispatch via a truth-table whose row-priority
+// silently dropped the *origin* of a WIDGET surface (user-toggled vs
+// pipeline-fallback). ADR-0008 splits this into two strictly
+// independent axes:
+//
+//  1. [WidgetState] — is the floating overlay visible, and if so why?
+//     Hidden | Visible(USER) | Visible(PIPELINE).
+//  2. `imeViewVisible: Boolean` — is the IME-View rendered? Top-level
+//     field on [DictateUiState] (added alongside `widget`).
+//
+// Both axes can be true simultaneously (widget *and* keyboard rendered
+// at the same time during a transition). [ViewMode] derives a single
+// surface; the new model lets each axis stay live independently and
+// preserves user intent across IME-View lifecycle events.
+//
+// **Migration status:** B3.1 introduces the data types only. Both
+// axes co-exist with [ViewMode] until B3.2 — B3.5 migrate reducers,
+// resolvers, predicates, and finally remove the legacy enum.
+
+/**
+ * Floating-overlay visibility axis (B3 / ADR-0008 §"Surface-Axes").
+ *
+ * Replaces [ViewMode]'s WIDGET / HOVER values; the keyboard-axis lives
+ * separately as `DictateUiState.imeViewVisible`.
+ *
+ * # Variants
+ *
+ *  - **[Hidden]** — no floating overlay rendered. Default initial
+ *    state; reached via `User Close-Btn` (W2), pipeline-end with
+ *    PIPELINE origin (W6), or `OnImeViewShown` while PIPELINE origin
+ *    (W4).
+ *  - **[Visible]** — the floating overlay is rendered. Carries an
+ *    [origin] tag distinguishing user-stickiness from pipeline-
+ *    transience:
+ *     - [WidgetOrigin.USER] — user pressed the widget-toggle; the
+ *       overlay survives IME-View show/hide cycles (W5: sticky).
+ *     - [WidgetOrigin.PIPELINE] — auto-shown by `OnImeViewHidden` while
+ *       recording / pipeline was in flight (W3); auto-closes on the
+ *       next `OnImeViewShown` (W4) or pipeline-end (W6).
+ *
+ * # Why `sealed class` and not `enum`
+ *
+ * The [Visible] variant carries the [WidgetOrigin] data; an enum
+ * would need a side-channel (a second field) and re-introduce the
+ * "two fields, one axis" pitfall that motivated this refactor.
+ */
+sealed class WidgetState {
+    /** No floating overlay rendered. */
+    data object Hidden : WidgetState()
+
+    /**
+     * The floating overlay is rendered. [origin] determines sticky-vs-
+     * transient lifecycle per the W1-W8 transition table.
+     */
+    data class Visible(val origin: WidgetOrigin) : WidgetState()
+}
+
+/**
+ * Provenance of a [WidgetState.Visible] surface.
+ *
+ * Captures the **user intent vs system convenience** distinction that
+ * the legacy Triangle-FSM lost via row-priority truth-table resolution.
+ * A USER-origin widget persists across IME-View lifecycle events; a
+ * PIPELINE-origin widget is auto-released on the next IME-View-show or
+ * pipeline-end.
+ */
+enum class WidgetOrigin {
+    /**
+     * User pressed widget-toggle. Sticky semantics:
+     *
+     *  - survives `OnImeViewShown` (W5 — keyboard renders alongside)
+     *  - survives `OnImeViewHidden` (W3 — already visible, no
+     *    re-trigger)
+     *  - is dismissed only by an explicit user action ([Visible] → [Hidden]
+     *    via Close-Btn — W2) or a Trash-cascade.
+     */
+    USER,
+
+    /**
+     * Auto-shown by the system because the IME-View vanished while a
+     * recording or pipeline was in flight. Transient semantics:
+     *
+     *  - is dismissed automatically on the next `OnImeViewShown`
+     *    (W4) — the keyboard is back, the overlay is no longer
+     *    needed
+     *  - is dismissed automatically on `recording=Idle && pipeline=Idle`
+     *    (W6) — nothing left to render
+     */
+    PIPELINE,
 }
 
 /**

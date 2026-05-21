@@ -135,6 +135,9 @@ open class DictateModuleRegistry(
             PipelineModule,
             AudioModule,
             ViewModeModule,
+            // B3.1 / ADR-0008 — Widget+ImeView axes. No-op until B3.2
+            // fills W1-W8 transitions; co-exists with ViewModeModule.
+            WidgetModule,
             OverlayModule,
             // ─── Aux (C6) — simpler axes ───
             ResendModule,

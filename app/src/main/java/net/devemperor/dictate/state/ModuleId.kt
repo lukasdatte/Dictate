@@ -27,6 +27,10 @@ sealed interface ModuleId {
     data object Pipeline : ModuleId
     data object Audio : ModuleId
     data object ViewMode : ModuleId
+
+    /** B3 / ADR-0008 — replaces [ViewMode] once cutover completes. */
+    data object Widget : ModuleId
+
     data object Overlay : ModuleId
     data object Resend : ModuleId
     data object LivePrompt : ModuleId

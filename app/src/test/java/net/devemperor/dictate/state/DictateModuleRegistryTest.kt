@@ -32,17 +32,19 @@ class DictateModuleRegistryTest {
     }
 
     @Test
-    fun `production singleton contains 13 active modules plus the Phase-2 stub (C5 + C6)`() {
+    fun `production singleton contains 14 active modules plus the Phase-2 stub (C5 + C6 + B3)`() {
         // Order is a binding contract (cascade order, ADR-0002) — the
         // list literal in `DictateModuleRegistry.Default` is the single
-        // source of truth. 5 core (C5) + 8 aux (C6) + 1 Phase-2 stub
-        // (InterruptionModule) = 14 entries; the §15.1 module inventory
-        // calls this "13 aktive + 1 Phase-2-Stub".
+        // source of truth. B3.1 / ADR-0008 added `WidgetModule` next to
+        // the legacy `ViewModeModule`; both co-exist until B3.5 retires
+        // the ViewMode axis. Inventory: 6 core (C5 + B3 widget) + 8
+        // aux (C6) + 1 Phase-2 stub (InterruptionModule) = 15 entries.
         val expected: List<DictateModule<*, *, *>> = listOf(
             RecordingModule,
             PipelineModule,
             AudioModule,
             ViewModeModule,
+            WidgetModule,
             OverlayModule,
             ResendModule,
             LivePromptModule,

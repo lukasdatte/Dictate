@@ -442,6 +442,66 @@ sealed class Action {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // Widget-axis actions (WidgetModule) — B3 / ADR-0008
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Triggers for the [WidgetState] + `imeViewVisible` axes per the
+     * plan §3 W1-W8 transition table. The reducer logic is filled in
+     * by B3.2; B3.1 ships only the action shape so consumers can be
+     * migrated incrementally.
+     *
+     * **Migration overlap:** these actions co-exist with the legacy
+     * [ViewModeAction.*] surface during B3.2-B3.5. Dispatchers route
+     * to one or the other; the orchestrator runs both modules but
+     * [WidgetModule] is a no-op until B3.2.
+     *
+     * @see net.devemperor.dictate.state.WidgetModule
+     * @see docs/decisions/0008-ui-surface-axes-widget-state-and-ime-view.md
+     */
+    sealed class WidgetAction : Action() {
+        /**
+         * User pressed the widget-toggle button. **W1** transition:
+         * `widget=Hidden → widget=Visible(USER)`. The handler is
+         * permission-gated upstream (see [resolveWidgetToggleAction] —
+         * a missing SYSTEM_ALERT_WINDOW permission routes through
+         * `OverlayAction.ShowOverlayOnboarding` instead).
+         */
+        data object ToggleWidget : WidgetAction()
+
+        /**
+         * User pressed the widget close-button. **W2** transition:
+         * `widget=Visible → widget=Hidden + suppressBit=true +
+         * (recording.Active → Paused)`. The pipeline keeps running in
+         * the FGS; its result surfaces via the Pending-Insert
+         * info-bar (B4) after pipeline-done.
+         */
+        data object CloseWidget : WidgetAction()
+
+        /**
+         * The IME-View just became visible. **W4 / W5** transition.
+         * Driven by `DictateInputMethodService.onStartInputView` /
+         * `onCreateInputView` returning a non-null view.
+         */
+        data object OnImeViewShown : WidgetAction()
+
+        /**
+         * The IME-View just became invisible. **W3** transition. Driven
+         * by `DictateInputMethodService.onFinishInputView`.
+         */
+        data object OnImeViewHidden : WidgetAction()
+
+        /**
+         * Recording transitioned `Idle → Preparing` (W7) or
+         * `Paused → Active` (W8). Cascaded by `WidgetModule`'s own
+         * cross-module observer in reaction to the [RecordingState]
+         * FSM transition. Clears the suppress-bit so the next
+         * `OnImeViewHidden` can re-auto-show the PIPELINE widget.
+         */
+        data object ResetSuppressBit : WidgetAction()
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // Layout-axis actions (LayoutModule)
     // ════════════════════════════════════════════════════════════════
 

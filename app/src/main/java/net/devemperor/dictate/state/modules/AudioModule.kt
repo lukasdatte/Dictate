@@ -287,6 +287,22 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
                 if (state.audioFocusEnabledPref) add(Effect.RequestAudioFocus)
             },
         )
+
+        // 2026-05-21 indirection-cleanup Chunk 3.5 (C-3) — apply a
+        // live runtime change derived from an external
+        // SharedPreferences-side write (Settings Activity). The mirror
+        // has already updated `audio.audioFocusEnabledPref`; this arm
+        // emits the `ApplyAudioFocusRuntime` effect iff the live
+        // AudioManager state differs from the wanted state (same
+        // idempotency gate the in-IME ToggleAudioFocusPref path uses).
+        // State is left unchanged — the mirror is the canonical writer
+        // and the action itself is effect-only.
+        is Action.AudioAction.ApplyAudioFocusRuntimeFromPref -> TransitionResult(
+            nextState = state,
+            sideEffects = if (action.enabled != state.audioFocusGranted) {
+                listOf(Effect.ApplyAudioFocusRuntime(action.enabled))
+            } else emptyList(),
+        )
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
@@ -424,6 +440,41 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
                     useBluetooth = nextPhase == ScoPhase.Connected,
                 )
             }
+        }
+
+        // 2026-05-21 indirection-cleanup Chunk 3.5 (C-3 audioFocusListener
+        // removal) — external SP-write path. The Settings Activity writes
+        // `Pref.AudioFocus`; PipelinePrefMirror mirrors it into
+        // `audio.audioFocusEnabledPref`. While idle the state-only update
+        // is enough; during an Active recording, however, the live
+        // AudioManager state must follow the pref (matches the legacy
+        // `audioFocusListener` → `recordingStateController.setAudioFocusRuntime`
+        // call). Cascade `ApplyAudioFocusRuntimeFromPref` — the AudioModule
+        // reducer arm gates on `value != audioFocusGranted` so a re-write
+        // of the same value is a clean no-op (idempotent).
+        //
+        // The in-IME click path (`onAudioFocusToggled` → dispatch
+        // `ToggleAudioFocusPref`) is *not* a duplicate caller: that path
+        // also produces the same prev != next pref transition here, but
+        // its reducer arm already emitted `ApplyAudioFocusRuntime` inline
+        // — and by the time this observer runs against the post-reducer
+        // state the effect is in flight (or completed, applying
+        // request/release synchronously through the AudioManager). The
+        // second `ApplyAudioFocusRuntime` cascaded here would either be
+        // gated by the `audioFocusGranted` equality check (live state now
+        // matches wanted), or — if AudioManager has not yet emitted the
+        // OnAudioFocusGrantChanged that updates `audioFocusGranted` — be
+        // a redundant request/release on an idempotent subsystem (the
+        // `AudioManager.requestAudioFocus` re-request is a safe no-op,
+        // and `abandonAudioFocusRequest` is idempotent at the framework
+        // layer). Either way no observable difference; the in-IME path
+        // remains the primary driver.
+        if (prev.audio.audioFocusEnabledPref != next.audio.audioFocusEnabledPref &&
+            nextRec is RecordingState.Active
+        ) {
+            cascade += Action.AudioAction.ApplyAudioFocusRuntimeFromPref(
+                enabled = next.audio.audioFocusEnabledPref,
+            )
         }
 
         return cascade

@@ -290,23 +290,14 @@ public class DictateInputMethodService extends InputMethodService
      */
     private SharedPreferences.OnSharedPreferenceChangeListener inputLanguagesListener;
 
-    /**
-     * Block 2 (Quality-Gate K5): bidirectional sync between the Settings
-     * Switch-Preference and the Edit-Bar/Single-Row audio-focus toggle. When
-     * the user flips the value in Settings while the keyboard is cached, this
-     * listener re-applies it to both the icon and the running RecordingState.
-     *
-     * <p>Registered alongside {@link #inputLanguagesListener} in
-     * {@link #onCreateInputView()}; deregistered in
-     * {@link #cleanupOldControllers()} (view-recreate) and {@link #onDestroy()}
-     * (process tear-down) — same lifecycle pattern.</p>
-     *
-     * <p>Invariant: the listener fires on every SP write, including the
-     * service-internal write inside {@link #onAudioFocusToggled()}. The
-     * resulting refresh is idempotent (same value, same icon, same field) so
-     * the doubled fire is benign.</p>
-     */
-    private SharedPreferences.OnSharedPreferenceChangeListener audioFocusListener;
+    // 2026-05-21 indirection-cleanup Chunk 3.5 (C-3) — the custom
+    // `audioFocusListener` SP-listener is REMOVED. PipelinePrefMirror
+    // now owns the full SP → state.audio.audioFocusEnabledPref mirror;
+    // the EditBarAudioFocusObserver (Chunk 3.3) feeds the edit-bar twin;
+    // the AudioModule.onCrossModuleStateChange cascade emits
+    // `ApplyAudioFocusRuntimeFromPref` for mid-recording external SP
+    // writes (Chunk 3.5). No private listener field, no listener
+    // registration, no unregistration — the indirection is gone.
 
     /**
      * Phase 5.B of `2026-05-21 - dictate-render-cutover-completion-vol2`:
@@ -1076,34 +1067,19 @@ public class DictateInputMethodService extends InputMethodService
         };
         sp.registerOnSharedPreferenceChangeListener(inputLanguagesListener);
 
-        // Block 2 (Quality-Gate K5): mirror Settings-screen toggles into the
-        // Edit-Bar / Single-Row buttons + the running RecordingStateController.
-        audioFocusListener = (changedPrefs, key) -> {
-            if (Pref.AudioFocus.INSTANCE.getKey().equals(key)) {
-                boolean newValue = DictatePrefsKt.get(changedPrefs, Pref.AudioFocus.INSTANCE);
-                // CR-DEL (Theme C-R / G14): the catalog AUDIO_FOCUS
-                // iconResolver drives the icon state-reactively —
-                // Pref.AudioFocus is mirrored into
-                // state.audio.audioFocusEnabledPref by PipelinePrefMirror,
-                // which emits a fresh state → the attached ImeViewBackend
-                // re-renders the AUDIO_FOCUS slot. The legacy
-                // mainButtonsController.refreshAudioFocusIcon unbound
-                // fallback is GONE (MainButtonsController deleted; the
-                // drive-call rollback surface collapses at the
-                // point-of-no-return). F-3 (B5-VAL): the edit-bar twin
-                // is NOT state-driven by the catalog AUDIO_FOCUS slot,
-                // so it must still be refreshed explicitly on an
-                // external Settings-screen toggle (parity with the
-                // legacy refreshAudioFocusIcon SP-listener call site).
-                if (editBarController != null) {
-                    editBarController.refreshAudioFocusIcon(newValue);
-                }
-                if (recordingStateController != null) {
-                    recordingStateController.setAudioFocusRuntime(newValue);
-                }
-            }
-        };
-        sp.registerOnSharedPreferenceChangeListener(audioFocusListener);
+        // 2026-05-21 indirection-cleanup Chunk 3.5 (C-3) — the custom
+        // `audioFocusListener` SP-listener registration is REMOVED.
+        // External Settings-Activity writes to Pref.AudioFocus flow via:
+        //   1. PipelinePrefMirror → state.audio.audioFocusEnabledPref
+        //   2. EditBarAudioFocusObserver re-renders the edit-bar twin
+        //      (Chunk 3.3); the catalog AUDIO_FOCUS slot iconResolver
+        //      re-renders the main-button-area twin.
+        //   3. AudioModule.onCrossModuleStateChange cascades
+        //      `ApplyAudioFocusRuntimeFromPref(value)` iff a recording
+        //      is Active, which produces `Effect.ApplyAudioFocusRuntime`
+        //      → the live AudioManager follows the pref (replaces
+        //      `recordingStateController.setAudioFocusRuntime`).
+        // No private listener field, no register/unregister — gone.
 
         // Pipeline UI side-effects driven reactively from the orchestrator
         // state (Phase 5.B of `2026-05-21 - dictate-render-cutover-completion-vol2`).
@@ -1968,13 +1944,9 @@ public class DictateInputMethodService extends InputMethodService
             sp.unregisterOnSharedPreferenceChangeListener(inputLanguagesListener);
             inputLanguagesListener = null;
         }
-        // Block 2: idempotent with cleanupOldControllers — when the IME is
-        // torn down without a preceding view-recreate the listener still needs
-        // to be detached.
-        if (audioFocusListener != null && sp != null) {
-            sp.unregisterOnSharedPreferenceChangeListener(audioFocusListener);
-            audioFocusListener = null;
-        }
+        // 2026-05-21 indirection-cleanup Chunk 3.5 — the audioFocusListener
+        // unregistration is GONE with the listener itself (the C-3 cascade
+        // through AudioModule.onCrossModuleStateChange replaces it).
 
         // Block 2 — Spec 1 §11.3.1: unbind the pipeline service so the
         // bind-counter drops. The service itself decides whether to
@@ -2044,13 +2016,9 @@ public class DictateInputMethodService extends InputMethodService
             sp.unregisterOnSharedPreferenceChangeListener(inputLanguagesListener);
             inputLanguagesListener = null;
         }
-        // Block 2: drop the audio-focus prefs listener bound to the soon-to-be
-        // discarded MainButtonsController; the fresh controller in the upcoming
-        // onCreateInputView re-registers a new listener.
-        if (audioFocusListener != null) {
-            sp.unregisterOnSharedPreferenceChangeListener(audioFocusListener);
-            audioFocusListener = null;
-        }
+        // 2026-05-21 indirection-cleanup Chunk 3.5 — audioFocusListener
+        // removed entirely; the view-recreate path no longer needs to
+        // un-register a per-view listener.
         // C15 — detach the previous ImeViewBackend before the upcoming
         // re-inflate. The backend holds direct View references that
         // become invalid the moment LayoutInflater produces a new tree.

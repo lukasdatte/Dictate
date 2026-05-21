@@ -435,6 +435,27 @@ sealed class Action {
          * @see docs/plans/2026-05-15 - dictate-cutover-completion/research/recording-audiofocus-btsco-handshake.md
          */
         data object ReacquireAudioFocus : AudioAction()
+
+        /**
+         * Apply the audio-focus runtime change derived from an
+         * **external** SP-mutation that the [PipelinePrefMirror]
+         * synced into `state.audio.audioFocusEnabledPref`
+         * (indirection-cleanup 2026-05-21, Chunk 3.5 — C-3 removal of
+         * `audioFocusListener`).
+         *
+         * **Why a distinct action (not reuse [ToggleAudioFocusPref]).**
+         * `ToggleAudioFocusPref` *flips* the bit; this action carries
+         * the explicit target value because the mirror-driven update
+         * has already changed the state — the reducer must not flip
+         * again. It is cascaded by [AudioModule.onCrossModuleStateChange]
+         * on the `prev.audio.audioFocusEnabledPref !=
+         * next.audio.audioFocusEnabledPref` AND `next.recording is
+         * Active` edge. The AudioModule reducer reads the
+         * already-mirrored bit and emits `Effect.ApplyAudioFocusRuntime`
+         * iff the live AudioManager state differs from the wanted state
+         * (same idempotency gate as the in-IME toggle path).
+         */
+        data class ApplyAudioFocusRuntimeFromPref(val enabled: Boolean) : AudioAction()
     }
 
     // ════════════════════════════════════════════════════════════════

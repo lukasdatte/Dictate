@@ -1,6 +1,7 @@
 package net.devemperor.dictate.state
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -593,6 +594,112 @@ class AudioModuleTest {
         assertEquals(
             listOf<AudioModule.Effect>(AudioModule.Effect.PersistAudioFocusPref(true)),
             result!!.sideEffects,
+        )
+    }
+
+    // ─── ApplyAudioFocusRuntimeFromPref (Chunk 3.5 — C-3 SP-listener removal) ─
+
+    @Test
+    fun `ApplyAudioFocusRuntimeFromPref emits ApplyAudioFocusRuntime when value differs from granted`() {
+        // External Settings-Activity SP-write path: PipelinePrefMirror
+        // updates `state.audio.audioFocusEnabledPref`; the
+        // `onCrossModuleStateChange` cascade dispatches this action.
+        // Reducer must apply the runtime change iff the live focus
+        // state still mismatches the wanted state.
+        val state = AudioState(audioFocusEnabledPref = false, audioFocusGranted = true)
+        val result = module.reduce(
+            state,
+            Action.AudioAction.ApplyAudioFocusRuntimeFromPref(enabled = false),
+            ctx(),
+        )
+        assertEquals(state, result!!.nextState)  // state-write is the mirror's job
+        assertEquals(
+            listOf<AudioModule.Effect>(AudioModule.Effect.ApplyAudioFocusRuntime(false)),
+            result.sideEffects,
+        )
+    }
+
+    @Test
+    fun `ApplyAudioFocusRuntimeFromPref emits no effect when value matches granted`() {
+        // Idempotency gate — same value, no AudioManager call needed.
+        val state = AudioState(audioFocusGranted = true)
+        val result = module.reduce(
+            state,
+            Action.AudioAction.ApplyAudioFocusRuntimeFromPref(enabled = true),
+            ctx(),
+        )
+        assertEquals(emptyList<AudioModule.Effect>(), result!!.sideEffects)
+    }
+
+    @Test
+    fun `cross-module pref change during Active recording cascades ApplyAudioFocusRuntimeFromPref`() {
+        val prev = DictateUiState.initial().copy(
+            audio = AudioState(audioFocusEnabledPref = true),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-ext"),
+        )
+        val next = prev.copy(
+            audio = prev.audio.copy(audioFocusEnabledPref = false),
+        )
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertTrue(
+            "expected ApplyAudioFocusRuntimeFromPref in cascade, got $cascade",
+            cascade.contains(
+                Action.AudioAction.ApplyAudioFocusRuntimeFromPref(enabled = false),
+            ),
+        )
+    }
+
+    @Test
+    fun `cross-module pref change during Idle does NOT cascade ApplyAudioFocusRuntimeFromPref`() {
+        // No recording → mirror updates state but no live AudioManager
+        // call needs to follow (the next startRecording will read the
+        // pref fresh anyway).
+        val prev = DictateUiState.initial().copy(
+            audio = AudioState(audioFocusEnabledPref = true),
+        )
+        val next = prev.copy(
+            audio = prev.audio.copy(audioFocusEnabledPref = false),
+        )
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertFalse(
+            "Idle pref change should not cascade runtime apply: $cascade",
+            cascade.any { it is Action.AudioAction.ApplyAudioFocusRuntimeFromPref },
+        )
+    }
+
+    @Test
+    fun `cross-module pref change during Paused does NOT cascade ApplyAudioFocusRuntimeFromPref`() {
+        // Paused: legacy `setAudioFocusRuntime` only acted when state is
+        // Active. Mirror that exactly — Paused is a deferred state, the
+        // live AudioManager state is already released.
+        val prev = DictateUiState.initial().copy(
+            audio = AudioState(audioFocusEnabledPref = true),
+            recording = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "sid-pause"),
+        )
+        val next = prev.copy(
+            audio = prev.audio.copy(audioFocusEnabledPref = false),
+        )
+        val cascade = module.onCrossModuleStateChange(prev, next)
+        assertFalse(
+            "Paused pref change should not cascade runtime apply: $cascade",
+            cascade.any { it is Action.AudioAction.ApplyAudioFocusRuntimeFromPref },
+        )
+    }
+
+    @Test
+    fun `cross-module pref unchanged does NOT cascade ApplyAudioFocusRuntimeFromPref`() {
+        // Defensive: every state-emit goes through onCrossModuleStateChange,
+        // most don't touch the audio pref. No `prev != next` → no cascade.
+        val state = DictateUiState.initial().copy(
+            audio = AudioState(audioFocusEnabledPref = true),
+            recording = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-stay"),
+        )
+        // Same pref, but mutate an unrelated audio field.
+        val next = state.copy(audio = state.audio.copy(audioFocusGranted = true))
+        val cascade = module.onCrossModuleStateChange(state, next)
+        assertFalse(
+            "Unchanged pref should not cascade: $cascade",
+            cascade.any { it is Action.AudioAction.ApplyAudioFocusRuntimeFromPref },
         )
     }
 

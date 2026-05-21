@@ -270,6 +270,7 @@ class RecordingHardwareAdapter(
             MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_APPROACHING -> {
                 val repo = audioFileRepository ?: return@OnInfoListener
                 val sid = activeSessionId ?: return@OnInfoListener
+                val params = lastCodecParams ?: return@OnInfoListener
                 val next = try {
                     repo.allocateNext(sid)
                 } catch (e: IOException) {
@@ -281,28 +282,29 @@ class RecordingHardwareAdapter(
                     Log.d(TAG, "Rolling: setNextOutputFile($next) armed")
                 } catch (e: Exception) {
                     Log.w(TAG, "Rolling: setNextOutputFile failed", e)
+                    return@OnInfoListener
                 }
-            }
-            MediaRecorder.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED -> {
-                Log.d(TAG, "Rolling: handover to next segment complete")
-                // Re-arm so the new segment also gets a size cap and
-                // rolling continues. setMaxFileSize is valid after
-                // start() — the recorder stays in "Recording" state
-                // after a NEXT_OUTPUT_FILE_STARTED handover.
-                val activeParams = lastCodecParams ?: return@OnInfoListener
+                // Re-arm setMaxFileSize **in the APPROACHING window**,
+                // before the actual handover happens — the recorder
+                // is still in the stable "Recording" state here.
+                // Setting the cap inside NEXT_OUTPUT_FILE_STARTED
+                // raced with the native rollover and threw
+                // IllegalStateException on Pixel 8 / SM-S948B
+                // (logcat 00:30:48, B1.3-hotfix-2 trigger).
                 try {
                     mr.setMaxFileSize(
-                        rollingMaxFileSizeBytes(activeParams, rollingIntervalMs)
+                        rollingMaxFileSizeBytes(params, rollingIntervalMs)
                     )
+                    Log.d(TAG, "Rolling: setMaxFileSize re-armed for next segment")
                 } catch (e: IllegalStateException) {
                     Log.w(TAG, "Rolling: setMaxFileSize re-arm failed", e)
                 }
             }
+            MediaRecorder.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED -> {
+                Log.d(TAG, "Rolling: handover to next segment complete")
+            }
             MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED -> {
-                // Best-effort logging only — if APPROACHING already
-                // armed a next file, the handover happens inside the
-                // recorder; nothing to do here.
-                Log.d(TAG, "Rolling: max file size reached (extra=$what)")
+                Log.d(TAG, "Rolling: max file size reached")
             }
         }
     }

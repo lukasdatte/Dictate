@@ -371,6 +371,9 @@ class DictatePipelineService : Service() {
             emitAction = { action -> orchestrator.emitAction(action) },
             audioFileRepository = audioFileRepository,
             rollingIntervalMs = rollingIntervalSec * 1000L,
+            // B1.3-hotfix: Rolling-Segments are now MediaRecorder
+            // OnInfoListener-driven (no Kotlin coroutine timer), so no
+            // CoroutineScope is needed any more.
         )
         val recordingHardware = recordingHardwareAdapterImpl
         val recordingTimer = RecordingTimerAdapter()

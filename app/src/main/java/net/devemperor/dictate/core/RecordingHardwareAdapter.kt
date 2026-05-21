@@ -2,12 +2,6 @@ package net.devemperor.dictate.core
 
 import android.media.MediaRecorder
 import android.util.Log
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.MainScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import net.devemperor.dictate.audio.AudioFileRepository
 import net.devemperor.dictate.audio.CodecParams
 import net.devemperor.dictate.state.Action
@@ -27,56 +21,69 @@ import java.io.IOException
  * production-quality implementation that the [DictateOrchestrator]
  * consumes via [RecordingModule.runEffect]. Both paths can coexist
  * because today the orchestrator-side modules are not yet the primary
- * driver of recording — the IME still owns the recording UX. The
- * adapter ensures that when a future block (B4-B6 LayoutCatalog /
- * Overlay) routes record-button clicks through `dispatch(Action.RecordingAction.X)`,
- * the corresponding effects produce real audio without further wiring.
+ * driver of recording — the IME still owns the recording UX.
+ *
+ * **Rolling-Segments (B1.3 / ADR-0007 §"Activation + Rolling-Segments").**
+ * When constructed with an [AudioFileRepository] and [allocate] is
+ * called with a non-null `sessionId`, the adapter wires the
+ * MediaRecorder's `MAX_DURATION_APPROACHING` callback to call
+ * `setNextOutputFile(allocateNext(sessionId))`. The MediaRecorder
+ * then rolls automatically when the per-segment duration limit
+ * (`rollingIntervalMs`) is reached — finalising the previous segment
+ * with a complete `moov` atom, so a crash mid-segment loses at most
+ * one rolling interval of audio.
+ *
+ * **Why callback-driven, not timer-driven?** The earlier B1.3 timer
+ * approach (Kotlin coroutine that called `setNextOutputFile` every
+ * 30 s) hit Android's MediaRecorder error `-38` (INVALID_OPERATION):
+ * `setNextOutputFile` is only valid in the narrow window between the
+ * `MAX_DURATION_APPROACHING` and `MAX_DURATION_REACHED` infos.
+ * Outside that window the native call rejects. The callback-driven
+ * variant matches the API's documented contract.
  *
  * **Threading:** all public methods MUST be called on the main thread
  * (the dispatch loop is `Dispatchers.Main.immediate`-confined per
- * [DictateOrchestrator]). The internal Timer/amplitude callbacks
- * post back to the main looper via [Handler].
+ * [DictateOrchestrator]). The OnInfoListener also fires on the main
+ * looper.
  *
  * **Failure routing:** errors during [allocate] / [start] surface via
  * [emitAction] as [Action.EffectFailure] carrying [ModuleId.Recording]
  * so the reducer's `reduceFailure` arm rolls back the FSM.
  *
- * @param audioSource the [MediaRecorder.AudioSource] constant used when
- *   the recording is **not** Bluetooth — typically [MediaRecorder.AudioSource.MIC].
- *   Bluetooth recordings use [MediaRecorder.AudioSource.VOICE_COMMUNICATION].
- * @param emitAction main-thread re-entry into the orchestrator. Called
- *   when the adapter completes `allocate` to signal
- *   [Action.RecordingAction.MediaRecorderReady] (audio file is ready
- *   for the FSM transition Preparing → Active).
+ * @param emitAction main-thread re-entry into the orchestrator.
+ * @param audioFileRepository repository for Rolling-Segment files.
+ *   `null` opts out of rolling — the adapter falls back to a single-
+ *   segment recording, identical to the pre-B1.3 behaviour.
+ * @param rollingIntervalMs per-segment duration cap (default 30 s,
+ *   from `Pref.RollingSegmentIntervalSec`).
  *
  * @see net.devemperor.dictate.state.RecordingHardwareSubsystem
  * @see net.devemperor.dictate.core.RecordingManager
- * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §9.1 §15.2
  */
 class RecordingHardwareAdapter(
     private val emitAction: (Action) -> Unit,
     private val audioFileRepository: AudioFileRepository? = null,
-    private val scope: CoroutineScope = MainScope(),
     private val rollingIntervalMs: Long = DEFAULT_ROLLING_INTERVAL_MS,
 ) : RecordingHardwareSubsystem {
 
     private var recorder: MediaRecorder? = null
 
     /**
-     * Active recording session-id, set by [allocate]. Used by the
-     * Rolling-Segment loop to call
-     * [AudioFileRepository.allocateNext]. Null when no session is
-     * active or when the caller did not supply a session-id (tests,
-     * legacy path).
+     * Active recording session-id, set by [allocate]. The OnInfoListener
+     * uses it to call [AudioFileRepository.allocateNext]. Null when
+     * no session is active or when the caller did not supply a
+     * session-id (tests, legacy path).
      */
     private var activeSessionId: String? = null
 
     /**
-     * Rolling-Segment timer job. Null when no rolling is active —
-     * either because no recording is in flight, the session-id was
-     * not supplied, or the repository was not injected.
+     * Codec params of the active recording, captured at [allocate]
+     * time. Used by the rolling info-listener to re-arm
+     * `setMaxFileSize` after each segment roll — the byte budget is
+     * `bitRate × interval` so it has to be recomputed from the params
+     * the recorder was configured with.
      */
-    private var rollingJob: Job? = null
+    private var lastCodecParams: CodecParams? = null
 
     override fun allocate(
         target: InsertionTarget,
@@ -100,6 +107,7 @@ class RecordingHardwareAdapter(
         // params read from the previous segment so the eventual
         // MediaMuxer concat does not reject heterogeneous formats.
         val params = codecParams ?: CodecParams.DEFAULT_AAC_M4A
+        lastCodecParams = params
         val mr = MediaRecorder().apply {
             setAudioSource(source)
             setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
@@ -110,6 +118,22 @@ class RecordingHardwareAdapter(
                 setAudioChannels(params.channelCount)
             }
             setOutputFile(audioFile)
+            // B1.3: Rolling-Segments via OnInfoListener callback.
+            // Android only emits an "approaching" warning for file
+            // SIZE, not duration — so we approximate the per-segment
+            // cap as bytes: bitrate / 8 × interval × headroom.
+            // The MediaRecorder fires
+            //   MEDIA_RECORDER_INFO_MAX_FILESIZE_APPROACHING (~95 %),
+            // at which point the listener calls setNextOutputFile;
+            //   MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED
+            // signals that the previous segment was finalised. The
+            // resulting cadence is close to (but not exactly)
+            // `rollingIntervalMs` — silence and quiet passages compress
+            // smaller than headroom, so segments may roll a bit later.
+            if (audioFileRepository != null && sessionId != null) {
+                setMaxFileSize(rollingMaxFileSizeBytes(params, rollingIntervalMs))
+                setOnInfoListener(rollingInfoListener)
+            }
         }
         recorder = mr
         try {
@@ -150,9 +174,7 @@ class RecordingHardwareAdapter(
                     reason = e.message ?: "start-failed",
                 )
             )
-            return
         }
-        startRollingTimerIfPossible()
     }
 
     override fun pause() {
@@ -162,10 +184,6 @@ class RecordingHardwareAdapter(
         } catch (e: IllegalStateException) {
             Log.w(TAG, "MediaRecorder.pause() failed (ignored — best-effort)", e)
         }
-        // Stop the rolling timer while paused — the MediaRecorder is
-        // not writing samples, so periodic setNextOutputFile() calls
-        // would only churn empty segments. `resume()` re-arms it.
-        cancelRollingTimer()
     }
 
     override fun resume() {
@@ -174,14 +192,11 @@ class RecordingHardwareAdapter(
             mr.resume()
         } catch (e: IllegalStateException) {
             Log.w(TAG, "MediaRecorder.resume() failed (ignored)", e)
-            return
         }
-        startRollingTimerIfPossible()
     }
 
     override fun stop() {
         val mr = recorder ?: return
-        cancelRollingTimer()
         try {
             mr.stop()
         } catch (e: RuntimeException) {
@@ -201,7 +216,6 @@ class RecordingHardwareAdapter(
     }
 
     override fun release() {
-        cancelRollingTimer()
         releaseRecorder()
     }
 
@@ -211,55 +225,85 @@ class RecordingHardwareAdapter(
         }
         recorder = null
         activeSessionId = null
+        lastCodecParams = null
     }
-
-    // ──── Rolling-Segments (L2) ─────────────────────────────────────
 
     /**
-     * Start the periodic `setNextOutputFile` loop. No-op when the
-     * adapter was constructed without an [AudioFileRepository], or
-     * when [allocate] was called without a session-id (legacy /
-     * test path). Idempotent — calling twice cancels and restarts.
+     * Approximate byte budget for one rolling segment:
+     * `bitRate × intervalSec ÷ 8 × headroom`. The 1.15 headroom
+     * accounts for AAC frame headers + MP4 container overhead so the
+     * MAX_FILESIZE_APPROACHING info fires inside the intended time
+     * window (silence and quiet passages compress smaller than peak
+     * bitrate, so segments may roll slightly later than the headline
+     * interval — that's acceptable for a durability boost).
      */
-    private fun startRollingTimerIfPossible() {
-        val repo = audioFileRepository
-        val sid = activeSessionId
-        if (repo == null || sid == null) {
-            // Rolling is opt-in: a missing dependency just means we
-            // keep the historic single-segment behaviour.
-            return
-        }
-        cancelRollingTimer()
-        rollingJob = scope.launch {
-            while (isActive) {
-                delay(rollingIntervalMs)
-                rollNextSegment(repo, sid)
+    private fun rollingMaxFileSizeBytes(
+        params: CodecParams,
+        intervalMs: Long,
+    ): Long {
+        val intervalSec = intervalMs / 1000.0
+        val bytes = (params.bitRate.toDouble() / 8.0) * intervalSec * 1.15
+        return bytes.toLong().coerceAtLeast(MIN_ROLLING_SEGMENT_BYTES)
+    }
+
+    // ──── Rolling-Segments (B1.3) ───────────────────────────────────
+
+    /**
+     * OnInfoListener wired into the MediaRecorder when both an
+     * [AudioFileRepository] and a session-id are present. Reacts to
+     * the two roll-related info codes:
+     *
+     *  - `MEDIA_RECORDER_INFO_MAX_DURATION_APPROACHING` (~800 ms
+     *    before the duration cap): allocate the next segment file
+     *    and arm it via `setNextOutputFile`. MediaRecorder rolls
+     *    on its own once the cap is hit; the previous segment is
+     *    finalised (its `moov` atom is written) so a subsequent
+     *    crash leaves a complete, readable segment behind.
+     *  - `MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED`: the
+     *    handover has completed — log only, for observability.
+     *  - `MEDIA_RECORDER_INFO_MAX_DURATION_REACHED`: re-arm the
+     *    duration cap on the new segment so rolling continues.
+     *    The cap is per-segment, not per-recording.
+     */
+    private val rollingInfoListener = MediaRecorder.OnInfoListener { mr, what, _ ->
+        when (what) {
+            MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_APPROACHING -> {
+                val repo = audioFileRepository ?: return@OnInfoListener
+                val sid = activeSessionId ?: return@OnInfoListener
+                val next = try {
+                    repo.allocateNext(sid)
+                } catch (e: IOException) {
+                    Log.w(TAG, "Rolling: allocateNext failed for $sid", e)
+                    return@OnInfoListener
+                }
+                try {
+                    mr.setNextOutputFile(next)
+                    Log.d(TAG, "Rolling: setNextOutputFile($next) armed")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Rolling: setNextOutputFile failed", e)
+                }
             }
-        }
-    }
-
-    private fun cancelRollingTimer() {
-        rollingJob?.cancel()
-        rollingJob = null
-    }
-
-    private fun rollNextSegment(repo: AudioFileRepository, sessionId: String) {
-        val mr = recorder ?: return
-        val nextFile = try {
-            repo.allocateNext(sessionId)
-        } catch (e: IOException) {
-            Log.w(TAG, "Rolling: allocateNext failed for $sessionId — keeping current segment", e)
-            return
-        }
-        try {
-            mr.setNextOutputFile(nextFile)
-        } catch (e: Exception) {
-            // setNextOutputFile throws IllegalStateException when the
-            // recorder is not currently recording (e.g. mid-pause race),
-            // and IOException on filesystem errors. Either way the
-            // current segment keeps writing — the rolling cycle is a
-            // best-effort durability boost, not a correctness invariant.
-            Log.w(TAG, "Rolling: setNextOutputFile($nextFile) failed", e)
+            MediaRecorder.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED -> {
+                Log.d(TAG, "Rolling: handover to next segment complete")
+                // Re-arm so the new segment also gets a size cap and
+                // rolling continues. setMaxFileSize is valid after
+                // start() — the recorder stays in "Recording" state
+                // after a NEXT_OUTPUT_FILE_STARTED handover.
+                val activeParams = lastCodecParams ?: return@OnInfoListener
+                try {
+                    mr.setMaxFileSize(
+                        rollingMaxFileSizeBytes(activeParams, rollingIntervalMs)
+                    )
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "Rolling: setMaxFileSize re-arm failed", e)
+                }
+            }
+            MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED -> {
+                // Best-effort logging only — if APPROACHING already
+                // armed a next file, the handover happens inside the
+                // recorder; nothing to do here.
+                Log.d(TAG, "Rolling: max file size reached (extra=$what)")
+            }
         }
     }
 
@@ -304,9 +348,16 @@ class RecordingHardwareAdapter(
          * `Pref.RollingSegmentIntervalSec.default` (30 s). The Pref
          * lookup is the caller's responsibility — the adapter receives
          * the resolved value via its constructor so unit tests can
-         * pass a smaller interval (e.g. 50 ms) without going through
-         * SharedPreferences.
+         * pass a smaller interval without going through SharedPreferences.
          */
         const val DEFAULT_ROLLING_INTERVAL_MS: Long = 30_000L
+
+        /**
+         * Floor for the per-segment byte budget. Avoids pathologically
+         * tiny caps if a future caller passes a sub-second interval —
+         * the MediaRecorder native layer rejects file-size caps that
+         * cannot fit even a single AAC frame header.
+         */
+        const val MIN_ROLLING_SEGMENT_BYTES: Long = 8_192L
     }
 }

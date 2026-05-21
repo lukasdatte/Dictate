@@ -5030,22 +5030,28 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onSmallModeToggled() {
-        // CR-DEL (Theme C-R / RR-2 + G15): the SoT for small-mode is
-        // state.layout.smallMode. The pref-write is mirrored into
-        // state.layout.smallMode by PipelinePrefMirror → state emit →
-        // the armed visibility controllers + ImeViewBackend
-        // (MotionLayout scene) render it. The legacy KSM
-        // setSmallMode unbound fallback is GONE (KeyboardStateManager
-        // deleted). The rotation animation is the IME-held
-        // EditNumbersAnimator (the legacy MainButtonsController delegate
-        // is deleted at the point-of-no-return). Pre-bind there is no
-        // state to read; default to the persisted pref (the binder
-        // arrives near-instantly and the reactive render reconciles).
-        boolean currentSmall = pipelineBinder != null
-                ? pipelineBinder.getState().getValue().getLayout().getSmallMode()
-                : DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE);
-        boolean newSmallMode = !currentSmall;
-        DictatePrefsKt.put(sp.edit(), Pref.SmallMode.INSTANCE, newSmallMode).apply();
+        // 2026-05-21 indirection-cleanup (A-1): dispatch directly to the
+        // orchestrator. The reducer flips state.layout.smallMode + clamps
+        // contentArea atomically AND emits Effect.PersistSmallMode which
+        // writes SharedPreferences. PipelinePrefMirror still mirrors
+        // *external* SP changes (settings activity) — the Effect-write
+        // round-trips through it but the duplicate state-update is
+        // absorbed by StateFlow's distinct-emission contract (no feedback
+        // loop). The 7-stage SP-roundtrip ("click → SP → mirror → state
+        // → render") collapses to 3 ("click → dispatch → reducer+effect →
+        // render").
+        //
+        // Pre-bind fallback: when pipelineBinder is null (Service not yet
+        // bound — narrow window during onCreateInputView), write SP
+        // directly so the user's choice survives. The mirror picks it up
+        // on bind. EditNumbersAnimator runs in either branch.
+        if (pipelineBinder != null) {
+            pipelineBinder.dispatch(
+                    net.devemperor.dictate.state.Action.LayoutAction.ToggleSmallMode.INSTANCE);
+        } else {
+            boolean current = DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE);
+            DictatePrefsKt.put(sp.edit(), Pref.SmallMode.INSTANCE, !current).apply();
+        }
         if (editNumbersAnimator != null) {
             editNumbersAnimator.animateSmallModeToggle(true);
         }
@@ -5053,38 +5059,16 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onSingleRowModeToggled() {
-        // Block 1 / Chunk 3 (Plan-Z. 235-241). Order:
-        //   1. flip + persist the pref
-        //   2. let the controller swap ConstraintSets + re-parent (animated
-        //      iff Pref.Animations is true)
-        //   3. play the editNumbersButton bounce as visual feedback
-        //   4. KSM.refresh() — Block-1a Quick-Win (Spec 1 §11.2.2 step 3):
-        //      the layout-mode controller's setSingleRowMode is structural
-        //      (ConstraintSet swap + re-parent) but does NOT recompute the
-        //      visibility axes owned by KeyboardStateManager. Without an
-        //      explicit refresh the action-row / input-row visibility could
-        //      lag a frame behind the pref-flip on the next state change.
-        //
-        // SmallMode-Vorrang (Plan-Z. 222-229): when SmallMode is on the
-        // entire main_buttons_cl is GONE, so step 2 is invisible; the pref
-        // still persists and takes effect as soon as SmallMode is toggled
-        // off. Same for QWERTZ ContentArea — applyVisibility() will
-        // re-call refresh() on the controller when MAIN_BUTTONS becomes
-        // active again.
-        boolean current = DictatePrefsKt.get(sp, Pref.SingleRowMode.INSTANCE);
-        boolean next = !current;
-        DictatePrefsKt.put(sp.edit(), Pref.SingleRowMode.INSTANCE, next).apply();
-        // C15 — KeyboardLayoutModeController is gone. The Pref-write above
-        // is mirrored into the orchestrator state via PipelinePrefMirror;
-        // the attached ImeViewBackend re-renders and asks MotionLayout to
-        // transition to the new scene-id. No direct controller call needed.
-        // CR-DEL (Theme C-R / G15 + RR-2): bounce animation is the
-        // IME-held EditNumbersAnimator (the legacy MainButtonsController
-        // delegate is deleted). The KSM refresh unbound fallback is GONE
-        // (KeyboardStateManager deleted) — Pref.SingleRowMode is mirrored
-        // into state.layout.singleRowMode by PipelinePrefMirror → state
-        // emit → the armed visibility controllers + ImeViewBackend
-        // (MotionLayout scene) render it reactively.
+        // 2026-05-21 indirection-cleanup (A-2): see onSmallModeToggled
+        // for the architecture. Effect.PersistSingleRowMode is emitted
+        // by the reducer arm; the legacy SP-roundtrip is retired.
+        if (pipelineBinder != null) {
+            pipelineBinder.dispatch(
+                    net.devemperor.dictate.state.Action.LayoutAction.ToggleSingleRowMode.INSTANCE);
+        } else {
+            boolean current = DictatePrefsKt.get(sp, Pref.SingleRowMode.INSTANCE);
+            DictatePrefsKt.put(sp.edit(), Pref.SingleRowMode.INSTANCE, !current).apply();
+        }
         if (editNumbersAnimator != null) {
             editNumbersAnimator.animateEditNumbersBounce();
         }

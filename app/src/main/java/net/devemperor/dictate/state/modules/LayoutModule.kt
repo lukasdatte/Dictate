@@ -7,6 +7,9 @@ package net.devemperor.dictate.state
 import android.util.Log
 import kotlin.reflect.KClass
 import net.devemperor.dictate.core.ContentArea
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.preferences.put
 
 /**
  * Owns the [LayoutState] axis — `contentArea` (MAIN_BUTTONS / QWERTZ /
@@ -39,15 +42,22 @@ import net.devemperor.dictate.core.ContentArea
  * changes are observed by the rendering side (KeyboardLayoutManager via
  * `state.collect`), not by other modules.
  *
- * **No effects.** All three booleans are Pref-mirrored via
- * `PipelinePrefMirror` (C7) — the mirror handles the SharedPreferences
- * write. LayoutModule's reducer is purely state-only.
+ * **Pref-persistence via owned Effects (2026-05-21 indirection-cleanup):**
+ * The `ToggleSmallMode` and `ToggleSingleRowMode` reducer arms emit
+ * [Effect.PersistSmallMode] / [Effect.PersistSingleRowMode] so the
+ * dispatch path is the **single source of truth**: click → dispatch →
+ * reducer → effect-write. The legacy "click writes SP, PipelinePrefMirror
+ * reflects it back" round-trip is retired (7 stages → 3). `PipelinePrefMirror`
+ * still mirrors *external* SP changes (e.g. settings activity) — the new
+ * Effect-write is a no-op for the mirror (StateFlow distinct-emit absorbs
+ * the re-applied value).
  *
  * @see net.devemperor.dictate.state.LayoutState
  * @see net.devemperor.dictate.state.Action.LayoutAction
  * @see net.devemperor.dictate.core.ContentArea
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §15.1
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.md §4.1
+ * @see docs/plans/2026-05-21 - dictate-indirection-cleanup/dictate-indirection-cleanup.md A-1
  */
 object LayoutModule : DictateModule<LayoutState, Action.LayoutAction, LayoutModule.Effect> {
 
@@ -61,11 +71,16 @@ object LayoutModule : DictateModule<LayoutState, Action.LayoutAction, LayoutModu
     override fun initialState(): LayoutState = LayoutState()
 
     /**
-     * No module-local effects — all three Pref-mirrored booleans are
-     * written back to SharedPreferences by `PipelinePrefMirror` (C7),
-     * the canonical Pref↔state mirror in Phase 1.
+     * Module-local effects for Pref persistence (2026-05-21). The toggle
+     * arms emit one of these to keep `SharedPreferences` in sync with the
+     * in-memory `LayoutState`. `PipelinePrefMirror` still listens to SP
+     * changes from external writers (settings activity) — but the click
+     * path no longer round-trips through it.
      */
-    sealed interface Effect : SideEffect
+    sealed interface Effect : SideEffect {
+        data class PersistSmallMode(val value: Boolean) : Effect
+        data class PersistSingleRowMode(val value: Boolean) : Effect
+    }
 
     override fun reduce(
         state: LayoutState,
@@ -73,10 +88,13 @@ object LayoutModule : DictateModule<LayoutState, Action.LayoutAction, LayoutModu
         ctx: ReducerContext,
     ): TransitionResult<LayoutState, Effect>? = when (action) {
 
-        Action.LayoutAction.ToggleSingleRowMode -> TransitionResult(
-            nextState = state.copy(singleRowMode = !state.singleRowMode),
-            sideEffects = emptyList(),
-        )
+        Action.LayoutAction.ToggleSingleRowMode -> {
+            val next = !state.singleRowMode
+            TransitionResult(
+                nextState = state.copy(singleRowMode = next),
+                sideEffects = listOf(Effect.PersistSingleRowMode(next)),
+            )
+        }
 
         Action.LayoutAction.ToggleSmallMode -> {
             // Atomic contract: enabling small-mode also clamps the
@@ -91,7 +109,7 @@ object LayoutModule : DictateModule<LayoutState, Action.LayoutAction, LayoutModu
                 } else {
                     state.copy(smallMode = false)
                 },
-                sideEffects = emptyList(),
+                sideEffects = listOf(Effect.PersistSmallMode(nextSmall)),
             )
         }
 
@@ -104,12 +122,12 @@ object LayoutModule : DictateModule<LayoutState, Action.LayoutAction, LayoutModu
             } else if (action.enabled) {
                 TransitionResult(
                     nextState = state.copy(smallMode = true, contentArea = ContentArea.MAIN_BUTTONS),
-                    sideEffects = emptyList(),
+                    sideEffects = listOf(Effect.PersistSmallMode(true)),
                 )
             } else {
                 TransitionResult(
                     nextState = state.copy(smallMode = false),
-                    sideEffects = emptyList(),
+                    sideEffects = listOf(Effect.PersistSmallMode(false)),
                 )
             }
         }
@@ -138,8 +156,19 @@ object LayoutModule : DictateModule<LayoutState, Action.LayoutAction, LayoutModu
             } else null
     }
 
-    override fun runEffect(effect: Effect, services: ModuleServices) {
-        // No effects — see [Effect] KDoc. Empty sealed interface.
+    override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
+        // Pref-persistence Effects (2026-05-21). `apply()` is async-disk
+        // but the in-memory SP value is visible to the next reader on the
+        // same thread. `PipelinePrefMirror.OnSharedPreferenceChangeListener`
+        // fires synchronously on the main-thread → it dispatches an
+        // `applyChange` whose `state.copy(...)` writes the same boolean we
+        // just emitted; MutableStateFlow's distinct-emission contract
+        // absorbs the no-op (no feedback-loop).
+        is Effect.PersistSmallMode ->
+            services.sharedPrefs.edit().put(Pref.SmallMode, effect.value).apply()
+
+        is Effect.PersistSingleRowMode ->
+            services.sharedPrefs.edit().put(Pref.SingleRowMode, effect.value).apply()
     }
 
     private const val TAG: String = "LayoutModule"

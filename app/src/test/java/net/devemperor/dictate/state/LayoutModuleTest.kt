@@ -190,4 +190,82 @@ class LayoutModuleTest {
     fun `initial state is default LayoutState`() {
         assertEquals(LayoutState(), module.initialState())
     }
+
+    // ─── Pref-Persist Effects (indirection-cleanup A-1/A-2, 2026-05-21) ─
+
+    @Test
+    fun `ToggleSmallMode emits PersistSmallMode with new value`() {
+        val state = LayoutState(smallMode = false)
+        val result = module.reduce(state, Action.LayoutAction.ToggleSmallMode, ctx())
+        assertEquals(
+            listOf(LayoutModule.Effect.PersistSmallMode(true)),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `ToggleSmallMode true to false emits PersistSmallMode(false)`() {
+        val state = LayoutState(smallMode = true)
+        val result = module.reduce(state, Action.LayoutAction.ToggleSmallMode, ctx())
+        assertEquals(
+            listOf(LayoutModule.Effect.PersistSmallMode(false)),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `SetSmallMode(true) emits PersistSmallMode(true)`() {
+        val state = LayoutState(smallMode = false)
+        val result = module.reduce(state, Action.LayoutAction.SetSmallMode(enabled = true), ctx())
+        assertEquals(
+            listOf(LayoutModule.Effect.PersistSmallMode(true)),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `SetSmallMode idempotent emits no effects (null result)`() {
+        // No state-change → null → no effect. Persistence guard: a stale
+        // SP write would re-trigger the mirror for no reason.
+        assertNull(
+            module.reduce(
+                LayoutState(smallMode = true),
+                Action.LayoutAction.SetSmallMode(enabled = true),
+                ctx(),
+            ),
+        )
+    }
+
+    @Test
+    fun `ToggleSingleRowMode emits PersistSingleRowMode with new value`() {
+        val state = LayoutState(singleRowMode = false)
+        val result = module.reduce(state, Action.LayoutAction.ToggleSingleRowMode, ctx())
+        assertEquals(
+            listOf(LayoutModule.Effect.PersistSingleRowMode(true)),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `ToggleSingleRowMode true to false emits PersistSingleRowMode(false)`() {
+        val state = LayoutState(singleRowMode = true)
+        val result = module.reduce(state, Action.LayoutAction.ToggleSingleRowMode, ctx())
+        assertEquals(
+            listOf(LayoutModule.Effect.PersistSingleRowMode(false)),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `SetContentArea emits no side-effects (no persist axis)`() {
+        // contentArea is not Pref-mirrored — purely transient. The arm
+        // returns an empty effects list (not a PersistContentArea effect).
+        val state = LayoutState(smallMode = false, contentArea = ContentArea.MAIN_BUTTONS)
+        val result = module.reduce(
+            state,
+            Action.LayoutAction.SetContentArea(area = ContentArea.QWERTZ),
+            ctx(),
+        )
+        assertEquals(emptyList<LayoutModule.Effect>(), result!!.sideEffects)
+    }
 }

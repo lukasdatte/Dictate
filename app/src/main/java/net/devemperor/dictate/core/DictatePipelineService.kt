@@ -736,8 +736,25 @@ class DictatePipelineService : Service() {
                 // LocalBinder. Captured at click time so it sees the
                 // currently-registered IME lambda (or null if IME
                 // unbound, in which case the click is a no-op).
+                //
+                // Plan §8.1 R-3 mitigation (fix-wave G3): if the click
+                // lands during the pre-bind race window (overlay shown
+                // but IME hasn't called registerImeSideAffordance yet),
+                // the delegate is null and the click is dropped. Log it
+                // so a recurring "first click after boot is a no-op"
+                // user report has a breadcrumb to grep for — without
+                // this log the drop would be invisible in logcat.
                 imeSideAffordance = { id, isLongPress ->
-                    binder.delegateImeSideAffordance?.invoke(id, isLongPress)
+                    val delegate = binder.delegateImeSideAffordance
+                    if (delegate == null) {
+                        Log.w(
+                            TAG,
+                            "affordance hook unwired at click time (pre-bind race); " +
+                                "event dropped: id=$id isLongPress=$isLongPress",
+                        )
+                    } else {
+                        delegate.invoke(id, isLongPress)
+                    }
                 },
             )
         } else {

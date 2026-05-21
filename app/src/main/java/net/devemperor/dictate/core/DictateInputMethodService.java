@@ -335,6 +335,11 @@ public class DictateInputMethodService extends InputMethodService
     // view's visibility; it is (re)started in onCreateInputView once
     // the views + binder exist and stopped in onDestroyInputView.
     private View overlayPermissionInfobar;
+    // 2026-05-21 indirection-cleanup Chunk 4.1 (B-1) — visibility writer
+    // for the overlay-permission info-bar. Owns the single View mutation
+    // outside the inline observer-lambda; the OverlayOnboardingObserver
+    // feeds its `apply(pending)` instead of `setVisibility` directly.
+    private net.devemperor.dictate.state.render.overlay.OverlayPermissionInfobarRenderer overlayPermissionInfobarRenderer;
     private OverlayOnboardingObserver overlayOnboardingObserver;
 
     // 2026-05-21 indirection-cleanup Chunk 3.3 — reactive bridge for the
@@ -936,6 +941,13 @@ public class DictateInputMethodService extends InputMethodService
         // picked up by F-3's onStartInputView refresh() on return.
         // "Later" permanently dismisses via DismissOverlayOnboarding.
         overlayPermissionInfobar = dictateKeyboardView.findViewById(R.id.overlay_permission_infobar);
+        // 2026-05-21 indirection-cleanup Chunk 4.1 — single visibility
+        // writer for the info-bar; consumed by the OverlayOnboardingObserver
+        // callback below (replaces the inline `setVisibility` lambda).
+        overlayPermissionInfobarRenderer = overlayPermissionInfobar != null
+                ? new net.devemperor.dictate.state.render.overlay.OverlayPermissionInfobarRenderer(
+                        overlayPermissionInfobar)
+                : null;
         View overlayPermGrantBtn = dictateKeyboardView.findViewById(R.id.overlay_perm_grant_btn);
         View overlayPermDismissBtn = dictateKeyboardView.findViewById(R.id.overlay_perm_dismiss_btn);
         overlayPermGrantBtn.setOnClickListener(v -> {
@@ -1503,8 +1515,13 @@ public class DictateInputMethodService extends InputMethodService
             overlayOnboardingObserver = new OverlayOnboardingObserver(
                 pipelineBinder.getState(),
                 pending -> {
-                    if (overlayPermissionInfobar != null) {
-                        overlayPermissionInfobar.setVisibility(pending ? View.VISIBLE : View.GONE);
+                    // 2026-05-21 indirection-cleanup Chunk 4.1 — route
+                    // through the dedicated renderer (B-1: no direct View
+                    // mutation in the observer lambda; AC-6 owners-list
+                    // gets `OverlayPermissionInfobarRenderer` as the
+                    // single legitimate writer for this axis).
+                    if (overlayPermissionInfobarRenderer != null) {
+                        overlayPermissionInfobarRenderer.apply(pending);
                     }
                 });
             overlayOnboardingObserver.start();
@@ -1844,6 +1861,11 @@ public class DictateInputMethodService extends InputMethodService
         // CR-EXTRACT owners (rebuilt against the fresh tree by
         // attachDormantEditBarEmojiOwners()).
         editNumbersAnimator = null;
+        // 2026-05-21 indirection-cleanup Chunk 4.1 — the info-bar
+        // renderer holds a direct View reference too; clear symmetric
+        // with editNumbersAnimator (rebuilt by `findInflatedViews` on
+        // the next view-creation).
+        overlayPermissionInfobarRenderer = null;
     }
 
     // method is called if the user closed the keyboard

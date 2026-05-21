@@ -69,6 +69,15 @@ class FakeSessionDao : SessionDao {
     override fun findLatestByOrigin(origin: String): SessionEntity? =
         rows.values.filter { it.origin == origin }.maxByOrNull { it.createdAt }
 
+    override fun findLatestRecordingInterrupted(createdAtFloor: Long): SessionEntity? =
+        rows.values
+            .filter {
+                it.status == "RECORDING_INTERRUPTED" &&
+                    it.origin == "KEYBOARD" &&
+                    it.createdAt >= createdAtFloor
+            }
+            .maxByOrNull { it.createdAt }
+
     override fun findWithMissingDuration(): List<SessionEntity> =
         rows.values.filter { it.audioFilePath != null && it.audioDurationSeconds == 0L }
 

@@ -36,6 +36,7 @@ object EmptySessionDao : SessionDao {
     override fun deleteById(id: String) = Unit
     override fun deleteAll() = Unit
     override fun findLatestByOrigin(origin: String): SessionEntity? = null
+    override fun findLatestRecordingInterrupted(createdAtFloor: Long): SessionEntity? = null
     override fun findWithMissingDuration(): List<SessionEntity> = emptyList()
     override fun updateStatus(id: String, status: String) = Unit
     override fun updateError(id: String, type: String?, message: String?) = Unit

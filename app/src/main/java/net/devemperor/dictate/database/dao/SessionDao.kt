@@ -49,6 +49,31 @@ interface SessionDao {
     fun findLatestByOrigin(origin: String): SessionEntity?
 
     /**
+     * Returns the most recent `RECORDING_INTERRUPTED` session whose
+     * `created_at` is at least [createdAtFloor] (i.e. fresh enough to
+     * be auto-continued). Used by [net.devemperor.dictate.state.layout.ActionResolvers]
+     * to decide whether the next Record-click should reuse a
+     * crash-interrupted session-id (B2 / ADR-0008 §"Auto-Continuation").
+     *
+     * Filter is `origin = KEYBOARD` only — only IME-driven recordings
+     * are eligible for continuation; history-reprocess and
+     * post-processing sessions are out of scope.
+     *
+     * Returns null when no fresh interrupted session exists.
+     */
+    @Query(
+        """
+        SELECT * FROM sessions
+        WHERE status = 'RECORDING_INTERRUPTED'
+          AND origin = 'KEYBOARD'
+          AND created_at >= :createdAtFloor
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    )
+    fun findLatestRecordingInterrupted(createdAtFloor: Long): SessionEntity?
+
+    /**
      * Returns all sessions whose audio file exists on disk but whose duration
      * field is still 0. Used by [net.devemperor.dictate.database.DurationHealingJob].
      *

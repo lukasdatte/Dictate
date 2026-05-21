@@ -68,6 +68,27 @@ class SessionTracker(
     }
 
     /**
+     * Returns the most recent `RECORDING_INTERRUPTED` session whose
+     * `created_at` is at least `now - freshnessMs` — i.e. fresh enough
+     * to be eligible for auto-continuation (B2 / ADR-0008).
+     *
+     * Synchronous DB read; no RAM cache (the candidate is volatile —
+     * the next [PipelineRecovery] pass promotes stale rows to FAILED
+     * and the user's next Record-click either accepts the candidate
+     * or starts fresh, so caching would only race the cleanup).
+     *
+     * @param freshnessMs window in milliseconds; rows older than
+     *   `now - freshnessMs` are filtered out.
+     * @param nowMs current clock (default `System.currentTimeMillis`)
+     *   — injected for tests.
+     */
+    fun findContinuationCandidate(
+        freshnessMs: Long,
+        nowMs: Long = System.currentTimeMillis(),
+    ): SessionEntity? =
+        sessionDao.findLatestRecordingInterrupted(nowMs - freshnessMs)
+
+    /**
      * Called by the pipeline after a new keyboard session finishes.
      * Updates the RAM cache — the DB was already written by the pipeline.
      */

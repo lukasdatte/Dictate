@@ -204,4 +204,5 @@ internal fun SessionEntity.toPendingSession(): PendingSession = PendingSession(
     status = statusEnum,
     transcribedText = finalOutputText,
     createdAt = createdAt,
+    lastErrorMessage = lastErrorMessage,
 )

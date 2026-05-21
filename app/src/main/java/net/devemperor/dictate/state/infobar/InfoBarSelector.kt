@@ -80,21 +80,77 @@ object InfoBarSelector {
         // AcceptAndInsert → IME service side-channel calls commitText;
         // Dismiss = plain Dismiss → session leaves the list with
         // `inserted_at` stamped, the result text is forfeited.
+        //
+        // B4 (ADR-0008) — Text-preview: the info-bar message now carries
+        // the first ~60 chars of the transcribed text so the user can
+        // judge what they're about to paste. Uses `dictate_pending_insert_msg_preview`
+        // (with %1$s placeholder) when transcribedText is non-empty;
+        // falls back to the legacy generic message when the text is
+        // null or empty (defensive — should not happen for COMPLETED
+        // status but the filter above only guarantees non-null).
         state.pendingSessions
             .filter { it.status == SessionStatus.COMPLETED && it.transcribedText != null }
             .forEach { session ->
+                val text = session.transcribedText
+                val preview = text?.trim()?.takeIf { it.isNotEmpty() }
+                val message = if (preview != null) {
+                    InfoBarMessage(
+                        textResId = R.string.dictate_pending_insert_msg_preview,
+                        textArgs = listOf(buildPreview(preview)),
+                        style = InfoBarStyle.ACTION,
+                    )
+                } else {
+                    // Fallback for the (theoretically impossible)
+                    // COMPLETED-with-empty-text edge case.
+                    InfoBarMessage(
+                        textResId = R.string.dictate_pending_insert_msg,
+                        style = InfoBarStyle.ACTION,
+                    )
+                }
                 add(
                     InfoBarItem(
                         id = "pending-insert:${session.sessionId}",
                         createdAt = session.createdAt,
-                        message = InfoBarMessage(
-                            textResId = R.string.dictate_pending_insert_msg,
-                            style = InfoBarStyle.ACTION,
-                        ),
+                        message = message,
                         confirmAction = Action.PendingSessionsAction.AcceptAndInsert(session.sessionId),
                         dismissAction = Action.PendingSessionsAction.Dismiss(session.sessionId),
                     )
                 )
+            }
+
+        // ── Partial-Recovery warning (B4 / ADR-0008 §"Partial Recovery") ──
+        // The pipeline persists a marker substring "partial:<seconds>"
+        // into SessionEntity.lastErrorMessage when a multi-segment
+        // upload had to skip an unreadable segment. The producer
+        // surfaces a one-shot ERROR-style info-bar that estimates the
+        // number of lost seconds; dismissing it clears the marker by
+        // routing through the same PendingSessionsAction.Dismiss that
+        // the pending-insert path uses (the session row stays as
+        // COMPLETED; only the info-bar item leaves the list).
+        //
+        // Sort-key: same createdAt as the pending-insert item, so when
+        // both fire for the same session they cluster together. The
+        // partial-warning item has a different id so the renderer
+        // shows them as two stacked entries.
+        state.pendingSessions
+            .filter { it.status == SessionStatus.COMPLETED }
+            .forEach { session ->
+                val lostSeconds = extractPartialRecoverySeconds(session.lastErrorMessage)
+                if (lostSeconds != null) {
+                    add(
+                        InfoBarItem(
+                            id = "partial-recovery:${session.sessionId}",
+                            createdAt = session.createdAt,
+                            message = InfoBarMessage(
+                                textResId = R.string.dictate_recovery_partial_msg,
+                                textArgs = listOf(lostSeconds),
+                                style = InfoBarStyle.ERROR,
+                            ),
+                            confirmAction = null,
+                            dismissAction = Action.PendingSessionsAction.Dismiss(session.sessionId),
+                        )
+                    )
+                }
             }
 
         // ── Pending-Recording (ADR-0006, MVP) ───────────────────────────
@@ -122,4 +178,50 @@ object InfoBarSelector {
                 )
             }
     }.sortedBy { it.createdAt }
+
+    // ─── B4 helpers ────────────────────────────────────────────────────
+
+    /**
+     * Truncate [text] to the first ~60 trimmed characters with an
+     * ellipsis when truncated. Used by the pending-insert info-bar so
+     * the user sees *what* they're about to paste (ADR-0008
+     * §"Pending-Insert text preview", plan §4 B4).
+     *
+     * The 60-char limit matches the user-stated preference
+     * ("Dieser beginnt mit den folgenden Buchstaben: …"); slightly
+     * shorter or longer is fine — the info-bar layout has the room
+     * for one line of body text, and the ellipsis signals truncation
+     * unambiguously. Newlines inside the text are replaced by a
+     * single space so the preview stays on a single visual line.
+     */
+    internal fun buildPreview(text: String): String {
+        val flattened = text.replace(Regex("\\s+"), " ").trim()
+        return if (flattened.length <= PREVIEW_LIMIT) {
+            flattened
+        } else {
+            flattened.substring(0, PREVIEW_LIMIT).trimEnd() + "…"
+        }
+    }
+
+    /**
+     * Parse the "partial:<seconds>" marker substring out of a
+     * `SessionEntity.lastErrorMessage` value (B4 / ADR-0008
+     * §"Partial Recovery"). Returns the seconds count or `null` when
+     * the marker is absent or malformed. Tolerant of leading /
+     * trailing context so the pipeline can append the marker to an
+     * existing error message without losing parseability:
+     *
+     *     "partial:7"            → 7
+     *     "partial:7s"           → 7   (s suffix tolerated)
+     *     "concat warning - partial:12 segments=3" → 12
+     *     null / "" / "ok"        → null
+     */
+    internal fun extractPartialRecoverySeconds(lastErrorMessage: String?): Int? {
+        if (lastErrorMessage.isNullOrEmpty()) return null
+        val match = PARTIAL_MARKER_REGEX.find(lastErrorMessage) ?: return null
+        return match.groupValues[1].toIntOrNull()
+    }
+
+    private const val PREVIEW_LIMIT = 60
+    private val PARTIAL_MARKER_REGEX = Regex("""partial:(\d+)""")
 }

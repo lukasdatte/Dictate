@@ -744,4 +744,12 @@ data class PendingSession(
     val status: net.devemperor.dictate.database.entity.SessionStatus,
     val transcribedText: String?,
     val createdAt: Long,
+    /**
+     * The `last_error_message` column from `SessionEntity`. The
+     * Partial-Recovery info-bar producer (B4) inspects this for the
+     * marker substring "partial:<seconds>" persisted by the pipeline
+     * when `PipelineAudioResult.PartialRecovery` reaches the upload
+     * stage (segments were unreadable, some audio was lost).
+     */
+    val lastErrorMessage: String? = null,
 )

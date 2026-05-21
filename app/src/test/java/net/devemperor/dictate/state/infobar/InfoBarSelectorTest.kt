@@ -212,4 +212,170 @@ class InfoBarSelectorTest {
             items.map { it.id },
         )
     }
+
+    // ── B4: Pending-Insert text preview ────────────────────────────────
+
+    @Test
+    fun `B4 pending-insert short text uses preview msg with full text as arg`() {
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "hello world",
+            createdAt = 1_000L,
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        val item = InfoBarSelector.select(state).first { it.id == "pending-insert:abc" }
+        assertEquals(
+            net.devemperor.dictate.R.string.dictate_pending_insert_msg_preview,
+            item.message.textResId,
+        )
+        assertEquals(listOf<Any>("hello world"), item.message.textArgs)
+    }
+
+    @Test
+    fun `B4 pending-insert long text truncates to 60 chars with ellipsis`() {
+        val longText = "A very long transcript that exceeds the sixty character preview limit by several extra words"
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = longText,
+            createdAt = 1_000L,
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        val item = InfoBarSelector.select(state).first { it.id == "pending-insert:abc" }
+        val preview = item.message.textArgs.first() as String
+        assertTrue(
+            "Preview must end with ellipsis when truncated: was '$preview'",
+            preview.endsWith("…"),
+        )
+        assertTrue(
+            "Preview length (incl. ellipsis) must be ≤ 61: was ${preview.length}",
+            preview.length <= 61,
+        )
+    }
+
+    @Test
+    fun `B4 pending-insert empty trimmed text falls back to generic msg`() {
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "   \n   ",
+            createdAt = 1_000L,
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        val item = InfoBarSelector.select(state).first { it.id == "pending-insert:abc" }
+        assertEquals(
+            "All-whitespace transcribedText falls back to the legacy generic message",
+            net.devemperor.dictate.R.string.dictate_pending_insert_msg,
+            item.message.textResId,
+        )
+        assertTrue(item.message.textArgs.isEmpty())
+    }
+
+    @Test
+    fun `B4 pending-insert preview replaces newlines with single spaces`() {
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "first line\n\n  second line",
+            createdAt = 1_000L,
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        val item = InfoBarSelector.select(state).first { it.id == "pending-insert:abc" }
+        assertEquals(
+            listOf<Any>("first line second line"),
+            item.message.textArgs,
+        )
+    }
+
+    // ── B4: Partial-Recovery producer ──────────────────────────────────
+
+    @Test
+    fun `B4 partial-recovery surfaces ERROR item with seconds arg`() {
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "hello world",
+            createdAt = 2_000L,
+            lastErrorMessage = "partial:7",
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        val items = InfoBarSelector.select(state)
+        val partial = items.first { it.id == "partial-recovery:abc" }
+        assertEquals(
+            net.devemperor.dictate.R.string.dictate_recovery_partial_msg,
+            partial.message.textResId,
+        )
+        assertEquals(listOf<Any>(7), partial.message.textArgs)
+        assertEquals(InfoBarStyle.ERROR, partial.message.style)
+        assertNull(partial.confirmAction)
+        assertEquals(
+            Action.PendingSessionsAction.Dismiss("abc"),
+            partial.dismissAction,
+        )
+    }
+
+    @Test
+    fun `B4 partial-recovery NOT surfaced when lastErrorMessage has no marker`() {
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "hello world",
+            createdAt = 2_000L,
+            lastErrorMessage = "some other error - not a partial-marker",
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        assertTrue(
+            "lastErrorMessage without `partial:<N>` marker must NOT surface partial-recovery",
+            InfoBarSelector.select(state).none { it.id.startsWith("partial-recovery") },
+        )
+    }
+
+    @Test
+    fun `B4 partial-recovery tolerates embedded marker with surrounding context`() {
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "hello world",
+            createdAt = 2_000L,
+            lastErrorMessage = "concat warning - partial:12 segments=3",
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        val partial = InfoBarSelector.select(state).first { it.id.startsWith("partial-recovery") }
+        assertEquals(listOf<Any>(12), partial.message.textArgs)
+    }
+
+    @Test
+    fun `B4 partial-recovery and pending-insert co-exist for the same session`() {
+        // The two producers run independently; a session that has both
+        // a transcribed text AND a partial-marker generates two stacked
+        // info-bar items (one Pending-Insert, one Partial-Recovery).
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "hello",
+            createdAt = 2_000L,
+            lastErrorMessage = "partial:5",
+        )
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        val items = InfoBarSelector.select(state).map { it.id }
+        assertTrue(items.contains("pending-insert:abc"))
+        assertTrue(items.contains("partial-recovery:abc"))
+    }
 }

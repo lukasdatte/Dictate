@@ -74,7 +74,13 @@
     <string name="dictate_bad_request_msg">The API rejected the request. Please check your settings.</string>
     <!-- ADR-0006 — Info-Bar producers (Block E) -->
     <string name="dictate_pending_insert_msg">Pending text ready to insert. Tap ✓ to paste.</string>
+    <!-- B4 (ADR-0008) — pending-insert with text preview. Format: %1$s is the first
+         ~60 characters of the transcribed text, ellipsised when truncated. -->
+    <string name="dictate_pending_insert_msg_preview">Text ready: »%1$s« — tap ✓ to paste.</string>
     <string name="dictate_pending_recording_msg">Last recording not yet transcribed.</string>
+    <!-- B4 (ADR-0008) — Partial-Recovery warning. %1$d is the estimated
+         number of seconds of audio lost from unreadable segments. -->
+    <string name="dictate_recovery_partial_msg">%1$d seconds of audio were skipped while sending — some words may be missing.</string>
     <string name="dictate_okay">Okay</string>
     <string name="dictate_cancel">Cancel</string>
     <string name="dictate_settings_api_key_title">Change OpenAI API key 🔑</string>

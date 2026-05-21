@@ -5,6 +5,7 @@
 package net.devemperor.dictate.state
 
 import kotlin.reflect.KClass
+import net.devemperor.dictate.preferences.Pref
 
 /**
  * Owns the [AudioState] axis — AudioFocus, BluetoothSco, and the
@@ -111,6 +112,44 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
         data object ReleaseAudioFocus : Effect
         data object StartBluetoothSco : Effect
         data object StopBluetoothSco : Effect
+
+        /**
+         * Persist the user's audio-focus pref to `SharedPreferences`
+         * (2026-05-21 indirection-cleanup, Chunk 3.1 — A-3 Part 1).
+         *
+         * Routed through [PrefPersistenceService] so the State → SP
+         * direction is the same canonical seam every module uses. The
+         * `PipelinePrefMirror` mirror-listener re-reads the value back
+         * into the store; the resulting `current.copy(...)` is
+         * structurally identical and the `MutableStateFlow`
+         * distinct-emission contract absorbs the no-op — no feedback
+         * loop.
+         */
+        data class PersistAudioFocusPref(val value: Boolean) : Effect
+
+        /**
+         * Mid-recording audio-focus runtime apply
+         * (2026-05-21 indirection-cleanup, Chunk 3.2 — A-3 Part 2).
+         *
+         * Emitted when the user toggles `audioFocusEnabledPref` **during**
+         * an `Active` recording and the new value differs from the
+         * already-held focus state. Replaces the legacy
+         * `RecordingStateController.setAudioFocusRuntime(enabled)`
+         * imperative path — the click-handler dispatches and this
+         * module's cross-module observer translates the recording-state
+         * coupling into a Mode-1 effect.
+         *
+         * - `enabled = true`: request audio-focus (idempotent at the
+         *   `AudioManager` level — re-requesting the same focus-request
+         *   is a safe no-op).
+         * - `enabled = false`: release audio-focus (idempotent —
+         *   abandon-after-abandon is a no-op).
+         *
+         * The effect is gated to `Recording.Active` by the observer that
+         * emits it — `runEffect` itself is a pure forward to the
+         * subsystem (no state inspection inside the effect handler).
+         */
+        data class ApplyAudioFocusRuntime(val enabled: Boolean) : Effect
     }
 
     override fun reduce(
@@ -139,10 +178,35 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
             } else null
         }
 
-        Action.AudioAction.ToggleAudioFocusPref -> TransitionResult(
-            nextState = state.copy(audioFocusEnabledPref = !state.audioFocusEnabledPref),
-            sideEffects = emptyList(),
-        )
+        Action.AudioAction.ToggleAudioFocusPref -> {
+            // 2026-05-21 indirection-cleanup A-3 — replace the legacy
+            // imperative path inside `DictateInputMethodService.onAudioFocusToggled`
+            // (SP-write + setAudioFocusRuntime + refreshAudioFocusIcon-Twin)
+            // with reducer-emitted Effects. The click-handler dispatches;
+            // this arm flips the pref bit and emits:
+            //   1. PersistAudioFocusPref — `SharedPreferences.AudioFocus`
+            //      gets the new value (Chunk 3.1).
+            //   2. ApplyAudioFocusRuntime — but only when a recording is
+            //      currently Active AND the new pref state differs from
+            //      the already-held focus state, so an idle toggle does
+            //      not touch the live AudioManager. Mirrors legacy
+            //      `RecordingStateController.setAudioFocusRuntime` gating
+            //      (Chunk 3.2).
+            // The edit-bar audio-focus-icon twin renders reactively in
+            // Chunk 3.3 — no Effect from the reducer.
+            val nextPref = !state.audioFocusEnabledPref
+            val live = ctx.global.recording is RecordingState.Active
+            val effects: List<Effect> = buildList {
+                add(Effect.PersistAudioFocusPref(nextPref))
+                if (live && nextPref != state.audioFocusGranted) {
+                    add(Effect.ApplyAudioFocusRuntime(nextPref))
+                }
+            }
+            TransitionResult(
+                nextState = state.copy(audioFocusEnabledPref = nextPref),
+                sideEffects = effects,
+            )
+        }
 
         // C6-IMPL-1 / B2-C6-W1 — recording entered an audio-capturing
         // phase. The transition is the *effects*: request audio-focus
@@ -230,6 +294,21 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
         Effect.ReleaseAudioFocus -> services.audioFocus.release()
         Effect.StartBluetoothSco -> services.bluetoothSco.start()
         Effect.StopBluetoothSco -> services.bluetoothSco.stop()
+        // 2026-05-21 indirection-cleanup Chunk 3.1 — route the State → SP
+        // write through the canonical PrefPersistenceService seam. The
+        // mirror-listener will re-read the value back into the store
+        // (StateFlow distinct-emission absorbs the no-op).
+        is Effect.PersistAudioFocusPref ->
+            services.prefs.persist(Pref.AudioFocus, effect.value)
+
+        // 2026-05-21 indirection-cleanup Chunk 3.2 — mid-recording focus
+        // apply, replaces `RecordingStateController.setAudioFocusRuntime`.
+        // `request()` / `release()` are idempotent at the AudioManager
+        // layer; the reducer gates emission to the cases where the live
+        // focus state actually needs to change.
+        is Effect.ApplyAudioFocusRuntime ->
+            if (effect.enabled) services.audioFocus.request()
+            else services.audioFocus.release()
     }
 
     override fun onCrossModuleStateChange(

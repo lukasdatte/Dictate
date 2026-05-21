@@ -518,4 +518,105 @@ class AudioModuleTest {
         val back = module.write(state, sub.copy(useBluetoothMic = true))
         assertEquals(true, back.audio.useBluetoothMic)
     }
+
+    // ─── Pref-Persist + Runtime-Apply Effects (indirection-cleanup Chunk 3.1 + 3.2) ─
+
+    @Test
+    fun `ToggleAudioFocusPref emits PersistAudioFocusPref with new value when idle`() {
+        // Idle path: no live recording → no ApplyAudioFocusRuntime, just
+        // the persist Effect. Mirrors the A-3 click path before the user
+        // ever starts a recording.
+        val state = AudioState(audioFocusEnabledPref = true, audioFocusGranted = false)
+        val result = module.reduce(state, Action.AudioAction.ToggleAudioFocusPref, ctx())
+        assertEquals(
+            listOf<AudioModule.Effect>(AudioModule.Effect.PersistAudioFocusPref(false)),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `ToggleAudioFocusPref false to true emits PersistAudioFocusPref(true)`() {
+        val state = AudioState(audioFocusEnabledPref = false)
+        val result = module.reduce(state, Action.AudioAction.ToggleAudioFocusPref, ctx())
+        assertEquals(
+            listOf<AudioModule.Effect>(AudioModule.Effect.PersistAudioFocusPref(true)),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `ToggleAudioFocusPref during Active recording emits Persist + ApplyAudioFocusRuntime`() {
+        // Active path: live focus needs to follow the pref flip too.
+        // Pref was true (focus held), now turning off → release focus.
+        val state = AudioState(audioFocusEnabledPref = true, audioFocusGranted = true)
+        val ctxActive = ReducerContext(
+            global = DictateUiState.initial().copy(
+                audio = state,
+                recording = RecordingState.Active(
+                    useBluetooth = false,
+                    audioFile = testFile,
+                    sessionId = "sid-toggle",
+                ),
+            ),
+        )
+        val result = module.reduce(state, Action.AudioAction.ToggleAudioFocusPref, ctxActive)
+        assertEquals(
+            listOf<AudioModule.Effect>(
+                AudioModule.Effect.PersistAudioFocusPref(false),
+                AudioModule.Effect.ApplyAudioFocusRuntime(false),
+            ),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `ToggleAudioFocusPref Active but focus already matches new value emits only Persist`() {
+        // Defensive: if the pref turns on but focus is already granted
+        // (pref-off but focus-granted because some external code held
+        // it), don't re-request — the AudioManager.request() is
+        // idempotent so the gate is more about avoiding spurious system
+        // calls than correctness. Same idea on the off direction:
+        // already-released stays released.
+        val state = AudioState(audioFocusEnabledPref = false, audioFocusGranted = true)
+        val ctxActive = ReducerContext(
+            global = DictateUiState.initial().copy(
+                audio = state,
+                recording = RecordingState.Active(
+                    useBluetooth = false,
+                    audioFile = testFile,
+                    sessionId = "sid-match",
+                ),
+            ),
+        )
+        val result = module.reduce(state, Action.AudioAction.ToggleAudioFocusPref, ctxActive)
+        // nextPref = true, audioFocusGranted = true → no runtime apply
+        assertEquals(
+            listOf<AudioModule.Effect>(AudioModule.Effect.PersistAudioFocusPref(true)),
+            result!!.sideEffects,
+        )
+    }
+
+    @Test
+    fun `ToggleAudioFocusPref during Paused recording skips runtime apply`() {
+        // Paused is not Active — legacy `setAudioFocusRuntime` only
+        // mutated the AudioManager when `state is Active`. Mirror that
+        // exactly: in Paused, the flag flips but the live state is left
+        // alone until resume.
+        val state = AudioState(audioFocusEnabledPref = true, audioFocusGranted = false)
+        val ctxPaused = ReducerContext(
+            global = DictateUiState.initial().copy(
+                audio = state,
+                recording = RecordingState.Paused(
+                    useBluetooth = false,
+                    audioFile = testFile,
+                    sessionId = "sid-paused",
+                ),
+            ),
+        )
+        val result = module.reduce(state, Action.AudioAction.ToggleAudioFocusPref, ctxPaused)
+        assertEquals(
+            listOf<AudioModule.Effect>(AudioModule.Effect.PersistAudioFocusPref(false)),
+            result!!.sideEffects,
+        )
+    }
 }

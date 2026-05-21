@@ -77,13 +77,23 @@ class RecordingModuleTest {
         assertEquals(true, next.awaitingSco)
         assertEquals(InsertionTarget.INPUT_CONNECTION, next.target)
         // No AllocateMediaRecorder yet — it fires on ScoRouteResolved.
-        assertTrue(result.sideEffects.isEmpty())
+        // PersistLastFileName (Chunk 4.4) IS emitted here — the file is
+        // allocated up-front; SCO-wait does not gate the RESEND-recovery
+        // persist (legacy behaviour: SP write happened immediately on
+        // user-click, well before SCO completed).
+        assertEquals(
+            listOf<RecordingModule.Effect>(
+                RecordingModule.Effect.PersistLastFileName(testFile.name),
+            ),
+            result.sideEffects,
+        )
     }
 
     @Test
     fun `StartRecording from Idle (non-BT) allocates immediately, no SCO wait`() {
-        // Non-BT path unchanged: immediate AllocateMediaRecorder(MIC),
-        // awaitingSco=false, target consumed by the synchronous effect.
+        // Non-BT path: immediate AllocateMediaRecorder(MIC) +
+        // PersistLastFileName (Chunk 4.4), awaitingSco=false, target
+        // consumed by the synchronous effect.
         val global = DictateUiState.initial()
             .copy(audio = AudioState(useBluetoothMic = false))
         val result = module.reduce(
@@ -102,10 +112,18 @@ class RecordingModuleTest {
         assertEquals("sid-start-42", next.sessionId)
         assertEquals(false, next.awaitingSco)
         assertNull(next.target)
-        val effect = result.sideEffects.single() as RecordingModule.Effect.AllocateMediaRecorder
-        assertEquals(InsertionTarget.INPUT_CONNECTION, effect.target)
-        assertEquals(false, effect.useBluetooth)
-        assertEquals(testFile, effect.audioFile)
+        // Effects order matters: AllocateMediaRecorder first (hardware
+        // allocation gates the FSM), PersistLastFileName second
+        // (best-effort SP persist for RESEND-recovery).
+        assertEquals(2, result.sideEffects.size)
+        val alloc = result.sideEffects[0] as RecordingModule.Effect.AllocateMediaRecorder
+        assertEquals(InsertionTarget.INPUT_CONNECTION, alloc.target)
+        assertEquals(false, alloc.useBluetooth)
+        assertEquals(testFile, alloc.audioFile)
+        assertEquals(
+            RecordingModule.Effect.PersistLastFileName(testFile.name),
+            result.sideEffects[1],
+        )
     }
 
     @Test
@@ -708,5 +726,42 @@ class RecordingModuleTest {
     @Test
     fun `initial state is Idle`() {
         assertEquals(RecordingState.Idle, module.initialState())
+    }
+
+    // ─── OnAudioFileImported (Chunk 4.4 — A-5) ───────────────────────────
+
+    @Test
+    fun `OnAudioFileImported from Idle emits PersistImportedAudioFileName`() {
+        val importedFile = java.io.File("/cache/audio/imported-clip.m4a")
+        val result = module.reduce(
+            state = RecordingState.Idle,
+            action = Action.RecordingAction.OnAudioFileImported(importedFile),
+            ctx = ctx(),
+        )
+        assertNotNull(result)
+        // No FSM transition — the import bypasses StartRecording.
+        assertEquals(RecordingState.Idle, result!!.nextState)
+        assertEquals(
+            listOf<RecordingModule.Effect>(
+                RecordingModule.Effect.PersistImportedAudioFileName("imported-clip.m4a"),
+            ),
+            result.sideEffects,
+        )
+    }
+
+    @Test
+    fun `OnAudioFileImported from Active is rejected (FSM not Idle)`() {
+        // Defensive: the import path runs in `onStartInputView`, which
+        // only triggers when no recording is in flight. A stray dispatch
+        // during Active is a programmer error — the reducer rejects it
+        // (returns null → Rejected("reducer-null"), the documented
+        // F1/Pure-Reducer semantic for "action not meaningful in this
+        // state").
+        val result = module.reduce(
+            state = RecordingState.Active(false, testFile, sessionId = "sid"),
+            action = Action.RecordingAction.OnAudioFileImported(java.io.File("/tmp/x.m4a")),
+            ctx = ctx(),
+        )
+        assertNull(result)
     }
 }

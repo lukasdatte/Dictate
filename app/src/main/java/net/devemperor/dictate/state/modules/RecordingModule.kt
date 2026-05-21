@@ -7,6 +7,7 @@ package net.devemperor.dictate.state
 
 import java.io.File
 import kotlin.reflect.KClass
+import net.devemperor.dictate.preferences.Pref
 
 /**
  * Owns the [RecordingState] FSM (Idle / Preparing / Active / Paused) and
@@ -119,6 +120,40 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
 
         /** Best-effort delete of an audio file (cancel / failure cleanup). */
         data class DeleteAudioFile(val file: File) : Effect
+
+        /**
+         * Persist the just-allocated audio-file name to
+         * `Pref.LastFileName` for the RESEND-recovery flow
+         * (indirection-cleanup 2026-05-21, Chunk 4.4 — A-4 / A-5).
+         *
+         * Emitted on the `Idle → Preparing` reducer arm (both BT and
+         * non-BT branches) and on the imported-audio-file path.
+         * Reads `Pref.LastFileName` (consumed by
+         * `KeyboardVisibilityPredicates.resolveResendVisibility` to
+         * decide whether the RESEND button is shown — the file's
+         * presence in `cacheDir/audio/` is the RESEND eligibility
+         * predicate).
+         *
+         * **Why a separate effect (not a generic `PersistPref<String>`):**
+         * the same effect arm also handles the imported-audio-file
+         * variant which needs to clear `Pref.TranscriptionAudioFile`
+         * atomically. Bundling both writes into the effect keeps the
+         * atomic-pair semantic local to one handler (vs. emitting two
+         * `PersistPref` effects whose ordering would have to be
+         * preserved by the orchestrator).
+         */
+        data class PersistLastFileName(val fileName: String) : Effect
+
+        /**
+         * Atomic pair: persist `Pref.LastFileName` AND clear
+         * `Pref.TranscriptionAudioFile` (indirection-cleanup 2026-05-21,
+         * Chunk 4.4 — A-5 import-audio-file branch). The Settings
+         * Activity writes the imported audio file to
+         * `Pref.TranscriptionAudioFile`; on the next keyboard view the
+         * IME picks it up, threads it through the orchestrator, and
+         * MUST clear the SP slot so the import does not loop.
+         */
+        data class PersistImportedAudioFileName(val fileName: String) : Effect
 
         /**
          * Start the recording-timer.
@@ -265,7 +300,13 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                         // ScoRouteResolved. AudioModule's RecordingStarted
                         // cascade emits Effect.StartBluetoothSco +
                         // Effect.RequestAudioFocus.
-                        sideEffects = emptyList(),
+                        // 2026-05-21 indirection-cleanup Chunk 4.4 (A-4)
+                        // — RESEND-recovery file-name persist also on
+                        // the BT branch (the file is allocated up-front;
+                        // SCO-wait does not gate persistence).
+                        sideEffects = listOf(
+                            Effect.PersistLastFileName(action.audioFile.name),
+                        ),
                     )
                 } else {
                     // Non-BT path — unchanged: allocate immediately
@@ -288,10 +329,31 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                                 useBluetooth = false,
                                 audioFile = action.audioFile,
                             ),
+                            // 2026-05-21 indirection-cleanup Chunk 4.4
+                            // (A-4) — RESEND-recovery file-name persist.
+                            Effect.PersistLastFileName(action.audioFile.name),
                         ),
                     )
                 }
             }
+
+            is Action.RecordingAction.OnAudioFileImported -> {
+                // 2026-05-21 indirection-cleanup Chunk 4.4 (A-5) —
+                // Audio-file import path: persist the file name for
+                // RESEND-recovery and clear the transient
+                // TranscriptionAudioFile slot. No FSM transition — the
+                // import is a one-shot SP-write pair that hands the file
+                // off to the pipeline directly (the IME service then
+                // dispatches `PipelineAction.TriggerPipeline` for the
+                // import).
+                TransitionResult(
+                    nextState = state,
+                    sideEffects = listOf(
+                        Effect.PersistImportedAudioFileName(action.audioFile.name),
+                    ),
+                )
+            }
+
             // F1 / ADR-0001 §"Pure-Reducer Invariant": other actions are
             // not meaningful when no recording is in flight (e.g. user
             // tapping Stop while Idle). Returning `null` becomes
@@ -592,6 +654,29 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
         // EffectFailure that cascade-cancels an active recording.
         is Effect.UpdateNotification -> services.notificationCoordinator.show(effect.status)
         Effect.DismissNotification -> services.notificationCoordinator.dismiss()
+        // 2026-05-21 indirection-cleanup Chunk 4.4 (A-4 / A-5) —
+        // route the RESEND-recovery file-name persist through the
+        // canonical PrefPersistenceService seam.
+        is Effect.PersistLastFileName ->
+            services.prefs.persist(Pref.LastFileName, effect.fileName)
+
+        is Effect.PersistImportedAudioFileName -> {
+            // Atomic pair: persist LastFileName + clear
+            // TranscriptionAudioFile. Both writes go through the same
+            // SharedPreferences instance via the persistence service so
+            // the mirror-listener fires for each in turn; the
+            // distinct-emission contract on the resulting state copies
+            // is irrelevant here (TranscriptionAudioFile is NOT in the
+            // PipelinePrefMirror mirror — purely IME-side persistence).
+            services.prefs.persist(Pref.LastFileName, effect.fileName)
+            // `TranscriptionAudioFile`'s default is `""`; persisting
+            // the empty string is the canonical "cleared" representation
+            // (consumer `onStartInputView` does `getString(...).isEmpty()`
+            // — both `apply().remove(...)` and `apply().putString(...,"")`
+            // produce the same observable state on the next read).
+            services.prefs.persist(Pref.TranscriptionAudioFile, "")
+            Unit
+        }
     }
 
     /**

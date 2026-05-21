@@ -3025,9 +3025,20 @@ public class DictateInputMethodService extends InputMethodService
             // for an import, so it is not sourced from RecordingState. It
             // is threaded explicitly into the transcribe entry-point.
             File importedAudio = new File(new File(getCacheDir(), "audio"), DictatePrefsKt.get(sp, Pref.TranscriptionAudioFile.INSTANCE));
-            DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, importedAudio.getName()).apply();
-
-            sp.edit().remove(Pref.TranscriptionAudioFile.INSTANCE.getKey()).apply();
+            // 2026-05-21 indirection-cleanup Chunk 4.4 (A-5) — dispatch
+            // the import-recognized action; the RecordingModule reducer
+            // emits the atomic LastFileName-persist + TranscriptionAudioFile-clear
+            // effect pair through the canonical PrefPersistenceService
+            // seam. Pre-bind fallback writes SP inline so the import
+            // file-name is not lost if the binder is unavailable in
+            // this narrow window.
+            if (pipelineBinder != null) {
+                pipelineBinder.dispatch(
+                        new net.devemperor.dictate.state.Action.RecordingAction.OnAudioFileImported(importedAudio));
+            } else {
+                DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, importedAudio.getName()).apply();
+                sp.edit().remove(Pref.TranscriptionAudioFile.INSTANCE.getKey()).apply();
+            }
             transcribeImportedAudioFileViaOrchestrator(importedAudio);
 
         } else if (DictatePrefsKt.get(sp, Pref.InstantRecording.INSTANCE)) {
@@ -3432,7 +3443,10 @@ public class DictateInputMethodService extends InputMethodService
             return;
         }
 
-        DictatePrefsKt.put(sp.edit(), Pref.LastFileName.INSTANCE, audioFile.getName()).apply();
+        // 2026-05-21 indirection-cleanup Chunk 4.4 (A-4) — `Pref.LastFileName`
+        // is persisted by `RecordingModule.Effect.PersistLastFileName`
+        // emitted from the `StartRecording` reducer arm (both BT and
+        // non-BT branches). No inline SP write here.
 
         // The orchestrator's RecordingModule drives the real
         // RecordingHardwareAdapter MediaRecorder (AC-2). The pre-allocated

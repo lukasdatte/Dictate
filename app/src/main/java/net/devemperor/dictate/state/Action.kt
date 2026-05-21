@@ -134,6 +134,28 @@ sealed class Action {
         data object CancelRecording : RecordingAction()
 
         /**
+         * Audio-file import path
+         * (indirection-cleanup 2026-05-21, Chunk 4.4 — A-5).
+         *
+         * The Settings Activity writes a user-picked audio file path to
+         * `Pref.TranscriptionAudioFile`; on the next `onStartInputView`
+         * the IME picks it up, dispatches this action, and the
+         * RecordingModule's `Idle`-arm reducer emits
+         * `Effect.PersistImportedAudioFileName(file.name)` — atomic
+         * pair of writes to `Pref.LastFileName` (RESEND-recovery) +
+         * `Pref.TranscriptionAudioFile` cleared (so the import does
+         * not loop).
+         *
+         * **Why a distinct action (not piggyback on `TriggerPipeline`):**
+         * the import bypasses `StartRecording` entirely (no FSM
+         * Preparing → Active transition); the file is handed directly
+         * to the pipeline. The persist + clear pair is the only state
+         * mutation on the import path, so a dedicated action keeps it
+         * dispatch-symmetric with `StartRecording`'s persist effect.
+         */
+        data class OnAudioFileImported(val audioFile: File) : RecordingAction()
+
+        /**
          * RECORD-button **long-press** — the 2-mode handler ported from
          * the legacy `MainButtonsController.onRecordLongClicked`
          * (`DictateInputMethodService.java:3257-3268`, behaviour group G2,

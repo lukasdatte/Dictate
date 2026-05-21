@@ -65,6 +65,16 @@ Alle vorab durch User-Review (§9.0) entschieden — Implementer startet ohne we
 - **Warum:** `Handler.postDelayed` / `removeCallbacks` sind `final` → Kotlin/Java-Tests können sie nicht überschreiben. K-4 (kein Android in Unit-Tests). Das Pattern existiert bereits (`PauseTimeoutScheduler`) — analoge Abstraktion ist DRY-konsistent. Trade-off: 12 Zeilen mehr Code für volle JVM-Test-Determinismus.
 - **Plan-Intention erhalten:** Ja (1 s Ticker durch Reducer; sauber JVM-testbar wie der Plan §5.8 verlangt).
 
+**D-6 — Fix-Wave G2 (B-C, BackspaceLongPressIntegrationTest)**
+- **Plan-Text §7.1 AC-C Test:** "Time-Source-Fake; assert that `currentDeleteDelay` flips from 50→25→10→5 ms at the 1.5/3/5-s checkpoints."
+- **Was getan:** Option C aus dem Fix-Wave-Brief — die threshold-basierte Speed-Curve aus `onBackspaceLongClicked()` in einen pure-Kotlin Helper `BackspaceDeleteSpeedCurve` extrahiert. Der Helper kapselt `(elapsedMs, currentDelayMs) -> StepTransition(nextDelayMs, advanced)`. Der IME-Handler-Loop ruft den Helper auf, das `vibrate()` ist gegen `step.advanced` gegated. Der neue Test pinnt die Curve direkt (7 Test-Cases): die drei Checkpoint-Transitions, Monotonie, Constants-Match-Legacy, One-Shot-Guards.
+- **Warum:** Time-Source-Fake gegen den echten `Handler.postDelayed` würde Robolectric (`ShadowLooper.idleMainLooper(...)`) erfordern — ein neuer Robolectric-Footprint für eine Curve, die in 30 Zeilen pure-Kotlin testbar ist. Die Wiring (`onBackspaceLongClicked()` wird aus dem IME-Lambda-`BACKSPACE && isLongPress`-Branch aufgerufen) ist bereits in `CutoverArchitectureInvariantTest.backspaceLongPressAffordanceWiredInImeLambda` strukturell gelocked. Die Curve-Korrektheit ist genau das, was ein Regressionstest abdecken muss ("someone simplifies the loop to a fixed 50 ms") — der Helper-Test erfüllt das ohne Loop-Mechanik-Kopplung.
+- **Plan-Intention erhalten:** Ja (50→25→10→5 ms an 1.5/3/5-s Checkpoints sind hart gepinnt; die Helper-Refaktorierung ist DRY-konsistent und behandelt den Initial-Wert via `BackspaceDeleteSpeedCurve.INITIAL_DELAY_MS` als Single Source of Truth).
+
+## Fix-Wave G3 (Plan §8.1 R-3, defensive pre-bind log)
+
+**D-7 nicht nötig** — die hinzugefügte `Log.w` im `imeSideAffordance`-Forwarder in `DictatePipelineService.onCreate()` ist genau der Mitigation-Schritt, den Plan §8.1 R-3 vorsieht ("defensive log on the OverlayBackend forwarder when delegateImeSideAffordance == null at click time"). Implementierung: 3 Zeilen, Tag = `DictatePipelineSvc` (existierender TAG-Konstante), Message zitiert ID + isLongPress für Logcat-Grep. Kein Test (purely defensive — keine Verhaltensaxe).
+
 ## Open issues / postponed
 
 - **broader `recordingStateController.getState()` removal**: §5.7-Whitelist-Lock + Source-side Migration aller Pre-Bind-Reads bleibt für Folge-Plan `dictate-recording-state-controller-removal` (OQ-3). Klasse ist `@Deprecated` markiert; im DictateInputMethodService bleiben ~8 Pre-Bind-Reads aktiv.

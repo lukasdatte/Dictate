@@ -2795,17 +2795,15 @@ public class DictateInputMethodService extends InputMethodService
             // for the record-button label (RECORD textResolver owns it
             // on the bound path).
             if (pipelineBinder == null) {
-                // Phase 5.B (Vol 2): the legacy resolveResendVisibility
-                // predicate still consumes the deprecated
-                // `core.PipelineUiState` (Phase 6 deletes the predicate +
-                // its sealed class). Qualify the Idle.INSTANCE reference
-                // explicitly so the IME-Java side no longer relies on a
-                // same-package bare-name resolution.
+                // Phase 6 of dictate-render-cutover-completion-vol2 — the
+                // resolveResendVisibility predicate now reads the
+                // orchestrator's `state.PipelineUiState.Idle.INSTANCE`,
+                // not the deleted `core.PipelineUiState` sealed class.
                 resendButton.setVisibility(KeyboardVisibilityPredicates.resolveResendVisibility(
                         new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists(),
                         DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE),
                         RecordingState.Idle.INSTANCE,
-                        net.devemperor.dictate.core.PipelineUiState.Idle.INSTANCE));
+                        net.devemperor.dictate.state.PipelineUiState.Idle.INSTANCE));
 
                 // Phase 3 of dictate-render-cutover-completion-vol2 — the
                 // Catalog `resolveRecordButtonText` is the single writer

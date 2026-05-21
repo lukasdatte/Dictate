@@ -3,6 +3,8 @@
 package net.devemperor.dictate.core
 
 import android.view.View
+import net.devemperor.dictate.state.InsertionTarget
+import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.testutil.Quadruple
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -120,8 +122,8 @@ class KeyboardVisibilityPredicatesTest {
                 lastAudioFileExists = true,
                 resendEnabled = true,
                 recordingState = RecordingState.Idle,
-                pipelineState = PipelineUiState.Preparing
-            )
+                pipelineState = PipelineUiState.Preparing(sessionId = "test-session"),
+            ),
         )
     }
 
@@ -133,12 +135,13 @@ class KeyboardVisibilityPredicatesTest {
                 resendEnabled = true,
                 recordingState = RecordingState.Idle,
                 pipelineState = PipelineUiState.Running(
+                    sessionId = "test-session",
+                    target = InsertionTarget.INPUT_CONNECTION,
                     totalSteps = 1,
                     completedSteps = 0,
-                    currentStepName = "Transkription",
-                    autoEnterActive = false
-                )
-            )
+                    autoEnterActive = false,
+                ),
+            ),
         )
     }
 
@@ -150,12 +153,10 @@ class KeyboardVisibilityPredicatesTest {
                 resendEnabled = true,
                 recordingState = RecordingState.Idle,
                 pipelineState = PipelineUiState.ReprocessStaging(
-                    targetSessionId = "test-session",
-                    audioDurationSeconds = 12,
-                    editableQueue = emptyList(),
-                    selectedLanguage = null
-                )
-            )
+                    sessionId = "test-session",
+                    transcript = "",
+                ),
+            ),
         )
     }
 
@@ -212,8 +213,8 @@ class KeyboardVisibilityPredicatesTest {
                 lastAudioFileExists = false,
                 resendEnabled = false,
                 recordingState = RecordingState.Active(useBluetooth = false),
-                pipelineState = PipelineUiState.Preparing
-            )
+                pipelineState = PipelineUiState.Preparing(sessionId = "s"),
+            ),
         )
     }
 
@@ -257,19 +258,15 @@ class KeyboardVisibilityPredicatesTest {
     @Test
     fun `resolveResendVisibility never returns VISIBLE for any non-Idle pipeline state`() {
         val nonIdlePipelineStates: List<PipelineUiState> = listOf(
-            PipelineUiState.Preparing,
+            PipelineUiState.Preparing(sessionId = "s"),
             PipelineUiState.Running(
+                sessionId = "s",
+                target = InsertionTarget.INPUT_CONNECTION,
                 totalSteps = 2,
                 completedSteps = 1,
-                currentStepName = "Formatierung",
-                autoEnterActive = false
+                autoEnterActive = false,
             ),
-            PipelineUiState.ReprocessStaging(
-                targetSessionId = "s",
-                audioDurationSeconds = 0,
-                editableQueue = emptyList(),
-                selectedLanguage = null
-            ),
+            PipelineUiState.ReprocessStaging(sessionId = "s", transcript = ""),
         )
         for (pipelineState in nonIdlePipelineStates) {
             val result = resolveResendVisibility(
@@ -308,11 +305,12 @@ class KeyboardVisibilityPredicatesTest {
                     true, true,
                     RecordingState.Idle,
                     PipelineUiState.Running(
+                        sessionId = "s",
+                        target = InsertionTarget.INPUT_CONNECTION,
                         totalSteps = 1,
                         completedSteps = 0,
-                        currentStepName = "",
-                        autoEnterActive = false
-                    )
+                        autoEnterActive = false,
+                    ),
                 ),
             )
         for ((expectedVisible, axes) in cases) {

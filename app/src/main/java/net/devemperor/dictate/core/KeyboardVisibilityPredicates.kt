@@ -3,6 +3,7 @@
 package net.devemperor.dictate.core
 
 import android.view.View
+import net.devemperor.dictate.state.PipelineUiState
 
 /**
  * Single source of truth for the resend-button visibility predicate.

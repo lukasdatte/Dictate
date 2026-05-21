@@ -310,7 +310,13 @@ class DictateCutoverE2ETest {
     }
 
     @Test
-    fun t4_widgetThenRealRecording_drivesWidgetToHoverKeepingBackend() {
+    fun t4_widgetThenRealRecording_keepsWidgetAndBackendAcrossImeHide() {
+        // Truth-table revision 2026-05-21 (Row 3): when the user
+        // explicitly prefers the widget, IME-hide no longer drops to
+        // HOVER. WIDGET stays sticky and the overlay backend stays
+        // attached — same observable property (overlay-still-on-screen)
+        // as the pre-fix HOVER path, with the bonus that the user's
+        // widget preference is preserved across IME-hide.
         val b = boot()
         idle()
         b.dispatch(Action.ViewModeAction.ToggleViewModeWidget) // T1 → WIDGET
@@ -319,16 +325,17 @@ class DictateCutoverE2ETest {
         assertTrue(b.keyboardLayoutManager.overlayAttached())
 
         startRecordingActive(b, "e2e-t4")
-        b.dispatch(Action.ViewModeAction.OnImeViewHidden) // T4 → HOVER
+        b.dispatch(Action.ViewModeAction.OnImeViewHidden)
         idle()
 
+        // Pre-fix: HOVER. Post-fix: stays WIDGET (Row 3).
         assertEquals(
-            "T4: WIDGET + real recording + IME hidden ⇒ HOVER",
-            ViewMode.HOVER,
+            "WIDGET + recording + IME hidden ⇒ stays WIDGET (sticky)",
+            ViewMode.WIDGET,
             b.state.value.viewMode,
         )
         assertTrue(
-            "T4 must keep the OverlayBackend attached (no churn)",
+            "Overlay backend stays attached across IME-hide while widget is user-preferred",
             b.keyboardLayoutManager.overlayAttached(),
         )
     }

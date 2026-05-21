@@ -86,9 +86,23 @@ class ViewModeModuleTest {
     }
 
     @Test
-    fun `computeViewMode hidden + no pipeline yields KEYBOARD (default)`() {
+    fun `computeViewMode hidden + no widget-pref + no pipeline yields KEYBOARD (default)`() {
+        // The Row-5 catch-all. Hidden + nothing the user explicitly
+        // wanted to keep alive → KEYBOARD.
         assertEquals(
             ViewMode.KEYBOARD,
+            module.computeViewMode(imeViewVisible = false, userPrefersWidget = false, pipelineActive = false),
+        )
+    }
+
+    @Test
+    fun `computeViewMode hidden + userPrefersWidget yields WIDGET (sticky widget, Row 3)`() {
+        // 2026-05-21 — widget-pref outlives IME-hide. The user
+        // wanted the floating widget; the FSM keeps it sticky even
+        // when nothing is in flight. Prior versions silently flipped
+        // to KEYBOARD and detached the overlay.
+        assertEquals(
+            ViewMode.WIDGET,
             module.computeViewMode(imeViewVisible = false, userPrefersWidget = true, pipelineActive = false),
         )
     }
@@ -159,18 +173,50 @@ class ViewModeModuleTest {
         assertEquals(ViewMode.HOVER, result!!.nextState)
     }
 
-    // ─── T4: WIDGET → HOVER (IME hidden, pipeline active, was WIDGET) ────
+    // ─── T4 — semantic update (2026-05-21) ──────────────────────────────
+    //
+    // Pre-fix: WIDGET → HOVER on IME-hide + pipelineActive (any
+    // userPrefersWidget). Post-fix: WIDGET stays sticky whenever the
+    // user explicitly wants it (Row 3 in the revised truth-table).
+    // T4 (WIDGET → HOVER) therefore now requires userPrefersWidget=false —
+    // i.e. the user is "in WIDGET" only because of an in-flight
+    // pipeline, not because they toggled it. This is a corner case
+    // (HOVER and WIDGET-not-prefers would have to coincide); kept here
+    // so the FSM matrix is complete.
 
     @Test
-    fun `T4 WIDGET to HOVER on OnImeViewHidden + pipelineActive`() {
-        // userPrefersWidget=true is irrelevant — IME hidden + pipelineActive
-        // always lands in HOVER (Spec 3 §7.3 T4).
+    fun `T4 WIDGET to HOVER on OnImeViewHidden when not user-preferred but pipeline active`() {
+        val result = module.reduce(
+            state = ViewMode.WIDGET,
+            action = Action.ViewModeAction.OnImeViewHidden,
+            ctx = ctx(global(userPrefersWidget = false, pipelineActive = true)),
+        )
+        assertEquals(ViewMode.HOVER, result!!.nextState)
+    }
+
+    @Test
+    fun `T4-sticky WIDGET stays WIDGET on OnImeViewHidden when userPrefersWidget (Row 3)`() {
+        // The user-visible fix: widget persists across IME-hide even
+        // with no in-flight work.
+        val result = module.reduce(
+            state = ViewMode.WIDGET,
+            action = Action.ViewModeAction.OnImeViewHidden,
+            ctx = ctx(global(userPrefersWidget = true, pipelineActive = false)),
+        )
+        // No transition — Row 3 keeps WIDGET sticky.
+        assertNull("Row 3: WIDGET stays sticky across IME-hide", result)
+    }
+
+    @Test
+    fun `T4-sticky WIDGET stays WIDGET on OnImeViewHidden with userPrefersWidget AND pipeline active`() {
+        // Belt-and-suspenders: even when the pipeline is also in flight,
+        // the user's explicit widget-pref outranks the HOVER fallback.
         val result = module.reduce(
             state = ViewMode.WIDGET,
             action = Action.ViewModeAction.OnImeViewHidden,
             ctx = ctx(global(userPrefersWidget = true, pipelineActive = true)),
         )
-        assertEquals(ViewMode.HOVER, result!!.nextState)
+        assertNull("Row 3 dominates: WIDGET stays sticky", result)
     }
 
     // ─── T5: HOVER → KEYBOARD (IME shown, was-NOT-widget) ───────────────
@@ -216,16 +262,18 @@ class ViewModeModuleTest {
     }
 
     @Test
-    fun `T7 with userPrefersWidget=true still resolves to KEYBOARD (per truth-table)`() {
-        // Even with the widget-bit, no pipeline + no IME-visible (HOVER)
-        // collapses to default KEYBOARD. The widget-bit only takes effect
-        // once the IME view comes back (T6).
+    fun `T7 with userPrefersWidget=true now resolves to WIDGET (Row 3, 2026-05-21)`() {
+        // Truth-table revision 2026-05-21: when the pipeline finishes
+        // while the IME is hidden AND the user explicitly prefers the
+        // widget, the FSM now lands in WIDGET (sticky) instead of
+        // dropping to KEYBOARD. The pre-fix behaviour silently lost
+        // the user's widget preference at every pipeline-done.
         val result = module.reduce(
             state = ViewMode.HOVER,
             action = Action.ViewModeAction.OnPipelineDone,
             ctx = ctx(global(userPrefersWidget = true, pipelineActive = false)),
         )
-        assertEquals(ViewMode.KEYBOARD, result!!.nextState)
+        assertEquals(ViewMode.WIDGET, result!!.nextState)
     }
 
     // ─── No-op / direct-mutation paths ──────────────────────────────────

@@ -193,7 +193,11 @@ class DictatePipelineServiceOverlayTransitionTest {
     }
 
     @Test
-    fun `T4 WIDGET to HOVER keeps the overlay backend attached`() {
+    fun `T4-sticky WIDGET stays WIDGET on IME-hide keeping the overlay backend attached`() {
+        // 2026-05-21 truth-table Row 3: when the user explicitly
+        // prefers the widget, IME-hide no longer collapses to HOVER —
+        // WIDGET stays sticky. Overlay backend remains attached
+        // either way (HOVER and WIDGET share `viewMode != KEYBOARD`).
         val b = binder()
         idle()
         b.dispatch(Action.ViewModeAction.ToggleViewModeWidget) // T1 → WIDGET
@@ -207,12 +211,13 @@ class DictatePipelineServiceOverlayTransitionTest {
             ),
         )
         idle()
-        b.dispatch(Action.ViewModeAction.OnImeViewHidden) // T4 → HOVER
+        b.dispatch(Action.ViewModeAction.OnImeViewHidden)
         idle()
 
-        assertEquals(ViewMode.HOVER, b.state.value.viewMode)
+        // Pre-fix: HOVER. Post-fix: stays WIDGET (Row 3).
+        assertEquals(ViewMode.WIDGET, b.state.value.viewMode)
         assertTrue(
-            "T4 must keep the OverlayBackend attached (no churn)",
+            "Overlay backend remains attached across IME-hide while user prefers widget",
             b.keyboardLayoutManager.overlayAttached(),
         )
     }
@@ -307,18 +312,16 @@ class DictatePipelineServiceOverlayTransitionTest {
 
     @Test
     fun `F-1 T6 HOVER to WIDGET on OnImeViewShown when userPrefersWidget`() {
+        // Truth-table revision 2026-05-21 made Row 3 sticky: when the
+        // user prefers widget, IME-hide no longer enters HOVER. To
+        // exercise T6 the test now drives HOVER directly via
+        // SetViewMode(HOVER) (the same path the recovery / permission-
+        // cascade pipelines use) so the T6 transition can be observed.
         val b = binder()
         idle()
-        b.dispatch(Action.ViewModeAction.ToggleViewModeWidget) // → WIDGET (sets userPrefersWidget)
+        b.dispatch(Action.ViewModeAction.ToggleViewModeWidget) // → WIDGET, userPrefersWidget=true
         idle()
-        b.dispatch(
-            Action.PipelineAction.TriggerPipeline(
-                sessionId = "s1",
-                audioFile = java.io.File("/tmp/a.m4a"),
-            ),
-        )
-        idle()
-        b.dispatch(Action.ViewModeAction.OnImeViewHidden) // WIDGET → HOVER (T4)
+        b.dispatch(Action.ViewModeAction.SetViewMode(ViewMode.HOVER)) // force HOVER directly
         idle()
         assertEquals(ViewMode.HOVER, b.state.value.viewMode)
 

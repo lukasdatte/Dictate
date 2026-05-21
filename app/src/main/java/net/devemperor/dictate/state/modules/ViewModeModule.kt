@@ -17,14 +17,25 @@ import kotlin.reflect.KClass
  * TransitionResult<ViewMode, _>?`. Cross-axis reads (`overlay.hasPermission`,
  * `pipeline`, `recording`) go through [ReducerContext.global].
  *
- * **Truth-table for [computeViewMode] (Spec 3 §7.1):**
+ * **Truth-table for [computeViewMode] (Spec 3 §7.1, revised 2026-05-21):**
  *
  * | imeViewVisible | userPrefersWidget | pipelineActive | result   |
  * |----------------|-------------------|----------------|----------|
  * | true           | true              | (any)          | WIDGET   |
  * | true           | false             | (any)          | KEYBOARD |
- * | false          | (any)             | true           | HOVER    |
- * | false          | (any)             | false          | KEYBOARD |
+ * | false          | true              | (any)          | WIDGET   |
+ * | false          | false             | true           | HOVER    |
+ * | false          | false             | false          | KEYBOARD |
+ *
+ * **Row 3 — "Widget persists across IME-hide"** (added 2026-05-21):
+ * Prior versions collapsed Rows 3 + 4 into a single
+ * `!imeViewVisible && pipelineActive -> HOVER, else KEYBOARD`
+ * decision. That dropped the user's explicit widget preference
+ * whenever the IME was hidden without active recording/pipeline —
+ * `viewMode` flipped to KEYBOARD, the WIDGET→KEYBOARD cross-module
+ * cascade reset `userPrefersWidget=false`, and the overlay backend
+ * detached. The user lost the widget. The new Row 3 keeps WIDGET
+ * sticky so the widget stays visible as long as the user wants it.
  *
  * The auto-paths feed off two facts:
  * - `imeViewVisible` — derived from the dispatching action (e.g.
@@ -243,6 +254,11 @@ object ViewModeModule : DictateModule<ViewMode, Action.ViewModeAction, ViewModeM
     ): ViewMode = when {
         imeViewVisible && userPrefersWidget -> ViewMode.WIDGET
         imeViewVisible && !userPrefersWidget -> ViewMode.KEYBOARD
+        // Row 3 (added 2026-05-21): widget-pref outlives the IME-view
+        // tear-down. Keeps the floating widget sticky across app-
+        // switches that don't carry any in-flight work — the prior
+        // behaviour flipped to KEYBOARD and lost the user's pref.
+        !imeViewVisible && userPrefersWidget -> ViewMode.WIDGET
         !imeViewVisible && pipelineActive -> ViewMode.HOVER
         else -> ViewMode.KEYBOARD
     }

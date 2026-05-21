@@ -665,11 +665,48 @@ public class DictateInputMethodService extends InputMethodService
                         .build())
                 .setAcceptsDelayedFocusGain(true)
                 .setOnAudioFocusChangeListener(focusChange -> {
+                    // 2026-05-21 indirection-cleanup Chunk 3.6 (C-1) —
+                    // route AudioManager focus events through the
+                    // orchestrator instead of bypassing it with a direct
+                    // `recordingStateController.togglePause()`. The
+                    // `AudioModule.onCrossModuleStateChange` cascade
+                    // already detects `prev.audio.audioFocusGranted &&
+                    // !next.audio.audioFocusGranted && Active|Paused` →
+                    // cascades `RecordingAction.PauseRecording`. The
+                    // legacy `togglePause()` direct-call bypassed the
+                    // orchestrator entirely; now the AudioModule reducer
+                    // is the single source of truth.
+                    //
+                    // **Legacy parity contract:** the legacy code only
+                    // paused on full AUDIOFOCUS_LOSS — transient losses
+                    // (LOSS_TRANSIENT / LOSS_TRANSIENT_CAN_DUCK) were
+                    // ignored, and GAIN/etc were no-ops. We preserve
+                    // that exactly: dispatch `granted=false` only on
+                    // hard LOSS; dispatch `granted=true` on any GAIN
+                    // variant. Transient LOSS variants are deliberately
+                    // not dispatched (the AudioModule state already
+                    // reflects the prior grant state — re-dispatching
+                    // `true` would be redundant; the reducer rejects
+                    // the same value as null per its idempotency
+                    // contract).
+                    if (pipelineBinder == null) return;  // pre-bind no-op
+                    Boolean grantedOrNull;
                     if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
-                        if (recordingStateController != null
-                                && recordingStateController.getState() instanceof RecordingState.Active) {
-                            recordingStateController.togglePause();
-                        }
+                        grantedOrNull = Boolean.FALSE;
+                    } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN
+                            || focusChange == AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                            || focusChange == AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                            || focusChange == AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE) {
+                        grantedOrNull = Boolean.TRUE;
+                    } else {
+                        // LOSS_TRANSIENT / LOSS_TRANSIENT_CAN_DUCK — legacy
+                        // no-op, do not dispatch.
+                        grantedOrNull = null;
+                    }
+                    if (grantedOrNull != null) {
+                        pipelineBinder.dispatch(
+                                new net.devemperor.dictate.state.Action.AudioAction.OnAudioFocusGrantChanged(
+                                        grantedOrNull));
                     }
                 })
                 .build();

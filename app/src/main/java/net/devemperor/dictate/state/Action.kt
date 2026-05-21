@@ -121,6 +121,57 @@ sealed class Action {
         ) : RecordingAction()
 
         /**
+         * Begin a **continuation** of a crash-interrupted recording
+         * session (B2 / ADR-0008 §"Auto-Continuation").
+         *
+         * The contract mirrors [StartRecording] but with three twists
+         * fed in by [net.devemperor.dictate.state.ContinuationLookup]:
+         *
+         * - **`sessionId`** is the existing `RECORDING_INTERRUPTED`
+         *   session-id (reused — no fresh UUID). The DB row's status
+         *   transitions back to in-flight via the reducer's
+         *   `Idle → Preparing` arm just like a fresh recording, but
+         *   `audio_file_paths` retains every prior segment so the
+         *   eventual MediaMuxer concat sees the full session.
+         * - **`audioFile`** is the **next** segment file allocated by
+         *   [net.devemperor.dictate.audio.AudioFileRepository.allocateNext]
+         *   *before* this action is dispatched. The repository has
+         *   already appended its path to the session's `audio_file_paths`
+         *   column at allocate-time (R.2 — the reducer stays pure; no
+         *   DB write inside the reducer).
+         * - **`codecParams`** are the codec parameters read from the
+         *   last existing segment via
+         *   [net.devemperor.dictate.audio.AudioCodecReader.readCodecParams].
+         *   The `Effect.AllocateMediaRecorder` arm passes them to the
+         *   subsystem so the new MediaRecorder records in the same
+         *   format — heterogeneous segments would fail MediaMuxer
+         *   concat (ADR-0007 §"Failure-Modes §1", B1.2 mitigation).
+         *
+         * **User-visible distinction from [StartRecording]:** none. The
+         * user clicked Record; the FSM goes to Preparing → Active just
+         * like a fresh recording. When they hit Send, every prior
+         * segment plus the new one are concatenated and fed into the
+         * pipeline — exactly as if no crash had happened. Per the plan,
+         * Continuation is **silent** (no info-bar, no toast).
+         *
+         * **Why not piggyback on [StartRecording]?** A continuation
+         * carries non-trivial extra payload (the reused id, the
+         * read-back codec params), and the resolver path that produces
+         * it does extra IO (DB lookup, segment list, MediaExtractor
+         * read, allocateNext). Keeping the actions distinct makes
+         * reducer-tests, audit-trails, and analytics greppable; the
+         * Idle-arm body in [net.devemperor.dictate.state.RecordingModule]
+         * stays linear instead of being a 50-line `if-continuation /
+         * else-fresh` branch.
+         */
+        data class StartRecordingContinuation(
+            val target: InsertionTarget,
+            val audioFile: File,
+            val sessionId: String,
+            val codecParams: net.devemperor.dictate.audio.CodecParams,
+        ) : RecordingAction()
+
+        /**
          * Hardware callback — `MediaRecorder.prepare()` returned. Drives
          * the `Preparing → Active` transition. Carries the **actual**
          * allocated file (may differ from the requested one if the

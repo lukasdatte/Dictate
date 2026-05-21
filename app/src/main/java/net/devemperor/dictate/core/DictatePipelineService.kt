@@ -520,6 +520,17 @@ class DictatePipelineService : Service() {
             actionRouter = pipelineActionRouterImpl,
         )
 
+        // B2 / ADR-0008 §"Auto-Continuation" — ContinuationLookup composite.
+        // Reuses the service-owned SessionTracker (DB query) and the same
+        // AudioFileRepository (allocateNext + segment-list). The freshness
+        // window is read live from `Pref.ContinuationFreshnessMs` so the
+        // user can adjust the 24h default without rebinding.
+        val continuationLookup = RecordingContinuationLookup(
+            sessionTracker = sessionTrackerImpl,
+            audioFileRepository = audioFileRepository,
+            freshnessMsSupplier = { sharedPrefs.get(Pref.ContinuationFreshnessMs) },
+        )
+
         moduleServicesImpl = ModuleServices(
             recordingHardware = recordingHardware,
             bluetoothSco = bluetoothSco,
@@ -540,6 +551,7 @@ class DictatePipelineService : Service() {
             prefs = SharedPrefsPersistenceService(sharedPrefs),
             toastSink = realToastSink(applicationContext),
             audioFileFactory = audioFileFactoryImpl,
+            continuationLookup = continuationLookup,
             scope = serviceScope,
             emitAction = { action -> orchestrator.emitAction(action) },
         )

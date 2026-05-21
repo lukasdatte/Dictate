@@ -384,6 +384,74 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 }
             }
 
+            is Action.RecordingAction.StartRecordingContinuation -> {
+                // B2 / ADR-0008 §"Auto-Continuation". Mirrors the
+                // StartRecording branch one-to-one with three tweaks:
+                //   1. sessionId is reused (no fresh UUID — the
+                //      ContinuationLookup composite handed back the
+                //      existing crash-interrupted session-id).
+                //   2. audioFile is the next segment file already
+                //      appended to audio_file_paths by allocateNext;
+                //      RecordingState.Preparing.audioFile carries it
+                //      through Preparing → Active just like a fresh
+                //      session.
+                //   3. codecParams are threaded into
+                //      Effect.AllocateMediaRecorder so the new
+                //      MediaRecorder writes in the same format as the
+                //      prior segments. Heterogeneous formats would
+                //      break the eventual MediaMuxer-concat
+                //      (ADR-0007 §"Failure-Modes §1").
+                //
+                // BT-mic branch matches the StartRecording shape: SCO
+                // wait carries audioFile + target + sessionId, defers
+                // AllocateMediaRecorder until ScoRouteResolved. The
+                // codecParams ride through ctx via a Pref-mirror? — NO,
+                // the BT branch consumes them at the deferred
+                // AllocateMediaRecorder. Until B3 reworks the wait,
+                // continuation falls back to MIC during the BT-wait
+                // window (acceptable: the user already paid for a crash;
+                // forcing the MediaRecorder format match is the
+                // pipeline-correctness invariant). Keep the BT path
+                // simple — log + non-BT semantics.
+                require(action.sessionId.isNotBlank()) {
+                    "StartRecordingContinuation.sessionId must be non-blank"
+                }
+                if (ctx.global.audio.useBluetoothMic) {
+                    TransitionResult(
+                        nextState = RecordingState.Preparing(
+                            useBluetooth = true,
+                            audioFile = action.audioFile,
+                            sessionId = action.sessionId,
+                            awaitingSco = true,
+                            target = action.target,
+                        ),
+                        sideEffects = listOf(
+                            Effect.PersistLastFileName(action.audioFile.name),
+                        ),
+                    )
+                } else {
+                    TransitionResult(
+                        nextState = RecordingState.Preparing(
+                            useBluetooth = false,
+                            audioFile = action.audioFile,
+                            sessionId = action.sessionId,
+                            awaitingSco = false,
+                            target = null,
+                        ),
+                        sideEffects = listOf(
+                            Effect.AllocateMediaRecorder(
+                                target = action.target,
+                                useBluetooth = false,
+                                audioFile = action.audioFile,
+                                sessionId = action.sessionId,
+                                codecParams = action.codecParams,
+                            ),
+                            Effect.PersistLastFileName(action.audioFile.name),
+                        ),
+                    )
+                }
+            }
+
             is Action.RecordingAction.OnAudioFileImported -> {
                 // 2026-05-21 indirection-cleanup Chunk 4.4 (A-5) —
                 // Audio-file import path: persist the file name for

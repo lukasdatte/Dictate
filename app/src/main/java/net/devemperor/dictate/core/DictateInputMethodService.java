@@ -3617,6 +3617,29 @@ public class DictateInputMethodService extends InputMethodService
                     android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
+
+        // B2 / ADR-0008 §"Auto-Continuation" — before allocating a fresh
+        // recording session, ask the ContinuationLookup whether the most
+        // recent RECORDING_INTERRUPTED row is fresh enough to continue
+        // (within Pref.ContinuationFreshnessMs). A non-null result reuses
+        // the existing session-id, the next pre-allocated segment file,
+        // and the codec params read off the prior segment.
+        // See resolveRecordAction (LayoutCatalog resolver) for the
+        // symmetric Kotlin-side check — both paths use the same lookup
+        // so the behavior is byte-identical across UI surfaces.
+        net.devemperor.dictate.state.EligibleContinuation continuation =
+                pipelineBinder.getModuleServices().getContinuationLookup().lookup();
+        if (continuation != null) {
+            newPathRecordingSessionId = continuation.getSessionId();
+            pipelineBinder.dispatch(
+                    new net.devemperor.dictate.state.Action.RecordingAction.StartRecordingContinuation(
+                            net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+                            continuation.getNextSegmentFile(),
+                            continuation.getSessionId(),
+                            continuation.getCodecParams()));
+            return;
+        }
+
         // D-14 (C9-C2): the allocated file is handed to the orchestrator
         // via StartRecording and becomes RecordingState's authoritative
         // payload (Spec 1 §15.2). The IME keeps only this method-local

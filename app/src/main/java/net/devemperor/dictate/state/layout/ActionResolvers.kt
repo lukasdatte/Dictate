@@ -84,9 +84,30 @@ private fun newSessionId(): String = UUID.randomUUID().toString()
  * **IOException side-channel.** `audioFileFactory.allocate()` may fail;
  * the resolver fires a toast on `services.toastSink` and returns `null`.
  */
-fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action? =
-    when (state.recording) {
+fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action? {
+    return when (state.recording) {
         RecordingState.Idle -> {
+            // B2 / ADR-0008 §"Auto-Continuation". On every Idle Record-tap
+            // we first ask the ContinuationLookup whether the most recent
+            // session is a fresh RECORDING_INTERRUPTED row eligible for
+            // continuation. The composite (RecordingContinuationLookup)
+            // does the DB lookup, segment-list probe, MediaExtractor codec
+            // read, and allocateNext — see its KDoc for the eligibility
+            // chain. A non-null result has already mutated repository
+            // state (next segment is reserved on disk + appended to
+            // audio_file_paths). Returning the StartRecordingContinuation
+            // action skips the fresh allocate + UUID mint below — both
+            // would be wasteful and the new fresh allocate would orphan
+            // a file the user could see in cleanup logs.
+            val continuation = services.continuationLookup.lookup()
+            if (continuation != null) {
+                return Action.RecordingAction.StartRecordingContinuation(
+                    target = InsertionTarget.INPUT_CONNECTION,
+                    audioFile = continuation.nextSegmentFile,
+                    sessionId = continuation.sessionId,
+                    codecParams = continuation.codecParams,
+                )
+            }
             val file = try {
                 services.audioFileFactory.allocate()
             } catch (e: java.io.IOException) {
@@ -107,6 +128,7 @@ fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action
         is RecordingState.Paused -> Action.RecordingAction.StopRecordingAndSend
         is RecordingState.Preparing -> null
     }
+}
 
 /**
  * Record-button **long-press** resolver (behaviour group G2,

@@ -11,8 +11,10 @@ import net.devemperor.dictate.state.AudioFileFactory
 import net.devemperor.dictate.state.AudioFocusSubsystem
 import net.devemperor.dictate.state.BluetoothScoSubsystem
 import net.devemperor.dictate.state.BorderGlowSubsystem
+import net.devemperor.dictate.state.ContinuationLookup
 import net.devemperor.dictate.state.InsertionTarget
 import net.devemperor.dictate.state.ModuleServices
+import net.devemperor.dictate.state.NoopContinuationLookup
 import net.devemperor.dictate.state.NotificationStatus
 import net.devemperor.dictate.state.PendingSession
 import net.devemperor.dictate.state.PipelineNotificationCoordinatorSubsystem
@@ -65,6 +67,7 @@ fun fakeModuleServices(
     prefs: PrefPersistenceService = SharedPrefsPersistenceService(sharedPrefs),
     toastSink: ToastSink = NoopToastSink,
     audioFileFactory: AudioFileFactory = NoopAudioFileFactory,
+    continuationLookup: ContinuationLookup = NoopContinuationLookup,
 ): ModuleServices = ModuleServices(
     recordingHardware = recordingHardware,
     bluetoothSco = bluetoothSco,
@@ -81,6 +84,7 @@ fun fakeModuleServices(
     prefs = prefs,
     toastSink = toastSink,
     audioFileFactory = audioFileFactory,
+    continuationLookup = continuationLookup,
     scope = scope,
     emitAction = emitAction,
 )

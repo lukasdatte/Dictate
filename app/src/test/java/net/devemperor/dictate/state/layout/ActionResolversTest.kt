@@ -98,6 +98,73 @@ class ActionResolversTest {
     }
 
     @Test
+    fun `resolveRecordAction emits StartRecordingContinuation when lookup returns a candidate`() {
+        // B2 / ADR-0008 §"Auto-Continuation". Eligible continuation must
+        // skip the fresh allocate (would orphan a file the user could
+        // see in cleanup logs) AND the fresh UUID mint (would lose the
+        // reused session-id). The lookup's returned next-segment file
+        // and codec params must be threaded into the action verbatim.
+        val nextSegment = File("/tmp/sess_existing_seg2.m4a")
+        val codecParams = net.devemperor.dictate.audio.CodecParams(
+            sampleRate = 22050,
+            channelCount = 1,
+            bitRate = 32000,
+            mimeType = "audio/opus",
+        )
+        val factory = FixedAudioFileFactory(File("/tmp/fresh-WOULD-BE-WRONG.m4a"))
+        val lookup = StubContinuationLookup(
+            net.devemperor.dictate.state.EligibleContinuation(
+                sessionId = "existing-sid-42",
+                nextSegmentFile = nextSegment,
+                codecParams = codecParams,
+            ),
+        )
+        val services = fakeModuleServices(
+            audioFileFactory = factory,
+            continuationLookup = lookup,
+        )
+        val s = state.copy(recording = RecordingState.Idle)
+
+        val action = resolveRecordAction(s, services)
+            as? Action.RecordingAction.StartRecordingContinuation
+            ?: error("Expected StartRecordingContinuation, got ${resolveRecordAction(s, services)}")
+
+        assertEquals("existing-sid-42", action.sessionId)
+        assertEquals(nextSegment, action.audioFile)
+        assertEquals(codecParams, action.codecParams)
+        assertEquals(InsertionTarget.INPUT_CONNECTION, action.target)
+
+        // Crucial — the resolver must NOT have asked AudioFileFactory
+        // to mint a fresh path. allocateNext already handed back the
+        // correct one via the lookup.
+        assertEquals(
+            "fresh allocate() must be skipped on the continuation path " +
+                "— otherwise the orphaned file appears in cleanup logs",
+            0, factory.allocateCallCount,
+        )
+        assertEquals(1, lookup.lookupCallCount)
+    }
+
+    @Test
+    fun `resolveRecordAction falls back to StartRecording when lookup returns null`() {
+        // Negative path — no continuation candidate, no IO mutation
+        // from the lookup, standard fresh-session resolution.
+        val recordingFile = File("/tmp/dictate-test-1.m4a")
+        val factory = FixedAudioFileFactory(recordingFile)
+        val lookup = StubContinuationLookup(eligibility = null)
+        val services = fakeModuleServices(
+            audioFileFactory = factory,
+            continuationLookup = lookup,
+        )
+        val s = state.copy(recording = RecordingState.Idle)
+
+        val action = resolveRecordAction(s, services)
+        assertTrue(action is Action.RecordingAction.StartRecording)
+        assertEquals(1, lookup.lookupCallCount)
+        assertEquals(1, factory.allocateCallCount)
+    }
+
+    @Test
     fun `resolveRecordAction returns null and shows toast on IOException`() {
         val toast = RecordingToastSink()
         val services = fakeModuleServices(
@@ -724,6 +791,24 @@ private class RecordingToastSink : ToastSink {
 
     override fun show(resId: Int) {
         resourceIds.add(resId)
+    }
+}
+
+/**
+ * Hand-rolled [net.devemperor.dictate.state.ContinuationLookup] that
+ * returns a fixed [eligibility] on every call and counts invocations.
+ * Used to drive the B2 continuation-resolver branch without spinning
+ * up SessionTracker + AudioFileRepository + AudioCodecReader.
+ */
+private class StubContinuationLookup(
+    private val eligibility: net.devemperor.dictate.state.EligibleContinuation?,
+) : net.devemperor.dictate.state.ContinuationLookup {
+    var lookupCallCount: Int = 0
+        private set
+
+    override fun lookup(): net.devemperor.dictate.state.EligibleContinuation? {
+        lookupCallCount++
+        return eligibility
     }
 }
 

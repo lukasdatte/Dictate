@@ -114,6 +114,7 @@ class ModuleServices(
     val prefs: PrefPersistenceService,
     val toastSink: ToastSink,
     val audioFileFactory: AudioFileFactory,
+    val continuationLookup: ContinuationLookup,
     val scope: CoroutineScope,
     val emitAction: (Action) -> Unit,
 )

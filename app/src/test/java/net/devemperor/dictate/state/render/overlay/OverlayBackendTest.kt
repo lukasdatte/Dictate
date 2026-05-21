@@ -444,6 +444,200 @@ class OverlayBackendTest {
         )
     }
 
+    // ─── §8.3 Chunk 3.1 / 3.2 — imeSideAffordance hook ────────────────
+
+    @Test
+    fun `OVERLAY_RECORD click fires imeSideAffordance before catalog dispatch`() {
+        // The hook MUST fire on every OVERLAY_RECORD click (the IME-side
+        // implementation is self-gating). Without it, the orchestrator's
+        // async `resolveFresh` finds no R-1 JobRequest snapshot and the
+        // pipeline hangs in Preparing forever.
+        val affordanceCalls: MutableList<Pair<LogicalButtonId, Boolean>> = mutableListOf()
+        val tmpFile = File.createTempFile("overlay-affordance", ".m4a")
+        tmpFile.deleteOnExit()
+        val services = fakeModuleServices(
+            emitAction = {},
+            audioFileFactory = object : net.devemperor.dictate.state.AudioFileFactory {
+                override fun allocate(): File = tmpFile
+            },
+        )
+        val backend = OverlayBackend(
+            ctx = ctx,
+            services = services,
+            overlayWindow = window,
+            permissions = NoOverlayPermissionGate,
+            layoutParamsFactory = DefaultOverlayLayoutParamsFactory(ctx),
+            imeSideAffordance = { id, longPress -> affordanceCalls += id to longPress },
+        )
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+
+        findOverlayButton(LogicalButtonId.OVERLAY_RECORD).performClick()
+
+        assertEquals(
+            "Exactly one affordance call for the RECORD click, isLongPress=false.",
+            listOf(LogicalButtonId.OVERLAY_RECORD to false),
+            affordanceCalls,
+        )
+        // The catalog dispatch must also fire — affordance + dispatch
+        // are symmetric, not exclusive.
+        assertEquals(1, captured.size)
+        assertTrue(
+            "Expected StartRecording, got ${captured[0]}",
+            captured[0] is Action.RecordingAction.StartRecording,
+        )
+    }
+
+    @Test
+    fun `non-RECORD clicks do not fire imeSideAffordance`() {
+        // The affordance hook is RECORD-specific (the keyboard surface
+        // also fires only for RECORD/RESEND — and the overlay has no
+        // RESEND). PAUSE / TRASH / CLOSE clicks must not invoke it.
+        val affordanceCalls: MutableList<LogicalButtonId> = mutableListOf()
+        val backend = OverlayBackend(
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            overlayWindow = window,
+            permissions = NoOverlayPermissionGate,
+            layoutParamsFactory = DefaultOverlayLayoutParamsFactory(ctx),
+            imeSideAffordance = { id, _ -> affordanceCalls += id },
+        )
+        backend.attach { captured += it }
+        backend.render(
+            stateWithPermission(
+                viewMode = ViewMode.WIDGET,
+                recording = RecordingState.Active(
+                    useBluetooth = false,
+                    audioFile = File("/tmp/x.m4a"),
+                    sessionId = "sid-test",
+                ),
+            ),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        // PAUSE click — must not fire affordance.
+        findOverlayButton(LogicalButtonId.OVERLAY_PAUSE).performClick()
+        // CLOSE click — must not fire affordance.
+        findOverlayButton(LogicalButtonId.OVERLAY_CLOSE).performClick()
+        // TRASH click — must not fire affordance.
+        findOverlayButton(LogicalButtonId.OVERLAY_TRASH).performClick()
+
+        assertTrue(
+            "No affordance must fire for PAUSE/CLOSE/TRASH: $affordanceCalls",
+            affordanceCalls.isEmpty(),
+        )
+    }
+
+    // ─── §8.1 Chunks 1.3-1.4 — side-channel forwarders ────────────────
+
+    @Test
+    fun `onTimerTick is a no-op when no recording-animation factory is supplied`() {
+        // JVM tests that don't care about animations leave the factory
+        // null — the forwarder must not NPE / crash.
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(), catalog.OVERLAY_5BUTTON)
+
+        backend.onTimerTick(1234L)
+        backend.onAmplitude(0.5f)
+        backend.updateAccentColor(0xFF112233.toInt())
+        // No exception = pass. (We can't observe the no-op directly
+        // because there is no renderer to instrument.)
+    }
+
+    @Test
+    fun `side-channel forwarders deliver to the factory-built renderers`() {
+        // When a real factory is wired, onState / onTimerTick / onAmplitude
+        // / updateAccentColor must reach the renderer instance.
+        var lastTimerText: String? = null
+        var lastAmplitude: Float? = null
+        val fakeAnimation = object : net.devemperor.dictate.widget.RecordingAnimation {
+            override fun prepare(target: android.view.View) = Unit
+            override fun start() = Unit
+            override fun pause() = Unit
+            override fun resume() = Unit
+            override fun cancel() = Unit
+            override fun onAmplitude(level: Float) {
+                lastAmplitude = level
+            }
+            override fun onTimerTick(timerText: String) {
+                lastTimerText = timerText
+            }
+            override fun updateColor(color: Int) = Unit
+        }
+        val factory = RecordingAnimationControllerFactory { btn, pulse ->
+            net.devemperor.dictate.state.render.RecordingAnimationController(
+                fakeAnimation, pulse, animationsEnabled = { true },
+            )
+        }
+        val backend = OverlayBackend(
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            overlayWindow = window,
+            permissions = NoOverlayPermissionGate,
+            layoutParamsFactory = DefaultOverlayLayoutParamsFactory(ctx),
+            recordingAnimationControllerFactory = factory,
+        )
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(), catalog.OVERLAY_5BUTTON)
+
+        backend.onTimerTick(65_000L)  // 01:05
+        backend.onAmplitude(0.7f)
+
+        // Both side-channel ticks must reach the underlying animation.
+        assertEquals("01:05", lastTimerText)
+        assertEquals(0.7f, lastAmplitude)
+    }
+
+    @Test
+    fun `teardown clears renderer bundle - subsequent forwarders are no-ops`() {
+        // R-2 from the plan §10.1: pending animations must be detached
+        // BEFORE the View refs become invalid. Once teardownOverlay
+        // nulls the bundle, the forwarder methods must not touch any
+        // (now-stale) renderer instances.
+        var amplitudeAfterDetach: Float? = null
+        val fakeAnimation = object : net.devemperor.dictate.widget.RecordingAnimation {
+            override fun prepare(target: android.view.View) = Unit
+            override fun start() = Unit
+            override fun pause() = Unit
+            override fun resume() = Unit
+            override fun cancel() = Unit
+            override fun onAmplitude(level: Float) {
+                // If teardown didn't null the bundle, this would land
+                // here after detach() → leak.
+                amplitudeAfterDetach = level
+            }
+            override fun onTimerTick(timerText: String) = Unit
+            override fun updateColor(color: Int) = Unit
+        }
+        val factory = RecordingAnimationControllerFactory { btn, pulse ->
+            net.devemperor.dictate.state.render.RecordingAnimationController(
+                fakeAnimation, pulse, animationsEnabled = { true },
+            )
+        }
+        val backend = OverlayBackend(
+            ctx = ctx,
+            services = fakeModuleServices(emitAction = {}),
+            overlayWindow = window,
+            permissions = NoOverlayPermissionGate,
+            layoutParamsFactory = DefaultOverlayLayoutParamsFactory(ctx),
+            recordingAnimationControllerFactory = factory,
+        )
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+        backend.detach()
+
+        // Post-detach tick MUST be a no-op — the bundle is null.
+        backend.onAmplitude(0.9f)
+
+        assertEquals(
+            "Forwarder must be a no-op after detach (bundle cleared).",
+            null,
+            amplitudeAfterDetach,
+        )
+        assertFalse("Window detached.", window.isAttached())
+    }
+
     @Test
     fun `detach tears the window down after a position render`() {
         val backend = OverlayBackend(

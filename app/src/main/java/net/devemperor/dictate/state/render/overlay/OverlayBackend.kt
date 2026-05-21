@@ -7,6 +7,7 @@ import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
+import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.R
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
@@ -17,7 +18,11 @@ import net.devemperor.dictate.state.layout.ButtonSlot
 import net.devemperor.dictate.state.layout.LayoutMode
 import net.devemperor.dictate.state.layout.LogicalButtonId
 import net.devemperor.dictate.state.layout.RenderBackend
+import net.devemperor.dictate.state.render.AutoEnterRenderer
+import net.devemperor.dictate.state.render.RecordButtonColorController
+import net.devemperor.dictate.state.render.RecordingAnimationController
 import net.devemperor.dictate.state.render.applySlotToView
+import net.devemperor.dictate.widget.PulseLayout
 
 /**
  * RenderBackend implementation for the floating-overlay window
@@ -133,6 +138,58 @@ class OverlayBackend(
      */
     private val dragControllerFactory: OverlayDragControllerFactory =
         DefaultOverlayDragControllerFactory(ctx),
+    /**
+     * Side-channel renderer factories (dictate-widget-integration §8.1
+     * Chunks 1.3-1.4). The three side-channel-renderer classes
+     * ([RecordingAnimationController], [AutoEnterRenderer],
+     * [RecordButtonColorController]) are bound to concrete View
+     * instances — which only exist after [inflateAndAttach] runs. The
+     * factories let the construction site (e.g.
+     * `DictatePipelineService.onCreate`) wire the production renderers
+     * with no `lateinit`-style late binding, and let tests skip them
+     * entirely by leaving the defaults `null`.
+     *
+     * Each factory may return `null` to opt out (e.g. JVM tests that
+     * don't care about animations) — in that case the corresponding
+     * forwarder method on this backend is a no-op. Production callers
+     * pass real factories; the backend instantiates one renderer of
+     * each kind per `inflateAndAttach` (and resets them in
+     * [teardownOverlay]).
+     *
+     * **Why a factory and not a constructor-injected renderer?** The
+     * three renderers hold strong refs to the inflated `record_btn` /
+     * `overlay_pulse_layout` Views. Constructing them at backend-build
+     * time would either (a) require View refs the service does not have
+     * yet, or (b) force the backend to allocate them with `null` Views
+     * and then reach in to set them — an indirection that breaks the
+     * single-writer invariant. Factories invert the dependency: the
+     * backend resolves the Views inside `inflateAndAttach`, hands them
+     * to the factory, and stores the resulting renderer in its render
+     * bundle.
+     */
+    private val recordingAnimationControllerFactory: RecordingAnimationControllerFactory? = null,
+    private val autoEnterRendererFactory: AutoEnterRendererFactory? = null,
+    private val recordButtonColorControllerFactory: RecordButtonColorControllerFactory? = null,
+    /**
+     * IME-side affordance hook fired *before* the catalog click-dispatch
+     * for the `OVERLAY_RECORD` button (dictate-widget-integration §8.3
+     * Chunk 3.1). Symmetric to `ImeViewBackend.imeSideAffordance` — the
+     * production IME wires this to the same lambda the keyboard surface
+     * uses, so the R-1 `JobRequest` snapshot
+     * (`prepareCatalogStopRecordingIfActive`) lands in
+     * `ImePipelineConfigResolver` BEFORE the orchestrator dispatches
+     * `StopRecordingAndSend`. Without this hook, the pipeline async
+     * `resolveFresh` would find an empty snapshot and the FSM would hang
+     * in `Preparing` ("Sending …" with no progress) — the R-1
+     * silent-data-loss class the keyboard surface guards against.
+     *
+     * The hook is self-gating in the IME implementation
+     * (`prepareCatalogStopRecordingIfActive` returns early when state is
+     * not Active|Paused), so it is safe to call unconditionally on every
+     * OVERLAY_RECORD click. Default no-op for JVM tests / fallback
+     * mode.
+     */
+    private val imeSideAffordance: (LogicalButtonId, Boolean) -> Unit = { _, _ -> },
 ) : RenderBackend {
 
     override val backendType: BackendType = BackendType.OVERLAY_WINDOW
@@ -180,6 +237,23 @@ class OverlayBackend(
      * mid-drag.
      */
     private var lastAppliedPosition: AppliedPosition? = null
+
+    /**
+     * Side-channel renderer bundle — the three view-bound renderers
+     * that mirror the IME-View backend's render-axes onto the overlay
+     * surface (dictate-widget-integration §8.1 Chunks 1.3-1.4).
+     *
+     * Built once per [inflateAndAttach] from the supplied factories; each
+     * renderer holds strong refs to the inflated `overlay_record_btn`
+     * (and the `overlay_pulse_layout` for the animation controller).
+     * Reset in [teardownOverlay] BEFORE the View refs become invalid so
+     * a pending animation does not touch a torn-down View tree.
+     *
+     * `null` outside an attached lifecycle, and any field of it stays
+     * `null` if the corresponding factory was not supplied (e.g. JVM
+     * unit tests).
+     */
+    private var rendererBundle: OverlayRendererBundle? = null
 
     // ─── RenderBackend implementation ────────────────────────────────
 
@@ -236,12 +310,61 @@ class OverlayBackend(
         // 4 — Slot apply.
         applySlots(state, mode)
 
-        // 5 — Position apply — de-normalises the persisted [0..1]
+        // 5 — Side-channel forwards (dictate-widget-integration §8.1
+        //     Chunk 1.4) — symmetric to `ImeViewBackend.render` step 3-6.
+        //     The three view-bound renderers are idempotent (no-op when
+        //     the cached state class hasn't changed) so a render-tick
+        //     that doesn't transition is cheap. Order mirrors
+        //     ImeViewBackend.render to keep the two surfaces lock-step
+        //     (B4-VAL F-14 idempotency contract).
+        rendererBundle?.autoEnter?.onState(state)
+        rendererBundle?.color?.onState(state)
+        rendererBundle?.recording?.onState(state)
+
+        // 6 — Position apply — de-normalises the persisted [0..1]
         //     coordinates from `state.overlay.position{Portrait,Landscape}{X,Y}`
         //     into pixels and writes them into the WindowManager params.
         //     Short-circuits during an active drag so the user's finger
         //     position wins over the (stale) normalised state axis.
         applyPosition(state.overlay)
+    }
+
+    // ─── Public side-channel forwarders (Spec 2 §11.5 pattern) ─────────
+
+    /**
+     * Side-channel amplitude tick (dictate-widget-integration §8.1
+     * Chunk 1.3). Not part of [DictateUiState] — forwarded by the IME
+     * service's `RecordingActivityTickerObserver` from the
+     * `services.amplitudeStream` side-flow. No-op when no
+     * [RecordingAnimationController] factory was supplied (JVM tests).
+     *
+     * Mirrors `ImeViewBackend.onAmplitude` exactly so the two surfaces
+     * stay in lock-step — same controller class, different View
+     * instance.
+     */
+    fun onAmplitude(level: Float) {
+        rendererBundle?.recording?.onAmplitude(level)
+    }
+
+    /**
+     * Side-channel timer tick (dictate-widget-integration §8.1 Chunk
+     * 1.3). Same rationale as [onAmplitude]: not in [DictateUiState],
+     * forwarded by the IME service. No-op when no
+     * [RecordingAnimationController] factory was supplied.
+     *
+     * Mirrors `ImeViewBackend.onTimerTick` exactly.
+     */
+    fun onTimerTick(elapsedMs: Long) {
+        rendererBundle?.recording?.onTimerTick(elapsedMs)
+    }
+
+    /**
+     * Re-paint the recording animation with a new accent colour.
+     * Symmetric to `ImeViewBackend.updateAccentColor`. No-op when no
+     * [RecordingAnimationController] factory was supplied.
+     */
+    fun updateAccentColor(color: Int) {
+        rendererBundle?.recording?.updateColor(color)
     }
 
     // ─── Internal — render helpers ───────────────────────────────────
@@ -310,6 +433,34 @@ class OverlayBackend(
 
         wireStaticOverlayHandlers()
         wireDragController(view)
+        buildRendererBundle(view, views)
+    }
+
+    /**
+     * Instantiate the side-channel renderer bundle from the inflated
+     * Views (dictate-widget-integration §8.1 Chunk 1.4).
+     *
+     * Each renderer is built only if its factory was supplied — JVM
+     * tests that ignore animations leave the factory `null` and the
+     * forwarder methods become no-ops. The bundle stays live until
+     * [teardownOverlay] resets it, at which point the View refs are
+     * about to become invalid.
+     *
+     * The `record_btn` view is downcast to [MaterialButton] because the
+     * three renderer classes expect that concrete type — the layout XML
+     * uses `<MaterialButton>` so the cast is structurally safe.
+     */
+    private fun buildRendererBundle(rootView: View, views: Map<LogicalButtonId, View>) {
+        val recordBtn = views[LogicalButtonId.OVERLAY_RECORD] as? MaterialButton ?: run {
+            Log.w(TAG, "OVERLAY_RECORD view is not a MaterialButton — skipping side-channel renderers.")
+            return
+        }
+        val pulseLayout = rootView.findViewById<PulseLayout?>(R.id.overlay_pulse_layout)
+        rendererBundle = OverlayRendererBundle(
+            recording = recordingAnimationControllerFactory?.create(recordBtn, pulseLayout),
+            autoEnter = autoEnterRendererFactory?.create(recordBtn),
+            color = recordButtonColorControllerFactory?.create(recordBtn),
+        )
     }
 
     /**
@@ -352,12 +503,44 @@ class OverlayBackend(
      * Wire click listeners exactly once. Each lambda reads
      * [stateRef] + [modeRef] at click time so the listener captures
      * a single lambda per button (L8 — forbidden-pattern (l)).
+     *
+     * # `imeSideAffordance` hook for OVERLAY_RECORD (R-1 snapshot)
+     *
+     * For [LogicalButtonId.OVERLAY_RECORD] the affordance hook fires
+     * **before** the catalog `actionResolver` is consulted, symmetric to
+     * `ImeViewBackend.wireStaticHandlers` for the keyboard RECORD. The
+     * production IME wires this to the same lambda used for
+     * keyboard-RECORD: the lambda calls
+     * `prepareCatalogStopRecordingIfActive()` which captures the R-1
+     * `JobRequest` snapshot (`imePipelineConfigResolver.snapshotFresh`)
+     * BEFORE the catalog dispatches `StopRecordingAndSend`. Without
+     * this hook, the orchestrator's async `resolveFresh` finds an empty
+     * snapshot, throws the loud `UnsupportedOperationException` R-1
+     * tripwire, the EffectFailure arm catches it, and the pipeline FSM
+     * hangs in `Preparing` ("Sending …") forever — the exact bug user
+     * reported for the overlay SEND path before this hook landed.
+     *
+     * The hook is self-gating in the IME implementation (the helper
+     * returns early when state is not Active|Paused), so it is safe to
+     * call unconditionally — `null` `actionResolver` returns
+     * (e.g. HOVER-gate, Idle-record-pre-allocate) just mean the
+     * dispatch is a no-op while the snapshot remains harmless.
      */
     private fun wireStaticOverlayHandlers() {
         buttonViews.forEach { (id, view) ->
             view.setOnClickListener {
                 val state = stateRef ?: return@setOnClickListener
                 val slot = currentSlot(id) ?: return@setOnClickListener
+                // R-1 affordance: fire BEFORE the catalog dispatch for
+                // OVERLAY_RECORD so the JobRequest snapshot lands in
+                // `imePipelineConfigResolver` before the orchestrator
+                // submits the pipeline. Symmetric to ImeViewBackend's
+                // RECORD click branch (`ImeViewBackend.wireStaticHandlers`
+                // line ~457). Default no-op lambda makes this a free
+                // call when no IME is attached (JVM tests / fallback).
+                if (id == LogicalButtonId.OVERLAY_RECORD) {
+                    imeSideAffordance(id, false)
+                }
                 // R.3 nullable-resolver-idiom — null = silent no-op.
                 slot.actionResolver(state, services)?.let { action ->
                     onAction?.invoke(action)
@@ -475,6 +658,21 @@ class OverlayBackend(
      * every cached reference is dropped.
      */
     private fun teardownOverlay() {
+        // Side-channel renderer cleanup MUST run before the window
+        // detach (dictate-widget-integration §10.1 R-2): pending
+        // animations + drawable cache references would otherwise outlive
+        // their View refs and leak. The renderer-classes' `reset()` is
+        // idempotent; each clears its idempotency cache so a subsequent
+        // re-attach re-applies unconditionally.
+        try {
+            rendererBundle?.recording?.reset()
+            rendererBundle?.autoEnter?.reset()
+            rendererBundle?.color?.reset()
+        } catch (t: Throwable) {
+            Log.w(TAG, "rendererBundle.reset threw", t)
+        }
+        rendererBundle = null
+
         try {
             dragController?.detach()
         } catch (t: Throwable) {
@@ -520,3 +718,65 @@ class OverlayBackend(
         const val TAG: String = "OverlayBackend"
     }
 }
+
+// ─── Side-channel renderer factory contracts (§8.1 Chunks 1.3-1.4) ──
+
+/**
+ * Builds a [RecordingAnimationController] bound to the inflated overlay
+ * `record_btn` + `overlay_pulse_layout` views.
+ *
+ * The factory is invoked once per [OverlayBackend.inflateAndAttach],
+ * AFTER the views are inflated and attached to the WindowManager. The
+ * resulting controller owns the `BorderGlow` + `PulseLayout` animation
+ * lifecycle for the overlay surface; it is symmetric to the IME-View
+ * backend's `recordingAnimationController` but bound to a different
+ * View instance.
+ *
+ * Production wiring: the service builds the underlying
+ * `RecordingAnimation` (e.g. `BorderGlowAnimation` configured with the
+ * accent colour and density), then returns a
+ * `RecordingAnimationController(animation, pulseLayout, animationsEnabled)`.
+ *
+ * @see dictate-widget-integration §8.1 Chunk 1.4
+ */
+fun interface RecordingAnimationControllerFactory {
+    fun create(recordButton: MaterialButton, pulseLayout: PulseLayout?): RecordingAnimationController?
+}
+
+/**
+ * Builds an [AutoEnterRenderer] bound to the inflated overlay
+ * `record_btn`. Production wiring: `AutoEnterRenderer(recordButton)`.
+ *
+ * @see dictate-widget-integration §8.1 Chunk 1.4
+ */
+fun interface AutoEnterRendererFactory {
+    fun create(recordButton: MaterialButton): AutoEnterRenderer?
+}
+
+/**
+ * Builds a [RecordButtonColorController] bound to the inflated overlay
+ * `record_btn`. Production wiring:
+ * `RecordButtonColorController(recordButton, ...)`.
+ *
+ * @see dictate-widget-integration §8.1 Chunk 1.4
+ */
+fun interface RecordButtonColorControllerFactory {
+    fun create(recordButton: MaterialButton): RecordButtonColorController?
+}
+
+/**
+ * Holder for the three view-bound side-channel renderer instances built
+ * inside [OverlayBackend.inflateAndAttach]. Each field is independently
+ * nullable so callers that opt out of a single side-channel (e.g. tests)
+ * still get a coherent bundle.
+ *
+ * **Lifecycle:** Created once per inflate, reset in
+ * [OverlayBackend.teardownOverlay] BEFORE the View refs become invalid.
+ * The bundle itself is data; the renderers it holds carry the mutable
+ * idempotency caches.
+ */
+internal data class OverlayRendererBundle(
+    val recording: RecordingAnimationController?,
+    val autoEnter: AutoEnterRenderer?,
+    val color: RecordButtonColorController?,
+)

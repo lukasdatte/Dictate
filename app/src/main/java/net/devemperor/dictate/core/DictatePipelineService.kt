@@ -677,12 +677,68 @@ class DictatePipelineService : Service() {
         val windowManager: WindowManager? =
             getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         if (windowManager != null) {
+            // Side-channel renderer factories for the overlay surface
+            // (dictate-widget-integration §8.1 Chunks 1.3-1.4). The
+            // factories run AFTER `OverlayBackend.inflateAndAttach`
+            // inflates the overlay layout — they receive the live
+            // `overlay_record_btn` + `overlay_pulse_layout` views and
+            // return renderer instances symmetric to the IME-View
+            // backend's (constructed in `attachImeViewBackendIfReady`).
+            // The same classes are reused; only the bound View instance
+            // differs — User-Req: "exakt den gleichen Button" =
+            // identical wiring, independent View instances.
+            val animationsEnabledLambda: () -> Boolean = {
+                sharedPrefs.get(Pref.Animations)
+            }
+            val recordingAnimationFactory =
+                net.devemperor.dictate.state.render.overlay.RecordingAnimationControllerFactory {
+                    recordButton, pulseLayout ->
+                    val ctx = recordButton.context
+                    val displayDensity = ctx.resources.displayMetrics.density
+                    val animation = net.devemperor.dictate.widget.BorderGlowAnimation(
+                        sharedPrefs.get(Pref.AccentColor),
+                        androidx.appcompat.content.res.AppCompatResources.getDrawable(
+                            ctx, net.devemperor.dictate.R.drawable.ic_baseline_send_20,
+                        ),
+                        net.devemperor.dictate.widget.AmplitudeVisualizerDrawable
+                            .BarCountMode.Fixed(30),
+                        0.35f,
+                        displayDensity,
+                    )
+                    animation.prepare(recordButton)
+                    net.devemperor.dictate.state.render.RecordingAnimationController(
+                        animation,
+                        pulseLayout,
+                        animationsEnabledLambda,
+                    )
+                }
+            val autoEnterFactory =
+                net.devemperor.dictate.state.render.overlay.AutoEnterRendererFactory {
+                    recordButton ->
+                    net.devemperor.dictate.state.render.AutoEnterRenderer(recordButton)
+                }
+            val colorFactory =
+                net.devemperor.dictate.state.render.overlay.RecordButtonColorControllerFactory {
+                    recordButton ->
+                    net.devemperor.dictate.state.render.RecordButtonColorController(recordButton)
+                }
+
             overlayBackendImpl = OverlayBackend(
                 ctx = this,
                 services = moduleServicesImpl,
                 overlayWindow = AndroidOverlayWindow(windowManager),
                 permissions = overlayPermissionGateImpl,
                 layoutParamsFactory = DefaultOverlayLayoutParamsFactory(this),
+                recordingAnimationControllerFactory = recordingAnimationFactory,
+                autoEnterRendererFactory = autoEnterFactory,
+                recordButtonColorControllerFactory = colorFactory,
+                // §8.3 Chunk 3.1+3.2 — late-bound affordance via the
+                // LocalBinder. Captured at click time so it sees the
+                // currently-registered IME lambda (or null if IME
+                // unbound, in which case the click is a no-op).
+                imeSideAffordance = { id, isLongPress ->
+                    binder.delegateImeSideAffordance?.invoke(id, isLongPress)
+                },
             )
         } else {
             // Defensive: a Service without WindowManager (e.g. an
@@ -1296,6 +1352,33 @@ class DictatePipelineService : Service() {
         internal var delegateInputConnectionProvider: (() -> android.view.inputmethod.InputConnection?)? = null
 
         /**
+         * IME-side affordance hook for the overlay-surface RECORD click
+         * (dictate-widget-integration §8.3 Chunk 3.2). The IME registers
+         * the same lambda it uses for the keyboard-surface RECORD click
+         * (see `DictateInputMethodService.imeSideAffordance`); the
+         * [OverlayBackend] looks the lambda up at click-time so the R-1
+         * `JobRequest` snapshot (`prepareCatalogStopRecordingIfActive`)
+         * runs BEFORE the catalog dispatches `StopRecordingAndSend`.
+         *
+         * **Why a late-bound field and not a `ModuleServices` member?**
+         * The IME's affordance lambda captures IME-private state
+         * (`imePipelineConfigResolver`, `newPathRecordingSessionId`)
+         * that has no place in `ModuleServices` (the DI container for
+         * pure reducer effects). The lambda also has to survive the IME's
+         * onCreate → onStartInputView → onUnbind lifecycle independently
+         * of the Service's onCreate. A `@Volatile` register-with-IME
+         * field on the binder mirrors the `delegateInputConnectionProvider`
+         * pattern.
+         *
+         * `null` when the IME is not currently bound — the overlay's
+         * click handler treats `null` as a no-op (the lambda passed into
+         * the backend defaults to `{ _, _ -> }`).
+         */
+        @Volatile
+        internal var delegateImeSideAffordance:
+            ((net.devemperor.dictate.state.layout.LogicalButtonId, Boolean) -> Unit)? = null
+
+        /**
          * C5 — the IME-registered [PipelineConfigResolver]. Read by the
          * [DelegatingPipelineConfigResolver] wrapping the
          * [PipelineRunnerSubsystemAdapter]: when non-null the fresh /
@@ -1334,6 +1417,24 @@ class DictatePipelineService : Service() {
          */
         fun registerInputConnectionProvider(provider: (() -> android.view.inputmethod.InputConnection?)?) {
             delegateInputConnectionProvider = provider
+        }
+
+        /**
+         * Register the IME's overlay-RECORD affordance lambda
+         * (dictate-widget-integration §8.3 Chunk 3.2). The IME calls
+         * this on bind with the same lambda used for the keyboard-RECORD
+         * click handler. Pass `null` on unbind so a click that races the
+         * unbind becomes a no-op.
+         *
+         * The lambda is invoked from
+         * [OverlayBackend.wireStaticOverlayHandlers] (overlay click
+         * branch for `OVERLAY_RECORD`) — see [OverlayBackend] KDoc for
+         * the R-1 snapshot rationale.
+         */
+        fun registerImeSideAffordance(
+            affordance: ((net.devemperor.dictate.state.layout.LogicalButtonId, Boolean) -> Unit)?,
+        ) {
+            delegateImeSideAffordance = affordance
         }
 
         /**

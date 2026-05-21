@@ -467,6 +467,227 @@ class ActionResolversTest {
             resolveWidgetToggleAction(s, fakeModuleServices()),
         )
     }
+
+    // ─── resolveOverlayRecordAction (Variante 2a, dictate-widget-integration §8.2 Chunk 2.2) ──
+    //
+    // The User-Requirement (verbatim, plan §2):
+    //   "Senden darf nicht möglich sein, während gerade kein
+    //    Tastaturinput verfügbar ist."
+    // → HOVER (no InputConnection) must yield `null` for every recording
+    //   sub-state. WIDGET must mirror the keyboard surface 1:1.
+
+    @Test
+    fun `resolveOverlayRecordAction HOVER always returns null (User-Req SEND-gate)`() {
+        // Idle, Active, Paused, Preparing, Running — none of them may
+        // produce an action in HOVER (no InputConnection target).
+        val services = fakeModuleServices(audioFileFactory = FixedAudioFileFactory(File("/tmp/h.m4a")))
+        val hoverIdle = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
+            recording = RecordingState.Idle,
+            pipeline = PipelineUiState.Idle,
+        )
+        val hoverActive = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-h"
+            ),
+        )
+        val hoverPaused = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
+            recording = RecordingState.Paused(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-h"
+            ),
+        )
+        val hoverPreparing = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
+            pipeline = PipelineUiState.Preparing("sid-h"),
+        )
+        val hoverRunning = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
+            pipeline = PipelineUiState.Running(
+                sessionId = "sid-h", target = InsertionTarget.INPUT_CONNECTION,
+            ),
+        )
+
+        listOf(hoverIdle, hoverActive, hoverPaused, hoverPreparing, hoverRunning).forEach { s ->
+            assertNull(
+                "HOVER must yield null (User-Req SEND-gate): ${s.recording::class.simpleName}",
+                resolveOverlayRecordAction(s, services),
+            )
+        }
+    }
+
+    @Test
+    fun `resolveOverlayRecordAction KEYBOARD returns null (defensive)`() {
+        val services = fakeModuleServices()
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.KEYBOARD,
+            recording = RecordingState.Idle,
+        )
+        // KEYBOARD shouldn't reach this resolver because the overlay
+        // backend isn't attached in KEYBOARD mode, but a stale tick
+        // during a ViewMode transition must not produce an action either.
+        assertNull(resolveOverlayRecordAction(s, services))
+    }
+
+    @Test
+    fun `resolveOverlayRecordAction WIDGET-Active emits StopRecordingAndSend`() {
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-w"
+            ),
+        )
+        assertTrue(
+            resolveOverlayRecordAction(s, fakeModuleServices())
+                is Action.RecordingAction.StopRecordingAndSend,
+        )
+    }
+
+    @Test
+    fun `resolveOverlayRecordAction WIDGET-Paused emits StopRecordingAndSend`() {
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            recording = RecordingState.Paused(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-w"
+            ),
+        )
+        assertTrue(
+            resolveOverlayRecordAction(s, fakeModuleServices())
+                is Action.RecordingAction.StopRecordingAndSend,
+        )
+    }
+
+    @Test
+    fun `resolveOverlayRecordAction WIDGET-Idle emits StartRecording with allocated file`() {
+        val recordingFile = File("/tmp/overlay-idle.m4a")
+        val factory = FixedAudioFileFactory(recordingFile)
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            recording = RecordingState.Idle,
+            pipeline = PipelineUiState.Idle,
+        )
+        val action = resolveOverlayRecordAction(s, fakeModuleServices(audioFileFactory = factory))
+            as? Action.RecordingAction.StartRecording
+            ?: error("Expected StartRecording")
+        assertEquals(recordingFile, action.audioFile)
+        assertEquals(1, factory.allocateCallCount)
+    }
+
+    @Test
+    fun `resolveOverlayRecordAction WIDGET-Preparing emits ToggleRunningAutoEnter`() {
+        // Pipeline Preparing (the 500ms-2s upload window) — the merged
+        // RECORD+SEND slot acts as a per-run auto-enter toggle, matching
+        // the keyboard SEND_MODE behaviour. #AE-DEEP2 contract: a
+        // double-tap during Preparing must flip the autoEnterActive bit.
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            pipeline = PipelineUiState.Preparing("sid-w"),
+        )
+        assertEquals(
+            Action.PipelineAction.ToggleRunningAutoEnter,
+            resolveOverlayRecordAction(s, fakeModuleServices()),
+        )
+    }
+
+    @Test
+    fun `resolveOverlayRecordAction WIDGET-Running emits ToggleRunningAutoEnter`() {
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            pipeline = PipelineUiState.Running(
+                sessionId = "sid-w", target = InsertionTarget.INPUT_CONNECTION,
+            ),
+        )
+        assertEquals(
+            Action.PipelineAction.ToggleRunningAutoEnter,
+            resolveOverlayRecordAction(s, fakeModuleServices()),
+        )
+    }
+
+    @Test
+    fun `resolveOverlayRecordAction WIDGET-Preparing-recording returns null (recorder warming up)`() {
+        // Recording-Preparing is the <100ms window between StartRecording
+        // and MediaRecorderReady. Mirrors resolveRecordAction's null.
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            recording = RecordingState.Preparing(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-w"
+            ),
+            pipeline = PipelineUiState.Idle,
+        )
+        assertNull(resolveOverlayRecordAction(s, fakeModuleServices()))
+    }
+
+    // ─── resolveOverlayRecordEnabled (Variante 2a, §8.2 Chunk 2.3) ────
+
+    @Test
+    fun `resolveOverlayRecordEnabled HOVER is false in every recording state`() {
+        val recordingStates = listOf(
+            RecordingState.Idle,
+            RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x"),
+            RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x"),
+            RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x"),
+        )
+        recordingStates.forEach { rs ->
+            val s = state.copy(
+                viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
+                recording = rs,
+            )
+            assertEquals(
+                "HOVER must disable the button (${rs::class.simpleName})",
+                false,
+                resolveOverlayRecordEnabled(s),
+            )
+        }
+    }
+
+    @Test
+    fun `resolveOverlayRecordEnabled WIDGET is true for Idle Active Paused`() {
+        val cases = listOf(
+            "Idle" to RecordingState.Idle,
+            "Active" to RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x"),
+            "Paused" to RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x"),
+        )
+        cases.forEach { (label, rs) ->
+            val s = state.copy(
+                viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+                recording = rs,
+                pipeline = PipelineUiState.Idle,
+            )
+            assertEquals(
+                "WIDGET must enable the button in $label",
+                true,
+                resolveOverlayRecordEnabled(s),
+            )
+        }
+    }
+
+    @Test
+    fun `resolveOverlayRecordEnabled WIDGET is false during Preparing-recording`() {
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            recording = RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x"),
+            pipeline = PipelineUiState.Idle,
+        )
+        assertEquals(false, resolveOverlayRecordEnabled(s))
+    }
+
+    @Test
+    fun `resolveOverlayRecordEnabled WIDGET is true during live pipeline (auto-enter reachable)`() {
+        // #AE-OPTIK2 / #AE-DEEP2 — the button stays enabled during the
+        // live pipeline so the double-tap-to-toggle auto-enter is
+        // reachable. Mirrors the keyboard SEND_MODE record slot.
+        val preparing = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            pipeline = PipelineUiState.Preparing("x"),
+        )
+        val running = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            pipeline = PipelineUiState.Running(sessionId = "x", target = InsertionTarget.INPUT_CONNECTION),
+        )
+        assertEquals(true, resolveOverlayRecordEnabled(preparing))
+        assertEquals(true, resolveOverlayRecordEnabled(running))
+    }
 }
 
 // ─── Hand-rolled fakes (K-1) ─────────────────────────────────────────

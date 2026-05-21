@@ -795,6 +795,11 @@ public class DictateInputMethodService extends InputMethodService
             binder.registerPromptQueueCallback(null);
             binder.registerInputConnectionProvider(null);
             binder.registerPipelineConfigResolver(null);
+            // dictate-widget-integration §8.3 Chunk 3.2 — clear the
+            // overlay affordance lambda so a click that races the unbind
+            // becomes a no-op (the OverlayBackend reads the lambda via
+            // the binder field at click time).
+            binder.registerImeSideAffordance(null);
         } catch (Throwable t) {
             Log.w("DictateIME", "unbindAiInfrastructureFromService: callback unregister threw", t);
         }
@@ -1487,6 +1492,21 @@ public class DictateInputMethodService extends InputMethodService
             accentTextViews
         );
 
+        // dictate-widget-integration §8.3 Chunk 3.2 — share the exact
+        // same IME-side affordance lambda with the service-owned
+        // OverlayBackend, so an OVERLAY_RECORD click in the floating
+        // widget fires the same R-1 `JobRequest` snapshot
+        // (`prepareCatalogStopRecordingIfActive`) as a keyboard-RECORD
+        // click. Without this registration the overlay SEND path would
+        // dispatch `StopRecordingAndSend` with no snapshot in
+        // `imePipelineConfigResolver`, the pipeline async `resolveFresh`
+        // would hit the R-1 tripwire (UnsupportedOperationException),
+        // the EffectFailure arm would catch it, and the pipeline FSM
+        // would hang in Preparing forever — the exact bug Plan §5 traces.
+        // Self-gating: the lambda's RECORD branch is a no-op when state
+        // is not Active|Paused, so registering unconditionally is safe.
+        pipelineBinder.registerImeSideAffordance(imeSideAffordance);
+
         try {
             keyboardLayoutManager.attachBackend(imeViewBackend);
         } catch (Throwable t) {
@@ -1571,6 +1591,17 @@ public class DictateInputMethodService extends InputMethodService
         if (recordingTickerObserver != null) {
             recordingTickerObserver.stop();
         }
+        // dictate-widget-integration §8.1 Chunk 1.3 — fan the timer +
+        // amplitude side-channel ticks into THREE consumers in lock-step:
+        // the IME-View backend, the QWERTZ recording controller, AND
+        // the service-owned OverlayBackend. The overlay's side-channel
+        // renderers are no-ops until `inflateAndAttach` runs (which only
+        // happens in WIDGET / HOVER ViewModes) so forwarding
+        // unconditionally costs nothing in KEYBOARD mode but guarantees
+        // the overlay-record-button shows the same Timer + Amplitude as
+        // the keyboard-record-button while WIDGET is active —
+        // User-Req: "Aufzeichnen-Button mit Timer und allem Drum und Dran".
+        final DictatePipelineService.LocalBinder binderForTicker = pipelineBinder;
         recordingTickerObserver = new RecordingActivityTickerObserver(
                 pipelineBinder.getState(),
                 elapsedMs -> {
@@ -1578,6 +1609,9 @@ public class DictateInputMethodService extends InputMethodService
                     if (qwertzRecordingController != null) {
                         qwertzRecordingController.onTimerTick(elapsedMs);
                     }
+                    net.devemperor.dictate.state.render.overlay.OverlayBackend overlay =
+                            binderForTicker.getOverlayBackend();
+                    if (overlay != null) overlay.onTimerTick(elapsedMs);
                     return kotlin.Unit.INSTANCE;
                 },
                 amplitude -> {
@@ -1589,6 +1623,9 @@ public class DictateInputMethodService extends InputMethodService
                     if (qwertzRecordingController != null) {
                         qwertzRecordingController.onAmplitude(level);
                     }
+                    net.devemperor.dictate.state.render.overlay.OverlayBackend overlay =
+                            binderForTicker.getOverlayBackend();
+                    if (overlay != null) overlay.onAmplitude(level);
                     return kotlin.Unit.INSTANCE;
                 },
                 () -> binderForAmplitude.pollRecordingMaxAmplitude());

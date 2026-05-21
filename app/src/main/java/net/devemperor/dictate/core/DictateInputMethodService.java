@@ -2148,6 +2148,15 @@ public class DictateInputMethodService extends InputMethodService
         if (pipelineBinder != null) {
             pipelineBinder.dispatch(
                     net.devemperor.dictate.state.Action.ViewModeAction.OnImeViewHidden.INSTANCE);
+            // B3.3 bridge — dispatch the same lifecycle event onto the
+            // new Widget axis (ADR-0008) so `state.widget` and
+            // `state.imeViewVisible` keep tracking the live IME state.
+            // Both axes co-exist until B3.5 retires ViewMode; the
+            // resolvers + layout predicates still read `viewMode`, so
+            // this bridge is dispatch-only (no behaviour change visible
+            // to the user yet).
+            pipelineBinder.dispatch(
+                    net.devemperor.dictate.state.Action.WidgetAction.OnImeViewHidden.INSTANCE);
         }
     }
 
@@ -3017,6 +3026,11 @@ public class DictateInputMethodService extends InputMethodService
             // research §3 view-recreation handling.
             pipelineBinder.dispatch(
                     net.devemperor.dictate.state.Action.ViewModeAction.OnImeViewShown.INSTANCE);
+            // B3.3 bridge — same lifecycle event onto the Widget axis.
+            // See the symmetric OnImeViewHidden dispatch above for the
+            // rationale.
+            pipelineBinder.dispatch(
+                    net.devemperor.dictate.state.Action.WidgetAction.OnImeViewShown.INSTANCE);
         }
 
         // Determine if we are truly idle (no recording, no pipeline running).

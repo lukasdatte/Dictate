@@ -302,6 +302,14 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
         // ─── T1: KEYBOARD → WIDGET ──────────────────────────────────────
         if (prev.viewMode == ViewMode.KEYBOARD && next.viewMode == ViewMode.WIDGET) {
             cascade += Action.OverlayAction.SetUserPrefersWidget(prefers = true)
+            // B3.3 bridge (ADR-0008) — emit the symmetric WidgetAction
+            // so the new `state.widget` axis tracks the user toggle.
+            // Guarded on the current widget state to keep the W1 reducer
+            // contract (only Hidden → Visible(USER)); already-Visible
+            // would be Rejected and the bridge would log noise.
+            if (prev.widget == WidgetState.Hidden) {
+                cascade += Action.WidgetAction.ToggleWidget
+            }
         }
 
         // ─── Onboarding auto-cleanup (Spec 3 §5.4) ──────────────────────
@@ -321,6 +329,21 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
         // ─── T2: WIDGET → KEYBOARD ──────────────────────────────────────
         if (prev.viewMode == ViewMode.WIDGET && next.viewMode == ViewMode.KEYBOARD) {
             cascade += Action.OverlayAction.SetUserPrefersWidget(prefers = false)
+            // B3.3 bridge (ADR-0008) — emit WidgetAction.CloseWidget
+            // when the WIDGET → KEYBOARD diff was driven by an explicit
+            // user-close (state.widget was Visible(USER) — i.e. the user
+            // had toggled it open and is now toggling it off, the only
+            // path that flips viewMode to KEYBOARD from WIDGET while the
+            // user-pref is still high). The other path that produces the
+            // same diff — runtime permission-revoke (Spec 3 §9, the
+            // SetViewMode(KEYBOARD) cascade below) — sees prev.widget
+            // already Hidden because no user-toggle could have brought
+            // it back, so the guard skips the bridge there.
+            if (prev.widget is WidgetState.Visible &&
+                prev.widget.origin == WidgetOrigin.USER
+            ) {
+                cascade += Action.WidgetAction.CloseWidget
+            }
         }
 
         // ─── HOVER → KEYBOARD (CloseOverlay-cascade) ───────────────────

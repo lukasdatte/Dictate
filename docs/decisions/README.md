@@ -71,6 +71,8 @@ editing rules".
 | [0003](0003-service-foreground-pipeline-architecture.md) | Service — Foreground Pipeline Architecture | service · *Project-Wide* | Accepted | 2026-05-14 |
 | [0004](0004-ui-layout-catalog-motionlayout.md) | UI — LayoutCatalog + MotionLayout | ui-rendering · *Project-Wide* | Accepted | 2026-05-14 |
 | [0005](0005-ui-triangle-fsm-keyboard-widget-hover.md) | UI — Triangle-FSM (KEYBOARD / WIDGET / HOVER) | ui-mode · *Project-Wide* | Accepted | 2026-05-14 |
+| [0006](0006-ui-info-bar-state-derived-items.md) | UI — Info-Bar State-Derived Items with Cross-Module Producers | ui-architecture, state-management | Proposed | 2026-05-21 |
+| [0007](0007-audio-multi-file-repository.md) | Audio — Multi-File Recording Repository (Resume-after-Cold-Start) | audio-pipeline, database | Proposed | 2026-05-21 |
 
 ## Relationship graph
 
@@ -99,7 +101,17 @@ ADR-0005 (Triangle-FSM)
   ├── implemented in    ─► ADR-0001 (ViewModeModule)
   ├── needs             ─► ADR-0003 (FGS for HOVER persistence)
   ├── needs             ─► ADR-0002 (T7 = Pipeline-Done cascade)
-  └── rendered by       ─► ADR-0004 (RenderBackend switching)
+  ├── rendered by       ─► ADR-0004 (RenderBackend switching)
+  └── extended by       ─► ADR-0006 (Overlay-Block-Hint mode)
+
+ADR-0006 (Info-Bar State-Derived Items)
+  ├── plugs into        ─► ADR-0001 (new module on modular store)
+  ├── extends           ─► ADR-0005 (OVERLAY_BLOCK_HINT mode)
+  └── consumes          ─► ADR-0007 (Pending-Recording dismiss/append)
+
+ADR-0007 (Multi-File Audio Repository)
+  ├── hosted by         ─► ADR-0003 (FGS owns MediaRecorder instances for Live-Resume)
+  └── consumed by       ─► ADR-0006 (Pending-Recording Fortsetzen action)
 ```
 
 Every ADR's `## References` section lists the other four ADRs as

@@ -362,6 +362,16 @@ public class DictateInputMethodService extends InputMethodService
     // bit follows the orchestrator state, not the legacy controller.
     private PromptChipsBusyObserver promptChipsBusyObserver;
 
+    // dictate-pipeline-render-and-state-unification §5.2 — per-second
+    // pipeline-timer ticker (B-D-3). Dispatches
+    // `Action.PipelineAction.TickPipelineTimer` every 1000 ms while
+    // `state.pipeline is Running` so the record-button label's `M:SS`
+    // timer advances visibly between step boundaries. Pre-fix
+    // `elapsedMs` only restamped at StepStarted/Completed/Failed
+    // boundaries, so the user saw a frozen timer during long steps
+    // (transcription, reword).
+    private PipelineActivityTickerObserver pipelineTimerTickerObserver;
+
     // Post-cutover hotfix #3+#4 — drives the recording-animation
     // side-channel (timer + amplitude polling on Active|Paused) from
     // state.recording transitions. See RecordingActivityTickerObserver
@@ -1646,6 +1656,34 @@ public class DictateInputMethodService extends InputMethodService
                 busy -> updatePromptButtonsEnabledState());
         promptChipsBusyObserver.start();
 
+        // dictate-pipeline-render-and-state-unification §5.2 — start the
+        // pipeline-timer ticker. Dispatches `TickPipelineTimer` every
+        // 1 s while `state.pipeline is Running` so the record-button
+        // label's `M:SS` timer advances visibly between step boundaries
+        // (B-D-3 fix).
+        final DictatePipelineService.LocalBinder binderForPipelineTicker = pipelineBinder;
+        if (pipelineTimerTickerObserver != null) {
+            pipelineTimerTickerObserver.stop();
+        }
+        pipelineTimerTickerObserver = new PipelineActivityTickerObserver(
+                pipelineBinder.getState(),
+                () -> {
+                    DictatePipelineService.LocalBinder b = binderForPipelineTicker;
+                    if (b != null) {
+                        // Ignore DispatchOutcome return — the observer's
+                        // contract is `() -> Unit`. The orchestrator's
+                        // outcome is structurally guaranteed to be
+                        // `Reduced` for `TickPipelineTimer` (no module
+                        // owns a Rejected arm for it) and we don't act
+                        // on it here either way.
+                        b.dispatch(
+                                net.devemperor.dictate.state.Action.PipelineAction
+                                        .TickPipelineTimer.INSTANCE);
+                    }
+                    return kotlin.Unit.INSTANCE;
+                });
+        pipelineTimerTickerObserver.start();
+
         // Post-cutover hotfix #3+#4 — start the recording-animation
         // side-channel ticker. Drives ImeViewBackend.onTimerTick/onAmplitude
         // + QwertzRecordingController.onTimerTick/onAmplitude from
@@ -2093,6 +2131,13 @@ public class DictateInputMethodService extends InputMethodService
         if (promptChipsBusyObserver != null) {
             promptChipsBusyObserver.stop();
             promptChipsBusyObserver = null;
+        }
+
+        // dictate-pipeline-render-and-state-unification §5.2 — symmetric
+        // tear-down of the per-second pipeline-timer ticker.
+        if (pipelineTimerTickerObserver != null) {
+            pipelineTimerTickerObserver.stop();
+            pipelineTimerTickerObserver = null;
         }
 
         // Post-cutover hotfix #3+#4 — cancel the recording-animation

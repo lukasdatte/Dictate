@@ -192,6 +192,94 @@ class PipelineModuleTest {
         )
     }
 
+    // ─── B-D-3: per-second TickPipelineTimer ─────────────────────────
+
+    @Test
+    fun `TickPipelineTimer in Running restamps elapsedMs from startedAtMs`() {
+        // B-D-3 fix: the per-second observer dispatches TickPipelineTimer
+        // and the reducer restamps elapsedMs = ctx.now - startedAtMs so
+        // the record-button label advances visibly between step
+        // boundaries.
+        val state = PipelineUiState.Running(
+            sid,
+            InsertionTarget.INPUT_CONNECTION,
+            startedAtMs = 1_500L,
+            elapsedMs = 0L,
+        )
+        val result = module.reduce(state, Action.PipelineAction.TickPipelineTimer, ctx())
+        val next = result!!.nextState as PipelineUiState.Running
+        assertEquals(3_500L, next.elapsedMs)  // 5_000 - 1_500
+        // Pure state-only: no side effects emitted.
+        assertTrue(result.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `TickPipelineTimer in Idle is a no-op`() {
+        // Late tick after the pipeline ended (Running → Idle race): the
+        // observer's collect-coroutine may schedule one more
+        // Handler.postDelayed before noticing the phase change. The
+        // reducer's else-arm absorbs it (idempotent action contract).
+        val result = module.reduce(
+            PipelineUiState.Idle,
+            Action.PipelineAction.TickPipelineTimer,
+            ctx(),
+        )
+        assertNull(result)
+    }
+
+    @Test
+    fun `TickPipelineTimer in Preparing is a no-op`() {
+        // Preparing has no elapsedMs slot; the timer only starts after
+        // the runner's StartPipeline transitions Preparing → Running.
+        val result = module.reduce(
+            PipelineUiState.Preparing(sid),
+            Action.PipelineAction.TickPipelineTimer,
+            ctx(),
+        )
+        assertNull(result)
+    }
+
+    @Test
+    fun `TickPipelineTimer in ReprocessStaging is a no-op`() {
+        val result = module.reduce(
+            PipelineUiState.ReprocessStaging(sid, transcript = ""),
+            Action.PipelineAction.TickPipelineTimer,
+            ctx(),
+        )
+        assertNull(result)
+    }
+
+    @Test
+    fun `TickPipelineTimer preserves stepHistory and other fields`() {
+        // The tick must restamp ONLY elapsedMs. Step history, autoEnter,
+        // hasFailure etc. are owned by other action arms.
+        val originalHistory = kotlinx.collections.immutable.persistentListOf(
+            StepRowItem(
+                stepName = "Transcribe",
+                status = StepStatus.RUNNING,
+                startedAtMs = 1_000L,
+            ),
+        )
+        val state = PipelineUiState.Running(
+            sessionId = sid,
+            target = InsertionTarget.INPUT_CONNECTION,
+            autoEnterActive = true,
+            completedSteps = 1,
+            totalSteps = 2,
+            startedAtMs = 1_000L,
+            elapsedMs = 2_000L,
+            hasFailure = false,
+            stepHistory = originalHistory,
+        )
+        val result = module.reduce(state, Action.PipelineAction.TickPipelineTimer, ctx())
+        val next = result!!.nextState as PipelineUiState.Running
+        assertEquals(4_000L, next.elapsedMs)
+        assertEquals(true, next.autoEnterActive)
+        assertEquals(1, next.completedSteps)
+        assertEquals(2, next.totalSteps)
+        assertEquals(originalHistory, next.stepHistory)
+    }
+
     // ─── Phase 5.A: stepHistory + hasFailure ─────────────────────────
 
     @Test

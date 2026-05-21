@@ -336,6 +336,31 @@ sealed class Action {
          * mitigation, R.17).
          */
         data class RejectedJobAlreadyActive(val sessionId: String) : PipelineAction()
+
+        /**
+         * Per-second timer tick during [PipelineUiState.Running].
+         *
+         * B-D-3 (dictate-pipeline-render-and-state-unification §5.2
+         * Variante A + §9.4 OQ-4: 1000 ms cadence). Dispatched from
+         * the [net.devemperor.dictate.core.PipelineActivityTickerObserver]
+         * while the pipeline is in `Running`. The
+         * [net.devemperor.dictate.state.modules.PipelineModule] reducer
+         * restamps `elapsedMs = ctx.now - state.startedAtMs` and emits
+         * no side effects — pure state-only.
+         *
+         * **Idempotent:** if the pipeline is not in `Running` (Idle /
+         * Preparing / Done / ReprocessStaging) the reducer returns
+         * `null` (no-op) so a late-arriving tick from a previously
+         * scheduled `Handler.postDelayed` (race with the
+         * observer's stop) is harmless.
+         *
+         * **No `sessionId` payload** — the reducer reads the current
+         * `Running.startedAtMs` directly. A session change mid-tick is
+         * caught by the observer's `distinctUntilChanged` on the
+         * pipeline phase (the observer cancels and re-starts the
+         * ticker on every phase transition).
+         */
+        data object TickPipelineTimer : PipelineAction()
     }
 
     // ════════════════════════════════════════════════════════════════

@@ -466,6 +466,30 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                 } else null
                 else -> null
             }
+
+        // ─── Pipeline timer per-second tick (B-D-3) ────────────────────
+        is Action.PipelineAction.TickPipelineTimer -> when (state) {
+            // Per-second restamp of `elapsedMs` so the record-button
+            // label visibly advances between step boundaries. Pure
+            // state-only — no side effects. Idempotent: if `elapsedMs`
+            // happens to already match (e.g. two ticks fire in the same
+            // 1ms slot from a Handler race), `state.copy(...)`
+            // produces an equal object and the StateFlow's
+            // distinctUntilChanged in the observer chain will collapse
+            // it.
+            //
+            // Triangle-FSM safety: the reducer is pure-state, so a
+            // tick fired from the observer's tail-cancellation race
+            // (ticker fired after the observer's collect-coroutine
+            // saw the state leave `Running`) collapses to a no-op
+            // on Idle/Done.
+            is PipelineUiState.Running -> TransitionResult(
+                nextState = state.copy(
+                    elapsedMs = elapsedSince(state.startedAtMs, ctx.now),
+                ),
+            )
+            else -> null
+        }
     }
 
     /**

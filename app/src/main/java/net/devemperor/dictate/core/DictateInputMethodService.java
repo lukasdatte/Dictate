@@ -346,6 +346,15 @@ public class DictateInputMethodService extends InputMethodService
     private View overlayPermissionInfobar;
     private OverlayOnboardingObserver overlayOnboardingObserver;
 
+    // 2026-05-21 indirection-cleanup Chunk 3.3 — reactive bridge for the
+    // edit-bar audio-focus-twin (`editAudioFocusButton`). Listens to
+    // `state.audio.audioFocusEnabledPref` and forwards to
+    // `EditBarController.refreshAudioFocusIcon(...)`. Replaces the
+    // imperative refresh paths in `audioFocusListener` + the
+    // post-toggle call inside `onAudioFocusToggled` (both removed in
+    // Chunks 3.4 / 3.5).
+    private EditBarAudioFocusObserver editBarAudioFocusObserver;
+
     // Post-cutover hotfix #3+#4 — drives the recording-animation
     // side-channel (timer + amplitude polling on Active|Paused) from
     // state.recording transitions. See RecordingActivityTickerObserver
@@ -1488,6 +1497,24 @@ public class DictateInputMethodService extends InputMethodService
             overlayOnboardingObserver.start();
         }
 
+        // 2026-05-21 indirection-cleanup Chunk 3.3 — start the reactive
+        // edit-bar audio-focus-twin observer. It feeds `refreshAudioFocusIcon`
+        // from `state.audio.audioFocusEnabledPref` on every distinct change
+        // (including the first emit on subscribe — which subsumes the
+        // post-attach seed `editBarController.refreshAudioFocusIcon(...)`
+        // call in `attachDormantEditBarEmojiOwners`).
+        if (editBarAudioFocusObserver != null) {
+            editBarAudioFocusObserver.stop();
+        }
+        editBarAudioFocusObserver = new EditBarAudioFocusObserver(
+                pipelineBinder.getState(),
+                enabled -> {
+                    if (editBarController != null) {
+                        editBarController.refreshAudioFocusIcon(enabled);
+                    }
+                });
+        editBarAudioFocusObserver.start();
+
         // Post-cutover hotfix #3+#4 — start the recording-animation
         // side-channel ticker. Drives ImeViewBackend.onTimerTick/onAmplitude
         // + QwertzRecordingController.onTimerTick/onAmplitude from
@@ -1719,14 +1746,14 @@ public class DictateInputMethodService extends InputMethodService
             this);
         editBarController.installDormant();
         editBarController.attachToViews();
-        // F-3 (B5-VAL): the edit-bar audio-focus twin is NOT covered by
-        // the catalog AUDIO_FOCUS slot (that drives only the
-        // main-button-area twin). Seed its icon + contentDescription
-        // from the persisted pref after (re-)inflate so it does not stay
-        // frozen at the static volume_off default (parity with the
-        // deleted legacy refreshAudioFocusIcon initial-render call).
-        editBarController.refreshAudioFocusIcon(
-                DictatePrefsKt.get(sp, Pref.AudioFocus.INSTANCE));
+        // 2026-05-21 indirection-cleanup Chunk 3.3 — the legacy
+        // imperative seed (`editBarController.refreshAudioFocusIcon(sp.get(Pref.AudioFocus))`)
+        // is no longer needed: the reactive
+        // `EditBarAudioFocusObserver` started further down emits the
+        // current value on first subscribe and on every subsequent
+        // change. F-3 (B5-VAL — edit-bar twin not covered by catalog
+        // AUDIO_FOCUS slot) is now satisfied via the reactive observer
+        // instead of imperative re-painting.
 
         emojiController = new EmojiController(
             new EmojiViews(editEmojiButton, emojiPickerCloseButton, emojiPickerView),
@@ -1899,6 +1926,13 @@ public class DictateInputMethodService extends InputMethodService
         if (overlayOnboardingObserver != null) {
             overlayOnboardingObserver.stop();
             overlayOnboardingObserver = null;
+        }
+
+        // 2026-05-21 indirection-cleanup Chunk 3.3 — symmetric tear-down
+        // of the edit-bar audio-focus-twin reactive observer.
+        if (editBarAudioFocusObserver != null) {
+            editBarAudioFocusObserver.stop();
+            editBarAudioFocusObserver = null;
         }
 
         // Post-cutover hotfix #3+#4 — cancel the recording-animation

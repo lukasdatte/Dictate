@@ -109,10 +109,15 @@ class PipelineSessionRepoAdapter(
      * paste-hint per F-1).
      */
     override suspend fun loadPending(): List<PendingSession> = withContext(ioContext) {
-        // RECORDED rows with existing audio
+        // RECORDED rows with existing audio.
+        // ADR-0007 Phase 1 — read through `effectiveAudioFilePaths` so
+        // dual-column rows are handled. Multi-segment sessions must
+        // have EVERY segment on disk to qualify; a partial loss bricks
+        // the downstream MediaMuxer concat.
         val recordedWithAudio = sessionDao.getSessionsByStatuses(listOf(SessionStatus.RECORDED.name))
             .filter { entity ->
-                entity.audioFilePath?.let { File(it).exists() } == true
+                val paths = entity.effectiveAudioFilePaths
+                paths.isNotEmpty() && paths.all { File(it).exists() }
             }
 
         // COMPLETED rows with pending insertion — uses dedicated DAO query

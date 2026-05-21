@@ -182,18 +182,26 @@ class PipelineRecovery(
         // 1. RECORDING → FAILED. Recording-phase doesn't survive OOM-death.
         //    Ordering: DB-promote FIRST, opportunistic File.delete SECOND.
         //    See §6.3 Z. 3333-3341 for the rationale.
+        //
+        //    ADR-0007 Phase 1 — read through `effectiveAudioFilePaths`
+        //    so the dual-column window is transparent. Multi-segment
+        //    sessions delete every segment in the list.
         candidates.filter { it.statusEnum == SessionStatus.RECORDING }.forEach { row ->
             safeUpdateStatus(row.id, SessionStatus.FAILED)
             safeUpdateError(row.id, AIProviderException.ErrorType.UNKNOWN.name,
                 "recording-interrupted-by-process-death")
-            deleteAudioOpportunistic(row.audioFilePath)
+            row.effectiveAudioFilePaths.forEach { deleteAudioOpportunistic(it) }
             safeClearAudioPath(row.id)
         }
 
         // 2. TRANSCRIBING — downgrade to RECORDED if audio exists, else FAILED.
         //    Clear stale errors on downgrade (Spec 1 §6.3 Z. 3389-3394).
+        //    Multi-segment: a session counts as "audio exists" only when
+        //    EVERY segment is still on disk — a partial loss bricks the
+        //    concatenation step downstream.
         candidates.filter { it.statusEnum == SessionStatus.TRANSCRIBING }.forEach { row ->
-            val audioOk = row.audioFilePath?.let { File(it).exists() } == true
+            val paths = row.effectiveAudioFilePaths
+            val audioOk = paths.isNotEmpty() && paths.all { File(it).exists() }
             if (audioOk) {
                 safeUpdateStatus(row.id, SessionStatus.RECORDED)
                 safeUpdateError(row.id, null, null)
@@ -207,8 +215,9 @@ class PipelineRecovery(
 
         // 3. Ghost RECORDED — audio gone. Promote to FAILED + clear path.
         candidates.filter { it.statusEnum == SessionStatus.RECORDED }.forEach { row ->
-            val audioOk = row.audioFilePath?.let { File(it).exists() } == true
-            if (row.audioFilePath != null && !audioOk) {
+            val paths = row.effectiveAudioFilePaths
+            val audioOk = paths.isNotEmpty() && paths.all { File(it).exists() }
+            if (paths.isNotEmpty() && !audioOk) {
                 safeUpdateStatus(row.id, SessionStatus.FAILED)
                 safeUpdateError(row.id, AIProviderException.ErrorType.UNKNOWN.name,
                     "audio file vanished")

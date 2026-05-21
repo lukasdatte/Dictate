@@ -80,8 +80,16 @@ interface SessionDao {
     @Query("UPDATE sessions SET queued_prompt_ids = :ids WHERE id = :id")
     fun updateQueuedPromptIds(id: String, ids: String?)
 
-    /** Clears the audio file path (used when the audio file is deleted but the session is kept). */
-    @Query("UPDATE sessions SET audio_file_path = NULL WHERE id = :id")
+    /**
+     * Clears the audio file path (used when the audio file is deleted but the session is kept).
+     *
+     * **Dual-column write (ADR-0007 Phase 1):** clears both the legacy
+     * `audio_file_path` and the new `audio_file_paths` (set to '' →
+     * empty list). The two columns stay consistent so
+     * `SessionEntity.effectiveAudioFilePaths` reflects the cleared
+     * state regardless of which side a downstream reader consults.
+     */
+    @Query("UPDATE sessions SET audio_file_path = NULL, audio_file_paths = '' WHERE id = :id")
     fun clearAudioFilePath(id: String)
 
     /**
@@ -90,8 +98,13 @@ interface SessionDao {
      *
      * Finding SEC-0-8: required after the RecordingRepository promotes the file
      * out of the cache directory.
+     *
+     * **Dual-column write (ADR-0007 Phase 1):** mirrors the path into
+     * `audio_file_paths` so the new and legacy columns stay consistent
+     * during the migration window. A single-element list needs no pipe
+     * delimiter.
      */
-    @Query("UPDATE sessions SET audio_file_path = :path WHERE id = :id")
+    @Query("UPDATE sessions SET audio_file_path = :path, audio_file_paths = :path WHERE id = :id")
     fun updateAudioFilePath(id: String, path: String)
 
     // ── NEW (M4 pipeline-service refactor, Spec 1 §6.1) ────────────────────
@@ -179,8 +192,12 @@ interface SessionDao {
      * by `DictatePipelineService.cleanupOrphanedAudio()` after the
      * File.delete() pass succeeded (Spec 1 §6.3.1). Idempotent —
      * additive across retries.
+     *
+     * **Dual-column write (ADR-0007 Phase 1):** clears both `audio_file_path`
+     * and `audio_file_paths` so the cleared state holds regardless of
+     * which side a downstream reader consults.
      */
-    @Query("UPDATE sessions SET audio_file_path = NULL WHERE id IN (:ids)")
+    @Query("UPDATE sessions SET audio_file_path = NULL, audio_file_paths = '' WHERE id IN (:ids)")
     fun clearAudioFilePathBulk(ids: List<String>)
 
     /**

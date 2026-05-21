@@ -350,3 +350,62 @@ elsewhere. MediaMuxer is the first-party API and handles same-codec
 concatenation trivially; the alternatives (FFmpeg, AudioRecord)
 introduce dependencies or maintenance burden disproportionate to the
 benefit.
+
+### 2026-05-21 — Activation + Rolling-Segments + PipelineAudioResult (Continuation-Refactor)
+
+**Trigger:** Plan `2026-05-21 - dictate-widget-state-and-recovery`
+B1 — `allocateNext()` was implemented as Phase-1 placeholder but
+never wired; user requested seamless Auto-Continuation after
+process-death (plan §1.3 Variant A), preservation of as much
+audio as possible at crash (Rolling-Segments L2), and explicit
+partial-recovery signalling at pipeline send.
+
+**Before:**
+- `allocateNext(sessionId)` defined in the API but no call-site in
+  the codebase (Phase-1 placeholder per original §"Repository API").
+- MediaRecorder writes a single `_seg1.m4a` per recording session;
+  at process-death the partial file has no `moov` atom → unreadable.
+- `readForPipeline(sessionId): File` returns one file unconditionally;
+  callers cannot distinguish "complete merge" from "partial-recovery
+  merge with skipped segments".
+- Codec-Param heterogeneity (Failure-Mode 1) listed as future B.3
+  mitigation without code.
+
+**After:**
+- **Continuation wiring:** `RecordingHardwareAdapter` calls
+  `allocateNext(sessionId)` on Cold-Resume — triggered by
+  `ActionResolvers.resolveRecordAction` detecting a
+  `RECORDING_INTERRUPTED` session within freshness window and reusing
+  its sessionId (see plan B2). New MediaRecorder is configured
+  identically to the previous segment via `MediaExtractor` codec-param
+  read (B.3 mitigation now coded).
+- **Rolling-Segments (L2):** during active recording, the adapter
+  periodically calls `MediaRecorder.setNextOutputFile()` (default
+  every 30s, configurable via `Pref.RollingSegmentIntervalSec`).
+  Each roll finalises the previous segment (writes `moov`), so a
+  crash loses at most one rolling interval.
+- **PipelineAudioResult sealed class:** `readForPipeline(sessionId)`
+  now returns `PipelineAudioResult.Complete(file)` or
+  `PartialRecovery(file, ignoredSegmentIndices, estimatedLostSeconds)`.
+  MediaMuxer-Concat skips unreadable segments and records them in
+  `ignoredSegmentIndices`; the caller persists this into the
+  `lastErrorMessage` column as a "partial" marker, which triggers
+  the Partial-Recovery InfoBar producer (ADR-0006 cooperation).
+- **UX-Invariant:** seamless continuation is silent — no InfoBar
+  shown when recovery succeeds without loss. Only the partial-recovery
+  case surfaces a warning ("N seconds of audio skipped at send").
+
+**Reasoning:** The original ADR-0007 designed `allocateNext()` for
+Cold-Resume but stopped at the API level — the actual Recording-
+Hardware-Adapter wiring was deferred because there was no clear UX
+contract for "what happens when recovery is partial". With the
+Widget-State-and-Recovery plan (ADR-0008), that UX contract was
+nailed down: seamless when possible, explicit when not. That
+decision drove the `PipelineAudioResult`-sealed-class form (instead
+of overloading the return-type) so the InfoBar layer can decide
+declaratively whether to surface a warning. Rolling-Segments (L2)
+was chosen over partial-file repair (L3) because it's a native
+Android API, integrates cleanly with the existing multi-segment
+architecture (each roll = a new segment), and bounds the worst-case
+loss to the roll interval — much better than "last segment opfern"
+(L1) and far less brittle than MP4-repair libraries.

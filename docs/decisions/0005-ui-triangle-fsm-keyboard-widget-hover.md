@@ -1,6 +1,6 @@
 # ADR-0005: UI — Triangle-FSM (KEYBOARD / WIDGET / HOVER)
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0008](0008-ui-surface-axes-widget-state-and-ime-view.md) (2026-05-21)
 **Subsystem:** ui-mode
 **Scope:** Project-Wide
 **Date:** 2026-05-14
@@ -536,3 +536,49 @@ The shared `OVERLAY_5BUTTON` LayoutMode (OPEN-2 resolution) lets us
 keep WIDGET/HOVER visually consistent. T7 is structural — it
 eliminates a UX-failure class by construction rather than via
 imperative cleanup code.
+
+### 2026-05-21 — Superseded by ADR-0008
+
+**Trigger:** The Triangle-FSM accumulated structural pressure that the
+three-Mode-Enum form could no longer absorb cleanly:
+
+1. **Truth-Table-Konflikt (Row 3 fix, 2026-05-21):** Bug #121
+   ("Widget verschwindet bei IME-Close ohne Recording") forced a
+   Row 3 (`!imeView && userPrefersWidget → WIDGET`) into
+   `computeViewMode`. Row 3 collides semantically with Row 4
+   (`!imeView && pipelineActive → HOVER`); the resolution by
+   row-priority discards the *origin* of the WIDGET state.
+2. **Bidirectional-Render-Migration (A3-Phase, 2026-05-21):**
+   `KeyboardLayoutManager.modeForBackend` introduced parallel
+   render paths (Keyboard- and Widget-Surface can be live
+   simultaneously). The "exclusive Mode-Wahl" semantics of the
+   enum became structurally false — but the State-Model did not
+   follow.
+3. **Crash-Recovery-Requirement (2026-05-21):** The
+   Widget-State-and-Recovery plan needs to know after Pipeline-End
+   whether to return to KEYBOARD (Pipeline triggered) or remain in
+   WIDGET (User preference). With a Mode-Enum that has no Origin
+   field, this question is structurally unanswerable.
+
+**Before:** ViewMode-Enum (KEYBOARD | WIDGET | HOVER) with five-row
+truth-table, T1-T7 transitions, `userPrefersWidget` transient on
+`overlay`.
+
+**After:** Superseded by ADR-0008 — `WidgetState` (Hidden |
+Visible(origin: WidgetOrigin)) + `imeViewVisible: Boolean` as two
+orthogonal axes. W1-W8 transitions. Origin is now an explicit,
+typesafe field. Bidirectional-Render is structurally visible (both
+axes can be true). The Row-3 patch is obsolete — sticky-widget is
+guaranteed by W5 (USER-Origin survives `OnImeViewShown`).
+
+**Reasoning:** The Triangle-FSM solved the problems of 2026-05-14
+correctly. But the three-Mode-Enum form collapsed three orthogonal
+concepts (which surface is rendered, who triggered it, is the
+keyboard visible) into one variable. Each subsequent change pressed
+on the join points: T7 fixed the Geist-Widget class, Row 3 fixed
+sticky-widget, Bidirectional-Render broke the exclusive semantics,
+Crash-Recovery needed an Origin field that doesn't fit the enum.
+Two-axes is the smallest restructure that makes all of these
+structurally clean. See ADR-0008 §"Alternatives" for the full
+weighing — flat enum, twin booleans, and 4-Mode-Enum variants were
+all considered and rejected.

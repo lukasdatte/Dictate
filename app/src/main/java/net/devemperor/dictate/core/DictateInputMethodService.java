@@ -2091,10 +2091,23 @@ public class DictateInputMethodService extends InputMethodService
         // unreachable in the *primary* use-case (dictation continues
         // after the user switches the keyboard away). See ADR-0005
         // Decision-History 2026-05-15 + research §6.1.
+        //
+        // 2026-05-21 F — the legacy `recordingStateController.onKeyboardHidden()`
+        // call (which paused the MediaRecorder with a 60s timeout) is
+        // GONE. Post-cutover the RecordingStateController is dead code
+        // on the bound path (its KDoc spells this out) and the
+        // FGS-owned RecordingHardwareAdapter keeps the recording alive
+        // across IME-view tear-down. The user's "Aufnahme darf nicht
+        // verloren gehen bei Tastatur-Schließen" requirement is now
+        // structurally satisfied: the recorder lives in the service
+        // and the OnImeViewHidden dispatch below flips ViewMode to
+        // HOVER so the Overlay surface takes over rendering.
         if (recordingStateController.getState().isRecordingOrPaused()
                 || recordingStateController.getState() instanceof RecordingState.Preparing) {
-            // State (A): Recording is active or paused -> delegate to controller (pause + timeout)
-            recordingStateController.onKeyboardHidden();
+            // State (A): Recording is active or paused — no IME-side
+            // hardware mutation; recording continues in the FGS.
+            // Content-area is collapsed so the leftover IME-view
+            // chrome doesn't paint partial state during HOVER.
             setEffectiveContentArea(ContentArea.MAIN_BUTTONS);
         } else if (pipelineOrchestrator != null && pipelineOrchestrator.isRunning()) {
             // State (B): API request is running -> let it continue, just hide content panels

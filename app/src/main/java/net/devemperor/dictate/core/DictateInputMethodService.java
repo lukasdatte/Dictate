@@ -3406,6 +3406,17 @@ public class DictateInputMethodService extends InputMethodService
     private void performEnterAction() {
         InputConnection inputConnection = getCurrentInputConnection();
         if (inputConnection == null) return;
+        // B3.5 host-commit guard — same rationale as
+        // `commitTextToInputConnection`: the IME-View is collapsed when
+        // the widget is visible, so `inputConnection` belongs to whatever
+        // host window has focus. Sending KEYCODE_ENTER into it would
+        // submit forms / send messages in the wrong app.
+        if (!canCommitToHost()) {
+            android.util.Log.w("DictateIME",
+                    "performEnterAction blocked — widget is visible, " +
+                    "deferring Enter until IME is re-attached");
+            return;
+        }
         EditorInfo editorInfo = getCurrentInputEditorInfo();
 
         if (editorInfo == null) {
@@ -4267,6 +4278,35 @@ public class DictateInputMethodService extends InputMethodService
         return pipelineBinder.getState().getValue().getPipeline();
     }
 
+    /**
+     * Host-commit guard (B3.5 / plan §4 B3, ADR-0008 §"Send-during-widget").
+     *
+     * Returns {@code true} when the IME may safely
+     * {@link InputConnection#commitText(CharSequence, int)} text into the
+     * current input target — i.e. when the floating widget is NOT visible
+     * and therefore the IME-View is the active surface backing
+     * {@code getCurrentInputConnection()}. Returns {@code false} when the
+     * widget is visible: the keyboard is collapsed, the live
+     * {@code InputConnection} is whatever host window has focus (Settings
+     * app, browser address bar, …) — committing transcript into it would
+     * leak the user's text into the wrong field.
+     *
+     * Callers that have a pending text to insert MUST persist it via the
+     * Pending-Insert info-bar surface (B4) when this returns {@code false}
+     * so the user can re-attach the IME and tap to insert.
+     *
+     * Defensive: when {@code pipelineBinder} is null (pre-bind window
+     * during service start-up), returns {@code true} — the bind establishes
+     * before any pipeline can complete, but a stray commit in the gap is
+     * structurally impossible and the safe default is "allow".
+     */
+    private boolean canCommitToHost() {
+        if (pipelineBinder == null) return true;
+        net.devemperor.dictate.state.WidgetState widget =
+                pipelineBinder.getState().getValue().getWidget();
+        return !(widget instanceof net.devemperor.dictate.state.WidgetState.Visible);
+    }
+
     @Override
     public void onStepStarted(@androidx.annotation.NonNull String stepName) {
         mainHandler.post(() -> {
@@ -4577,6 +4617,21 @@ public class DictateInputMethodService extends InputMethodService
             String sessionIdOverride,
             boolean enableAutoEnter) {
         if (ic == null) return false;
+
+        // B3.5 host-commit guard (plan §4 B3, ADR-0008 §"Send-during-widget").
+        // When the floating widget is visible the keyboard is collapsed and
+        // `ic` belongs to whatever host window has focus — typically NOT the
+        // app the user was dictating into. Committing transcript here would
+        // leak text into a wrong field. Persist via the Pending-Insert
+        // info-bar (B4) instead; the user re-attaches the IME and taps to
+        // insert. Returning `false` mirrors the contract above (caller
+        // treats it as a silent no-op for that one commit attempt).
+        if (!canCommitToHost()) {
+            android.util.Log.w("DictateIME",
+                    "commitTextToInputConnection blocked — widget is visible, " +
+                    "deferring to Pending-Insert info-bar");
+            return false;
+        }
 
         // 1. Capture replaced (selected) text before commit for undo-buffer / audit
         String replacedText = null;

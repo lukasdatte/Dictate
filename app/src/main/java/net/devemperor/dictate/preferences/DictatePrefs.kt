@@ -161,6 +161,21 @@ sealed class Pref<T>(val key: String, val default: T) {
     // @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/b3-cleanup-cascade-and-backfill-policy.md §4
     object PendingInsertionFreshnessMs :
         Pref<Long>("net.devemperor.dictate.pending_insertion_freshness_ms", 86_400_000L)
+
+    // Rolling-Segments interval (ADR-0007 §"Activation + Rolling-Segments",
+    // B1.3). The RecordingHardwareAdapter rolls to a new MediaRecorder
+    // output file every N seconds during active recording so the previous
+    // segment is finalised (moov-atom written) and survives a crash. At
+    // worst, the user loses one rolling interval of audio when the
+    // process dies mid-segment.
+    //
+    // Default: 30 s — the historic ADR-0007 estimate. Lower = less worst-
+    // case loss but more on-disk fragmentation; higher = fewer files but
+    // proportionally more audio lost per crash.
+    //
+    // @see net.devemperor.dictate.core.RecordingHardwareAdapter
+    object RollingSegmentIntervalSec :
+        Pref<Long>("net.devemperor.dictate.rolling_segment_interval_sec", 30L)
 }
 
 // ── Extension Functions ──

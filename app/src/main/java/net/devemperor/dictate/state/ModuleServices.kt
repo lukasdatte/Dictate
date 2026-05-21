@@ -269,12 +269,18 @@ interface RecordingHardwareSubsystem {
      *   MediaMuxer concat in `AudioFileRepository.readForPipeline` does
      *   not reject heterogeneous formats (ADR-0007 §"Failure-Modes §1",
      *   B1.2 mitigation).
+     * @param sessionId the active session-id. Required for Rolling-
+     *   Segments (B1.3) — the adapter stores it and uses it to call
+     *   `audioFileRepository.allocateNext(sessionId)` on each rolling
+     *   tick. `null` disables rolling for this allocate (used by tests
+     *   and any caller that does not own a session-id).
      */
     fun allocate(
         target: InsertionTarget,
         useBluetooth: Boolean,
         audioFile: java.io.File,
         codecParams: net.devemperor.dictate.audio.CodecParams? = null,
+        sessionId: String? = null,
     )
 
     /** Begin recording — must follow a successful `allocate`. */

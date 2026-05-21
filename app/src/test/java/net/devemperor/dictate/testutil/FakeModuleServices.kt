@@ -107,6 +107,7 @@ object NoopRecordingHardware : RecordingHardwareSubsystem {
         useBluetooth: Boolean,
         audioFile: File,
         codecParams: net.devemperor.dictate.audio.CodecParams?,
+        sessionId: String?,
     ) = Unit
     override fun start() = Unit
     override fun pause() = Unit

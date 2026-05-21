@@ -352,9 +352,26 @@ class DictatePipelineService : Service() {
         // is also held as a service field [recordingHardwareAdapterImpl] so
         // the LocalBinder can expose [RecordingHardwareAdapter.maxAmplitudeOrNull]
         // for the IME's amplitude-polling side-channel (post-cutover #3+#4).
-        recordingHardwareAdapterImpl = RecordingHardwareAdapter(emitAction = { action ->
-            orchestrator.emitAction(action)
-        })
+        // Audio-File Repository (ADR-0007) is service-owned and shared
+        // with the RecordingHardwareAdapter (for Rolling-Segments via
+        // allocateNext) and the future B2 Cold-Resume path (read
+        // codec-params + reuse session-id). The rolling interval comes
+        // from `Pref.RollingSegmentIntervalSec` (default 30 s); if the
+        // user changes it, the new value takes effect on the next
+        // service-start (no live re-read — recording in flight keeps
+        // its interval).
+        val audioFileRepository = CacheDirAudioFileRepository(
+            cacheDirProvider = { applicationContext.cacheDir },
+        )
+        val rollingIntervalSec: Long = run {
+            val pref = net.devemperor.dictate.preferences.Pref.RollingSegmentIntervalSec
+            sharedPrefs.getLong(pref.key, pref.default)
+        }
+        recordingHardwareAdapterImpl = RecordingHardwareAdapter(
+            emitAction = { action -> orchestrator.emitAction(action) },
+            audioFileRepository = audioFileRepository,
+            rollingIntervalMs = rollingIntervalSec * 1000L,
+        )
         val recordingHardware = recordingHardwareAdapterImpl
         val recordingTimer = RecordingTimerAdapter()
         val amplitudeStream = AmplitudeStreamAdapter()

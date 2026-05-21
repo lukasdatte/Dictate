@@ -63,7 +63,13 @@ internal object PipelineServiceStubSubsystems {
 
     /** Recording-hardware adapter stub. Logs and discards every call. */
     val recordingHardware: RecordingHardwareSubsystem = object : RecordingHardwareSubsystem {
-        override fun allocate(target: InsertionTarget, useBluetooth: Boolean, audioFile: File) {
+        override fun allocate(
+            target: InsertionTarget,
+            useBluetooth: Boolean,
+            audioFile: File,
+            codecParams: net.devemperor.dictate.audio.CodecParams?,
+            sessionId: String?,
+        ) {
             Log.w(TAG, "recordingHardware.allocate($target, $useBluetooth, $audioFile): $MESSAGE")
         }
         override fun start() { Log.w(TAG, "recordingHardware.start(): $MESSAGE") }

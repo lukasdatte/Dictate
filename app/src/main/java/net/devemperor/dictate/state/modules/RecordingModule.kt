@@ -105,6 +105,7 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
             val useBluetooth: Boolean,
             val audioFile: File,
             val codecParams: net.devemperor.dictate.audio.CodecParams? = null,
+            val sessionId: String? = null,
         ) : Effect
 
         /**
@@ -373,6 +374,7 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                                 target = action.target,
                                 useBluetooth = false,
                                 audioFile = action.audioFile,
+                                sessionId = action.sessionId,
                             ),
                             // 2026-05-21 indirection-cleanup Chunk 4.4
                             // (A-4) — RESEND-recovery file-name persist.
@@ -470,6 +472,7 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                         ),
                         sideEffects = listOf(
                             Effect.AllocateMediaRecorder(
+                                sessionId = state.sessionId,
                                 target = requireNotNull(state.target) {
                                     "ScoRouteResolved on awaitingSco " +
                                         "Preparing requires non-null target"
@@ -664,6 +667,7 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 useBluetooth = effect.useBluetooth,
                 audioFile = effect.audioFile,
                 codecParams = effect.codecParams,
+                sessionId = effect.sessionId,
             )
         // B3-VAL-W1 F-10 — bridge the new Effect.StartMediaRecorder.
         Effect.StartMediaRecorder -> services.recordingHardware.start()

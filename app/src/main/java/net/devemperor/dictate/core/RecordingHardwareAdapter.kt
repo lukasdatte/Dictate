@@ -2,6 +2,13 @@ package net.devemperor.dictate.core
 
 import android.media.MediaRecorder
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import net.devemperor.dictate.audio.AudioFileRepository
 import net.devemperor.dictate.audio.CodecParams
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.InsertionTarget
@@ -48,20 +55,41 @@ import java.io.IOException
  */
 class RecordingHardwareAdapter(
     private val emitAction: (Action) -> Unit,
+    private val audioFileRepository: AudioFileRepository? = null,
+    private val scope: CoroutineScope = MainScope(),
+    private val rollingIntervalMs: Long = DEFAULT_ROLLING_INTERVAL_MS,
 ) : RecordingHardwareSubsystem {
 
     private var recorder: MediaRecorder? = null
+
+    /**
+     * Active recording session-id, set by [allocate]. Used by the
+     * Rolling-Segment loop to call
+     * [AudioFileRepository.allocateNext]. Null when no session is
+     * active or when the caller did not supply a session-id (tests,
+     * legacy path).
+     */
+    private var activeSessionId: String? = null
+
+    /**
+     * Rolling-Segment timer job. Null when no rolling is active —
+     * either because no recording is in flight, the session-id was
+     * not supplied, or the repository was not injected.
+     */
+    private var rollingJob: Job? = null
 
     override fun allocate(
         target: InsertionTarget,
         useBluetooth: Boolean,
         audioFile: File,
         codecParams: CodecParams?,
+        sessionId: String?,
     ) {
         if (recorder != null) {
             Log.w(TAG, "allocate() called with existing recorder — releasing previous instance")
             releaseRecorder()
         }
+        activeSessionId = sessionId
         val source = if (useBluetooth) {
             MediaRecorder.AudioSource.VOICE_COMMUNICATION
         } else {
@@ -122,7 +150,9 @@ class RecordingHardwareAdapter(
                     reason = e.message ?: "start-failed",
                 )
             )
+            return
         }
+        startRollingTimerIfPossible()
     }
 
     override fun pause() {
@@ -132,6 +162,10 @@ class RecordingHardwareAdapter(
         } catch (e: IllegalStateException) {
             Log.w(TAG, "MediaRecorder.pause() failed (ignored — best-effort)", e)
         }
+        // Stop the rolling timer while paused — the MediaRecorder is
+        // not writing samples, so periodic setNextOutputFile() calls
+        // would only churn empty segments. `resume()` re-arms it.
+        cancelRollingTimer()
     }
 
     override fun resume() {
@@ -140,11 +174,14 @@ class RecordingHardwareAdapter(
             mr.resume()
         } catch (e: IllegalStateException) {
             Log.w(TAG, "MediaRecorder.resume() failed (ignored)", e)
+            return
         }
+        startRollingTimerIfPossible()
     }
 
     override fun stop() {
         val mr = recorder ?: return
+        cancelRollingTimer()
         try {
             mr.stop()
         } catch (e: RuntimeException) {
@@ -164,6 +201,7 @@ class RecordingHardwareAdapter(
     }
 
     override fun release() {
+        cancelRollingTimer()
         releaseRecorder()
     }
 
@@ -172,6 +210,57 @@ class RecordingHardwareAdapter(
             try { it.release() } catch (e: Exception) { Log.w(TAG, "release() failed", e) }
         }
         recorder = null
+        activeSessionId = null
+    }
+
+    // ──── Rolling-Segments (L2) ─────────────────────────────────────
+
+    /**
+     * Start the periodic `setNextOutputFile` loop. No-op when the
+     * adapter was constructed without an [AudioFileRepository], or
+     * when [allocate] was called without a session-id (legacy /
+     * test path). Idempotent — calling twice cancels and restarts.
+     */
+    private fun startRollingTimerIfPossible() {
+        val repo = audioFileRepository
+        val sid = activeSessionId
+        if (repo == null || sid == null) {
+            // Rolling is opt-in: a missing dependency just means we
+            // keep the historic single-segment behaviour.
+            return
+        }
+        cancelRollingTimer()
+        rollingJob = scope.launch {
+            while (isActive) {
+                delay(rollingIntervalMs)
+                rollNextSegment(repo, sid)
+            }
+        }
+    }
+
+    private fun cancelRollingTimer() {
+        rollingJob?.cancel()
+        rollingJob = null
+    }
+
+    private fun rollNextSegment(repo: AudioFileRepository, sessionId: String) {
+        val mr = recorder ?: return
+        val nextFile = try {
+            repo.allocateNext(sessionId)
+        } catch (e: IOException) {
+            Log.w(TAG, "Rolling: allocateNext failed for $sessionId — keeping current segment", e)
+            return
+        }
+        try {
+            mr.setNextOutputFile(nextFile)
+        } catch (e: Exception) {
+            // setNextOutputFile throws IllegalStateException when the
+            // recorder is not currently recording (e.g. mid-pause race),
+            // and IOException on filesystem errors. Either way the
+            // current segment keeps writing — the rolling cycle is a
+            // best-effort durability boost, not a correctness invariant.
+            Log.w(TAG, "Rolling: setNextOutputFile($nextFile) failed", e)
+        }
     }
 
     /**
@@ -209,5 +298,15 @@ class RecordingHardwareAdapter(
 
     private companion object {
         const val TAG: String = "RecordingHwAdapter"
+
+        /**
+         * Default Rolling-Segment interval, matches
+         * `Pref.RollingSegmentIntervalSec.default` (30 s). The Pref
+         * lookup is the caller's responsibility — the adapter receives
+         * the resolved value via its constructor so unit tests can
+         * pass a smaller interval (e.g. 50 ms) without going through
+         * SharedPreferences.
+         */
+        const val DEFAULT_ROLLING_INTERVAL_MS: Long = 30_000L
     }
 }

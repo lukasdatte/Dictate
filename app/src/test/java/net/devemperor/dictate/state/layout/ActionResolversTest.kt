@@ -625,6 +625,97 @@ class ActionResolversTest {
         )
     }
 
+    // ─── B3.4 — Pause-Toggle via widget axis ────────────────────────
+
+    @Test
+    fun `B3-4 WIDGET-Active + widget Visible(USER) emits PauseRecording (Pause-Toggle)`() {
+        // The Send-button morphs into a Pause-Toggle when the floating
+        // widget is visible — the keyboard is collapsed, so there is no
+        // guaranteed InputConnection to commit transcript into. Pause
+        // is the only safe action; the actual send is deferred until
+        // the user re-opens the IME-View.
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            widget = net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.USER
+            ),
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-w"
+            ),
+        )
+        assertTrue(
+            "Active + widget visible → PauseRecording, not StopRecordingAndSend",
+            resolveOverlayRecordAction(s, fakeModuleServices())
+                is Action.RecordingAction.PauseRecording,
+        )
+    }
+
+    @Test
+    fun `B3-4 WIDGET-Paused + widget Visible(PIPELINE) emits ResumeRecording (Resume-Toggle)`() {
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            widget = net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.PIPELINE
+            ),
+            recording = RecordingState.Paused(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-w"
+            ),
+        )
+        assertTrue(
+            "Paused + widget visible → ResumeRecording, not StopRecordingAndSend",
+            resolveOverlayRecordAction(s, fakeModuleServices())
+                is Action.RecordingAction.ResumeRecording,
+        )
+    }
+
+    @Test
+    fun `B3-4 pipeline Running takes precedence over Pause-Toggle (auto-enter still owns the btn)`() {
+        // When the pipeline is live the button is the per-run auto-enter
+        // toggle, regardless of widget-state. Pause/Resume only kicks
+        // in for non-live-pipeline recording sub-states.
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            widget = net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.USER
+            ),
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-w"
+            ),
+            pipeline = PipelineUiState.Running(
+                sessionId = "sid-pipe",
+                target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+                totalSteps = 1,
+                elapsedMs = 0L,
+                autoEnterActive = false,
+            ),
+        )
+        assertTrue(
+            "Pipeline.Running + widget visible + Active → ToggleRunningAutoEnter (not Pause)",
+            resolveOverlayRecordAction(s, fakeModuleServices())
+                is Action.PipelineAction.ToggleRunningAutoEnter,
+        )
+    }
+
+    @Test
+    fun `B3-4 WIDGET-Idle + widget Visible still goes through StartRecording path`() {
+        // Continuation-Lookup runs in resolveRecordAction (B2); the
+        // overlay resolver falls through to it for the Idle case
+        // regardless of widget-state — Pause/Resume only meaningful
+        // when recording is in flight.
+        val recordingFile = File("/tmp/overlay-idle-widget.m4a")
+        val factory = FixedAudioFileFactory(recordingFile)
+        val s = state.copy(
+            viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
+            widget = net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.USER
+            ),
+            recording = RecordingState.Idle,
+        )
+        val action = resolveOverlayRecordAction(s, fakeModuleServices(audioFileFactory = factory))
+        assertTrue(action is Action.RecordingAction.StartRecording)
+        assertEquals(1, factory.allocateCallCount)
+    }
+
     @Test
     fun `resolveOverlayRecordAction WIDGET-Idle emits StartRecording with allocated file`() {
         val recordingFile = File("/tmp/overlay-idle.m4a")

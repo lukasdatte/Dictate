@@ -11,6 +11,7 @@ import net.devemperor.dictate.state.ModuleServices
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
 import net.devemperor.dictate.state.ViewMode
+import net.devemperor.dictate.state.WidgetState
 import java.util.UUID
 
 /**
@@ -323,9 +324,39 @@ fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices):
         return resolveRecordActionPipeline(state, services)
     }
 
+    // B3.4 (plan §1.2 + W2 KDoc): the Send-button morphs into a
+    // **Pause-Toggle** while the floating widget is visible. The
+    // user-requirement is "Pause is reachable without unhiding the
+    // keyboard": in widget-mode the keyboard is collapsed, so a
+    // separate OVERLAY_PAUSE slot would be redundant. The Send-button
+    // takes that role — Active→Paused, Paused→Active. The legacy
+    // `StopRecordingAndSend` path is no longer reachable from the
+    // overlay surface; sends are deferred until the user re-opens
+    // the IME-View (where commitTextToInputConnection has a guaranteed
+    // InputConnection — see the B3.5 host-commit guard).
+    //
+    // This is a deliberate behaviour change vs. ADR-0005's overlay
+    // semantics — ADR-0008 §"Send-during-widget" captures the
+    // motivation: a tap-to-send during widget-mode previously committed
+    // text into the wrong InputConnection (the Settings app, browser
+    // address bar, … whatever the host was when the widget surfaced).
+    if (state.widget is WidgetState.Visible) {
+        when (state.recording) {
+            is RecordingState.Active -> return Action.RecordingAction.PauseRecording
+            is RecordingState.Paused -> return Action.RecordingAction.ResumeRecording
+            RecordingState.Idle,
+            is RecordingState.Preparing -> {
+                // Fall through to the keyboard-surface body — Idle
+                // path becomes StartRecording / StartRecordingContinuation
+                // via the resolver below; Preparing returns null.
+            }
+        }
+    }
+
     // Otherwise: same Start/Stop semantics as the keyboard surface —
-    // delegate so IOException handling + UUID minting stay byte-identical
-    // (R.3 / single-source-of-side-effect).
+    // delegate so IOException handling + UUID minting + the B2
+    // ContinuationLookup branch stay byte-identical (R.3 /
+    // single-source-of-side-effect).
     return resolveRecordAction(state, services)
 }
 

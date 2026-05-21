@@ -190,4 +190,82 @@ class TextResolversTest {
         // testLayoutStrings includes ` ↵` when autoEnter is true.
         assertEquals("Format\n1/2 ↵  500ms", text)
     }
+
+    // ─── B3.4 — Pause/Resume label override ──────────────────────────
+
+    @Test
+    fun `B3-4 overlay text Active + widget Visible(USER) returns pauseLabel`() {
+        val s = baseState.copy(
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = audioFile(), sessionId = "x",
+            ),
+            widget = net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.USER
+            ),
+            pipeline = PipelineUiState.Idle,
+        )
+        assertEquals(strings.pauseLabel, resolveOverlayRecordButtonText(s, strings))
+    }
+
+    @Test
+    fun `B3-4 overlay text Paused + widget Visible(PIPELINE) returns resumeLabel`() {
+        val s = baseState.copy(
+            recording = RecordingState.Paused(
+                useBluetooth = false, audioFile = audioFile(), sessionId = "x",
+            ),
+            widget = net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.PIPELINE
+            ),
+            pipeline = PipelineUiState.Idle,
+        )
+        assertEquals(strings.resumeLabel, resolveOverlayRecordButtonText(s, strings))
+    }
+
+    @Test
+    fun `B3-4 overlay text Active + widget Hidden falls back to send label (no Pause override)`() {
+        // widget == Hidden means there IS a guaranteed InputConnection;
+        // the legacy StopRecordingAndSend path is still meaningful and
+        // the Send-label stays. The Pause-override applies only when
+        // widget is Visible.
+        val s = baseState.copy(
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = audioFile(), sessionId = "x",
+            ),
+            widget = net.devemperor.dictate.state.WidgetState.Hidden,
+            pipeline = PipelineUiState.Idle,
+        )
+        assertEquals(strings.send, resolveOverlayRecordButtonText(s, strings))
+    }
+
+    @Test
+    fun `B3-4 pipeline Running label wins over Pause-override (auto-enter owns the btn)`() {
+        // Pipeline-Running takes precedence: the per-run auto-enter label
+        // ("N/M ↵ M:SS") is what the user sees, even when widget is
+        // visible and recording is Active.
+        val running = PipelineUiState.Running(
+            sessionId = "sid",
+            target = InsertionTarget.INPUT_CONNECTION,
+            completedSteps = 0,
+            totalSteps = 0,
+            elapsedMs = 0L,
+            autoEnterActive = false,
+        )
+        val s = baseState.copy(
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = audioFile(), sessionId = "x",
+            ),
+            widget = net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.USER
+            ),
+            pipeline = running,
+        )
+        // Sanity check: the resolver did NOT return the pauseLabel —
+        // it returned whatever the pipeline-resolver produces.
+        val text = resolveOverlayRecordButtonText(s, strings)
+        assertEquals(
+            "Pipeline-Running must NOT be overridden by Pause-Toggle text",
+            resolveRecordButtonTextPipeline(s, strings),
+            text,
+        )
+    }
 }

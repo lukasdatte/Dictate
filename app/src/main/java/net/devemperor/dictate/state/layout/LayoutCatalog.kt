@@ -5,6 +5,7 @@ import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
+import net.devemperor.dictate.state.WidgetState
 import net.devemperor.dictate.state.isActiveOrPaused
 
 /**
@@ -567,7 +568,19 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     ButtonSlot(
                         logicalId = LogicalButtonId.OVERLAY_PAUSE,
                         widthPolicy = WidthPolicy.WrapContent,
-                        visibilityPredicate = { true },
+                        // B3.4 (plan §4 B3): hidden when the widget is
+                        // visible — the Send-button doubles as the
+                        // pause-toggle then (resolveOverlayRecordAction +
+                        // resolveOverlayRecordButtonText carry the
+                        // pause/resume body). A separate OVERLAY_PAUSE
+                        // would be redundant. The slot stays visible in
+                        // the HOVER-style layout (overlay rendered while
+                        // `widget == Hidden && !imeViewVisible`, i.e.
+                        // post-CloseWidget pipeline-fallback) so the user
+                        // can still pause from there.
+                        visibilityPredicate = { state ->
+                            state.widget !is WidgetState.Visible
+                        },
                         enabledResolver = { state -> state.recording.isActiveOrPaused },
                         alphaResolver = { state ->
                             if (state.recording.isActiveOrPaused) 1f else 0.4f

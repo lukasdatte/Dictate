@@ -5,6 +5,7 @@ package net.devemperor.dictate.state.layout
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
+import net.devemperor.dictate.state.WidgetState
 import net.devemperor.dictate.state.currentStepName
 
 /**
@@ -107,6 +108,20 @@ data class LayoutStrings(
         elapsedMs: Long,
     ) -> CharSequence,
     val formatPreparingLabel: (autoEnterActive: Boolean) -> CharSequence,
+    /**
+     * Label for the overlay record-button when [DictateUiState.widget]
+     * is `Visible` and a recording is `Active` — the button morphs into
+     * a Pause-Toggle (B3.4 / plan §1.2). Backed by
+     * `R.string.dictate_action_pause`.
+     */
+    val pauseLabel: CharSequence = "Pause",
+    /**
+     * Label for the overlay record-button when [DictateUiState.widget]
+     * is `Visible` and a recording is `Paused` — the button morphs into
+     * a Resume-Toggle (B3.4 / plan §1.2). Backed by
+     * `R.string.dictate_action_resume`.
+     */
+    val resumeLabel: CharSequence = "Resume",
     @Deprecated(
         "Variante 2a (dictate-widget-integration §6.5) merged OVERLAY_SEND " +
             "into OVERLAY_RECORD; this field is no longer read by any " +
@@ -202,12 +217,32 @@ fun resolveRecordButtonTextPipeline(state: DictateUiState, strings: LayoutString
  * @see resolveRecordButtonText (keyboard-surface non-pipeline sibling)
  * @see resolveRecordButtonTextPipeline (keyboard-surface pipeline sibling)
  */
-fun resolveOverlayRecordButtonText(state: DictateUiState, strings: LayoutStrings): CharSequence =
-    when (state.pipeline) {
+fun resolveOverlayRecordButtonText(state: DictateUiState, strings: LayoutStrings): CharSequence {
+    // B3.4 — Pause-Toggle text override (plan §1.2 / ADR-0008
+    // §"Send-during-widget"). When the widget is visible and a recording
+    // is in flight, the Send-button morphs into a Pause-Toggle: the
+    // label switches to "Pause" / "Resume" and the action resolver
+    // emits `PauseRecording` / `ResumeRecording` instead of
+    // `StopRecordingAndSend`. Pipeline-live states (Preparing /
+    // Running) take precedence over the pause-toggle path because they
+    // own the per-run auto-enter-toggle UI ("N/M ↵ M:SS" label).
+    if (state.pipeline !is PipelineUiState.Preparing &&
+        state.pipeline !is PipelineUiState.Running &&
+        state.widget is WidgetState.Visible
+    ) {
+        when (state.recording) {
+            is RecordingState.Active -> return strings.pauseLabel
+            is RecordingState.Paused -> return strings.resumeLabel
+            RecordingState.Idle,
+            is RecordingState.Preparing -> Unit // fall through
+        }
+    }
+    return when (state.pipeline) {
         is PipelineUiState.Preparing,
         is PipelineUiState.Running -> resolveRecordButtonTextPipeline(state, strings)
         else -> resolveRecordButtonText(state, strings)
     }
+}
 
 /**
  * Record-button text in `KEYBOARD_REPROCESS_STAGING` — "Audio 0:23 · Send".

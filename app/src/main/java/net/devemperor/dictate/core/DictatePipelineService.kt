@@ -983,6 +983,13 @@ class DictatePipelineService : Service() {
                 getString(R.string.dictate_sending)
             }
         },
+        // B3.4 — Pause-Toggle labels. The overlay record-button morphs
+        // into a Pause/Resume toggle when the widget is visible
+        // (resolveOverlayRecordAction + resolveOverlayRecordButtonText).
+        // Strings reuse the existing notification-action labels for
+        // pause/resume so localisation stays in one place.
+        pauseLabel = getString(R.string.dictate_action_pause),
+        resumeLabel = getString(R.string.dictate_action_resume),
     )
 
     /**

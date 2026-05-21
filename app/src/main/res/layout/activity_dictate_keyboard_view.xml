@@ -173,12 +173,18 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content" />
 
+        <!-- pause_btn — DO NOT add android:foreground here. The pause/mic
+             icon flip is owned by the catalog `iconResolver = ::resolvePauseIcon`
+             (LayoutCatalog.kt:146 / :197 / :578) and written by
+             SlotRenderer.applySlotToView via MaterialButton.icon — the single
+             writer. A static `android:foreground` would render on top of the
+             dynamic icon (Android draws foreground over MaterialButton.icon),
+             producing the B-B duplication bug
+             (see docs/plans/2026-05-21 - dictate-pipeline-render-and-state-unification §4.2). -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/pause_btn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:foreground="@drawable/ic_baseline_pause_24"
-            android:foregroundGravity="center"
             android:minWidth="0dp"
             android:visibility="gone"
             tools:visibility="visible" />

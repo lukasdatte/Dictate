@@ -813,4 +813,176 @@ class CutoverArchitectureInvariantTest {
             !docStripped.contains("LogicalButtonId.OVERLAY_RECORD"),
         )
     }
+
+    // ---- (j) pause_btn has NO android:foreground in the keyboard layout XML
+    //         (dictate-pipeline-render-and-state-unification §5.6 / AC-B).
+    //
+    // Failure mode this locks against: a future edit re-introduces an
+    // `android:foreground="@drawable/ic_baseline_pause_24"` (or any other
+    // drawable) on the `pause_btn` MaterialButton in
+    // `activity_dictate_keyboard_view.xml`. The catalog `iconResolver =
+    // ::resolvePauseIcon` already writes MaterialButton.icon — a static
+    // foreground is a second writer that renders ON TOP, producing the
+    // B-B duplication bug (two icons visible during Recording / Paused).
+    //
+    // The scan is on the **raw** XML text (no comment-strip needed for
+    // XML — comments are <!-- … --> and an `android:foreground` inside
+    // an XML comment would already be inert).
+
+    @Test
+    fun pauseBtnHasNoAndroidForegroundInKeyboardLayoutXml() {
+        val layoutFile = File("src/main/res/layout/activity_dictate_keyboard_view.xml")
+        assertTrue(
+            "Layout file missing at ${layoutFile.absolutePath}",
+            layoutFile.isFile,
+        )
+        val xml = layoutFile.readText()
+
+        // Match the pause_btn MaterialButton element block. Tag spans
+        // until the next self-closing `/>` or open `>`; we want to
+        // scan only the attributes of THAT element.
+        val pauseBlockRegex = Regex(
+            """<com\.google\.android\.material\.button\.MaterialButton\b[^>]*?android:id\s*=\s*"@\+id/pause_btn"[^>]*?/>""",
+            setOf(RegexOption.DOT_MATCHES_ALL),
+        )
+        val pauseBlock = pauseBlockRegex.find(xml)
+        assertTrue(
+            "Could not locate `pause_btn` MaterialButton element in the " +
+                "keyboard layout XML — layout shape changed; update this " +
+                "regression-lock to match.",
+            pauseBlock != null,
+        )
+        val attrs = pauseBlock!!.value
+        assertTrue(
+            "AC-B regression-lock (dictate-pipeline-render-and-state-unification " +
+                "§5.6): `pause_btn` MUST NOT carry `android:foreground` — the " +
+                "catalog `iconResolver = ::resolvePauseIcon` is the SOLE writer " +
+                "of the pause-icon axis (via MaterialButton.icon). A static " +
+                "foreground re-introduces the B-B duplication bug (two " +
+                "icons visible during Recording / Paused).",
+            !attrs.contains("android:foreground"),
+        )
+    }
+
+    // ---- (k) Backspace long-press affordance branch wired in IME lambda
+    //         (dictate-pipeline-render-and-state-unification §5.5 / AC-C).
+    //
+    // Failure mode this locks against: a future edit removes the
+    // `if (id == LogicalButtonId.BACKSPACE && isLongPress)` branch from
+    // the `imeSideAffordance` lambda in DictateInputMethodService. The
+    // accelerated-delete cascade (`onBackspaceLongClicked`) would then
+    // become dead code again (its CR-DEL legacy caller is already gone),
+    // re-introducing the B-C regression: long-press on Backspace does
+    // nothing.
+    //
+    // Two assertions are paired: (1) the IME lambda calls
+    // `onBackspaceLongClicked()` inside a gate that names BACKSPACE; and
+    // (2) the ImeViewBackend long-click branch includes BACKSPACE in its
+    // affordance gate (so the IME lambda is actually fed the gesture).
+
+    @Test
+    fun backspaceLongPressAffordanceWiredInImeLambda() {
+        val imeCode = functionalCode(imeFile)
+        val callRegex = Regex("""onBackspaceLongClicked\s*\(\s*\)""")
+        val calls = callRegex.findAll(imeCode).toList()
+        assertTrue(
+            "AC-C invariant: DictateInputMethodService MUST invoke " +
+                "`onBackspaceLongClicked()` from a code path (the IME " +
+                "affordance lambda's BACKSPACE branch). Without it the " +
+                "accelerated-delete cascade is dead code.",
+            // calls.size includes the method definition site itself
+            // (`public void onBackspaceLongClicked() { ... }` matches the
+            // regex). We require at least 2: the definition + at least
+            // one invocation.
+            calls.size >= 2,
+        )
+        // The comment-stripper replaces comments with whitespace but
+        // keeps newlines — a one-line gate `} else if (id == BACKSPACE
+        // && isLongPress) { onBackspaceLongClicked(); }` survives in
+        // ~80 chars of functional code. We scan a generous 600-char
+        // window to absorb any future indent/refactor noise.
+        val windowChars = 600
+        val gatedByBackspace = calls.any { m ->
+            val start = (m.range.first - windowChars).coerceAtLeast(0)
+            val end = (m.range.last + windowChars).coerceAtMost(imeCode.length - 1)
+            val nearby = imeCode.substring(start, end)
+            nearby.contains("LogicalButtonId.BACKSPACE") &&
+                nearby.contains("isLongPress")
+        }
+        assertTrue(
+            "AC-C invariant: `onBackspaceLongClicked()` MUST be called from " +
+                "a gate that names BOTH `LogicalButtonId.BACKSPACE` and " +
+                "`isLongPress` within a 600-char window — i.e. the IME-side " +
+                "affordance lambda's BACKSPACE-long-press branch. Without " +
+                "this branch the catalog-driven render path swallows the " +
+                "long-press gesture (no longClickResolver on BACKSPACE) and " +
+                "the cascade never starts.",
+            gatedByBackspace,
+        )
+    }
+
+    @Test
+    fun imeViewBackendLongClickBranchIncludesBackspace() {
+        val code = functionalCode(imeViewBackendFile)
+        // The long-click branch fires `imeSideAffordance(id, true)`.
+        val callRegex = Regex("""imeSideAffordance\s*\(\s*id\s*,\s*true\s*\)""")
+        val matches = callRegex.findAll(code).toList()
+        assertTrue(
+            "AC-C invariant (backend half): ImeViewBackend.kt MUST call " +
+                "`imeSideAffordance(id, true)` at least once from the " +
+                "long-click branch — the hook that feeds BACKSPACE / " +
+                "RECORD / RESEND long-presses into the IME-side lambda.",
+            matches.isNotEmpty(),
+        )
+        // The OR-chain gate (`id == RECORD || id == RESEND || id ==
+        // BACKSPACE`) is ~80 chars of functional code post-strip; we
+        // scan 600-char windows on either side to absorb whitespace
+        // padding from stripped comments and tolerate future reorders.
+        val windowChars = 600
+        val coversBackspaceRecordResend = matches.any { m ->
+            val start = (m.range.first - windowChars).coerceAtLeast(0)
+            val end = (m.range.last + windowChars).coerceAtMost(code.length - 1)
+            val nearby = code.substring(start, end)
+            nearby.contains("LogicalButtonId.BACKSPACE") &&
+                nearby.contains("LogicalButtonId.RECORD") &&
+                nearby.contains("LogicalButtonId.RESEND")
+        }
+        assertTrue(
+            "AC-C invariant (backend half): the `imeSideAffordance(id, true)` " +
+                "gate in ImeViewBackend.kt MUST cover RECORD, RESEND, and " +
+                "BACKSPACE within a 600-char window. Dropping BACKSPACE " +
+                "re-introduces the dead-cascade regression (B-C).",
+            coversBackspaceRecordResend,
+        )
+    }
+
+    @Test
+    fun commentStripperIsSound_backspaceLongPressAffordance() {
+        val codeSample = """
+            } else if (id == LogicalButtonId.BACKSPACE && isLongPress) {
+                onBackspaceLongClicked();
+            }
+        """.trimIndent()
+        val stripped = stripCommentsAndStrings(codeSample)
+        assertTrue(
+            "A real BACKSPACE-long-press affordance branch must survive " +
+                "stripping (proves the BACKSPACE-affordance lock is " +
+                "non-vacuous).",
+            stripped.contains("LogicalButtonId.BACKSPACE") &&
+                stripped.contains("isLongPress") &&
+                Regex("""onBackspaceLongClicked\s*\(\s*\)""").containsMatchIn(stripped),
+        )
+        val docOnly = """
+            // historical: id == LogicalButtonId.BACKSPACE && isLongPress →
+            //   onBackspaceLongClicked() — the accel-delete cascade entry
+            /* val ref = "id == LogicalButtonId.BACKSPACE && isLongPress" */
+        """.trimIndent()
+        val docStripped = stripCommentsAndStrings(docOnly)
+        assertTrue(
+            "Doc-only mentions of the BACKSPACE-affordance branch must NOT " +
+                "survive stripping (proves the lock does not false-GREEN).",
+            !docStripped.contains("LogicalButtonId.BACKSPACE") &&
+                !docStripped.contains("isLongPress"),
+        )
+    }
 }

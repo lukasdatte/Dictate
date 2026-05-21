@@ -487,13 +487,28 @@ class ImeViewBackend @JvmOverloads constructor(
             //    staticHandlerInstaller's BackspaceSwipeHandler, §11.7).
             view.setOnLongClickListener {
                 onVibrate()
-                if (id == LogicalButtonId.RECORD || id == LogicalButtonId.RESEND) {
+                if (id == LogicalButtonId.RECORD ||
+                    id == LogicalButtonId.RESEND ||
+                    id == LogicalButtonId.BACKSPACE
+                ) {
                     // IME-side affordance — fired BEFORE the catalog
                     // dispatch so the IME observes the gesture even when
                     // the resolver returns null. The IME body re-checks
                     // the effective state itself (legacy
-                    // `onRecordLongClicked` / `onResendLongClicked`
-                    // parity).
+                    // `onRecordLongClicked` / `onResendLongClicked` /
+                    // `onBackspaceLongClicked` parity).
+                    //
+                    // B-C fix (dictate-pipeline-render-and-state-unification
+                    // §5.5 Variante B): BACKSPACE is in the affordance gate
+                    // because the accelerating-delete cascade
+                    // (`onBackspaceLongClicked` → `deleteHandler.postDelayed`)
+                    // has NO catalog/longClickResolver representation — the
+                    // legacy MainButtonsController callers were deleted in
+                    // CR-DEL without migrating the wiring. The affordance
+                    // hook is the bridge. ACTION_UP / ACTION_CANCEL still
+                    // calls `onBackspaceDeleteCancelled()` via
+                    // BackspaceSwipeHandler.onTouch so the cascade stops on
+                    // finger lift.
                     imeSideAffordance(id, true)
                 }
                 val s = stateRef

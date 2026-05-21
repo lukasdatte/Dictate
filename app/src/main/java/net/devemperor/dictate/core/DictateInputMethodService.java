@@ -1416,6 +1416,18 @@ public class DictateInputMethodService extends InputMethodService
             imeSideAffordance = (id, isLongPress) -> {
                 if (id == LogicalButtonId.RECORD && isLongPress) {
                     onRecordLongClicked();
+                } else if (id == LogicalButtonId.BACKSPACE && isLongPress) {
+                    // B-C (dictate-pipeline-render-and-state-unification §5.5
+                    // Variante B): the accelerating-delete cascade
+                    // (`onBackspaceLongClicked` → `deleteHandler.postDelayed`
+                    // with 50→25→10→5 ms cascade) has NO catalog/dispatch
+                    // representation. The CR-DEL render-cutover deleted its
+                    // legacy caller (`MainButtonsController.Callback`) but
+                    // left the body in place; this affordance branch
+                    // re-attaches it. ACTION_UP / ACTION_CANCEL cancellation
+                    // is owned by `BackspaceSwipeHandler.onTouch` →
+                    // `onBackspaceDeleteCancelled()` (already intact).
+                    onBackspaceLongClicked();
                 } else if (id == LogicalButtonId.RESEND && isLongPress) {
                     onResendLongClicked();
                 } else if (id == LogicalButtonId.RESEND) {

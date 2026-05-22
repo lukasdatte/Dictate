@@ -5566,11 +5566,27 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onSettingsClicked() {
-        if (isEffectiveRecordingInFlight()) {
-            cancelEffectiveRecording();
-            livePrompt = false;
-            updatePromptButtonsEnabledState();
-        }
+        // 2026-05-22 — the previous in-flight-recording cancel-reflex
+        // was the root cause of "Aufnahme geht verloren beim Settings-
+        // Wechsel". The reflex predates the FGS-owned recording stack:
+        // back then, opening Settings would unbind the IME and the
+        // MediaRecorder would die anyway, so canceling explicitly kept
+        // the state consistent. Today recording lives in the
+        // foreground-service path (RecordingHardwareAdapter +
+        // DictatePipelineService FGS), so Settings-Open is harmless —
+        // the recording continues in the background and the
+        // notification carries Pause/Stop affordance.
+        //
+        // The previous code:
+        //   if (isEffectiveRecordingInFlight()) {
+        //       cancelEffectiveRecording();
+        //       livePrompt = false;
+        //       updatePromptButtonsEnabledState();
+        //   }
+        // is removed. Consistent with onHistoryClicked() (which never
+        // cancelled) and openLanguageSettings() (also no cancel).
+        // Trash-button + WidgetClose-X remain the explicit
+        // user-driven cancel paths.
         infoBarController.dismiss();
         openSettingsActivity();
     }

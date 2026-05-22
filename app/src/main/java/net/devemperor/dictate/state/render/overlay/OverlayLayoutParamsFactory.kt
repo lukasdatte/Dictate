@@ -58,13 +58,13 @@ interface OverlayLayoutParamsFactory {
 /**
  * Production [OverlayLayoutParamsFactory].
  *
- * @property ctx Android context — needed for the (currently unused)
- *   dp-to-px helper and any future density-driven default. Held
- *   privately to keep the factory `Context`-bound for the lifetime of
- *   the IME / Service that built it.
+ * @property ctx Android context — used to convert the fixed overlay
+ *   width ([OVERLAY_WIDTH_DP]) from dp to px. Held privately to keep
+ *   the factory `Context`-bound for the lifetime of the IME / Service
+ *   that built it.
  */
 class DefaultOverlayLayoutParamsFactory(
-    @Suppress("UNUSED_PARAMETER") private val ctx: Context,
+    private val ctx: Context,
 ) : OverlayLayoutParamsFactory {
 
     override fun create(): WindowManager.LayoutParams {
@@ -82,8 +82,19 @@ class DefaultOverlayLayoutParamsFactory(
                 or WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
             )
 
+        // 2026-05-22 — the WindowManager.LayoutParams.width is the
+        // authoritative window width; a WRAP_CONTENT here makes the
+        // WindowManager re-measure the card by content, so the
+        // `overlay_root` XML `layout_width="156dp"` is silently ignored
+        // (the card grew to ~4 buttons wide when the record-btn label
+        // was long). Pin the window width to OVERLAY_WIDTH_DP so the
+        // overlay is a stable 3-buttons-wide card. Height stays
+        // WRAP_CONTENT (the 2-row layout's natural height is correct).
+        val widthPx = (OVERLAY_WIDTH_DP * ctx.resources.displayMetrics.density)
+            .toInt()
+
         return WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            widthPx,
             WindowManager.LayoutParams.WRAP_CONTENT,
             type,
             flags,
@@ -99,5 +110,17 @@ class DefaultOverlayLayoutParamsFactory(
             // immediately when attached.
             windowAnimations = 0
         }
+    }
+
+    private companion object {
+        /**
+         * Fixed overlay window width in dp. Matches the 3-button card:
+         * 3 × 48dp icon buttons + 2 × 6dp container padding = 156dp.
+         * Kept in sync with `overlay_5button_layout.xml`'s
+         * `overlay_root` `layout_width` (the XML value is the
+         * layout-preview hint; this constant is the authoritative
+         * runtime width — see the `create()` comment).
+         */
+        const val OVERLAY_WIDTH_DP = 156
     }
 }

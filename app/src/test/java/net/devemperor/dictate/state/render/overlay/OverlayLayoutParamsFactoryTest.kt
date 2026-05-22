@@ -110,9 +110,14 @@ class OverlayLayoutParamsFactoryTest {
     }
 
     @Test
-    fun `width is WRAP_CONTENT`() {
+    fun `width is the fixed 156dp overlay width in px`() {
+        // 2026-05-22 — the overlay window width is pinned to 156dp
+        // (3 × 48dp buttons + 12dp container padding). A WRAP_CONTENT
+        // here let the WindowManager re-measure by content, so the
+        // overlay grew to ~4 buttons when the record-btn label was long.
+        val expectedPx = (156 * ctx.resources.displayMetrics.density).toInt()
         val params = factory.create()
-        assertEquals(WindowManager.LayoutParams.WRAP_CONTENT, params.width)
+        assertEquals(expectedPx, params.width)
     }
 
     @Test

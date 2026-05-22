@@ -5550,7 +5550,17 @@ public class DictateInputMethodService extends InputMethodService
         } else {
             action = net.devemperor.dictate.state.Action.OverlayAction.ShowOverlayOnboarding.INSTANCE;
         }
+        Log.i("DictateTrace", "IME.onWidgetToggleClicked() dispatching=" + action.getClass().getSimpleName()
+                + " viewMode=" + state.getViewMode()
+                + " widget=" + state.getWidget().getClass().getSimpleName()
+                + " imeViewVisible=" + state.getImeViewVisible()
+                + " hasPermission=" + state.getOverlay().getHasPermission()
+                + " userPrefersWidget=" + state.getOverlay().getUserPrefersWidget());
         pipelineBinder.dispatch(action);
+        net.devemperor.dictate.state.DictateUiState after =
+                pipelineBinder.getState().getValue();
+        Log.i("DictateTrace", "IME.onWidgetToggleClicked() AFTER viewMode=" + after.getViewMode()
+                + " widget=" + after.getWidget().getClass().getSimpleName());
     }
 
     @Override

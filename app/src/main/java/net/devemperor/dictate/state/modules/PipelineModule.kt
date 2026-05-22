@@ -5,6 +5,7 @@
 // in the file tree without paying the per-file package cost.
 package net.devemperor.dictate.state
 
+import android.util.Log
 import java.io.File
 import kotlin.reflect.KClass
 import kotlinx.coroutines.launch
@@ -576,7 +577,13 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
             // the row would only appear on the next service-start Recovery
             // pass; the user would never see the affordance.
             services.scope.launch {
+                Log.i("DictateTrace", "RefreshPendingSessionsAsync.launch — loading pending")
                 val pending = services.sessionRepo.loadPending()
+                Log.i(
+                    "DictateTrace",
+                    "RefreshPendingSessionsAsync — loaded ${pending.size} pending sessions: " +
+                        pending.joinToString { "${it.sessionId.take(8)}:${it.status}" },
+                )
                 services.emitAction(Action.PendingSessionsAction.Refresh(pending))
             }
             Unit

@@ -4400,13 +4400,27 @@ public class DictateInputMethodService extends InputMethodService
      *
      * Returns {@code true} when the IME may safely
      * {@link InputConnection#commitText(CharSequence, int)} text into the
-     * current input target — i.e. when the floating widget is NOT visible
-     * and therefore the IME-View is the active surface backing
-     * {@code getCurrentInputConnection()}. Returns {@code false} when the
-     * widget is visible: the keyboard is collapsed, the live
-     * {@code InputConnection} is whatever host window has focus (Settings
-     * app, browser address bar, …) — committing transcript into it would
-     * leak the user's text into the wrong field.
+     * current input target — i.e. when the IME-View is on screen and is
+     * therefore the active surface backing {@code getCurrentInputConnection()}
+     * with a real, focused host field. Returns {@code false} when the
+     * IME-View is hidden: the live {@code InputConnection} is then either
+     * {@code null} or belongs to whatever window happens to have focus —
+     * committing transcript into it would leak the user's text into the
+     * wrong field.
+     *
+     * <p><b>Axis correctness (2026-05-22).</b> This guard keys on
+     * {@code state.imeViewVisible}, NOT on {@code state.widget}. The two
+     * are orthogonal: the floating widget can be visible <i>while the
+     * IME-View is also visible</i> (the keyboard and the widget on screen
+     * together — the normal "dictate with the widget floating over the
+     * keyboard" flow). The earlier {@code widget instanceof Visible} check
+     * wrongly blocked every commit while the widget floated, so a widget
+     * Send produced a transcript that never reached the focused field —
+     * it was always deferred to Pending-Insert. {@code imeViewVisible} is
+     * the single axis that actually answers "is there a valid host field
+     * to commit into", and it is the same axis the overlay Send
+     * action-resolver ({@code resolveOverlayRecordAction}) gates on, so
+     * the action layer and the commit layer now agree.
      *
      * Callers that have a pending text to insert MUST persist it via the
      * Pending-Insert info-bar surface (B4) when this returns {@code false}
@@ -4419,9 +4433,8 @@ public class DictateInputMethodService extends InputMethodService
      */
     private boolean canCommitToHost() {
         if (pipelineBinder == null) return true;
-        net.devemperor.dictate.state.WidgetState widget =
-                pipelineBinder.getState().getValue().getWidget();
-        return !(widget instanceof net.devemperor.dictate.state.WidgetState.Visible);
+        return net.devemperor.dictate.state.DictateUiStateKt.getCanCommitToHost(
+                pipelineBinder.getState().getValue());
     }
 
     @Override

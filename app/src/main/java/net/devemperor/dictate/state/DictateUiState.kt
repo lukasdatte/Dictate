@@ -257,6 +257,31 @@ val RecordingState.audioFileOrNull: File?
     }
 
 /**
+ * `true` when the IME may commit transcript text (or send Enter) into
+ * the current host field — i.e. the IME-View is on screen and therefore
+ * backs `getCurrentInputConnection()` with a real, focused target.
+ *
+ * **The host-commit decision keys on [imeViewVisible] and ONLY on it.**
+ * [widget] is deliberately not consulted: the floating widget is
+ * orthogonal to the IME-View ([imeViewVisible]'s KDoc — both can be true
+ * at once, the normal "dictate with the widget floating over the
+ * keyboard" flow). A widget-based gate wrongly blocked every commit
+ * while the widget floated, so a widget Send produced a transcript that
+ * never reached the focused field — it was always deferred to
+ * Pending-Insert (2026-05-22 regression, ADR-0008 §"Send-during-widget").
+ *
+ * Canonical, named home for the rule so the two enforcement sites —
+ * `DictateInputMethodService.canCommitToHost` (the commit/Enter guard)
+ * and `resolveOverlayRecordAction` (the overlay Send action-resolver) —
+ * cannot drift onto different axes again. The earlier bug was exactly a
+ * guard whose name said "canCommitToHost" while its body checked
+ * `widget`; a single named predicate makes that name-vs-body drift
+ * structurally impossible.
+ */
+val DictateUiState.canCommitToHost: Boolean
+    get() = imeViewVisible
+
+/**
  * Pipeline progress FSM. Owned by `PipelineModule`.
  *
  * Each non-idle state carries the `sessionId` (UUID string per R.15)

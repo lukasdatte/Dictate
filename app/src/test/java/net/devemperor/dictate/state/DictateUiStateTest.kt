@@ -351,4 +351,55 @@ class DictateUiStateTest {
         assertSame(a.recording, b.recording)
         assertSame(a.pipeline, b.pipeline)
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // canCommitToHost — host-commit guard predicate (2026-05-22)
+    //
+    // Regression guard: the IME's `canCommitToHost()` guard used to key
+    // on the `widget` axis (`widget instanceof Visible` → block). The
+    // widget axis is orthogonal to `imeViewVisible` — a widget Send with
+    // the keyboard still on screen must reach the focused field. The
+    // predicate now keys on `imeViewVisible` alone.
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `canCommitToHost true when imeViewVisible true`() {
+        assertTrue(DictateUiState.initial().copy(imeViewVisible = true).canCommitToHost)
+    }
+
+    @Test
+    fun `canCommitToHost false when imeViewVisible false`() {
+        assertFalse(DictateUiState.initial().copy(imeViewVisible = false).canCommitToHost)
+    }
+
+    @Test
+    fun `canCommitToHost true when widget Visible but imeViewVisible true — widget-Send regression`() {
+        // The keyboard and the floating widget are both on screen, so a
+        // widget Send must commit into the focused field. The pre-fix
+        // guard returned false here (`widget instanceof Visible`) and
+        // silently deferred the transcript to Pending-Insert.
+        val s = DictateUiState.initial().copy(
+            widget = WidgetState.Visible(WidgetOrigin.USER),
+            imeViewVisible = true,
+        )
+        assertTrue(s.canCommitToHost)
+    }
+
+    @Test
+    fun `canCommitToHost false when imeViewVisible false regardless of widget`() {
+        // The widget axis must not rescue a hidden IME-View either —
+        // imeViewVisible is the sole axis in both directions.
+        assertFalse(
+            DictateUiState.initial().copy(
+                widget = WidgetState.Visible(WidgetOrigin.PIPELINE),
+                imeViewVisible = false,
+            ).canCommitToHost,
+        )
+        assertFalse(
+            DictateUiState.initial().copy(
+                widget = WidgetState.Hidden,
+                imeViewVisible = false,
+            ).canCommitToHost,
+        )
+    }
 }

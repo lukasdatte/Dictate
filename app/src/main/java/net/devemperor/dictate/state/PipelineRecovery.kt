@@ -225,13 +225,14 @@ class PipelineRecovery(
         //    Auto-Continuation path (ADR-0008 §"Auto-Continuation"),
         //    not lost.
         //
-        //    ADR-0007 Phase 1 — read through `effectiveAudioFilePaths`
-        //    so the dual-column window is transparent. The promotion
-        //    target depends on whether every recorded segment is still
-        //    on disk (partial loss falls back to FAILED + delete because
-        //    MediaMuxer concat would fail downstream anyway).
+        //    Block A3 (recording-stack-completion) — `audioFilePaths`
+        //    is the single source of truth (MIGRATION_6_7 backfilled
+        //    pre-A1 rows). The promotion target depends on whether
+        //    every recorded segment is still on disk; partial loss
+        //    falls back to FAILED + delete because MediaMuxer concat
+        //    would fail downstream anyway.
         candidates.filter { it.statusEnum == SessionStatus.RECORDING }.forEach { row ->
-            val paths = row.effectiveAudioFilePaths
+            val paths = row.audioFilePaths
             val audioOk = paths.isNotEmpty() && paths.all { File(it).exists() }
             if (audioOk) {
                 // Auto-Continuation candidate — keep audio, keep paths,
@@ -260,7 +261,7 @@ class PipelineRecovery(
                     safeUpdateStatus(row.id, SessionStatus.FAILED)
                     safeUpdateError(row.id, AIProviderException.ErrorType.UNKNOWN.name,
                         "stale-recording-interrupted-cleaned-up")
-                    row.effectiveAudioFilePaths.forEach { deleteAudioOpportunistic(it) }
+                    row.audioFilePaths.forEach { deleteAudioOpportunistic(it) }
                     safeClearAudioPath(row.id)
                 }
             }
@@ -271,7 +272,7 @@ class PipelineRecovery(
         //    EVERY segment is still on disk — a partial loss bricks the
         //    concatenation step downstream.
         candidates.filter { it.statusEnum == SessionStatus.TRANSCRIBING }.forEach { row ->
-            val paths = row.effectiveAudioFilePaths
+            val paths = row.audioFilePaths
             val audioOk = paths.isNotEmpty() && paths.all { File(it).exists() }
             if (audioOk) {
                 safeUpdateStatus(row.id, SessionStatus.RECORDED)
@@ -286,7 +287,7 @@ class PipelineRecovery(
 
         // 3. Ghost RECORDED — audio gone. Promote to FAILED + clear path.
         candidates.filter { it.statusEnum == SessionStatus.RECORDED }.forEach { row ->
-            val paths = row.effectiveAudioFilePaths
+            val paths = row.audioFilePaths
             val audioOk = paths.isNotEmpty() && paths.all { File(it).exists() }
             if (paths.isNotEmpty() && !audioOk) {
                 safeUpdateStatus(row.id, SessionStatus.FAILED)

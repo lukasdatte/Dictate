@@ -47,6 +47,12 @@ class PipelineSessionRepoAdapterTest {
                 targetAppPackage = null,
                 language = null,
                 audioFilePath = audioFilePath,
+                // Block A3 — `audioFilePaths` is the post-cutover source
+                // of truth. Mirror the legacy `audioFilePath` here so the
+                // test setup matches the post-MIGRATION_6_7 row shape that
+                // production code now relies on (no more `effectiveAudioFilePaths`
+                // bridge).
+                audioFilePaths = listOfNotNull(audioFilePath),
                 status = status.name,
                 finalOutputText = finalOutputText,
                 insertedAt = insertedAt,

@@ -127,17 +127,4 @@ data class SessionEntity(
             runCatching { AIProviderException.ErrorType.valueOf(it) }.getOrNull()
         }
 
-    /**
-     * Effective audio path list — bridges the dual-column window from
-     * ADR-0007 Phase 1. Prefers the new [audioFilePaths] when populated,
-     * otherwise wraps the legacy [audioFilePath] in a singleton list.
-     *
-     * **Use this read-side accessor** in pipeline / recovery / cleanup
-     * code instead of [audioFilePath] for forward compatibility. The
-     * dual semantics disappear when `MIGRATION_5_6` drops the legacy
-     * column; this accessor becomes a thin pass-through and can be
-     * removed once every caller reads `audioFilePaths` directly.
-     */
-    val effectiveAudioFilePaths: List<String>
-        get() = if (audioFilePaths.isNotEmpty()) audioFilePaths else listOfNotNull(audioFilePath)
 }

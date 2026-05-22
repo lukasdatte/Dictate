@@ -65,6 +65,10 @@ class PipelineRecoveryFullTest {
             targetAppPackage = null,
             language = null,
             audioFilePath = audioFilePath,
+            // Block A3 — mirror legacy path into the multi-segment column
+            // so the post-MIGRATION_6_7 row shape is reflected. Without
+            // this PipelineRecovery's `audioFilePaths`-based check fails.
+            audioFilePaths = listOfNotNull(audioFilePath),
             status = status.name,
             finalOutputText = finalOutputText,
             insertedAt = insertedAt,

@@ -177,6 +177,34 @@ object InfoBarSelector {
                     )
                 )
             }
+
+        // ── Recording-Interrupted (2026-05-22) ──────────────────────────
+        // Session in RECORDING_INTERRUPTED status — recording was cut
+        // off by an FGS kill (Android 14+ microphone-FGS restriction at
+        // keyboard switch / process background). The audio segments are
+        // still on disk. The user can resume by tapping Record (the
+        // ContinuationLookup will pick this session up if its freshness
+        // is OK) or discard via the InfoBar's dismiss action.
+        //
+        // dismissAction = DiscardInterruptedSession (atomic discard via
+        // RecordingModule reducer — stops MediaRecorder if any, deletes
+        // audio segments, marks DB row as FAILED).
+        state.pendingSessions
+            .filter { it.status == SessionStatus.RECORDING_INTERRUPTED }
+            .forEach { session ->
+                add(
+                    InfoBarItem(
+                        id = "recording-interrupted:${session.sessionId}",
+                        createdAt = session.createdAt,
+                        message = InfoBarMessage(
+                            textResId = R.string.dictate_recording_interrupted_msg,
+                            style = InfoBarStyle.ACTION,
+                        ),
+                        confirmAction = null,
+                        dismissAction = Action.RecordingAction.DiscardInterruptedSession(session.sessionId),
+                    )
+                )
+            }
     }.sortedBy { it.createdAt }
 
     // ─── B4 helpers ────────────────────────────────────────────────────

@@ -78,6 +78,11 @@
          ~60 characters of the transcribed text, ellipsised when truncated. -->
     <string name="dictate_pending_insert_msg_preview">Text ready: »%1$s« — tap ✓ to paste.</string>
     <string name="dictate_pending_recording_msg">Last recording not yet transcribed.</string>
+    <!-- 2026-05-22 — RECORDING_INTERRUPTED InfoBar message. Shown after the
+         FGS was killed mid-recording (e.g. keyboard switch on Android 14+
+         microphone-FGS restrictions). Tap record to continue, dismiss
+         to discard. -->
+    <string name="dictate_recording_interrupted_msg">Aufnahme unterbrochen — tippe auf Aufnehmen zum Fortsetzen, oder verwerfe sie.</string>
     <!-- B4 (ADR-0008) — Partial-Recovery warning. %1$d is the estimated
          number of seconds of audio lost from unreadable segments. -->
     <string name="dictate_recovery_partial_msg">%1$d seconds of audio were skipped while sending — some words may be missing.</string>

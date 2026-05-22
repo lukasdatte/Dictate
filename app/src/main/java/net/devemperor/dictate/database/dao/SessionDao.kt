@@ -132,6 +132,25 @@ interface SessionDao {
     @Query("UPDATE sessions SET audio_file_path = :path, audio_file_paths = :path WHERE id = :id")
     fun updateAudioFilePath(id: String, path: String)
 
+    /**
+     * Write the multi-segment audio-file paths into `audio_file_paths`
+     * (ADR-0007 Phase-2 / recording-stack-completion Block A1).
+     *
+     * `paths` is the **already pipe-delimited** string the caller built via
+     * `paths.joinToString(Converters.DELIMITER)`. Room's `UPDATE` queries
+     * do not invoke `@TypeConverter` on bound parameters, so the encoding
+     * must happen at the call site (`PipelineSessionRepoAdapter.syncAudioFilePaths`).
+     *
+     * **Single-column write.** Unlike [updateAudioFilePath], this does NOT
+     * touch `audio_file_path` — the legacy column is frozen at allocate-
+     * time (set by RecordingHardwareAdapter via the initial allocate path)
+     * and only the new column tracks rolling-segment growth. Readers go
+     * through `audioFilePaths` directly (Block A3 removes the
+     * `effectiveAudioFilePaths` bridge).
+     */
+    @Query("UPDATE sessions SET audio_file_paths = :paths WHERE id = :id")
+    fun updateAudioFilePaths(id: String, paths: String)
+
     // ── NEW (M4 pipeline-service refactor, Spec 1 §6.1) ────────────────────
 
     /**

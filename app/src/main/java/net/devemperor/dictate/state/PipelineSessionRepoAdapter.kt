@@ -6,6 +6,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.withContext
+import net.devemperor.dictate.audio.AudioFileRepository
+import net.devemperor.dictate.database.converter.Converters
 import net.devemperor.dictate.database.dao.SessionDao
 import net.devemperor.dictate.database.entity.SessionEntity
 import net.devemperor.dictate.database.entity.SessionStatus
@@ -69,6 +71,14 @@ import java.io.File
  */
 class PipelineSessionRepoAdapter(
     private val sessionDao: SessionDao,
+    /**
+     * Repository for the per-session segment files (recording-stack-
+     * completion Block A1). The adapter's [syncAudioFilePaths] reads the
+     * live segment list from this and writes the joined paths into the
+     * DB row's `audio_file_paths` column. Nullable for the test surface
+     * that only exercises pending-list / mark-status calls.
+     */
+    private val audioFileRepository: AudioFileRepository? = null,
     /**
      * Freshness floor supplier for [findPendingInsertion]. Production
      * wiring captures `now - Pref.PendingInsertionFreshnessMs` lazily;
@@ -178,6 +188,46 @@ class PipelineSessionRepoAdapter(
      * collector — both deferrable until a use-case demands it.
      */
     override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
+
+    /**
+     * Sync `audio_file_paths` from the live segment list on disk.
+     * See [PipelineSessionRepoSubsystem.syncAudioFilePaths] for the
+     * triggering boundaries.
+     *
+     * **Encoding (recording-stack-completion Block A1).** Room's
+     * `@Query("UPDATE ... SET audio_file_paths = :paths")` does NOT run
+     * the [Converters.fromStringList] type-converter on the bound
+     * parameter — type-converters apply only on row-write through `@Insert`
+     * / `@Update` entity methods. The adapter therefore joins the list
+     * with [Converters.DELIMITER] (pipe) itself before binding. The
+     * read-side [SessionEntity.audioFilePaths] still goes through the
+     * `toStringList` converter on row-read, so the round-trip is
+     * symmetric.
+     *
+     * **Fail-soft.** A DAO/IO failure during sync is logged + swallowed;
+     * recording must never crash because the path-mirror failed. The
+     * next sync boundary (segment-roll, stop-and-send) gets another shot,
+     * and `PipelineRecovery` reads `effectiveAudioFilePaths` so a missed
+     * sync doesn't strand the session — the legacy `audio_file_path`
+     * column still points at the first segment.
+     */
+    override suspend fun syncAudioFilePaths(sessionId: String): Int =
+        withContext(ioContext) {
+            val repo = audioFileRepository ?: run {
+                Log.w(TAG, "syncAudioFilePaths($sessionId) — no AudioFileRepository wired, skipping")
+                return@withContext 0
+            }
+            try {
+                val segments = repo.segments(sessionId)
+                val paths = segments.map { it.absolutePath }
+                val encoded = paths.joinToString(Converters.DELIMITER)
+                sessionDao.updateAudioFilePaths(sessionId, encoded)
+                paths.size
+            } catch (t: Throwable) {
+                Log.w(TAG, "syncAudioFilePaths failed for $sessionId", t)
+                0
+            }
+        }
 
     private companion object {
         private const val TAG = "PipelineSessionRepoAdapter"

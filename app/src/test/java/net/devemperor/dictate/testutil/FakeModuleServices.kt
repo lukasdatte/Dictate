@@ -167,6 +167,7 @@ object NoopSessionRepo : PipelineSessionRepoSubsystem {
     override suspend fun markFailed(sessionId: String, reason: String) = Unit
     override fun pendingFlow(): kotlinx.coroutines.flow.Flow<List<PendingSession>> =
         kotlinx.coroutines.flow.emptyFlow()
+    override suspend fun syncAudioFilePaths(sessionId: String): Int = 0
 }
 
 object NoopNotificationCoordinator : PipelineNotificationCoordinatorSubsystem {

@@ -46,6 +46,7 @@ class DictateOrchestratorInitOrderTest {
         override suspend fun markInserted(sessionId: String, at: Long) = Unit
         override suspend fun markFailed(sessionId: String, reason: String) = Unit
         override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
+        override suspend fun syncAudioFilePaths(sessionId: String): Int = 0
     }
 
     @Test
@@ -102,6 +103,7 @@ class DictateOrchestratorInitOrderTest {
                 override suspend fun markInserted(sessionId: String, at: Long) = Unit
                 override suspend fun markFailed(sessionId: String, reason: String) = Unit
                 override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
+                override suspend fun syncAudioFilePaths(sessionId: String): Int = 0
             }
         )
 

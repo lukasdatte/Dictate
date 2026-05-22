@@ -166,6 +166,10 @@ internal object PipelineServiceStubSubsystems {
             Log.w(TAG, "sessionRepo.markFailed($sessionId, $reason): $MESSAGE")
         }
         override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
+        override suspend fun syncAudioFilePaths(sessionId: String): Int {
+            Log.w(TAG, "sessionRepo.syncAudioFilePaths($sessionId): $MESSAGE")
+            return 0
+        }
     }
 
     /**

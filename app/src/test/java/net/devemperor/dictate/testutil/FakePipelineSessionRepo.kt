@@ -37,4 +37,7 @@ class FakePipelineSessionRepo(
     override suspend fun markFailed(sessionId: String, reason: String) = Unit
 
     override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
+
+    /** Block A1 — fake returns 0 (no segments tracked). Override per-test if needed. */
+    override suspend fun syncAudioFilePaths(sessionId: String): Int = 0
 }

@@ -455,6 +455,12 @@ class DictatePipelineService : Service() {
 
         val sessionRepoAdapterImpl = PipelineSessionRepoAdapter(
             sessionDao = database.sessionDao(),
+            // Block A1 (recording-stack-completion) — wire the audio
+            // repository so the adapter's `syncAudioFilePaths` can read
+            // the live segment list. The same `audioFileRepository`
+            // instance is shared with the RecordingHardwareAdapter +
+            // ContinuationLookup below.
+            audioFileRepository = audioFileRepository,
             // F-2 freshness floor — gate legacy pre-M4 rows so
             // NotifyManualPasteNeeded doesn't flood on first post-upgrade
             // boot (Spec 1 §6.5 + Pref.PendingInsertionFreshnessMs).

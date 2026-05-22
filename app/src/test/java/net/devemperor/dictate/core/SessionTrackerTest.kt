@@ -157,6 +157,7 @@ private class FakeSessionDao : SessionDao {
     override fun updateQueuedPromptIds(id: String, ids: String?) = notUsed()
     override fun clearAudioFilePath(id: String) = notUsed()
     override fun updateAudioFilePath(id: String, path: String) = notUsed()
+    override fun updateAudioFilePaths(id: String, paths: String) = notUsed()
 
     // M4 additions (Spec 1 §6.1) — none of these are exercised by
     // SessionTracker.getLastKeyboardSession(), but the interface

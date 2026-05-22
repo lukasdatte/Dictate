@@ -395,6 +395,31 @@ interface PipelineSessionRepoSubsystem {
     suspend fun markInserted(sessionId: String, at: Long)
     suspend fun markFailed(sessionId: String, reason: String)
     fun pendingFlow(): kotlinx.coroutines.flow.Flow<List<PendingSession>>
+
+    /**
+     * Synchronise the session's `audio_file_paths` column with the live
+     * segment list on disk (recording-stack-completion Block A1).
+     *
+     * Reads the segments from [net.devemperor.dictate.audio.AudioFileRepository.segments]
+     * and writes their absolute paths into the DB row. Called from
+     * [RecordingModule]'s effect handler on three boundaries:
+     *
+     *  1. **`MediaRecorderReady`** (Preparing → Active) — first segment
+     *     is allocated; persists the single-element list so the row leaves
+     *     the empty-list state.
+     *  2. **`SegmentRolled`** (Rolling-Segments handover in Active state) —
+     *     a new segment file went live; appends it to the list so a crash
+     *     after this point leaves a recoverable trail.
+     *  3. **`StartRecordingContinuation`** (Cold-Resume) — the
+     *     ContinuationLookup minted a new segment via `allocateNext` but
+     *     never wrote to the DB; this is the first sync that picks it up.
+     *
+     * @return the count of segments that ended up in the column (for
+     *   telemetry / test assertions). Returns 0 on DAO/IO failure
+     *   (logged but swallowed — recording must never crash because the
+     *   path-sync failed).
+     */
+    suspend fun syncAudioFilePaths(sessionId: String): Int
 }
 
 /**

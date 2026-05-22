@@ -265,7 +265,7 @@ class RecordingModuleTest {
         val next = result!!.nextState as RecordingState.Active
         assertEquals(false, next.useBluetooth)
         assertEquals(testFile, next.audioFile)
-        assertEquals(5, result.sideEffects.size)
+        assertEquals(6, result.sideEffects.size)
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartMediaRecorder))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartTimer))
         assertTrue(result.sideEffects.contains(RecordingModule.Effect.StartAmplitudeStream))
@@ -275,6 +275,13 @@ class RecordingModuleTest {
                 RecordingModule.Effect.UpdateNotification(
                     NotificationStatus.Recording("sid-test"),
                 ),
+            ),
+        )
+        // Block A1 — SyncAudioSegments lands on the same Preparing → Active
+        // arm so the first segment is persisted to `audio_file_paths`.
+        assertTrue(
+            result.sideEffects.contains(
+                RecordingModule.Effect.SyncAudioSegments("sid-test"),
             ),
         )
     }

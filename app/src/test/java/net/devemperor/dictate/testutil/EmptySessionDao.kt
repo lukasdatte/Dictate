@@ -43,6 +43,7 @@ object EmptySessionDao : SessionDao {
     override fun updateQueuedPromptIds(id: String, ids: String?) = Unit
     override fun clearAudioFilePath(id: String) = Unit
     override fun updateAudioFilePath(id: String, path: String) = Unit
+    override fun updateAudioFilePaths(id: String, paths: String) = Unit
     override fun markInserted(id: String, timestamp: Long) = Unit
     override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> = emptyList()
     override fun deleteInsertedOlderThan(cutoff: Long): Int = 0

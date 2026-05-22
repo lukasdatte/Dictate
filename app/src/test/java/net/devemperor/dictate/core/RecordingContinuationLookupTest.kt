@@ -159,6 +159,7 @@ class RecordingContinuationLookupTest {
         override fun updateQueuedPromptIds(id: String, ids: String?) = unused()
         override fun clearAudioFilePath(id: String) = unused()
         override fun updateAudioFilePath(id: String, path: String) = unused()
+        override fun updateAudioFilePaths(id: String, paths: String) = unused()
         override fun markInserted(id: String, timestamp: Long) = unused()
         override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> = unused()
         override fun deleteInsertedOlderThan(cutoff: Long): Int = unused()

@@ -103,6 +103,16 @@ class FakeSessionDao : SessionDao {
         rows[id]?.let { rows[id] = it.copy(audioFilePath = path) }
     }
 
+    /**
+     * Block A1 — encoded paths string is split on the pipe delimiter
+     * (matches `Converters.fromStringList`). Empty string round-trips
+     * to empty list (consumer's job is to write the pre-encoded value).
+     */
+    override fun updateAudioFilePaths(id: String, paths: String) {
+        val decoded = if (paths.isEmpty()) emptyList() else paths.split("|")
+        rows[id]?.let { rows[id] = it.copy(audioFilePaths = decoded) }
+    }
+
     // ── M4 additions ──
 
     override fun markInserted(id: String, timestamp: Long) {

@@ -65,7 +65,7 @@ class RecordingModuleContinuationTest {
         assertEquals(false, next.awaitingSco)
         assertNull(next.target)
 
-        assertEquals(2, result.sideEffects.size)
+        assertEquals(3, result.sideEffects.size)
         val alloc = result.sideEffects[0] as RecordingModule.Effect.AllocateMediaRecorder
         assertEquals(InsertionTarget.INPUT_CONNECTION, alloc.target)
         assertEquals(false, alloc.useBluetooth)
@@ -79,6 +79,14 @@ class RecordingModuleContinuationTest {
         assertEquals(
             RecordingModule.Effect.PersistLastFileName(nextSegment.name),
             result.sideEffects[1],
+        )
+        // Block A1 — SyncAudioSegments persists the freshly-allocated
+        // Cold-Resume segment into `audio_file_paths` (the
+        // ContinuationLookup minted it via allocateNext but never wrote
+        // the DB; this is the first sync that picks it up).
+        assertEquals(
+            RecordingModule.Effect.SyncAudioSegments("existing-sid-99"),
+            result.sideEffects[2],
         )
     }
 
@@ -106,10 +114,17 @@ class RecordingModuleContinuationTest {
         assertEquals(true, next.awaitingSco)
         assertEquals(InsertionTarget.INPUT_CONNECTION, next.target)
 
-        assertEquals(1, result.sideEffects.size)
+        assertEquals(2, result.sideEffects.size)
         assertEquals(
             RecordingModule.Effect.PersistLastFileName(nextSegment.name),
             result.sideEffects[0],
+        )
+        // Block A1 — BT path still persists segments even during SCO wait
+        // (the file is already on disk; persistence must not gate on the
+        // hardware allocate).
+        assertEquals(
+            RecordingModule.Effect.SyncAudioSegments("bt-sid-7"),
+            result.sideEffects[1],
         )
         assertTrue(
             "BT path must NOT fire AllocateMediaRecorder before SCO resolves",

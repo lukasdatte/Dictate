@@ -7,6 +7,7 @@ package net.devemperor.dictate.state
 
 import java.io.File
 import kotlin.reflect.KClass
+import kotlinx.coroutines.launch
 import net.devemperor.dictate.preferences.Pref
 
 /**
@@ -292,6 +293,28 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
          * [UpdateNotification] KDoc).
          */
         data object DismissNotification : Effect
+
+        /**
+         * Sync `SessionEntity.audio_file_paths` with the live segment list
+         * on disk (recording-stack-completion Block A1).
+         *
+         * Emitted on three boundaries:
+         *
+         *  1. `Preparing → Active` (MediaRecorderReady) — first segment is
+         *     now live, persist the single-element list.
+         *  2. `Active` stays (SegmentRolled) — rolling-segments handover
+         *     completed, append the new file to the column.
+         *  3. `Idle → Preparing` (StartRecordingContinuation) — Cold-Resume
+         *     minted a new segment via `allocateNext` before the action
+         *     was dispatched; this is the first sync that picks it up so
+         *     the eventual MediaMuxer-concat sees every segment.
+         *
+         * **Effect-handler** dispatches to `Dispatchers.IO` via
+         * `services.scope` — the segment-list `listFiles` call is IO. The
+         * adapter swallows DAO failures (fail-soft, see KDoc on
+         * `PipelineSessionRepoSubsystem.syncAudioFilePaths`).
+         */
+        data class SyncAudioSegments(val sessionId: String) : Effect
     }
 
     override fun reduce(
@@ -427,6 +450,12 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                         ),
                         sideEffects = listOf(
                             Effect.PersistLastFileName(action.audioFile.name),
+                            // Block A1 — Cold-Resume minted a new segment
+                            // via `allocateNext` before this action was
+                            // dispatched. Persist the segment list now so
+                            // a crash before MediaRecorderReady still
+                            // leaves the new segment in the DB.
+                            Effect.SyncAudioSegments(action.sessionId),
                         ),
                     )
                 } else {
@@ -447,6 +476,8 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                                 codecParams = action.codecParams,
                             ),
                             Effect.PersistLastFileName(action.audioFile.name),
+                            // Block A1 — see BT-branch comment above.
+                            Effect.SyncAudioSegments(action.sessionId),
                         ),
                     )
                 }
@@ -503,6 +534,11 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.UpdateNotification(
                         NotificationStatus.Recording(state.sessionId),
                     ),
+                    // Block A1 — first segment is now live. Persist the
+                    // segment list so the DB row leaves the empty-list
+                    // state (and a crash after this point leaves the
+                    // segment recoverable via Cold-Resume).
+                    Effect.SyncAudioSegments(state.sessionId),
                 ),
             )
             // C6-IMPL-1 / B2-C6-W1 — the SCO route resolved while we
@@ -650,6 +686,26 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.DismissNotification,
                 ),
             )
+            // Block A1 — Rolling-Segments handover. State stays Active;
+            // the only side-effect is the DB sync so the new segment lands
+            // in `audio_file_paths`. A crash *after* this action leaves a
+            // recoverable trail; a crash *before* loses the new segment's
+            // path but the file itself is finalised on disk (the handover
+            // wrote the `moov` atom before the OS callback fired).
+            //
+            // Defensive sessionId match — drop a stale roll for a previous
+            // session-id (cannot happen with a single MediaRecorder + a
+            // single live session, but the check is cheap and forward-
+            // compatible with future BT-resume scenarios).
+            is Action.RecordingAction.SegmentRolled ->
+                if (action.sessionId == state.sessionId) {
+                    TransitionResult(
+                        nextState = state,
+                        sideEffects = listOf(Effect.SyncAudioSegments(state.sessionId)),
+                    )
+                } else {
+                    null
+                }
             else -> null
         }
 
@@ -781,6 +837,17 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
         // canonical PrefPersistenceService seam.
         is Effect.PersistLastFileName ->
             services.prefs.persist(Pref.LastFileName, effect.fileName)
+
+        // Block A1 — push the live segment list into the DB. Launches
+        // into `services.scope` because `syncAudioFilePaths` is suspend
+        // (hops to Dispatchers.IO inside the adapter). The handler does
+        // not await the result; fail-soft logging happens in the adapter.
+        is Effect.SyncAudioSegments -> {
+            services.scope.launch {
+                services.sessionRepo.syncAudioFilePaths(effect.sessionId)
+            }
+            Unit
+        }
 
         is Effect.PersistImportedAudioFileName -> {
             // Sequential SP writes (review-fix G6, 2026-05-21 — the

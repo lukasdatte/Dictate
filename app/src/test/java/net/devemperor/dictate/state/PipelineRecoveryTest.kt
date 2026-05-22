@@ -96,6 +96,7 @@ class PipelineRecoveryTest {
             override suspend fun markInserted(sessionId: String, at: Long) = Unit
             override suspend fun markFailed(sessionId: String, reason: String) = Unit
             override fun pendingFlow(): Flow<List<PendingSession>> = emptyFlow()
+            override suspend fun syncAudioFilePaths(sessionId: String): Int = 0
         }
         val store = DictateUiStateStore(DictateUiState.initial())
         val recovery = testPipelineRecovery(repo)

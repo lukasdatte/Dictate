@@ -302,6 +302,19 @@ class RecordingHardwareAdapter(
             }
             MediaRecorder.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED -> {
                 Log.d(TAG, "Rolling: handover to next segment complete")
+                // Block A1 (recording-stack-completion) — the previous
+                // segment was finalised and the recorder is now writing
+                // into the next file. Dispatch SegmentRolled so the
+                // RecordingModule emits a `SyncAudioSegments` effect and
+                // the new segment-path lands in
+                // `SessionEntity.audio_file_paths`. A crash *after* this
+                // point leaves the segment recoverable in the DB; a crash
+                // *between* the handover and this callback loses only the
+                // path entry (the file's `moov` was already written at
+                // APPROACHING-time).
+                activeSessionId?.let { sid ->
+                    emitAction(Action.RecordingAction.SegmentRolled(sid))
+                }
             }
             MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED -> {
                 Log.d(TAG, "Rolling: max file size reached")

@@ -179,6 +179,28 @@ sealed class Action {
          */
         data class MediaRecorderReady(val audioFile: File) : RecordingAction()
 
+        /**
+         * Rolling-Segments handover completed — the previous segment was
+         * finalised (its `moov` atom written) and the recorder is now
+         * writing into the next segment file (recording-stack-completion
+         * Block A1).
+         *
+         * Emitted by [net.devemperor.dictate.core.RecordingHardwareAdapter]'s
+         * `OnInfoListener` on `MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED`.
+         * The reducer's `Active`-arm responds by emitting
+         * [RecordingModule.Effect.SyncAudioSegments] so the new segment
+         * lands in `SessionEntity.audioFilePaths` — a crash *after* this
+         * point leaves a recoverable trail in the DB.
+         *
+         * **Payload is the sessionId**, not the file path. The full segment
+         * list lives on disk; the effect handler reads it via
+         * `AudioFileRepository.segments(sessionId)`. Carrying the path here
+         * would duplicate state (file is already in the cache via
+         * `setNextOutputFile`); the segment-list-from-disk is the canonical
+         * source.
+         */
+        data class SegmentRolled(val sessionId: String) : RecordingAction()
+
         data object PauseRecording : RecordingAction()
         data object ResumeRecording : RecordingAction()
         data object StopRecording : RecordingAction()

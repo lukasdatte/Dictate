@@ -115,6 +115,7 @@ class PipelineNotificationCoordinator(
      * user-visible orphan).
      */
     override fun show(status: NotificationStatus) {
+        Log.i("DictateTrace", "NotificationCoordinator.show(${status::class.simpleName})")
         if (status is NotificationStatus.Idle) {
             dismiss()
             return
@@ -131,8 +132,22 @@ class PipelineNotificationCoordinator(
         }
     }
 
-    /** Remove the persistent notification (pipeline/recording terminal). */
+    /**
+     * Remove the persistent notification (pipeline/recording terminal).
+     *
+     * 2026-05-22 — Trace-logged: this is the canonical "FGS notification
+     * went away" event. The FGS depends on the notification being live —
+     * once `nm.cancel(NOTIF_ID)` runs, Android no longer treats the
+     * service as foreground and may kill it at the next unbind (the
+     * Tastaturwechsel-recording-loss bug). Stack-trace included so we
+     * can see *which* effect-dispatch tore the notification down.
+     */
     override fun dismiss() {
+        Log.i(
+            "DictateTrace",
+            "NotificationCoordinator.dismiss() — FGS anchor torn down",
+            Throwable("dismiss trace"),
+        )
         try {
             nm.cancel(NOTIF_ID)
         } catch (t: Throwable) {

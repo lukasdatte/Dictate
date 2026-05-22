@@ -4485,9 +4485,14 @@ public class DictateInputMethodService extends InputMethodService
                 // Live prompt: transcription result becomes the prompt for a completion call.
                 // Dispatch PipelineDone first so the chained completion's
                 // primePipelineUiForNewPath sees a clean Idle state.
+                // committed=true: live-prompt chains do not call
+                // commitTextToInputConnection on this transcript (the
+                // text is fed into a follow-up completion call), so
+                // there is no commit to gate on — the legacy MarkSessionInserted
+                // path stays correct for this branch.
                 if (sid != null) {
                     dispatchPipelineActionToOrchestrator(
-                            new net.devemperor.dictate.state.Action.PipelineAction.PipelineDone(sid, text),
+                            new net.devemperor.dictate.state.Action.PipelineAction.PipelineDone(sid, text, true),
                             "PipelineDone");
                 }
                 pendingLivePromptChain = false;
@@ -4510,10 +4515,14 @@ public class DictateInputMethodService extends InputMethodService
                 // and the next StartRecording isn't rejected by a stale
                 // pipeline FSM — see git history) — the dispatch still
                 // fires, just 1-2 ms later.
-                commitTextToInputConnection(text, source);
+                boolean committed = commitTextToInputConnection(text, source);
                 if (sid != null) {
+                    // 2026-05-22 — pass the commit-result to PipelineDone so
+                    // the reducer can branch: success → MarkSessionInserted,
+                    // blocked (B3.5 widget-host-block) → RefreshPendingSessions
+                    // so the InfoBar surfaces a "Tap to paste" item live.
                     dispatchPipelineActionToOrchestrator(
-                            new net.devemperor.dictate.state.Action.PipelineAction.PipelineDone(sid, text),
+                            new net.devemperor.dictate.state.Action.PipelineAction.PipelineDone(sid, text, committed),
                             "PipelineDone");
                 }
             }
@@ -4673,8 +4682,8 @@ public class DictateInputMethodService extends InputMethodService
      * delegates to the parametrised overload with auto-enter enabled. All
      * existing pipeline call sites continue to work unchanged.
      */
-    private void commitTextToInputConnection(String text, InsertionSource source) {
-        commitTextToInputConnection(
+    private boolean commitTextToInputConnection(String text, InsertionSource source) {
+        return commitTextToInputConnection(
                 getCurrentInputConnection(),
                 getCurrentInputEditorInfo(),
                 text,

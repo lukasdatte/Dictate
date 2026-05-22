@@ -395,8 +395,31 @@ sealed class Action {
         data class StepCompleted(val sessionId: String) : PipelineAction()
         data class StepFailed(val sessionId: String, val reason: String) : PipelineAction()
 
-        /** Pipeline successfully produced [finalText]. */
-        data class PipelineDone(val sessionId: String, val finalText: String) : PipelineAction()
+        /**
+         * Pipeline successfully produced [finalText].
+         *
+         * [committed] — was the text actually inserted into an editor's
+         * `InputConnection`? `true` is the regular path (commit succeeded
+         * → `inserted_at` is stamped via [PipelineModule.Effect
+         * .MarkSessionInserted]). `false` is the widget-host-block path
+         * (B3.5 `canCommitToHost()` returned `false` because the IME-View
+         * was collapsed): the transcript was produced but not inserted.
+         * In that case the reducer skips `MarkSessionInserted` (keeping
+         * `inserted_at = NULL` so the row is a "pending insertion") and
+         * fires [PipelineModule.Effect.RefreshPendingSessionsAsync]
+         * instead, which re-reads the pending list off the repo and
+         * dispatches [PendingSessionsAction.Refresh] so the InfoBar
+         * surfaces a "Tap to paste" item live (without waiting for the
+         * next service-start Recovery pass).
+         *
+         * Default `true` preserves backwards-compat for legacy call-sites
+         * that don't know about the commit-blocked path.
+         */
+        data class PipelineDone(
+            val sessionId: String,
+            val finalText: String,
+            val committed: Boolean = true,
+        ) : PipelineAction()
 
         data class PipelineFailed(val sessionId: String, val reason: String) : PipelineAction()
 

@@ -122,6 +122,22 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
 
         /** Dismiss the persistent FGS notification (pipeline back to Idle). */
         data object DismissNotification : Effect
+
+        /**
+         * Asynchronously re-read the pending-insertions list from the
+         * session repo and dispatch [Action.PendingSessionsAction.Refresh]
+         * with the result.
+         *
+         * Fired by [Action.PipelineAction.PipelineDone] when
+         * `committed == false` (B3.5 widget-host-block path). The pipeline
+         * finished producing text but the IME couldn't commit it into an
+         * `InputConnection` (host-window mismatch); the row stays
+         * `inserted_at = NULL` so the InfoBar's pending-insert producer
+         * surfaces a "Tap to paste" item once the user re-opens the IME.
+         * This effect refreshes the in-memory `state.pendingSessions`
+         * list without waiting for the next service-start Recovery pass.
+         */
+        data object RefreshPendingSessionsAsync : Effect
     }
 
     override fun reduce(
@@ -313,10 +329,21 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         is Action.PipelineAction.PipelineDone -> when (state) {
             is PipelineUiState.Running, is PipelineUiState.Preparing ->
                 if (sessionIdOf(state) == action.sessionId) {
+                    // 2026-05-22 — split effects on commit-success.
+                    // committed=true: stamp inserted_at (legacy path).
+                    // committed=false: leave inserted_at NULL so the row
+                    // surfaces in the InfoBar's pending-insert producer;
+                    // refresh pendingSessions live so the UI updates
+                    // without waiting for the next Recovery pass.
+                    val followUp = if (action.committed) {
+                        Effect.MarkSessionInserted(action.sessionId, ctx.now)
+                    } else {
+                        Effect.RefreshPendingSessionsAsync
+                    }
                     TransitionResult(
                         nextState = PipelineUiState.Idle,
                         sideEffects = listOf(
-                            Effect.MarkSessionInserted(action.sessionId, ctx.now),
+                            followUp,
                             Effect.DismissNotification,
                         ),
                     )
@@ -541,6 +568,19 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         }
         is Effect.UpdateNotification -> services.notificationCoordinator.show(effect.status)
         Effect.DismissNotification -> services.notificationCoordinator.dismiss()
+        Effect.RefreshPendingSessionsAsync -> {
+            // 2026-05-22 (B3.5 widget-host-block follow-up) — re-read the
+            // pending-insertions list from the repo and re-emit
+            // PendingSessionsAction.Refresh so the InfoBar's pending-insert
+            // producer surfaces a "Tap to paste" item live. Without this,
+            // the row would only appear on the next service-start Recovery
+            // pass; the user would never see the affordance.
+            services.scope.launch {
+                val pending = services.sessionRepo.loadPending()
+                services.emitAction(Action.PendingSessionsAction.Refresh(pending))
+            }
+            Unit
+        }
     }
 
     /**

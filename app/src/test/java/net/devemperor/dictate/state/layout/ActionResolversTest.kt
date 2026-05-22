@@ -56,7 +56,7 @@ class ActionResolversTest {
     fun `resolveRecordAction emits StartRecording from Idle with allocated file`() {
         val recordingFile = File("/tmp/dictate-test-1.m4a")
         val factory = FixedAudioFileFactory(recordingFile)
-        val services = fakeModuleServices(audioFileFactory = factory)
+        val services = fakeModuleServices(audioFileRepository = factory)
         val s = state.copy(recording = RecordingState.Idle)
 
         val action = resolveRecordAction(s, services) as? Action.RecordingAction.StartRecording
@@ -73,7 +73,7 @@ class ActionResolversTest {
 
     @Test
     fun `F-10 resolveRecordAction mints a fresh sessionId on each StartRecording`() {
-        val services = fakeModuleServices(audioFileFactory = FixedAudioFileFactory(File("/tmp/r.m4a")))
+        val services = fakeModuleServices(audioFileRepository =FixedAudioFileFactory(File("/tmp/r.m4a")))
         val s = state.copy(recording = RecordingState.Idle)
         val a = resolveRecordAction(s, services) as Action.RecordingAction.StartRecording
         val b = resolveRecordAction(s, services) as Action.RecordingAction.StartRecording
@@ -120,7 +120,7 @@ class ActionResolversTest {
             ),
         )
         val services = fakeModuleServices(
-            audioFileFactory = factory,
+            audioFileRepository =factory,
             continuationLookup = lookup,
         )
         val s = state.copy(recording = RecordingState.Idle)
@@ -153,7 +153,7 @@ class ActionResolversTest {
         val factory = FixedAudioFileFactory(recordingFile)
         val lookup = StubContinuationLookup(eligibility = null)
         val services = fakeModuleServices(
-            audioFileFactory = factory,
+            audioFileRepository =factory,
             continuationLookup = lookup,
         )
         val s = state.copy(recording = RecordingState.Idle)
@@ -168,7 +168,7 @@ class ActionResolversTest {
     fun `resolveRecordAction returns null and shows toast on IOException`() {
         val toast = RecordingToastSink()
         val services = fakeModuleServices(
-            audioFileFactory = FailingAudioFileFactory(IOException("disk full")),
+            audioFileRepository =FailingAudioFileFactory(IOException("disk full")),
             toastSink = toast,
         )
         val s = state.copy(recording = RecordingState.Idle)
@@ -547,7 +547,7 @@ class ActionResolversTest {
     fun `resolveOverlayRecordAction HOVER always returns null (User-Req SEND-gate)`() {
         // Idle, Active, Paused, Preparing, Running — none of them may
         // produce an action in HOVER (no InputConnection target).
-        val services = fakeModuleServices(audioFileFactory = FixedAudioFileFactory(File("/tmp/h.m4a")))
+        val services = fakeModuleServices(audioFileRepository =FixedAudioFileFactory(File("/tmp/h.m4a")))
         val hoverIdle = state.copy(
             viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
             recording = RecordingState.Idle,
@@ -711,7 +711,7 @@ class ActionResolversTest {
             ),
             recording = RecordingState.Idle,
         )
-        val action = resolveOverlayRecordAction(s, fakeModuleServices(audioFileFactory = factory))
+        val action = resolveOverlayRecordAction(s, fakeModuleServices(audioFileRepository = factory))
         assertTrue(action is Action.RecordingAction.StartRecording)
         assertEquals(1, factory.allocateCallCount)
     }
@@ -725,7 +725,7 @@ class ActionResolversTest {
             recording = RecordingState.Idle,
             pipeline = PipelineUiState.Idle,
         )
-        val action = resolveOverlayRecordAction(s, fakeModuleServices(audioFileFactory = factory))
+        val action = resolveOverlayRecordAction(s, fakeModuleServices(audioFileRepository = factory))
             as? Action.RecordingAction.StartRecording
             ?: error("Expected StartRecording")
         assertEquals(recordingFile, action.audioFile)
@@ -850,20 +850,44 @@ class ActionResolversTest {
 
 // ─── Hand-rolled fakes (K-1) ─────────────────────────────────────────
 
-/** Always returns the same [file]. Tracks the number of `allocate` calls. */
-private class FixedAudioFileFactory(private val file: File) : AudioFileFactory {
+/**
+ * Always returns the same [file] from `allocateFirst`. Tracks the number
+ * of calls (kept compatible with the old `FixedAudioFileFactory` assertion
+ * surface so the Initial-File-Cutover (Block A4) didn't require renaming
+ * every test). Other methods of the repository contract throw — none of
+ * these tests exercise rolling-segments or pipeline-reads.
+ */
+private class FixedAudioFileFactory(private val file: File) :
+    net.devemperor.dictate.audio.AudioFileRepository {
     var allocateCallCount: Int = 0
         private set
 
-    override fun allocate(): File {
+    override fun allocateFirst(sessionId: String): File {
         allocateCallCount++
         return file
     }
+
+    override fun allocateNext(sessionId: String): File =
+        error("FixedAudioFileFactory.allocateNext not exercised by resolver tests")
+    override fun segments(sessionId: String): List<File> = emptyList()
+    override suspend fun readForPipeline(
+        sessionId: String,
+    ): net.devemperor.dictate.audio.PipelineAudioResult? = null
+    override fun deleteAll(sessionId: String) = Unit
+    override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
 }
 
-/** Throws [thrown] on every `allocate` call. */
-private class FailingAudioFileFactory(private val thrown: IOException) : AudioFileFactory {
-    override fun allocate(): File = throw thrown
+/** Throws [thrown] on every `allocateFirst` call. */
+private class FailingAudioFileFactory(private val thrown: IOException) :
+    net.devemperor.dictate.audio.AudioFileRepository {
+    override fun allocateFirst(sessionId: String): File = throw thrown
+    override fun allocateNext(sessionId: String): File = throw thrown
+    override fun segments(sessionId: String): List<File> = emptyList()
+    override suspend fun readForPipeline(
+        sessionId: String,
+    ): net.devemperor.dictate.audio.PipelineAudioResult? = null
+    override fun deleteAll(sessionId: String) = Unit
+    override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
 }
 
 /** Captures every toast call so tests can assert on the side-channel. */

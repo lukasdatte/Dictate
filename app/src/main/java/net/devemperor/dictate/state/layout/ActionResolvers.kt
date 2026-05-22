@@ -109,19 +109,30 @@ fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action
                     codecParams = continuation.codecParams,
                 )
             }
+            // Block A4 (recording-stack-completion) — Initial-File-Cutover.
+            // Mint the sessionId BEFORE allocate so we can ask the
+            // AudioFileRepository for `sess_{sid}_seg1.m4a`. This unifies
+            // the naming convention: initial file + every rolling segment
+            // share the `sess_{sid}_seg*` prefix that `segments(sid)`
+            // scans for. Without this the initial file was named
+            // `rec_{ts}_{uuid8}.m4a` (from CacheDirAudioFileFactory) and
+            // therefore invisible to the multi-segment muxer at upload
+            // time — which is exactly the "only the latest audio chunk
+            // reached the AI" bug observed on-device on 2026-05-22.
+            val sessionId = newSessionId()
             val file = try {
-                services.audioFileFactory.allocate()
+                services.audioFileRepository.allocateFirst(sessionId)
             } catch (e: java.io.IOException) {
                 // B4-VAL F-4: toast via @StringRes overload so the user-visible
                 // message goes through Android's i18n machinery (Spec 2 §8.5).
                 services.toastSink.show(R.string.dictate_storage_full)
-                Log.w(TAG, "audioFileFactory.allocate failed", e)
+                Log.w(TAG, "audioFileRepository.allocateFirst failed", e)
                 return null
             }
             Action.RecordingAction.StartRecording(
                 target = InsertionTarget.INPUT_CONNECTION,
                 audioFile = file,
-                sessionId = newSessionId(),
+                sessionId = sessionId,
             )
         }
 

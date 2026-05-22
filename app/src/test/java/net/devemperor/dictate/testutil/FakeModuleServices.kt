@@ -67,6 +67,7 @@ fun fakeModuleServices(
     prefs: PrefPersistenceService = SharedPrefsPersistenceService(sharedPrefs),
     toastSink: ToastSink = NoopToastSink,
     audioFileFactory: AudioFileFactory = NoopAudioFileFactory,
+    audioFileRepository: net.devemperor.dictate.audio.AudioFileRepository = NoopAudioFileRepository,
     continuationLookup: ContinuationLookup = NoopContinuationLookup,
 ): ModuleServices = ModuleServices(
     recordingHardware = recordingHardware,
@@ -84,10 +85,35 @@ fun fakeModuleServices(
     prefs = prefs,
     toastSink = toastSink,
     audioFileFactory = audioFileFactory,
+    audioFileRepository = audioFileRepository,
     continuationLookup = continuationLookup,
     scope = scope,
     emitAction = emitAction,
 )
+
+/**
+ * Default [net.devemperor.dictate.audio.AudioFileRepository] for tests
+ * that don't care about allocation specifics. Returns a deterministic
+ * temp-file path; tests that assert on file identity or count call
+ * counts substitute a `RecordingAudioFileRepository` or
+ * `FixedAudioFileFactory` (the ActionResolversTest's hand-rolled fake).
+ *
+ * `readForPipeline` returns null and `segments` returns empty so a test
+ * that incidentally hits the read path observes a clean "no audio"
+ * shape rather than an exception.
+ */
+object NoopAudioFileRepository : net.devemperor.dictate.audio.AudioFileRepository {
+    override fun allocateFirst(sessionId: String): java.io.File =
+        java.io.File("/tmp/noop-audio-first-$sessionId.m4a")
+    override fun allocateNext(sessionId: String): java.io.File =
+        java.io.File("/tmp/noop-audio-next-$sessionId.m4a")
+    override fun segments(sessionId: String): List<java.io.File> = emptyList()
+    override suspend fun readForPipeline(
+        sessionId: String,
+    ): net.devemperor.dictate.audio.PipelineAudioResult? = null
+    override fun deleteAll(sessionId: String) = Unit
+    override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
+}
 
 /**
  * Test fake for [PrefPersistenceService] that captures every

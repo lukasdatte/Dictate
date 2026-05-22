@@ -568,6 +568,7 @@ class DictatePipelineService : Service() {
             prefs = SharedPrefsPersistenceService(sharedPrefs),
             toastSink = realToastSink(applicationContext),
             audioFileFactory = audioFileFactoryImpl,
+            audioFileRepository = audioFileRepository,
             continuationLookup = continuationLookup,
             scope = serviceScope,
             emitAction = { action -> orchestrator.emitAction(action) },

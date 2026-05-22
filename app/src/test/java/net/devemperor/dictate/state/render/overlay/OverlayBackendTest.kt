@@ -276,8 +276,18 @@ class OverlayBackendTest {
         tmpFile.deleteOnExit()
         val services = fakeModuleServices(
             emitAction = {},
-            audioFileFactory = object : net.devemperor.dictate.state.AudioFileFactory {
-                override fun allocate(): File = tmpFile
+            // Block A4 — Initial-File-Cutover. Resolver routes through
+            // audioFileRepository.allocateFirst(sid) now, not the factory.
+            audioFileRepository = object : net.devemperor.dictate.audio.AudioFileRepository {
+                override fun allocateFirst(sessionId: String): File = tmpFile
+                override fun allocateNext(sessionId: String): File =
+                    error("not exercised by this test")
+                override fun segments(sessionId: String): List<File> = emptyList()
+                override suspend fun readForPipeline(
+                    sessionId: String,
+                ): net.devemperor.dictate.audio.PipelineAudioResult? = null
+                override fun deleteAll(sessionId: String) = Unit
+                override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
             },
         )
         val backend = OverlayBackend(
@@ -457,8 +467,18 @@ class OverlayBackendTest {
         tmpFile.deleteOnExit()
         val services = fakeModuleServices(
             emitAction = {},
-            audioFileFactory = object : net.devemperor.dictate.state.AudioFileFactory {
-                override fun allocate(): File = tmpFile
+            // Block A4 — Initial-File-Cutover. Resolver routes through
+            // audioFileRepository.allocateFirst(sid) now, not the factory.
+            audioFileRepository = object : net.devemperor.dictate.audio.AudioFileRepository {
+                override fun allocateFirst(sessionId: String): File = tmpFile
+                override fun allocateNext(sessionId: String): File =
+                    error("not exercised by this test")
+                override fun segments(sessionId: String): List<File> = emptyList()
+                override suspend fun readForPipeline(
+                    sessionId: String,
+                ): net.devemperor.dictate.audio.PipelineAudioResult? = null
+                override fun deleteAll(sessionId: String) = Unit
+                override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
             },
         )
         val backend = OverlayBackend(

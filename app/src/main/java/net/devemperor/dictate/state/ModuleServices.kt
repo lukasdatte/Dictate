@@ -114,6 +114,18 @@ class ModuleServices(
     val prefs: PrefPersistenceService,
     val toastSink: ToastSink,
     val audioFileFactory: AudioFileFactory,
+    /**
+     * Recording audio-file repository (recording-stack-completion
+     * Block A1 + Initial-File cutover). The pre-dispatch Record-Action
+     * resolver calls [net.devemperor.dictate.audio.AudioFileRepository.allocateFirst]
+     * to mint `sess_{sid}_seg1.m4a` BEFORE dispatching `StartRecording`,
+     * so the rolling-segments path's `allocateNext` produces `_seg2`,
+     * `_seg3`, … under the **same** naming convention. Without this,
+     * `segments(sid)` would miss the initial file (the old
+     * [audioFileFactory.allocate] produced `rec_{ts}_{uuid8}.m4a`,
+     * which doesn't match the `sess_*_seg*` prefix scan).
+     */
+    val audioFileRepository: net.devemperor.dictate.audio.AudioFileRepository,
     val continuationLookup: ContinuationLookup,
     val scope: CoroutineScope,
     val emitAction: (Action) -> Unit,

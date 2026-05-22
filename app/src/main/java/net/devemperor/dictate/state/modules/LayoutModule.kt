@@ -4,7 +4,6 @@
 // to the same package.
 package net.devemperor.dictate.state
 
-import android.util.Log
 import kotlin.reflect.KClass
 import net.devemperor.dictate.core.ContentArea
 import net.devemperor.dictate.preferences.Pref
@@ -133,21 +132,33 @@ object LayoutModule : DictateModule<LayoutState, Action.LayoutAction, LayoutModu
         }
 
         is Action.LayoutAction.SetContentArea ->
-            // Setting the content-area while in small-mode is a no-op —
-            // the structural rule is "small + non-MAIN_BUTTONS" is
-            // forbidden (KSM-bug fix, Issue 1.1.5). The UI side won't
-            // surface non-MAIN_BUTTONS targets in small-mode anyway.
-            // F-20 (2026-05-15) — emit a `Log.w` diagnostic so a
-            // resolver-author bug that forgets the small-mode gate
-            // surfaces in logcat instead of being silently absorbed.
+            // Three cases:
+            //
+            //  1. small-mode + non-MAIN_BUTTONS target (e.g. user clicks
+            //     the emoji or keyboard chip while small-mode is active):
+            //     auto-exit small-mode AND set the content-area in a
+            //     single atomic transition. The earlier "reject + Log.w"
+            //     behaviour (KSM-bug fix, Issue 1.1.5) blocked the user
+            //     from reaching emoji/QWERTZ at all — the structural rule
+            //     was meant to keep small-mode layout-clean, but it
+            //     surfaced as "tap does nothing" which is worse UX than
+            //     the layout reshuffle.
+            //
+            //     The PersistSmallMode(false) side-effect is bundled so
+            //     SharedPreferences agrees with the in-memory transition
+            //     (same atomic pair as ToggleSmallMode).
+            //
+            //  2. non-small-mode + new area: plain content-area set.
+            //
+            //  3. same area: no-op.
             if (state.smallMode && action.area != ContentArea.MAIN_BUTTONS) {
-                Log.w(
-                    TAG,
-                    "SetContentArea(${action.area}) rejected in small-mode — " +
-                        "resolver MUST gate on state.smallMode before dispatch " +
-                        "(KSM-bug structural-rejection, Issue 1.1.5).",
+                TransitionResult(
+                    nextState = state.copy(
+                        smallMode = false,
+                        contentArea = action.area,
+                    ),
+                    sideEffects = listOf(Effect.PersistSmallMode(false)),
                 )
-                null
             } else if (action.area != state.contentArea) {
                 TransitionResult(
                     nextState = state.copy(contentArea = action.area),

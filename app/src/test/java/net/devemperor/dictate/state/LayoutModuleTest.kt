@@ -116,18 +116,38 @@ class LayoutModuleTest {
     // ─── SetContentArea ────────────────────────────────────────────────
 
     @Test
-    fun `SetContentArea while small-mode and non-MAIN_BUTTONS is rejected`() {
-        // Structural rule (Spec 2 §4.1): small + non-MAIN_BUTTONS is
-        // forbidden. The reducer rejects the request silently so the UI
-        // is forced to drop small-mode first.
+    fun `SetContentArea while small-mode and non-MAIN_BUTTONS auto-exits small-mode`() {
+        // Updated 2026-05-22 — the earlier "structural reject" of small +
+        // non-MAIN_BUTTONS surfaced as "tap does nothing" (the user
+        // couldn't reach emoji/QWERTZ from small-mode without first
+        // toggling small-mode off). The reducer now atomically drops
+        // small-mode AND sets the target area, with a Persist effect so
+        // SharedPreferences agrees. Same atomic pair as ToggleSmallMode.
         val state = LayoutState(smallMode = true, contentArea = ContentArea.MAIN_BUTTONS)
-        assertNull(
-            module.reduce(
-                state,
-                Action.LayoutAction.SetContentArea(area = ContentArea.QWERTZ),
-                ctx(),
-            ),
+        val result = module.reduce(
+            state,
+            Action.LayoutAction.SetContentArea(area = ContentArea.QWERTZ),
+            ctx(),
         )
+        assertEquals(false, result!!.nextState.smallMode)
+        assertEquals(ContentArea.QWERTZ, result.nextState.contentArea)
+        assertEquals(
+            listOf(LayoutModule.Effect.PersistSmallMode(false)),
+            result.sideEffects,
+        )
+    }
+
+    @Test
+    fun `SetContentArea EMOJI_PICKER while small-mode auto-exits small-mode`() {
+        // Symmetric case — emoji target also drops small-mode.
+        val state = LayoutState(smallMode = true, contentArea = ContentArea.MAIN_BUTTONS)
+        val result = module.reduce(
+            state,
+            Action.LayoutAction.SetContentArea(area = ContentArea.EMOJI_PICKER),
+            ctx(),
+        )
+        assertEquals(false, result!!.nextState.smallMode)
+        assertEquals(ContentArea.EMOJI_PICKER, result.nextState.contentArea)
     }
 
     @Test

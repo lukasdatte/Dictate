@@ -464,6 +464,234 @@ Initialisierung in `DictateModule.kt`.
       auf Gerät verifiziert — Widget-Sticky, Pause, Auto-Widget,
       Restore-Keyboard
 
+## 4.5 — Architektur-Modellierung: Cleanup + Discard (2026-05-22 Iteration)
+
+Nachtrag nach der On-Device-Verifikation der Block-A-Implementierung
+(`[A.4]`, `[A.4b]`, `[A.4c]`). Block C aus §5 unten bleibt als
+High-Level-Outline; dieser Abschnitt vertieft die zwei größten
+Architektur-Fragen — **Cleanup-Job** und **Trash-Btn-Discard** —
+mit der konkreten Mechanik die ihrer Implementation zugrundeliegt.
+
+### 4.5.1 — File-Inventar nach Block A (Bestandsaufnahme)
+
+Drei physische Speicherorte, drei Lebenszyklen:
+
+| Pfad | Was | Owner | Lebensende |
+|---|---|---|---|
+| `cache/audio/sess_{sid}_seg{N}.m4a` | Rohe Segmente einer Session (initial + rolling) | `AudioFileRepository.allocateFirst/Next` | **Heute: nie aktiv gelöscht** — wartet auf 7-Tage-Cleanup |
+| `cache/audio/sess_{sid}_merged.m4a` | Transient muxed file für Upload | `CacheDirAudioFileRepository.readForPipeline` | **Heute: nie aktiv gelöscht** — bei jedem `readForPipeline` neu überschrieben |
+| `files/recordings/{sid}.m4a` | Persistierte kanonische Audio-Quelle | `PipelineOrchestrator.persistMuxedForUpload` (A.4c) | Existing 7-Tage-Cleanup auf `deleteInsertedOlderThan` triggert es heute schon (`PipelineOrphanCleaner`) |
+
+Beobachtung: **die Cache-Schiene fehlt komplett im existing Cleanup**.
+Sie hat heute einen unbegrenzten Wachstums-Effekt — bei 5 Sessions pro
+Tag × 7 Tage × ~150 KB ≈ 5 MB monatlich. Auf einem Phone mit 64-128 GB
+ist das Bagatelle, aber als technische Schuld nicht akzeptabel.
+
+### 4.5.2 — Cleanup-Job — Architektur
+
+**Genre:** WorkManager-One-Shot Periodic-Job, kein Service-side
+Sub-System. Konsistent mit `BootCompletedReceiver` (B1.4 im
+Vorgänger-Plan), der bereits über WorkManager One-Shots schedult.
+
+**Frequenz:** 1× alle 24 Stunden, mit `KEEP`-Strategie
+(`ExistingPeriodicWorkPolicy.KEEP`). Beim ersten App-Start nach
+Update wird der Job gescheduled; danach läuft er periodisch.
+
+**Job-Klasse:** `CacheAudioCleanupJob` (extends `CoroutineWorker`)
+im Package `net.devemperor.dictate.audio`. Konstruktor erhält
+`AudioFileRepository` + `SessionDao` via dependency-injection
+(per `WorkerParameters` extras).
+
+**Algorithmus (in vier Phasen):**
+
+```
+Phase 1: List candidates
+  scanResult = audioFileRepository.allSegmentFiles()  // neue Methode
+              + audioFileRepository.allMergedFiles()   // neue Methode
+
+Phase 2: Build the "alive" set
+  aliveSessionIds = sessionDao.findActiveSessionIds()
+  // = sessions whose status ∈ {RECORDING, RECORDING_INTERRUPTED,
+  //                            RECORDED, TRANSCRIBING}
+  // 'Alive' heißt: die Session darf ihre Audio-Files weiter belegen.
+
+Phase 3: Per-file decision
+  for each file in scanResult:
+    sid = parseSessionIdFromName(file)
+    if (sid in aliveSessionIds): keep  // session noch nicht terminal
+    else if (file.lastModified() < now - 7 days): delete
+    else: keep  // terminal, aber jünger als TTL — vielleicht
+                // Reprocess-Window noch offen
+
+Phase 4: Metric & log
+  Log.i(TAG, "cleanup: deleted ${deleted.size}, kept ${kept.size}")
+```
+
+**Warum 7 Tage als TTL?** Konsistent mit `Pref.SessionCleanupGracePeriodMs`
+(default = 7 d), der bereits existing für `deleteInsertedOlderThan` läuft.
+Eine *einzige* TTL für beide Schichten — User-mental einfach, kein
+"warum sind manche Files weg und andere noch da"-Bug-Surface.
+
+**Konflikt-Auflösung mit `RECORDING_INTERRUPTED`-Continuation-Window:**
+Die `Pref.ContinuationFreshnessMs` (24 h default) ist *strikter* als
+die 7-Tage-TTL. Eine RECORDING_INTERRUPTED-Session älter als 24 h wird
+von `PipelineRecovery` zu `FAILED` promoted (mit `safeClearAudioPath`).
+Erst dann wird sie für den 7-Tage-TTL relevant. Sequenz ist kompatibel.
+
+**Failure-Modes:**
+
+1. **Race mit aktivem Recording.** Der Job läuft auf einem
+   WorkManager-Thread; die Recording-Pfade laufen auf dem
+   Service-Main-Thread. Ein file in der gerade aktiven Session
+   könnte vom Job als "alt genug" angesehen werden, wenn der
+   `lastModified`-Stamp eines Rolling-Segments unter dem 7-Tage-Cutoff
+   liegt UND die Session zwischen `findActiveSessionIds` und der
+   File-Delete-Aktion in den terminal Zustand übergeht (extremes
+   Edge-Race).
+   **Mitigation:** Phase 2 wird **nach** Phase 1 ausgeführt — die
+   Liste ist also stale zugunsten von "alive". Die Wahrscheinlichkeit
+   einen aktiven Segment-File zu löschen ist marginal (Session
+   müsste in der Job-Run-Window terminieren UND die Files müssten
+   älter als 7 d sein — was bei einer gerade noch aktiven Session
+   nicht möglich ist, da sie zuvor mindestens 7 d in `RECORDING`
+   gestanden haben müsste).
+
+2. **Boot-Recovery läuft parallel.** `PipelineRecovery` und
+   `CacheAudioCleanupJob` können theoretisch zur selben Zeit laufen.
+   **Mitigation:** Cleanup-Job geht durch dieselbe `AudioFileRepository`-
+   API wie Recovery — Repository ist Thread-safe (alle Methoden sind
+   stateless beyond File-IO). Per-Session-Cleanup ist idempotent: ein
+   Doppel-Delete logged eine `IOException`, aber führt zu keiner
+   Datenkorruption.
+
+### 4.5.3 — Trash-Btn Discard — Architektur
+
+**User-Story:** Eine `RECORDING_INTERRUPTED`-Session (Folge eines
+Process-Death) erscheint nach App-Restart als Continuation-Candidate.
+Der Trash-Btn-Klick verwirft sie sofort — die Auto-Continuation
+beim nächsten Record-Tap soll NICHT mehr aufpoppen.
+
+**Action:** `Action.RecordingAction.DiscardInterruptedSession(sessionId: String)`.
+
+**Reducer-Arm** (Idle-State):
+
+```kotlin
+is Action.RecordingAction.DiscardInterruptedSession ->
+    TransitionResult(
+        nextState = state,  // FSM stays Idle
+        sideEffects = listOf(
+            Effect.DiscardAudioForSession(action.sessionId),
+        ),
+    )
+```
+
+**Effect:** `Effect.DiscardAudioForSession(sessionId: String)` —
+bündelt zwei Operationen die immer zusammen passieren müssen
+(atomare User-Aktion):
+
+```kotlin
+is Effect.DiscardAudioForSession -> services.scope.launch {
+    // 1. Delete every segment file + merged file from cache.
+    services.audioFileRepository.deleteAll(effect.sessionId)
+    // 2. Promote the DB row to FAILED so the ContinuationLookup
+    //    skips it on the next Record-tap.
+    services.sessionRepo.markFailed(
+        effect.sessionId,
+        reason = "discarded_by_user",
+    )
+    // 3. Persistent file in files/recordings/ — IF it exists from
+    //    a prior successful upload, it stays (the session was
+    //    COMPLETED + persisted before being interrupted). Discard
+    //    operates on the RECORDING_INTERRUPTED state only; a fully
+    //    completed session would be deleted via History-UI swipe
+    //    (out of scope here).
+}
+```
+
+**Visibility-Predicate** (`LayoutPredicates.isTrashVisible` —
+erweiterung des heute existing Predicates):
+
+```kotlin
+fun isTrashVisible(state: DictateUiState): Boolean = when {
+    // existing: visible during active recording or pipeline staging
+    state.recording.isActiveOrPaused -> true
+    state.pipeline is PipelineUiState.ReprocessStaging -> true
+    // NEW: visible at Idle if a continuation-candidate exists
+    state.recording is RecordingState.Idle &&
+        state.pipeline is PipelineUiState.Idle &&
+        state.pendingSessions.any { it.status == SessionStatus.RECORDING_INTERRUPTED } -> true
+    else -> false
+}
+```
+
+**Resolver** (`ActionResolvers.resolveTrashAction` — erweiterung):
+
+```kotlin
+fun resolveTrashAction(state: DictateUiState): Action? = when {
+    state.pipeline is PipelineUiState.ReprocessStaging ->
+        Action.PipelineAction.CancelReprocessStaging(state.pipeline.sessionId)
+    state.recording.isActiveOrPaused ->
+        Action.RecordingAction.CancelRecording
+    // NEW — Idle + RECORDING_INTERRUPTED visible
+    state.recording is RecordingState.Idle && state.pipeline is PipelineUiState.Idle -> {
+        val interrupted = state.pendingSessions.firstOrNull {
+            it.status == SessionStatus.RECORDING_INTERRUPTED
+        }
+        interrupted?.let {
+            Action.RecordingAction.DiscardInterruptedSession(it.sessionId)
+        }
+    }
+    else -> null
+}
+```
+
+**Failure-Modes:**
+
+1. **Discard während Cold-Resume schon läuft (sehr kurzes Window).**
+   User klickt Record (triggert `ContinuationLookup.lookup()` →
+   `allocateNext(sid)` → returnt `EligibleContinuation`) und im
+   *selben* Moment Trash. Race: könnte den frisch allokierten Segment
+   zwischen `allocateNext` und `StartRecordingContinuation`-Dispatch
+   löschen.
+   **Mitigation:** Beide Actions gehen durch den Orchestrator-Dispatch
+   (Main-Thread, einer-nach-dem-anderen). Wenn Record zuerst dispatched
+   wird → Continuation läuft → Discard kommt zu spät und scheitert
+   (Session ist jetzt RECORDING, nicht RECORDING_INTERRUPTED — der
+   Resolver returnt `null` für Discard, kein Effekt). Wenn Discard
+   zuerst → Audio + Row weg → Record dispatched aber `ContinuationLookup`
+   findet nichts mehr → frische Session. Beide Sequenzen sind safe.
+
+2. **Discard hinterlässt verwaiste `files/recordings/{sid}.m4a`** wenn
+   die Session ein **vorhergehendes** erfolgreiches Recording hatte
+   (z.B. mehrfaches Cold-Resume). Heute kann das nicht vorkommen —
+   `persistMuxedForUpload` läuft nur auf dem Send-Pfad. Ein
+   RECORDING_INTERRUPTED-Status wird NIE persistiert. Aber wenn das
+   irgendwann ändert, sollte `Effect.DiscardAudioForSession` auch die
+   persist-Datei löschen.
+   **Mitigation:** für jetzt nicht handeln; in der Implementation
+   einen TODO-Anchor setzen.
+
+### 4.5.4 — Implementation-Reihenfolge
+
+Empfohlen als **separater Plan** `dictate-cache-cleanup-and-discard`:
+
+1. **C0** — `AudioFileRepository` erweitern: `allSegmentFiles()`,
+   `allMergedFiles()` (neue Read-Helper für die Cleanup-Job)
+2. **C1** — `SessionDao.findActiveSessionIds()` neu (single-column
+   query mit IN-Klausel)
+3. **C2** — `CacheAudioCleanupJob` als `CoroutineWorker`
+4. **C3** — Job-Scheduling in `DictatePipelineService.onCreate`
+5. **C4** — `Action.RecordingAction.DiscardInterruptedSession` +
+   Reducer-Arm + `Effect.DiscardAudioForSession`
+6. **C5** — `LayoutPredicates.isTrashVisible` + `ActionResolvers.resolveTrashAction`
+   erweitern
+7. **C6** — Tests: `CacheAudioCleanupJobTest` (Robolectric — braucht
+   WorkManager-Test-Infrastruktur), `ActionResolversTest` für die
+   neue Resolver-Branch, `LayoutPredicatesTest`
+
+Implementation-Score: ~8 (mittelgroß; ein neuer Worker plus zwei
+state-modul-Erweiterungen).
+
 ## 5 — Block C: Polish
 
 **Implementation-Score:** 6 (drei kleine Code-Chunks + Test + Release-Build).

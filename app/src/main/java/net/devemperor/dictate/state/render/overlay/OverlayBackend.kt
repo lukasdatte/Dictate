@@ -464,10 +464,13 @@ class OverlayBackend(
     }
 
     /**
-     * Attach the drag controller to the overlay root. Per Spec 3 §4.6
-     * the listener lives on the **root view** so the entire window is
-     * draggable; button-clicks still propagate by the controller's
-     * threshold-based touch-routing (Spec 3 §11.5.2).
+     * Build the drag controller and bind it to the overlay root.
+     *
+     * The root is a [DraggableOverlayLayout]; assigning its
+     * [DraggableOverlayLayout.dragController] routes the view's
+     * `onInterceptTouchEvent` / `onTouchEvent` into the controller, so
+     * the whole window is draggable while the buttons stay clickable
+     * (Spec 3 §4.6 / §11.5.2 — see [OverlayDragController]).
      */
     private fun wireDragController(view: View) {
         val controller = dragControllerFactory.create(
@@ -495,7 +498,12 @@ class OverlayBackend(
                 lastAppliedPosition = AppliedPosition(portrait, normX, normY)
             },
         )
-        controller.attach()
+        val root = view as? DraggableOverlayLayout
+        if (root != null) {
+            root.dragController = controller
+        } else {
+            Log.w(TAG, "overlay root is not a DraggableOverlayLayout — window drag disabled")
+        }
         dragController = controller
     }
 
@@ -653,9 +661,9 @@ class OverlayBackend(
      * The drag controller's [OverlayDragController.detach] runs
      * **before** the window's `detach` so a mid-drag tear-down can
      * still persist the final pixel position via [onAction] (Spec 3
-     * §4.6 Issue 3.1.5 / R.18). After the controller has flushed, the
-     * view's touch listener is cleared, the window is removed, and
-     * every cached reference is dropped.
+     * §4.6 Issue 3.1.5 / R.18). After the controller has flushed, it is
+     * unbound from the [DraggableOverlayLayout] root, the window is
+     * removed, and every cached reference is dropped.
      */
     private fun teardownOverlay() {
         // Side-channel renderer cleanup MUST run before the window
@@ -675,9 +683,9 @@ class OverlayBackend(
 
         try {
             dragController?.detach()
+            (overlayView as? DraggableOverlayLayout)?.dragController = null
         } catch (t: Throwable) {
-            // Touch-listener detach is reflective inside the View; an
-            // unexpected throw here must not block the window cleanup.
+            // A mid-drag persist throw must not block the window cleanup.
             Log.w(TAG, "dragController.detach threw", t)
         }
         dragController = null

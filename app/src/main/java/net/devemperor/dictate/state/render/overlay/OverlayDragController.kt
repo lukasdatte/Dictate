@@ -90,14 +90,22 @@ class DefaultOverlayDragControllerFactory(
  *
  * # Click-vs-drag differentiation (Spec 3 §11.5.2)
  *
- * The controller's `OnTouchListener` returns `false` until the user's
- * finger has travelled more than the [dragThresholdPx] from the
- * `ACTION_DOWN` position. Beneath the threshold the touch propagates
- * to the underlying child views (the five overlay buttons) — they
- * receive `ACTION_DOWN` → `ACTION_UP` and fire `OnClickListener`.
- * Above the threshold the controller takes over: returns `true`,
- * stops button-clicks from firing for the rest of the gesture, and
+ * The controller is driven by [DraggableOverlayLayout]'s
+ * `onInterceptTouchEvent` / `onTouchEvent` overrides. [onInterceptTouchEvent]
+ * does **not** intercept `ACTION_DOWN`, so the button children still
+ * receive it and stay clickable. Beneath [dragThresholdPx] the gesture
+ * keeps flowing to the buttons — they get `ACTION_DOWN` → `ACTION_UP`
+ * and fire `OnClickListener`. The first `ACTION_MOVE` past the
+ * threshold makes [onInterceptTouchEvent] return `true`: the ViewGroup
+ * steals the gesture (the button receives `ACTION_CANCEL`, its click is
+ * cancelled) and every following event flows into [onTouchEvent], which
  * issues continuous [OverlayWindow.update] calls per `ACTION_MOVE`.
+ *
+ * Intercepting — rather than a parent `OnTouchListener` — is mandatory:
+ * once a clickable child consumes `ACTION_DOWN` it becomes the touch
+ * target for the whole gesture and a listener on the parent never sees
+ * the moves. `onInterceptTouchEvent` is the only hook that re-routes a
+ * gesture a child already claimed.
  *
  * # Threshold — accessibility-aware
  *
@@ -148,13 +156,14 @@ class DefaultOverlayDragControllerFactory(
  * `ACTION_DOWN`, F-7). Without this hook the un-emitted drag would
  * disappear from the state axis.
  *
- * # Why not `View.setOnTouchListener` in the backend?
+ * # Why a separate class (not drag logic inlined in the view/backend)?
  *
- * The backend owns the root view but **not** the touch-routing policy
- * — that policy interacts with `WindowManager.update`, drag thresholds,
- * and the persistence cascade in a single coherent state machine.
- * Splitting it out lets unit tests inject a recording mapper +
- * recording persister (K-1, hand-rolled fakes).
+ * Neither [OverlayBackend] nor [DraggableOverlayLayout] owns the
+ * touch-routing *policy* — it interacts with `WindowManager.update`,
+ * drag thresholds, and the persistence cascade in a single coherent
+ * state machine. Keeping it here lets unit tests drive
+ * [onInterceptTouchEvent] / [onTouchEvent] directly with injected
+ * recording fakes (K-1); the view stays a thin override shell.
  *
  * @property ctx context — used to read [ViewConfiguration.getScaledTouchSlop]
  *   and density at construction time.
@@ -226,36 +235,52 @@ class OverlayDragController(
      */
     fun isDragging(): Boolean = dragging
 
-    private val touchListener = View.OnTouchListener { _, event ->
-        val params = paramsHolder() ?: return@OnTouchListener false
-        when (event.actionMasked) {
+    /**
+     * `onInterceptTouchEvent` hook for the [DraggableOverlayLayout] root.
+     *
+     * `ACTION_DOWN` is recorded but **not** intercepted (`false`) so the
+     * button children still receive it and stay clickable. Each
+     * `ACTION_MOVE` is measured against [dragThresholdPx]; the first
+     * move past the threshold flips [dragging] on and returns `true` —
+     * the ViewGroup then steals the gesture (the button receives
+     * `ACTION_CANCEL`) and the remainder flows into [onTouchEvent].
+     */
+    fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+        val params = paramsHolder() ?: return false
+        return when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                initialTouchX = event.rawX
-                initialTouchY = event.rawY
-                initialParamsX = params.x
-                initialParamsY = params.y
-                // F-7: snapshot the orientation ONCE here. params is
-                // the same instance the backend holds; capturing
-                // `initialParamsX/Y` from it relies on the
-                // detach-before-params-swap invariant (F-12 comment in
-                // detach()).
-                gestureOrientationPortrait = orientationProvider()
-                dragging = false
-                // Return `false` so the inflated button children still
-                // receive `ACTION_DOWN` for ripple feedback (Spec 3
-                // §11.5.1).
+                recordGestureStart(event, params)
                 false
+            }
+            MotionEvent.ACTION_MOVE -> updateDragging(event)
+            else -> false
+        }
+    }
+
+    /**
+     * `onTouchEvent` hook for the [DraggableOverlayLayout] root.
+     *
+     * Reached either (a) after [onInterceptTouchEvent] stole the gesture
+     * — every following move/up arrives here — or (b) directly, when the
+     * `ACTION_DOWN` landed on an empty (non-button) region of the root
+     * and no child claimed it. Case (b) is why `ACTION_DOWN` records the
+     * gesture start and returns `true` (claiming the gesture) and why
+     * `ACTION_MOVE` re-checks the threshold: on the empty-region path
+     * `onInterceptTouchEvent` is not consulted for the moves.
+     */
+    fun onTouchEvent(event: MotionEvent): Boolean {
+        val params = paramsHolder() ?: return false
+        return when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                recordGestureStart(event, params)
+                true
             }
 
             MotionEvent.ACTION_MOVE -> {
-                val dx = event.rawX - initialTouchX
-                val dy = event.rawY - initialTouchY
-                if (!dragging && hypot(dx.toDouble(), dy.toDouble()) > dragThresholdPx) {
-                    dragging = true
-                }
+                updateDragging(event)
                 if (dragging) {
-                    params.x = initialParamsX + dx.toInt()
-                    params.y = initialParamsY + dy.toInt()
+                    params.x = initialParamsX + (event.rawX - initialTouchX).toInt()
+                    params.y = initialParamsY + (event.rawY - initialTouchY).toInt()
                     window.update(view, params)
                     true
                 } else {
@@ -267,13 +292,8 @@ class OverlayDragController(
                 if (dragging) {
                     persistCurrentPosition(params)
                     dragging = false
-                    // Returning `true` suppresses the button-click
-                    // that would otherwise fire on a confirmed drag
-                    // (Spec 3 §11.5.2 third row).
                     true
                 } else {
-                    // Tap — pass through to the buttons' click
-                    // listeners.
                     false
                 }
             }
@@ -283,18 +303,46 @@ class OverlayDragController(
     }
 
     /**
-     * Bind the touch listener to the overlay root. Idempotent — a
-     * second call replaces the prior listener (Android
-     * `setOnTouchListener` semantics).
+     * Capture the gesture's start coordinates, the window's start
+     * position, and the orientation snapshot (F-7 — read ONCE here so
+     * the persisted value's pref-bucket and the geometry that produced
+     * it come from the same configuration). Idempotent for the single
+     * `ACTION_DOWN` of a gesture — safe to call from both
+     * [onInterceptTouchEvent] and [onTouchEvent].
      */
-    fun attach() {
-        view.setOnTouchListener(touchListener)
+    private fun recordGestureStart(event: MotionEvent, params: WindowManager.LayoutParams) {
+        initialTouchX = event.rawX
+        initialTouchY = event.rawY
+        initialParamsX = params.x
+        initialParamsY = params.y
+        gestureOrientationPortrait = orientationProvider()
+        dragging = false
     }
 
     /**
-     * Release the touch listener. If a drag is in flight, the final
-     * pixel position is persisted before the listener is detached so
-     * no drag silently disappears (Spec 3 §4.6 / R.18).
+     * Promote a potential click to a confirmed drag once the finger has
+     * travelled past [dragThresholdPx]. Returns `true` on the single
+     * tick where [dragging] flips on — [onInterceptTouchEvent] uses that
+     * as the "steal the gesture now" signal.
+     */
+    private fun updateDragging(event: MotionEvent): Boolean {
+        if (dragging) return false
+        val dx = event.rawX - initialTouchX
+        val dy = event.rawY - initialTouchY
+        if (hypot(dx.toDouble(), dy.toDouble()) > dragThresholdPx) {
+            dragging = true
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Flush an in-flight drag at overlay teardown. If a drag is active
+     * (a mode-transition tears the overlay down while the finger is
+     * still on the window), the final pixel position is persisted so no
+     * drag silently disappears (Spec 3 §4.6 / R.18). Unbinding this
+     * controller from [DraggableOverlayLayout.dragController] is done
+     * separately by [OverlayBackend.teardownOverlay].
      */
     fun detach() {
         if (dragging) {
@@ -311,7 +359,6 @@ class OverlayDragController(
             paramsHolder()?.let { params -> persistCurrentPosition(params) }
             dragging = false
         }
-        view.setOnTouchListener(null)
     }
 
     private fun persistCurrentPosition(params: WindowManager.LayoutParams) {

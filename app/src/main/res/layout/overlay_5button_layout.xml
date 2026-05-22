@@ -39,7 +39,8 @@
     @see net.devemperor.dictate.state.layout.LayoutCatalog (OVERLAY_5BUTTON)
     @see net.devemperor.dictate.state.render.overlay.OverlayBackend
 -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<net.devemperor.dictate.state.render.overlay.DraggableOverlayLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/overlay_root"
     android:layout_width="156dp"
@@ -132,4 +133,4 @@
             app:iconPadding="0dp"
             android:contentDescription="@string/overlay_close_cd" />
     </LinearLayout>
-</LinearLayout>
+</net.devemperor.dictate.state.render.overlay.DraggableOverlayLayout>

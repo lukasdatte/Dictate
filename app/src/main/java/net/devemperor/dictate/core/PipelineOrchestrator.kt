@@ -1157,7 +1157,8 @@ class PipelineOrchestrator @JvmOverloads constructor(
                 val legacyPath = sessionManager.getSessionById(sid)?.audioFilePath
                 legacyPath?.let { File(it) }
             }
-            is PipelineAudioResult.Complete -> result.file
+            is PipelineAudioResult.Complete ->
+                persistMuxedForUpload(sid, result.file)
             is PipelineAudioResult.PartialRecovery -> {
                 // Persist the marker so the InfoBar producer surfaces the
                 // warning. `last_error_message = "partial:N"` is the
@@ -1177,8 +1178,57 @@ class PipelineOrchestrator @JvmOverloads constructor(
                     "Partial-recovery for $sid: ${result.ignoredSegmentIndices.size} " +
                         "segments skipped, ~${result.estimatedLostSeconds}s lost",
                 )
-                result.file
+                persistMuxedForUpload(sid, result.file)
             }
+        }
+    }
+
+    /**
+     * Block A4c (recording-stack-completion) — copy the about-to-be-
+     * uploaded audio (single-segment OR muxed multi-segment) into
+     * `filesDir/recordings/{sid}.m4a` so the session's authoritative
+     * audio survives a cache eviction. The session row's
+     * `audio_file_path` is updated to point at the persistent location.
+     *
+     * **Why here, not after upload success:** if the upload itself
+     * crashes, the merged file in the cache could be evicted before a
+     * retry-on-resume runs. Persisting before transcribe is the cheapest
+     * mitigation — copyTo is O(file-size), typically <100 ms for a
+     * 1-minute recording.
+     *
+     * **Segments stay in place.** The rolling segments under
+     * `cacheDir/audio/sess_{sid}_seg*.m4a` are NOT deleted; the
+     * cache-resident state is the "raw take" that recovery /
+     * partial-recovery / future re-mux paths still need. Periodic
+     * cleanup (B-style job, not in this commit) sweeps segments older
+     * than the cache TTL.
+     *
+     * **Idempotent.** Re-running on an already-persisted session
+     * overwrites `{sid}.m4a` with the latest mux (e.g. a re-mux after a
+     * Cold-Resume continuation adds new segments) — `copyTo(..., overwrite=true)`.
+     *
+     * @return the persistent file if the copy + DB-update succeeded;
+     *   otherwise the source (cache-resident) file, so the upload still
+     *   has audio to send. Failure is logged but never throws back to
+     *   the caller (recording-must-never-be-lost discipline).
+     */
+    private fun persistMuxedForUpload(sid: String, source: File): File {
+        val repo = recordingRepository ?: run {
+            // Pre-A4c orchestrator (no recordingRepository wired) —
+            // legacy Java callers; keep returning the source so the
+            // upload still happens.
+            return source
+        }
+        return try {
+            // persistFromCache is a copyTo (NOT a move) — segments and the
+            // cache-resident merged file stay intact. Idempotent across
+            // re-uploads (overwrite=true inside persistFromCache).
+            val recording = repo.persistFromCache(source, sid)
+            database?.sessionDao()?.updateAudioFilePath(sid, recording.audioFile.absolutePath)
+            recording.audioFile
+        } catch (t: Throwable) {
+            Log.w(TAG, "persistMuxedForUpload($sid) failed; falling back to source", t)
+            source
         }
     }
 

@@ -169,13 +169,20 @@ sealed class Pref<T>(val key: String, val default: T) {
     // worst, the user loses one rolling interval of audio when the
     // process dies mid-segment.
     //
-    // Default: 30 s — the historic ADR-0007 estimate. Lower = less worst-
-    // case loss but more on-disk fragmentation; higher = fewer files but
-    // proportionally more audio lost per crash.
+    // Default: 15 s — halved from the historic ADR-0007 30 s estimate
+    // after the on-device verification of recording-stack-completion
+    // Block A on 2026-05-22. 15 s halves the worst-case crash-loss window
+    // and keeps the multi-segment-mux overhead bounded: a typical 30-60 s
+    // recording produces 2-4 segments (vs. 1-2 at 30 s), the MediaMuxer
+    // concat at upload-time stays under 200 ms. Lower (e.g. 10 s) makes
+    // multi-segment the default for *every* recording — more
+    // setNextOutputFile race-warnings on Pixel/Samsung hardware,
+    // proportionally more DB-writes via SyncAudioSegments. Higher (e.g.
+    // 30 s) preserves more audio loss per crash than necessary.
     //
     // @see net.devemperor.dictate.core.RecordingHardwareAdapter
     object RollingSegmentIntervalSec :
-        Pref<Long>("net.devemperor.dictate.rolling_segment_interval_sec", 30L)
+        Pref<Long>("net.devemperor.dictate.rolling_segment_interval_sec", 15L)
 
     // Continuation freshness window — how long a RECORDING_INTERRUPTED
     // session stays eligible for auto-continuation on the next

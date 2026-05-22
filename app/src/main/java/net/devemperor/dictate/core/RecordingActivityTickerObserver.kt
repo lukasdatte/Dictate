@@ -118,9 +118,13 @@ class RecordingActivityTickerObserver(
 
     private var scope: CoroutineScope? = null
     private val handler = Handler(Looper.getMainLooper())
-    private var startedAtMs: Long = -1L
-    private var accumulatedElapsedMs: Long = 0L
-    private var currentSessionId: String? = null
+    // Mirrors of the persisted state. Mutations sync back to the
+    // companion-object fields (which survive Observer recreation on
+    // IME-View rotation / theme change) — see the IME-rotation fix
+    // KDoc at the top of the class.
+    private var startedAtMs: Long = persistedStartedAtMs
+    private var accumulatedElapsedMs: Long = persistedAccumulatedElapsedMs
+    private var currentSessionId: String? = persistedSessionId
     private var ticking: Boolean = false
 
     private val tickRunnable = object : Runnable {
@@ -174,8 +178,24 @@ class RecordingActivityTickerObserver(
 
     private fun startOrContinueTicker(sessionId: String) {
         if (currentSessionId != sessionId) {
-            // New recording session — reset both the timer anchor AND
-            // the accumulated counter so the timer restarts at 0.
+            // Two cases produce this branch:
+            //
+            //   (a) Truly new recording session — reset anchor AND
+            //       accumulator so the timer restarts at 0.
+            //   (b) **IME-View rotation while a recording is in
+            //       flight** — this observer was just instantiated
+            //       in onCreateInputView(); `currentSessionId` is
+            //       whatever survived from the persisted-companion
+            //       restore. If that restore matched the live
+            //       session, we'd hit the `else if` branch instead.
+            //       But on a *cold* observer with no prior persist
+            //       (e.g. service-process-restart while recording
+            //       was active in a survived FGS) we land here with
+            //       persistedStartedAtMs == -1L, which makes case (b)
+            //       indistinguishable from case (a). Cold observer
+            //       == fresh timer is the correct fallback (timer
+            //       resync from "now" is the least confusing UX vs.
+            //       random pre-restart elapsed time).
             startedAtMs = SystemClock.elapsedRealtime()
             accumulatedElapsedMs = 0L
             currentSessionId = sessionId
@@ -184,8 +204,19 @@ class RecordingActivityTickerObserver(
             // invalidated by `freezeTicker`). Re-stamp the anchor so the
             // tick continues; `accumulatedElapsedMs` carries the value
             // from the previous Active interval.
+            //
+            // **Rotation case**: when persistedStartedAtMs was -1L
+            // (e.g. last Paused → freezeTicker) but persistedSessionId
+            // matches the live recording, we land here and correctly
+            // re-stamp the anchor — equivalent to a Pause → Resume.
             startedAtMs = SystemClock.elapsedRealtime()
         }
+        // **Rotation case (same sessionId, startedAtMs ≥ 0L)**: the
+        // companion restore lined up perfectly with the live state.
+        // No mutation needed — the new Observer instance is already
+        // in sync with the recording in progress, and the tick will
+        // resume from `accumulatedElapsedMs + (now - startedAtMs)`.
+        syncToCompanion()
         if (!ticking) {
             ticking = true
             handler.post(tickRunnable)
@@ -210,6 +241,7 @@ class RecordingActivityTickerObserver(
         }
         ticking = false
         handler.removeCallbacks(tickRunnable)
+        syncToCompanion()
         // Emit one final tick on the frozen value so the UI sits on the
         // exact stopped time (no last-tick race where the rendered
         // number is one TICK_INTERVAL_MS short of the freeze point).
@@ -222,9 +254,67 @@ class RecordingActivityTickerObserver(
         startedAtMs = -1L
         accumulatedElapsedMs = 0L
         currentSessionId = null
+        // Recording reached Idle — clear the persisted companion so
+        // the NEXT recording session starts fresh. This is the only
+        // path that clears the companion; [stop] (Observer lifecycle
+        // boundary) does NOT clear it so a rotation-driven re-attach
+        // can restore the state.
+        clearPersistedState()
     }
 
-    private companion object {
+    /**
+     * Sync the live instance fields back into the companion-object
+     * "persistent" slots. Called after every mutation so a subsequent
+     * Observer recreation (rotation, theme change, IME-View tear-down)
+     * can restore the timer state in its constructor.
+     */
+    private fun syncToCompanion() {
+        persistedStartedAtMs = startedAtMs
+        persistedAccumulatedElapsedMs = accumulatedElapsedMs
+        persistedSessionId = currentSessionId
+    }
+
+    companion object {
         const val TICK_INTERVAL_MS: Long = 100L
+
+        // ── Cross-Observer-instance persistence (rotation survival) ──
+        //
+        // The IME re-instantiates [RecordingActivityTickerObserver] on
+        // every `onCreateInputView`. Without these fields the new
+        // observer's `currentSessionId` is null and any live
+        // `state.recording=Active(...)` emission appears as a "fresh
+        // session", resetting the visible timer to 0:00 mid-recording
+        // (verified on-device 2026-05-22 — rotation while recording).
+        //
+        // The persisted state is cleared exactly when the recording
+        // reaches Idle (see [stopTicker]); Observer-lifecycle stops
+        // (rotation tear-down, IME unbind) do NOT clear it so the
+        // companion-restore can re-anchor on the next observer
+        // construction.
+        //
+        // Threading: writes happen on the main thread (the Observer's
+        // dispatch is `Dispatchers.Main` + the `handler` is a main-
+        // looper handler). Volatile keeps cross-thread visibility for
+        // any defensive reader (none today, but cheap insurance).
+        @Volatile private var persistedStartedAtMs: Long = -1L
+        @Volatile private var persistedAccumulatedElapsedMs: Long = 0L
+        @Volatile private var persistedSessionId: String? = null
+
+        /**
+         * Reset the persisted timer-state to its initial values.
+         * Called by [stopTicker] when the recording reaches `Idle`
+         * — at that point the next recording is a genuinely new
+         * session and the timer must start at 0.
+         *
+         * **Test seam:** exposed `internal` so unit tests can wipe
+         * the companion between tests (state survives across test
+         * cases otherwise, which is a real test-isolation foot-gun).
+         */
+        @JvmStatic
+        internal fun clearPersistedState() {
+            persistedStartedAtMs = -1L
+            persistedAccumulatedElapsedMs = 0L
+            persistedSessionId = null
+        }
     }
 }

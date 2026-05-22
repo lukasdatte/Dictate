@@ -9,20 +9,22 @@
       - `OverlayButton.Icon` — Record / Pause / Trash / Close (icon-only,
         48 dp square).
 
-    Both inherit Material 3 defaults; the only override is a 12dp corner
-    radius so the buttons echo the rounded `overlay_background` card.
+    Both inherit Material 3 defaults — no `cornerRadius` override so the
+    buttons match the keyboard-surface buttons (record_btn / trash_btn /
+    pause_btn / enter_btn — none of them sets cornerRadius either, so
+    they all share the Material 3 pill-shape default). The previous 12dp
+    override was removed 2026-05-22 per user-req "Buttons sollen genauso
+    ausschauen wie auf der normalen Tastatur, also auch mit den gleichen
+    Rundungen".
 
     @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §3.2
 -->
 <resources>
 
     <style name="OverlayButton.Primary" parent="Widget.Material3.Button">
-        <item name="cornerRadius">12dp</item>
         <item name="android:textAllCaps">false</item>
     </style>
 
-    <style name="OverlayButton.Icon" parent="Widget.Material3.Button.IconButton">
-        <item name="cornerRadius">12dp</item>
-    </style>
+    <style name="OverlayButton.Icon" parent="Widget.Material3.Button.IconButton" />
 
 </resources>

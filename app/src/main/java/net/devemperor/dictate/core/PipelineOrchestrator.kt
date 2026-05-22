@@ -903,7 +903,22 @@ class PipelineOrchestrator @JvmOverloads constructor(
         val repo = recordingRepository
         val audioDurationSec: Long
         val audioPathForRow: String
-        if (repo != null) {
+        // Block A4 (recording-stack-completion) — Multi-Segment detection.
+        // Post-A4 the IME allocates the initial file as `sess_{sid}_seg1.m4a`
+        // via AudioFileRepository.allocateFirst; rolling-segments produce
+        // `_seg2`, `_seg3`, … alongside it. Copying the FIRST segment to
+        // `files/recordings/{sid}.m4a` and then deleting the cache original
+        // (legacy persist-first flow below) tears the segment sequence
+        // apart — the muxer at upload-time would only see `_seg2`+. The
+        // multi-segment path therefore SKIPS persistFromCache: the
+        // segments live in `cache/audio/`; readForPipeline() merges them
+        // at upload-time and the merged file is what reaches the AI.
+        // `audioFilePath` on the session row points at the first segment
+        // so legacy code paths (history, recovery cleanup) can still find
+        // *an* audio file for the session.
+        val isMultiSegmentInitial = audioFile.parentFile?.name == "audio" &&
+            audioFile.name.startsWith("sess_") && audioFile.name.contains("_seg")
+        if (repo != null && !isMultiSegmentInitial) {
             val recording = repo.persistFromCache(audioFile, sessionId)
             audioDurationSec = repo.extractDurationSeconds(recording.audioFile)
             audioPathForRow = recording.audioFile.absolutePath
@@ -924,6 +939,14 @@ class PipelineOrchestrator @JvmOverloads constructor(
                         it,
                     )
                 }
+        } else if (repo != null) {
+            // Multi-Segment path — segments stay in cache; readForPipeline()
+            // does the muxer concat at upload-time. Duration extraction
+            // still runs on the first segment for the denormalised cache
+            // (DurationHealingJob re-syncs to sum-of-segments later if a
+            // rolling-roll lands after this point).
+            audioDurationSec = repo.extractDurationSeconds(audioFile)
+            audioPathForRow = audioFile.absolutePath
         } else {
             // Legacy path: copy to recordingsDir, no synchronous duration.
             config.recordingsDir.mkdirs()

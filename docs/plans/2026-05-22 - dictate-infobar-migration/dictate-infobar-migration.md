@@ -1,248 +1,293 @@
-# Dictate InfoBar Migration — Complete the ADR-0006 State-Derived Big-Bang
+# Dictate Unified Info-Notice Migration — Complete the ADR-0006 State-Derived Big-Bang
 
 archive_target: 2026-05-22 - dictate-infobar-migration
 
 ## 1. Context & Problem
 
-Dictate runs **two** info-bar systems side by side:
+Dictate communicates transient information to the user (errors, warnings,
+app-prompts) through **scattered, mostly imperative channels**:
 
-- **Legacy** — `InfoBarController` (imperative `showInfo(type)`), renders
-  into the `info_cl` container.
-- **New** — `InfoBarSelector` (pure `(DictateUiState) -> List<InfoBarItem>`)
-  + `InfoBarRenderer` (a `StateFlow` collector), renders into the
-  `overlay_permission_infobar` container.
+- **Legacy InfoBar** — `InfoBarController.showInfo(type)`, 9 imperative
+  type strings, renders into `info_cl`.
+- **New InfoBar** — `InfoBarSelector` (pure `(DictateUiState) ->
+  List<InfoBarItem>`) + `InfoBarRenderer`, wired (wrongly) to
+  `overlay_permission_infobar`.
+- **Operational toasts** — `Toast.makeText` fired from 3–4 sites each
+  for `service_not_ready`, `storage_full`, `audio_file_missing`,
+  `resend_focus_lost`, `job_already_active`.
 
-ADR-0006 decided the legacy system would be fully migrated into the
-selector and deleted ("big-bang migration"). It was only half done:
-the new `InfoBarRenderer` exists, but (a) it was wired to the wrong
-container — `overlay_permission_infobar`, which is **not** in the
-layout's constraint chain, so it overlaps and is painted over by later
-views (the **InfoBar Z-order bug**); and (b) the 9 legacy
-`InfoBarController` types were never migrated, so `InfoBarController`
-still lives.
+The two research files
+([infobar-territory-map.md](research/infobar-territory-map.md),
+[info-feedback-channels.md](research/info-feedback-channels.md)) expose
+the real disease: **a single AI error fans to 4–5 surfaces through
+independent wirings with no shared "error" fact in state**, and the
+error *kind* is destroyed by the pipeline FSM (`PipelineFailed` →
+`Idle`). The InfoBar and the red record-button derive the same event
+from two different sources and can desync; the FGS notification
+*contradicts* the InfoBar (dismisses on an error the InfoBar shows).
 
-Full territory map: [research/infobar-territory-map.md](research/infobar-territory-map.md).
-This plan is the single source of truth for the *work*; the research
-file is the SSoT for the *current-state facts*.
+This plan unifies every **transient in-keyboard notice** — pipeline
+errors *and* operational notices — into one typed state axis, finishes
+the ADR-0006 InfoBar migration, and deletes both the legacy
+`InfoBarController` and the dead `ToastSink` infrastructure.
+
+The two research files are the SSoT for the *current-state facts*; this
+plan is the SSoT for the *work*.
 
 ## 2. Acceptance Criteria
 
-- **AC-1** — All 8 live info-bar types render via
-  `InfoBarSelector` → `InfoBarRenderer`: `update`, `rate`, `donate`,
-  `invalid_api_key`, `quota_exceeded`, `model_not_found`, `bad_request`,
-  `internet_error`. (`timeout` dropped — dead code, no caller.)
-- **AC-2** — `InfoBarController.kt` is deleted; no `showInfo(...)` /
-  `infoBarController.dismiss()` call sites remain.
-- **AC-3** — `info_cl` is the single info-bar container; `InfoBarRenderer`
-  renders into it; `overlay_permission_infobar` (+ its 3 children) is
-  removed from the layout.
-- **AC-4** — The InfoBar Z-order bug is gone: an active info-bar is fully
-  visible and tappable (`info_cl` is in the constraint chain → pushes
-  content down; the `PromptVisibilityController` mutex from commit
-  `7ee502c` hides `prompts_keyboard_cl` while the bar is up).
-- **AC-5** — Each new selector producer (pipeline-error, app-prompt) has
-  a "confirm/dismiss action actually removes the item" test
-  (ADR-0006 §Failure-Modes).
-- **AC-6** — `quota_exceeded` keeps its dynamic behaviour: provider
-  display-name interpolated into the message; the billing-URL confirm
-  button appears only when `provider.billingUrl != null`.
-- **AC-7** — Confirm/dismiss side-effects are preserved: `update` dismiss
-  writes `Pref.LastVersionCode`; `rate` writes `Pref.FlagHasRated`;
-  `donate` writes both `Pref.FlagHasDonated` and `Pref.FlagHasRated`;
-  confirm buttons still open Settings / Play-Store / PayPal / billing URL.
-- **AC-8** — Full unit-test suite green; debug APK builds; device-verified
-  (trigger a network error → bar shows in `info_cl`, readable, tappable).
-- **AC-9** — ADR-0006 moved `Proposed` → `Accepted` with a Decision-History
-  entry recording the final state-modelling choices (D1–D6 below).
+- **AC-1** — All transient in-keyboard notices render via
+  `InfoBarSelector` → `InfoBarRenderer` → `info_cl`:
+  - 5 pipeline errors — `invalid_api_key`, `quota_exceeded`,
+    `model_not_found`, `bad_request`, `internet_error`;
+  - 4 operational notices — `service_not_ready`, `storage_full`,
+    `audio_file_missing`, `resend_focus_lost`;
+  - 3 app-prompts — `update`, `rate`, `donate`.
+- **AC-2** — Dropped, not migrated: `timeout` (dead code), `cancelled`
+  (never surfaces), `job_already_active` (cosmetic echo of a reducer
+  `Idle`-guard — deleted outright).
+- **AC-3** — `InfoBarController.kt` deleted; the dead `ToastSink`
+  interface + its binding deleted; no `showInfo(...)`,
+  `infoBarController.dismiss()`, or operational `Toast.makeText` call
+  site remains in `DictateInputMethodService`.
+- **AC-4** — `info_cl` is the single info-bar container;
+  `overlay_permission_infobar` (+ its 3 children) removed from the
+  layout. `InfoBarRenderer` renders into `info_cl`.
+- **AC-5** — The InfoBar Z-order bug is gone (`info_cl` is in the
+  constraint chain → pushes content down; the `PromptVisibilityController`
+  mutex from commit `7ee502c` hides `prompts_keyboard_cl` while a bar is
+  up).
+- **AC-6** — Every selector producer has a "confirm/dismiss action
+  actually removes the item" test (ADR-0006 §Failure-Modes).
+- **AC-7** — `quota_exceeded` keeps its dynamic behaviour: provider
+  display-name interpolated; billing-URL confirm button only when
+  `provider.billingUrl != null`.
+- **AC-8** — Side-effects preserved: `update` dismiss writes
+  `Pref.LastVersionCode`; `rate` writes `Pref.FlagHasRated`; `donate`
+  writes both `Pref.FlagHasDonated` + `Pref.FlagHasRated`; confirm
+  buttons still open Settings / Play-Store / PayPal / billing URL.
+- **AC-9** — The 300 ms error vibration fires **consistently** for
+  every error-class notice (an `Effect` on the notice-add edge) — the
+  preflight `vibrate=false` vs. runtime `vibrate=true` inconsistency is
+  gone.
+- **AC-10** — Full unit-test suite green; debug APK builds;
+  device-verified (force a network error → bar in `info_cl`, readable,
+  tappable, prompts hidden, vibrates; dismiss → bar gone).
+- **AC-11** — ADR-0006 `Proposed` → `Accepted` with a Decision-History
+  entry recording D1–D9.
 
 ## 3. Design Decisions
 
-### D1 — Pipeline transient error: a top-level `pipelineError` axis
+### D1 — One typed list axis: `transientNotices`
 
-A pipeline error is a one-shot event; the pipeline FSM goes straight to
-`Idle`, so the error key cannot live *inside* `PipelineUiState`
-(`Idle` would have to carry it). Model it as a **top-level nullable
-axis** `DictateUiState.pipelineError: PipelineError?`, owned by
-`PipelineModule` (a module may own more than one axis; the
-single-owner-per-axis invariant is per *axis*).
+A `PersistentList<TransientNotice>` on `DictateUiState`. `TransientNotice`
+is a **sealed hierarchy** — each variant carries exactly its own data
+(no optional-field-valid-only-for-some-variants smell). Consistent with
+`pendingSessions` (already a `PersistentList`) and with the project's
+sealed-class discipline (`RecordingState`, `PipelineUiState`, …).
 
-```
-enum class PipelineErrorKind { INVALID_API_KEY, QUOTA_EXCEEDED,
-                               MODEL_NOT_FOUND, BAD_REQUEST, INTERNET_ERROR }
-
-data class PipelineError(
-    val kind: PipelineErrorKind,
-    val providerKey: String?,   // AIProvider persist key, for QUOTA_EXCEEDED
-    val createdAt: Long,        // stamped by the dispatcher (pure reducer has no clock)
-)
-```
-
-ADR-0006's sketch said `state.pipeline.transientError`; this plan
-deviates to a sibling top-level field because the sealed `PipelineUiState`
-cannot carry a shared field cleanly. Recorded in AC-9.
-
-### D2 — App-lifecycle prompts: a resolved-boolean `appPrompts` axis
-
-`update/rate/donate` depend on SharedPreferences flags **and** a DB
-aggregate (`usageDao.getTotalAudioTime()`). Mirroring a live DB
-aggregate into state continuously is heavy and pointless — the checks
-only run at `onStartInputView`. So model the **resolved** booleans:
-
-```
-data class AppPromptsState(
-    val updateAvailable: Boolean = false,
-    val ratePromptDue: Boolean = false,
-    val donatePromptDue: Boolean = false,
-)
+```kotlin
+sealed interface TransientNotice {
+    val id: String         // stable, for dedup + dismiss targeting
+    val createdAt: Long    // stamped by the dispatching action (reducers have no clock)
+}
+// pipeline errors
+data class QuotaExceeded(val providerKey: String?, override val id, override val createdAt) : TransientNotice
+data class InvalidApiKey(...)  : TransientNotice
+data class ModelNotFound(...)  : TransientNotice
+data class BadRequest(...)     : TransientNotice
+data class NetworkError(...)   : TransientNotice
+// operational notices (today's toasts)
+data object/ data class ServiceNotReady(...)  : TransientNotice
+data class StorageFull(...)      : TransientNotice
+data class AudioFileMissing(...) : TransientNotice
+data class ResendFocusLost(...)  : TransientNotice
 ```
 
-The IME service computes the three booleans where it already does the
-pref/DB reads (`onStartInputView`) and dispatches
-`AppPromptsAction.Refresh(...)`. The selector reads three booleans —
-pure. Owned by a new tiny `AppPromptsModule`.
+The renderer shows the oldest item (`items.first()`); extra notices
+queue — acceptable (errors rarely co-occur).
 
-ADR-0006's sketch read a non-existent `state.prefs` axis; this plan
-resolves that gap with `AppPromptsState`. Recorded in AC-9.
+### D2 — Separate axis for app-prompts: `appPrompts`
 
-### D3 — Drop `timeout` and `cancelled`
+`update/rate/donate` derive from **persistent prefs** + a DB aggregate,
+not transient events — they do not belong in `transientNotices`.
+`AppPromptsState(updateAvailable, ratePromptDue, donatePromptDue)` —
+resolved booleans. The IME service computes them where it already does
+the pref/DB reads (`onStartInputView`) and dispatches a `Refresh`
+action; the selector reads three booleans → pure. `createdAt` for these
+items = `BuildConfig.VERSION_BUILD_TIME` (stable).
 
-`timeout` has a `when` branch + string resource but **no caller** —
-delete the branch; keep the string resource (cheap, harmless) or remove
-it (implementer's call). `cancelled` is produced by
-`AIProviderException.toInfoKey()` but never reaches the bar — the
-error-key→kind mapping simply has no `CANCELLED` case.
+### D3 — The "info subsystem" is a module: `InfoModule`
 
-### D4 — One container: `info_cl`
+One new `DictateModule` — `InfoModule` — owns **both** new axes
+(`transientNotices` + `appPrompts`) and carries their reducers. This is
+the user-requested "info subsystem" in the architecturally-correct
+form: a reducer-owning module, **not** an imperative manager class
+(that is exactly the `InfoBarController` being deleted). The three
+roles stay clean: `InfoModule` (state + reducers) → `InfoBarSelector`
+(pure aggregation) → `InfoBarRenderer` (the collector that paints).
 
-`info_cl` is already in the layout constraint chain
-(`prompts_keyboard_cl` is `Top_toBottomOf="@id/info_cl"`), so it pushes
-content down correctly. Re-point `InfoBarRenderer` at `info_cl` /
-`info_tv` / `info_yes_btn` / `info_no_btn`; delete the
-`overlay_permission_infobar` container and its 3 children. The Z-order
-bug disappears structurally — there is no longer an unchained,
-low-Z-order info-bar container.
+### D4 — Removal is reducer-driven; no timers
 
-### D5 — Confirm-action side-channels stay in the IME action-sink
+A `TransientNotice` leaves the list only via a reducer:
+- **User-dismiss** — the dismiss button dispatches `DismissNotice(id)`;
+  the reducer removes it (ADR-0006 "dismiss = natural-source mutation").
+- **Event-clear** — a reducer arm removes notices on a natural
+  follow-up event: starting a new pipeline clears stale pipeline-error
+  notices; the service binding clears `ServiceNotReady`.
 
-`InfoBarRenderer` dispatches one `Action` per click. State mutations go
-through the reducer; **side-channels** (launch Settings / a browser URL)
-fire alongside dispatch in the IME service's `InfoBarRenderer` action
-sink — exactly the existing pattern for `RequestOverlayPermission`
-(`DictateInputMethodService.java:1606-1668`). Side-channel parameters
-that depend on state (e.g. `quota_exceeded`'s `billingUrl`, derived from
-`providerKey`) are read **before** dispatch, because the dismiss
-mutation clears `pipelineError`.
+No auto-dismiss timers in v1 — every notice has a natural clear path
+(user action or follow-up event). This is the explicit per-toast
+auto-dismiss decision the research flagged.
 
-### D6 — Keep the `PromptVisibilityController` mutex (commit `7ee502c`)
+### D5 — Drop `timeout`, `cancelled`, `job_already_active`
 
-ADR-0006 §"Container-level mutex" specifies `info_cl` VISIBLE ↔
-`prompts_keyboard_cl` GONE. Commit `7ee502c` already added it
-(`infoBarActive -> false` in `PromptVisibilityController.render()`).
-Once `InfoBarController` is gone and `InfoBarRenderer` is the *sole*
-writer of `info_cl` driven by the selector, the mutex's
-`InfoBarSelector.select(state).isNotEmpty()` check is correct and
-race-free. No change needed — just verified.
+`timeout` — dead `when` branch, no caller. `cancelled` — never reaches
+a surface (orchestrator returns early on cancellation). `job_already_active`
+— a cosmetic toast echoing a reducer `Idle`-guard the FSM already
+enforces; the real protection stays, the toast is deleted (not migrated).
+
+### D6 — One container: `info_cl`
+
+`info_cl` is in the layout constraint chain (`prompts_keyboard_cl` is
+`Top_toBottomOf="@id/info_cl"`) → it pushes content down, no overlap.
+Re-point `InfoBarRenderer` at `info_cl` / `info_tv` / `info_yes_btn` /
+`info_no_btn`; delete the unchained `overlay_permission_infobar`. The
+Z-order bug disappears structurally. The `PromptVisibilityController`
+mutex (commit `7ee502c`) stays — once the selector is the sole writer
+of `info_cl` it is correct and race-free.
+
+### D7 — Vibration is an `Effect`, not state
+
+Modelling "buzz now" as state would need edge-detection. Instead the
+`InfoModule` reducer, when it **adds** an error-class `TransientNotice`,
+emits a vibration `Effect`; the IME effect-handler fires the 300 ms
+error pattern. This makes vibration fire for *every* error notice
+(including preflight) — fixing the current inconsistency (AC-9).
+
+### D8 — Delete the dead `ToastSink`
+
+`ToastSink` is plumbed but has zero producers. The operational toasts
+become `TransientNotice`s; `ToastSink` + its binding
+(`PipelineServiceStubSubsystems.realToastSink`) + the `ModuleServices`
+field are deleted. No genuinely-ephemeral feedback channel needs
+resurrecting today.
+
+### D9 — `Running.hasFailure` stays separate
+
+A non-terminal *step* failure (`StepFailed` → `Running.hasFailure`, the
+red record-button + step-row ✕, pipeline keeps running) is a
+**different fact** from a terminal pipeline error (a `TransientNotice`).
+They are not merged; `RecordButtonColorController` /
+`PipelineStepRowRenderer` are untouched.
+
+### Side-channels & out of scope
+
+- **Confirm-action side-channels** (open Settings / Play-Store / PayPal
+  / billing URL) fire in the IME service's `InfoBarRenderer` action
+  sink alongside dispatch — the existing `RequestOverlayPermission`
+  pattern. State-dependent params (the billing URL) are read **before**
+  dispatch (the dismiss mutation clears the notice).
+- **Out of scope** — the FGS notification (stays a separate OS surface;
+  its contradiction with the InfoBar on errors is noted as a follow-up,
+  not fixed here); `OVERLAY_BLOCK_HINT` (info-items while the overlay
+  shows); the "What's new" dialog vs. InfoBar-`update` duplication.
 
 ## 4. Work Blocks
 
 > Commit prefix per chunk: `[<Block>.<Chunk>] <title> (dictate-infobar-migration)`.
 
-### Block A — State foundation
+### Block A — State foundation & `InfoModule`
 
-- **A.1** — `PipelineErrorKind` enum + `PipelineError` data class
-  (new file under `state/`). Add `DictateUiState.pipelineError:
-  PipelineError? = null`; update `initial()`. Reducer/data-class tests.
-- **A.2** — `Action.PipelineAction.ReportTransientError(kind,
-  providerKey, createdAt)` + `ClearTransientError`. `PipelineModule`
-  reducer arms: set on `ReportTransientError`, clear on
-  `ClearTransientError`, **and** clear on pipeline-start
-  (`TriggerPipeline`/`StartPipeline` — replaces the imperative
-  `dismiss()` at `:4118`/`:4225`). `PipelineModuleTest` arms.
-- **A.3** — `AppPromptsState` + `DictateUiState.appPrompts`;
-  `Action.AppPromptsAction` (`Refresh` + `DismissUpdate`/`ConfirmUpdate`
-  /`DismissRate`/`ConfirmRate`/`DismissDonate`/`ConfirmDonate`); new
-  `AppPromptsModule` + registration in the module registry. Dismiss/
-  confirm reducer arms flip the `*Due` boolean and emit
-  `Effect.PersistPref` for the flag writes (AC-7). `AppPromptsModuleTest`.
+- **A.1** — `TransientNotice` sealed hierarchy (9 variants) + a small
+  `errorKindOf` / classification helper. New file under `state/`.
+- **A.2** — `AppPromptsState`. Add `DictateUiState.transientNotices:
+  PersistentList<TransientNotice>` and `appPrompts: AppPromptsState`;
+  update `initial()`.
+- **A.3** — `Action`s: `InfoAction.AddNotice(notice)`,
+  `DismissNotice(id)`, `ClearPipelineErrorNotices`,
+  `ClearServiceNotReady`; `AppPromptsAction.{Refresh, DismissUpdate,
+  ConfirmUpdate, DismissRate, ConfirmRate, DismissDonate, ConfirmDonate}`.
+- **A.4** — `InfoModule` (owns both axes) + reducers: add/dismiss,
+  event-clears (D4), app-prompt dismiss/confirm arms emitting
+  `Effect.PersistPref` (AC-8), and the error-notice-add vibration
+  `Effect` (D7). Register `InfoModule` in the module registry.
+- Reducer + data-class tests (`InfoModuleTest`, `DictateUiStateTest`).
 
 ### Block B — Selector producers
 
-- **B.1** — Pipeline-error producer in `InfoBarSelector.select()`:
-  `state.pipelineError?.let { add(InfoBarItem(...)) }`. Maps each
-  `PipelineErrorKind` → string resource + `InfoBarStyle.ERROR`.
-  `quota_exceeded`: derive provider display-name via
-  `AIProvider.fromPersistKey(providerKey)?.displayName ?: "API"` into
-  `textArgs`; `confirmAction` non-null only when `billingUrl != null`
-  (AC-6). `dismissAction = ClearTransientError`; confirm actions per D5.
-- **B.2** — App-prompts producer: three `if (state.appPrompts.xxxDue)`
-  blocks → `InfoBarItem` with `InfoBarStyle.INFO`, `createdAt` from
-  `BuildConfig.VERSION_BUILD_TIME` (stable, per ADR-0006 §Failure-Modes).
-- **B.3** — Selector tests in `InfoBarSelectorTest.kt` for all 8 types,
-  including the dismiss/confirm-removes-item tests (AC-5) and the
-  `quota_exceeded` provider/billing matrix.
+- **B.1** — `transientNotices` producer in `InfoBarSelector.select()`:
+  iterate the list → `InfoBarItem` per variant. Per-variant message
+  (`@StringRes` + `textArgs` + `InfoBarStyle.ERROR`),
+  `dismissAction = DismissNotice(id)`, `confirmAction` per variant
+  (Settings / billing / none). `quota_exceeded`: provider display-name
+  → `textArgs`, confirm only if `billingUrl != null` (AC-7).
+- **B.2** — `appPrompts` producer (3 `if` blocks, `InfoBarStyle.INFO`,
+  `createdAt = VERSION_BUILD_TIME`).
+- **B.3** — `InfoBarSelectorTest` for all 12 items, including the
+  dismiss/confirm-removes-item tests (AC-6) and the `quota_exceeded`
+  provider/billing matrix.
 
 ### Block C — Wiring & legacy removal
 
-- **C.1** — `onPipelineError(errorInfoKey, vibrate, providerName)`:
-  replace `showInfo(errorInfoKey, providerName)` with a dispatch of
-  `ReportTransientError(kind, providerKey, createdAt)`. Add a
-  `String → PipelineErrorKind?` mapping (drop `timeout`/`cancelled`;
-  unknown → `INTERNET_ERROR` fallback, matching today's else-less
-  behaviour). `PipelineFailed` dispatch stays.
-- **C.2** — `onStartInputView` update/rate/donate checks (`:3298-3312`):
-  replace the three `showInfo(...)` calls with one
-  `AppPromptsAction.Refresh(updateAvailable, ratePromptDue,
-  donatePromptDue)` dispatch (computed from the same pref reads + the
-  `dbExecutor` `totalAudioTime` query).
-- **C.3** — Re-point `InfoBarRenderer` construction
-  (`DictateInputMethodService.java:1592-1668`) from
-  `overlay_permission_infobar`/`overlay_permission_*` to `info_cl` /
-  `info_tv` / `info_yes_btn` / `info_no_btn`. Extend the action-sink to
-  handle the new confirm side-channels (Settings, Play-Store, PayPal,
-  billing URL) — D5.
-- **C.4** — Delete `InfoBarController.kt`; remove the field (`:321`),
-  the construction (`:963-968`), the two private wrappers (`:4989`,
-  `:4993`), and the five imperative `dismiss()` calls (`:2163`,
-  `:4118`, `:4225`, `:5062`, `:5611` — superseded by reducer-driven
-  clearing). Remove the now-dead `infoBarController == null` guard
-  (`:4546`).
+- **C.1** — `onPipelineError`: replace `showInfo(...)` with a dispatch
+  of `InfoAction.AddNotice(<mapped TransientNotice>)`
+  (`String → TransientNotice` mapping; `timeout`/`cancelled` →
+  unmapped; unknown → `NetworkError`). `PipelineFailed` dispatch stays.
+- **C.2** — The 4 operational toasts: replace each `Toast.makeText` in
+  `DictateInputMethodService` (`service_not_ready`, `storage_full`,
+  `audio_file_missing`, `resend_focus_lost`) with an
+  `InfoAction.AddNotice(...)` dispatch. Delete the `job_already_active`
+  toast + `showJobBusyToast()` (D5).
+- **C.3** — `onStartInputView` update/rate/donate checks: replace the 3
+  `showInfo(...)` with one `AppPromptsAction.Refresh(...)` dispatch.
+- **C.4** — Re-point `InfoBarRenderer` construction
+  (`DictateInputMethodService.java:1592-1668`) to `info_cl` /
+  `info_tv` / `info_yes_btn` / `info_no_btn`. Extend the action sink
+  for the new confirm side-channels (D-§Side-channels).
+- **C.5** — Delete `InfoBarController.kt` (+ field, construction, the 2
+  private `showInfo` wrappers, the 5 `dismiss()` calls, the null
+  guard). Delete `ToastSink` + its binding + the `ModuleServices`
+  field (D8).
 
 ### Block D — Layout
 
 - **D.1** — Delete the `overlay_permission_infobar` container + its 3
   children (`activity_dictate_keyboard_view.xml:290-346`). Verify the
-  `info_cl` → `prompts_keyboard_cl` → `edit_buttons_keyboard_ll` →
-  `main_buttons_cl` chain is intact and `info_cl`'s children
-  (`info_tv`/`info_yes_btn`/`info_no_btn`) match what `InfoBarRenderer`
-  expects (ids, button styling).
+  `info_cl → prompts_keyboard_cl → edit_buttons_keyboard_ll →
+  main_buttons_cl` chain and that `info_cl`'s 3 children match what
+  `InfoBarRenderer` expects.
 
 ### Block E — Verify & docs
 
 - **E.1** — Full `./gradlew test` green; `assembleDebug`; install;
-  device-verify: force a network error (airplane mode mid-transcription)
-  → error bar in `info_cl`, readable + tappable, prompts hidden; tap
-  dismiss → bar gone. Verify update/rate prompts still surface.
-- **E.2** — ADR-0006 `Proposed` → `Accepted`; Decision-History entry for
-  D1 (top-level `pipelineError` vs. `state.pipeline.transientError`),
-  D2 (`AppPromptsState` resolving the missing `state.prefs` axis), D3
-  (`timeout` dropped). Cross-link this plan in ADR-0006 `## References`.
+  device-verify per AC-10. Verify update/rate prompts still surface and
+  a storage-full / service-not-ready notice renders in `info_cl`.
+- **E.2** — ADR-0006 `Proposed` → `Accepted`; Decision-History entry
+  for D1–D9. Cross-link this plan in ADR-0006 `## References`.
 
 ## 5. Risks & Notes
 
-- **Big-bang risk** — `InfoBarController` deletion + container swap land
-  together; partial states are not shippable. Mitigation: the selector
-  is pure and unit-tested per type (B.3) before C.4 deletes the legacy
-  path; Block C is one reviewable unit.
-- **`createdAt` for `pipelineError`** — the pure reducer cannot read a
-  clock; `onPipelineError` stamps `System.currentTimeMillis()` into the
-  action. App-prompts use `BuildConfig.VERSION_BUILD_TIME`.
-- **Out of scope** — ADR-0006's `OVERLAY_BLOCK_HINT` LayoutMode (overlay
-  surface transform when items exist) is a separate concern; not touched.
+- **Big-bang risk** — Block C lands the new dispatch + the
+  `InfoBarController`/`ToastSink` deletion together; partial states are
+  not shippable. Mitigation: the selector is pure and unit-tested per
+  type (Block B) **before** Block C deletes the legacy path; Block C is
+  one reviewable cutover unit.
+- **`createdAt`** — the pure reducer has no clock; `onPipelineError` and
+  the toast call sites stamp `System.currentTimeMillis()` into the
+  `AddNotice` action. App-prompts use `BuildConfig.VERSION_BUILD_TIME`.
+- **Toast lifetime change** — a migrated toast lingers until dismissed
+  / event-cleared instead of auto-vanishing after ~2 s. D4 gives each a
+  natural clear path; verify on device that none feels "stuck".
+- **Dead-code cleanup found by research** — `NotificationStatus.Pipeline.step`
+  (plumbed, never rendered) and the orphaned `dictate_notif_ready_to_insert`
+  strings are noted but **out of scope** here.
 
 ## 6. References
 
 - ADR: `docs/decisions/0006-ui-info-bar-state-derived-items.md`
-- Research: [research/infobar-territory-map.md](research/infobar-territory-map.md)
+- Research: [research/infobar-territory-map.md](research/infobar-territory-map.md),
+  [research/info-feedback-channels.md](research/info-feedback-channels.md)
 - Related fix (already landed): commit `3c72d2a` — widget-send
-  `canCommitToHost` axis correction (the sibling bug from the same
+  `canCommitToHost` axis correction (sibling bug from the same
   investigation; independent of this plan).

@@ -951,6 +951,21 @@ sealed class Action {
         data class Dismiss(val sessionId: String) : PendingSessionsAction()
 
         /**
+         * Append a single [PendingSession] to the in-memory list
+         * (dedup on `sessionId`).
+         *
+         * 2026-05-22 — emitted by [PipelineModule.Effect
+         * .AddPendingInsertSession] when a pipeline finishes but the
+         * transcript could not be committed (B3.5 widget-host-block).
+         * Unlike [Refresh] (a full DB-snapshot replace), this carries
+         * the freshly-produced session directly from the `PipelineDone`
+         * action — no DB round-trip — so it is immune to the race where
+         * `findPendingInsertion` runs before the pipeline runner has
+         * written `status = COMPLETED`.
+         */
+        data class AddOne(val session: PendingSession) : PendingSessionsAction()
+
+        /**
          * User confirmed a Pending-Insert item — equivalent to [Dismiss]
          * on the state side (the session leaves `pendingSessions`, the
          * DB's `inserted_at` is stamped), with one additional imperative

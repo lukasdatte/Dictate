@@ -310,6 +310,18 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             if (prev.widget == WidgetState.Hidden) {
                 cascade += Action.WidgetAction.ToggleWidget
             }
+            // 2026-05-22 — clear the auto-overlay suppress bit on an
+            // explicit user-open. The bit (set by CloseWidget / W2) is
+            // meant to stop the *automatic* PIPELINE-overlay re-show
+            // after a user-close, but OverlayBackend.render() checks it
+            // unconditionally — so once it is set, even a deliberate
+            // Widget-Toggle-Btn press renders nothing (teardownOverlay
+            // at render() step 2). An explicit KEYBOARD → WIDGET toggle
+            // is exactly the user saying "I want the widget now", so the
+            // suppression is obsolete. Without this the widget could
+            // only be re-opened by starting a fresh recording (the only
+            // other ResetSuppressBit emitter — RecordingModule W7).
+            cascade += Action.OverlayAction.ResetSuppressBit
         }
 
         // ─── Onboarding auto-cleanup (Spec 3 §5.4) ──────────────────────

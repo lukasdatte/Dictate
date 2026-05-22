@@ -81,6 +81,23 @@ object PendingSessionsModule : DictateModule<PersistentList<PendingSession>, Act
             } else null
         }
 
+        is Action.PendingSessionsAction.AddOne -> {
+            // Append-with-dedup. The session arrives directly from the
+            // PipelineDone action (no DB round-trip) so the InfoBar can
+            // surface the pending-insert item without waiting for a
+            // status=COMPLETED write to land. Idempotent — a duplicate
+            // sessionId is a no-op (the existing entry already carries
+            // the text).
+            if (state.any { it.sessionId == action.session.sessionId }) {
+                null
+            } else {
+                TransitionResult(
+                    nextState = state.add(action.session),
+                    sideEffects = emptyList(),
+                )
+            }
+        }
+
         is Action.PendingSessionsAction.Dismiss -> dismiss(state, action.sessionId)
 
         is Action.PendingSessionsAction.AcceptAndInsert -> {

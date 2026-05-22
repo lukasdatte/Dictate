@@ -125,20 +125,28 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         data object DismissNotification : Effect
 
         /**
-         * Asynchronously re-read the pending-insertions list from the
-         * session repo and dispatch [Action.PendingSessionsAction.Refresh]
-         * with the result.
+         * Append the just-finished session to `state.pendingSessions`
+         * directly — no DB round-trip.
          *
          * Fired by [Action.PipelineAction.PipelineDone] when
          * `committed == false` (B3.5 widget-host-block path). The pipeline
-         * finished producing text but the IME couldn't commit it into an
-         * `InputConnection` (host-window mismatch); the row stays
-         * `inserted_at = NULL` so the InfoBar's pending-insert producer
-         * surfaces a "Tap to paste" item once the user re-opens the IME.
-         * This effect refreshes the in-memory `state.pendingSessions`
-         * list without waiting for the next service-start Recovery pass.
+         * finished producing [text] but the IME couldn't commit it into
+         * an `InputConnection` (host-window mismatch).
+         *
+         * The earlier design re-read the pending list via
+         * `sessionRepo.loadPending()`, but that lost a race: the pipeline
+         * runner's `finalizeCompleted` (status → COMPLETED) and the
+         * `PipelineDone` dispatch run on different threads, so
+         * `findPendingInsertion` (which filters `status = COMPLETED`)
+         * frequently returned an empty list (Logcat: "loaded 0 pending
+         * sessions"). Carrying the session payload on the effect makes it
+         * race-free — the reducer already has `sessionId` + `finalText`.
          */
-        data object RefreshPendingSessionsAsync : Effect
+        data class AddPendingInsertSession(
+            val sessionId: String,
+            val text: String,
+            val createdAt: Long,
+        ) : Effect
     }
 
     override fun reduce(
@@ -339,7 +347,11 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                     val followUp = if (action.committed) {
                         Effect.MarkSessionInserted(action.sessionId, ctx.now)
                     } else {
-                        Effect.RefreshPendingSessionsAsync
+                        Effect.AddPendingInsertSession(
+                            sessionId = action.sessionId,
+                            text = action.finalText,
+                            createdAt = ctx.now,
+                        )
                     }
                     TransitionResult(
                         nextState = PipelineUiState.Idle,
@@ -569,23 +581,27 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         }
         is Effect.UpdateNotification -> services.notificationCoordinator.show(effect.status)
         Effect.DismissNotification -> services.notificationCoordinator.dismiss()
-        Effect.RefreshPendingSessionsAsync -> {
-            // 2026-05-22 (B3.5 widget-host-block follow-up) — re-read the
-            // pending-insertions list from the repo and re-emit
-            // PendingSessionsAction.Refresh so the InfoBar's pending-insert
-            // producer surfaces a "Tap to paste" item live. Without this,
-            // the row would only appear on the next service-start Recovery
-            // pass; the user would never see the affordance.
-            services.scope.launch {
-                Log.i("DictateTrace", "RefreshPendingSessionsAsync.launch — loading pending")
-                val pending = services.sessionRepo.loadPending()
-                Log.i(
-                    "DictateTrace",
-                    "RefreshPendingSessionsAsync — loaded ${pending.size} pending sessions: " +
-                        pending.joinToString { "${it.sessionId.take(8)}:${it.status}" },
-                )
-                services.emitAction(Action.PendingSessionsAction.Refresh(pending))
-            }
+        is Effect.AddPendingInsertSession -> {
+            // 2026-05-22 (B3.5 widget-host-block follow-up) — append the
+            // freshly-produced session straight to state.pendingSessions
+            // so the InfoBar's pending-insert producer surfaces a "Tap to
+            // paste" item live. Race-free: the payload comes off the
+            // PipelineDone action, not a DB query (see the effect's KDoc).
+            Log.i(
+                "DictateTrace",
+                "AddPendingInsertSession sid=${effect.sessionId.take(8)} " +
+                    "textLen=${effect.text.length}",
+            )
+            services.emitAction(
+                Action.PendingSessionsAction.AddOne(
+                    net.devemperor.dictate.state.PendingSession(
+                        sessionId = effect.sessionId,
+                        status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+                        transcribedText = effect.text,
+                        createdAt = effect.createdAt,
+                    ),
+                ),
+            )
             Unit
         }
     }

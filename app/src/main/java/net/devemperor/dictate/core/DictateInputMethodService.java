@@ -356,6 +356,12 @@ public class DictateInputMethodService extends InputMethodService
     // post-toggle call inside `onAudioFocusToggled` (both removed in
     // Chunks 3.4 / 3.5).
     private EditBarAudioFocusObserver editBarAudioFocusObserver;
+    /**
+     * 2026-05-22 — reactive observer for state.layout.smallMode so the
+     * edit_numbers_btn rotation tracks the SoT even when the state
+     * changes outside onSmallModeToggled (e.g. SetContentArea auto-exit).
+     */
+    private EditNumbersSmallModeObserver editNumbersSmallModeObserver;
 
     // dictate-pipeline-render-and-state-unification §5.7 — reactive
     // bridge for the prompt-chips disable-bit. Listens to a derived
@@ -1689,6 +1695,23 @@ public class DictateInputMethodService extends InputMethodService
                 });
         editBarAudioFocusObserver.start();
 
+        // 2026-05-22 — reactive small-mode rotation observer. Fires the
+        // existing animator whenever `state.layout.smallMode` changes,
+        // closing the gap left by SetContentArea's auto-exit (Reducer-
+        // driven small-mode flips that don't route through
+        // onSmallModeToggled).
+        if (editNumbersSmallModeObserver != null) {
+            editNumbersSmallModeObserver.stop();
+        }
+        editNumbersSmallModeObserver = new EditNumbersSmallModeObserver(
+                pipelineBinder.getState(),
+                smallMode -> {
+                    if (editNumbersAnimator != null) {
+                        editNumbersAnimator.animateSmallModeToggle(true);
+                    }
+                });
+        editNumbersSmallModeObserver.start();
+
         // dictate-pipeline-render-and-state-unification §5.7 — start the
         // reactive prompt-chips-busy observer. Listens to the derived
         // `recording is Active|Paused|Preparing OR pipeline is
@@ -2201,6 +2224,10 @@ public class DictateInputMethodService extends InputMethodService
         if (editBarAudioFocusObserver != null) {
             editBarAudioFocusObserver.stop();
             editBarAudioFocusObserver = null;
+        }
+        if (editNumbersSmallModeObserver != null) {
+            editNumbersSmallModeObserver.stop();
+            editNumbersSmallModeObserver = null;
         }
 
         // dictate-pipeline-render-and-state-unification §5.7 — symmetric

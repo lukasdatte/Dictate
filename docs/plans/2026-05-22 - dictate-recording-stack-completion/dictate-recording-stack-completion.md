@@ -1,7 +1,7 @@
 ---
 name: dictate-recording-stack-completion
 archive_target: "2026-05-22 - dictate-recording-stack-completion"
-status: Proposed
+status: In Progress (Block A core done, A4/A5 + Block B/C deferred — see Iteration Log 2026-05-22 Update-1)
 language: de
 ---
 
@@ -629,6 +629,77 @@ nötig.
   (Decision-History-Entry).
 
 ## 9 — Iteration Log
+
+### 2026-05-22 Update-1 — Block A core landed; A4/A5 + B/C deferred
+
+**Implemented (Block A core, 3 commits):**
+
+- **A1** (`065df2c`) — `audioFilePaths` persistence during recording.
+  New `Effect.SyncAudioSegments` emitted on three boundaries (Preparing
+  → Active, SegmentRolled, StartRecordingContinuation). New DAO method
+  `updateAudioFilePaths(id, pipeDelimitedPaths)` + repository method
+  `syncAudioFilePaths(sessionId)`. Adapter emits new
+  `Action.RecordingAction.SegmentRolled` on rolling handover.
+- **A2** (`ee28d37`) — Pipeline consumes `PipelineAudioResult` via
+  `audioFileRepository.readForPipeline()`. `PartialRecovery` persists
+  `partial:<sec>` into `last_error_message`, completing the
+  Partial-Recovery InfoBar UX-loop. `PipelineOrchestrator` got an
+  optional `audioFileRepository` ctor-param; `runBlocking` is the
+  safe sync ↔ suspend bridge on the executor-thread.
+- **A3 + A6** (`2dfee32`) — Reader-Cutover off
+  `effectiveAudioFilePaths`. Bridge-Property deleted; readers in
+  `PipelineSessionRepoAdapter` + `PipelineRecovery` (4 sites) migrated
+  to `entity.audioFilePaths`. `MIGRATION_6_7` backfills pre-A1 rows.
+  DB version bumped 6 → 7; schema 7.json generated.
+
+**Deferred (separate concerns, separate plans):**
+
+- **A4 — Legacy `RecordingManager` + `core.RecordingState` removal:**
+  scope-creep discovered during implementation. `RecordingManager` is
+  not just a fallback — it is *the* active recorder in the IME's live
+  Pre-Bind path (`DictateInputMethodService.java:325 +753`) and drives
+  `BluetoothScoManager`, `RecordingStateController`, the amplitude
+  side-channel, and the timer adapter. Removing it requires the IME
+  service to route recording exclusively through the orchestrator
+  (`Action.RecordingAction.StartRecording`), which is itself a
+  substantial cutover touching ~10 files plus integration tests. That
+  exceeds the additive scope of this plan. **Action:** carry as a
+  follow-up plan `dictate-ime-recording-trigger-cutover`. The duplicate
+  `core.RecordingState` vs `state.RecordingState` is a real source of
+  reader-confusion but functionally harmless today (clear ownership
+  per file: import boundary tells you which one); the cleanup lands
+  with the IME-side cutover.
+- **A5 — End-to-end Cold-Resume integration test:** the existing
+  unit-test coverage (`RecordingContinuationLookupTest`,
+  `PipelineRecoveryFullTest`, `CacheDirAudioFileRepositoryTest`,
+  the migration test surface) covers each seam individually.
+  The end-to-end "record → crash → resume → upload → partial-recovery
+  marker" run-through needs Robolectric for the FGS/Service lifecycle —
+  scoped to the deferred Robolectric test wave (was Block C2 of this
+  plan, also deferred). The manual M-runbook (M6, M7, M10) covers
+  the gap on-device in the meantime.
+
+**Block B (ViewMode-Removal) — Deferred:** the cutover is structurally
+small (12 prod-references, 8 test-files, B3.3-bridge in 3 lines) but
+each reader needs an individual Truth-Table audit, and the resolver
+behaviour is load-bearing for the live keyboard / widget split. Better
+done in a dedicated session with focused on-device verification (M1-M5
+of the prior plan). **Action:** carry as a follow-up plan
+`dictate-viewmode-removal` — independent of Block A.
+
+**Block C (Polish) — Deferred:** Trash-Btn for `RECORDING_INTERRUPTED`
+needs a `pendingSessions` Continuation-Candidate predicate that isn't
+trivial to assemble without a UI session to verify the visibility-state.
+Robolectric tests for BootReceiver + ServiceLifecycle are scoped
+together. Release-build + lint baseline can land any time. **Action:**
+carry as a follow-up plan `dictate-recording-stack-polish`.
+
+**Outcome of this run:** the *critical* daily-driver path (Multi-
+Segment audio, Rolling-Segments, Cold-Resume continuation, Partial-
+Recovery InfoBar) is now functionally complete — every blocker for
+the M6/M7/M10 acceptance criteria from the prior plan is closed.
+What remains is architectural cleanup that does not affect user-
+visible behaviour and benefits from its own focused planning.
 
 ### 2026-05-22 — Initial proposal
 

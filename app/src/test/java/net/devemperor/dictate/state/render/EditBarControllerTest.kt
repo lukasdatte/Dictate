@@ -62,6 +62,7 @@ class EditBarControllerTest {
         override fun onAudioFocusToggled() { events += "audioFocus" }
         override fun onKeyboardToggleClicked() { events += "kbToggle" }
         override fun onKeyboardLongClicked() { events += "kbLong" }
+        override fun onWidgetToggleClicked() { events += "widgetToggle" }
         override fun onEditAction(actionId: Int) {
             events += "editAction"
             editActionIds += actionId

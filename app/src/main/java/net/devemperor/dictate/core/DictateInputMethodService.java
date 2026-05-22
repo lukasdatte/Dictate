@@ -504,6 +504,10 @@ public class DictateInputMethodService extends InputMethodService
     private EmojiPickerView emojiPickerView;
     private MaterialButton editNumbersButton;
     private MaterialButton editKeyboardButton;
+    // 2026-05-22 — edit-bar widget-toggle (relocated from the main action
+    // row's widget_toggle_btn slot; see EditBarController.Callback
+    // .onWidgetToggleClicked).
+    private MaterialButton editWidgetToggleButton;
     private FrameLayout qwertzContainer;
     private QwertzKeyboardView qwertzKeyboardView;
     private QwertzKeyboardController qwertzController;
@@ -915,6 +919,7 @@ public class DictateInputMethodService extends InputMethodService
         editEmojiButton = dictateKeyboardView.findViewById(R.id.edit_emoji_btn);
         editNumbersButton = dictateKeyboardView.findViewById(R.id.edit_numbers_btn);
         editKeyboardButton = dictateKeyboardView.findViewById(R.id.edit_keyboard_btn);
+        editWidgetToggleButton = dictateKeyboardView.findViewById(R.id.edit_widget_toggle_btn);
         emojiPickerCl = dictateKeyboardView.findViewById(R.id.emoji_picker_cl);
         emojiPickerTitleTv = dictateKeyboardView.findViewById(R.id.emoji_picker_title_tv);
         emojiPickerCloseButton = dictateKeyboardView.findViewById(R.id.emoji_picker_close_btn);
@@ -1973,7 +1978,7 @@ public class DictateInputMethodService extends InputMethodService
                 editNumbersButton, editSettingsButton, editHistoryButton,
                 pipelineCancelBtn, editAudioFocusButton, editKeyboardButton,
                 editUndoButton, editRedoButton, editCutButton,
-                editCopyButton, editPasteButton),
+                editCopyButton, editPasteButton, editWidgetToggleButton),
             this);
         editBarController.installDormant();
         editBarController.attachToViews();
@@ -5402,6 +5407,29 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onKeyboardLongClicked() {
         switchToPreviousKeyboard();
+    }
+
+    /**
+     * Edit-bar widget-toggle click (2026-05-22 relocation). Permission-
+     * aware: if the overlay permission is missing, surface the
+     * onboarding flow instead of attempting the toggle (mirrors the
+     * resolveWidgetToggleAction logic the old main-row slot used).
+     *
+     * Pre-bind fallback unnecessary because the keyboard view is only
+     * inflated post-bind (the IME service has the binder by then).
+     */
+    @Override
+    public void onWidgetToggleClicked() {
+        if (pipelineBinder == null) return;
+        net.devemperor.dictate.state.DictateUiState state =
+                pipelineBinder.getState().getValue();
+        net.devemperor.dictate.state.Action action;
+        if (state.getOverlay().getHasPermission()) {
+            action = net.devemperor.dictate.state.Action.ViewModeAction.ToggleViewModeWidget.INSTANCE;
+        } else {
+            action = net.devemperor.dictate.state.Action.OverlayAction.ShowOverlayOnboarding.INSTANCE;
+        }
+        pipelineBinder.dispatch(action);
     }
 
     @Override

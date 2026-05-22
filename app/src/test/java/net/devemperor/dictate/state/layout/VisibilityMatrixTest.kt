@@ -125,7 +125,7 @@ class VisibilityMatrixTest(
             LogicalButtonId.RESEND to false,        // no audio
             LogicalButtonId.BACKSPACE to true,
             LogicalButtonId.AUDIO_FOCUS to false,   // single-row-only
-            LogicalButtonId.WIDGET_TOGGLE to true,
+            LogicalButtonId.WIDGET_TOGGLE to false,
             LogicalButtonId.TRASH to false,
             LogicalButtonId.SPACE to true,
             LogicalButtonId.PAUSE to false,
@@ -141,7 +141,7 @@ class VisibilityMatrixTest(
             LogicalButtonId.RESEND to false,     // recording suppresses resend
             LogicalButtonId.BACKSPACE to true,
             LogicalButtonId.AUDIO_FOCUS to false,
-            LogicalButtonId.WIDGET_TOGGLE to true,
+            LogicalButtonId.WIDGET_TOGGLE to false,
             LogicalButtonId.TRASH to true,       // active recording shows cancel
             LogicalButtonId.SPACE to true,
             LogicalButtonId.PAUSE to true,
@@ -154,7 +154,7 @@ class VisibilityMatrixTest(
             LogicalButtonId.RESEND to false,
             LogicalButtonId.BACKSPACE to true,
             LogicalButtonId.AUDIO_FOCUS to true,    // single-row-specific
-            LogicalButtonId.WIDGET_TOGGLE to true,
+            LogicalButtonId.WIDGET_TOGGLE to false,
             LogicalButtonId.TRASH to false,
             LogicalButtonId.SPACE to true,
             LogicalButtonId.PAUSE to false,
@@ -170,7 +170,7 @@ class VisibilityMatrixTest(
             LogicalButtonId.RESEND to false,
             LogicalButtonId.BACKSPACE to true,
             LogicalButtonId.AUDIO_FOCUS to true,
-            LogicalButtonId.WIDGET_TOGGLE to true,
+            LogicalButtonId.WIDGET_TOGGLE to false,
             LogicalButtonId.TRASH to true,
             LogicalButtonId.SPACE to true,
             LogicalButtonId.PAUSE to true,
@@ -234,7 +234,7 @@ class VisibilityMatrixTest(
                     LogicalButtonId.RESEND to false,
                     LogicalButtonId.BACKSPACE to true,
                     LogicalButtonId.AUDIO_FOCUS to false,
-                    LogicalButtonId.WIDGET_TOGGLE to true,    // viewMode = KEYBOARD
+                    LogicalButtonId.WIDGET_TOGGLE to false,    // viewMode = KEYBOARD
                     LogicalButtonId.TRASH to false,
                     LogicalButtonId.SPACE to true,
                     LogicalButtonId.PAUSE to false,
@@ -247,7 +247,7 @@ class VisibilityMatrixTest(
                     LogicalButtonId.RESEND to false,
                     LogicalButtonId.BACKSPACE to true,
                     LogicalButtonId.AUDIO_FOCUS to false,
-                    LogicalButtonId.WIDGET_TOGGLE to true,
+                    LogicalButtonId.WIDGET_TOGGLE to false,
                     LogicalButtonId.TRASH to true,    // staging triggers predTrashVisible
                     LogicalButtonId.SPACE to true,
                     LogicalButtonId.PAUSE to true,
@@ -267,7 +267,7 @@ class VisibilityMatrixTest(
                     LogicalButtonId.RESEND to false,
                     LogicalButtonId.BACKSPACE to true,
                     LogicalButtonId.AUDIO_FOCUS to true,
-                    LogicalButtonId.WIDGET_TOGGLE to true,
+                    LogicalButtonId.WIDGET_TOGGLE to false,
                     LogicalButtonId.TRASH to true,
                     LogicalButtonId.SPACE to true,
                     LogicalButtonId.PAUSE to true,

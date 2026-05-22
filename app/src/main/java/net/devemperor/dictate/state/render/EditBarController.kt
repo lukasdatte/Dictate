@@ -106,6 +106,17 @@ class EditBarController(
         fun onKeyboardToggleClicked()
         fun onKeyboardLongClicked()
         fun onEditAction(actionId: Int)
+
+        /**
+         * Edit-bar widget-toggle (2026-05-22). Was previously a main-row
+         * slot driven by the catalog's WIDGET_TOGGLE; relocated into
+         * the edit-bar so it sits next to settings + small-mode. The
+         * IME dispatches the same Action it used to dispatch from the
+         * slot's actionResolver (resolveWidgetToggleAction) — permission-
+         * aware: emits ShowOverlayOnboarding when overlay permission is
+         * missing, ToggleViewModeWidget otherwise.
+         */
+        fun onWidgetToggleClicked()
     }
 
     /**
@@ -178,6 +189,10 @@ class EditBarController(
                 callback.onKeyboardLongClicked()
                 true
             },
+            editWidgetToggleClick = View.OnClickListener {
+                callback.onVibrate()
+                callback.onWidgetToggleClicked()
+            },
             // undo/redo/cut/copy/paste — per-button click forwarding the
             // android.R.id.* action id (legacy `:151-164` parity).
             editActionClicks = editActionViews().map { (view, actionId) ->
@@ -210,6 +225,7 @@ class EditBarController(
         views.editAudioFocusButton.setOnClickListener(c.editAudioFocusClick)
         views.editKeyboardButton.setOnClickListener(c.editKeyboardClick)
         views.editKeyboardButton.setOnLongClickListener(c.editKeyboardLong)
+        views.editWidgetToggleButton?.setOnClickListener(c.editWidgetToggleClick)
         for ((view, listener) in c.editActionClicks) {
             view.setOnClickListener(listener)
         }
@@ -250,6 +266,9 @@ class EditBarController(
         views.editNumbersButton.setBackgroundColor(accentMedium)
         views.editHistoryButton.setBackgroundColor(accentMedium)
         views.editAudioFocusButton.setBackgroundColor(accentMedium)
+        // Edit-bar widget-toggle (2026-05-22 relocation) — themed with
+        // the same accentMedium tier as the other edit-bar buttons.
+        views.editWidgetToggleButton?.setBackgroundColor(accentMedium)
     }
 
     /**
@@ -324,7 +343,7 @@ class EditBarController(
         views.editPasteButton to android.R.id.paste,
     )
 
-    private fun allEditBarViews(): List<View> = listOf(
+    private fun allEditBarViews(): List<View> = listOfNotNull(
         views.editNumbersButton,
         views.editSettingsButton,
         views.editHistoryButton,
@@ -336,6 +355,7 @@ class EditBarController(
         views.editCutButton,
         views.editCopyButton,
         views.editPasteButton,
+        views.editWidgetToggleButton,
     )
 
     private var cached: CachedListeners? = null
@@ -349,6 +369,7 @@ class EditBarController(
         val editAudioFocusClick: View.OnClickListener,
         val editKeyboardClick: View.OnClickListener,
         val editKeyboardLong: View.OnLongClickListener,
+        val editWidgetToggleClick: View.OnClickListener,
         val editActionClicks: List<Pair<MaterialButton, View.OnClickListener>>,
     )
 
@@ -391,4 +412,11 @@ data class EditBarViews(
     val editCutButton: MaterialButton,
     val editCopyButton: MaterialButton,
     val editPasteButton: MaterialButton,
+    /**
+     * Edit-bar widget-toggle (2026-05-22). Nullable so existing tests
+     * built before the relocation keep compiling without listing the
+     * new field. Production code passes the concrete view from the
+     * inflated tree.
+     */
+    val editWidgetToggleButton: MaterialButton? = null,
 )

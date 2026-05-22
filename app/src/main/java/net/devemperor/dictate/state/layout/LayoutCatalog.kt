@@ -112,15 +112,14 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     ButtonSlot(
                         logicalId = LogicalButtonId.WIDGET_TOGGLE,
                         widthPolicy = WidthPolicy.WrapContent,
-                        // B4-VAL F-18: visibility gating happens at the
-                        // forKeyboard() mode-selection layer — this slot is
-                        // only evaluated when viewMode == KEYBOARD, so the
-                        // structurally-always-true predicate is the honest
-                        // value here.
-                        visibilityPredicate = { true },
-                        // B5 F-2: permission-aware — emits
-                        // ShowOverlayOnboarding when overlay permission
-                        // is missing instead of a silent reducer no-op.
+                        // 2026-05-22 — Widget-toggle has been relocated
+                        // out of the main action row and into the
+                        // edit-bar above (R.id.edit_widget_toggle_btn).
+                        // The slot stays as a structural placeholder
+                        // (a backward-compatible GONE view in the
+                        // MotionLayout) while EditBarController owns
+                        // the live click + visibility surface.
+                        visibilityPredicate = { false },
                         actionResolver = ::resolveWidgetToggleAction,
                     ),
                 )),
@@ -232,10 +231,10 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                 ButtonSlot(
                     logicalId = LogicalButtonId.WIDGET_TOGGLE,
                     widthPolicy = WidthPolicy.WrapContent,
-                    // B4-VAL F-18: see KEYBOARD_TWO_ROW WIDGET_TOGGLE slot.
-                    visibilityPredicate = { true },
-                    // B5 F-2: permission-aware resolver (see the
-                    // KEYBOARD_TWO_ROW WIDGET_TOGGLE slot).
+                    // 2026-05-22 — Widget-toggle relocated to edit-bar
+                    // (see KEYBOARD_TWO_ROW WIDGET_TOGGLE slot for the
+                    // rationale). Structurally GONE in the main row.
+                    visibilityPredicate = { false },
                     actionResolver = ::resolveWidgetToggleAction,
                 ),
             ))),

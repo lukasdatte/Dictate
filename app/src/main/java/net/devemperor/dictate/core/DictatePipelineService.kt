@@ -1200,23 +1200,23 @@ class DictatePipelineService : Service() {
         // and re-runnable on the next boot's recovery pass).
         triggerOrphanCleanupAsync()
 
-        // B3-VAL-W1 F-3 — Pre-Cancel-Dispatch (ADR-0003 §"Required
-        // mechanics" item 9). If a recording is in flight when the
-        // service is destroyed, dispatch CancelRecording through the
-        // existing reduce → runEffect path so MediaRecorder.release()
-        // runs deterministically. Without this, the native-heap
-        // allocation leaks until the process dies. The check is a
-        // pure snapshot read — no IO, no allocations.
-        if (::orchestrator.isInitialized) {
-            try {
-                val recordingSnapshot = orchestrator.state.value.recording
-                if (recordingSnapshot !is net.devemperor.dictate.state.RecordingState.Idle) {
-                    orchestrator.dispatch(Action.RecordingAction.CancelRecording)
-                }
-            } catch (t: Throwable) {
-                Log.w(TAG, "Pre-Cancel-Dispatch failed during onDestroy", t)
-            }
-        }
+        // 2026-05-22 — the previous Pre-Cancel-Dispatch (B3-VAL-W1 F-3,
+        // ADR-0003) was the root cause of "Aufnahme geht verloren bei
+        // Tastaturwechsel". When Android tears down the IME-Service
+        // (user switches to a different keyboard), the IME's unbindService
+        // brings DictatePipelineService.onDestroy down with it. Dispatching
+        // CancelRecording here runs the StopMediaRecorder + DeleteAudioFile
+        // effects synchronously → the in-flight recording's audio file is
+        // *deleted* before the process exits. The Native-heap-leak argument
+        // in the original comment is moot: the process dies milliseconds
+        // later, and the OS reclaims every native allocation.
+        //
+        // Letting the recording state stay non-Idle is intentional. The
+        // B2a RECORDING_INTERRUPTED migration + the next service-start's
+        // recovery pass (PipelineRecovery + ContinuationLookup) detect the
+        // orphan session via SessionDao.findActiveSessionIds and mark it
+        // INTERRUPTED — the audio segments stay on disk and can be replayed
+        // by the user from the InfoBar partial-recovery surface (B4).
 
         // B3-VAL-W1 F-3 — Timeout-bounded shutdown (ADR-0003
         // §"Required mechanics" item 8). The 2-second wall clock

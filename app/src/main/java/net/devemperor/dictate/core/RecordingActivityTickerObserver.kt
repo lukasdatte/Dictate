@@ -157,11 +157,26 @@ class RecordingActivityTickerObserver(
     /**
      * Stop observing and the tick. Idempotent — safe to call on an
      * already-stopped observer.
+     *
+     * **Lifecycle-vs-state distinction**: this method tears down the
+     * Observer's own coroutine + handler resources. It does NOT clear
+     * the persisted companion-state — that wipe only happens when the
+     * recording itself reaches [RecordingState.Idle] (see
+     * [stopTicker]). Rotation tears down the Observer mid-recording
+     * without changing the state, so leaving the companion intact lets
+     * the next constructor restore the timer correctly. Clearing the
+     * companion here was a regression in the original B-rotation fix
+     * (2026-05-22 commit 7c305aa) — fixed in the same-day follow-up
+     * once the on-device test showed the timer still reset.
      */
     fun stop() {
         scope?.cancel()
         scope = null
-        stopTicker()
+        // Tear down the local tick loop without touching the companion-
+        // persisted state (so a subsequent Observer construction can
+        // restore from it).
+        ticking = false
+        handler.removeCallbacks(tickRunnable)
     }
 
     private fun handleRecordingStateChange(rs: RecordingState) {

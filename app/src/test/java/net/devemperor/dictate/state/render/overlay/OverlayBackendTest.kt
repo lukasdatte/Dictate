@@ -250,14 +250,22 @@ class OverlayBackendTest {
     }
 
     @Test
-    fun `record click in HOVER is a silent no-op (R-3 null resolver)`() {
+    fun `record click with IME hidden + Active is a silent no-op (Senden verboten)`() {
+        // 2026-05-22 — post-Widget-Pause-refactor spec: with the IME
+        // hidden and a recording in flight, the record-btn is disabled
+        // (no InputConnection target → Senden verboten). The user must
+        // explicitly use the dedicated OVERLAY_PAUSE slot to pause.
         val backend = newBackend()
         backend.attach { captured += it }
-        // HOVER state with no active recording — visibility predicate
-        // of OVERLAY_RECORD evaluates to true (Idle + Idle pipeline);
-        // the action resolver returns null because viewMode != WIDGET.
         backend.render(
-            stateWithPermission(viewMode = ViewMode.HOVER),
+            stateWithPermission(viewMode = ViewMode.HOVER).copy(
+                imeViewVisible = false,
+                recording = RecordingState.Active(
+                    useBluetooth = false,
+                    audioFile = File("/tmp/x.m4a"),
+                    sessionId = "sid-x",
+                ),
+            ),
             catalog.OVERLAY_5BUTTON,
         )
 
@@ -265,7 +273,7 @@ class OverlayBackendTest {
         recordBtn.performClick()
 
         assertTrue(
-            "HOVER record-click must be a silent no-op (R.3): $captured",
+            "IME hidden + Active record-click must be a silent no-op: $captured",
             captured.isEmpty(),
         )
     }

@@ -218,25 +218,12 @@ fun resolveRecordButtonTextPipeline(state: DictateUiState, strings: LayoutString
  * @see resolveRecordButtonTextPipeline (keyboard-surface pipeline sibling)
  */
 fun resolveOverlayRecordButtonText(state: DictateUiState, strings: LayoutStrings): CharSequence {
-    // B3.4 — Pause-Toggle text override (plan §1.2 / ADR-0008
-    // §"Send-during-widget"). When the widget is visible and a recording
-    // is in flight, the Send-button morphs into a Pause-Toggle: the
-    // label switches to "Pause" / "Resume" and the action resolver
-    // emits `PauseRecording` / `ResumeRecording` instead of
-    // `StopRecordingAndSend`. Pipeline-live states (Preparing /
-    // Running) take precedence over the pause-toggle path because they
-    // own the per-run auto-enter-toggle UI ("N/M ↵ M:SS" label).
-    if (state.pipeline !is PipelineUiState.Preparing &&
-        state.pipeline !is PipelineUiState.Running &&
-        state.widget is WidgetState.Visible
-    ) {
-        when (state.recording) {
-            is RecordingState.Active -> return strings.pauseLabel
-            is RecordingState.Paused -> return strings.resumeLabel
-            RecordingState.Idle,
-            is RecordingState.Preparing -> Unit // fall through
-        }
-    }
+    // 2026-05-22 — overlay record-btn text mirrors the keyboard-surface
+    // record-btn 1:1. The previous B3.4 "morph to Pause / Resume label
+    // while widget is visible" rule is gone: the dedicated OVERLAY_PAUSE
+    // slot now owns the pause UI, so the record-btn keeps its
+    // start/send identity on both surfaces. Pipeline-live states show
+    // the per-run auto-enter-toggle label ("N/M ↵ M:SS").
     return when (state.pipeline) {
         is PipelineUiState.Preparing,
         is PipelineUiState.Running -> resolveRecordButtonTextPipeline(state, strings)

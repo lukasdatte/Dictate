@@ -567,18 +567,18 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     ButtonSlot(
                         logicalId = LogicalButtonId.OVERLAY_PAUSE,
                         widthPolicy = WidthPolicy.WrapContent,
-                        // B3.4 (plan §4 B3): hidden when the widget is
-                        // visible — the Send-button doubles as the
-                        // pause-toggle then (resolveOverlayRecordAction +
-                        // resolveOverlayRecordButtonText carry the
-                        // pause/resume body). A separate OVERLAY_PAUSE
-                        // would be redundant. The slot stays visible in
-                        // the HOVER-style layout (overlay rendered while
-                        // `widget == Hidden && !imeViewVisible`, i.e.
-                        // post-CloseWidget pipeline-fallback) so the user
-                        // can still pause from there.
+                        // 2026-05-22 — pause-btn is the stand-alone pause
+                        // surface in BOTH overlay modes (widget visible
+                        // and HOVER pipeline-fallback). Supersedes B3.4's
+                        // "hidden while widget is visible" rule: the
+                        // record-btn used to morph into pause-toggle, but
+                        // post-refactor the record-btn keeps its
+                        // start/send role and OVERLAY_PAUSE is the only
+                        // pause UI on both surfaces. Visible whenever a
+                        // recording is in flight; hidden in Idle so the
+                        // overlay stays compact.
                         visibilityPredicate = { state ->
-                            state.widget !is WidgetState.Visible
+                            state.recording.isActiveOrPaused
                         },
                         enabledResolver = { state -> state.recording.isActiveOrPaused },
                         alphaResolver = { state ->

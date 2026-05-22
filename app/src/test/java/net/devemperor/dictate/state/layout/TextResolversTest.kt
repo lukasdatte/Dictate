@@ -194,7 +194,11 @@ class TextResolversTest {
     // ─── B3.4 — Pause/Resume label override ──────────────────────────
 
     @Test
-    fun `B3-4 overlay text Active + widget Visible(USER) returns pauseLabel`() {
+    fun `overlay text Active + widget Visible mirrors keyboard send label (post-Widget-Pause-refactor)`() {
+        // 2026-05-22 — the B3.4 "label morphs to Pause/Resume while widget
+        // is visible" rule is gone. The dedicated OVERLAY_PAUSE slot owns
+        // the pause UI now; the record-btn keeps its keyboard-surface
+        // identity on both overlay surfaces.
         val s = baseState.copy(
             recording = RecordingState.Active(
                 useBluetooth = false, audioFile = audioFile(), sessionId = "x",
@@ -204,11 +208,14 @@ class TextResolversTest {
             ),
             pipeline = PipelineUiState.Idle,
         )
-        assertEquals(strings.pauseLabel, resolveOverlayRecordButtonText(s, strings))
+        assertEquals(
+            resolveRecordButtonText(s, strings),
+            resolveOverlayRecordButtonText(s, strings),
+        )
     }
 
     @Test
-    fun `B3-4 overlay text Paused + widget Visible(PIPELINE) returns resumeLabel`() {
+    fun `overlay text Paused + widget Visible mirrors keyboard send label (post-Widget-Pause-refactor)`() {
         val s = baseState.copy(
             recording = RecordingState.Paused(
                 useBluetooth = false, audioFile = audioFile(), sessionId = "x",
@@ -218,7 +225,10 @@ class TextResolversTest {
             ),
             pipeline = PipelineUiState.Idle,
         )
-        assertEquals(strings.resumeLabel, resolveOverlayRecordButtonText(s, strings))
+        assertEquals(
+            resolveRecordButtonText(s, strings),
+            resolveOverlayRecordButtonText(s, strings),
+        )
     }
 
     @Test

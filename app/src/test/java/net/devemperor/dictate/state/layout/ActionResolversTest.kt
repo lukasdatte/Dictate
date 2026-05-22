@@ -583,64 +583,43 @@ class ActionResolversTest {
 
     // ─── resolveOverlayRecordAction (Variante 2a, dictate-widget-integration §8.2 Chunk 2.2) ──
     //
-    // The User-Requirement (verbatim, plan §2):
-    //   "Senden darf nicht möglich sein, während gerade kein
-    //    Tastaturinput verfügbar ist."
-    // → HOVER (no InputConnection) must yield `null` for every recording
-    //   sub-state. WIDGET must mirror the keyboard surface 1:1.
+    // 2026-05-22 — overlay record-btn spec (post-Widget-Pause refactor):
+    //   • IME visible: Klick = Send (StopRecordingAndSend), Start (Idle), or
+    //     auto-enter toggle (pipeline live) — same as the keyboard surface.
+    //   • IME hidden + Active/Paused: Klick = disabled (return null). The
+    //     dedicated OVERLAY_PAUSE slot owns the pause UI in that mode.
+    //   • IME hidden + Idle: Klick = StartRecording (allowed — the whole
+    //     point of the widget is starting without unfolding the IME).
+    //   • IME hidden + pipeline live: Klick = auto-enter toggle (no-op
+    //     against a missing InputConnection, but the toggle itself is
+    //     valid state-machine signal).
 
     @Test
-    fun `resolveOverlayRecordAction HOVER always returns null (User-Req SEND-gate)`() {
-        // Idle, Active, Paused, Preparing, Running — none of them may
-        // produce an action in HOVER (no InputConnection target).
-        val services = fakeModuleServices(audioFileRepository =FixedAudioFileFactory(File("/tmp/h.m4a")))
-        val hoverIdle = state.copy(
-            viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
-            recording = RecordingState.Idle,
-            pipeline = PipelineUiState.Idle,
-        )
-        val hoverActive = state.copy(
-            viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
+    fun `resolveOverlayRecordAction IME-hidden + Active returns null (Senden verboten)`() {
+        val s = state.copy(
+            imeViewVisible = false,
             recording = RecordingState.Active(
                 useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-h"
             ),
         )
-        val hoverPaused = state.copy(
-            viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
+        assertNull(
+            "IME hidden + Active must yield null (User-Req: Senden verboten ohne InputConnection)",
+            resolveOverlayRecordAction(s, fakeModuleServices()),
+        )
+    }
+
+    @Test
+    fun `resolveOverlayRecordAction IME-hidden + Paused returns null (Senden verboten)`() {
+        val s = state.copy(
+            imeViewVisible = false,
             recording = RecordingState.Paused(
                 useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-h"
             ),
         )
-        val hoverPreparing = state.copy(
-            viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
-            pipeline = PipelineUiState.Preparing("sid-h"),
+        assertNull(
+            "IME hidden + Paused must yield null (User-Req: Senden verboten ohne InputConnection)",
+            resolveOverlayRecordAction(s, fakeModuleServices()),
         )
-        val hoverRunning = state.copy(
-            viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
-            pipeline = PipelineUiState.Running(
-                sessionId = "sid-h", target = InsertionTarget.INPUT_CONNECTION,
-            ),
-        )
-
-        listOf(hoverIdle, hoverActive, hoverPaused, hoverPreparing, hoverRunning).forEach { s ->
-            assertNull(
-                "HOVER must yield null (User-Req SEND-gate): ${s.recording::class.simpleName}",
-                resolveOverlayRecordAction(s, services),
-            )
-        }
-    }
-
-    @Test
-    fun `resolveOverlayRecordAction KEYBOARD returns null (defensive)`() {
-        val services = fakeModuleServices()
-        val s = state.copy(
-            viewMode = net.devemperor.dictate.state.ViewMode.KEYBOARD,
-            recording = RecordingState.Idle,
-        )
-        // KEYBOARD shouldn't reach this resolver because the overlay
-        // backend isn't attached in KEYBOARD mode, but a stale tick
-        // during a ViewMode transition must not produce an action either.
-        assertNull(resolveOverlayRecordAction(s, services))
     }
 
     @Test
@@ -671,46 +650,49 @@ class ActionResolversTest {
         )
     }
 
-    // ─── B3.4 — Pause-Toggle via widget axis ────────────────────────
+    // ─── 2026-05-22 Widget-Pause-Refactor ────────────────────────
+    //
+    // The previous B3.4 "Send-button morphs into Pause-Toggle while widget
+    // is visible" rule is superseded. The dedicated OVERLAY_PAUSE slot
+    // now owns the pause UI; the record-btn keeps its start/send role on
+    // both surfaces (gated by `imeViewVisible` for the Active/Paused →
+    // Send case).
 
     @Test
-    fun `B3-4 WIDGET-Active + widget Visible(USER) emits PauseRecording (Pause-Toggle)`() {
-        // The Send-button morphs into a Pause-Toggle when the floating
-        // widget is visible — the keyboard is collapsed, so there is no
-        // guaranteed InputConnection to commit transcript into. Pause
-        // is the only safe action; the actual send is deferred until
-        // the user re-opens the IME-View.
+    fun `Widget-Active + IME visible emits StopRecordingAndSend (post-Widget-Pause-refactor)`() {
         val s = state.copy(
             viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
             widget = net.devemperor.dictate.state.WidgetState.Visible(
                 net.devemperor.dictate.state.WidgetOrigin.USER
             ),
+            imeViewVisible = true,
             recording = RecordingState.Active(
                 useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-w"
             ),
         )
         assertTrue(
-            "Active + widget visible → PauseRecording, not StopRecordingAndSend",
+            "Active + widget visible + IME visible → StopRecordingAndSend (Send role restored)",
             resolveOverlayRecordAction(s, fakeModuleServices())
-                is Action.RecordingAction.PauseRecording,
+                is Action.RecordingAction.StopRecordingAndSend,
         )
     }
 
     @Test
-    fun `B3-4 WIDGET-Paused + widget Visible(PIPELINE) emits ResumeRecording (Resume-Toggle)`() {
+    fun `Widget-Paused + IME visible emits StopRecordingAndSend (post-Widget-Pause-refactor)`() {
         val s = state.copy(
             viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
             widget = net.devemperor.dictate.state.WidgetState.Visible(
                 net.devemperor.dictate.state.WidgetOrigin.PIPELINE
             ),
+            imeViewVisible = true,
             recording = RecordingState.Paused(
                 useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-w"
             ),
         )
         assertTrue(
-            "Paused + widget visible → ResumeRecording, not StopRecordingAndSend",
+            "Paused + widget visible + IME visible → StopRecordingAndSend (Send role restored)",
             resolveOverlayRecordAction(s, fakeModuleServices())
-                is Action.RecordingAction.ResumeRecording,
+                is Action.RecordingAction.StopRecordingAndSend,
         )
     }
 
@@ -825,21 +807,23 @@ class ActionResolversTest {
     // ─── resolveOverlayRecordEnabled (Variante 2a, §8.2 Chunk 2.3) ────
 
     @Test
-    fun `resolveOverlayRecordEnabled HOVER is false in every recording state`() {
-        val recordingStates = listOf(
-            RecordingState.Idle,
-            RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x"),
-            RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x"),
-            RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x"),
+    fun `resolveOverlayRecordEnabled IME-hidden is false only for Active+Paused (post-Widget-Pause-refactor)`() {
+        // 2026-05-22 — new spec: IME-hidden disables the record-btn ONLY
+        // for Active/Paused (the "Senden ohne InputConnection ist verboten"
+        // gate). Idle stays enabled (Start is allowed without IME). The
+        // <100ms Preparing window is always disabled (recorder warming up).
+        val cases = listOf(
+            "Idle" to (RecordingState.Idle to true),
+            "Active" to (RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x") to false),
+            "Paused" to (RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x") to false),
+            "Preparing" to (RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x") to false),
         )
-        recordingStates.forEach { rs ->
-            val s = state.copy(
-                viewMode = net.devemperor.dictate.state.ViewMode.HOVER,
-                recording = rs,
-            )
+        cases.forEach { (name, pair) ->
+            val (rs, expected) = pair
+            val s = state.copy(imeViewVisible = false, recording = rs)
             assertEquals(
-                "HOVER must disable the button (${rs::class.simpleName})",
-                false,
+                "IME hidden + $name: expected enabled=$expected",
+                expected,
                 resolveOverlayRecordEnabled(s),
             )
         }

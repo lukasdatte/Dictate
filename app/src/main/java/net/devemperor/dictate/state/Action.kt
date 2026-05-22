@@ -547,13 +547,26 @@ sealed class Action {
         data object ToggleWidget : WidgetAction()
 
         /**
-         * User pressed the widget close-button. **W2** transition:
-         * `widget=Visible → widget=Hidden + suppressBit=true +
-         * (recording.Active → Paused)`. The pipeline keeps running in
-         * the FGS; its result surfaces via the Pending-Insert
-         * info-bar (B4) after pipeline-done.
+         * The widget was closed. **W2** transition:
+         * `widget=Visible → widget=Hidden + suppressBit=true`.
+         *
+         * [source] decides whether the in-flight recording is paused
+         * (2026-05-22 user-req — "Close über die Tastatur lässt die
+         * Aufzeichnung weiterlaufen; Close über das Widget selbst
+         * pausiert"):
+         *  - [WidgetCloseSource.KEYBOARD_TOGGLE] — the edit-bar
+         *    Widget-Toggle-Btn collapsed the overlay; the IME-View is
+         *    still on screen, the user can keep dictating → recording
+         *    is NOT paused.
+         *  - [WidgetCloseSource.WIDGET_BUTTON] — the overlay's own X
+         *    button; the user explicitly dismissed the Dictate surface
+         *    → `recording.Active → Paused`.
+         *
+         * The pipeline keeps running in the FGS regardless of [source];
+         * its result surfaces via the Pending-Insert info-bar (B4)
+         * after pipeline-done.
          */
-        data object CloseWidget : WidgetAction()
+        data class CloseWidget(val source: WidgetCloseSource) : WidgetAction()
 
         /**
          * The IME-View just became visible. **W4 / W5** transition.

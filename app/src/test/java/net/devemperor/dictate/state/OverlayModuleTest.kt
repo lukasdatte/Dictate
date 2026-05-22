@@ -240,8 +240,10 @@ class OverlayModuleTest {
         val next = prev.copy(viewMode = ViewMode.KEYBOARD)
         val cascade = module.onCrossModuleStateChange(prev, next)
         assertTrue(
-            "T2 bridge must emit WidgetAction.CloseWidget when widget was USER-origin",
-            cascade.contains(Action.WidgetAction.CloseWidget),
+            "T2 bridge must emit WidgetAction.CloseWidget(KEYBOARD_TOGGLE) when widget was USER-origin",
+            cascade.contains(
+                Action.WidgetAction.CloseWidget(WidgetCloseSource.KEYBOARD_TOGGLE),
+            ),
         )
     }
 

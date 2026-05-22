@@ -158,18 +158,24 @@ object WidgetModule :
                 null
             }
 
-        // ── W2: user clicks Close-Btn while widget visible ──────────────
-        // widget = Hidden + suppressBit = true + (Active → Paused).
-        // Pipeline keeps running in the FGS; its result will surface as a
-        // Pending-Insert info-bar (B4) once it completes.
-        Action.WidgetAction.CloseWidget ->
+        // ── W2: widget closed ───────────────────────────────────────────
+        // widget = Hidden + suppressBit = true. Pause is gated on the
+        // close source (2026-05-22 user-req):
+        //  - WIDGET_BUTTON (overlay X) → Active recording is paused.
+        //  - KEYBOARD_TOGGLE (edit-bar btn) → recording keeps running;
+        //    the IME-View stays on screen so the user can keep dictating.
+        // Pipeline keeps running in the FGS regardless; its result will
+        // surface as a Pending-Insert info-bar (B4) once it completes.
+        is Action.WidgetAction.CloseWidget ->
             if (state.widget is WidgetState.Visible) {
                 val activeRecording = ctx.global.recording is RecordingState.Active
+                val pause = action.source == WidgetCloseSource.WIDGET_BUTTON &&
+                    activeRecording
                 TransitionResult(
                     nextState = state.copy(widget = WidgetState.Hidden),
                     sideEffects = listOf(
                         Effect.DispatchCloseWidgetCascade(
-                            shouldPauseRecording = activeRecording,
+                            shouldPauseRecording = pause,
                         ),
                     ),
                 )
@@ -290,6 +296,22 @@ object WidgetModule :
             next.recording is RecordingState.Active
         ) {
             cascade += Action.OverlayAction.ResetSuppressBit
+        }
+
+        // 2026-05-22 — viewMode-sync for the direct CloseWidget path.
+        // The overlay's X button dispatches CloseWidget(WIDGET_BUTTON)
+        // straight into this module, flipping `widget` Visible → Hidden
+        // without touching the legacy `viewMode` axis. Cascade
+        // ToggleViewModeWidget so ViewModeModule follows WIDGET →
+        // KEYBOARD. Guarded on `next.viewMode == WIDGET` so the
+        // keyboard-toggle path (where the OverlayModule T2-bridge has
+        // already driven viewMode to KEYBOARD before emitting
+        // CloseWidget) does NOT re-toggle back to WIDGET.
+        if (prev.widget is WidgetState.Visible &&
+            next.widget == WidgetState.Hidden &&
+            next.viewMode == ViewMode.WIDGET
+        ) {
+            cascade += Action.ViewModeAction.ToggleViewModeWidget
         }
 
         return cascade

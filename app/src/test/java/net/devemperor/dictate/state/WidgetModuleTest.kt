@@ -81,31 +81,62 @@ class WidgetModuleTest {
     // ─── W2: CloseWidget from Visible ─────────────────────────────────
 
     @Test
-    fun `W2 CloseWidget from Visible USER + recording Active emits Hidden + cascade with Pause`() {
+    fun `W2 CloseWidget WIDGET_BUTTON + recording Active emits Hidden + cascade with Pause`() {
         val s = WidgetModule.WidgetSubState(
             widget = WidgetState.Visible(WidgetOrigin.USER),
             imeViewVisible = true,
         )
         val globalWithActive = DictateUiState.initial().copy(recording = activeRecording())
-        val r = module.reduce(s, Action.WidgetAction.CloseWidget, ctx(globalWithActive))
+        val r = module.reduce(
+            s,
+            Action.WidgetAction.CloseWidget(WidgetCloseSource.WIDGET_BUTTON),
+            ctx(globalWithActive),
+        )
         assertNotNull(r)
         assertEquals(WidgetState.Hidden, r!!.nextState.widget)
         assertEquals(1, r.sideEffects.size)
         val cascade = r.sideEffects[0] as WidgetModule.Effect.DispatchCloseWidgetCascade
         assertTrue(
-            "Active recording must trigger PauseRecording in the cascade",
+            "WIDGET_BUTTON close + Active recording must trigger PauseRecording",
             cascade.shouldPauseRecording,
         )
     }
 
     @Test
-    fun `W2 CloseWidget from Visible PIPELINE + recording Paused emits Hidden + cascade WITHOUT Pause`() {
+    fun `W2 CloseWidget KEYBOARD_TOGGLE + recording Active emits Hidden + cascade WITHOUT Pause`() {
+        // 2026-05-22 — closing via the edit-bar toggle keeps the IME-View
+        // on screen, so the recording must keep running (user-req).
+        val s = WidgetModule.WidgetSubState(
+            widget = WidgetState.Visible(WidgetOrigin.USER),
+            imeViewVisible = true,
+        )
+        val globalWithActive = DictateUiState.initial().copy(recording = activeRecording())
+        val r = module.reduce(
+            s,
+            Action.WidgetAction.CloseWidget(WidgetCloseSource.KEYBOARD_TOGGLE),
+            ctx(globalWithActive),
+        )
+        assertNotNull(r)
+        assertEquals(WidgetState.Hidden, r!!.nextState.widget)
+        val cascade = r.sideEffects[0] as WidgetModule.Effect.DispatchCloseWidgetCascade
+        assertEquals(
+            "KEYBOARD_TOGGLE close must NOT pause — recording keeps running",
+            false, cascade.shouldPauseRecording,
+        )
+    }
+
+    @Test
+    fun `W2 CloseWidget WIDGET_BUTTON + recording Paused emits Hidden + cascade WITHOUT Pause`() {
         val s = WidgetModule.WidgetSubState(
             widget = WidgetState.Visible(WidgetOrigin.PIPELINE),
             imeViewVisible = true,
         )
         val globalWithPaused = DictateUiState.initial().copy(recording = pausedRecording())
-        val r = module.reduce(s, Action.WidgetAction.CloseWidget, ctx(globalWithPaused))
+        val r = module.reduce(
+            s,
+            Action.WidgetAction.CloseWidget(WidgetCloseSource.WIDGET_BUTTON),
+            ctx(globalWithPaused),
+        )
         assertNotNull(r)
         assertEquals(WidgetState.Hidden, r!!.nextState.widget)
         val cascade = r.sideEffects[0] as WidgetModule.Effect.DispatchCloseWidgetCascade
@@ -121,7 +152,13 @@ class WidgetModuleTest {
             widget = WidgetState.Hidden,
             imeViewVisible = true,
         )
-        assertNull(module.reduce(s, Action.WidgetAction.CloseWidget, ctx()))
+        assertNull(
+            module.reduce(
+                s,
+                Action.WidgetAction.CloseWidget(WidgetCloseSource.WIDGET_BUTTON),
+                ctx(),
+            ),
+        )
     }
 
     // ─── W3: OnImeViewHidden auto-show ────────────────────────────────

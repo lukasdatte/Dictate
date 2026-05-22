@@ -209,7 +209,11 @@ class OverlayBackendTest {
     }
 
     @Test
-    fun `close click in WIDGET emits ToggleViewModeWidget`() {
+    fun `close click in WIDGET emits CloseWidget(WIDGET_BUTTON)`() {
+        // 2026-05-22 — the overlay's X button dispatches CloseWidget
+        // with WIDGET_BUTTON source directly (not ToggleViewModeWidget),
+        // so the W2 reducer can pause the recording. WidgetModule's
+        // cross-module observer cascades the viewMode-sync afterwards.
         val backend = newBackend()
         backend.attach { captured += it }
         backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
@@ -218,7 +222,11 @@ class OverlayBackendTest {
         closeBtn.performClick()
 
         assertEquals(
-            listOf(Action.ViewModeAction.ToggleViewModeWidget),
+            listOf(
+                Action.WidgetAction.CloseWidget(
+                    net.devemperor.dictate.state.WidgetCloseSource.WIDGET_BUTTON,
+                ),
+            ),
             captured,
         )
     }

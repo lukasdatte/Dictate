@@ -354,7 +354,18 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             if (prev.widget is WidgetState.Visible &&
                 prev.widget.origin == WidgetOrigin.USER
             ) {
-                cascade += Action.WidgetAction.CloseWidget
+                // 2026-05-22 — this T2 path is the edit-bar Widget-Toggle
+                // (KEYBOARD↔WIDGET via ToggleViewModeWidget). The overlay's
+                // own X button no longer routes through here — it dispatches
+                // CloseWidget(WIDGET_BUTTON) directly (resolveOverlayClose-
+                // Action), which flips state.widget to Hidden *before* this
+                // diff observer runs, so the `prev.widget is Visible` guard
+                // above already excludes it. Hence: every CloseWidget that
+                // still reaches this bridge is a keyboard-toggle close →
+                // KEYBOARD_TOGGLE source (recording keeps running).
+                cascade += Action.WidgetAction.CloseWidget(
+                    WidgetCloseSource.KEYBOARD_TOGGLE,
+                )
             }
         }
 

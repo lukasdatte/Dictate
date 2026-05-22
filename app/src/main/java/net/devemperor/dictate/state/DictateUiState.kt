@@ -555,6 +555,27 @@ enum class WidgetOrigin {
 }
 
 /**
+ * Which UI surface closed the widget — the discriminator for the W2
+ * `CloseWidget` reducer's pause decision (2026-05-22 user-req).
+ *
+ * The legacy `CloseWidget` paused the in-flight recording unconditionally.
+ * The user wants the pause gated on *how* the widget was closed:
+ *  - Close via the keyboard's edit-bar toggle → IME-View stays on
+ *    screen, the user can keep dictating → keep recording running.
+ *  - Close via the floating overlay's own X button → the user
+ *    explicitly dismissed the Dictate surface → pause the recording.
+ *
+ * @see Action.WidgetAction.CloseWidget
+ */
+enum class WidgetCloseSource {
+    /** Edit-bar Widget-Toggle-Btn (`edit_widget_toggle_btn`). No pause. */
+    KEYBOARD_TOGGLE,
+
+    /** Floating overlay's X button (`overlay_close_btn`). Pauses recording. */
+    WIDGET_BUTTON,
+}
+
+/**
  * Layout-related Pref-mirror + `contentArea` switch. Owned by `LayoutModule`.
  *
  * `contentArea` was previously a top-level field; it now lives here so

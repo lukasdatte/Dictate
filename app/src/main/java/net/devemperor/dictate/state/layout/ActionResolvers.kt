@@ -11,6 +11,7 @@ import net.devemperor.dictate.state.ModuleServices
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
 import net.devemperor.dictate.state.ViewMode
+import net.devemperor.dictate.state.WidgetCloseSource
 import net.devemperor.dictate.state.WidgetState
 import java.util.UUID
 
@@ -462,7 +463,15 @@ fun resolveOverlayCloseAction(
     state: DictateUiState,
     @Suppress("UNUSED_PARAMETER") services: ModuleServices,
 ): Action? = when (state.viewMode) {
-    ViewMode.WIDGET -> Action.ViewModeAction.ToggleViewModeWidget
+    // 2026-05-22 — the overlay's own X button dispatches CloseWidget
+    // with WIDGET_BUTTON source directly (not ToggleViewModeWidget).
+    // The source tells W2's reducer to pause the in-flight recording
+    // (user-req: closing via the widget itself = "I'm done dictating").
+    // WidgetModule's cross-module observer cascades ToggleViewModeWidget
+    // afterwards so the legacy `viewMode` axis stays in sync.
+    ViewMode.WIDGET -> Action.WidgetAction.CloseWidget(
+        WidgetCloseSource.WIDGET_BUTTON,
+    )
     ViewMode.HOVER -> Action.ViewModeAction.CloseOverlay
     ViewMode.KEYBOARD -> null
 }

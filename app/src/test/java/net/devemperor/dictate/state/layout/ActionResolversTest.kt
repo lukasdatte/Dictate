@@ -300,6 +300,52 @@ class ActionResolversTest {
         )
     }
 
+    // recording-stack-completion §4.5.3 — Trash-Btn surfaces
+    // DiscardInterruptedSession for a RECORDING_INTERRUPTED row at Idle.
+    @Test
+    fun `resolveTrashAction returns DiscardInterruptedSession at Idle when interrupted session present`() {
+        val interruptedSid = "interrupted-sid"
+        val s = state.copy(
+            recording = RecordingState.Idle,
+            pipeline = PipelineUiState.Idle,
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(
+                net.devemperor.dictate.state.PendingSession(
+                    sessionId = interruptedSid,
+                    status = net.devemperor.dictate.database.entity.SessionStatus.RECORDING_INTERRUPTED,
+                    transcribedText = null,
+                    createdAt = 0L,
+                ),
+            ),
+        )
+        val result = resolveTrashAction(s, fakeModuleServices())
+            as? Action.RecordingAction.DiscardInterruptedSession
+            ?: error("Expected DiscardInterruptedSession, got ${resolveTrashAction(s, fakeModuleServices())}")
+        assertEquals(interruptedSid, result.sessionId)
+    }
+
+    @Test
+    fun `resolveTrashAction returns null at Idle when only RECORDED and COMPLETED present`() {
+        val s = state.copy(
+            recording = RecordingState.Idle,
+            pipeline = PipelineUiState.Idle,
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(
+                net.devemperor.dictate.state.PendingSession(
+                    sessionId = "completed-sid",
+                    status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+                    transcribedText = "hi",
+                    createdAt = 0L,
+                ),
+                net.devemperor.dictate.state.PendingSession(
+                    sessionId = "recorded-sid",
+                    status = net.devemperor.dictate.database.entity.SessionStatus.RECORDED,
+                    transcribedText = null,
+                    createdAt = 0L,
+                ),
+            ),
+        )
+        assertNull(resolveTrashAction(s, fakeModuleServices()))
+    }
+
     // ─── resolvePauseAction ───────────────────────────────────────────
 
     @Test
@@ -875,6 +921,7 @@ private class FixedAudioFileFactory(private val file: File) :
     ): net.devemperor.dictate.audio.PipelineAudioResult? = null
     override fun deleteAll(sessionId: String) = Unit
     override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
+    override fun listAllOwnedFiles(): Map<String, List<File>> = emptyMap()
 }
 
 /** Throws [thrown] on every `allocateFirst` call. */
@@ -888,6 +935,7 @@ private class FailingAudioFileFactory(private val thrown: IOException) :
     ): net.devemperor.dictate.audio.PipelineAudioResult? = null
     override fun deleteAll(sessionId: String) = Unit
     override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
+    override fun listAllOwnedFiles(): Map<String, List<File>> = emptyMap()
 }
 
 /** Captures every toast call so tests can assert on the side-channel. */

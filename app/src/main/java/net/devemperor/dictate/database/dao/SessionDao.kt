@@ -14,6 +14,42 @@ interface SessionDao {
     @Query("SELECT * FROM sessions WHERE id = :id")
     fun getById(id: String): SessionEntity?
 
+    /**
+     * Return the session-ids of every session whose status is **not**
+     * terminal — i.e. the session may still need its on-disk audio.
+     * Consumed by [net.devemperor.dictate.audio.CacheAudioCleanupJob]
+     * (recording-stack-completion §4.5.2) as the "alive set" gating
+     * the 7-day TTL: only files belonging to sessions outside this
+     * set are deletion-candidates.
+     *
+     * **Why these four statuses?**
+     *
+     *  - `RECORDING` — live recording, audio segments are actively
+     *    being written.
+     *  - `RECORDING_INTERRUPTED` — process-death survivor, the user
+     *    may auto-continue on the next Record-click (B2 / ADR-0008
+     *    §"Auto-Continuation"). Eligible for the 24h continuation
+     *    window, after which `PipelineRecovery` promotes the row to
+     *    `FAILED` (then files become deletion candidates).
+     *  - `RECORDED` — stop-and-send was hit, pipeline has not yet
+     *    consumed the audio. The audio must remain readable until
+     *    the pipeline runs.
+     *  - `TRANSCRIBING` — pipeline is in flight, audio file is being
+     *    uploaded.
+     *
+     * `COMPLETED`/`FAILED`/`CANCELLED` are terminal — their audio is
+     * either already persisted to `files/recordings/{sid}.m4a` (the
+     * upload path under recording-stack-completion A.4c) or no
+     * longer needed.
+     */
+    @Query(
+        """
+        SELECT id FROM sessions
+        WHERE status IN ('RECORDING', 'RECORDING_INTERRUPTED', 'RECORDED', 'TRANSCRIBING')
+        """
+    )
+    fun findActiveSessionIds(): List<String>
+
     @Query("UPDATE sessions SET final_output_text = :text WHERE id = :sessionId")
     fun updateFinalOutputText(sessionId: String, text: String?)
 

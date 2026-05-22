@@ -1049,6 +1049,22 @@ class DictatePipelineService : Service() {
                 Log.w(TAG, "orphan-cleanup failed", t)
             }
         }
+
+        // Second cleanup pass — cache-audio (`cache/audio/`) periodic
+        // sweep (recording-stack-completion §4.5.2). The scheduler
+        // self-gates on Pref.CacheCleanupLastRunMs so this onDestroy
+        // tick is a no-op if the app-onCreate tick already ran within
+        // the 24h interval. Two trigger sites give the 24h cadence
+        // resilience against either "app rarely opened" (then service-
+        // onDestroy is the path) or "service rarely stopped" (then
+        // app-onCreate is the path).
+        net.devemperor.dictate.audio.CacheAudioCleanupScheduler.scheduleFromApp(
+            cacheDirProvider = { cacheDir },
+            prefs = sharedPrefs,
+            sessionDao = net.devemperor.dictate.database.DictateDatabase
+                .getInstance(this)
+                .sessionDao(),
+        )
     }
 
     /**

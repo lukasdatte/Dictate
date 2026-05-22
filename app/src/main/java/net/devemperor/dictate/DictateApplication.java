@@ -3,6 +3,7 @@ package net.devemperor.dictate;
 import android.app.Application;
 import android.content.SharedPreferences;
 
+import net.devemperor.dictate.audio.CacheAudioCleanupScheduler;
 import net.devemperor.dictate.core.RecordingRepository;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.DurationHealingScheduler;
@@ -69,6 +70,21 @@ public class DictateApplication extends Application {
         final DictateDatabase db = DictateDatabase.getInstance(this);
         final RecordingRepository recordingRepository = new RecordingRepository(this);
         DurationHealingScheduler.INSTANCE.schedule(db.sessionDao(), recordingRepository);
+
+        // Cache-audio cleanup — periodic background sweep of stale
+        // segment + transient merged files in cache/audio/ (recording-
+        // stack-completion §4.5.2). Gated by Pref.CacheCleanupLastRunMs
+        // against Pref.CacheCleanupIntervalMs (24h default) so the
+        // job runs at most once per interval even with the parallel
+        // Service-onDestroy trigger in DictatePipelineService.
+        //
+        // The scheduler constructs its own CacheDirAudioFileRepository
+        // (the service's instance has a different lifecycle and the
+        // read-side listAllOwnedFiles API is stateless) — invoked via
+        // the @JvmStatic scheduleFromApp helper because Kotlin
+        // default-argument constructors are awkward to call from Java.
+        CacheAudioCleanupScheduler.scheduleFromApp(
+                this::getCacheDir, sp, db.sessionDao());
     }
 
     // D-13 (Epic §4 Block C1): the process-scope legacy language-controller

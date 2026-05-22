@@ -195,6 +195,55 @@ sealed class Pref<T>(val key: String, val default: T) {
     // Unit: milliseconds (matches `System.currentTimeMillis()` math).
     object ContinuationFreshnessMs :
         Pref<Long>("net.devemperor.dictate.continuation_freshness_ms", 86_400_000L)
+
+    // ── Cache-Audio-Cleanup Job (recording-stack-completion §4.5.2) ──
+    //
+    // The hybrid Application-onCreate + Service-onDestroy cleanup job
+    // sweeps stale segment files (`sess_{sid}_seg{N}.m4a`) and
+    // transient merged files (`sess_{sid}_merged.m4a`) out of
+    // `cache/audio/`. Each invocation is gated by [CacheCleanupLastRunMs]
+    // against [CacheCleanupIntervalMs] so the job runs at most once per
+    // interval even with two trigger sites.
+    //
+    // Files are deleted only when (a) the owning session is no longer
+    // in `SessionDao.findActiveSessionIds()` AND (b) the file's
+    // `lastModified` is older than `now - CacheCleanupTtlMs`. The TTL
+    // is kept independent from [SessionCleanupGracePeriodMs] because
+    // they live on different layers (row-scope vs file-scope) and
+    // could drift in the future.
+
+    /**
+     * Timestamp (ms epoch) of the last [CacheAudioCleanupJob] run.
+     * Default 0L — meaning "never run" so the first scheduled tick
+     * after install always executes.
+     *
+     * @see net.devemperor.dictate.audio.CacheAudioCleanupScheduler.scheduleIfDue
+     */
+    object CacheCleanupLastRunMs :
+        Pref<Long>("net.devemperor.dictate.cache_cleanup_last_run_ms", 0L)
+
+    /**
+     * Minimum gap between two [CacheAudioCleanupJob] runs (ms).
+     * Default 24 h. The scheduler short-circuits when
+     * `now - CacheCleanupLastRunMs < CacheCleanupIntervalMs`.
+     */
+    object CacheCleanupIntervalMs :
+        Pref<Long>(
+            "net.devemperor.dictate.cache_cleanup_interval_ms",
+            24L * 60L * 60L * 1000L,
+        )
+
+    /**
+     * File-scope TTL — segment + merged files older than this and
+     * belonging to a terminal session are deletion-candidates.
+     * Default 7 d, mirroring [SessionCleanupGracePeriodMs]'s headline
+     * value (but kept independent so the layers can drift if needed).
+     */
+    object CacheCleanupTtlMs :
+        Pref<Long>(
+            "net.devemperor.dictate.cache_cleanup_ttl_ms",
+            7L * 24L * 60L * 60L * 1000L,
+        )
 }
 
 // ── Extension Functions ──

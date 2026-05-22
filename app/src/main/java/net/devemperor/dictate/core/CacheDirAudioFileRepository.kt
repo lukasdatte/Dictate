@@ -235,6 +235,14 @@ class CacheDirAudioFileRepository(
         return onDisk - knownSessionIds
     }
 
+    override fun listAllOwnedFiles(): Map<String, List<File>> {
+        val files = audioCacheDir.listFiles()?.asSequence() ?: return emptyMap()
+        return files
+            .filter { it.isFile }
+            .mapNotNull { f -> parseSessionId(f.name)?.let { sid -> sid to f } }
+            .groupBy({ it.first }, { it.second })
+    }
+
     private fun mergedFile(sessionId: String): File =
         File(audioCacheDir, "$PREFIX$sessionId$MERGED_SUFFIX$EXT")
 

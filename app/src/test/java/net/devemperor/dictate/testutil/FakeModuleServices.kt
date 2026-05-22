@@ -113,6 +113,7 @@ object NoopAudioFileRepository : net.devemperor.dictate.audio.AudioFileRepositor
     ): net.devemperor.dictate.audio.PipelineAudioResult? = null
     override fun deleteAll(sessionId: String) = Unit
     override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
+    override fun listAllOwnedFiles(): Map<String, List<java.io.File>> = emptyMap()
 }
 
 /**

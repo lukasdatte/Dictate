@@ -78,6 +78,18 @@ class FakeSessionDao : SessionDao {
             }
             .maxByOrNull { it.createdAt }
 
+    override fun findActiveSessionIds(): List<String> =
+        rows.values
+            .filter {
+                it.status in setOf(
+                    "RECORDING",
+                    "RECORDING_INTERRUPTED",
+                    "RECORDED",
+                    "TRANSCRIBING",
+                )
+            }
+            .map { it.id }
+
     override fun findWithMissingDuration(): List<SessionEntity> =
         rows.values.filter { it.audioFilePath != null && it.audioDurationSeconds == 0L }
 

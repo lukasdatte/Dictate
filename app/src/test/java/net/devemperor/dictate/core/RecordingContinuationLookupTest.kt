@@ -140,6 +140,8 @@ class RecordingContinuationLookupTest {
             return candidate
         }
 
+        override fun findActiveSessionIds(): List<String> = unused()
+
         // ── Methods the lookup does not exercise — throw to fail-loud ──
 
         override fun insert(entity: SessionEntity) = unused()
@@ -205,5 +207,8 @@ class RecordingContinuationLookupTest {
 
         override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> =
             error("listOrphanSessionIds not exercised by lookup")
+
+        override fun listAllOwnedFiles(): Map<String, List<File>> =
+            error("listAllOwnedFiles not exercised by lookup")
     }
 }

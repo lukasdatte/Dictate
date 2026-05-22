@@ -288,6 +288,7 @@ class OverlayBackendTest {
                 ): net.devemperor.dictate.audio.PipelineAudioResult? = null
                 override fun deleteAll(sessionId: String) = Unit
                 override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
+                override fun listAllOwnedFiles(): Map<String, List<File>> = emptyMap()
             },
         )
         val backend = OverlayBackend(
@@ -479,6 +480,7 @@ class OverlayBackendTest {
                 ): net.devemperor.dictate.audio.PipelineAudioResult? = null
                 override fun deleteAll(sessionId: String) = Unit
                 override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
+                override fun listAllOwnedFiles(): Map<String, List<File>> = emptyMap()
             },
         )
         val backend = OverlayBackend(

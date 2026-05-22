@@ -117,4 +117,18 @@ interface AudioFileRepository {
      * not occupy storage forever.
      */
     fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String>
+
+    /**
+     * Return every repository-owned file (segments + transient merged
+     * files) grouped by session-id. Used by [CacheAudioCleanupJob]
+     * (recording-stack-completion §4.5) for the per-session retention
+     * decision: a session-id whose status is not in
+     * [net.devemperor.dictate.database.dao.SessionDao.findActiveSessionIds]
+     * AND whose newest file is older than the TTL is safe to delete.
+     *
+     * Foreign content in the audio directory (files not matching the
+     * `sess_*` prefix) is silently skipped — the repository owns only
+     * its own naming scheme.
+     */
+    fun listAllOwnedFiles(): Map<String, List<File>>
 }

@@ -139,6 +139,8 @@ private class FakeSessionDao : SessionDao {
         return stubbedInterrupted
     }
 
+    override fun findActiveSessionIds(): List<String> = notUsed()
+
     // ── Unused — throw so accidental calls fail loud ──
 
     override fun insert(entity: SessionEntity) = notUsed()

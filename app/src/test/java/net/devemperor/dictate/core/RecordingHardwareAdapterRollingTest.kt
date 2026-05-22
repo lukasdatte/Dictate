@@ -49,6 +49,7 @@ class RecordingHardwareAdapterRollingTest {
         override suspend fun readForPipeline(sessionId: String): PipelineAudioResult? = null
         override fun deleteAll(sessionId: String) = Unit
         override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
+        override fun listAllOwnedFiles(): Map<String, List<File>> = emptyMap()
     }
 
     private fun newAudioFile(name: String = "test-rolling.m4a"): File =

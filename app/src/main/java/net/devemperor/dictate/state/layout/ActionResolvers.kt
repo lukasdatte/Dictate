@@ -140,6 +140,26 @@ fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action
         is RecordingState.Active -> Action.RecordingAction.StopRecordingAndSend
         is RecordingState.Paused -> Action.RecordingAction.StopRecordingAndSend
         is RecordingState.Preparing -> null
+
+        // Recovery-surfaced interrupted recording (2026-05-22). A
+        // Record-tap continues it — the same continuation path as the
+        // Idle branch above. ContinuationLookup re-resolves the segment
+        // list + codec and allocates the next segment; it finds this
+        // very session (the freshest RECORDING_INTERRUPTED row). When
+        // the session is no longer continuable (segments gone /
+        // freshness elapsed between surfacing and the tap) the lookup
+        // returns null and the tap is a no-op — the user can discard
+        // via the trash button instead.
+        is RecordingState.Interrupted -> {
+            services.continuationLookup.lookup()?.let { continuation ->
+                Action.RecordingAction.StartRecordingContinuation(
+                    target = InsertionTarget.INPUT_CONNECTION,
+                    audioFile = continuation.nextSegmentFile,
+                    sessionId = continuation.sessionId,
+                    codecParams = continuation.codecParams,
+                )
+            }
+        }
     }
 }
 
@@ -177,7 +197,10 @@ fun resolveRecordLongPressAction(
         is RecordingState.Active,
         is RecordingState.Paused -> Action.RecordingAction.OnRecordLongPress
         RecordingState.Idle,
-        is RecordingState.Preparing -> null
+        is RecordingState.Preparing,
+        // Interrupted: long-press has no meaningful action — discard
+        // goes through the trash button, continue through a normal tap.
+        is RecordingState.Interrupted -> null
     }
 
 /**
@@ -233,9 +256,15 @@ fun resolveTrashAction(
     @Suppress("UNUSED_PARAMETER") services: ModuleServices,
 ): Action? {
     val pipe = state.pipeline
+    val rec = state.recording
     return when {
         pipe is PipelineUiState.ReprocessStaging ->
             Action.PipelineAction.CancelReprocessStaging(pipe.sessionId)
+        // Recovery-surfaced interrupted recording (2026-05-22): the
+        // trash button discards it (delete segments + mark row FAILED)
+        // and returns the FSM to Idle.
+        rec is RecordingState.Interrupted ->
+            Action.RecordingAction.DiscardInterruptedSession(rec.sessionId)
         state.recording is RecordingState.Idle && state.pipeline is PipelineUiState.Idle -> {
             // Idle + Idle: surface DiscardInterruptedSession if a
             // RECORDING_INTERRUPTED row is present; otherwise the

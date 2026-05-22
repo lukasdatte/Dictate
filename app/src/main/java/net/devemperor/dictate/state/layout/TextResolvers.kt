@@ -152,6 +152,10 @@ fun resolveRecordButtonText(state: DictateUiState, strings: LayoutStrings): Char
         is RecordingState.Paused -> strings.send
         is RecordingState.Preparing -> strings.record
         RecordingState.Idle -> strings.dictateButtonText(state.language.effective)
+        // Interrupted (2026-05-22): rendered "as if paused" — the frozen
+        // timer overlay carries the elapsed seconds; the button label is
+        // the plain record text since a tap continues recording.
+        is RecordingState.Interrupted -> strings.record
     }
 
 /**

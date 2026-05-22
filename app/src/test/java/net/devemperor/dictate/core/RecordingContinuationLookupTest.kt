@@ -163,6 +163,14 @@ class RecordingContinuationLookupTest {
         override fun updateAudioFilePath(id: String, path: String) = unused()
         override fun updateAudioFilePaths(id: String, paths: String) = unused()
         override fun markInserted(id: String, timestamp: Long) = unused()
+        override fun finalizeRecordedMetadata(
+            id: String,
+            status: String,
+            targetApp: String?,
+            language: String?,
+            durationSeconds: Long,
+            queuedPromptIds: String?,
+        ) = unused()
         override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> = unused()
         override fun deleteInsertedOlderThan(cutoff: Long): Int = unused()
         override fun findOrphanedTerminalAudio(cutoff: Long): List<OrphanedAudioRow> = unused()

@@ -960,18 +960,39 @@ class PipelineOrchestrator @JvmOverloads constructor(
             audioPathForRow = dest.absolutePath
         }
 
-        sessionManager.createSession(
-            id = sessionId,
-            type = SessionType.RECORDING,
-            targetApp = config.targetAppPackage,
-            language = config.language,
-            audioFilePath = audioPathForRow,
-            audioDurationSeconds = audioDurationSec,
-            parentId = null,
-            origin = config.origin,
-            queuedPromptIds = queuedIdsAtStart.joinToString(","),
-            initialStatus = SessionStatus.RECORDED
-        )
+        // Recovery-chain reconciliation (2026-05-22). When the recording
+        // was started through RecordingModule, the session row already
+        // exists with status=RECORDING (Effect.CreateRecordingSession —
+        // the first link of the recovery chain). Re-inserting it here
+        // would hit SessionDao.insert's default ABORT conflict strategy
+        // and throw. Transition the existing row to RECORDED instead;
+        // audio_file_path(s) are already owned by the recording-start
+        // insert + the SyncAudioSegments effects, so the metadata-only
+        // update must not clobber them. Legacy callers that never
+        // dispatched StartRecording through RecordingModule (audio
+        // import, reprocess paths) have no row yet → createSession.
+        if (sessionManager.getSessionById(sessionId) != null) {
+            sessionManager.finalizeRecordedFromRecordingRow(
+                sessionId = sessionId,
+                targetApp = config.targetAppPackage,
+                language = config.language,
+                audioDurationSeconds = audioDurationSec,
+                queuedPromptIds = queuedIdsAtStart.joinToString(","),
+            )
+        } else {
+            sessionManager.createSession(
+                id = sessionId,
+                type = SessionType.RECORDING,
+                targetApp = config.targetAppPackage,
+                language = config.language,
+                audioFilePath = audioPathForRow,
+                audioDurationSeconds = audioDurationSec,
+                parentId = null,
+                origin = config.origin,
+                queuedPromptIds = queuedIdsAtStart.joinToString(","),
+                initialStatus = SessionStatus.RECORDED
+            )
+        }
 
         // Finding SEC-5-3: notifySessionCreated was never defined on
         // SessionTracker. Set currentSessionId directly.

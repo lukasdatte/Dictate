@@ -141,6 +141,42 @@ class SessionManager(private val db: DictateDatabase) {
     }
 
     /**
+     * Recovery-chain SEND-path reconciliation (2026-05-22). Transition
+     * a row that was already inserted at recording-start
+     * (`status = RECORDING`, via
+     * `PipelineSessionRepoSubsystem.createRecordingSession`) to
+     * `RECORDED`, filling the session metadata the SEND path resolved.
+     *
+     * Used by [net.devemperor.dictate.core.PipelineOrchestrator] in
+     * place of [createSession] when the row already exists — a second
+     * `createSession` would hit `SessionDao.insert`'s default `ABORT`
+     * conflict strategy and throw.
+     *
+     * Unlike [transitionRecorded] this **does not touch the audio-path
+     * columns**: `audio_file_path` / `audio_file_paths` are owned by the
+     * recording-start insert + the `SyncAudioSegments` effects, which
+     * have already populated the full rolling-segment list. Re-writing
+     * a single path here would collapse a multi-segment recording back
+     * to its first segment.
+     */
+    fun finalizeRecordedFromRecordingRow(
+        sessionId: String,
+        targetApp: String?,
+        language: String?,
+        audioDurationSeconds: Long,
+        queuedPromptIds: String?,
+    ) {
+        sessionDao.finalizeRecordedMetadata(
+            id = sessionId,
+            status = SessionStatus.RECORDED.name,
+            targetApp = targetApp,
+            language = language,
+            durationSeconds = audioDurationSeconds,
+            queuedPromptIds = queuedPromptIds,
+        )
+    }
+
+    /**
      * Sets `status = TRANSCRIBING`. Called from
      * `PipelineModule.runEffect(Effect.PersistStatus(TRANSCRIBING))`
      * at pipeline-start (Spec 1 §6.2).

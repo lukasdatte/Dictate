@@ -77,12 +77,16 @@ class RecordingModuleTest {
         assertEquals(true, next.awaitingSco)
         assertEquals(InsertionTarget.INPUT_CONNECTION, next.target)
         // No AllocateMediaRecorder yet — it fires on ScoRouteResolved.
-        // PersistLastFileName (Chunk 4.4) IS emitted here — the file is
-        // allocated up-front; SCO-wait does not gate the RESEND-recovery
-        // persist (legacy behaviour: SP write happened immediately on
-        // user-click, well before SCO completed).
+        // CreateRecordingSession (recovery-chain first link, 2026-05-22)
+        // + PersistLastFileName (Chunk 4.4) ARE emitted here — both run
+        // off the up-front-allocated file; the SCO-wait gates only the
+        // hardware allocate, not persistence.
         assertEquals(
             listOf<RecordingModule.Effect>(
+                RecordingModule.Effect.CreateRecordingSession(
+                    sessionId = "sid-start-42",
+                    audioFile = testFile,
+                ),
                 RecordingModule.Effect.PersistLastFileName(testFile.name),
             ),
             result.sideEffects,
@@ -112,17 +116,25 @@ class RecordingModuleTest {
         assertEquals("sid-start-42", next.sessionId)
         assertEquals(false, next.awaitingSco)
         assertNull(next.target)
-        // Effects order matters: AllocateMediaRecorder first (hardware
-        // allocation gates the FSM), PersistLastFileName second
-        // (best-effort SP persist for RESEND-recovery).
-        assertEquals(2, result.sideEffects.size)
+        // Effects: AllocateMediaRecorder first (hardware allocation
+        // gates the FSM), then CreateRecordingSession (recovery-chain
+        // first link, 2026-05-22 — the RECORDING DB row), then
+        // PersistLastFileName (best-effort SP persist for RESEND).
+        assertEquals(3, result.sideEffects.size)
         val alloc = result.sideEffects[0] as RecordingModule.Effect.AllocateMediaRecorder
         assertEquals(InsertionTarget.INPUT_CONNECTION, alloc.target)
         assertEquals(false, alloc.useBluetooth)
         assertEquals(testFile, alloc.audioFile)
         assertEquals(
-            RecordingModule.Effect.PersistLastFileName(testFile.name),
+            RecordingModule.Effect.CreateRecordingSession(
+                sessionId = "sid-start-42",
+                audioFile = testFile,
+            ),
             result.sideEffects[1],
+        )
+        assertEquals(
+            RecordingModule.Effect.PersistLastFileName(testFile.name),
+            result.sideEffects[2],
         )
     }
 
@@ -618,6 +630,45 @@ class RecordingModuleTest {
         module.runEffect(RecordingModule.Effect.DismissNotification, services)
         assertEquals(listOf<NotificationStatus>(NotificationStatus.Recording("sid-x")), showCalls)
         assertEquals(1, dismissCount)
+    }
+
+    // ─── Recovery-chain first link (2026-05-22) ─────────────────────────
+
+    @Test
+    fun `runEffect CreateRecordingSession asks the sessionRepo to insert the RECORDING row`() {
+        // Recovery-chain first link: the StartRecording arm emits
+        // CreateRecordingSession; its handler must forward the sessionId
+        // + first-segment path to the sessionRepo so a process death
+        // mid-recording (FGS torn down on a keyboard switch) leaves a
+        // RECORDING row for PipelineRecovery to promote.
+        val repo = net.devemperor.dictate.testutil.FakePipelineSessionRepo()
+        val services = net.devemperor.dictate.testutil.fakeModuleServices(sessionRepo = repo)
+        module.runEffect(
+            RecordingModule.Effect.CreateRecordingSession(
+                sessionId = "sid-rec-1",
+                audioFile = testFile,
+            ),
+            services,
+        )
+        assertEquals(
+            listOf("sid-rec-1" to testFile.absolutePath),
+            repo.createdRecordingSessions,
+        )
+    }
+
+    @Test
+    fun `runEffect MarkSessionRecording re-arms the interrupted row via sessionRepo`() {
+        // Recovery-chain: the StartRecordingContinuation arm emits
+        // MarkSessionRecording so a second interruption mid-continuation
+        // is caught by PipelineRecovery again. The handler forwards the
+        // sessionId to the sessionRepo.
+        val repo = net.devemperor.dictate.testutil.FakePipelineSessionRepo()
+        val services = net.devemperor.dictate.testutil.fakeModuleServices(sessionRepo = repo)
+        module.runEffect(
+            RecordingModule.Effect.MarkSessionRecording("sid-cont-7"),
+            services,
+        )
+        assertEquals(listOf("sid-cont-7"), repo.transitionedToRecording)
     }
 
     // ─── Cross-module cascade (KG-RSB-2-Fix verification) ───────────────

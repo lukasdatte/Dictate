@@ -46,6 +46,14 @@ object EmptySessionDao : SessionDao {
     override fun updateAudioFilePath(id: String, path: String) = Unit
     override fun updateAudioFilePaths(id: String, paths: String) = Unit
     override fun markInserted(id: String, timestamp: Long) = Unit
+    override fun finalizeRecordedMetadata(
+        id: String,
+        status: String,
+        targetApp: String?,
+        language: String?,
+        durationSeconds: Long,
+        queuedPromptIds: String?,
+    ) = Unit
     override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> = emptyList()
     override fun deleteInsertedOlderThan(cutoff: Long): Int = 0
     override fun findOrphanedTerminalAudio(cutoff: Long): List<OrphanedAudioRow> = emptyList()

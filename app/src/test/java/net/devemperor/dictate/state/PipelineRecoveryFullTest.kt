@@ -382,4 +382,50 @@ class PipelineRecoveryFullTest {
         // Store is unchanged; pending list is empty.
         assertTrue(store.snapshot.pendingSessions.isEmpty())
     }
+
+    // ─── Phase 5: auto-surface the interrupted recording (2026-05-22) ──
+
+    @Test
+    fun `recover Phase 5 surfaces a fresh interrupted recording via SurfaceInterruptedRecording`() {
+        // A keyboard-origin RECORDING_INTERRUPTED row → Phase 5 dispatches
+        // SurfaceInterruptedRecording so the next keyboard open shows the
+        // cut-off recording "as if briefly paused" instead of waiting for
+        // a Record-tap.
+        val tmp = File.createTempFile("dictate-int", ".m4a").also { it.deleteOnExit() }
+        seed("interrupted-1", SessionStatus.RECORDING_INTERRUPTED, audioFilePath = tmp.absolutePath)
+        val store = DictateUiStateStore(DictateUiState.initial())
+        val recovery = PipelineRecovery(
+            sessionDao = dao,
+            sessionRepo = adapter,
+            emitAction = { dispatchedActions += it },
+            ioContext = EmptyCoroutineContext,
+            // Huge freshness window so the createdAt=0 seed row is "fresh".
+            continuationFreshnessMs = { Long.MAX_VALUE / 2 },
+            interruptedRecordingElapsedMsProvider = { 8_000L },
+        )
+
+        runBlocking { recovery.recover(store) }
+
+        val surface = dispatchedActions
+            .filterIsInstance<Action.RecordingAction.SurfaceInterruptedRecording>()
+            .single()
+        assertEquals("interrupted-1", surface.sessionId)
+        assertEquals(8_000L, surface.elapsedMs)
+    }
+
+    @Test
+    fun `recover Phase 5 does not surface when no interrupted recording exists`() {
+        val tmp = File.createTempFile("dictate-noint", ".m4a").also { it.deleteOnExit() }
+        seed("recorded-only", SessionStatus.RECORDED, audioFilePath = tmp.absolutePath)
+        val store = DictateUiStateStore(DictateUiState.initial())
+
+        runBlocking { recovery().recover(store) }
+
+        assertTrue(
+            "no interrupted recording → no SurfaceInterruptedRecording dispatch",
+            dispatchedActions.none {
+                it is Action.RecordingAction.SurfaceInterruptedRecording
+            },
+        )
+    }
 }

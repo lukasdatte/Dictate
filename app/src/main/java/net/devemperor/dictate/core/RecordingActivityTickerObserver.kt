@@ -188,6 +188,10 @@ class RecordingActivityTickerObserver(
                 // Preparing — wait for Active. Don't start the tick yet
                 // (no audio has actually started recording).
             }
+            // Recovery-surfaced interrupted recording (2026-05-22):
+            // freeze the ticker at the known segment-sum duration so
+            // the user sees the true elapsed time (their "0:08").
+            is RecordingState.Interrupted -> freezeTickerAt(rs.sessionId, rs.elapsedMs)
         }
     }
 
@@ -261,6 +265,35 @@ class RecordingActivityTickerObserver(
         // exact stopped time (no last-tick race where the rendered
         // number is one TICK_INTERVAL_MS short of the freeze point).
         onTimerTick(accumulatedElapsedMs)
+    }
+
+    /**
+     * Freeze the ticker at a known elapsed value — used when a
+     * recovery-surfaced [RecordingState.Interrupted] recording appears
+     * (2026-05-22). Unlike [freezeTicker] (which folds the *live*
+     * Active interval into the accumulator), this seeds the accumulator
+     * directly with [elapsedMs] — the sum of the already-recorded
+     * segments' durations — so the UI shows the recording's true
+     * progress (the user's "0:08") even though no Active interval ever
+     * ran in this process.
+     *
+     * The [sessionId] is the interrupted session. Because
+     * `StartRecordingContinuation` reuses that same id, the subsequent
+     * `Interrupted → Preparing → Active` transition lands in
+     * [startOrContinueTicker]'s "resume from Paused" branch (same
+     * sessionId, `startedAtMs < 0`) — the seeded accumulator carries
+     * forward and the timer continues from [elapsedMs] instead of
+     * restarting at zero.
+     */
+    private fun freezeTickerAt(sessionId: String, elapsedMs: Long) {
+        currentSessionId = sessionId
+        accumulatedElapsedMs = elapsedMs
+        startedAtMs = -1L
+        ticking = false
+        handler.removeCallbacks(tickRunnable)
+        syncToCompanion()
+        // Emit one tick on the seeded value so the UI sits on 0:08.
+        onTimerTick(elapsedMs)
     }
 
     private fun stopTicker() {

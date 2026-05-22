@@ -239,6 +239,34 @@ sealed class Action {
         data class DiscardInterruptedSession(val sessionId: String) : RecordingAction()
 
         /**
+         * Surface a recovery-detected interrupted recording into the
+         * live FSM (2026-05-22). Dispatched by the recovery pass on the
+         * next keyboard open after `PipelineRecovery` promoted a row to
+         * `RECORDING_INTERRUPTED`: it drives the `Idle → Interrupted`
+         * transition so the keyboard shows the cut-off recording "as if
+         * it had just been briefly paused" — frozen timer at the
+         * recorded duration, the trash / continue affordances — instead
+         * of silently waiting for the user to tap Record.
+         *
+         * **Why a dedicated action (not reuse [StartRecordingContinuation]):**
+         * [StartRecordingContinuation] actually *resumes* recording
+         * (allocates a `MediaRecorder`, goes `Preparing → Active`).
+         * Surfacing is passive — it only makes the interrupted recording
+         * *visible* and resumable; no hardware is touched until the user
+         * taps to continue. Conflating the two would speculatively grab
+         * the microphone on every keyboard open.
+         *
+         * @property sessionId the `RECORDING_INTERRUPTED` session.
+         * @property elapsedMs accumulated duration of the recorded
+         *   segments — drives the frozen timer
+         *   ([net.devemperor.dictate.state.RecordingState.Interrupted.elapsedMs]).
+         */
+        data class SurfaceInterruptedRecording(
+            val sessionId: String,
+            val elapsedMs: Long,
+        ) : RecordingAction()
+
+        /**
          * Audio-file import path
          * (indirection-cleanup 2026-05-21, Chunk 4.4 — A-5).
          *

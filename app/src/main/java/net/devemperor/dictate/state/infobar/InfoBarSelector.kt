@@ -178,33 +178,17 @@ object InfoBarSelector {
                 )
             }
 
-        // ── Recording-Interrupted (2026-05-22) ──────────────────────────
-        // Session in RECORDING_INTERRUPTED status — recording was cut
-        // off by an FGS kill (Android 14+ microphone-FGS restriction at
-        // keyboard switch / process background). The audio segments are
-        // still on disk. The user can resume by tapping Record (the
-        // ContinuationLookup will pick this session up if its freshness
-        // is OK) or discard via the InfoBar's dismiss action.
-        //
-        // dismissAction = DiscardInterruptedSession (atomic discard via
-        // RecordingModule reducer — stops MediaRecorder if any, deletes
-        // audio segments, marks DB row as FAILED).
-        state.pendingSessions
-            .filter { it.status == SessionStatus.RECORDING_INTERRUPTED }
-            .forEach { session ->
-                add(
-                    InfoBarItem(
-                        id = "recording-interrupted:${session.sessionId}",
-                        createdAt = session.createdAt,
-                        message = InfoBarMessage(
-                            textResId = R.string.dictate_recording_interrupted_msg,
-                            style = InfoBarStyle.ACTION,
-                        ),
-                        confirmAction = null,
-                        dismissAction = Action.RecordingAction.DiscardInterruptedSession(session.sessionId),
-                    )
-                )
-            }
+        // ── Recording-Interrupted — NOT an info-bar producer ────────────
+        // A RECORDING_INTERRUPTED session is surfaced as a first-class
+        // paused-style recording in the keyboard itself
+        // ([RecordingState.Interrupted], driven by
+        // `PipelineRecovery` Phase 5 → `SurfaceInterruptedRecording`,
+        // 2026-05-22). It deliberately has NO info-bar item — an
+        // info-bar on top of the paused-recording UI would surface the
+        // same thing twice. Continue = a Record-tap; discard = the
+        // keyboard trash button. (Completed-but-uninserted results, by
+        // contrast, remain pure info-bar items — see the pending-insert
+        // producer above.)
     }.sortedBy { it.createdAt }
 
     // ─── B4 helpers ────────────────────────────────────────────────────

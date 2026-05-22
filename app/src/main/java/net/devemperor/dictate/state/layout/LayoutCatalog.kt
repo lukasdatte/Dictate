@@ -6,6 +6,7 @@ import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
 import net.devemperor.dictate.state.WidgetState
+import net.devemperor.dictate.state.infobar.InfoBarSelector
 import net.devemperor.dictate.state.isActiveOrPaused
 
 /**
@@ -626,19 +627,36 @@ class LayoutCatalog(private val strings: LayoutStrings) {
      * Edge-Case 1: staging is workflow-fokussiert (editable queue +
      * language chip), single-row makes no sense — stays two-row even
      * when the user has small-mode enabled.
+     *
+     * **InfoBar force-expand (2026-05-22).** When the state-derived
+     * info-bar surface is non-empty, the keyboard is forced into the
+     * two-row layout regardless of the user's `singleRowMode`
+     * preference: a collapsed single row leaves the info-bar cramped
+     * and competing with the keyboard content (the user explicitly
+     * asked for "komplett expandierter Modus" whenever an info message
+     * is present). The override is **transient + computed** — it masks
+     * `singleRowMode` for the duration the bar is shown and never
+     * mutates the persisted `Pref.SingleRowMode`, so the keyboard
+     * returns to the user's preference once the bar is dismissed. This
+     * mirrors the `ReprocessStaging` precedent above, which likewise
+     * ignores `singleRowMode` for a workflow reason.
      */
     fun forKeyboard(state: DictateUiState): LayoutMode {
         val pipe = state.pipeline
         val isStaging = pipe is PipelineUiState.ReprocessStaging
         val isPipelineLive = pipe is PipelineUiState.Preparing || pipe is PipelineUiState.Running
+        // InfoBar force-expand: a visible info-bar masks the single-row
+        // preference (see KDoc). Computed, not persisted.
+        val infoBarActive = InfoBarSelector.select(state).isNotEmpty()
+        val singleRow = state.layout.singleRowMode && !infoBarActive
         // B4-VAL F-24: every case explicit; `else -> error(...)` guards
         // against future state-shape changes that break exhaustiveness.
         return when {
             isStaging -> KEYBOARD_REPROCESS_STAGING
-            isPipelineLive && state.layout.singleRowMode -> KEYBOARD_SINGLE_ROW_SEND_MODE
-            isPipelineLive && !state.layout.singleRowMode -> KEYBOARD_TWO_ROW_SEND_MODE
-            !isPipelineLive && state.layout.singleRowMode -> KEYBOARD_SINGLE_ROW
-            !isPipelineLive && !state.layout.singleRowMode -> KEYBOARD_TWO_ROW
+            isPipelineLive && singleRow -> KEYBOARD_SINGLE_ROW_SEND_MODE
+            isPipelineLive && !singleRow -> KEYBOARD_TWO_ROW_SEND_MODE
+            !isPipelineLive && singleRow -> KEYBOARD_SINGLE_ROW
+            !isPipelineLive && !singleRow -> KEYBOARD_TWO_ROW
             else -> error("forKeyboard: impossible state shape (pipe=$pipe, layout=${state.layout})")
         }
     }

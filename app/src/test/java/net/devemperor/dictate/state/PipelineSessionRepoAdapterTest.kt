@@ -3,7 +3,9 @@ package net.devemperor.dictate.state
 import kotlinx.coroutines.runBlocking
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.database.entity.SessionEntity
+import net.devemperor.dictate.database.entity.SessionOrigin
 import net.devemperor.dictate.database.entity.SessionStatus
+import net.devemperor.dictate.database.entity.SessionType
 import net.devemperor.dictate.testutil.FakeSessionDao
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -204,6 +206,43 @@ class PipelineSessionRepoAdapterTest {
 
         // Status string unknown to this build → fallback per SessionEntity.statusEnum.
         assertEquals(SessionStatus.RECORDED, entity.toPendingSession().status)
+    }
+
+    // ─── Recovery-chain first link (2026-05-22) ─────────────────────────
+
+    @Test
+    fun `createRecordingSession inserts a RECORDING row tying the audio to a session`() {
+        // Without this row a process death mid-recording leaves nothing
+        // for PipelineRecovery to promote to RECORDING_INTERRUPTED — the
+        // audio would be silently unrecoverable.
+        runBlocking {
+            adapter.createRecordingSession("sid-new", "/cache/audio/sess_sid-new_seg1.m4a")
+        }
+
+        val row = dao.getById("sid-new")
+        assertNotNull(row)
+        assertEquals(SessionStatus.RECORDING.name, row!!.status)
+        assertEquals(SessionType.RECORDING.name, row.type)
+        // origin=KEYBOARD is load-bearing — findLatestRecordingInterrupted
+        // filters on it, so this is what makes a recovered row eligible
+        // for the auto-continuation lookup.
+        assertEquals(SessionOrigin.KEYBOARD.name, row.origin)
+        assertEquals("/cache/audio/sess_sid-new_seg1.m4a", row.audioFilePath)
+        // audio_file_paths is seeded with the first segment so the row
+        // leaves the empty-list state immediately (PipelineRecovery
+        // treats an empty list as unrecoverable → FAILED).
+        assertEquals(listOf("/cache/audio/sess_sid-new_seg1.m4a"), row.audioFilePaths)
+    }
+
+    @Test
+    fun `transitionToRecording re-arms an interrupted row back to RECORDING`() {
+        // A continuation re-arms the row so a second interruption is
+        // caught by PipelineRecovery exactly like the first.
+        seedSession("sid-int", SessionStatus.RECORDING_INTERRUPTED, audioFilePath = "/x/seg1.m4a")
+
+        runBlocking { adapter.transitionToRecording("sid-int") }
+
+        assertEquals(SessionStatus.RECORDING.name, dao.getById("sid-int")!!.status)
     }
 
     private fun createTempFile(prefix: String, suffix: String): File =

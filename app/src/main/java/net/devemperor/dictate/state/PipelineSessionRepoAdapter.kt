@@ -10,7 +10,9 @@ import net.devemperor.dictate.audio.AudioFileRepository
 import net.devemperor.dictate.database.converter.Converters
 import net.devemperor.dictate.database.dao.SessionDao
 import net.devemperor.dictate.database.entity.SessionEntity
+import net.devemperor.dictate.database.entity.SessionOrigin
 import net.devemperor.dictate.database.entity.SessionStatus
+import net.devemperor.dictate.database.entity.SessionType
 import java.io.File
 
 /**
@@ -246,6 +248,72 @@ class PipelineSessionRepoAdapter(
                 0
             }
         }
+
+    /**
+     * Recovery-chain first link (2026-05-22) — insert the `RECORDING`
+     * row at recording-start. See
+     * [PipelineSessionRepoSubsystem.createRecordingSession].
+     *
+     * **`origin = KEYBOARD`** is correct for every IME recording:
+     * [SessionOrigin] has no `WIDGET` value — the floating-overlay
+     * recording is still keyboard-originated. The continuation-lookup
+     * (`SessionDao.findLatestRecordingInterrupted`) filters
+     * `origin = 'KEYBOARD'`, so this is also the only origin a
+     * recovered recording could be continued from.
+     *
+     * **`audio_file_paths`** is seeded with the first segment so the
+     * row leaves the empty-list state immediately (a crash during the
+     * sub-second Preparing window is then still classified
+     * `RECORDING_INTERRUPTED` rather than `FAILED`); the
+     * `SyncAudioSegments` effects overwrite it with the disk-scanned
+     * list from `MediaRecorderReady` onward.
+     *
+     * **`target_app_package` / `language`** are left `null` here — the
+     * recording FSM has no business knowing the editor package. The
+     * SEND path fills them via
+     * `SessionManager.finalizeRecordedFromRecordingRow`; a recording
+     * that never reaches SEND (crash-interrupted) simply keeps them
+     * `null`, which history display already tolerates.
+     *
+     * Fail-soft: a DAO failure is logged and swallowed.
+     */
+    override suspend fun createRecordingSession(sessionId: String, audioFilePath: String) {
+        withContext(ioContext) {
+            try {
+                sessionDao.insert(
+                    SessionEntity(
+                        id = sessionId,
+                        type = SessionType.RECORDING.name,
+                        createdAt = System.currentTimeMillis(),
+                        targetAppPackage = null,
+                        language = null,
+                        audioFilePath = audioFilePath,
+                        audioFilePaths = listOf(audioFilePath),
+                        status = SessionStatus.RECORDING.name,
+                        origin = SessionOrigin.KEYBOARD.name,
+                    ),
+                )
+            } catch (t: Throwable) {
+                Log.w(TAG, "createRecordingSession failed for $sessionId", t)
+            }
+        }
+    }
+
+    /**
+     * Recovery-chain (2026-05-22) — re-arm an interrupted row to
+     * `RECORDING`. See
+     * [PipelineSessionRepoSubsystem.transitionToRecording].
+     * Fail-soft.
+     */
+    override suspend fun transitionToRecording(sessionId: String) {
+        withContext(ioContext) {
+            try {
+                sessionDao.updateStatus(sessionId, SessionStatus.RECORDING.name)
+            } catch (t: Throwable) {
+                Log.w(TAG, "transitionToRecording failed for $sessionId", t)
+            }
+        }
+    }
 
     private companion object {
         private const val TAG = "PipelineSessionRepoAdapter"

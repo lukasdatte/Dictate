@@ -132,6 +132,30 @@ class FakeSessionDao : SessionDao {
         rows[id]?.let { rows[id] = it.copy(insertedAt = timestamp) }
     }
 
+    /**
+     * Recovery-chain SEND-path reconciliation (2026-05-22) — mirrors the
+     * production `UPDATE`: writes status + metadata, leaves the
+     * `audio_file_path` / `audio_file_paths` columns untouched.
+     */
+    override fun finalizeRecordedMetadata(
+        id: String,
+        status: String,
+        targetApp: String?,
+        language: String?,
+        durationSeconds: Long,
+        queuedPromptIds: String?,
+    ) {
+        rows[id]?.let {
+            rows[id] = it.copy(
+                status = status,
+                targetAppPackage = targetApp,
+                language = language,
+                audioDurationSeconds = durationSeconds,
+                queuedPromptIds = queuedPromptIds,
+            )
+        }
+    }
+
     override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> =
         rows.values
             .filter {

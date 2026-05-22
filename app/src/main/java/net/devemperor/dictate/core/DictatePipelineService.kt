@@ -591,6 +591,19 @@ class DictatePipelineService : Service() {
             pendingInsertionFreshnessFloor = {
                 System.currentTimeMillis() - sharedPrefs.get(Pref.PendingInsertionFreshnessMs)
             },
+            // Continuation-freshness — Phase 5 auto-surfacing reuses the
+            // same window the auto-continuation lookup uses (a recording
+            // older than this is not offered for resume).
+            continuationFreshnessMs = { sharedPrefs.get(Pref.ContinuationFreshnessMs) },
+            // 2026-05-22 — elapsed-ms for the recovery auto-surfacing:
+            // sum the on-disk segment durations so the surfaced
+            // RecordingState.Interrupted freezes its timer at the real
+            // recorded length (the user's "0:08").
+            interruptedRecordingElapsedMsProvider = { sessionId ->
+                audioFileRepository.segments(sessionId).sumOf { segment ->
+                    recordingRepositoryImpl.extractDurationSeconds(segment)
+                } * 1000L
+            },
         )
 
         orchestrator = DictateOrchestrator(

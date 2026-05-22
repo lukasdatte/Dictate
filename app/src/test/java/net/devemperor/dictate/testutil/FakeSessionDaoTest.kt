@@ -239,6 +239,47 @@ class FakeSessionDaoTest {
     }
 
     @Test
+    fun `finalizeRecordedMetadata transitions to RECORDED without clobbering audio_file_paths`() {
+        // Recovery-chain SEND-path reconciliation (2026-05-22): when the
+        // row was inserted at recording-start, the SEND path transitions
+        // it to RECORDED + fills metadata, but MUST leave the rolling
+        // audio_file_paths list intact — a multi-segment recording would
+        // otherwise collapse back to its first segment.
+        dao.seed(
+            SessionEntity(
+                id = "rec-1",
+                type = SessionType.RECORDING.name,
+                createdAt = 100L,
+                targetAppPackage = null,
+                language = null,
+                audioFilePath = "/a/seg1.m4a",
+                audioFilePaths = listOf("/a/seg1.m4a", "/a/seg2.m4a"),
+                status = SessionStatus.RECORDING.name,
+                origin = SessionOrigin.KEYBOARD.name,
+            )
+        )
+
+        dao.finalizeRecordedMetadata(
+            id = "rec-1",
+            status = SessionStatus.RECORDED.name,
+            targetApp = "com.example.app",
+            language = "de",
+            durationSeconds = 17L,
+            queuedPromptIds = "3,7",
+        )
+
+        val row = dao.getById("rec-1")!!
+        assertEquals(SessionStatus.RECORDED.name, row.status)
+        assertEquals("com.example.app", row.targetAppPackage)
+        assertEquals("de", row.language)
+        assertEquals(17L, row.audioDurationSeconds)
+        assertEquals("3,7", row.queuedPromptIds)
+        // The rolling-segment list survives the RECORDED transition.
+        assertEquals(listOf("/a/seg1.m4a", "/a/seg2.m4a"), row.audioFilePaths)
+        assertEquals("/a/seg1.m4a", row.audioFilePath)
+    }
+
+    @Test
     fun `unknown ids are no-ops on update paths`() {
         // None of these should throw; the production Room DAO returns
         // 0 affected rows for missing IDs and the fake mirrors that.

@@ -209,6 +209,40 @@ sealed interface RecordingState {
         val audioFile: File,
         val sessionId: String,
     ) : RecordingState
+
+    /**
+     * A recording that was cut off by process death — the FGS is torn
+     * down when the user switches keyboards (see
+     * `DictatePipelineService.onDestroy`) — and recovered from disk on
+     * the next keyboard open. Rendered exactly like [Paused] (frozen
+     * timer at [elapsedMs], the same button row) so the user sees the
+     * recording "as if it had just been briefly paused" — the explicit
+     * user requirement (2026-05-22).
+     *
+     * **Why a distinct state and not [Paused]:** [Paused] is backed by a
+     * live `MediaRecorder` — its `ResumeRecording` arm calls
+     * `ResumeMediaRecorder`. An interrupted recording has no live
+     * recorder; its audio lives only as on-disk segments. Resuming it
+     * means `StartRecordingContinuation` (allocate a fresh recorder,
+     * codec-matched to the prior segments), not `resume()`. Modelling it
+     * as [Paused] would force a meaningless `audioFile` / `useBluetooth`
+     * and make [Paused] lie about owning a recorder. [Interrupted]
+     * carries exactly what it needs and nothing fake.
+     *
+     * Set by the recovery pass (`Action.RecordingAction.SurfaceInterruptedRecording`)
+     * after `PipelineRecovery` promoted the row to `RECORDING_INTERRUPTED`.
+     * Continuing routes through `Action.RecordingAction.StartRecordingContinuation`
+     * (the same path a Record-tap from [Idle] takes); discarding routes
+     * through `Action.RecordingAction.DiscardInterruptedSession`.
+     *
+     * @property sessionId the `RECORDING_INTERRUPTED` session surfaced.
+     * @property elapsedMs accumulated duration of the already-recorded
+     *   segments — drives the frozen timer display (the user's "0:08").
+     */
+    data class Interrupted(
+        val sessionId: String,
+        val elapsedMs: Long,
+    ) : RecordingState
 }
 
 /**
@@ -253,6 +287,10 @@ val RecordingState.audioFileOrNull: File?
         is RecordingState.Preparing -> audioFile
         is RecordingState.Active -> audioFile
         is RecordingState.Paused -> audioFile
+        // An interrupted recording has no single in-flight audio file —
+        // its audio is the multi-segment list on disk. Continuing it
+        // re-resolves the segments via ContinuationLookup.
+        is RecordingState.Interrupted -> null
         RecordingState.Idle -> null
     }
 

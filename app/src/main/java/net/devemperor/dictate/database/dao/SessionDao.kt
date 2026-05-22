@@ -204,6 +204,45 @@ interface SessionDao {
     fun markInserted(id: String, timestamp: Long)
 
     /**
+     * Recovery-chain SEND-path reconciliation (2026-05-22). Transitions
+     * a row that was inserted at recording-start (`status = RECORDING`,
+     * via [net.devemperor.dictate.state.PipelineSessionRepoSubsystem.createRecordingSession])
+     * to `RECORDED` and fills the session metadata the SEND path
+     * resolved.
+     *
+     * **Why a dedicated query (not [updateStatus] + N setters):** the
+     * SEND path must NOT touch `audio_file_path` / `audio_file_paths` —
+     * those are already owned by the recording-start insert + the
+     * `SyncAudioSegments` effects. A combined `UPDATE` that writes only
+     * the SEND-known columns leaves the rolling-segment list intact and
+     * is a single atomic statement. Re-inserting through `@Insert`
+     * instead would hit the default `ABORT` conflict strategy and throw.
+     *
+     * Called via `SessionManager.finalizeRecordedFromRecordingRow` from
+     * `PipelineOrchestrator.persistNewSession` when the row already
+     * exists.
+     */
+    @Query(
+        """
+        UPDATE sessions
+        SET status = :status,
+            target_app_package = :targetApp,
+            language = :language,
+            audio_duration_seconds = :durationSeconds,
+            queued_prompt_ids = :queuedPromptIds
+        WHERE id = :id
+        """
+    )
+    fun finalizeRecordedMetadata(
+        id: String,
+        status: String,
+        targetApp: String?,
+        language: String?,
+        durationSeconds: Long,
+        queuedPromptIds: String?,
+    )
+
+    /**
      * Pending-insertion query for the recovery pass — returns the
      * sessions whose pipeline completed but whose result has not yet
      * been surfaced to the user. Drives the restart-button + recovery

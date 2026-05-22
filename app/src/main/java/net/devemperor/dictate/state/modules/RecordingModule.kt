@@ -317,6 +317,48 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
         data class SyncAudioSegments(val sessionId: String) : Effect
 
         /**
+         * Insert the session row at recording-start with
+         * `status = RECORDING` — the **first link of the recovery
+         * chain** (2026-05-22).
+         *
+         * Emitted on the `StartRecording` `Idle → Preparing` arm. Until
+         * this effect existed nothing wrote a `RECORDING` row while a
+         * recording was in flight: `SessionManager.createSession` only
+         * runs at `StopRecordingAndSend` time. A process death
+         * mid-recording (the FGS is torn down when the user switches
+         * keyboards — see `DictatePipelineService.onDestroy`) therefore
+         * left **no DB row** for [net.devemperor.dictate.state.PipelineRecovery]
+         * to promote to `RECORDING_INTERRUPTED`, and the audio was
+         * silently unrecoverable. This row is the anchor that ties the
+         * on-disk audio segments to the continuation-lookup.
+         *
+         * **Effect-handler** launches into `services.scope`; the insert
+         * is fail-soft (the adapter swallows DAO failures — recording
+         * must never crash because the row-create failed). The row's
+         * `audio_file_paths` is provisionally the first segment and is
+         * kept fresh by the [SyncAudioSegments] effects as segments roll.
+         */
+        data class CreateRecordingSession(
+            val sessionId: String,
+            val audioFile: File,
+        ) : Effect
+
+        /**
+         * Re-arm an existing crash-interrupted session row back to
+         * `status = RECORDING` — emitted on the
+         * `StartRecordingContinuation` arm.
+         *
+         * The continuation row already exists as `RECORDING_INTERRUPTED`
+         * (the `ContinuationLookup` found it). Transitioning it back to
+         * `RECORDING` means a **second** interruption mid-continuation is
+         * caught by [net.devemperor.dictate.state.PipelineRecovery]
+         * exactly like the first — the recovery chain stays armed across
+         * an arbitrary number of resume cycles. Fail-soft, same as
+         * [CreateRecordingSession].
+         */
+        data class MarkSessionRecording(val sessionId: String) : Effect
+
+        /**
          * recording-stack-completion §4.5.3 — atomic user-driven
          * discard of a RECORDING_INTERRUPTED session: delete every
          * segment + transient merged file from the cache AND promote
@@ -411,6 +453,14 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                         // the BT branch (the file is allocated up-front;
                         // SCO-wait does not gate persistence).
                         sideEffects = listOf(
+                            // Recovery-chain first link (2026-05-22) —
+                            // persist the RECORDING row before the SCO
+                            // wait so a crash mid-handshake is still
+                            // recoverable.
+                            Effect.CreateRecordingSession(
+                                sessionId = action.sessionId,
+                                audioFile = action.audioFile,
+                            ),
                             Effect.PersistLastFileName(action.audioFile.name),
                         ),
                     )
@@ -436,6 +486,14 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                                 audioFile = action.audioFile,
                                 sessionId = action.sessionId,
                             ),
+                            // Recovery-chain first link (2026-05-22) —
+                            // insert the RECORDING row so a process
+                            // death mid-recording leaves a row for
+                            // PipelineRecovery to promote.
+                            Effect.CreateRecordingSession(
+                                sessionId = action.sessionId,
+                                audioFile = action.audioFile,
+                            ),
                             // 2026-05-21 indirection-cleanup Chunk 4.4
                             // (A-4) — RESEND-recovery file-name persist.
                             Effect.PersistLastFileName(action.audioFile.name),
@@ -444,81 +502,9 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 }
             }
 
-            is Action.RecordingAction.StartRecordingContinuation -> {
-                // B2 / ADR-0008 §"Auto-Continuation". Mirrors the
-                // StartRecording branch one-to-one with three tweaks:
-                //   1. sessionId is reused (no fresh UUID — the
-                //      ContinuationLookup composite handed back the
-                //      existing crash-interrupted session-id).
-                //   2. audioFile is the next segment file already
-                //      appended to audio_file_paths by allocateNext;
-                //      RecordingState.Preparing.audioFile carries it
-                //      through Preparing → Active just like a fresh
-                //      session.
-                //   3. codecParams are threaded into
-                //      Effect.AllocateMediaRecorder so the new
-                //      MediaRecorder writes in the same format as the
-                //      prior segments. Heterogeneous formats would
-                //      break the eventual MediaMuxer-concat
-                //      (ADR-0007 §"Failure-Modes §1").
-                //
-                // BT-mic branch matches the StartRecording shape: SCO
-                // wait carries audioFile + target + sessionId, defers
-                // AllocateMediaRecorder until ScoRouteResolved. The
-                // codecParams ride through ctx via a Pref-mirror? — NO,
-                // the BT branch consumes them at the deferred
-                // AllocateMediaRecorder. Until B3 reworks the wait,
-                // continuation falls back to MIC during the BT-wait
-                // window (acceptable: the user already paid for a crash;
-                // forcing the MediaRecorder format match is the
-                // pipeline-correctness invariant). Keep the BT path
-                // simple — log + non-BT semantics.
-                require(action.sessionId.isNotBlank()) {
-                    "StartRecordingContinuation.sessionId must be non-blank"
-                }
-                if (ctx.global.audio.useBluetoothMic) {
-                    TransitionResult(
-                        nextState = RecordingState.Preparing(
-                            useBluetooth = true,
-                            audioFile = action.audioFile,
-                            sessionId = action.sessionId,
-                            awaitingSco = true,
-                            target = action.target,
-                        ),
-                        sideEffects = listOf(
-                            Effect.PersistLastFileName(action.audioFile.name),
-                            // Block A1 — Cold-Resume minted a new segment
-                            // via `allocateNext` before this action was
-                            // dispatched. Persist the segment list now so
-                            // a crash before MediaRecorderReady still
-                            // leaves the new segment in the DB.
-                            Effect.SyncAudioSegments(action.sessionId),
-                        ),
-                    )
-                } else {
-                    TransitionResult(
-                        nextState = RecordingState.Preparing(
-                            useBluetooth = false,
-                            audioFile = action.audioFile,
-                            sessionId = action.sessionId,
-                            awaitingSco = false,
-                            target = null,
-                        ),
-                        sideEffects = listOf(
-                            Effect.AllocateMediaRecorder(
-                                target = action.target,
-                                useBluetooth = false,
-                                audioFile = action.audioFile,
-                                sessionId = action.sessionId,
-                                codecParams = action.codecParams,
-                            ),
-                            Effect.PersistLastFileName(action.audioFile.name),
-                            // Block A1 — see BT-branch comment above.
-                            Effect.SyncAudioSegments(action.sessionId),
-                        ),
-                    )
-                }
-            }
+            is Action.RecordingAction.StartRecordingContinuation ->
+                // Shared with the Interrupted arm — see [continuationTransition].
+                continuationTransition(action, ctx)
 
             is Action.RecordingAction.OnAudioFileImported -> {
                 // 2026-05-21 indirection-cleanup Chunk 4.4 (A-5) —
@@ -548,6 +534,21 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     ),
                 )
             }
+
+            is Action.RecordingAction.SurfaceInterruptedRecording ->
+                // Recovery auto-surfacing (2026-05-22) — the recovery
+                // pass detected a fresh RECORDING_INTERRUPTED session;
+                // drive Idle → Interrupted so the keyboard shows it "as
+                // if briefly paused" (frozen timer at elapsedMs). Purely
+                // passive — no hardware is touched until the user taps
+                // to continue.
+                TransitionResult(
+                    nextState = RecordingState.Interrupted(
+                        sessionId = action.sessionId,
+                        elapsedMs = action.elapsedMs,
+                    ),
+                    sideEffects = emptyList(),
+                )
 
             // F1 / ADR-0001 §"Pure-Reducer Invariant": other actions are
             // not meaningful when no recording is in flight (e.g. user
@@ -831,6 +832,109 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
             )
             else -> null
         }
+
+        // Recovery-surfaced interrupted recording (2026-05-22). Rendered
+        // "as if briefly paused"; the only meaningful transitions are
+        // continue (a Record-tap, resolved to StartRecordingContinuation)
+        // and discard (the trash button → DiscardInterruptedSession).
+        is RecordingState.Interrupted -> when (action) {
+            is Action.RecordingAction.StartRecordingContinuation ->
+                // Continue — the same transition a Record-tap from Idle
+                // takes once ContinuationLookup resolved a continuation.
+                continuationTransition(action, ctx)
+
+            is Action.RecordingAction.DiscardInterruptedSession -> TransitionResult(
+                // Discard — drop the interrupted recording, return to
+                // Idle. The dual side-effect deletes the segments and
+                // marks the DB row FAILED.
+                nextState = RecordingState.Idle,
+                sideEffects = listOf(
+                    Effect.DiscardAudioForSession(action.sessionId),
+                ),
+            )
+
+            // A stale re-surface, or a Stop/Pause with no live recorder,
+            // is structurally meaningless here → null (Rejected).
+            else -> null
+        }
+    }
+
+    /**
+     * Shared `StartRecordingContinuation` transition — used by both the
+     * `Idle` arm (a Record-tap that `ContinuationLookup` resolved to a
+     * continuation) and the `Interrupted` arm (continuing a
+     * recovery-surfaced interrupted recording). Both reach the FSM at
+     * [RecordingState.Preparing]; the prior state carries no payload
+     * into the transition, so one helper serves both.
+     *
+     * B2 / ADR-0008 §"Auto-Continuation". Mirrors the `StartRecording`
+     * branch with three tweaks fed in by
+     * [net.devemperor.dictate.state.ContinuationLookup]:
+     *   1. `sessionId` is reused (no fresh UUID — the existing
+     *      crash-interrupted session id).
+     *   2. `audioFile` is the next segment already appended to
+     *      `audio_file_paths` by `allocateNext`.
+     *   3. `codecParams` are threaded into [Effect.AllocateMediaRecorder]
+     *      so the new `MediaRecorder` writes the same format as the
+     *      prior segments — heterogeneous formats break the eventual
+     *      MediaMuxer concat (ADR-0007 §"Failure-Modes §1").
+     *
+     * The BT-mic branch matches the `StartRecording` shape: the SCO wait
+     * carries `audioFile` + `target` + `sessionId` and defers
+     * `AllocateMediaRecorder` until `ScoRouteResolved`.
+     */
+    private fun continuationTransition(
+        action: Action.RecordingAction.StartRecordingContinuation,
+        ctx: ReducerContext,
+    ): TransitionResult<RecordingState, Effect> {
+        require(action.sessionId.isNotBlank()) {
+            "StartRecordingContinuation.sessionId must be non-blank"
+        }
+        return if (ctx.global.audio.useBluetoothMic) {
+            TransitionResult(
+                nextState = RecordingState.Preparing(
+                    useBluetooth = true,
+                    audioFile = action.audioFile,
+                    sessionId = action.sessionId,
+                    awaitingSco = true,
+                    target = action.target,
+                ),
+                sideEffects = listOf(
+                    // Recovery-chain (2026-05-22) — re-arm the
+                    // interrupted row back to RECORDING so a second
+                    // interruption is caught by PipelineRecovery again.
+                    Effect.MarkSessionRecording(action.sessionId),
+                    Effect.PersistLastFileName(action.audioFile.name),
+                    // Block A1 — Cold-Resume minted a new segment via
+                    // `allocateNext` before this action; persist the
+                    // segment list now so a crash before
+                    // MediaRecorderReady still leaves it in the DB.
+                    Effect.SyncAudioSegments(action.sessionId),
+                ),
+            )
+        } else {
+            TransitionResult(
+                nextState = RecordingState.Preparing(
+                    useBluetooth = false,
+                    audioFile = action.audioFile,
+                    sessionId = action.sessionId,
+                    awaitingSco = false,
+                    target = null,
+                ),
+                sideEffects = listOf(
+                    Effect.AllocateMediaRecorder(
+                        target = action.target,
+                        useBluetooth = false,
+                        audioFile = action.audioFile,
+                        sessionId = action.sessionId,
+                        codecParams = action.codecParams,
+                    ),
+                    Effect.MarkSessionRecording(action.sessionId),
+                    Effect.PersistLastFileName(action.audioFile.name),
+                    Effect.SyncAudioSegments(action.sessionId),
+                ),
+            )
+        }
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
@@ -894,6 +998,30 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
         is Effect.SyncAudioSegments -> {
             services.scope.launch {
                 services.sessionRepo.syncAudioFilePaths(effect.sessionId)
+            }
+            Unit
+        }
+
+        // Recovery-chain first link (2026-05-22) — insert the RECORDING
+        // row at recording-start. Launched into `services.scope`; the
+        // adapter hops to IO and swallows DAO failures (recording must
+        // never crash because the row-create failed).
+        is Effect.CreateRecordingSession -> {
+            services.scope.launch {
+                services.sessionRepo.createRecordingSession(
+                    sessionId = effect.sessionId,
+                    audioFilePath = effect.audioFile.absolutePath,
+                )
+            }
+            Unit
+        }
+
+        // Recovery-chain (2026-05-22) — re-arm an interrupted row back
+        // to RECORDING when the user continues a crash-interrupted
+        // recording. Same fail-soft launch as CreateRecordingSession.
+        is Effect.MarkSessionRecording -> {
+            services.scope.launch {
+                services.sessionRepo.transitionToRecording(effect.sessionId)
             }
             Unit
         }

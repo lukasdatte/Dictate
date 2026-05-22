@@ -65,7 +65,7 @@ class RecordingModuleContinuationTest {
         assertEquals(false, next.awaitingSco)
         assertNull(next.target)
 
-        assertEquals(3, result.sideEffects.size)
+        assertEquals(4, result.sideEffects.size)
         val alloc = result.sideEffects[0] as RecordingModule.Effect.AllocateMediaRecorder
         assertEquals(InsertionTarget.INPUT_CONNECTION, alloc.target)
         assertEquals(false, alloc.useBluetooth)
@@ -76,9 +76,16 @@ class RecordingModuleContinuationTest {
                 "the eventual MediaMuxer concat does not reject heterogeneous formats",
             priorCodec, alloc.codecParams,
         )
+        // Recovery-chain (2026-05-22) — re-arm the interrupted row back
+        // to RECORDING so a second interruption mid-continuation is
+        // caught by PipelineRecovery again.
+        assertEquals(
+            RecordingModule.Effect.MarkSessionRecording("existing-sid-99"),
+            result.sideEffects[1],
+        )
         assertEquals(
             RecordingModule.Effect.PersistLastFileName(nextSegment.name),
-            result.sideEffects[1],
+            result.sideEffects[2],
         )
         // Block A1 — SyncAudioSegments persists the freshly-allocated
         // Cold-Resume segment into `audio_file_paths` (the
@@ -86,7 +93,7 @@ class RecordingModuleContinuationTest {
         // the DB; this is the first sync that picks it up).
         assertEquals(
             RecordingModule.Effect.SyncAudioSegments("existing-sid-99"),
-            result.sideEffects[2],
+            result.sideEffects[3],
         )
     }
 
@@ -114,17 +121,23 @@ class RecordingModuleContinuationTest {
         assertEquals(true, next.awaitingSco)
         assertEquals(InsertionTarget.INPUT_CONNECTION, next.target)
 
-        assertEquals(2, result.sideEffects.size)
+        assertEquals(3, result.sideEffects.size)
+        // Recovery-chain (2026-05-22) — re-arm the interrupted row to
+        // RECORDING; emitted even during the SCO wait.
+        assertEquals(
+            RecordingModule.Effect.MarkSessionRecording("bt-sid-7"),
+            result.sideEffects[0],
+        )
         assertEquals(
             RecordingModule.Effect.PersistLastFileName(nextSegment.name),
-            result.sideEffects[0],
+            result.sideEffects[1],
         )
         // Block A1 — BT path still persists segments even during SCO wait
         // (the file is already on disk; persistence must not gate on the
         // hardware allocate).
         assertEquals(
             RecordingModule.Effect.SyncAudioSegments("bt-sid-7"),
-            result.sideEffects[1],
+            result.sideEffects[2],
         )
         assertTrue(
             "BT path must NOT fire AllocateMediaRecorder before SCO resolves",
@@ -173,6 +186,88 @@ class RecordingModuleContinuationTest {
                 sessionId = "new-attempt",
                 codecParams = priorCodec,
             ),
+            ctx = ctx(),
+        )
+        assertNull(result)
+    }
+
+    // ─── RecordingState.Interrupted — recovery auto-surfacing (2026-05-22) ───
+
+    @Test
+    fun `SurfaceInterruptedRecording from Idle transitions to Interrupted with the elapsed time`() {
+        // The recovery pass detected a fresh RECORDING_INTERRUPTED
+        // session → drive Idle → Interrupted so the keyboard shows it
+        // "as if briefly paused" with the timer frozen at elapsedMs.
+        val result = module.reduce(
+            state = RecordingState.Idle,
+            action = Action.RecordingAction.SurfaceInterruptedRecording(
+                sessionId = "interrupted-sid",
+                elapsedMs = 8_000L,
+            ),
+            ctx = ctx(),
+        )
+        assertNotNull(result)
+        val next = result!!.nextState as RecordingState.Interrupted
+        assertEquals("interrupted-sid", next.sessionId)
+        assertEquals(8_000L, next.elapsedMs)
+        // Surfacing is passive — no hardware effect.
+        assertTrue("Surfacing must emit no side-effects", result.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `StartRecordingContinuation from Interrupted continues the recording`() {
+        // A Record-tap on a surfaced interrupted recording continues it
+        // — the same continuationTransition the Idle path uses.
+        val result = module.reduce(
+            state = RecordingState.Interrupted(sessionId = "existing-sid-99", elapsedMs = 8_000L),
+            action = Action.RecordingAction.StartRecordingContinuation(
+                target = InsertionTarget.INPUT_CONNECTION,
+                audioFile = nextSegment,
+                sessionId = "existing-sid-99",
+                codecParams = priorCodec,
+            ),
+            ctx = ctx(DictateUiState.initial().copy(audio = AudioState(useBluetoothMic = false))),
+        )
+        assertNotNull(result)
+        val next = result!!.nextState as RecordingState.Preparing
+        assertEquals("existing-sid-99", next.sessionId)
+        assertEquals(nextSegment, next.audioFile)
+        assertTrue(
+            "continuation from Interrupted must allocate the recorder",
+            result.sideEffects.any { it is RecordingModule.Effect.AllocateMediaRecorder },
+        )
+        assertTrue(
+            "continuation must re-arm the DB row to RECORDING",
+            result.sideEffects.contains(
+                RecordingModule.Effect.MarkSessionRecording("existing-sid-99"),
+            ),
+        )
+    }
+
+    @Test
+    fun `DiscardInterruptedSession from Interrupted returns to Idle and discards the audio`() {
+        val result = module.reduce(
+            state = RecordingState.Interrupted(sessionId = "sid-x", elapsedMs = 5_000L),
+            action = Action.RecordingAction.DiscardInterruptedSession("sid-x"),
+            ctx = ctx(),
+        )
+        assertNotNull(result)
+        assertEquals(RecordingState.Idle, result!!.nextState)
+        assertEquals(
+            listOf<RecordingModule.Effect>(
+                RecordingModule.Effect.DiscardAudioForSession("sid-x"),
+            ),
+            result.sideEffects,
+        )
+    }
+
+    @Test
+    fun `Interrupted rejects unrelated actions (reducer-null)`() {
+        // Stop / Pause make no sense on a recording with no live
+        // recorder — the reducer rejects them.
+        val result = module.reduce(
+            state = RecordingState.Interrupted(sessionId = "sid-x", elapsedMs = 0L),
+            action = Action.RecordingAction.StopRecording,
             ctx = ctx(),
         )
         assertNull(result)

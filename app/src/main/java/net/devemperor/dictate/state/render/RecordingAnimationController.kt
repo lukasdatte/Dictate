@@ -99,7 +99,10 @@ class RecordingAnimationController(
                 }
             }
 
-            is RecordingState.Paused -> {
+            is RecordingState.Paused,
+            is RecordingState.Interrupted -> {
+                // Interrupted (2026-05-22) renders "as if briefly
+                // paused" — the same frozen-pulse look as Paused.
                 if (animationsEnabled()) {
                     animation.pause()
                     pulseLayout?.pausePulse()

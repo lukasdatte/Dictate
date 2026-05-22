@@ -40,4 +40,22 @@ class FakePipelineSessionRepo(
 
     /** Block A1 — fake returns 0 (no segments tracked). Override per-test if needed. */
     override suspend fun syncAudioFilePaths(sessionId: String): Int = 0
+
+    /**
+     * Recovery-chain (2026-05-22) — records every `createRecordingSession`
+     * call as `(sessionId, audioFilePath)` so effect-handler tests can
+     * assert the row-create was requested.
+     */
+    val createdRecordingSessions: MutableList<Pair<String, String>> = mutableListOf()
+
+    /** Records every `transitionToRecording` call's `sessionId`. */
+    val transitionedToRecording: MutableList<String> = mutableListOf()
+
+    override suspend fun createRecordingSession(sessionId: String, audioFilePath: String) {
+        createdRecordingSessions += sessionId to audioFilePath
+    }
+
+    override suspend fun transitionToRecording(sessionId: String) {
+        transitionedToRecording += sessionId
+    }
 }

@@ -76,6 +76,9 @@ fun isResendVisible(state: DictateUiState): Boolean =
  */
 fun isTrashVisible(state: DictateUiState): Boolean =
     state.recording.isActiveOrPaused ||
+        // Recovery-surfaced interrupted recording (2026-05-22): the
+        // trash button is the discard affordance for it.
+        state.recording is RecordingState.Interrupted ||
         state.pipeline is PipelineUiState.ReprocessStaging ||
         (
             state.recording is RecordingState.Idle &&

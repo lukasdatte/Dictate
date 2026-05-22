@@ -432,6 +432,42 @@ interface PipelineSessionRepoSubsystem {
      *   path-sync failed).
      */
     suspend fun syncAudioFilePaths(sessionId: String): Int
+
+    /**
+     * Insert the session row for a freshly started recording with
+     * `status = RECORDING` — the **first link of the recovery chain**
+     * (2026-05-22).
+     *
+     * Called from [net.devemperor.dictate.state.RecordingModule]'s
+     * effect handler on the `StartRecording` `Idle → Preparing`
+     * boundary. The row is the anchor
+     * [net.devemperor.dictate.state.PipelineRecovery] needs: a process
+     * death mid-recording (the FGS is torn down when the user switches
+     * keyboards) leaves a `RECORDING` row that the next service start
+     * promotes to `RECORDING_INTERRUPTED`, making the audio recoverable
+     * via the continuation-lookup. Without the row the recovery chain
+     * has no first link and the recording is silently lost.
+     *
+     * Implementations are **fail-soft** — they swallow DAO failures
+     * (recording must never crash because the row-create failed). The
+     * default body is a no-op so test fakes / stub subsystems that do
+     * not model persistence stay valid.
+     *
+     * @param audioFilePath the first segment's absolute path; written
+     *   into both `audio_file_path` and `audio_file_paths` so the row
+     *   leaves the empty-list state immediately. The `SyncAudioSegments`
+     *   effects keep `audio_file_paths` fresh as segments roll.
+     */
+    suspend fun createRecordingSession(sessionId: String, audioFilePath: String): Unit = Unit
+
+    /**
+     * Re-arm an existing crash-interrupted session row to
+     * `status = RECORDING` — called on the `StartRecordingContinuation`
+     * boundary so a *second* interruption mid-continuation is caught by
+     * [net.devemperor.dictate.state.PipelineRecovery] exactly like the
+     * first. Fail-soft; default no-op.
+     */
+    suspend fun transitionToRecording(sessionId: String): Unit = Unit
 }
 
 /**

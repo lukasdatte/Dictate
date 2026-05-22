@@ -131,6 +131,9 @@ fun resolveRecordLeftIcon(state: DictateUiState): Int? = when (state.pipeline) {
         is RecordingState.Active -> R.drawable.ic_baseline_send_20
         is RecordingState.Paused -> R.drawable.ic_baseline_send_20
         is RecordingState.Preparing -> null
+        // Interrupted (2026-05-22): a Record-tap continues recording —
+        // the mic icon (like Idle) signals "record again", not "send".
+        is RecordingState.Interrupted -> R.drawable.ic_baseline_mic_20
     }
 }
 
@@ -177,5 +180,7 @@ fun resolveRecordRightIcon(state: DictateUiState): Int? = when (state.pipeline) 
         is RecordingState.Active -> if (rec.useBluetooth) R.drawable.ic_baseline_bluetooth_20 else null
         is RecordingState.Paused -> if (rec.useBluetooth) R.drawable.ic_baseline_bluetooth_20 else null
         is RecordingState.Preparing -> null
+        // Interrupted (2026-05-22): no BT residue, no folder affordance.
+        is RecordingState.Interrupted -> null
     }
 }

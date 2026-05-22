@@ -114,6 +114,21 @@ class PipelineRecovery(
      * an explicit supplier has the documented behaviour.
      */
     private val continuationFreshnessMs: () -> Long = { 86_400_000L },
+    /**
+     * Elapsed-ms provider for the recovery auto-surfacing (2026-05-22).
+     * Given a `RECORDING_INTERRUPTED` session id it returns the summed
+     * duration of that session's on-disk audio segments — the value the
+     * surfaced [RecordingState.Interrupted] freezes its timer at (the
+     * user's "0:08").
+     *
+     * Production wiring (`DictatePipelineService`) sums
+     * `RecordingRepository.extractDurationSeconds` over
+     * `AudioFileRepository.segments`. The default `{ 0L }` keeps the
+     * boot path ([recoverDbOnly]) and unit tests free of an Android
+     * media dependency — the timer then simply shows `0:00`, a graceful
+     * degradation: the recording is still surfaced and continuable.
+     */
+    private val interruptedRecordingElapsedMsProvider: (sessionId: String) -> Long = { 0L },
 ) {
 
     /**
@@ -167,6 +182,39 @@ class PipelineRecovery(
             // re-binds, the header shows "tap-to-paste".
             pendingInsertionRows.forEach { entity ->
                 emitAction(Action.ResendAction.NotifyManualPasteNeeded(entity.id))
+            }
+
+            // ── Phase 5: surface a recovery-detected interrupted ─────
+            // recording (2026-05-22). When a fresh RECORDING_INTERRUPTED
+            // session exists, dispatch SurfaceInterruptedRecording so
+            // the keyboard shows the cut-off recording "as if briefly
+            // paused" (frozen timer at the recorded duration) instead of
+            // silently waiting for the user to tap Record. The
+            // RecordingModule reducer only acts on this from `Idle`, so
+            // a parallel recording started during recovery (the §6.3
+            // merge case) is safely unaffected.
+            val interrupted = withContext(ioContext) {
+                val floor = System.currentTimeMillis() - continuationFreshnessMs()
+                runCatching { sessionDao.findLatestRecordingInterrupted(floor) }
+                    .onFailure {
+                        Log.w(TAG, "findLatestRecordingInterrupted failed during recovery", it)
+                    }
+                    .getOrNull()
+            }
+            if (interrupted != null) {
+                val elapsedMs = withContext(ioContext) {
+                    runCatching { interruptedRecordingElapsedMsProvider(interrupted.id) }
+                        .onFailure {
+                            Log.w(TAG, "interrupted-elapsed provider failed for ${interrupted.id}", it)
+                        }
+                        .getOrDefault(0L)
+                }
+                emitAction(
+                    Action.RecordingAction.SurfaceInterruptedRecording(
+                        sessionId = interrupted.id,
+                        elapsedMs = elapsedMs,
+                    ),
+                )
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Recovery failed", t)

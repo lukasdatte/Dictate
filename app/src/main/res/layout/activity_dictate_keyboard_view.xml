@@ -281,11 +281,18 @@
          toggled from the IME service's pipeline-state observation
          (DictateInputMethodService), co-located with the existing
          InfoBarController surface — see ADR-0005 Decision-History
-         2026-05-15. Floats over the keyboard like info_cl (same
-         constraint pattern: constrained to parent top, gone by
-         default). The two never show simultaneously in practice
-         (info_cl is error/update feedback; this is the first-run
-         permission flow).
+         2026-05-15.
+
+         Z-order fix (2026-05-22): this container is the live render
+         target of the state-driven InfoBarRenderer — not just the
+         first-run overlay-permission flow. It is therefore chained
+         INTO the vertical layout (`Top_toBottomOf=info_cl`, with
+         prompts_keyboard_cl chained below it) so a shown InfoBar
+         pushes the keyboard content down instead of floating over —
+         and behind — it. Before the fix it floated at parent-top and
+         was drawn underneath the later-declared button rows. info_cl
+         stays the legacy-InfoBarController container; the two now
+         stack cleanly if both ever show simultaneously.
          ════════════════════════════════════════════════════════════ -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/overlay_permission_infobar"
@@ -296,7 +303,7 @@
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/info_cl"
         tools:visibility="visible">
 
         <TextView
@@ -526,7 +533,7 @@
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/info_cl"
+        app:layout_constraintTop_toBottomOf="@id/overlay_permission_infobar"
         tools:visibility="visible">
 
         <LinearLayout

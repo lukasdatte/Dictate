@@ -179,17 +179,6 @@ public class DictateInputMethodService extends InputMethodService
     private ImePipelineConfigResolver imePipelineConfigResolver;
 
     /**
-     * The {@code preAllocatedId} UUID minted for the in-flight new-path
-     * recording (the same value passed to
-     * {@code RecordingAction.StartRecording.sessionId}). Captured at
-     * {@link #startRecording()} so {@link #stopRecording()} can key the
-     * R-1 config snapshot under it before dispatching the payload-less
-     * {@code StopRecordingAndSend} (FN-4). {@code null} when no new-path
-     * recording is in flight.
-     */
-    private String newPathRecordingSessionId;
-
-    /**
      * Transient bridge that lets {@link #restoreUiState()} after view recreation recover the
      * user's auto-enter toggle from the about-to-be-discarded controller instance. Captured in
      * {@link #cleanupOldControllers()} and consumed (then reset to null) in
@@ -3710,10 +3699,29 @@ public class DictateInputMethodService extends InputMethodService
      */
     private void cancelEffectiveRecording() {
         if (pipelineBinder != null) {
-            if (newPathRecordingSessionId != null && imePipelineConfigResolver != null) {
-                imePipelineConfigResolver.discard(newPathRecordingSessionId);
+            // 2026-05-22 — discard the R-1 config snapshot keyed by the
+            // current session id (read off state.recording, the single
+            // source of truth — same pattern as stopRecording()). The
+            // previous newPathRecordingSessionId field was only populated
+            // on the QWERTZ start-path and stayed null whenever recording
+            // was kicked off from the catalog (main keyboard) surface, so
+            // the discard silently skipped the snapshot cleanup for those
+            // sessions.
+            if (imePipelineConfigResolver != null) {
+                net.devemperor.dictate.state.RecordingState rs =
+                        pipelineBinder.getState().getValue().getRecording();
+                String sessionId = null;
+                if (rs instanceof net.devemperor.dictate.state.RecordingState.Active) {
+                    sessionId = ((net.devemperor.dictate.state.RecordingState.Active) rs).getSessionId();
+                } else if (rs instanceof net.devemperor.dictate.state.RecordingState.Paused) {
+                    sessionId = ((net.devemperor.dictate.state.RecordingState.Paused) rs).getSessionId();
+                } else if (rs instanceof net.devemperor.dictate.state.RecordingState.Preparing) {
+                    sessionId = ((net.devemperor.dictate.state.RecordingState.Preparing) rs).getSessionId();
+                }
+                if (sessionId != null) {
+                    imePipelineConfigResolver.discard(sessionId);
+                }
             }
-            newPathRecordingSessionId = null;
             pipelineBinder.dispatch(
                     net.devemperor.dictate.state.Action.RecordingAction.CancelRecording.INSTANCE);
             return;
@@ -3782,7 +3790,6 @@ public class DictateInputMethodService extends InputMethodService
         net.devemperor.dictate.state.EligibleContinuation continuation =
                 pipelineBinder.getModuleServices().getContinuationLookup().lookup();
         if (continuation != null) {
-            newPathRecordingSessionId = continuation.getSessionId();
             pipelineBinder.dispatch(
                     new net.devemperor.dictate.state.Action.RecordingAction.StartRecordingContinuation(
                             net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
@@ -3825,7 +3832,6 @@ public class DictateInputMethodService extends InputMethodService
         // reducer reads ctx.global.audio.useBluetoothMic — already
         // pref-mirrored), so it is NOT threaded on the action.
         String preAllocatedId = java.util.UUID.randomUUID().toString();
-        newPathRecordingSessionId = preAllocatedId;
         pipelineBinder.dispatch(new net.devemperor.dictate.state.Action.RecordingAction.StartRecording(
                 net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
                 audioFile,
@@ -3833,26 +3839,19 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void stopRecording() {
-        // The send-tap is the IME-runtime config snapshot instant (the same
-        // place + same field values the legacy path read) so the
-        // orchestrator's async PipelineModule.SubmitPipeline →
-        // PipelineRunnerSubsystemAdapter → ImePipelineConfigResolver
-        // rebuild a JobRequest field-for-field identical to the legacy
-        // construction (R-1: a dropped field is silent data loss). Then
-        // dispatch the payload-less StopRecordingAndSend (FN-4) — the
-        // RecordingModule reads the sessionId off the live FSM and fires
-        // EmitPipelineTrigger → TriggerPipeline → SubmitPipeline.
-        String sessionId = newPathRecordingSessionId;
-        if (sessionId == null || pipelineBinder == null
-                || imePipelineConfigResolver == null) {
-            // Defensive: a stop with no in-flight new-path recording
-            // (e.g. binder dropped mid-recording). Nothing to send; clear
-            // any stale snapshot key. The orchestrator FSM is the source
-            // of truth — a StopRecordingAndSend with no Active state is a
-            // reducer no-op (Rejected), so dispatching is harmless, but
-            // without a snapshot the resolver would throw; bail cleanly.
+        // 2026-05-22 — sessionId is read from state.recording (the orchestrator-
+        // authoritative source — same pattern as togglePauseEffectiveRecording
+        // and prepareCatalogStopRecordingIfActive). The previous read from a
+        // private newPathRecordingSessionId field caused the QWERTZ-Send-Bug:
+        // the catalog Start path (ActionResolvers.resolveRecordAction) mints
+        // its own UUID and does NOT route through this IME.startRecording(),
+        // so the field stayed null whenever the user started recording from
+        // the main keyboard surface — and the QWERTZ Send-tap then hit the
+        // "no in-flight session — skipping send" bail-out. Sourcing the id
+        // from state.recording unifies the two surfaces onto a single source.
+        if (pipelineBinder == null || imePipelineConfigResolver == null) {
             Log.w("DictateIME",
-                    "stopRecording (new path): no in-flight session — skipping send");
+                    "stopRecording (new path): binder/resolver missing — skipping send");
             return;
         }
 
@@ -3861,35 +3860,39 @@ public class DictateInputMethodService extends InputMethodService
         // recording state (still `Preparing` — BT-SCO wait unresolved,
         // or a slow `MediaRecorder.prepare()`) is a reducer no-op
         // (RecordingModule has no `Preparing + StopRecordingAndSend`
-        // arm → Rejected). But the trio below is irreversible *before*
-        // any FSM check: `captureFreshConfigSnapshot` consumes/resets
-        // the one-shot flags (livePrompt / autoSwitchKeyboard /
-        // pendingLivePromptChain), `primePipelineUiForNewPath` shows the
-        // "Sending…" keyboard, and `newPathRecordingSessionId=null`
-        // orphans the recording. The F-1/F-2 Preparing-SCO redesign
+        // arm → Rejected). But `captureFreshConfigSnapshot` and
+        // `primePipelineUiForNewPath` are irreversible *before* any FSM
+        // check: the former consumes/resets one-shot flags (livePrompt /
+        // autoSwitchKeyboard / pendingLivePromptChain), the latter shows
+        // the "Sending…" keyboard. The F-1/F-2 Preparing-SCO redesign
         // *widens* the Preparing window (a BT-mic recording can stay
         // `Preparing(awaitingSco)` for up to 2500 ms), so a
         // Send-while-Preparing race is materially more likely. Bail
-        // cleanly here — nothing destructive has run yet — exactly like
-        // the existing defensive null-guard above.
-        if (!isEffectiveRecordingActiveOrPaused()) {
+        // cleanly here — nothing destructive has run yet.
+        net.devemperor.dictate.state.RecordingState rs =
+                pipelineBinder.getState().getValue().getRecording();
+        String sessionId;
+        File recordingAudioFile;
+        if (rs instanceof net.devemperor.dictate.state.RecordingState.Active) {
+            net.devemperor.dictate.state.RecordingState.Active active =
+                    (net.devemperor.dictate.state.RecordingState.Active) rs;
+            sessionId = active.getSessionId();
+            recordingAudioFile = active.getAudioFile();
+        } else if (rs instanceof net.devemperor.dictate.state.RecordingState.Paused) {
+            net.devemperor.dictate.state.RecordingState.Paused paused =
+                    (net.devemperor.dictate.state.RecordingState.Paused) rs;
+            sessionId = paused.getSessionId();
+            recordingAudioFile = paused.getAudioFile();
+        } else {
             Log.w("DictateIME",
                     "stopRecording (new path): recording not Active/Paused "
                             + "(still Preparing?) — skipping send, recording preserved");
             return;
         }
-
-        // D-14 (C9-C2): the recording's audio file is sourced from the
-        // orchestrator's authoritative state.recording payload (Spec 1
-        // §15.2), not a removed IME field. The Active/Paused guard above
-        // guarantees a non-null handle; bail defensively if state raced
-        // away (binder dropped) — nothing destructive has run yet.
-        File recordingAudioFile = net.devemperor.dictate.state.DictateUiStateKt
-                .getAudioFileOrNull(pipelineBinder.getState().getValue().getRecording());
-        if (recordingAudioFile == null) {
+        if (sessionId == null || recordingAudioFile == null) {
             Log.w("DictateIME",
-                    "stopRecording (new path): no audioFile in state.recording "
-                            + "— skipping send, recording preserved");
+                    "stopRecording (new path): missing sessionId/audioFile in "
+                            + "state.recording — skipping send, recording preserved");
             return;
         }
 
@@ -3901,7 +3904,6 @@ public class DictateInputMethodService extends InputMethodService
         // thin IME-side UI bookkeeping the legacy path also performed.
         primePipelineUiForNewPath();
 
-        newPathRecordingSessionId = null;
         pipelineBinder.dispatch(
                 net.devemperor.dictate.state.Action.RecordingAction.StopRecordingAndSend.INSTANCE);
     }
@@ -3953,24 +3955,17 @@ public class DictateInputMethodService extends InputMethodService
      * and {@code state.pipeline} hangs in {@code Preparing} forever:
      * endless "Sending…" with no step-rows and no progress UI.</p>
      *
-     * <p><strong>sessionId source (post-hotfix root-cause fix).</strong>
-     * The sessionId is read from {@code state.recording.{Active,Paused}}
-     * — the orchestrator-authoritative id — NOT from the IME's private
-     * {@code newPathRecordingSessionId} field. Reason: the catalog
-     * resolver ({@code ActionResolvers.resolveRecordAction} for Idle →
-     * StartRecording) mints its OWN UUID via {@code newSessionId()}
-     * (`ActionResolvers.kt:99-103`); the IME's
-     * {@link #startRecording()} method (which IS what sets
-     * {@code newPathRecordingSessionId}) is called <strong>only by the
-     * QWERTZ path</strong>, never by the catalog click. So on the
-     * catalog path {@code newPathRecordingSessionId} stays {@code null}
-     * for the whole recording session, and a helper that gated on it
-     * would early-return → no snapshot → the R-1 tripwire fires anyway.
-     * The orchestrator's {@code state.recording.Active.sessionId} is
-     * the single id the catalog dispatch carries forward into
-     * {@code state.pipeline.Preparing.sessionId} and then
-     * {@code Effect.SubmitPipeline(sessionId)}, so it is the only id
-     * the helper can match.</p>
+     * <p><strong>sessionId source.</strong> The sessionId is read from
+     * {@code state.recording.{Active,Paused}} — the orchestrator-
+     * authoritative id — the single source for both the catalog and
+     * QWERTZ surfaces (2026-05-22 unification; the previous IME-private
+     * {@code newPathRecordingSessionId} field caused the QWERTZ-Send-Bug
+     * because the catalog Start path mints its own UUID via
+     * {@code ActionResolvers.newSessionId} and never populated the
+     * field). {@code state.recording.Active.sessionId} is the id the
+     * catalog dispatch carries forward into {@code state.pipeline
+     * .Preparing.sessionId} and then {@code Effect.SubmitPipeline(
+     * sessionId)}, so it is the only id the helper can match.</p>
      *
      * <p><strong>Self-gating</strong> — when state is not Active|Paused
      * (catalog resolver returns null for those states), or when the
@@ -4022,11 +4017,6 @@ public class DictateInputMethodService extends InputMethodService
                         + sessionId + " (audioFile=" + recordingAudioFile.getName() + ")");
         captureFreshConfigSnapshot(sessionId, recordingAudioFile);
         primePipelineUiForNewPath();
-        // Defensive — keep newPathRecordingSessionId in sync with the legacy
-        // stopRecording() invariant (`newPathRecordingSessionId == sessionId
-        // → null` after a successful send). On the catalog path the field
-        // may already be null (the catalog mint's its own id) — no-op then.
-        newPathRecordingSessionId = null;
     }
 
     /**

@@ -1,10 +1,13 @@
 package net.devemperor.dictate.core
 
 import android.util.Log
+import kotlinx.coroutines.runBlocking
 import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.ai.prompt.PromptService
+import net.devemperor.dictate.audio.AudioFileRepository
+import net.devemperor.dictate.audio.PipelineAudioResult
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.database.dao.ProcessingStepDao
 import net.devemperor.dictate.database.dao.PromptDao
@@ -98,7 +101,23 @@ class PipelineOrchestrator @JvmOverloads constructor(
     private val recordingRepository: RecordingRepository? = null,
     private val transcriptionDao: TranscriptionDao? = null,
     private val stepDao: ProcessingStepDao? = null,
-    private val database: DictateDatabase? = null
+    private val database: DictateDatabase? = null,
+    /**
+     * Block A2 (recording-stack-completion) — audio repository the
+     * transcription pipeline reads through. When wired,
+     * `runTranscriptionPipelineBody` calls
+     * [AudioFileRepository.readForPipeline] before upload so multi-segment
+     * sessions land at the AI provider as a single muxed file. Returns
+     * `PartialRecovery` when the MediaMuxer skipped unreadable segments —
+     * the orchestrator persists `partial:N` into `last_error_message` so
+     * the InfoBar producer surfaces the warning to the user.
+     *
+     * Nullable for the legacy Java constructor path that still uses the
+     * pre-A2 8-arg ctor; when null the code falls back to reading
+     * `session.audioFilePath` directly (single-segment behaviour, no
+     * partial-recovery handling).
+     */
+    private val audioFileRepository: AudioFileRepository? = null,
 ) {
 
     // region Callback interface
@@ -959,14 +978,20 @@ class PipelineOrchestrator @JvmOverloads constructor(
         sid: String,
         token: CancellationToken
     ) {
-        val session = sessionManager.getSessionById(sid)
-        val audioPath = session?.audioFilePath
-        val audioFile = audioPath?.let { File(it) } ?: config.audioFile
+        // Block A2 — read audio through the repository so multi-segment
+        // sessions are muxed into a single upload file. The repository is
+        // the post-A2 source of truth for `the audio of session sid`;
+        // legacy callers that still pre-allocate `config.audioFile`
+        // (Java IME standalone-prompt path) fall through to the
+        // pre-A2 path when the repo is not wired.
+        val audioFile = resolvePipelineAudio(sid)
+            ?: config.audioFile
+            ?: throw IllegalStateException("No audio for session $sid")
 
         // Step 1: Transcription (always)
         token.throwIfCancelled()
         var text = executeTranscription(
-            audioFile ?: throw IllegalStateException("No audio for session $sid"),
+            audioFile,
             config.language,
             config.stylePrompt,
             sid,
@@ -1055,6 +1080,83 @@ class PipelineOrchestrator @JvmOverloads constructor(
         }
         callback.onPipelineCompleted(currentText, InsertionSource.QUEUED_PROMPT)
         return currentText
+    }
+
+    /**
+     * Block A2 (recording-stack-completion) — resolve the audio file to
+     * upload for the session, reading through the [AudioFileRepository]
+     * when wired.
+     *
+     * **Three outcomes:**
+     *
+     *  - `null` — neither the repository nor the legacy `audioFilePath`
+     *    column produced a file. The caller falls back to
+     *    `config.audioFile` (legacy Java IME standalone-prompt path);
+     *    if that is also null the body throws `IllegalStateException`.
+     *  - [PipelineAudioResult.Complete] — the standard path: every
+     *    segment was readable, muxed into one upload file (or the single
+     *    segment returned zero-copy).
+     *  - [PipelineAudioResult.PartialRecovery] — some segments were
+     *    skipped (corruption, truncation, codec mismatch). The orchestrator
+     *    persists `partial:N` (where N = estimated lost seconds) into
+     *    `last_error_message` so the InfoBar producer surfaces the
+     *    warning. The transcription proceeds with the partial muxed
+     *    file (better N-1 segments than nothing).
+     *
+     * **Threading.** Called from the orchestrator's executor-thread which
+     * is synchronous; [AudioFileRepository.readForPipeline] is `suspend`
+     * (it hops to `Dispatchers.IO` internally for the muxer). Wrapping
+     * with [runBlocking] is safe here because the executor thread is
+     * exactly the background hop the suspend function expects to land
+     * on; there is no UI thread to deadlock.
+     *
+     * **Legacy fallback.** When the repo is null (pre-A2 Java ctor) the
+     * method reads `session.audioFilePath` and wraps it in a File so the
+     * legacy single-segment path still works without re-plumbing. This
+     * lets the Java side migrate incrementally; once all callers route
+     * through the Kotlin orchestrator pipeline this branch can be
+     * deleted (Block A4).
+     */
+    private fun resolvePipelineAudio(sid: String): File? {
+        val repo = audioFileRepository
+        if (repo == null) {
+            val legacyPath = sessionManager.getSessionById(sid)?.audioFilePath
+            return legacyPath?.let { File(it) }
+        }
+        val result = runBlocking { repo.readForPipeline(sid) }
+        return when (result) {
+            null -> {
+                // No segments on disk — fall back to the legacy column in
+                // case an older session row points at a still-present
+                // file. This is the bridge for pre-Block-A1 rows whose
+                // recording started before audio_file_paths was being
+                // populated; A3 + MigrationTo7 close this gap properly.
+                val legacyPath = sessionManager.getSessionById(sid)?.audioFilePath
+                legacyPath?.let { File(it) }
+            }
+            is PipelineAudioResult.Complete -> result.file
+            is PipelineAudioResult.PartialRecovery -> {
+                // Persist the marker so the InfoBar producer surfaces the
+                // warning. `last_error_message = "partial:N"` is the
+                // contract InfoBarSelector.extractPartialRecoverySeconds
+                // already consumes (B4 from the prior plan).
+                runCatching {
+                    database?.sessionDao()?.updateError(
+                        id = sid,
+                        type = null,
+                        message = "partial:${result.estimatedLostSeconds}",
+                    )
+                }.onFailure {
+                    Log.w(TAG, "Failed to persist partial-recovery marker for $sid", it)
+                }
+                Log.i(
+                    TAG,
+                    "Partial-recovery for $sid: ${result.ignoredSegmentIndices.size} " +
+                        "segments skipped, ~${result.estimatedLostSeconds}s lost",
+                )
+                result.file
+            }
+        }
     }
 
     /**

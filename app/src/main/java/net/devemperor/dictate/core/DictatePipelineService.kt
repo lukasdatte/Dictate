@@ -317,6 +317,15 @@ class DictatePipelineService : Service() {
         // PipelineCallbackBridge — null delegate until the IME binds.
         pipelineCallbackBridgeImpl = PipelineCallbackBridge()
 
+        // Block A2 (recording-stack-completion) — instantiate the audio
+        // repository EARLY so the PipelineOrchestrator below can consume
+        // it via readForPipeline(). The same instance is reused later by
+        // the RecordingHardwareAdapter + ContinuationLookup + repo adapter
+        // (single instance, no state leak: the repository is stateless).
+        val audioFileRepository = CacheDirAudioFileRepository(
+            cacheDirProvider = { applicationContext.cacheDir },
+        )
+
         // Construct the legacy PipelineOrchestrator (audio-pipeline runner).
         // Naming: `pipelineOrchestratorImpl` is the LEGACY runner; the
         // modular DictateOrchestrator is the state-action router.
@@ -333,6 +342,7 @@ class DictatePipelineService : Service() {
             database.transcriptionDao(),
             database.processingStepDao(),
             database,
+            audioFileRepository,
         )
 
         // JobExecutor.initialize — the IMPL-1 closure point. Single-shot
@@ -360,9 +370,10 @@ class DictatePipelineService : Service() {
         // user changes it, the new value takes effect on the next
         // service-start (no live re-read — recording in flight keeps
         // its interval).
-        val audioFileRepository = CacheDirAudioFileRepository(
-            cacheDirProvider = { applicationContext.cacheDir },
-        )
+        // Block A2 — the AudioFileRepository was already instantiated
+        // earlier (see comment above PipelineOrchestrator). Reuse the
+        // same instance here so the adapter + repository + continuation-
+        // lookup all share one stateless coordinator.
         val rollingIntervalSec: Long = run {
             val pref = net.devemperor.dictate.preferences.Pref.RollingSegmentIntervalSec
             sharedPrefs.getLong(pref.key, pref.default)

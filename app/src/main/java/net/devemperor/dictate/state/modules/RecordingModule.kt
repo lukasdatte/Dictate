@@ -341,6 +341,23 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
         state: RecordingState,
         action: Action.RecordingAction,
         ctx: ReducerContext,
+    ): TransitionResult<RecordingState, Effect>? {
+        val transition = reduceInner(state, action, ctx)
+        android.util.Log.i(
+            "DictateTrace",
+            "RecordingModule.reduce ${state::class.simpleName} + " +
+                "${action::class.simpleName} -> " +
+                if (transition == null) "null"
+                else transition.nextState::class.simpleName +
+                    " effects=" + transition.sideEffects.joinToString { it::class.simpleName ?: "?" }
+        )
+        return transition
+    }
+
+    private fun reduceInner(
+        state: RecordingState,
+        action: Action.RecordingAction,
+        ctx: ReducerContext,
     ): TransitionResult<RecordingState, Effect>? = when (state) {
         is RecordingState.Idle -> when (action) {
             is Action.RecordingAction.StartRecording -> {

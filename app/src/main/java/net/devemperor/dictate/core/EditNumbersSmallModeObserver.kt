@@ -1,5 +1,6 @@
 package net.devemperor.dictate.core
 
+import android.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -9,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import net.devemperor.dictate.state.DictateUiState
 
@@ -74,14 +76,19 @@ class EditNumbersSmallModeObserver @JvmOverloads constructor(
     /** Begin observing. Idempotent. */
     fun start() {
         if (scope != null) return
+        Log.i("DictateTrace", "EditNumbersSmallModeObserver.start() initial=${state.value.layout.smallMode}")
         val s = CoroutineScope(SupervisorJob() + mainDispatcher)
         scope = s
         s.launch {
             state
                 .map { it.layout.smallMode }
                 .distinctUntilChanged()
+                .onEach { Log.i("DictateTrace", "EditNumbersSmallModeObserver pre-drop emit smallMode=$it") }
                 .drop(1)
-                .collect { onChanged.onSmallModeChanged(it) }
+                .collect {
+                    Log.i("DictateTrace", "EditNumbersSmallModeObserver post-drop forward smallMode=$it")
+                    onChanged.onSmallModeChanged(it)
+                }
         }
     }
 

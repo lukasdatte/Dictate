@@ -849,6 +849,8 @@ public class DictateInputMethodService extends InputMethodService
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public View onCreateInputView() {
+        Log.i("DictateTrace", "IME.onCreateInputView() bindAttempted=" + pipelineServiceBindAttempted
+                + " binder=" + (pipelineBinder != null));
         Context context = new ContextThemeWrapper(this, R.style.Theme_Dictate);
 
         // ── 0. Start + bind the pipeline service (Block 2, Spec 1 §11.3.1) ──
@@ -2105,6 +2107,25 @@ public class DictateInputMethodService extends InputMethodService
     public void onFinishInputView(boolean finishingInput) {
         super.onFinishInputView(finishingInput);
 
+        // DictateTrace — IME-Lifecycle log for the recording-loss-on-app-switch
+        // investigation. Snapshots the recording / pipeline / viewMode at entry
+        // so we can see exactly what was active when the app-switch arrived.
+        try {
+            String snap;
+            if (pipelineBinder != null) {
+                net.devemperor.dictate.state.DictateUiState s = pipelineBinder.getState().getValue();
+                snap = "recording=" + s.getRecording().getClass().getSimpleName()
+                        + " pipeline=" + s.getPipeline().getClass().getSimpleName()
+                        + " viewMode=" + s.getViewMode()
+                        + " widget=" + s.getWidget().getClass().getSimpleName();
+            } else {
+                snap = "no-binder";
+            }
+            Log.i("DictateTrace", "IME.onFinishInputView(finishing=" + finishingInput + ") " + snap);
+        } catch (Throwable t) {
+            Log.w("DictateTrace", "snapshot in onFinishInputView failed", t);
+        }
+
         // Hide QWERTZ keyboard when the input view is finishing (app switch, background, etc.)
         hideQwertzKeyboard();
 
@@ -2188,8 +2209,60 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
+    // DictateTrace — additional IME-lifecycle overrides to make the
+    // app-switch / unbind / window-hide sequence visible. These hooks
+    // are critical for the recording-loss investigation: onUnbindInput
+    // fires when the IME service is detached from a client (app-switch
+    // to a non-EditText context), onWindowHidden when the IME-window
+    // itself is taken off-screen.
+    @Override
+    public void onUnbindInput() {
+        try {
+            String snap = "no-binder";
+            if (pipelineBinder != null) {
+                net.devemperor.dictate.state.DictateUiState s = pipelineBinder.getState().getValue();
+                snap = "recording=" + s.getRecording().getClass().getSimpleName()
+                        + " pipeline=" + s.getPipeline().getClass().getSimpleName()
+                        + " viewMode=" + s.getViewMode();
+            }
+            Log.i("DictateTrace", "IME.onUnbindInput() " + snap);
+        } catch (Throwable t) {
+            Log.w("DictateTrace", "snapshot in IME.onUnbindInput failed", t);
+        }
+        super.onUnbindInput();
+    }
+
+    @Override
+    public void onWindowHidden() {
+        try {
+            String snap = "no-binder";
+            if (pipelineBinder != null) {
+                net.devemperor.dictate.state.DictateUiState s = pipelineBinder.getState().getValue();
+                snap = "recording=" + s.getRecording().getClass().getSimpleName()
+                        + " pipeline=" + s.getPipeline().getClass().getSimpleName()
+                        + " viewMode=" + s.getViewMode();
+            }
+            Log.i("DictateTrace", "IME.onWindowHidden() " + snap);
+        } catch (Throwable t) {
+            Log.w("DictateTrace", "snapshot in IME.onWindowHidden failed", t);
+        }
+        super.onWindowHidden();
+    }
+
     @Override
     public void onDestroy() {
+        try {
+            String snap = "no-binder";
+            if (pipelineBinder != null) {
+                net.devemperor.dictate.state.DictateUiState s = pipelineBinder.getState().getValue();
+                snap = "recording=" + s.getRecording().getClass().getSimpleName()
+                        + " pipeline=" + s.getPipeline().getClass().getSimpleName()
+                        + " viewMode=" + s.getViewMode();
+            }
+            Log.i("DictateTrace", "IME.onDestroy() " + snap);
+        } catch (Throwable t) {
+            Log.w("DictateTrace", "snapshot in IME.onDestroy failed", t);
+        }
         // C15 — Detach the ImeViewBackend so the KeyboardLayoutManager
         // drops its View references. Calling detach via the cached
         // manager (the binder may have already been nulled in
@@ -3031,6 +3104,28 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
+
+        // DictateTrace — IME-Lifecycle log. Snapshots the state at entry so we
+        // can correlate with the rotation-bug + recording-loss investigations.
+        try {
+            String snap;
+            if (pipelineBinder != null) {
+                net.devemperor.dictate.state.DictateUiState s = pipelineBinder.getState().getValue();
+                snap = "smallMode=" + s.getLayout().getSmallMode()
+                        + " contentArea=" + s.getLayout().getContentArea()
+                        + " recording=" + s.getRecording().getClass().getSimpleName()
+                        + " pipeline=" + s.getPipeline().getClass().getSimpleName()
+                        + " viewMode=" + s.getViewMode()
+                        + " widget=" + s.getWidget().getClass().getSimpleName();
+            } else {
+                snap = "no-binder smallModePref="
+                        + DictatePrefsKt.get(sp, Pref.SmallMode.INSTANCE);
+            }
+            Log.i("DictateTrace", "IME.onStartInputView(restarting=" + restarting + ") " + snap);
+        } catch (Throwable t) {
+            Log.w("DictateTrace", "snapshot in onStartInputView failed", t);
+        }
+
         updateEnterButtonIcon(info);
         bluetoothScoManager.registerReceiver();
 

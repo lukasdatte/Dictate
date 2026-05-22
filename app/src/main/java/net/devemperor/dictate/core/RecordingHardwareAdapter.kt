@@ -92,6 +92,11 @@ class RecordingHardwareAdapter(
         codecParams: CodecParams?,
         sessionId: String?,
     ) {
+        Log.i(
+            "DictateTrace",
+            "RecordingHardwareAdapter.allocate() target=$target sid=$sessionId " +
+                "file=${audioFile.name} useBt=$useBluetooth existing=${recorder != null}"
+        )
         if (recorder != null) {
             Log.w(TAG, "allocate() called with existing recorder — releasing previous instance")
             releaseRecorder()
@@ -158,6 +163,7 @@ class RecordingHardwareAdapter(
     }
 
     override fun start() {
+        Log.i("DictateTrace", "RecordingHardwareAdapter.start() recorder=${recorder != null} sid=$activeSessionId")
         val mr = recorder
         if (mr == null) {
             Log.w(TAG, "start() called without an active recorder — no-op")
@@ -178,6 +184,7 @@ class RecordingHardwareAdapter(
     }
 
     override fun pause() {
+        Log.i("DictateTrace", "RecordingHardwareAdapter.pause() recorder=${recorder != null} sid=$activeSessionId")
         val mr = recorder ?: return
         try {
             mr.pause()
@@ -187,6 +194,7 @@ class RecordingHardwareAdapter(
     }
 
     override fun resume() {
+        Log.i("DictateTrace", "RecordingHardwareAdapter.resume() recorder=${recorder != null} sid=$activeSessionId")
         val mr = recorder ?: return
         try {
             mr.resume()
@@ -196,6 +204,7 @@ class RecordingHardwareAdapter(
     }
 
     override fun stop() {
+        Log.i("DictateTrace", "RecordingHardwareAdapter.stop() recorder=${recorder != null} sid=$activeSessionId")
         val mr = recorder ?: return
         try {
             mr.stop()
@@ -216,6 +225,7 @@ class RecordingHardwareAdapter(
     }
 
     override fun release() {
+        Log.i("DictateTrace", "RecordingHardwareAdapter.release() recorder=${recorder != null} sid=$activeSessionId")
         releaseRecorder()
     }
 

@@ -278,6 +278,7 @@ class DictatePipelineService : Service() {
         get() = notificationChannelReady
 
     override fun onCreate() {
+        Log.i("DictateTrace", "Service.onCreate()")
         super.onCreate()
         // ──────────────────────────────────────────────────────────────
         // Step 1 — NotificationChannel (FGS pre-requisite, < 5 ms).
@@ -1098,6 +1099,7 @@ class DictatePipelineService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i("DictateTrace", "Service.onStartCommand(action=${intent?.action} flags=$flags startId=$startId)")
         // C4-B2 — notification-action back-channel (Spec 1 §7.3/§7.5).
         // A tap on a `[Pause]`/`[Stopp]`/`[Senden]`/`[Abbrechen]`/
         // `[Einfügen]`/`[Verwerfen]` button re-enters here; the router
@@ -1142,9 +1144,41 @@ class DictatePipelineService : Service() {
         return START_REDELIVER_INTENT
     }
 
-    override fun onBind(intent: Intent?): IBinder = binder
+    override fun onBind(intent: Intent?): IBinder {
+        Log.i("DictateTrace", "Service.onBind()")
+        return binder
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        try {
+            val s = orchestrator.state.value
+            Log.i(
+                "DictateTrace",
+                "Service.onUnbind() recording=${s.recording::class.simpleName} " +
+                    "pipeline=${s.pipeline::class.simpleName} viewMode=${s.viewMode}"
+            )
+        } catch (t: Throwable) {
+            Log.w("DictateTrace", "snapshot in Service.onUnbind failed", t)
+        }
+        return super.onUnbind(intent)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i("DictateTrace", "Service.onTaskRemoved()")
+        super.onTaskRemoved(rootIntent)
+    }
 
     override fun onDestroy() {
+        try {
+            val s = orchestrator.state.value
+            Log.i(
+                "DictateTrace",
+                "Service.onDestroy() recording=${s.recording::class.simpleName} " +
+                    "pipeline=${s.pipeline::class.simpleName} viewMode=${s.viewMode}"
+            )
+        } catch (t: Throwable) {
+            Log.w("DictateTrace", "snapshot in Service.onDestroy failed", t)
+        }
         // C15 — Detach any backends that the IME left attached. The
         // KeyboardLayoutManager owns the View references, so a clean
         // detach here prevents leaks (the IME's `onDestroy` runs in

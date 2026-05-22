@@ -1,5 +1,6 @@
 package net.devemperor.dictate.core
 
+import android.util.Log
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 
@@ -60,7 +61,15 @@ class EditNumbersAnimator(
      * @param animate request the tween (still gated by [animationsEnabled]).
      */
     fun animateSmallModeToggle(animate: Boolean) {
-        val target = if (isSmallMode()) 180f else 0f
+        val smallMode = isSmallMode()
+        val target = if (smallMode) 180f else 0f
+        val before = editNumbersButton.rotation
+        Log.i(
+            "DictateTrace",
+            "EditNumbersAnimator.animateSmallModeToggle(animate=$animate) " +
+                "isSmallMode=$smallMode before=$before target=$target " +
+                "animationsEnabled=${animationsEnabled()}"
+        )
         if (animate && animationsEnabled()) {
             editNumbersButton.animate()
                 .rotation(target)

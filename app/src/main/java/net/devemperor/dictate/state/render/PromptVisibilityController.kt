@@ -114,10 +114,26 @@ class PromptVisibilityController(
         val isStaging = pipeline is PipelineUiState.ReprocessStaging
         val rewordingEnabled = state.features.rewordingEnabled
 
+        // 2026-05-22 — InfoBar mutex (the "enters in Block F" TODO from
+        // InfoBarRenderer's KDoc that was never implemented). When the
+        // state-derived info-bar has at least one item, `info_cl`
+        // renders at the top of the keyboard view; without this mutex
+        // `prompts_keyboard_cl` stayed VISIBLE underneath and (because
+        // it is declared later in the XML → higher Z-order) painted
+        // over the info-bar — the user could neither read nor tap it.
+        // Hiding the prompts container while the info-bar is up gives
+        // the info-bar the surface to itself. InfoBarSelector.select is
+        // a pure (DictateUiState) -> List function, so calling it here
+        // keeps PromptVisibilityController the single owner of
+        // `prompts_keyboard_cl`'s visibility (no two-controller race).
+        val infoBarActive = net.devemperor.dictate.state.infobar.InfoBarSelector
+            .select(state).isNotEmpty()
+
         // Prompts container visibility — derived from the truth-table
         // in the class KDoc. The `else` branch maps to `rewordingEnabled`
         // so the prompt list stays visible in the rewording-only flow.
         val showPrompts = when {
+            infoBarActive -> false
             layout.smallMode -> false
             layout.contentArea == ContentArea.EMOJI_PICKER -> false
             isActive || isPipelineRunning || isPreparing || isStaging -> true

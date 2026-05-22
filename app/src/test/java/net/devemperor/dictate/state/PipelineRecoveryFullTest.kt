@@ -279,10 +279,12 @@ class PipelineRecoveryFullTest {
         // COMPLETED stays
         assertEquals(SessionStatus.COMPLETED.name, dao.getById("compl-pending")!!.status)
 
-        // Pending set: trans-ok (just downgraded to RECORDED with file) +
+        // Pending set: rec (now RECORDING_INTERRUPTED, surfaced by
+        // recording-stack-completion §4.5.3 for the Trash-Btn-Discard
+        // path) + trans-ok (just downgraded to RECORDED with file) +
         // recorded-ok + compl-pending.
         val pendingIds = store.snapshot.pendingSessions.map { it.sessionId }.toSet()
-        assertEquals(setOf("trans-ok", "recorded-ok", "compl-pending"), pendingIds)
+        assertEquals(setOf("rec", "trans-ok", "recorded-ok", "compl-pending"), pendingIds)
 
         // SF-4 fired for compl-pending only.
         assertEquals(

@@ -362,6 +362,44 @@ class LayoutPredicatesTest {
         assertEquals(false, isTrashVisible(preparing))
     }
 
+    // recording-stack-completion §4.5.3 — Trash-Btn visible at Idle
+    // when a RECORDING_INTERRUPTED pending-session is present.
+    @Test
+    fun `isTrashVisible true at Idle when interrupted session present`() {
+        val withInterrupted = DictateUiState.initial().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(
+                net.devemperor.dictate.state.PendingSession(
+                    sessionId = "interrupted-sid",
+                    status = net.devemperor.dictate.database.entity.SessionStatus.RECORDING_INTERRUPTED,
+                    transcribedText = null,
+                    createdAt = 0L,
+                ),
+            ),
+        )
+        assertEquals(true, isTrashVisible(withInterrupted))
+    }
+
+    @Test
+    fun `isTrashVisible false at Idle with only RECORDED or COMPLETED pending`() {
+        val onlyTerminal = DictateUiState.initial().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(
+                net.devemperor.dictate.state.PendingSession(
+                    sessionId = "completed-sid",
+                    status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+                    transcribedText = "x",
+                    createdAt = 0L,
+                ),
+                net.devemperor.dictate.state.PendingSession(
+                    sessionId = "recorded-sid",
+                    status = net.devemperor.dictate.database.entity.SessionStatus.RECORDED,
+                    transcribedText = null,
+                    createdAt = 0L,
+                ),
+            ),
+        )
+        assertEquals(false, isTrashVisible(onlyTerminal))
+    }
+
     @Test
     fun `isPauseVisible mirrors isTrashVisible`() {
         // Same truth table — kept as a separate helper for callsite-readability

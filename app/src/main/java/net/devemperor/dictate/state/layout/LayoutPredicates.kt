@@ -64,7 +64,11 @@ fun isResendVisible(state: DictateUiState): Boolean =
  *
  * Visible when recording is `Active`/`Paused`, OR the user is editing the
  * reprocess queue (ReprocessStaging) — both cases want a "cancel"
- * affordance.
+ * affordance. **Also** visible at Idle when a `RECORDING_INTERRUPTED`
+ * session is present in `state.pendingSessions`
+ * (recording-stack-completion §4.5.3) — the user has a stale
+ * process-death survivor in the pending list and the Trash button
+ * offers explicit "throw it away" affordance.
  *
  * **NOT consumed in `KEYBOARD_*_SEND_MODE`** — those layouts hardcode
  * `{ false }` to structurally prevent bug #3a (trash button covering the
@@ -72,7 +76,15 @@ fun isResendVisible(state: DictateUiState): Boolean =
  */
 fun isTrashVisible(state: DictateUiState): Boolean =
     state.recording.isActiveOrPaused ||
-        state.pipeline is PipelineUiState.ReprocessStaging
+        state.pipeline is PipelineUiState.ReprocessStaging ||
+        (
+            state.recording is RecordingState.Idle &&
+                state.pipeline is PipelineUiState.Idle &&
+                state.pendingSessions.any {
+                    it.status ==
+                        net.devemperor.dictate.database.entity.SessionStatus.RECORDING_INTERRUPTED
+                }
+            )
 
 /**
  * Pause button visibility in standard (non-SEND-MODE) keyboard layouts.

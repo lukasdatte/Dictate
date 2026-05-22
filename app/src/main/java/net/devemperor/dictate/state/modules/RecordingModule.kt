@@ -315,6 +315,26 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
          * `PipelineSessionRepoSubsystem.syncAudioFilePaths`).
          */
         data class SyncAudioSegments(val sessionId: String) : Effect
+
+        /**
+         * recording-stack-completion §4.5.3 — atomic user-driven
+         * discard of a RECORDING_INTERRUPTED session: delete every
+         * segment + transient merged file from the cache AND promote
+         * the DB row to FAILED with reason `"discarded_by_user"` so
+         * the row leaves the pending-list and the continuation-lookup
+         * skips it.
+         *
+         * **Why one effect, not two.** Splitting into separate
+         * `DeleteSessionAudio` + `MarkSessionFailed` effects would
+         * make the partial-failure state observable: if the executor
+         * dies between the two calls, the cache is half-cleaned. The
+         * single-effect form lets us order the calls (delete files
+         * first, then mark row failed) inside a single
+         * `services.scope.launch` block — if either call fails, the
+         * next cleanup-job + recovery pass closes the loop
+         * idempotently.
+         */
+        data class DiscardAudioForSession(val sessionId: String) : Effect
     }
 
     override fun reduce(
@@ -496,6 +516,18 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     nextState = state,
                     sideEffects = listOf(
                         Effect.PersistImportedAudioFileName(action.audioFile.name),
+                    ),
+                )
+            }
+
+            is Action.RecordingAction.DiscardInterruptedSession -> {
+                // recording-stack-completion §4.5.3 — atomic user-driven
+                // discard of a RECORDING_INTERRUPTED session. FSM stays
+                // Idle; the dual side-effect handles audio + DB.
+                TransitionResult(
+                    nextState = state,
+                    sideEffects = listOf(
+                        Effect.DiscardAudioForSession(action.sessionId),
                     ),
                 )
             }
@@ -867,6 +899,41 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
             // — both `apply().remove(...)` and `apply().putString(...,"")`
             // produce the same observable state on the next read).
             services.prefs.persist(Pref.TranscriptionAudioFile, "")
+            Unit
+        }
+
+        // recording-stack-completion §4.5.3 — atomic user-driven
+        // discard. Order: delete files first (cache cleanup), then
+        // mark row FAILED (DB cleanup). If the launch dies between
+        // the two, the next cache-cleanup-job pass + the next
+        // PipelineRecovery pass close the loop idempotently.
+        is Effect.DiscardAudioForSession -> {
+            services.scope.launch {
+                runCatching {
+                    services.audioFileRepository.deleteAll(effect.sessionId)
+                }.onFailure {
+                    android.util.Log.w(
+                        "RecordingModule",
+                        "DiscardAudioForSession deleteAll failed for ${effect.sessionId}",
+                        it,
+                    )
+                }
+                services.sessionRepo.markFailed(
+                    effect.sessionId,
+                    reason = "discarded_by_user",
+                )
+                // Re-read the pending list (now post-FAILED-promotion
+                // — the markFailed above wrote the row out of the
+                // RECORDING_INTERRUPTED status that loadPending picks
+                // up) and dispatch Refresh so PendingSessionsModule's
+                // reducer drops the row from `state.pendingSessions`.
+                // This clears the Idle-arm Trash-button visibility
+                // predicate on the next render.
+                val refreshed = services.sessionRepo.loadPending()
+                services.emitAction(
+                    Action.PendingSessionsAction.Refresh(refreshed),
+                )
+            }
             Unit
         }
     }

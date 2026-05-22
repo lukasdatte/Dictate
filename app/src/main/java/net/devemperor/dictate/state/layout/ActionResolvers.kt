@@ -212,11 +212,20 @@ fun resolveRecordActionPipeline(
 /**
  * Trash-button click resolver.
  *
- * | Sub-state                                                  | Action                                |
- * |-----------------------------------------------------------|---------------------------------------|
- * | `pipeline is ReprocessStaging`                            | `CancelReprocessStaging(sessionId)`   |
- * | `recording is Idle && pipeline is Idle`                   | `null` (visibility predicate hides it)|
- * | otherwise (recording active/paused, or pipeline Preparing)| `CancelRecording`                     |
+ * | Sub-state                                                  | Action                                                       |
+ * |-----------------------------------------------------------|--------------------------------------------------------------|
+ * | `pipeline is ReprocessStaging`                            | `CancelReprocessStaging(sessionId)`                          |
+ * | `Idle + Idle + interrupted-session in pendingSessions`     | `DiscardInterruptedSession(sessionId)` (§4.5.3)             |
+ * | `recording is Idle && pipeline is Idle`                   | `null` (visibility predicate hides it)                       |
+ * | otherwise (recording active/paused, or pipeline Preparing)| `CancelRecording`                                            |
+ *
+ * The `DiscardInterruptedSession` branch picks the **first**
+ * RECORDING_INTERRUPTED entry from `pendingSessions` (recording-stack-
+ * completion §4.5.3). In practice there is at most one such entry
+ * because `findLatestRecordingInterrupted` is used for the auto-
+ * continuation path (a multi-RECORDING_INTERRUPTED race would already
+ * have been collapsed by `PipelineRecovery` to a single active
+ * candidate), but the resolver guards via `firstOrNull` defensively.
  */
 fun resolveTrashAction(
     state: DictateUiState,
@@ -226,8 +235,19 @@ fun resolveTrashAction(
     return when {
         pipe is PipelineUiState.ReprocessStaging ->
             Action.PipelineAction.CancelReprocessStaging(pipe.sessionId)
-        state.recording is RecordingState.Idle && state.pipeline is PipelineUiState.Idle ->
-            null
+        state.recording is RecordingState.Idle && state.pipeline is PipelineUiState.Idle -> {
+            // Idle + Idle: surface DiscardInterruptedSession if a
+            // RECORDING_INTERRUPTED row is present; otherwise the
+            // button is hidden by the predicate so this branch only
+            // fires when the user actually saw the button.
+            val interrupted = state.pendingSessions.firstOrNull {
+                it.status ==
+                    net.devemperor.dictate.database.entity.SessionStatus.RECORDING_INTERRUPTED
+            }
+            interrupted?.let {
+                Action.RecordingAction.DiscardInterruptedSession(it.sessionId)
+            }
+        }
         else -> Action.RecordingAction.CancelRecording
     }
 }

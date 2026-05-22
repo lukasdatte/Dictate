@@ -207,6 +207,38 @@ sealed class Action {
         data object CancelRecording : RecordingAction()
 
         /**
+         * Trash-button click at `Idle` when a `RECORDING_INTERRUPTED`
+         * session is present in `state.pendingSessions`
+         * (recording-stack-completion §4.5.3). Atomic user-driven
+         * discard: deletes every segment + transient merged file via
+         * [net.devemperor.dictate.audio.AudioFileRepository.deleteAll]
+         * AND promotes the DB row to `FAILED` with reason
+         * `"discarded_by_user"` so the next
+         * [net.devemperor.dictate.state.ContinuationLookup.lookup] pass
+         * skips it.
+         *
+         * **Why atomic.** If only `deleteAll` ran, the DB row would
+         * still be in `RECORDING_INTERRUPTED` and the next Record-tap
+         * would attempt auto-continuation against absent audio
+         * (defensive code in `RecordingContinuationLookup` returns
+         * null, but the user-visible side-effect is a phantom row in
+         * the pending list until the 24h freshness floor promotes it
+         * to FAILED). If only `markFailed` ran, the segment files
+         * would orphan in the cache until the periodic cleanup-job
+         * (§4.5.2) catches them — extra ~5 MB sitting on disk for up
+         * to 24h.
+         *
+         * **Why not piggyback on `CancelRecording`.** `CancelRecording`
+         * targets the *currently-active* recording (it expects to
+         * write to a non-Idle FSM state via the reducer's
+         * Active/Paused/Preparing arms). `DiscardInterruptedSession`
+         * runs in `Idle` and never touches the FSM — keeping them
+         * distinct makes both reducer-arms small and greppable in
+         * audit + analytics.
+         */
+        data class DiscardInterruptedSession(val sessionId: String) : RecordingAction()
+
+        /**
          * Audio-file import path
          * (indirection-cleanup 2026-05-21, Chunk 4.4 — A-5).
          *

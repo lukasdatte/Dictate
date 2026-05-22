@@ -132,11 +132,27 @@ class PipelineSessionRepoAdapter(
                 paths.isNotEmpty() && paths.all { File(it).exists() }
             }
 
+        // RECORDING_INTERRUPTED rows (recording-stack-completion §4.5.3).
+        // Surfaced so the keyboard Trash-button at Idle can target them
+        // for explicit user-driven discard via
+        // `Action.RecordingAction.DiscardInterruptedSession`. File-
+        // existence is NOT pre-checked: the discard path
+        // (`AudioFileRepository.deleteAll`) is idempotent against missing
+        // files, and surfacing the row even with partial audio loss
+        // matches the user-mental model "I want to throw this away".
+        //
+        // The auto-continuation path (`ContinuationLookup.lookup`) has
+        // its own freshness gating + codec readability check, so it is
+        // unaffected by widening the pending-list here.
+        val interrupted = sessionDao.getSessionsByStatuses(
+            listOf(SessionStatus.RECORDING_INTERRUPTED.name),
+        )
+
         // COMPLETED rows with pending insertion — uses dedicated DAO query
         // with the freshness floor that gates legacy rows.
         val pendingInsertion = sessionDao.findPendingInsertion(pendingInsertionFreshnessFloor())
 
-        (recordedWithAudio + pendingInsertion).map { it.toPendingSession() }
+        (recordedWithAudio + interrupted + pendingInsertion).map { it.toPendingSession() }
     }
 
     override suspend fun markInserted(sessionId: String, at: Long) {

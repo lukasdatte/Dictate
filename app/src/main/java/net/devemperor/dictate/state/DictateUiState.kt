@@ -733,11 +733,20 @@ data class InterruptionState(
  *
  * @property sessionId UUID string (R.15 — strings throughout for cross-process
  *   safety, never long-typed IDs).
- * @property status terminal status — only [net.devemperor.dictate.database.entity.SessionStatus.RECORDED]
- *   or [net.devemperor.dictate.database.entity.SessionStatus.COMPLETED]
- *   reach this list. `RECORDING`/`TRANSCRIBING` are rewritten by recovery
- *   before insertion (Spec 1 §6.3); `FAILED`/`CANCELLED` are terminal and
- *   never appear.
+ * @property status one of [net.devemperor.dictate.database.entity.SessionStatus.RECORDED],
+ *   [net.devemperor.dictate.database.entity.SessionStatus.RECORDING_INTERRUPTED],
+ *   or [net.devemperor.dictate.database.entity.SessionStatus.COMPLETED] —
+ *   the three terminal-ish states that surface to the user. `RECORDING`
+ *   and `TRANSCRIBING` are rewritten by recovery before insertion (Spec 1 §6.3);
+ *   `FAILED`/`CANCELLED` are terminal and never appear.
+ *
+ *   `RECORDING_INTERRUPTED` was added in recording-stack-completion
+ *   §4.5.3 to let the keyboard Trash-button at Idle target the row
+ *   for explicit user-driven discard (`DiscardInterruptedSession`).
+ *   Note that consumers must filter on `status` — the [InfoBarSelector]
+ *   producer-pipeline does this already (each producer's `.filter { …`
+ *   clause picks exactly one status), so widening the list does not
+ *   change existing info-bar behaviour.
  */
 data class PendingSession(
     val sessionId: String,

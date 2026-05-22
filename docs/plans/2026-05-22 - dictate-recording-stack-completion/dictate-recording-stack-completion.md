@@ -489,18 +489,59 @@ ist das Bagatelle, aber als technische Schuld nicht akzeptabel.
 
 ### 4.5.2 — Cleanup-Job — Architektur
 
-**Genre:** WorkManager-One-Shot Periodic-Job, kein Service-side
-Sub-System. Konsistent mit `BootCompletedReceiver` (B1.4 im
-Vorgänger-Plan), der bereits über WorkManager One-Shots schedult.
+**Korrektur 2026-05-22:** Eine erste Version dieses Abschnitts schlug
+WorkManager als Job-Framework vor. **Die Codebase nutzt aber kein
+WorkManager** (keine Dependency, keine Imports, keine
+Test-Infrastruktur). Background-Jobs folgen vier etablierten
+Patterns:
 
-**Frequenz:** 1× alle 24 Stunden, mit `KEEP`-Strategie
-(`ExistingPeriodicWorkPolicy.KEEP`). Beim ersten App-Start nach
-Update wird der Job gescheduled; danach läuft er periodisch.
+| Pattern | Beispiel | Trigger | Lebenszeit |
+|---|---|---|---|
+| 1 — BroadcastReceiver mit `goAsync()` | `BootCompletedReceiver` | System-Event | 10 s Receiver-Budget |
+| 2 — `object`-Scheduler + App-onCreate | `DurationHealingScheduler` | `DictateApplication.onCreate` | Single-shot pro App-Start |
+| 3 — Service-Member + Lifecycle-Slot | `PipelineOrphanCleaner` | `DictatePipelineService.onDestroy` | `serviceScope`-gebunden |
+| 4 — In-Effect-Coroutine | `Effect.SyncAudioSegments` (A.1) | Reducer-Effect | `services.scope` |
 
-**Job-Klasse:** `CacheAudioCleanupJob` (extends `CoroutineWorker`)
-im Package `net.devemperor.dictate.audio`. Konstruktor erhält
-`AudioFileRepository` + `SessionDao` via dependency-injection
-(per `WorkerParameters` extras).
+Der Cleanup-Job braucht **periodisch (~24 h-Cadence)** und
+**boot-resistent**. Reiner Pattern-Match: 2 trifft "läuft bei jedem
+App-Start"; 3 trifft "läuft bei jedem Service-Stop"; 1 trifft nur
+Reboot (Phone wird nicht täglich neu gestartet). Kombination 2+3
+gibt 24 h-Cadence ohne externe Scheduling-Dependency.
+
+**Genre:** `object`-Scheduler im Style von `DurationHealingScheduler`
+plus Gating via SharedPreferences-Timestamp. Zwei Trigger-Sites:
+
+```
+Trigger 1 — DictateApplication.onCreate
+  CacheAudioCleanupScheduler.scheduleIfDue(prefs, repo, sessionDao)
+
+Trigger 2 — DictatePipelineService.onDestroy
+  (im Block direkt nach triggerOrphanCleanupAsync())
+  CacheAudioCleanupScheduler.scheduleIfDue(prefs, repo, sessionDao)
+```
+
+**Gating-Mechanik** (`scheduleIfDue`):
+
+```kotlin
+val lastRun = prefs.get(Pref.CacheCleanupLastRunMs)  // default 0L
+val intervalMs = 24h.inWholeMilliseconds
+val now = clock()
+if (now - lastRun < intervalMs) {
+    return  // not yet due
+}
+val exec = Executors.newSingleThreadExecutor()
+exec.execute {
+    CacheAudioCleanupJob.run(repo, sessionDao, now, ttlMs = 7d)
+    prefs.persist(Pref.CacheCleanupLastRunMs, now)
+}
+exec.shutdown()
+```
+
+**Konsistenz mit `DurationHealingScheduler`:** identische Mechanik
+(`Executors.newSingleThreadExecutor()` + `shutdown()` ohne `awaitTermination`
+in Produktion), identischer Test-Seam (`resetForTest()` mit
+graceful `awaitTermination` für Robolectric-Hygiene). Mirror dazu,
+um die existing Convention nicht zu brechen.
 
 **Algorithmus (in vier Phasen):**
 
@@ -676,21 +717,40 @@ fun resolveTrashAction(state: DictateUiState): Action? = when {
 Empfohlen als **separater Plan** `dictate-cache-cleanup-and-discard`:
 
 1. **C0** — `AudioFileRepository` erweitern: `allSegmentFiles()`,
-   `allMergedFiles()` (neue Read-Helper für die Cleanup-Job)
+   `allMergedFiles()` (neue Read-Helper für den Cleanup-Job)
 2. **C1** — `SessionDao.findActiveSessionIds()` neu (single-column
    query mit IN-Klausel)
-3. **C2** — `CacheAudioCleanupJob` als `CoroutineWorker`
-4. **C3** — Job-Scheduling in `DictatePipelineService.onCreate`
-5. **C4** — `Action.RecordingAction.DiscardInterruptedSession` +
+3. **C2** — `Pref.CacheCleanupLastRunMs: Long` (default 0L)
+   und `Pref.CacheCleanupIntervalMs: Long` (default 24 h) neu;
+   `Pref.CacheCleanupTtlMs: Long` (default 7 d) neu — die existing
+   `SessionCleanupGracePeriodMs` ist Session-row-scope, nicht
+   File-scope; die neue Pref erlaubt unabhängige Justage falls nötig
+4. **C3** — `CacheAudioCleanupJob` als reines `object` mit pure
+   `run(repo, sessionDao, now, ttlMs)`-API. Vier-Phasen-Algorithmus
+   (§4.5.2 oben).
+5. **C4** — `CacheAudioCleanupScheduler` als `object` analog zu
+   `DurationHealingScheduler` — `scheduleIfDue` mit lastRun-Gating,
+   `resetForTest` mit graceful awaitTermination.
+6. **C5** — Scheduler-Wiring an zwei Trigger-Sites:
+   - `DictateApplication.onCreate` nach dem existing
+     `DurationHealingScheduler.schedule(...)`
+   - `DictatePipelineService.triggerOrphanCleanupAsync` (direkt im
+     Anschluss, mit demselben Pref-Snapshot)
+7. **C6** — `Action.RecordingAction.DiscardInterruptedSession` +
    Reducer-Arm + `Effect.DiscardAudioForSession`
-6. **C5** — `LayoutPredicates.isTrashVisible` + `ActionResolvers.resolveTrashAction`
-   erweitern
-7. **C6** — Tests: `CacheAudioCleanupJobTest` (Robolectric — braucht
-   WorkManager-Test-Infrastruktur), `ActionResolversTest` für die
-   neue Resolver-Branch, `LayoutPredicatesTest`
+8. **C7** — `LayoutPredicates.isTrashVisible` + `ActionResolvers.resolveTrashAction`
+   erweitern (neue Idle+RECORDING_INTERRUPTED-Branch)
+9. **C8** — Tests:
+   - `CacheAudioCleanupJobTest` (pure JVM mit hand-rolled Fakes —
+     analog zu `PipelineOrphanCleanerTest`; **kein Robolectric**)
+   - `CacheAudioCleanupSchedulerTest` (lastRun-Timing mit
+     injectable `now`-clock)
+   - `ActionResolversTest` Erweiterung für die neue Resolver-Branch
+   - `LayoutPredicatesTest` Erweiterung
 
-Implementation-Score: ~8 (mittelgroß; ein neuer Worker plus zwei
-state-modul-Erweiterungen).
+Implementation-Score: ~7 (kleiner als die ursprüngliche WorkManager-
+Variante: keine neue Dependency, keine neue Test-Infrastruktur,
+nur Pure-JVM Fakes wie der Rest der Suite).
 
 ## 5 — Block C: Polish
 

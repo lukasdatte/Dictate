@@ -929,7 +929,20 @@ public class DictateInputMethodService extends InputMethodService
             () -> getCurrentInputConnection(),
             () -> { vibrate(); return kotlin.Unit.INSTANCE; },
             () -> { deleteOneCharacter(); return kotlin.Unit.INSTANCE; },
-            () -> { performEnterAction(); return kotlin.Unit.INSTANCE; },
+            () -> {
+                // Plan: dictate-enter-button-host-action Chunk 4 —
+                // QWERTZ-Enter goes through the same orchestrator
+                // dispatch the Catalog ENTER slot uses, so both paths
+                // share one source of truth (HostEditorState → Role →
+                // PerformEnter Effect). Pre-bind window: silently skip
+                // (the user can re-tap once the binder is alive — sub-
+                // second window in practice).
+                if (pipelineBinder != null) {
+                    pipelineBinder.dispatch(
+                            net.devemperor.dictate.state.Action.KeyboardInputAction.EnterKey.INSTANCE);
+                }
+                return kotlin.Unit.INSTANCE;
+            },
             () -> { hideQwertzKeyboard(); return kotlin.Unit.INSTANCE; },
             () -> { onRecordClicked(); return kotlin.Unit.INSTANCE; },
             () -> {
@@ -1308,10 +1321,13 @@ public class DictateInputMethodService extends InputMethodService
         recordingAnimationForBackend.prepare(recordButton);
         kotlin.jvm.functions.Function0<Boolean> animationsEnabledLambda =
             () -> DictatePrefsKt.get(sp, Pref.Animations.INSTANCE);
+        kotlin.jvm.functions.Function0<Integer> accentColorLambda =
+            () -> DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
         RecordingAnimationController recordingAnimationCtrlForBackend =
             new RecordingAnimationController(
                 recordingAnimationForBackend,
-                recordPulseLayout,
+                recordButton,
+                accentColorLambda,
                 animationsEnabledLambda
             );
         // Phase 3 of dictate-render-cutover-completion-vol2 — single
@@ -2196,6 +2212,13 @@ public class DictateInputMethodService extends InputMethodService
             // to the user yet).
             pipelineBinder.dispatch(
                     net.devemperor.dictate.state.Action.WidgetAction.OnImeViewHidden.INSTANCE);
+            // Plan: dictate-enter-button-host-action Chunk 3 — the host
+            // editor is gone (app switch / IME hide). Reset the
+            // HostEditorState so a stale snapshot does not drive the
+            // Catalog's resolveEnterIcon between now and the next
+            // onStartInputView. Pre-bind no-op via the outer guard.
+            pipelineBinder.dispatch(
+                    net.devemperor.dictate.state.Action.KeyboardInputAction.HostEditorDetached.INSTANCE);
         }
     }
 
@@ -3116,7 +3139,16 @@ public class DictateInputMethodService extends InputMethodService
             Log.w("DictateTrace", "snapshot in onStartInputView failed", t);
         }
 
-        updateEnterButtonIcon(info);
+        // Plan: dictate-enter-button-host-action Chunk 5 — the Enter
+        // button's icon AND action are both derived from this
+        // HostEditorState snapshot via the Catalog's resolveEnterIcon /
+        // resolveEnterAction. The legacy updateEnterButtonIcon method
+        // and performEnterAction helper are gone (zero-grep).
+        if (pipelineBinder != null) {
+            pipelineBinder.dispatch(
+                    new net.devemperor.dictate.state.Action.KeyboardInputAction.HostEditorAttached(
+                            net.devemperor.dictate.state.HostEditorMapper.hostEditorStateFrom(info)));
+        }
         bluetoothScoManager.registerReceiver();
 
         // If recording was paused (by onFinishInputView), cancel timeout and restore UI
@@ -3520,60 +3552,29 @@ public class DictateInputMethodService extends InputMethodService
         return inputClass == InputType.TYPE_CLASS_DATETIME;
     }
 
-    private void performEnterAction() {
-        InputConnection inputConnection = getCurrentInputConnection();
-        if (inputConnection == null) return;
-        // B3.5 host-commit guard — same rationale as
-        // `commitTextToInputConnection`: the IME-View is collapsed when
-        // the widget is visible, so `inputConnection` belongs to whatever
-        // host window has focus. Sending KEYCODE_ENTER into it would
-        // submit forms / send messages in the wrong app.
-        if (!canCommitToHost()) {
-            android.util.Log.w("DictateIME",
-                    "performEnterAction blocked — widget is visible, " +
-                    "deferring Enter until IME is re-attached");
-            return;
-        }
-        EditorInfo editorInfo = getCurrentInputEditorInfo();
-
-        if (editorInfo == null) {
-            inputConnection.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER));
-            inputConnection.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER));
-            return;
-        }
-
-        int imeAction = editorInfo.imeOptions & EditorInfo.IME_MASK_ACTION;
-        boolean noEnterAction = (editorInfo.imeOptions & EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0;
-
-        if (noEnterAction) {
-            inputConnection.commitText("\n", 1);
-        } else {
-            switch (imeAction) {
-                case EditorInfo.IME_ACTION_GO:
-                case EditorInfo.IME_ACTION_SEARCH:
-                case EditorInfo.IME_ACTION_SEND:
-                case EditorInfo.IME_ACTION_NEXT:
-                case EditorInfo.IME_ACTION_DONE:
-                    inputConnection.performEditorAction(imeAction);
-                    break;
-                default:
-                    inputConnection.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER));
-                    inputConnection.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER));
-                    break;
-            }
-        }
-    }
-
-    /**
-     * Schedules {@link #performEnterAction()} with a delay after text commit.
-     * The delay ensures terminal emulators (e.g. Termux → Claude Code) treat Enter
-     * as a separate keystroke rather than part of the pasted text block.
-     * For character-by-character mode, the delay is added after the last character's delay.
+/**
+     * Dispatches {@link net.devemperor.dictate.state.Action.KeyboardInputAction#EnterKey}
+     * after a delay, so terminal emulators (e.g. Termux → Claude Code)
+     * treat the Enter as a separate keystroke rather than as part of the
+     * pasted text block. For character-by-character mode, the delay is
+     * extended past the last character's animated reveal.
+     *
+     * <p>The dispatched action is processed by {@link
+     * net.devemperor.dictate.state.KeyboardInputModule} which reads the
+     * current {@link net.devemperor.dictate.state.HostEditorState} and
+     * picks the right effect (performEditorAction / commitText("\n") /
+     * sendKeyEvent). Semantically equivalent to the legacy
+     * performEnterAction read of {@code getCurrentInputEditorInfo()} at
+     * fire-time, because the orchestrator's host-editor snapshot is
+     * refreshed on every {@code onStartInputView}.
      */
     private void scheduleAutoEnter(String output) {
+        if (pipelineBinder == null) return; // pre-bind: silently skip
+        Runnable dispatchEnter = () -> pipelineBinder.dispatch(
+                net.devemperor.dictate.state.Action.KeyboardInputAction.EnterKey.INSTANCE);
         if (mainHandler == null) {
-            // No handler available — fall back to immediate (best effort)
-            performEnterAction();
+            // No handler available — fire immediately
+            dispatchEnter.run();
             return;
         }
 
@@ -3585,33 +3586,7 @@ public class DictateInputMethodService extends InputMethodService
             baseDelay += lastCharDelay;
         }
 
-        mainHandler.postDelayed(this::performEnterAction, baseDelay);
-    }
-
-    private void updateEnterButtonIcon(EditorInfo info) {
-        if (info == null || enterButton == null) return;
-
-        int imeAction = info.imeOptions & EditorInfo.IME_MASK_ACTION;
-        boolean noEnterAction = (info.imeOptions & EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0;
-
-        if (noEnterAction) {
-            enterButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_subdirectory_arrow_left_24));
-        } else {
-            switch (imeAction) {
-                case EditorInfo.IME_ACTION_GO:
-                case EditorInfo.IME_ACTION_SEARCH:
-                case EditorInfo.IME_ACTION_SEND:
-                case EditorInfo.IME_ACTION_NEXT:
-                    enterButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_send_20));
-                    break;
-                case EditorInfo.IME_ACTION_DONE:
-                    enterButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_check_24));
-                    break;
-                default:
-                    enterButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_subdirectory_arrow_left_24));
-                    break;
-            }
-        }
+        mainHandler.postDelayed(dispatchEnter, baseDelay);
     }
 
     private void openSettingsActivity() {
@@ -4740,12 +4715,13 @@ public class DictateInputMethodService extends InputMethodService
      *                            of {@link ResendInsertStrategy}) pass
      *                            {@code false} because (a) Stage 2 commits
      *                            on a captured IC while
-     *                            {@link #scheduleAutoEnter}/{@link #performEnterAction}
-     *                            would later fire on the live IC — Enter
-     *                            would land in the wrong field — and (b) a
-     *                            Resend click is a recovery insert, not a
-     *                            new transcription, so silently appending
-     *                            Enter is unwanted UX in either stage.
+     *                            {@link #scheduleAutoEnter} would later
+     *                            dispatch EnterKey against the live IC —
+     *                            Enter would land in the wrong field — and
+     *                            (b) a Resend click is a recovery insert,
+     *                            not a new transcription, so silently
+     *                            appending Enter is unwanted UX in either
+     *                            stage.
      * @return {@code true} if the commit succeeded, {@code false} if the IC
      *         was {@code null} or {@code commitText()} reported failure.
      */
@@ -5233,7 +5209,7 @@ public class DictateInputMethodService extends InputMethodService
                 sessionId,
                 // enableAutoEnter = false in BOTH resend stages:
                 // - Stage 2 (captured IC): scheduleAutoEnter would later fire
-                //   performEnterAction, which reads the *live* IC — Enter would
+                //   dispatch EnterKey against the *live* IC — Enter would
                 //   land in whatever field has focus now, not the captured one.
                 // - Stage 1 (live IC, same editor): a Resend click is a recovery
                 //   insert, not a new transcription, so appending Enter is
@@ -5525,13 +5501,6 @@ public class DictateInputMethodService extends InputMethodService
     // QwertzRecordingController prompt-pause toggle. Body kept.
     public void onPauseClicked() {
         togglePauseEffectiveRecording();
-    }
-
-    // CR-DEL: was MainButtonsController.Callback (deleted). ENTER is the
-    // catalog Action.KeyboardInputAction.EnterKey on the bound path;
-    // body kept for any non-catalog caller.
-    public void onEnterClicked() {
-        performEnterAction();
     }
 
     @Override

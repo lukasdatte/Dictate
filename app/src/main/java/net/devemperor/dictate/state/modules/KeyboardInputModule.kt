@@ -8,26 +8,27 @@ import android.content.ClipData
 import kotlin.reflect.KClass
 
 /**
- * Forwards direct IME-input actions (Backspace / Enter / Space /
- * Clipboard-Copy) as side-effects on the `InputConnection` and the
- * system clipboard. **Owns no sub-state** — the type parameter `S` is
- * `Unit` because the operations live outside the [DictateUiState] (in
- * the system InputConnection buffer and clipboard).
+ * Owns the [KeyboardInputState] axis and forwards direct IME-input
+ * actions (Backspace / Enter / Space / Clipboard-Copy) as side-effects
+ * on the `InputConnection` and the system clipboard.
  *
- * **Why have a module at all? (Spec 1 §15.6):**
+ * **Why the state axis?**
  *
- * The F-8 Single-Dispatch invariant says every state-mutating Action
- * MUST flow through [DictateOrchestrator.dispatch]. Without a module
- * owner for [Action.KeyboardInputAction], Backspace / Enter / Space
- * clicks would be silently dropped as `DispatchOutcome.Unrouted` —
- * resolver code (`ButtonSlot.actionResolver`) is required to return
- * `Action?`, so it can't directly call the IME service. Routing
- * through this module keeps the resolver layer trivial and the
- * dispatch invariant intact.
+ * Originally this module was `S = Unit` — pure effect-translator. With
+ * the Enter-button cutover
+ * (`docs/plans/2026-05-23 - dictate-enter-button-host-action/`) the
+ * module gained `KeyboardInputState.hostEditor`: the `EditorInfo`
+ * snapshot of the currently-focused host editor. Catalog
+ * `iconResolver` and `actionResolver` for the ENTER slot both read this
+ * axis, so icon (Send / Search / Check / Return) and action
+ * (`performEditorAction(SEND)` vs `commitText("\n", 1)` vs
+ * `sendKeyEvent(KEYCODE_ENTER)`) cannot drift apart.
  *
- * **Trivial reducer:** each Action is translated 1:1 into the
- * corresponding [Effect]; `state` stays `Unit`, only the
- * `sideEffects` list propagates.
+ * The module is still the **single owner** of every Dictate Action
+ * involving the host `InputConnection` (F-8 invariant) — placing the
+ * host-editor snapshot on the same module keeps the
+ * "all keyboard-input concerns in one place" SRP intact and avoids a
+ * second module whose sole responsibility would be a unit fan-out.
  *
  * **Failure handling:** the effect handler returns no-op when the
  * `InputConnection` is `null` (Editor lost focus) — this is the
@@ -36,63 +37,124 @@ import kotlin.reflect.KClass
  * `DictateInputMethodService` already treats null InputConnection as
  * no-op).
  *
- * **No cross-module observer:** Unit-state, no inbound coupling, no
- * outbound coupling. Spec 1 §15.1.x explicitly omits KeyboardInputModule
+ * **Cross-module observer:** none — host-editor state is consumed by
+ * Catalog resolvers (pull-from-state via lens read), not pushed to
+ * other modules. Spec 1 §15.1.x explicitly omits KeyboardInputModule
  * from the Cross-Module-Coupling-Matrix.
  *
  * @see net.devemperor.dictate.state.Action.KeyboardInputAction
+ * @see net.devemperor.dictate.state.KeyboardInputState
+ * @see net.devemperor.dictate.state.HostEditorState
  * @see net.devemperor.dictate.state.DictateOrchestrator
  * @see docs/decisions/0001-state-modular-orchestrator-pattern.md
- * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §15.6
+ * @see docs/plans/2026-05-23 - dictate-enter-button-host-action/dictate-enter-button-host-action.md
  */
-object KeyboardInputModule : DictateModule<Unit, Action.KeyboardInputAction, KeyboardInputModule.Effect> {
+object KeyboardInputModule : DictateModule<KeyboardInputState, Action.KeyboardInputAction, KeyboardInputModule.Effect> {
 
     override val id: ModuleId = ModuleId.KeyboardInput
     override val actionClass: KClass<Action.KeyboardInputAction> = Action.KeyboardInputAction::class
 
-    override fun read(global: DictateUiState) = Unit
-    override fun write(global: DictateUiState, sub: Unit): DictateUiState = global
-    override fun initialState() = Unit
+    override fun read(global: DictateUiState): KeyboardInputState = global.keyboardInput
+    override fun write(global: DictateUiState, sub: KeyboardInputState): DictateUiState =
+        global.copy(keyboardInput = sub)
+    override fun initialState(): KeyboardInputState = KeyboardInputState()
 
     /**
      * Module-local effect surface — one variant per input op.
-     * `data object` for the simple keystrokes; `data class` for
-     * clipboard since it carries a payload (effect-identifier note:
-     * `effect.toString()` includes the args, so any future
-     * `reduceFailure` arm would use `startsWith("CopyToClipboard(")`).
+     *
+     * `SendEnter` was replaced by [PerformEnter] in the cutover plan —
+     * the old single-shape effect (`commitText("\n", 1)`) was wrong for
+     * every editor that declared an `imeOptions` action (Browser GO,
+     * Chat SEND, Maps SEARCH, Form NEXT, Custom Action, …). The new
+     * effect carries the [net.devemperor.dictate.state.layout.EnterButtonRole]
+     * the reducer picked from [HostEditorState] plus the custom
+     * actionId so the handler can branch between
+     * `performEditorAction`, `commitText("\n", 1)`, and the
+     * pre-bind `sendKeyEvent(KEYCODE_ENTER)` fallback in one place.
      */
     sealed interface Effect : SideEffect {
         data object SendBackspace : Effect
-        data object SendEnter : Effect
         data object SendSpace : Effect
         data class CopyToClipboard(val text: String) : Effect
+
+        /**
+         * Perform the Enter-button's semantic action against the current
+         * `InputConnection`. The reducer pre-computes [role] from
+         * [HostEditorState] (via
+         * `net.devemperor.dictate.state.layout.resolveEnterRole`) so the
+         * handler stays a simple dispatcher.
+         *
+         * @property role what the user expects to happen — drives the
+         *   branch in [runEffect]:
+         *   `NEWLINE → commitText("\n", 1)`,
+         *   any IME-action role → `performEditorAction(actionIdForRole(role))`,
+         *   `CUSTOM → performEditorAction(actionId)`,
+         *   `PRE_BIND_FALLBACK` (modelled as `role = NEWLINE` with
+         *   [hasEditorInfo] = false in the reducer) → handler still
+         *   commits newline — only the explicit physical-keystroke
+         *   fallback uses `sendKeyEvent` below.
+         * @property actionId payload for `CUSTOM`; ignored otherwise.
+         */
+        data class PerformEnter(
+            val role: net.devemperor.dictate.state.layout.EnterButtonRole,
+            val actionId: Int,
+        ) : Effect
+
+        /**
+         * Physical-keystroke fallback for the pre-bind window — the IME
+         * has no `EditorInfo` yet so an action-routed Enter would have
+         * no target. `sendKeyEvent(KEYCODE_ENTER)` also produces DOM
+         * `keydown`/`keyup` events in WebViews, which is the closest
+         * thing to "press the hardware Enter key" the IME can do.
+         */
+        data object SendPhysicalEnter : Effect
     }
 
     override fun reduce(
-        state: Unit,
+        state: KeyboardInputState,
         action: Action.KeyboardInputAction,
         ctx: ReducerContext,
-    ): TransitionResult<Unit, Effect>? = when (action) {
+    ): TransitionResult<KeyboardInputState, Effect>? = when (action) {
         Action.KeyboardInputAction.Backspace ->
-            TransitionResult(nextState = Unit, sideEffects = listOf(Effect.SendBackspace))
+            TransitionResult(nextState = state, sideEffects = listOf(Effect.SendBackspace))
         Action.KeyboardInputAction.EnterKey ->
-            TransitionResult(nextState = Unit, sideEffects = listOf(Effect.SendEnter))
+            reduceEnterKey(state)
         Action.KeyboardInputAction.SpaceKey ->
-            TransitionResult(nextState = Unit, sideEffects = listOf(Effect.SendSpace))
+            TransitionResult(nextState = state, sideEffects = listOf(Effect.SendSpace))
         is Action.KeyboardInputAction.CopyToClipboard ->
             TransitionResult(
-                nextState = Unit,
+                nextState = state,
                 sideEffects = listOf(Effect.CopyToClipboard(action.text)),
             )
+        is Action.KeyboardInputAction.HostEditorAttached ->
+            TransitionResult(nextState = state.copy(hostEditor = action.state), sideEffects = emptyList())
+        Action.KeyboardInputAction.HostEditorDetached ->
+            TransitionResult(nextState = state.copy(hostEditor = HostEditorState()), sideEffects = emptyList())
+    }
+
+    /**
+     * Picks the right [Effect] flavour for an `EnterKey` Action. The
+     * Role is derived from the current [HostEditorState] via
+     * [net.devemperor.dictate.state.layout.resolveEnterRole]; the
+     * pre-bind fallback (no `EditorInfo` ever attached) emits the
+     * physical-keystroke variant so the user can type Enter even
+     * before the IME has been told about any editor.
+     */
+    private fun reduceEnterKey(state: KeyboardInputState): TransitionResult<KeyboardInputState, Effect> {
+        val host = state.hostEditor
+        val effect = if (!host.hasEditorInfo) {
+            Effect.SendPhysicalEnter
+        } else {
+            val role = net.devemperor.dictate.state.layout.resolveEnterRole(host)
+            val actionId = net.devemperor.dictate.state.layout.actionIdForEnter(role, host)
+            Effect.PerformEnter(role, actionId)
+        }
+        return TransitionResult(nextState = state, sideEffects = listOf(effect))
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {
         Effect.SendBackspace -> {
             services.inputConnectionProvider()?.deleteSurroundingText(1, 0)
-            Unit
-        }
-        Effect.SendEnter -> {
-            services.inputConnectionProvider()?.commitText("\n", 1)
             Unit
         }
         Effect.SendSpace -> {
@@ -101,6 +163,38 @@ object KeyboardInputModule : DictateModule<Unit, Action.KeyboardInputAction, Key
         }
         is Effect.CopyToClipboard -> {
             services.clipboard?.setPrimaryClip(ClipData.newPlainText("dictate", effect.text))
+            Unit
+        }
+        is Effect.PerformEnter -> {
+            val ic = services.inputConnectionProvider()
+            if (ic != null) {
+                when (effect.role) {
+                    net.devemperor.dictate.state.layout.EnterButtonRole.NEWLINE ->
+                        ic.commitText("\n", 1)
+                    net.devemperor.dictate.state.layout.EnterButtonRole.CUSTOM ->
+                        ic.performEditorAction(effect.actionId)
+                    net.devemperor.dictate.state.layout.EnterButtonRole.GO,
+                    net.devemperor.dictate.state.layout.EnterButtonRole.SEARCH,
+                    net.devemperor.dictate.state.layout.EnterButtonRole.SEND,
+                    net.devemperor.dictate.state.layout.EnterButtonRole.NEXT,
+                    net.devemperor.dictate.state.layout.EnterButtonRole.PREVIOUS,
+                    net.devemperor.dictate.state.layout.EnterButtonRole.DONE ->
+                        ic.performEditorAction(effect.actionId)
+                }
+            }
+            Unit
+        }
+        Effect.SendPhysicalEnter -> {
+            val ic = services.inputConnectionProvider()
+            if (ic != null) {
+                val now = android.os.SystemClock.uptimeMillis()
+                ic.sendKeyEvent(
+                    android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_DOWN,
+                        android.view.KeyEvent.KEYCODE_ENTER, 0))
+                ic.sendKeyEvent(
+                    android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_UP,
+                        android.view.KeyEvent.KEYCODE_ENTER, 0))
+            }
             Unit
         }
     }

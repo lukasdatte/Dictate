@@ -165,7 +165,7 @@ class ActionHierarchyTest {
     // ────────────────────────────────────────────────────────────────
 
     @Test
-    fun `exhaustive when over KeyboardInputAction covers all four variants`() {
+    fun `exhaustive when over KeyboardInputAction covers all variants`() {
         // Compile-only sanity — if a new variant were added to
         // KeyboardInputAction this test would fail to compile.
         val actions = listOf<Action.KeyboardInputAction>(
@@ -173,6 +173,8 @@ class ActionHierarchyTest {
             Action.KeyboardInputAction.EnterKey,
             Action.KeyboardInputAction.SpaceKey,
             Action.KeyboardInputAction.CopyToClipboard("hi"),
+            Action.KeyboardInputAction.HostEditorAttached(HostEditorState()),
+            Action.KeyboardInputAction.HostEditorDetached,
         )
         val labels = actions.map {
             when (it) {
@@ -180,9 +182,11 @@ class ActionHierarchyTest {
                 Action.KeyboardInputAction.EnterKey -> "en"
                 Action.KeyboardInputAction.SpaceKey -> "sp"
                 is Action.KeyboardInputAction.CopyToClipboard -> "cp:" + it.text
+                is Action.KeyboardInputAction.HostEditorAttached -> "ha"
+                Action.KeyboardInputAction.HostEditorDetached -> "hd"
             }
         }
-        assertEquals(listOf("bs", "en", "sp", "cp:hi"), labels)
+        assertEquals(listOf("bs", "en", "sp", "cp:hi", "ha", "hd"), labels)
     }
 
     @Test

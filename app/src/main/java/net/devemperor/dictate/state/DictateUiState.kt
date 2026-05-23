@@ -42,6 +42,7 @@ import java.io.File
  * | 11 | [theming] | ThemingModule | theme + accent + overlay-chars + speed |
  * | 12 | [pendingSessions] | PendingSessionsModule | PersistentList, DB-subscriber-driven |
  * | 13 | [interruption] | InterruptionModule (Phase 2) | null in Phase 1 |
+ * | 14 | [keyboardInput] | KeyboardInputModule | host-editor `EditorInfo` snapshot driving Enter-button icon + action |
  *
  * @see net.devemperor.dictate.state.DictateModule
  * @see docs/decisions/0001-state-modular-orchestrator-pattern.md §"Module inventory"
@@ -96,6 +97,14 @@ data class DictateUiState(
 
     // ─── Phase 2 stub (default null = not modelled) ───
     val interruption: InterruptionState? = null,
+
+    /**
+     * Keyboard-input sub-state. Currently carries the host-editor
+     * `EditorInfo` snapshot that drives the Enter-button's icon and
+     * action so both sides cannot drift apart. Owned by
+     * `KeyboardInputModule` (`docs/plans/2026-05-23 - dictate-enter-button-host-action`).
+     */
+    val keyboardInput: KeyboardInputState = KeyboardInputState(),
 ) {
     companion object {
         /**
@@ -118,6 +127,7 @@ data class DictateUiState(
             theming = ThemingState(),
             pendingSessions = persistentListOf(),
             interruption = null,
+            keyboardInput = KeyboardInputState(),
         )
     }
 }

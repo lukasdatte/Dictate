@@ -1033,19 +1033,46 @@ sealed class Action {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Direct IME-input actions. Owned by `KeyboardInputModule`, which has
-     * no sub-state axis (`Unit`) — these actions are pure effect-producers
-     * that operate on the `InputConnection` and system clipboard.
+     * Direct IME-input actions. Owned by `KeyboardInputModule`.
      *
      * The module exists so every Dictate IME mutation flows through
      * `dispatch(action)` (F-8 invariant) — without it, Backspace/Enter/Space
      * clicks would have no module and be silently `DispatchOutcome.Unrouted`.
+     *
+     * **Two action families** live here side-by-side:
+     *  - **Effect-only** (`Backspace` / `EnterKey` / `SpaceKey` /
+     *    `CopyToClipboard`) — translated 1:1 into a side-effect; the
+     *    state may be touched (`EnterKey` reads `hostEditor` to pick the
+     *    right effect variant) but is not written.
+     *  - **State-write** (`HostEditorAttached` / `HostEditorDetached`) —
+     *    update [HostEditorState] from IME-Service lifecycle callbacks
+     *    (`onStartInputView` / `onFinishInputView`); no side-effect.
+     *
+     * @see net.devemperor.dictate.state.HostEditorState
      */
     sealed class KeyboardInputAction : Action() {
         data object Backspace : KeyboardInputAction()
         data object EnterKey : KeyboardInputAction()
         data object SpaceKey : KeyboardInputAction()
         data class CopyToClipboard(val text: String) : KeyboardInputAction()
+
+        /**
+         * IME-Service informs the orchestrator about a new
+         * [android.view.inputmethod.EditorInfo] binding — the user has
+         * focused a fresh editor target. The IME-Service constructs the
+         * [HostEditorState] via `HostEditorMapper.from(info)` and
+         * dispatches this action from `onStartInputView`. Replaces the
+         * Legacy `updateEnterButtonIcon(EditorInfo)` side-effect.
+         */
+        data class HostEditorAttached(val state: HostEditorState) : KeyboardInputAction()
+
+        /**
+         * IME-Service informs the orchestrator that the current editor
+         * target is gone — dispatched from `onFinishInputView` so the
+         * Enter-button falls back to the physical-keystroke default
+         * until the next attach.
+         */
+        data object HostEditorDetached : KeyboardInputAction()
     }
 
     // ════════════════════════════════════════════════════════════════

@@ -184,20 +184,30 @@ class PipelineRecovery(
                 emitAction(Action.ResendAction.NotifyManualPasteNeeded(entity.id))
             }
 
-            // ── Phase 5: surface a recovery-detected interrupted ─────
-            // recording (2026-05-22). When a fresh RECORDING_INTERRUPTED
-            // session exists, dispatch SurfaceInterruptedRecording so
-            // the keyboard shows the cut-off recording "as if briefly
-            // paused" (frozen timer at the recorded duration) instead of
-            // silently waiting for the user to tap Record. The
-            // RecordingModule reducer only acts on this from `Idle`, so
-            // a parallel recording started during recovery (the §6.3
-            // merge case) is safely unaffected.
+            // ── Phase 5: surface a recovery-detected unfinished ──────
+            // recording (2026-05-22 / extended 2026-05-23). When a
+            // fresh `RECORDING_INTERRUPTED` (process-death survivor)
+            // OR `RECORDED` (audio complete, transcription never
+            // finished — e.g. `TRANSCRIBING → RECORDED` recovery-
+            // downgrade above) session exists, dispatch
+            // `SurfaceInterruptedRecording` so the keyboard shows the
+            // unfinished recording "as if briefly paused" (frozen
+            // timer at the recorded duration) instead of silently
+            // waiting for the user to tap Record. Both statuses share
+            // the same surfacing path because the continuation
+            // machinery (`allocateNext` + MediaMuxer-concat) treats
+            // them identically — the distinction (audio-cut-off vs
+            // audio-complete) is irrelevant at the user-affordance
+            // seam.
+            //
+            // The `RecordingModule` reducer only acts on this from
+            // `Idle`, so a parallel recording started during recovery
+            // (the §6.3 merge case) is safely unaffected.
             val interrupted = withContext(ioContext) {
                 val floor = System.currentTimeMillis() - continuationFreshnessMs()
-                runCatching { sessionDao.findLatestRecordingInterrupted(floor) }
+                runCatching { sessionDao.findLatestUnfinishedRecording(floor) }
                     .onFailure {
-                        Log.w(TAG, "findLatestRecordingInterrupted failed during recovery", it)
+                        Log.w(TAG, "findLatestUnfinishedRecording failed during recovery", it)
                     }
                     .getOrNull()
             }

@@ -223,7 +223,7 @@ class PipelineSessionRepoAdapterTest {
         assertNotNull(row)
         assertEquals(SessionStatus.RECORDING.name, row!!.status)
         assertEquals(SessionType.RECORDING.name, row.type)
-        // origin=KEYBOARD is load-bearing — findLatestRecordingInterrupted
+        // origin=KEYBOARD is load-bearing — findLatestUnfinishedRecording
         // filters on it, so this is what makes a recovered row eligible
         // for the auto-continuation lookup.
         assertEquals(SessionOrigin.KEYBOARD.name, row.origin)

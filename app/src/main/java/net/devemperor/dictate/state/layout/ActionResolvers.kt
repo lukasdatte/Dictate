@@ -246,7 +246,7 @@ fun resolveRecordActionPipeline(
  * The `DiscardInterruptedSession` branch picks the **first**
  * RECORDING_INTERRUPTED entry from `pendingSessions` (recording-stack-
  * completion §4.5.3). In practice there is at most one such entry
- * because `findLatestRecordingInterrupted` is used for the auto-
+ * because `findLatestUnfinishedRecording` is used for the auto-
  * continuation path (a multi-RECORDING_INTERRUPTED race would already
  * have been collapsed by `PipelineRecovery` to a single active
  * candidate), but the resolver guards via `firstOrNull` defensively.

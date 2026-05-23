@@ -134,7 +134,7 @@ private class FakeSessionDao : SessionDao {
         return if (origin == SessionOrigin.KEYBOARD.name) stubbedLatest else null
     }
 
-    override fun findLatestRecordingInterrupted(createdAtFloor: Long): SessionEntity? {
+    override fun findLatestUnfinishedRecording(createdAtFloor: Long): SessionEntity? {
         lastInterruptedFloor = createdAtFloor
         return stubbedInterrupted
     }

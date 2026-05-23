@@ -22,10 +22,14 @@ import java.io.File
  *    `RecordingState`-sealed-class branch change triggers work.
  * 2. **Lifecycle parity with the legacy `RecordingUiController`** —
  *    Idle / Active / Paused mappings to start / cancel / pause.
- * 3. **`animationsEnabled = false` shortcut** — verified for both
- *    Active and Paused branches.
+ * 3. **`animationsEnabled = false` shortcut** — verified for the
+ *    Active, Paused, and Interrupted branches.
  * 4. **`reset()` re-arms first-apply after detach** — guards the
  *    view-recreate semantics on rotation.
+ * 5. **Cold-Interrupted rendering** — a recovery-surfaced
+ *    [RecordingState.Interrupted] must `start()`-then-`pause()` the
+ *    animation (it is reached without a prior Active interval) and
+ *    seed the frozen timer from `elapsedMs`.
  */
 class RecordingAnimationControllerTest {
 
@@ -60,6 +64,60 @@ class RecordingAnimationControllerTest {
         controller.onState(stateWithRecording(RecordingState.Idle))
 
         assertEquals(listOf("pause", "cancel"), anim.events)
+    }
+
+    @Test
+    fun `cold interrupted starts then freezes the animation and seeds the timer`() {
+        // Regression (2026-05-22): a recovery-surfaced Interrupted recording
+        // lands in a FRESH controller — no prior Active interval, so the
+        // animation was never start()-ed. The pre-fix code grouped
+        // Interrupted with Paused and emitted a bare pause(); on a cold
+        // BorderGlowAnimation that builds no visualizer and drops the timer
+        // text (`!isActive` guard) → the keyboard showed nothing.
+        val anim = FakeRecordingAnimation()
+        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+
+        controller.onState(stateWithRecording(interruptedRecording(elapsedMs = 8_000L)))
+
+        // start() builds the visualizer (the timer host), pause() freezes it.
+        assertEquals(listOf("start", "pause"), anim.events)
+        // The "0:08" must be seeded straight from Interrupted.elapsedMs.
+        assertEquals(listOf("00:08"), anim.timerTexts)
+    }
+
+    @Test
+    fun `interrupted then active continuation restarts the animation`() {
+        val anim = FakeRecordingAnimation()
+        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+
+        // A Record-tap on the surfaced Interrupted recording continues it.
+        controller.onState(stateWithRecording(interruptedRecording(elapsedMs = 8_000L)))
+        controller.onState(stateWithRecording(activeRecording()))
+
+        assertEquals(listOf("start", "pause", "start"), anim.events)
+    }
+
+    @Test
+    fun `interrupted then idle discard cancels the animation`() {
+        val anim = FakeRecordingAnimation()
+        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+
+        controller.onState(stateWithRecording(interruptedRecording(elapsedMs = 5_000L)))
+        controller.onState(stateWithRecording(RecordingState.Idle))
+
+        assertEquals(listOf("start", "pause", "cancel"), anim.events)
+    }
+
+    @Test
+    fun `animationsEnabled=false suppresses interrupted rendering`() {
+        val anim = FakeRecordingAnimation()
+        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { false })
+
+        controller.onState(stateWithRecording(interruptedRecording(elapsedMs = 8_000L)))
+
+        // Same pref-gate as the Active branch — no visualizer, no timer.
+        assertEquals(emptyList<String>(), anim.events)
+        assertEquals(emptyList<String>(), anim.timerTexts)
     }
 
     @Test
@@ -176,6 +234,9 @@ private fun preparingRecording(): RecordingState.Preparing =
         useBluetooth = false,
         audioFile = File("/tmp/test.m4a"), sessionId = "sid-test",
     )
+
+private fun interruptedRecording(elapsedMs: Long): RecordingState.Interrupted =
+    RecordingState.Interrupted(sessionId = "sid-test", elapsedMs = elapsedMs)
 
 // ─── Hand-rolled fake animator (K-1) ───────────────────────────────────
 

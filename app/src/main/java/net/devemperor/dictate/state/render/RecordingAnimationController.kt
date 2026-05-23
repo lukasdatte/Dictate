@@ -99,13 +99,38 @@ class RecordingAnimationController(
                 }
             }
 
-            is RecordingState.Paused,
-            is RecordingState.Interrupted -> {
-                // Interrupted (2026-05-22) renders "as if briefly
-                // paused" — the same frozen-pulse look as Paused.
+            is RecordingState.Paused -> {
                 if (animationsEnabled()) {
                     animation.pause()
                     pulseLayout?.pausePulse()
+                }
+            }
+
+            is RecordingState.Interrupted -> {
+                // Interrupted (2026-05-22) — a recovery-surfaced recording.
+                // Unlike Paused (only ever reached *after* an Active interval
+                // already `start()`-ed the animation), Interrupted is reached
+                // COLD: the process that ran the Active interval is gone, so
+                // this fresh controller never saw `start()`. A bare `pause()`
+                // on a cold animation is a no-op that renders nothing —
+                // `BorderGlowAnimation.pause()` only dims the background, and
+                // `onTimerTick` is dropped by its `!isActive` guard, so
+                // neither the visualizer nor the "0:08" timer ever appears
+                // (the user's "nichts angezeigt" bug). To render the
+                // frozen-paused look we must first `start()` the animation —
+                // that builds the `AmplitudeVisualizerDrawable` which hosts
+                // the timer text — then `pause()` it, and seed the timer
+                // straight from `Interrupted.elapsedMs`. Seeding here (rather
+                // than relying on the ticker-observer's `freezeTickerAt`)
+                // removes the render-tick-vs-ticker ordering hazard: whoever
+                // runs first, the timer is set against an already-active
+                // animation.
+                if (animationsEnabled()) {
+                    animation.start()
+                    animation.pause()
+                    pulseLayout?.startPulse()
+                    pulseLayout?.pausePulse()
+                    onTimerTick(curr.elapsedMs)
                 }
             }
         }

@@ -4,6 +4,7 @@ import net.devemperor.dictate.R
 import net.devemperor.dictate.database.entity.SessionStatus
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
+import net.devemperor.dictate.state.RecordingState
 
 /**
  * Pure function `(DictateUiState) -> List<InfoBarItem>` that derives
@@ -153,42 +154,52 @@ object InfoBarSelector {
                 }
             }
 
-        // ── Pending-Recording (ADR-0006, MVP) ───────────────────────────
-        // Session in RECORDED status (recording finished, pipeline not
-        // started yet). MVP-cut: single Dismiss-button ("Verwerfen")
-        // removes the session from the list and stamps inserted_at.
-        // 3-button affordance (Fortsetzen / Senden / Verwerfen) requires
-        // a layout that supports a third button and additional Pipeline
-        // actions — scheduled for a follow-up commit. The MVP keeps the
-        // user from being stuck with a stale RECORDED entry.
-        state.pendingSessions
-            .filter { it.status == SessionStatus.RECORDED }
-            .forEach { session ->
-                add(
-                    InfoBarItem(
-                        id = "pending-recording:${session.sessionId}",
-                        createdAt = session.createdAt,
-                        message = InfoBarMessage(
-                            textResId = R.string.dictate_pending_recording_msg,
-                            style = InfoBarStyle.ACTION,
-                        ),
-                        confirmAction = null,
-                        dismissAction = Action.PendingSessionsAction.Dismiss(session.sessionId),
-                    )
+        // ── Recovery-surfaced unfinished recording (2026-05-23) ─────────
+        // PipelineRecovery Phase 5 surfaces both RECORDING_INTERRUPTED
+        // (recording cut off mid-flight) and RECORDED (audio complete,
+        // transcription never finished) sessions as
+        // [RecordingState.Interrupted] in the keyboard — record button
+        // continues, trash button discards (LayoutPredicates +
+        // ActionResolvers). The user previously saw a separate
+        // "pending-recording" info-bar with a single Dismiss button,
+        // which doubled-surfaced the same thing and forced an
+        // architecture coupling between the InfoBar and the record/trash
+        // buttons.
+        //
+        // Now the info-bar adds an *explanatory pure-info text only* —
+        // both `confirmAction` and `dismissAction` are null, so the
+        // renderer hides both buttons. The text exists exactly as long
+        // as `state.recording is Interrupted` holds; the moment a
+        // keyboard action transitions the recording out (continuation →
+        // Preparing/Active, discard → Idle), the source condition fails
+        // and the item vanishes. No "DismissInfoBar" action exists, no
+        // record/trash button has any InfoBar awareness — the keyboard
+        // buttons mutate `state.recording`, this producer reads
+        // `state.recording`, that is the entire coupling surface.
+        //
+        // `createdAt = 0L` pins the item at the top so it outranks
+        // later transient items — the unfinished recording is the most
+        // actionable thing in the UI until the user resolves it.
+        //
+        // The replaced `pending-recording` producer + `dictate_pending_
+        // recording_msg` string are gone; RECORDED rows still live in
+        // `pendingSessions` (loadPending unchanged) but no producer
+        // emits anything for them in the InfoBar surface.
+        val recording = state.recording
+        if (recording is RecordingState.Interrupted) {
+            add(
+                InfoBarItem(
+                    id = "recovery-unfinished:${recording.sessionId}",
+                    createdAt = 0L,
+                    message = InfoBarMessage(
+                        textResId = R.string.dictate_recovery_unfinished_info,
+                        style = InfoBarStyle.INFO,
+                    ),
+                    confirmAction = null,
+                    dismissAction = null,
                 )
-            }
-
-        // ── Recording-Interrupted — NOT an info-bar producer ────────────
-        // A RECORDING_INTERRUPTED session is surfaced as a first-class
-        // paused-style recording in the keyboard itself
-        // ([RecordingState.Interrupted], driven by
-        // `PipelineRecovery` Phase 5 → `SurfaceInterruptedRecording`,
-        // 2026-05-22). It deliberately has NO info-bar item — an
-        // info-bar on top of the paused-recording UI would surface the
-        // same thing twice. Continue = a Record-tap; discard = the
-        // keyboard trash button. (Completed-but-uninserted results, by
-        // contrast, remain pure info-bar items — see the pending-insert
-        // producer above.)
+            )
+        }
     }.sortedBy { it.createdAt }
 
     // ─── B4 helpers ────────────────────────────────────────────────────

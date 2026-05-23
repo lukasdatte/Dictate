@@ -47,8 +47,11 @@ import net.devemperor.dictate.state.DictateUiState
  *    spread into `getString(...)`), style sets the text color
  *    (INFO=blue / ERROR=red / ACTION=action-color), confirm button is
  *    `VISIBLE` iff [InfoBarItem.confirmAction] != null and dispatches
- *    that action on click, dismiss button always renders and
- *    dispatches [InfoBarItem.dismissAction].
+ *    that action on click, dismiss button is `VISIBLE` iff
+ *    [InfoBarItem.dismissAction] != null and dispatches it on click.
+ *    Pure-info items (both actions null) render text only — the
+ *    item's lifecycle is then fully owned by the selector's source
+ *    condition (see [InfoBarItem] KDoc).
  *
  * # Action-dispatch boundary
  *
@@ -144,8 +147,13 @@ class InfoBarRenderer(
                 infoYesButton.visibility = View.GONE
                 infoYesButton.setOnClickListener(null)
             }
-            infoNoButton.visibility = View.VISIBLE
-            infoNoButton.setOnClickListener { onAction(top.dismissAction) }
+            if (top.dismissAction != null) {
+                infoNoButton.visibility = View.VISIBLE
+                infoNoButton.setOnClickListener { onAction(top.dismissAction) }
+            } else {
+                infoNoButton.visibility = View.GONE
+                infoNoButton.setOnClickListener(null)
+            }
 
             infoCl.visibility = View.VISIBLE
         } catch (t: Throwable) {

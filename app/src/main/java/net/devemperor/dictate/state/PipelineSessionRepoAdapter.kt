@@ -257,7 +257,7 @@ class PipelineSessionRepoAdapter(
      * **`origin = KEYBOARD`** is correct for every IME recording:
      * [SessionOrigin] has no `WIDGET` value — the floating-overlay
      * recording is still keyboard-originated. The continuation-lookup
-     * (`SessionDao.findLatestRecordingInterrupted`) filters
+     * (`SessionDao.findLatestUnfinishedRecording`) filters
      * `origin = 'KEYBOARD'`, so this is also the only origin a
      * recovered recording could be continued from.
      *

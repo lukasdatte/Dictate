@@ -171,7 +171,13 @@ class InfoBarSelectorTest {
     }
 
     @Test
-    fun `pending RECORDED session surfaces a dismiss-only item`() {
+    fun `pending RECORDED session no longer surfaces a pending-recording item (2026-05-23 refactor)`() {
+        // The legacy `pending-recording` producer is gone — RECORDED
+        // sessions now surface as [RecordingState.Interrupted] via
+        // PipelineRecovery Phase 5, and the keyboard's record / trash
+        // buttons own the Continue / Discard affordance. The InfoBar
+        // adds only a pure-info explanatory text when
+        // state.recording is Interrupted (separate test below).
         val session = net.devemperor.dictate.state.PendingSession(
             sessionId = "xyz",
             status = net.devemperor.dictate.database.entity.SessionStatus.RECORDED,
@@ -181,19 +187,19 @@ class InfoBarSelectorTest {
         val state = defaultState().copy(
             pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
         )
-        val items = InfoBarSelector.select(state)
-        assertEquals(1, items.size)
-        val item = items.first()
-        assertEquals("pending-recording:xyz", item.id)
-        assertNull("MVP — Pending-Recording has no confirm action", item.confirmAction)
-        assertEquals(
-            Action.PendingSessionsAction.Dismiss("xyz"),
-            item.dismissAction,
-        )
+        // RECORDED alone in pendingSessions (no Interrupted recording in
+        // state.recording — e.g. between FGS-onCreate and Phase 5's
+        // SurfaceInterruptedRecording dispatch) produces NO InfoBar item.
+        assertTrue(InfoBarSelector.select(state).isEmpty())
     }
 
     @Test
     fun `pending items sort ascending by createdAt`() {
+        // Post-refactor (2026-05-23) — only COMPLETED rows produce
+        // pending-insert items. The RECORDED row is intentionally
+        // dropped from the InfoBar surface (see test above + Selector
+        // KDoc). Sort order: ascending by createdAt of the remaining
+        // pending-insert items only.
         val s1 = net.devemperor.dictate.state.PendingSession(
             "a", net.devemperor.dictate.database.entity.SessionStatus.COMPLETED, "x", 3_000L,
         )
@@ -208,7 +214,94 @@ class InfoBarSelectorTest {
         )
         val items = InfoBarSelector.select(state)
         assertEquals(
-            listOf("pending-recording:b", "pending-insert:c", "pending-insert:a"),
+            listOf("pending-insert:c", "pending-insert:a"),
+            items.map { it.id },
+        )
+    }
+
+    // ── 2026-05-23: recovery-surfaced unfinished recording (pure-info) ────
+
+    @Test
+    fun `Interrupted recording surfaces a pure-info item with both actions null`() {
+        // The state-derived InfoBar's lifecycle is fully owned by the
+        // selector's source condition (state.recording is Interrupted).
+        // No buttons, no actions — the keyboard's record/trash buttons
+        // are the affordances, this item just explains what happened.
+        val state = defaultState().copy(
+            recording = net.devemperor.dictate.state.RecordingState.Interrupted(
+                sessionId = "sid-recovered",
+                elapsedMs = 8_000L,
+            ),
+        )
+        val items = InfoBarSelector.select(state)
+        assertEquals(1, items.size)
+        val item = items.first()
+        assertEquals("recovery-unfinished:sid-recovered", item.id)
+        assertEquals(
+            "Pinned to top (createdAt=0L) so it outranks transient items",
+            0L, item.createdAt,
+        )
+        assertNull(
+            "Pure-info item — no confirm button (record-tap continues via the keyboard)",
+            item.confirmAction,
+        )
+        assertNull(
+            "Pure-info item — no dismiss button (trash-tap discards via the keyboard)",
+            item.dismissAction,
+        )
+        assertEquals(InfoBarStyle.INFO, item.message.style)
+    }
+
+    @Test
+    fun `Interrupted item vanishes once state recording leaves Interrupted`() {
+        // The state-condition lifecycle is the resurrection guarantee:
+        // continuation (Preparing/Active) or discard (Idle) removes
+        // the item without any explicit dismiss.
+        val interrupted = defaultState().copy(
+            recording = net.devemperor.dictate.state.RecordingState.Interrupted(
+                sessionId = "sid-x", elapsedMs = 5_000L,
+            ),
+        )
+        assertEquals(1, InfoBarSelector.select(interrupted).size)
+
+        // Continuation arm → Preparing.
+        val preparing = interrupted.copy(
+            recording = net.devemperor.dictate.state.RecordingState.Preparing(
+                useBluetooth = false,
+                audioFile = java.io.File("/tmp/x"),
+                sessionId = "sid-x",
+            ),
+        )
+        assertTrue(InfoBarSelector.select(preparing).isEmpty())
+
+        // Discard arm → Idle.
+        val idle = interrupted.copy(recording = net.devemperor.dictate.state.RecordingState.Idle)
+        assertTrue(InfoBarSelector.select(idle).isEmpty())
+    }
+
+    @Test
+    fun `Interrupted item pinned to top above pending-insert items`() {
+        // When both an Interrupted recording AND a pending-insert exist,
+        // the Interrupted info-text (createdAt=0L) sorts ahead of the
+        // pending-insert (whose createdAt is the session timestamp).
+        // The renderer shows items.first(), so the user sees the
+        // unfinished-recording explanation first — the most actionable
+        // surface until they resolve it.
+        val pendingInsert = net.devemperor.dictate.state.PendingSession(
+            sessionId = "completed-sid",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "hello",
+            createdAt = 10_000L,
+        )
+        val state = defaultState().copy(
+            recording = net.devemperor.dictate.state.RecordingState.Interrupted(
+                sessionId = "interrupted-sid", elapsedMs = 3_000L,
+            ),
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(pendingInsert),
+        )
+        val items = InfoBarSelector.select(state)
+        assertEquals(
+            listOf("recovery-unfinished:interrupted-sid", "pending-insert:completed-sid"),
             items.map { it.id },
         )
     }

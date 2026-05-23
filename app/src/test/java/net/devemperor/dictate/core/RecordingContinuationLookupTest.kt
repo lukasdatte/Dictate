@@ -125,7 +125,7 @@ class RecordingContinuationLookupTest {
 
     /**
      * Hand-rolled SessionDao that returns [candidate] from
-     * findLatestRecordingInterrupted and records the floor it was
+     * findLatestUnfinishedRecording and records the floor it was
      * queried with. All other methods throw - the lookup must not
      * touch them.
      */
@@ -135,7 +135,7 @@ class RecordingContinuationLookupTest {
         var lastInterruptedFloor: Long = Long.MIN_VALUE
             private set
 
-        override fun findLatestRecordingInterrupted(createdAtFloor: Long): SessionEntity? {
+        override fun findLatestUnfinishedRecording(createdAtFloor: Long): SessionEntity? {
             lastInterruptedFloor = createdAtFloor
             return candidate
         }

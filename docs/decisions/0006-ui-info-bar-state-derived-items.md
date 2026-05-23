@@ -425,3 +425,95 @@ explicitly resolved, (c) dismiss persists via natural source, and
 imperative status quo could not be extended to satisfy (b) and (d)
 without re-architecting anyway; doing it once cleanly costs less than
 two iterative migrations.
+
+### 2026-05-23 — Pure-info items + unfinished-recording fold-in
+
+**Trigger:** User-architecture discussion on how to surface a
+recovered unfinished recording (the `Last recording not yet
+transcribed` info-bar). User constraint: "Consumer vom Senden-Button
+darf nichts von diesem Info-Modal wissen" — the record/trash button
+code must not gain any InfoBar coupling. Two sub-decisions emerged
+from that constraint plus the realisation that the record-button's
+action resolver reads `state.recording`, not the InfoBar.
+
+**Before:**
+
+1. `dismissAction: Action` was non-nullable on `InfoBarItem`. Every
+   item — including pure explanatory text — had to dispatch a
+   state-mutating dismiss action when clicked, otherwise it would
+   resurrect on the next emit.
+2. The Pending-Recording producer surfaced every `RECORDED` session
+   as an info-bar item with a single Dismiss-button that discarded
+   the audio. A separate `RECORDING_INTERRUPTED` surfacing path
+   already existed (`RecordingState.Interrupted` via
+   `PipelineRecovery` Phase 5, 2026-05-22). The two surfacings
+   diverged in shape (info-bar vs paused-recording UI) despite both
+   being "unfinished recording the user can continue or discard".
+
+**After:**
+
+1. **`dismissAction: Action?` is nullable** — and `confirmAction`
+   stays nullable. An item with **both actions null** is a
+   "pure-info" item: the renderer hides both buttons, and the
+   item's lifecycle is fully owned by the selector's source
+   condition (no resurrection because the item cannot be
+   user-dismissed; the only way it goes away is the source
+   condition becoming false on the next state emit).
+2. **The Pending-Recording producer is removed.** Both
+   `RECORDING_INTERRUPTED` and `RECORDED` rows fold into
+   `RecordingState.Interrupted` via the same `PipelineRecovery`
+   Phase 5 path — `SessionDao.findLatestUnfinishedRecording`
+   (renamed from `findLatestRecordingInterrupted`) returns either
+   status. The keyboard surfaces the unfinished recording as a
+   frozen paused-recording (today's fix in
+   `RecordingAnimationController.onState`), and the record/trash
+   buttons own the Continue / Discard affordance.
+3. A **new pure-info producer** drops a button-less info-text
+   item (`dictate_recovery_unfinished_info`) into the bar whenever
+   `state.recording is RecordingState.Interrupted`, pinned to top
+   (`createdAt = 0L`). The item vanishes the moment a keyboard
+   action transitions `state.recording` out of `Interrupted`
+   (Continue → `Preparing`/`Active`, Discard → `Idle`). No
+   InfoBar-specific code lives in the record-button resolver or
+   the trash-button resolver — the button code only mutates
+   `state.recording`, this producer only reads `state.recording`,
+   the orchestrator is the entire coupling surface.
+
+**Reasoning:**
+
+- Architecturally, *some* InfoBar items genuinely communicate state
+  without offering user action. Forcing them through a
+  state-mutating dismissAction encoded the wrong invariant — the
+  "no-resurrection" guarantee can equally be derived from the
+  source-condition lifecycle. Making both actions nullable
+  extends the contract cleanly: dismissable items keep the
+  natural-source-mutation guarantee; pure-info items rely on the
+  selector's predicate. Both prevent resurrection.
+- The decoupling the user wanted — "Senden-Button knows nothing
+  about the info modal" — is dissolved by realising that the
+  send/record button reads `state.recording`. For the button to
+  "continue" rather than start fresh, the continuable recording
+  must already live in `state.recording.Interrupted`. Once it does,
+  having a parallel info-bar surface with its own Continue/Discard
+  buttons doubles the affordance and creates the exact coupling the
+  user wanted to avoid. Eliminating that parallel surface (and
+  replacing it with a pure-info text) is the cleanest possible
+  decoupling: the keyboard buttons own the actions, the InfoBar
+  owns the explanation, nothing crosses.
+- The `RECORDED`-vs-`RECORDING_INTERRUPTED` semantic distinction
+  (complete vs incomplete audio) is irrelevant at the user-affordance
+  seam: the continuation machinery (`allocateNext` + MediaMuxer
+  concat) treats both identically (append segment N+1 under the same
+  session-id, concat on send). The DB-side distinction is preserved
+  (status promotion in §6.3, retention policies, cleanup) — only the
+  user-surface is unified.
+
+**Reference implementation:** commit on `feature/dictate-keyboard-
+layout-refactor` 2026-05-23 — `InfoBarItem.kt` (nullable
+`dismissAction` + KDoc), `InfoBarRenderer.kt` (hide `info_no_btn`
+when null), `InfoBarSelector.kt` (drop pending-recording producer +
+add recovery-unfinished producer), `SessionDao.kt` (rename + query
+extension to `RECORDED`), `PipelineRecovery.kt` (Phase 5 caller +
+KDoc), `SessionTracker.kt` (caller), test updates +
+`PipelineRecoveryFullTest` Phase-5-RECORDED test, this
+Decision-History entry.

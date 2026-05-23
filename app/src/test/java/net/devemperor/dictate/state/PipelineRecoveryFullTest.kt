@@ -414,15 +414,48 @@ class PipelineRecoveryFullTest {
     }
 
     @Test
-    fun `recover Phase 5 does not surface when no interrupted recording exists`() {
-        val tmp = File.createTempFile("dictate-noint", ".m4a").also { it.deleteOnExit() }
-        seed("recorded-only", SessionStatus.RECORDED, audioFilePath = tmp.absolutePath)
+    fun `recover Phase 5 surfaces a fresh RECORDED row via SurfaceInterruptedRecording (2026-05-23)`() {
+        // findLatestUnfinishedRecording extension — RECORDED rows now
+        // share the same surfacing path as RECORDING_INTERRUPTED so the
+        // user gets one consistent "unfinished recording" affordance set
+        // (keyboard record/trash buttons) regardless of why the audio
+        // was left over.
+        val tmp = File.createTempFile("dictate-recorded", ".m4a").also { it.deleteOnExit() }
+        seed("recorded-1", SessionStatus.RECORDED, audioFilePath = tmp.absolutePath)
+        val store = DictateUiStateStore(DictateUiState.initial())
+        val recovery = PipelineRecovery(
+            sessionDao = dao,
+            sessionRepo = adapter,
+            emitAction = { dispatchedActions += it },
+            ioContext = EmptyCoroutineContext,
+            continuationFreshnessMs = { Long.MAX_VALUE / 2 },
+            interruptedRecordingElapsedMsProvider = { 4_200L },
+        )
+
+        runBlocking { recovery.recover(store) }
+
+        val surface = dispatchedActions
+            .filterIsInstance<Action.RecordingAction.SurfaceInterruptedRecording>()
+            .single()
+        assertEquals("recorded-1", surface.sessionId)
+        assertEquals(4_200L, surface.elapsedMs)
+    }
+
+    @Test
+    fun `recover Phase 5 does not surface when only non-unfinished rows exist`() {
+        // COMPLETED is terminal — it never surfaces as an unfinished
+        // recording. Sanity-check the negative case so a future query
+        // regression that pulls COMPLETED into the unfinished set fails
+        // here rather than silently surfacing finished sessions as
+        // "tap to continue".
+        val tmp = File.createTempFile("dictate-completed", ".m4a").also { it.deleteOnExit() }
+        seed("completed-only", SessionStatus.COMPLETED, audioFilePath = tmp.absolutePath)
         val store = DictateUiStateStore(DictateUiState.initial())
 
         runBlocking { recovery().recover(store) }
 
         assertTrue(
-            "no interrupted recording → no SurfaceInterruptedRecording dispatch",
+            "no unfinished recording → no SurfaceInterruptedRecording dispatch",
             dispatchedActions.none {
                 it is Action.RecordingAction.SurfaceInterruptedRecording
             },

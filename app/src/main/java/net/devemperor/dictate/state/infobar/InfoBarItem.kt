@@ -11,19 +11,23 @@ import net.devemperor.dictate.state.Action
  * consecutive emits are treated as "the same" (the renderer can skip
  * an animation), even though the wrapping list is rebuilt fresh.
  *
- * **Dismiss is the natural-source mutation.** [dismissAction] is the
- * `Action` that, when dispatched, modifies the underlying state so
- * the selector no longer produces this item on the next emit (ADR-0006
- * §"Dismiss = natural-source mutation"). This contract is the single
- * structural guarantee that prevents item resurrection — the renderer
- * dispatches `dismissAction`, the state changes, the selector
- * re-evaluates without the item.
+ * **Dismiss is the natural-source mutation — when present.** [dismissAction],
+ * if non-null, MUST mutate the state-axis that caused the item to surface
+ * (ADR-0006 §"Dismiss = natural-source mutation"). That contract is the
+ * single structural guarantee against item resurrection — the renderer
+ * dispatches `dismissAction`, the state changes, the selector re-evaluates
+ * without the item.
  *
- * **Confirm is optional.** Some items (e.g. internet-error notice)
- * have no positive action — only "Dismiss". For those, [confirmAction]
- * is `null` and the renderer hides the confirm button. Items with a
- * positive action (e.g. "Open Settings" for invalid-api-key) supply a
- * non-null `Action`.
+ * **Confirm and dismiss are both optional.** A pure-info item that just
+ * communicates state without offering user action sets BOTH to `null` —
+ * the renderer hides both buttons and the item lives exactly as long as
+ * its source condition in the selector holds (e.g. "unfinished recording
+ * restored" tied to `state.recording is RecordingState.Interrupted`; the
+ * item vanishes the moment a keyboard action transitions the recording
+ * out of `Interrupted`, so the no-resurrection guarantee is preserved via
+ * the source-condition lifecycle instead of via the dismiss button).
+ * Single-action items (e.g. internet-error) keep `confirmAction` null and
+ * `dismissAction` non-null; full action items supply both.
  *
  * Future-extensible: an `extraActions: List<NamedAction>` slot can be
  * added without breaking existing items (default `emptyList()`). The
@@ -45,8 +49,10 @@ import net.devemperor.dictate.state.Action
  *   click. `null` means "no positive action" — renderer hides the
  *   confirm button.
  * @property dismissAction `Action` dispatched on the dismiss-button
- *   click. MUST mutate the state-axis that caused the item to surface
- *   (otherwise the item resurrects on the next emit).
+ *   click. When non-null, MUST mutate the state-axis that caused the
+ *   item to surface (otherwise the item resurrects on the next emit).
+ *   `null` means "no dismiss button" — pure-info items rely on the
+ *   selector's source condition for their lifecycle (see KDoc above).
  *
  * @see InfoBarMessage
  * @see InfoBarSelector
@@ -58,5 +64,5 @@ data class InfoBarItem(
     val createdAt: Long,
     val message: InfoBarMessage,
     val confirmAction: Action? = null,
-    val dismissAction: Action,
+    val dismissAction: Action? = null,
 )

@@ -85,29 +85,40 @@ interface SessionDao {
     fun findLatestByOrigin(origin: String): SessionEntity?
 
     /**
-     * Returns the most recent `RECORDING_INTERRUPTED` session whose
-     * `created_at` is at least [createdAtFloor] (i.e. fresh enough to
-     * be auto-continued). Used by [net.devemperor.dictate.state.layout.ActionResolvers]
-     * to decide whether the next Record-click should reuse a
-     * crash-interrupted session-id (B2 / ADR-0008 §"Auto-Continuation").
+     * Returns the most recent "unfinished recording" — either
+     * `RECORDING_INTERRUPTED` (process-death survivor) or `RECORDED`
+     * (recording closed but transcription never completed, e.g. a
+     * `TRANSCRIBING → RECORDED` recovery-downgrade) — whose
+     * `created_at` is at least [createdAtFloor].
+     *
+     * Both statuses now flow through the **same** surfacing path
+     * (`PipelineRecovery` Phase 5 → [net.devemperor.dictate.state.RecordingState.Interrupted];
+     * `ActionResolvers` auto-continuation, 2026-05-23). From the user's
+     * perspective both are "an unfinished recording I can continue
+     * (record-click → append segment N+1) or discard (trash button)" —
+     * the audio-completion distinction is irrelevant at this seam
+     * because the continuation machinery (`allocateNext` +
+     * MediaMuxer-concat) handles `RECORDED` and `RECORDING_INTERRUPTED`
+     * identically: it allocates a fresh next segment under the same
+     * session-id and concatenates whatever was already on disk.
      *
      * Filter is `origin = KEYBOARD` only — only IME-driven recordings
-     * are eligible for continuation; history-reprocess and
-     * post-processing sessions are out of scope.
+     * are eligible; history-reprocess and post-processing sessions are
+     * out of scope.
      *
-     * Returns null when no fresh interrupted session exists.
+     * Returns null when no fresh unfinished session exists.
      */
     @Query(
         """
         SELECT * FROM sessions
-        WHERE status = 'RECORDING_INTERRUPTED'
+        WHERE status IN ('RECORDING_INTERRUPTED', 'RECORDED')
           AND origin = 'KEYBOARD'
           AND created_at >= :createdAtFloor
         ORDER BY created_at DESC
         LIMIT 1
         """
     )
-    fun findLatestRecordingInterrupted(createdAtFloor: Long): SessionEntity?
+    fun findLatestUnfinishedRecording(createdAtFloor: Long): SessionEntity?
 
     /**
      * Returns all sessions whose audio file exists on disk but whose duration

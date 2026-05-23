@@ -69,10 +69,10 @@ class FakeSessionDao : SessionDao {
     override fun findLatestByOrigin(origin: String): SessionEntity? =
         rows.values.filter { it.origin == origin }.maxByOrNull { it.createdAt }
 
-    override fun findLatestRecordingInterrupted(createdAtFloor: Long): SessionEntity? =
+    override fun findLatestUnfinishedRecording(createdAtFloor: Long): SessionEntity? =
         rows.values
             .filter {
-                it.status == "RECORDING_INTERRUPTED" &&
+                it.status in setOf("RECORDING_INTERRUPTED", "RECORDED") &&
                     it.origin == "KEYBOARD" &&
                     it.createdAt >= createdAtFloor
             }

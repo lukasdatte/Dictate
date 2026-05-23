@@ -90,7 +90,12 @@ class ImeViewBackendTest {
             .associateWith { MaterialButton(ctx) as View }
             .toMutableMap()
         anim = FakeRecordingAnimation()
-        controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        controller = RecordingAnimationController(
+            anim,
+            recordButton = null,
+            accentColorProvider = { 0 },
+            animationsEnabled = { true },
+        )
         captured.clear()
     }
 

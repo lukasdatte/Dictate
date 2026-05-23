@@ -12,7 +12,7 @@ import java.io.File
  * Unit tests for [RecordingAnimationController].
  *
  * The animation strategy is mocked via [FakeRecordingAnimation] (K-1 —
- * hand-rolled, no Mockito). The [pulseLayout] parameter is nullable, so
+ * hand-rolled, no Mockito). The [recordButton] parameter is nullable, so
  * tests pass `null` to avoid pulling in `PulseLayout` (an Android
  * `FrameLayout` subclass that requires Robolectric).
  *
@@ -36,7 +36,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `idle then active starts the animation when enabled`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.onState(stateWithRecording(RecordingState.Idle))
         controller.onState(stateWithRecording(activeRecording()))
@@ -47,7 +47,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `active then paused calls pause`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.onState(stateWithRecording(activeRecording()))
         controller.onState(stateWithRecording(pausedRecording()))
@@ -58,7 +58,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `paused then idle calls cancel`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.onState(stateWithRecording(pausedRecording()))
         controller.onState(stateWithRecording(RecordingState.Idle))
@@ -75,7 +75,7 @@ class RecordingAnimationControllerTest {
         // BorderGlowAnimation that builds no visualizer and drops the timer
         // text (`!isActive` guard) → the keyboard showed nothing.
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.onState(stateWithRecording(interruptedRecording(elapsedMs = 8_000L)))
 
@@ -88,7 +88,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `interrupted then active continuation restarts the animation`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         // A Record-tap on the surfaced Interrupted recording continues it.
         controller.onState(stateWithRecording(interruptedRecording(elapsedMs = 8_000L)))
@@ -100,7 +100,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `interrupted then idle discard cancels the animation`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.onState(stateWithRecording(interruptedRecording(elapsedMs = 5_000L)))
         controller.onState(stateWithRecording(RecordingState.Idle))
@@ -111,7 +111,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `animationsEnabled=false suppresses interrupted rendering`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { false })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { false })
 
         controller.onState(stateWithRecording(interruptedRecording(elapsedMs = 8_000L)))
 
@@ -123,7 +123,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `re-emitting same recording class is idempotent`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.onState(stateWithRecording(activeRecording()))
         controller.onState(stateWithRecording(activeRecording()))  // same class
@@ -135,7 +135,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `preparing does not invoke the animator`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.onState(stateWithRecording(preparingRecording()))
 
@@ -147,7 +147,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `animationsEnabled=false suppresses active start`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { false })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { false })
 
         controller.onState(stateWithRecording(activeRecording()))
 
@@ -159,7 +159,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `animationsEnabled=false still allows idle cancel`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { false })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { false })
 
         // Even with animations off, the transition Active → Idle must
         // cancel (defensive — animations off may have flipped mid-
@@ -173,7 +173,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `onAmplitude forwards to the animator`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.onAmplitude(0.5f)
         controller.onAmplitude(0.75f)
@@ -184,7 +184,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `onTimerTick formats MM colon SS`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.onTimerTick(0L)
         controller.onTimerTick(8_000L)
@@ -196,7 +196,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `updateColor forwards to the animator`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.updateColor(0xFFAA0011.toInt())
 
@@ -206,7 +206,7 @@ class RecordingAnimationControllerTest {
     @Test
     fun `reset re-arms first-apply after detach`() {
         val anim = FakeRecordingAnimation()
-        val controller = RecordingAnimationController(anim, pulseLayout = null, animationsEnabled = { true })
+        val controller = RecordingAnimationController(anim, recordButton = null, accentColorProvider = { 0 }, animationsEnabled = { true })
 
         controller.onState(stateWithRecording(activeRecording()))  // start
         controller.reset()

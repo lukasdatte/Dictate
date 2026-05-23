@@ -638,9 +638,12 @@ class OverlayBackendTest {
             }
             override fun updateColor(color: Int) = Unit
         }
-        val factory = RecordingAnimationControllerFactory { btn, pulse ->
+        val factory = RecordingAnimationControllerFactory { btn, _ ->
             net.devemperor.dictate.state.render.RecordingAnimationController(
-                fakeAnimation, pulse, animationsEnabled = { true },
+                fakeAnimation,
+                btn,
+                accentColorProvider = { 0 },
+                animationsEnabled = { true },
             )
         }
         val backend = OverlayBackend(
@@ -683,9 +686,12 @@ class OverlayBackendTest {
             override fun onTimerTick(timerText: String) = Unit
             override fun updateColor(color: Int) = Unit
         }
-        val factory = RecordingAnimationControllerFactory { btn, pulse ->
+        val factory = RecordingAnimationControllerFactory { btn, _ ->
             net.devemperor.dictate.state.render.RecordingAnimationController(
-                fakeAnimation, pulse, animationsEnabled = { true },
+                fakeAnimation,
+                btn,
+                accentColorProvider = { 0 },
+                animationsEnabled = { true },
             )
         }
         val backend = OverlayBackend(

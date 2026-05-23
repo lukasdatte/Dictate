@@ -772,7 +772,8 @@ class DictatePipelineService : Service() {
                     animation.prepare(recordButton)
                     net.devemperor.dictate.state.render.RecordingAnimationController(
                         animation,
-                        pulseLayout,
+                        recordButton,
+                        { sharedPrefs.get(Pref.AccentColor) },
                         animationsEnabledLambda,
                     )
                 }

@@ -72,6 +72,22 @@
     <string name="dictate_internet_error_msg">Couldn\'t connect to the API. Please check your internet connection.</string>
     <string name="dictate_model_not_found_msg">The selected model was not found. Please check your API settings.</string>
     <string name="dictate_bad_request_msg">The API rejected the request. Please check your settings.</string>
+    <!-- ADR-0006 — Info-Bar producers (Block E) -->
+    <string name="dictate_pending_insert_msg">Pending text ready to insert. Tap ✓ to paste.</string>
+    <!-- B4 (ADR-0008) — pending-insert with text preview. Format: %1$s is the first
+         ~60 characters of the transcribed text, ellipsised when truncated. -->
+    <string name="dictate_pending_insert_msg_preview">Text ready: »%1$s« — tap ✓ to paste.</string>
+    <!-- 2026-05-23 — Recovery-surfaced unfinished recording. Pure-info
+         text shown while state.recording is RecordingState.Interrupted
+         (PipelineRecovery Phase 5 folds both RECORDING_INTERRUPTED and
+         RECORDED rows into this state). The keyboard already exposes
+         the actions (record = continue, trash = discard), so this
+         text-only InfoBar item explains the situation without
+         duplicating those affordances. -->
+    <string name="dictate_recovery_unfinished_info">Unfinished recording restored — tap record to continue, trash to discard.</string>
+    <!-- B4 (ADR-0008) — Partial-Recovery warning. %1$d is the estimated
+         number of seconds of audio lost from unreadable segments. -->
+    <string name="dictate_recovery_partial_msg">%1$d seconds of audio were skipped while sending — some words may be missing.</string>
     <string name="dictate_okay">Okay</string>
     <string name="dictate_cancel">Cancel</string>
     <string name="dictate_settings_api_key_title">Change OpenAI API key 🔑</string>
@@ -216,6 +232,11 @@
     <string name="dictate_changelog_16">v2.4.4\n\nThis is just a small update with some minor improvements.\n\n- The device screen now remains turned on during recording to make longer recordings more comfortable.\n\n- If you have activated backups via Google Drive, all settings are backed up from time to time so that you can continue dictating directly on a new device.\n\n- Bugfix: The Enter button now sends text in URL bars in browsers.\n\n\n</string>
     <string name="dictate_settings_audio_focus_title">Audio focus ⏸️</string>
     <string name="dictate_settings_audio_focus_summary">Pause background media while recording</string>
+    <!-- Block 2 (Quality-Gate Nice-to-have B2-8): TalkBack reads the toggle's
+         state, not the action. The verb belongs in the user's mental model
+         ("the focus IS active"), not in the contentDescription. -->
+    <string name="dictate_audio_focus_state_on">Audio-Fokus aktiv: Musik wird beim Aufnehmen pausiert</string>
+    <string name="dictate_audio_focus_state_off">Audio-Fokus inaktiv: Musik läuft beim Aufnehmen weiter</string>
     <string name="dictate_changelog_17">v2.4.5\n\nThis is just a tiny update that adds a settings option to disable the audio focus. You can now control whether background audio (e.g. music, podcasts, …) should be paused automatically.\n\n\n</string>
     <string name="dictate_changelog_18">v2.5.0\n\n- This update brings a cool new feature:\nYou can now undo and redo changes that were made after transcribing or rewording a text. Just click on the two buttons in the rewording section to jump through the history. ⏪\n\n- Some design changes and bug fixes have been made. ✨\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
     <string name="dictate_changelog_19">v2.6.0\n\n- Advanced reasoning models were added (o1, o3, o3-mini), which allow even better rewording. ✨\n\n- This update adds a better indicator for switching between input languages: The text on the record button now adapts to the currently selected input language. 💪\n\n- Some design changes and bug fixes have been made. ✨\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
@@ -330,6 +351,19 @@
     <string name="dictate_status_failed">Failed</string>
     <string name="dictate_status_cancelled">Cancelled</string>
     <string name="dictate_status_running">Processing…</string>
+    <!-- M4 (Spec 1 §6.1.3): defensive badges for the OOM-death window —
+         should never actually surface, because PipelineRecovery promotes
+         RECORDING→FAILED and TRANSCRIBING→RECORDED before the history
+         list reads from the DB. Kept as a belt-and-suspenders fallback. -->
+    <string name="dictate_status_recording">Recording…</string>
+    <string name="dictate_status_transcribing">Transcribing…</string>
+
+    <!-- B3-VAL-W1 F-4 (Spec 1 §4.11.6.3, KG-AFF-3): user-visible
+         toast shown when the user taps "Clear cache" while a recording
+         is in flight. Clearing mid-recording would unlink the open
+         MediaRecorder file descriptor and silently corrupt the
+         session (Ghost-FAILED with no clear cause). -->
+    <string name="dictate_cache_clear_blocked_recording">Cache cannot be cleared while recording is active.</string>
 
     <!-- History detail actions -->
     <string name="dictate_history_direct_reprocess">Run directly</string>
@@ -340,7 +374,10 @@
     <string name="dictate_reprocess_audio_available">Audio %1$s · Send</string>
     <string name="dictate_job_already_active">Processing already running</string>
     <string name="dictate_audio_file_missing">Audio file no longer available</string>
+    <string name="dictate_resend_focus_lost">Input field unavailable — restarting pipeline</string>
     <string name="dictate_reprocess_language">Language</string>
+    <string name="dictate_language_manage">⚙ Manage languages…</string>
+    <string name="dictate_language_other_separator">────── other languages ──────</string>
 
     <!-- Delete audio -->
     <string name="dictate_delete_audio_title">Delete audio</string>
@@ -378,6 +415,69 @@
         <item quantity="one">%d comment ignored</item>
         <item quantity="other">%d comments ignored</item>
     </plurals>
+
+    <!--
+        Block 2 (DictatePipelineService): notification channel + content
+        + service description + IME bind-race fallback. See Spec 1 §11.1
+        §11.5 §11.3.2a. Block 1b's PipelineNotificationCoordinator will
+        replace the idle subtitle with state-driven copy.
+    -->
+    <string name="dictate_pipeline_service_description">Background service for the Dictate transcription pipeline.</string>
+    <string name="dictate_pipeline_channel_name">Dictate pipeline</string>
+    <string name="dictate_pipeline_channel_description">Persistent notification while Dictate is recording or processing audio in the background.</string>
+    <string name="dictate_pipeline_notif_title">Dictate</string>
+    <string name="dictate_pipeline_notif_idle">Ready</string>
+    <string name="dictate_service_not_ready">Service is starting — please wait a moment.</string>
+    <string name="dictate_storage_full">Cache full — recording cannot start.</string>
+
+    <!--
+        C4-B2 (Epic OQ-3 / FN-2): PipelineNotificationCoordinator
+        state-driven subtitles + the [Pause][Stopp][Senden] /
+        [Resume][Stopp][Senden] / [Cancel] / [Insert][Discard]
+        action-button labels (Spec 1 §7.6). `dictate_history_pause`
+        already existed but is the history-row label — the FGS
+        notification needs its own keyed strings so a future history
+        re-word doesn't silently change the notification.
+    -->
+    <string name="dictate_notif_recording_active">Recording …</string>
+    <string name="dictate_notif_recording_paused">Recording paused</string>
+    <string name="dictate_notif_processing">Processing …</string>
+    <string name="dictate_notif_ready_to_insert">Ready to insert</string>
+    <string name="dictate_notif_overlay_permission_required">Floating widget hidden — permission revoked</string>
+    <string name="dictate_action_pause">Pause</string>
+    <string name="dictate_action_resume">Resume</string>
+    <string name="dictate_action_stop">Stop</string>
+    <string name="dictate_action_send">Send</string>
+    <string name="dictate_action_cancel">Cancel</string>
+    <string name="dictate_action_insert">Insert</string>
+    <string name="dictate_action_discard">Discard</string>
+
+    <!--
+        Block 5 / Spec 3 (Floating-Overlay): content-descriptions for the
+        5-button overlay layout. The shared "Send" label re-uses the
+        existing `dictate_send` resource; per-button accessibility
+        descriptions live below so screen-readers announce each affordance
+        unambiguously when the overlay is on screen.
+    -->
+    <string name="overlay_record_cd">Start recording</string>
+    <string name="overlay_send">Send</string>
+    <string name="overlay_send_cd">Send recording</string>
+    <string name="overlay_pause_cd">Pause or resume recording</string>
+    <string name="overlay_trash_cd">Cancel recording</string>
+    <string name="overlay_close_cd">Close overlay</string>
+
+    <!--
+        Block 5 / Spec 3 §5.2-§5.3 — onboarding strings for the floating
+        overlay (SYSTEM_ALERT_WINDOW) permission. Surfaced in the in-IME
+        info-bar AND in the standalone
+        OverlayPermissionOnboardingActivity.
+    -->
+    <string name="overlay_perm_onboarding_title">Floating overlay permission</string>
+    <string name="overlay_perm_explainer">To show the floating widget on top of other apps, Dictate needs the "Display over other apps" permission.</string>
+    <string name="overlay_perm_later">Later</string>
+    <string name="overlay_perm_grant">Allow</string>
+    <string name="overlay_perm_onboarding_granted">Permission granted.</string>
+    <string name="overlay_perm_onboarding_pending">Permission still required — tap "Allow" to open System Settings.</string>
 
     <string name="dictate_changelog_30">v3.2.0\n\nThis update brings some major improvements and new features! 🚀\n\n- Separate API keys: You can now save separate API keys for each provider (OpenAI, Groq, Custom), making switching between them seamless. 🔑\n\n- Improved Bluetooth support: Connecting to Bluetooth headsets is now faster and more reliable. 🎧\n\n- Auto Enter: Added an option to automatically press Enter/Send after transcription. ⚡\n\n- New Models: Added support for OpenAI o1, o4-mini, and GPT-5.2, including updated pricing info. 🤖\n\n- Various bug fixes and improvements. ✨\n\nI wish you a blessed New Year 2026! 🎆\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
 </resources>

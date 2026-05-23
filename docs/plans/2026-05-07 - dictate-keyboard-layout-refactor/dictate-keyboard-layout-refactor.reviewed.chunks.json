@@ -1,0 +1,448 @@
+{
+  "source": "/home/lukas/WebStorm/Dictate/worktrees/feature/dictate-keyboard-layout-refactor/docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/dictate-keyboard-layout-refactor.reviewed.md",
+  "sections": [
+    { "heading": "1. Kontext & Auslöser", "estimatedTokens": 1151 },
+    { "heading": "2. Ziele", "estimatedTokens": 487 },
+    { "heading": "3. Architektur-Vision", "estimatedTokens": 1710 },
+    { "heading": "4. Building Blocks (Implementierungs-Reihenfolge)", "estimatedTokens": 12347 },
+    { "heading": "5. Spec-Files", "estimatedTokens": 236 },
+    { "heading": "6. Risiken (Plan-Level, spec-übergreifend)", "estimatedTokens": 342 },
+    { "heading": "7. Verbleibende offene Fragen", "estimatedTokens": 2685 },
+    { "heading": "8. Referenzen", "estimatedTokens": 582 },
+    { "heading": "9. Iteration-Log", "estimatedTokens": 33164 }
+  ],
+  "blocks": [
+    {
+      "id": "B0",
+      "name": "Architecture-Foundation (ADRs + state-architecture docs)",
+      "chunk_ids": ["C0-block0-arch-docs"],
+      "test_agent_count": 1,
+      "notes": "Plan-§4.0 defines this Block 0 as a binding pre-code contract: 5 ADRs + 12 architecture docs + ADR index. No production code — docs only. D12-atomic Foundation-Pack (XL exemption documented on chunk). Must be implemented BEFORE all code-blocks per plan §4.0.4 'Bindender-Vertrag-Charakter'. test_agent_count=1 (docs only — light audit)."
+    },
+    {
+      "id": "B1",
+      "name": "Pre-Architecture and Service-Skeleton (plan-Block-1a + plan-Block-2)",
+      "chunk_ids": ["C1-block1a-quick-wins", "C2-block2-pipeline-service-skeleton"],
+      "test_agent_count": 1,
+      "notes": "Two small chunks grouped: Block-1a (predResendVisible helper consolidation + recordButton hybrid resolution + KSM.refresh quick-wins, in TODAY's code, compile-green) + Block-2 (DictatePipelineService skeleton + Manifest + Notification + Bind, NO Orchestrator yet). Both must land before Block 1b (modules) which lives in the service container. Aggregate score ~1250 (M); 2 chunks; below the 2-criterion threshold for a sub-split."
+    },
+    {
+      "id": "B2",
+      "name": "Modular-Orchestrator-Implementation (plan-Block-1b — DictateUiState + 13 Modules)",
+      "chunk_ids": [
+        "C3-state-core",
+        "C4-orchestrator-and-registry",
+        "C5-modules-core",
+        "C6-modules-auxiliary",
+        "C7-prefmirror-recovery-wiring"
+      ],
+      "test_agent_count": 3,
+      "notes": "The architectural core. 5 chunks decomposing plan-Block-1b along clean implementation cohesion (state-types → orchestrator/registry → core-modules → aux-modules → wiring). Aggregate score ~4350. test_agent_count=3 because total block diff will exceed 2500 LOC (per skill table). Each chunk maps to specific spec-1 sections (read on-demand via spec-1 chunks.json)."
+    },
+    {
+      "id": "B3",
+      "name": "Migration-Persistence-AudioFactory (plan-Block-3 + plan-Block-4)",
+      "chunk_ids": [
+        "C8-block3-subsystem-adapter-migration",
+        "C9-block3-db-persistence-schema-m4",
+        "C10-block3-db-persistence-recovery",
+        "C11-block4-audio-file-factory"
+      ],
+      "test_agent_count": 2,
+      "notes": "Post-architecture consumer migration + DB-persistence + AudioFileFactory. The plan's §4 table calls this Block 3 (Subsystem-Adapter-Migration) + Block 4 (RecordingHardwareSubsystem); spec1 §11.2.2 calls these 'Block 3 (DB-Persistence)' + 'Block 4 (AudioFileFactory)'. CHUNKING-DECISION: I split DB-persistence into TWO chunks (C9 schema/migration + C10 recovery/cleanup) because spec1 §6 is 17580 tokens — atomic implementation would be XXL. Aggregate score ~2500."
+    },
+    {
+      "id": "B4",
+      "name": "Keyboard-Layout-Catalog (plan-Block-5 — Spec 2 full)",
+      "chunk_ids": [
+        "C12-block5-layout-catalog-and-render-backend",
+        "C13-block5-motionscene-xml",
+        "C14-block5-ime-view-backend",
+        "C15-block5-service-wiring-and-cleanup"
+      ],
+      "test_agent_count": 2,
+      "notes": "Spec 2 implementation — KeyboardLayoutManager + LayoutCatalog + ImeViewBackend + MotionScene + RecordingAnimationController + ContentAreaController + PromptVisibilityController + OverlayResetHandler (R.10). Follows spec 2 §11.8 migration order: 5a (XML) || 5b (Backend) → 5c (Wiring with empty-body KSM) → 5d (Cleanup, destructive — only if 5c works). Aggregate score ~2500."
+    },
+    {
+      "id": "B5",
+      "name": "Floating-Overlay (plan-Block-6 — Spec 3 full)",
+      "chunk_ids": [
+        "C16-block6-overlay-backend-and-window",
+        "C17-block6-permission-onboarding",
+        "C18-block6-mode-transitions-and-drag"
+      ],
+      "test_agent_count": 2,
+      "notes": "Spec 3 implementation — OverlayBackend + WindowManager + Permission-Observer + Schließen-Button-Differential + Mode-Transitionen + Drag-Lifecycle. Aggregate score ~2000."
+    }
+  ],
+  "chunks": [
+    {
+      "id": "C0-block0-arch-docs",
+      "title": "Block 0: Architecture-ADRs + state-architecture docs (binding pre-code contract)",
+      "description": "Writes the 5 ADRs (state-modular-orchestrator-pattern, state-cross-module-cascade, service-foreground-pipeline-architecture, ui-layout-catalog-motionlayout, ui-triangle-fsm-keyboard-widget-hover) under docs/decisions/, the ADR index docs/decisions/README.md, and 12 architecture docs under docs/architecture/state-architecture/ per plan §4.0.1 + §4.0.2. Bidirectional plan-↔-ADR + spec-↔-ADR references. No production code. D12-atomic Foundation-Pack — XL exemption documented.",
+      "main": [
+        "1. Kontext & Auslöser",
+        "2. Ziele",
+        "3. Architektur-Vision",
+        "4. Building Blocks (Implementierungs-Reihenfolge)",
+        "5. Spec-Files",
+        "6. Risiken (Plan-Level, spec-übergreifend)",
+        "7. Verbleibende offene Fragen",
+        "8. Referenzen",
+        "9. Iteration-Log"
+      ],
+      "context": [],
+      "merge_exemption": "Foundation-Pack — Plan §4.0 (the entire body of plan §4) IS this Block 0's spec. 5 ADRs + 12 architecture docs + ADR index = ~18 files, ~2500-3000 LOC of binding-contract prose. ADRs cross-reference each other (§4.0.1.0.2 quer-verweis-graph); splitting would break the type-chain of the contract. Plan-meta sections §1-§9 are the SOURCE MATERIAL the ADR/docs-writer materializes into the contract files (§1→ADR-Kontext, §2→ADR-Consequences-Positive, §3→Triangle-FSM-doc, §4→hard-rules + §4.0.6-walkthrough-docs, §5→ADR-References, §6→ADR-Consequences-Negative, §7→ADR-Decision-History, §8→ADR-References, §9→ADR-Decision-History initial-entries). No spec-references — Block 0 is plan-scoped only.",
+      "implementation_score_estimate": 3600,
+      "bracket": "XL",
+      "files_estimate": 18,
+      "loc_estimate": 2800,
+      "notes": "Mandatory skill loads for the implementer: knowledge-adr-format + ~/.claude/templates/adr.md (per plan §4.0.1.0.3) + knowledge-doc-format + ~/.claude/templates/universal.md (per plan §4.0.2). Inline-anker setup is deferred to Phase 4.6 — Block 0 itself produces no code."
+    },
+    {
+      "id": "C1-block1a-quick-wins",
+      "title": "Block 1a: Quick-Wins in today's code (compile-green, no module-arch)",
+      "description": "Consolidate the 6 scattered resendButton.visibility mutations into a single predResendVisible helper. Resolve the recordButton.text/isEnabled hybrid into a single resolver inside KeyboardUiController (not LayoutCatalog yet — that comes in Block 5). Add KSM.refresh() triggers for onSingleRowModeToggled and onAudioFocusToggled. Plan §4 Block-1a column + Spec 1 §11.2.2 Block-1a steps 1-3 + Spec 2 §13.5 Gap 5.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §11.2.2 (Block-1a Schritt 1-3)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §9.4 (5 verstreute resend_btn-Mutationen — code pointers)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §9.5 (recordButton.text/isEnabled hybrid)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §13.5 (Gap 5)"
+      ],
+      "implementation_score_estimate": 400,
+      "bracket": "S/M",
+      "files_estimate": 5,
+      "loc_estimate": 150,
+      "notes": "Lives in TODAY's code (no DictateOrchestrator yet). The helper introduced here is later subsumed into LayoutCatalog.RESEND-Slot in Block 5. Acceptance: plan §10 Block-1a section (4 bullets)."
+    },
+    {
+      "id": "C2-block2-pipeline-service-skeleton",
+      "title": "Block 2: DictatePipelineService skeleton + FGS + Manifest + Notification + Bind",
+      "description": "Create app/src/main/java/net/devemperor/dictate/core/DictatePipelineService.kt with LocalBinder, onCreate/onStartCommand/onBind/onDestroy. NotificationChannel-setup as ensureNotificationChannel() called synchronously in onCreate. Manifest extension: FOREGROUND_SERVICE, FOREGROUND_SERVICE_MICROPHONE, POST_NOTIFICATIONS, SYSTEM_ALERT_WINDOW + Service entry with foregroundServiceType='microphone'. POST_NOTIFICATIONS runtime-permission-prompt in OnboardingActivity. JobExecutor-init moves from IME.onCreate to Service.onCreate. Bound-Connection in IME.onCreateInputView (NOT onCreate). Spec 1 §7 + §11.1 + §11.2.2 Block-2 (7 steps) + §11.3 + §11.5.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §7 (Service-Struktur, Start, onStartCommand, onDestroy)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §11.1 (FGS-Implementierung: AndroidManifest-Diff, Notification.Builder, startForegroundService, 5s-Timeout)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §11.2.2 (Block-2 — 7 Sub-Schritte)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §11.3 (Bound-Service-Setup, ServiceConnection-Edge-Cases)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §11.5 (Notification-UX, POST_NOTIFICATIONS)"
+      ],
+      "implementation_score_estimate": 850,
+      "bracket": "M",
+      "files_estimate": 7,
+      "loc_estimate": 500,
+      "notes": "Composition-Root is a STUB in Block 2 — DictateUiStateStore(initial) + minimal forwarders to existing controllers. The real Orchestrator wiring lands in Block 1b (C3-C7). audioFileFactory is a Block-4 dummy field (lateinit). Acceptance: plan §10 Block-2 section (~12 Phase-B+C bullets — service-survival, mic-indicator, FGS-killed-recovery, channel-order, FGS-boot-latency, NOTIF_ID-SoT, onDestroy-timeout, multi-bind, pre-bind-action, POST_NOTIFICATIONS-prompt, MediaRecorder-release-path, pipeline-cancel-path)."
+    },
+    {
+      "id": "C3-state-core",
+      "title": "Block 1b/1: DictateUiState data class + DictateUiStateStore + DictateModule interface + Action sealed hierarchy",
+      "description": "Foundation types for the modular orchestrator. Create state/DictateUiState.kt (12 sub-state types + pendingSessions PersistentList + 1 top-level Bool), state/DictateUiStateStore.kt (single source of truth, MutableStateFlow<DictateUiState>), state/DictateModule.kt (interface with 9 hooks: id, actionClass, read, write, initialState, reduce, reduceFailure, runEffect, onCrossModuleStateChange, terminate, prefBindings), state/Action.kt (sealed Action + inner sealed per module, including the Top-Level EffectFailure), state/ReducerContext + TransitionResult + SideEffect base. Spec 1 §3 + §4.2 + §4.4.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §3 (Datenmodell DictateUiState — Achsen-Übersicht, Sub-State-Typen, PersistentList-Idiom)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.2 (DictateModule-Interface F-11/Plugin-Kontrakt — 9 hooks)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.4 (DictateUiStateStore SSoT-Container)"
+      ],
+      "implementation_score_estimate": 850,
+      "bracket": "M",
+      "files_estimate": 5,
+      "loc_estimate": 600,
+      "notes": "Pure data types + interface — no behavior yet. Pairs with C4 (Orchestrator) which wires them together. Foundation-pack: splitting C3 from C4 keeps each chunk under XL; both are D12-atomic w.r.t. their own internal type-chain. Acceptance: plan §10 Block-1b section."
+    },
+    {
+      "id": "C4-orchestrator-and-registry",
+      "title": "Block 1b/2: DictateOrchestrator (Composition Root) + DictateModuleRegistry + ModuleServices + ModuleServicesFactory",
+      "description": "The dispatch engine. Create state/DictateOrchestrator.kt (dispatchInternal in 5 steps: cascade-limit → routing → reducer → state-write → effects async → cross-module-cascade), state/DictateModuleRegistry.kt (all-list + Init-Time sanity check for double-routing), state/ModuleServices.kt (DI container interface) + state/ModuleServicesFactory.kt (concrete wiring). Spec 1 §4.3 + §4.7 + §4.8.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.3 (DictateOrchestrator — dispatchInternal 5 steps, MAX_CASCADE_DEPTH, ProGuard-Keep)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.7 (ModuleServices + ModuleServicesFactory)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.8 (DictateModuleRegistry zentrale Modul-Liste)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.10 (Kontrakt — initialization order)"
+      ],
+      "implementation_score_estimate": 650,
+      "bracket": "M",
+      "files_estimate": 3,
+      "loc_estimate": 500,
+      "notes": "Initialization order: PipelinePrefMirror.attach BEFORE PipelineRecovery.recover (§4.10 contract). EffectFailure-Routing via originModuleId, NOT KClass-Lookup (Phase-B S-4 finding). Tests must verify cascade-order-determinism + shutdown-order + ProGuard-survival."
+    },
+    {
+      "id": "C5-modules-core",
+      "title": "Block 1b/3: Core modules — Recording, Pipeline, Audio, ViewMode, Overlay (5 modules with cross-module cascades)",
+      "description": "The five core modules with the heaviest cross-module-cascade traffic: RecordingModule (recording state, MediaRecorder Effects, ResetSuppressBit cascade on Idle→Preparing), PipelineModule (PipelineUiState sealed, PipelineDone cascades to Resend + LivePrompt), AudioModule (AudioFocus cascades to Recording.Pause and Recording.Preparing → AudioFocus-Request), ViewModeModule (Triangle-FSM logic with computeViewMode + 7 transitions T1-T7), OverlayModule (Overlay-state + suppressAutoOverlay handling). Spec 1 §15.2 + §15.3 + spec 1 §15.1.x coupling matrix + spec 3 §4.8 + §7.1.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §15.1 (Modul-Übersicht + Coupling-Matrix §15.1.x)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §15.2 (RecordingModule — vollständige Beispiel-Implementation)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §15.3 (AudioModule mit Cross-Module-Observer)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §15.5 (Cross-Module-Effect-Modi — Mode 1/2/3 + Anti-Beispiel-Tabelle)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §4.8 (OverlayModule — kanonische Spec)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §7.1 (Triangle-FSM-Logik im ViewModeModule)"
+      ],
+      "implementation_score_estimate": 1150,
+      "bracket": "L",
+      "files_estimate": 5,
+      "loc_estimate": 900,
+      "notes": "Heaviest module work — 5 modules with cross-module cascades. ViewMode + Overlay together implement Triangle-FSM T1-T7 (Spec 3 §7). Tests must cover ALL §15.1 cascade-arrows (plan §10 Block-1b acceptance lists 8 explicit cascade verifications)."
+    },
+    {
+      "id": "C6-modules-auxiliary",
+      "title": "Block 1b/4: Auxiliary modules — Resend, LivePrompt, Language, Layout, KeyboardInput, FeatureToggle, Theming, PendingSessions (8 modules, simpler)",
+      "description": "The eight simpler modules (no complex cross-module-cascades): ResendModule (resend.lastAudioExists + resendEnabled + resendCooldown), LivePromptModule (chain-next on PipelineDone), LanguageModule (subsumes today's LanguageController — direct migration, no adapter), LayoutModule (subsumes today's KeyboardStateManager contentArea/isSmallMode — atomic setSmallMode reducer), KeyboardInputModule (Unit-state, Effect-only: Backspace/Enter/Space/InsertText), FeatureToggleModule, ThemingModule, PendingSessionsModule. Spec 1 §15.6 (KeyboardInputModule canonical) + §15.1 references.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §15.1 (Modul-Übersicht — all 14)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §15.6 (KeyboardInputModule Effect-only Unit-State)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §4.1 (KeyboardLayoutManager ↔ LayoutModule Beziehung)"
+      ],
+      "implementation_score_estimate": 1100,
+      "bracket": "L",
+      "files_estimate": 8,
+      "loc_estimate": 700,
+      "notes": "Pattern-Repeat — 8 modules, similar structure (data state, reducer, optional cascade). Once you've internalized the DictateModule contract from C5, C6 is mechanical."
+    },
+    {
+      "id": "C7-prefmirror-recovery-wiring",
+      "title": "Block 1b/5: PipelinePrefMirror + PipelineRecovery + transitional Subscribers in Service.onCreate",
+      "description": "Glue between Modules and Pref/DB: PipelinePrefMirror (mirrors 19 UI-state-relevant prefs into sub-state — layout 3, audio 3, resend 1, features 4, theming 4, overlay 4), PipelineRecovery (DB-replay into state.pendingSessions). Wire into DictateOrchestrator.init in correct order: prefMirror.attach BEFORE recovery.recover. Plus the transitional resend-visibility subscriber in the IME-service (Block 1b Step 5 in §11.2.2) — replaced in Block 5 by LayoutCatalog.RESEND. Spec 1 §4.5 + §4.6.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.5 (PipelinePrefMirror — Pref-Sync, 19 prefs in initialMirror)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.6 (PipelineRecovery — DB-Replay)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §11.2.2 (Block-1b Sub-Schritte 5-8)"
+      ],
+      "implementation_score_estimate": 600,
+      "bracket": "M",
+      "files_estimate": 4,
+      "loc_estimate": 400,
+      "notes": "Tests: DictateOrchestratorInitOrderTest (prefMirror.attach before recovery.recover), DictateOrchestratorBootRaceTest (first state.value contains pref values, not DictateUiState.initial defaults — Phase-B S-1 acceptance)."
+    },
+    {
+      "id": "C8-block3-subsystem-adapter-migration",
+      "title": "Block 3a: Subsystem-Adapter-Migration — LanguageController/BluetoothScoManager/AudioFocus → Module-Migration",
+      "description": "Plan §4 Block 3 work: migrate LanguageController, BluetoothScoManager, AudioFocus implementations into their corresponding modules (LanguageModule directly subsumes LanguageController; RecordingHardwareSubsystem + BluetoothScoSubsystem + AudioFocusGate become Service-Adapter interfaces consumed by modules via ModuleServices). Subsumption of today's behaviour into modules introduced in C5+C6. Spec 1 §4.7 + §9.x.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.7 (ModuleServices — Hardware-Adapter)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.9 (Dependency-Interfaces F-2/DIP)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §9.1 (RecordingStateController → RecordingModule)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §9.2 (KeyboardUiController-State-Teil → PipelineModule)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §9.3 (KeyboardStateManager → LayoutModule)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §9.6 (Lösch-/Adapter-/Erhalt-Tabelle)"
+      ],
+      "implementation_score_estimate": 700,
+      "bracket": "M",
+      "files_estimate": 6,
+      "loc_estimate": 400,
+      "notes": "NOTE — Plan/Spec block-numbering drift: plan §4 table calls this 'Block 3 (Subsystem-Adapter-Migration)' but spec 1 §11.2.2 calls 'Block 3 = DB-Persistence'. I disambiguate by chunk-naming (C8 = subsystem-migration per plan, C9-C10 = db-persistence per spec1). Should be flagged in Phase 2.6 plan-consistency-check."
+    },
+    {
+      "id": "C9-block3-db-persistence-schema-m4",
+      "title": "Block 3b: DB-Persistence — Schema-Migration M3→M4 + Checkpoint-Hooks",
+      "description": "Schema migration M3→M4: SessionStatus enum extended (+RECORDING, +TRANSCRIBING), SessionEntity.insertedAt column, MigrationTo4.kt with CHECK-constraint recreation. SessionDao methods (markInserted, findPendingInsertion, deleteInsertedOlderThan, getSessionsByStatuses, findAllAudioFilePaths, markLegacyAudioSessionsFailed, findOrphanedTerminalAudio, clearAudioFilePathBulk). SessionManager transition methods. Checkpoint-hooks per module (Effect.PersistStatus emitted from RecordingModule + PipelineModule reducers). HistoryAdapter switch extension. ResendStatusDispatcher when extension. strings.xml additions. Lint setup. androidTest-Infrastruktur setup (eigener Schritt 0). Spec 1 §6.1 + §6.2 + §11.4 + §11.7.0a.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §6.1 (Schema-Migration M3→M4 mit table-recreate + CHECK)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §6.1.1 (ActiveJobRegistry-Strategie)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §6.1.3 (Konsumenten-Update-Audit)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §6.2 (Checkpoint-Hooks R.17 mit Reihenfolge-Disambiguierung)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §11.4 (DB-Migration: MigrationTo4.kt + MigrationTo4Test.kt)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §11.7.0a (androidTest-Infrastruktur — Schritt 0 vor MigrationTo4)"
+      ],
+      "implementation_score_estimate": 850,
+      "bracket": "M",
+      "files_estimate": 8,
+      "loc_estimate": 500,
+      "notes": "Step 0 (androidTest setup) MUST land before MigrationTo4 — explicit gate in spec 1 §11.7.0a. Plan §10 Block-3 acceptance has 9 bullets including doppel-sicherung, cleanup-reihenfolge, KDoc-update. DATABASE-PATTERNS.md is mandatory pre-read (per project CLAUDE.md). MUST consult knowledge skill grounding."
+    },
+    {
+      "id": "C10-block3-db-persistence-recovery",
+      "title": "Block 3c: DB-Persistence — Recovery, Orphan-Cleanup, Pref-Erweiterung",
+      "description": "PipelineRecovery.recoverFromDb() reads pending sessions: RECORDING→FAILED+cleanup, TRANSCRIBING→RECORDED-Downgrade-oder-FAILED, loads into state.pendingSessions. Orphan-FAILED-Audio-Cleanup (KG-SST-2 RESOLVED) — cleanupOrphanedTerminalAudio(). Cleanup-Policy beim Service-Idle-Stop: deleteInsertedOlderThan(now-7d) + cleanupOrphanedTerminalAudio + stopSelf. SharedPreferences-Erweiterung Overlay-Position (OPEN-3). Spec 1 §6.3 + §6.3.1 + §6.4 + §11.6.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §6.3 (Recovery-Read — full 6-Stati-Logic)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §6.3.1 (Orphan-FAILED-Audio-Cleanup KG-SST-2)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §6.4 (SharedPreferences-Erweiterung Overlay-Position)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §11.6 (OOM-Death-Recovery-Strategie)"
+      ],
+      "implementation_score_estimate": 600,
+      "bracket": "M",
+      "files_estimate": 4,
+      "loc_estimate": 400,
+      "notes": "Recovery sequence: recoverFromDb-strategy → orphan-cleanup → service-idle-stop. §11.6.2 has an outdated pre-S-2 simplified snippet — §6.3 is the SoT (annotated explicitly per Phase-C C-2 fix). Tests: PipelineRecoveryTest with FakeDao + branching for each status path."
+    },
+    {
+      "id": "C11-block4-audio-file-factory",
+      "title": "Block 4: AudioFileFactory + Pre-Dispatch-Allocation + Legacy-Migration + Recursive Cache-Clear",
+      "description": "Decouple audio-cache-file allocation from MediaRecorder setup (Pure-Reducer R.2, Multi-Job R.8). New: AudioFileFactory interface + CacheDirAudioFileFactory impl (60s-cutoff filter, requireNotNull cacheDir-defensive). ModuleServices.audioFileFactory + Factory-wiring in DictatePipelineService.onCreate. resolveRecordAction(state, services) extended to 2-arg, allocates pre-dispatch. ButtonSlot.actionResolver type extended to (state, services). Effect.AllocateMediaRecorder 3-arg signature verified. LegacyAudioFileMigration (cacheDir/audio.m4a → filesDir/recordings/{sessionId}.m4a) — idempotent via Pref-Flag. PreferencesFragment.clearCacheRecursively. Boot-Cleanup in Service.onCreate. Sofort-Delete in PipelineOrchestrator.persistNewSession. Spec 1 §4.11 + §11.2.2 Block-4 (14 steps).",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §4.11 (full — AudioFileFactory canonical spec, all 12 sub-sections)",
+        "research/1-pipeline-service/1-pipeline-service.reviewed.md §11.2.2 (Block-4 — 14 Sub-Schritte)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §3.3 (Action sealed-class — StartRecording 2-arg)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §8.5 (Zentrale Predicate- und Resolver-Helfer — resolveRecordAction signature update)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §3.1 (OVERLAY_RECORD-Resolver — analog update)"
+      ],
+      "implementation_score_estimate": 1000,
+      "bracket": "L",
+      "files_estimate": 8,
+      "loc_estimate": 600,
+      "notes": "All KG-AFF-{1-5} resolved per spec. Phase-B S-7 added the services-pass-through to ImeViewBackend + OverlayBackend (cross-spec wiring). Tests: CacheDirAudioFileFactoryTest, RecordingModuleAudioFileFactoryWiringTest, optional AudioFileFactoryRobolectricTest."
+    },
+    {
+      "id": "C12-block5-layout-catalog-and-render-backend",
+      "title": "Block 5/1: LayoutCatalog + RenderBackend interface + ButtonSlot/LayoutMode/LogicalButtonId + Predicate/Resolver helpers",
+      "description": "The data types and shared helpers of the keyboard layout system. Create state/LogicalButtonId.kt, layout/ButtonSlot.kt, layout/LayoutMode.kt, layout/RowDescriptor.kt, layout/LayoutCatalog.kt (5 KEYBOARD modes + OVERLAY_5BUTTON), layout/RenderBackend.kt interface, layout/SlotRenderer.kt (shared applySlotToView F-7), layout/predicates and resolvers (visibility predicates, resolvers, AudioFocus-Icon-Resolver F-4). KeyboardLayoutManager. Spec 2 §3 + §4 + §5 + §5.1 + §8.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §3 (Datenmodell — LogicalButtonId, ButtonSlot, LayoutMode, Action sealed)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §4 (KeyboardLayoutManager API + Beziehung zu LayoutModule)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §5 (RenderBackend-Interface)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §5.1 (Geteilter Slot-Apply-Helper F-7/DRY)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §8 (LayoutCatalog — vollständige Definitionen aller 5 KEYBOARD-Modi)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §8.5 (Predicate/Resolver Helfer)"
+      ],
+      "implementation_score_estimate": 800,
+      "bracket": "M",
+      "files_estimate": 8,
+      "loc_estimate": 500,
+      "notes": "Foundation for the rendering layer. Tests: VisibilityMatrixTest (parameterized, 25 cases per §14.2). Pending-Test for PipelineUiState.Sending.Backgrounded (until Spec-1 §7 Background-Send lands)."
+    },
+    {
+      "id": "C13-block5-motionscene-xml",
+      "title": "Block 5/2: MotionScene XML + activity_dictate_keyboard_view.xml refactor + VISIBILITY_MODE_IGNORE finalisation",
+      "description": "XML-world isolated from Kotlin code — can be developed and tested with mock-states. Create res/xml/motion_scene_keyboard.xml (5 scene-states matching the 5 LayoutModes, all state-driven buttons with motion:visibilityMode='ignore'). Refactor res/layout/activity_dictate_keyboard_view.xml — main_buttons_cl-area becomes MotionLayout-rooted. Spec 2 §7.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §7.1 (MotionScene XML — Datei res/xml/motion_scene_keyboard.xml)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §7.2 (Refactored activity_dictate_keyboard_view.xml)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §7.3 (VISIBILITY_MODE_IGNORE Finalisierung)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §11.1 (MotionLayout-Migration XML-Refactor-Diff)"
+      ],
+      "implementation_score_estimate": 500,
+      "bracket": "M",
+      "files_estimate": 2,
+      "loc_estimate": 480,
+      "notes": "Spec 2 §11.8 makes this parallel-able with C14 (Backend). Pure XML — testable via Spike §11.4 (Inflation-Cost-Messung < 50ms on Pixel 4a)."
+    },
+    {
+      "id": "C14-block5-ime-view-backend",
+      "title": "Block 5/3: ImeViewBackend + ContentAreaController + PromptVisibilityController + OverlayResetHandler + RecordingAnimationController",
+      "description": "Implement the four parallel rendering backends for the IME-View (R.10 Multi-Backend-Pattern). ImeViewBackend (RenderBackend impl for KEYBOARD modes — wireStaticHandlers once at attach, buttonViews map, render iterates slots and calls SlotRenderer.applySlotToView), ContentAreaController (container visibility for QWERTZ/EMOJI_PICKER/MAIN_BUTTONS), PromptVisibilityController, OverlayResetHandler. RecordingAnimationController (BorderGlow pulse migrated from existing). Special-Touch-Handler glue (CursorSwipe, Backspace-Swipe, Enter-Overlay — state-free, just wire into ImeViewBackend.attach). Spec 2 §6 + §11.5 + §11.6 + §11.7.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §6 (ImeViewBackend KEYBOARD-Modus)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §11.5 (BorderGlow-Animation-Migration: RecordingAnimationController)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §11.6 (Click-Listener-Lifecycle Memory-Leak-Analyse)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §11.7 (Special-Touch-Handler — CursorSwipe/BackspaceSwipe/EnterOverlay)"
+      ],
+      "implementation_score_estimate": 750,
+      "bracket": "M",
+      "files_estimate": 5,
+      "loc_estimate": 500,
+      "notes": "wireStaticHandlers ONCE at attach() — Lambdas reference stateRef/modeRef fields, NOT render-args (L8 memory-leak structural protection). Tests: UI-Test 1-10 (Espresso) per §14.2."
+    },
+    {
+      "id": "C15-block5-service-wiring-and-cleanup",
+      "title": "Block 5/4: Service wiring (5c) + Cleanup (5d) — KSM empty-body transition + KSM deletion + RUC.applyXxxState deletion",
+      "description": "Spec 2 §11.8 Block 5c+5d in order: 5c (KeyboardLayoutManager + ImeViewBackend instantiated in IME-Service, `pipeline.state.collect { manager.onStateChanged(it) }`, KSM methods get EMPTY bodies + Strict-Mode-Logging verifies no double-write), then 5d (DELETE KeyboardLayoutModeController, KSM completely, MainButtonsController click-logic, RecordingUiController.applyXxxState — only if 5c works!). Cleanup is destructive — strict end. Spec 2 §11.8 + §9 (Migration vorhandener Klassen — code-pointer per file).",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §9 (Migration vorhandener Klassen — KLMC, KSM, RUC, MainButtonsController — code-pointer)",
+        "research/2-keyboard-layout/2-keyboard-layout.reviewed.md §11.8 (Migration-Reihenfolge 5a/5b/5c/5d mit Zeilen-Budget)"
+      ],
+      "implementation_score_estimate": 450,
+      "bracket": "M",
+      "files_estimate": 4,
+      "loc_estimate": 30,
+      "notes": "Pure-Delete-Pass: deletes ~370 lines, adds ~30 wiring lines. Most of the LOC was already added in C12-C14. Net plan-bilanz: ~+760 new, ~-400 deleted = +360 net. Tests: Architektur-Test that grep-confirms KLMC/KSM/RUC.applyXxxState don't exist post-block."
+    },
+    {
+      "id": "C16-block6-overlay-backend-and-window",
+      "title": "Block 6/1: OverlayBackend + WindowManager-Wrapper + LayoutParamsFactory + Overlay-XML",
+      "description": "Create overlay XML (res/layout/overlay_5button.xml), OverlayWindow interface (DIP-wrapped WindowManager.LayoutParams + addView/removeView/updateViewLayout), DefaultOverlayWindow impl, LayoutParamsFactory (TYPE_APPLICATION_OVERLAY, FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCH_MODAL, NOT_TOUCH_MODAL routing rationale), OverlayBackend (RenderBackend impl, idempotent attach/detach, render iterates OVERLAY_5BUTTON slots). Spec 3 §3.1 + §3.2 + §4.1 + §4.2 + §4.3 + §4.4 + §4.5.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §3.1 (LayoutMode-Datenstruktur — OVERLAY_5BUTTON shared für WIDGET + HOVER)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §3.2 (Konkretes Overlay-XML-Layout)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §4.1 (Backend-Klasse mit Window-Manager-Wrapper DIP)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §4.2 (OverlayBackend überarbeitet)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §4.3 (LayoutParamsFactory vollständige WindowManager-Konfiguration)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §4.4 (Flag-Tabelle)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §4.5 (Format)"
+      ],
+      "implementation_score_estimate": 800,
+      "bracket": "M",
+      "files_estimate": 5,
+      "loc_estimate": 500,
+      "notes": "OVERLAY_5BUTTON shared for WIDGET + HOVER (DRY §13.3). Send-Button disabled in HOVER mode (state-driven via enabledResolver). Tests: OverlayBackendTest with FakeOverlayWindow."
+    },
+    {
+      "id": "C17-block6-permission-onboarding",
+      "title": "Block 6/2: OverlayPermissionObserver + Permission-Gate + Onboarding-UI + Activity-Result-Handling",
+      "description": "OverlayPermissionObserver (LiveData-style permission state), DefaultOverlayPermissionGate (Settings.canDrawOverlays + in-memory cache), Permission-Gate (SRP-separated from render), Settings-Intent for ACTION_MANAGE_OVERLAY_PERMISSION, Onboarding-UI im IME-View (Erste-Mal vs. Wieder-Verweigert-Logik), Activity-Result-Handling, Fallback bei Verweigerung, Manifest-Eintrag (SYSTEM_ALERT_WINDOW already in Block-2 manifest-diff per §11.1.1). Spec 3 §5.0 + §5.1-§5.7.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §5.0 (OverlayPermissionObserver)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §5.1 (Permission-Gate zentrale Logik, SRP-getrennt)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §5.2 (Settings-Intent — Permission-Request)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §5.3 (Onboarding-UI im IME-View)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §5.4 (Erste-Mal vs Wieder-Verweigert)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §5.5 (Activity-Result-Handling)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §5.6 (Fallback bei Verweigerung)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §5.7 (Manifest-Eintrag — already in Block 2)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §11.1 (SYSTEM_ALERT_WINDOW im IME-Kontext)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §11.3 (Onboarding-UX)"
+      ],
+      "implementation_score_estimate": 550,
+      "bracket": "M",
+      "files_estimate": 5,
+      "loc_estimate": 300,
+      "notes": "Notification-Fallback (Permission-frei, §9) — kein Code in §9, nur Verweis auf das Notification-Subsystem aus Block 2."
+    },
+    {
+      "id": "C18-block6-mode-transitions-and-drag",
+      "title": "Block 6/3: Mode-Transitions T1-T7 + Schließen-Button-Differential + Drag (OPEN-3) + OverlayModule reduce/cascade",
+      "description": "Triangle-FSM transition implementations (T1 KEYBOARD→WIDGET user-click, T2 WIDGET→KEYBOARD with SmallMode, T3 KEYBOARD→HOVER auto, T4 WIDGET→HOVER auto, T5 HOVER→KEYBOARD return, T6 HOVER→WIDGET persist, T7 HOVER→KEYBOARD pipeline-done cascade — Geist-Widget-Bug structural fix). Schließen-Button-Differential (WIDGET = ToggleViewModeWidget, HOVER = CloseOverlay+suppress). OverlayDragHandler + OverlayPositionMapper (OPEN-3 — normalize 0..1 vor persistierung, de-norm beim render, Orientation-Change-Handling). Click-vs-Drag-Differenzierung. Touch-Routing (FLAG_NOT_TOUCH_MODAL). Multi-Window-Mode + Window-Lifecycle-Edge-Cases. Spec 3 §6 + §7.3 + §4.6 + §4.7 + §8 + §11.5 + §11.6 + §11.7.",
+      "main": [],
+      "context": ["3. Architektur-Vision", "4. Building Blocks (Implementierungs-Reihenfolge)"],
+      "spec_references": [
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §4.6 (OverlayDragHandler OPEN-3)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §4.7 (OverlayPositionMapper OPEN-3)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §6 (Schließen-Button-Differentialverhalten — WIDGET vs HOVER)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §7.2 (KeyboardLayoutManager-Reaktion auf ViewMode-Wechsel)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §7.3 (Code-Skizzen pro Übergang T1-T7)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §8 (Touch-Routing)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §9 (Notification-Fallback)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §11.5 (Drag-Funktionalität OPEN-3 — vollständig)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §11.6 (Window-Lifecycle-Edge-Cases)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §11.7 (Multi-Window-Mode)",
+        "research/3-floating-overlay/3-floating-overlay.reviewed.md §11.9 (WIDGET im Idle OPEN-2)"
+      ],
+      "implementation_score_estimate": 650,
+      "bracket": "M",
+      "files_estimate": 4,
+      "loc_estimate": 450,
+      "notes": "Triangle-FSM is implemented in ViewModeModule (C5) — this chunk implements the OverlayModule Schließen-button + drag + the transition cascade wiring. T7 (HOVER→KEYBOARD on PipelineDone) is the structural fix for the Geist-Widget-Bug."
+    }
+  ]
+}

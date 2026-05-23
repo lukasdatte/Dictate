@@ -110,6 +110,90 @@ class SessionManager(private val db: DictateDatabase) {
         sessionDao.updateError(sessionId, errorType, errorMessage)
     }
 
+    // ── Live-state writes (Spec 1 §6.1 + §6.2 checkpoint hooks) ──
+    //
+    // Persistenz-Vertrag: DB-first, then ActiveJobRegistry update (KG-SST-5).
+    // The module-EffectHandler (RecordingModule / PipelineModule)
+    // calls one of these methods first, then updates the registry.
+    // No suspend / no explicit transaction — same single-statement
+    // pattern as `finalizeCompleted` above (synchronous; callers
+    // dispatch on an IO executor; comment CA-1 in `finalizeCancelled`
+    // documents the trade-off).
+
+    /**
+     * Sets `status = RECORDING`. Called from
+     * `RecordingModule.runEffect(Effect.PersistStatus(RECORDING))` at
+     * the recording-start checkpoint (Spec 1 §6.2).
+     */
+    fun transitionRecording(sessionId: String) {
+        sessionDao.updateStatus(sessionId, SessionStatus.RECORDING.name)
+    }
+
+    /**
+     * Sets `status = RECORDED` and persists the final audio file path
+     * in one go. Called from
+     * `RecordingModule.runEffect(Effect.PersistRecorded)` at
+     * recording-stop (Spec 1 §6.2).
+     */
+    fun transitionRecorded(sessionId: String, audioFilePath: String) {
+        sessionDao.updateStatus(sessionId, SessionStatus.RECORDED.name)
+        sessionDao.updateAudioFilePath(sessionId, audioFilePath)
+    }
+
+    /**
+     * Recovery-chain SEND-path reconciliation (2026-05-22). Transition
+     * a row that was already inserted at recording-start
+     * (`status = RECORDING`, via
+     * `PipelineSessionRepoSubsystem.createRecordingSession`) to
+     * `RECORDED`, filling the session metadata the SEND path resolved.
+     *
+     * Used by [net.devemperor.dictate.core.PipelineOrchestrator] in
+     * place of [createSession] when the row already exists — a second
+     * `createSession` would hit `SessionDao.insert`'s default `ABORT`
+     * conflict strategy and throw.
+     *
+     * Unlike [transitionRecorded] this **does not touch the audio-path
+     * columns**: `audio_file_path` / `audio_file_paths` are owned by the
+     * recording-start insert + the `SyncAudioSegments` effects, which
+     * have already populated the full rolling-segment list. Re-writing
+     * a single path here would collapse a multi-segment recording back
+     * to its first segment.
+     */
+    fun finalizeRecordedFromRecordingRow(
+        sessionId: String,
+        targetApp: String?,
+        language: String?,
+        audioDurationSeconds: Long,
+        queuedPromptIds: String?,
+    ) {
+        sessionDao.finalizeRecordedMetadata(
+            id = sessionId,
+            status = SessionStatus.RECORDED.name,
+            targetApp = targetApp,
+            language = language,
+            durationSeconds = audioDurationSeconds,
+            queuedPromptIds = queuedPromptIds,
+        )
+    }
+
+    /**
+     * Sets `status = TRANSCRIBING`. Called from
+     * `PipelineModule.runEffect(Effect.PersistStatus(TRANSCRIBING))`
+     * at pipeline-start (Spec 1 §6.2).
+     */
+    fun transitionTranscribing(sessionId: String) {
+        sessionDao.updateStatus(sessionId, SessionStatus.TRANSCRIBING.name)
+    }
+
+    /**
+     * Sets the `inserted_at` timestamp on the session. Called from
+     * `PipelineModule.runEffect(Effect.ConfirmInsertion)` once the
+     * result text has been pushed into the editor (Spec 1 §6.1 + §6.2).
+     */
+    fun markInserted(sessionId: String, timestamp: Long = System.currentTimeMillis()) {
+        sessionDao.markInserted(sessionId, timestamp)
+    }
+
     /**
      * Reads the historical queued prompt IDs for a session. Reads directly from
      * [SessionEntity.queuedPromptIds] — does NOT reconstruct from processing steps.

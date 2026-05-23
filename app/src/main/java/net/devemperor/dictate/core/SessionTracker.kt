@@ -68,6 +68,30 @@ class SessionTracker(
     }
 
     /**
+     * Returns the most recent "unfinished recording" — `RECORDING_INTERRUPTED`
+     * (process-death survivor) or `RECORDED` (audio complete, transcription
+     * never finished) — whose `created_at` is at least `now - freshnessMs`,
+     * i.e. fresh enough to be eligible for auto-continuation (B2 /
+     * ADR-0008; 2026-05-23 extension to RECORDED, see
+     * [net.devemperor.dictate.database.dao.SessionDao.findLatestUnfinishedRecording]).
+     *
+     * Synchronous DB read; no RAM cache (the candidate is volatile —
+     * the next [PipelineRecovery] pass promotes stale rows to FAILED
+     * and the user's next Record-click either accepts the candidate
+     * or starts fresh, so caching would only race the cleanup).
+     *
+     * @param freshnessMs window in milliseconds; rows older than
+     *   `now - freshnessMs` are filtered out.
+     * @param nowMs current clock (default `System.currentTimeMillis`)
+     *   — injected for tests.
+     */
+    fun findContinuationCandidate(
+        freshnessMs: Long,
+        nowMs: Long = System.currentTimeMillis(),
+    ): SessionEntity? =
+        sessionDao.findLatestUnfinishedRecording(nowMs - freshnessMs)
+
+    /**
      * Called by the pipeline after a new keyboard session finishes.
      * Updates the RAM cache — the DB was already written by the pipeline.
      */

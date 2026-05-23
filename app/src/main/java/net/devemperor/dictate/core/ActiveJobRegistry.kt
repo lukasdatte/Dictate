@@ -62,4 +62,27 @@ object ActiveJobRegistry {
 
     /** Current state for a session (null if not active). */
     fun get(sessionId: String): JobState? = _state.value[sessionId]
+
+    /**
+     * Testing seam — clears the process-wide registry between tests
+     * (B2-VAL-W1 F-6 / Epic R-7).
+     *
+     * `ActiveJobRegistry` is a process-wide `object` with a hard
+     * single-job lock ([register] returns `false` while `_state` is
+     * non-empty). `JobExecutor.resetForTest()` clears only the
+     * orchestrator/token/thread — **not** this registry. A job's async
+     * `unregister` runs on the single-thread executor's `finally`; if it
+     * has not completed before a test's `@After`, the next test in the
+     * same Robolectric fork hits [register] → `_state` non-empty →
+     * `return false` → the job silently never starts → assertion
+     * fails (R-7 order-dependent test-pollution). Call this in
+     * `@After` (after `JobExecutor.resetForTest()`) to make the lock
+     * deterministic across tests. Mirrors the established
+     * `DictateDatabase.resetForTest` / `JobExecutor.resetForTest`
+     * production-owned reset-seam convention (K-1 — no Mockito).
+     */
+    @JvmStatic
+    internal fun resetForTest() {
+        _state.value = emptyMap()
+    }
 }

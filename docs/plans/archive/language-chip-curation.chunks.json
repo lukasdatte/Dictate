@@ -1,0 +1,105 @@
+{
+  "source": "/home/lukas/WebStorm/Dictate/docs/plans/language-chip-curation.md",
+  "sections": [
+    { "heading": "Execution Plan", "estimatedTokens": 1577 },
+    { "heading": "Context", "estimatedTokens": 609 },
+    { "heading": "Design-Prinzipien", "estimatedTokens": 2583 },
+    { "heading": "Phase 0: Versioned-Envelope-Foundation *(portiert aus excel_ekl)*", "estimatedTokens": 3334 },
+    { "heading": "Phase 1: LanguageLabelResolver + InputLanguagesPlugin + LanguageController + Legacy-Helper", "estimatedTokens": 6142 },
+    { "heading": "Phase 2: UI-Integration — Always-visible Chip + Gruppierte PopupMenu", "estimatedTokens": 3877 },
+    { "heading": "Phase 3: Settings-UI-Anpassung", "estimatedTokens": 1304 },
+    { "heading": "Phase 4: Tests & Validation", "estimatedTokens": 1177 },
+    { "heading": "Phase 5: Bugfix Resend-Button — robuste Insertion + neue Status-Matrix", "estimatedTokens": 4012 },
+    { "heading": "Dateien", "estimatedTokens": 1310 },
+    { "heading": "Edge Cases", "estimatedTokens": 2253 },
+    { "heading": "Offene Punkte (nach Abstimmung bereits entschieden)", "estimatedTokens": 148 },
+    { "heading": "Aufwand (aktualisiert nach Quality-Gate-Review 2026-04-27)", "estimatedTokens": 705 }
+  ],
+  "chunks": [
+    {
+      "title": "Chunk 1 — Phase 5: Resend-Button Bugfix + Strategie-Briefing (scope-isolated, ships first)",
+      "description": "Entry-point chunk: implementiert den scope-isolierten Resend-Button-Bugfix (Phase 5) mit dem vorgelagerten Refactor von commitTextToInputConnection (expliziter InputConnection-Parameter), 3-stufiger Insertion-Strategie und neuer Status-Matrix (FAILED -> No-Op). Doppelt als Briefing-Chunk: enthaelt den Execution Plan, Context, Design-Prinzipien, Dateien-Inventar, Edge Cases und Offene Punkte als main — der Impl-Agent dieses Chunks etabliert das Gesamtverstaendnis fuer den restlichen Plan. Diese Chunk-Reihenfolge folgt der Plan-Empfehlung: Phase 5 zuerst, weil sie nicht von Phase 0-4 abhaengt und schnellen User-Wert liefert; gleichzeitig sind die Referenz-Sektionen in Folgechunks weiter als context verfuegbar.",
+      "main": [
+        "Execution Plan",
+        "Context",
+        "Design-Prinzipien",
+        "Phase 5: Bugfix Resend-Button — robuste Insertion + neue Status-Matrix",
+        "Dateien",
+        "Edge Cases",
+        "Offene Punkte (nach Abstimmung bereits entschieden)"
+      ],
+      "context": []
+    },
+    {
+      "title": "Chunk 2 — Phase 0: Versioned-Envelope-Foundation",
+      "description": "Portiert das generische Versioned<T>-System aus excel_ekl nach Kotlin/Android: VersionedPlugin<T>, VersionedPrefs, VersionedMigrator, StringListCodec. Schafft die Basis-Infrastruktur, auf der Phase 1 (InputLanguagesPlugin v1) und alle zukuenftigen Config-Prefs aufbauen.",
+      "main": [
+        "Phase 0: Versioned-Envelope-Foundation *(portiert aus excel_ekl)*"
+      ],
+      "context": [
+        "Execution Plan",
+        "Context",
+        "Design-Prinzipien",
+        "Dateien",
+        "Edge Cases"
+      ]
+    },
+    {
+      "title": "Chunk 3 — Phase 1: LanguageController + Plugin + Cross-Phase Refactor",
+      "description": "Konkrete Nutzung der Versioned-Envelope-Infrastruktur aus Chunk 2: LanguageLabelResolver, InputLanguagesPlugin (v1), LanguageController als zentrale Sprach-Domain mit setCuratedLanguages-Schreibpfad und PipelineUiStateReader-Interface (DIP). Enthaelt zusaetzlich den Cross-Phase-Refactor von KeyboardUiController auf addCallback/removeCallback (Voraussetzung fuer Multi-Listener), den einmaligen Legacy-Helper StringSet -> v1-Envelope sowie das JUnit4+Fake-Test-Setup.",
+      "main": [
+        "Phase 1: LanguageLabelResolver + InputLanguagesPlugin + LanguageController + Legacy-Helper"
+      ],
+      "context": [
+        "Execution Plan",
+        "Context",
+        "Design-Prinzipien",
+        "Dateien",
+        "Edge Cases"
+      ]
+    },
+    {
+      "title": "Chunk 4 — Phase 2: Always-visible Chip + Gruppierte PopupMenu",
+      "description": "UI-Integration: Language-Chip permanent sichtbar (beide Modi normal + ReprocessStaging), Klick oeffnet PopupMenu mit zwei visuell getrennten Gruppen (kuratierte oben, alle anderen unten, mit setGroupDividerEnabled-Trenner und API26/27-Fallback). Letzter Eintrag oeffnet die Settings-Activity. Service-Aufraeumen auf den neuen LanguageController.",
+      "main": [
+        "Phase 2: UI-Integration — Always-visible Chip + Gruppierte PopupMenu"
+      ],
+      "context": [
+        "Execution Plan",
+        "Context",
+        "Design-Prinzipien",
+        "Dateien",
+        "Edge Cases"
+      ]
+    },
+    {
+      "title": "Chunk 5 — Phase 3: Settings-UI-Anpassung",
+      "description": "Bestehende MultiSelectListPreference auf den Versioned-Envelope-Storage umstellen: setPersistent(false) + Schreiben ueber LanguageController.setCuratedLanguages (Single-Source-of-Truth). DictateApplication.getOrCreateLanguageController-Erreichbarkeit aus dem Settings-Process sichern.",
+      "main": [
+        "Phase 3: Settings-UI-Anpassung"
+      ],
+      "context": [
+        "Execution Plan",
+        "Context",
+        "Design-Prinzipien",
+        "Dateien",
+        "Edge Cases"
+      ]
+    },
+    {
+      "title": "Chunk 6 — Phase 4: Tests & Validation (Wrap-up)",
+      "description": "End-to-End-Tests: alle Unit-Tests (Versioned-Foundation, Plugin v1, LanguageController, Legacy-Migration, Pos-Resync) plus manuelle Verification-Checklist. Wrap-up-Chunk; enthaelt zusaetzlich die Aufwand-Tabelle als main, weil sie als Abschluss-Referenz/Status fuer das gesamte Feature dient.",
+      "main": [
+        "Phase 4: Tests & Validation",
+        "Aufwand (aktualisiert nach Quality-Gate-Review 2026-04-27)"
+      ],
+      "context": [
+        "Execution Plan",
+        "Context",
+        "Design-Prinzipien",
+        "Dateien",
+        "Edge Cases"
+      ]
+    }
+  ]
+}

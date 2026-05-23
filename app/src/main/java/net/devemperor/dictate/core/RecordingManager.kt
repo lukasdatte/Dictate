@@ -17,7 +17,11 @@ import java.io.IOException
  *
  * Does NOT handle UI - communicates state changes via RecordingCallback.
  */
-class RecordingManager(private val callback: RecordingCallback) {
+// Block 2 / Test Infrastructure: `open` so the unit tests in
+// RecordingStateControllerTest can subclass with no-op MediaRecorder methods.
+// All Android-touching methods are individually `open` to keep the override
+// surface small — production code remains the default closed-by-extension.
+open class RecordingManager(private val callback: RecordingCallback) {
 
     interface RecordingCallback {
         fun onRecordingStarted()
@@ -48,7 +52,7 @@ class RecordingManager(private val callback: RecordingCallback) {
      * @param audioSource MediaRecorder.AudioSource constant (MIC or VOICE_COMMUNICATION)
      * @return true if recording started successfully, false on error
      */
-    fun start(audioFile: File, audioSource: Int): Boolean {
+    open fun start(audioFile: File, audioSource: Int): Boolean {
         if (isRecording) return false
 
         currentAudioFile = audioFile
@@ -82,7 +86,7 @@ class RecordingManager(private val callback: RecordingCallback) {
      * Pauses the current recording.
      * Timer is stopped but state is preserved.
      */
-    fun pause() {
+    open fun pause() {
         if (!isRecording || isPaused || recorder == null) return
 
         recorder?.pause()
@@ -95,7 +99,7 @@ class RecordingManager(private val callback: RecordingCallback) {
      * Resumes a paused recording.
      * Timer continues from where it left off.
      */
-    fun resume() {
+    open fun resume() {
         if (!isRecording || !isPaused || recorder == null) return
 
         recorder?.resume()
@@ -108,7 +112,7 @@ class RecordingManager(private val callback: RecordingCallback) {
      * Stops the recording and releases the MediaRecorder.
      * @return the audio file that was recorded, or null if no recording was active
      */
-    fun stop(): File? {
+    open fun stop(): File? {
         if (!isRecording) return null
 
         stopTimer()
@@ -133,7 +137,7 @@ class RecordingManager(private val callback: RecordingCallback) {
     /**
      * Releases the MediaRecorder without stopping (for error/cleanup scenarios).
      */
-    fun release() {
+    open fun release() {
         stopTimer()
         recorder?.let {
             try { it.stop() } catch (_: RuntimeException) {}

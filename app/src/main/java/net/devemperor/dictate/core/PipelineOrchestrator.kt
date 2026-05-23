@@ -1,10 +1,13 @@
 package net.devemperor.dictate.core
 
 import android.util.Log
+import kotlinx.coroutines.runBlocking
 import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.ai.prompt.PromptService
+import net.devemperor.dictate.audio.AudioFileRepository
+import net.devemperor.dictate.audio.PipelineAudioResult
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.database.dao.ProcessingStepDao
 import net.devemperor.dictate.database.dao.PromptDao
@@ -27,6 +30,39 @@ import java.util.concurrent.Executors
  * Orchestrates the transcription and prompt processing pipeline on a single
  * background executor thread. Replaces the previous multi-thread-pool approach
  * (speechApiThread + rewordingApiThread per prompt) with one shared executor.
+ *
+ * # Cutover boundary — `PipelineRunnerSubsystem` adaptee (OQ-1, Spec 1 §9.6)
+ *
+ * This class is the **runner body**, and is **never deleted** (Spec 1 §9.6
+ * "Lösch-/Adapter-/Erhalt-Tabelle": *`JobExecutor` nie gelöscht —
+ * implementiert das `PipelineRunner`-Interface*; Spec 1 §1.x naming block:
+ * `PipelineOrchestrator` *"bleibt unverändert … implementiert
+ * `PipelineRunner`-Interface"*). The new state-architecture reaches it
+ * through a **delegation** chain — it is **not** reimplemented:
+ *
+ * ```
+ * DictateOrchestrator → PipelineModule.runEffect
+ *   → ModuleServices.pipelineRunner (PipelineRunnerSubsystem)
+ *     = PipelineRunnerSubsystemAdapter            (C3-B1 — thin wrapper)
+ *       → JobExecutor.INSTANCE.start/cancel        (process-global single-job lock)
+ *         → PipelineOrchestratorRunner             (JobExecutor inner runner)
+ *           → PipelineOrchestrator  ◄── THIS CLASS (unchanged runner body)
+ * ```
+ *
+ * [net.devemperor.dictate.core.PipelineRunnerSubsystemAdapter] delegates to
+ * `JobExecutor.INSTANCE`; `JobExecutor` was bound to this body via
+ * `JobExecutor.initialize(pipelineOrchestrator)` →
+ * `PipelineOrchestratorRunner(orchestrator)`. The only **other** legitimate
+ * direct callers are the standalone-prompt path
+ * ([PipelineOrchestrator.StandaloneConfig]), the cancel path
+ * ([PipelineOrchestrator.CancelInfo]), and the RESUME carve-out
+ * (C6-IMPL-2) — none of which is a second state-router. No double-dispatch
+ * (AC-10): every recording/pipeline user action routes through
+ * `DictateOrchestrator` and reaches this body only via the adapter.
+ *
+ * @see net.devemperor.dictate.core.PipelineRunnerSubsystemAdapter
+ * @see net.devemperor.dictate.core.JobExecutor
+ * @see net.devemperor.dictate.state.modules.PipelineModule
  *
  * Threading contract:
  * - [runTranscriptionPipeline] and [runStandalonePrompt] are called from the main thread.
@@ -65,7 +101,23 @@ class PipelineOrchestrator @JvmOverloads constructor(
     private val recordingRepository: RecordingRepository? = null,
     private val transcriptionDao: TranscriptionDao? = null,
     private val stepDao: ProcessingStepDao? = null,
-    private val database: DictateDatabase? = null
+    private val database: DictateDatabase? = null,
+    /**
+     * Block A2 (recording-stack-completion) — audio repository the
+     * transcription pipeline reads through. When wired,
+     * `runTranscriptionPipelineBody` calls
+     * [AudioFileRepository.readForPipeline] before upload so multi-segment
+     * sessions land at the AI provider as a single muxed file. Returns
+     * `PartialRecovery` when the MediaMuxer skipped unreadable segments —
+     * the orchestrator persists `partial:N` into `last_error_message` so
+     * the InfoBar producer surfaces the warning to the user.
+     *
+     * Nullable for the legacy Java constructor path that still uses the
+     * pre-A2 8-arg ctor; when null the code falls back to reading
+     * `session.audioFilePath` directly (single-segment behaviour, no
+     * partial-recovery handling).
+     */
+    private val audioFileRepository: AudioFileRepository? = null,
 ) {
 
     // region Callback interface
@@ -851,10 +903,50 @@ class PipelineOrchestrator @JvmOverloads constructor(
         val repo = recordingRepository
         val audioDurationSec: Long
         val audioPathForRow: String
-        if (repo != null) {
+        // Block A4 (recording-stack-completion) — Multi-Segment detection.
+        // Post-A4 the IME allocates the initial file as `sess_{sid}_seg1.m4a`
+        // via AudioFileRepository.allocateFirst; rolling-segments produce
+        // `_seg2`, `_seg3`, … alongside it. Copying the FIRST segment to
+        // `files/recordings/{sid}.m4a` and then deleting the cache original
+        // (legacy persist-first flow below) tears the segment sequence
+        // apart — the muxer at upload-time would only see `_seg2`+. The
+        // multi-segment path therefore SKIPS persistFromCache: the
+        // segments live in `cache/audio/`; readForPipeline() merges them
+        // at upload-time and the merged file is what reaches the AI.
+        // `audioFilePath` on the session row points at the first segment
+        // so legacy code paths (history, recovery cleanup) can still find
+        // *an* audio file for the session.
+        val isMultiSegmentInitial = audioFile.parentFile?.name == "audio" &&
+            audioFile.name.startsWith("sess_") && audioFile.name.contains("_seg")
+        if (repo != null && !isMultiSegmentInitial) {
             val recording = repo.persistFromCache(audioFile, sessionId)
             audioDurationSec = repo.extractDurationSeconds(recording.audioFile)
             audioPathForRow = recording.audioFile.absolutePath
+
+            // KG-AFF-1 (Spec 1 §4.11.6.1): explicit cleanup of the cache
+            // file once persistFromCache (copyTo + DB-row-create) lands
+            // its result in filesDir/recordings/. The session row now
+            // points at the persisted path, so the cache entry is no
+            // longer in the "referenced" set — leaving it on disk would
+            // only delay reclamation until the next boot's
+            // `cleanupOrphans`. Idempotent: if `delete` fails (FS race,
+            // permission), the next boot's orphan sweep catches it.
+            runCatching { audioFile.delete() }
+                .onFailure {
+                    android.util.Log.w(
+                        "PipelineOrchestrator",
+                        "cache delete after persist failed: ${audioFile.name}",
+                        it,
+                    )
+                }
+        } else if (repo != null) {
+            // Multi-Segment path — segments stay in cache; readForPipeline()
+            // does the muxer concat at upload-time. Duration extraction
+            // still runs on the first segment for the denormalised cache
+            // (DurationHealingJob re-syncs to sum-of-segments later if a
+            // rolling-roll lands after this point).
+            audioDurationSec = repo.extractDurationSeconds(audioFile)
+            audioPathForRow = audioFile.absolutePath
         } else {
             // Legacy path: copy to recordingsDir, no synchronous duration.
             config.recordingsDir.mkdirs()
@@ -868,18 +960,39 @@ class PipelineOrchestrator @JvmOverloads constructor(
             audioPathForRow = dest.absolutePath
         }
 
-        sessionManager.createSession(
-            id = sessionId,
-            type = SessionType.RECORDING,
-            targetApp = config.targetAppPackage,
-            language = config.language,
-            audioFilePath = audioPathForRow,
-            audioDurationSeconds = audioDurationSec,
-            parentId = null,
-            origin = config.origin,
-            queuedPromptIds = queuedIdsAtStart.joinToString(","),
-            initialStatus = SessionStatus.RECORDED
-        )
+        // Recovery-chain reconciliation (2026-05-22). When the recording
+        // was started through RecordingModule, the session row already
+        // exists with status=RECORDING (Effect.CreateRecordingSession —
+        // the first link of the recovery chain). Re-inserting it here
+        // would hit SessionDao.insert's default ABORT conflict strategy
+        // and throw. Transition the existing row to RECORDED instead;
+        // audio_file_path(s) are already owned by the recording-start
+        // insert + the SyncAudioSegments effects, so the metadata-only
+        // update must not clobber them. Legacy callers that never
+        // dispatched StartRecording through RecordingModule (audio
+        // import, reprocess paths) have no row yet → createSession.
+        if (sessionManager.getSessionById(sessionId) != null) {
+            sessionManager.finalizeRecordedFromRecordingRow(
+                sessionId = sessionId,
+                targetApp = config.targetAppPackage,
+                language = config.language,
+                audioDurationSeconds = audioDurationSec,
+                queuedPromptIds = queuedIdsAtStart.joinToString(","),
+            )
+        } else {
+            sessionManager.createSession(
+                id = sessionId,
+                type = SessionType.RECORDING,
+                targetApp = config.targetAppPackage,
+                language = config.language,
+                audioFilePath = audioPathForRow,
+                audioDurationSeconds = audioDurationSec,
+                parentId = null,
+                origin = config.origin,
+                queuedPromptIds = queuedIdsAtStart.joinToString(","),
+                initialStatus = SessionStatus.RECORDED
+            )
+        }
 
         // Finding SEC-5-3: notifySessionCreated was never defined on
         // SessionTracker. Set currentSessionId directly.
@@ -909,14 +1022,20 @@ class PipelineOrchestrator @JvmOverloads constructor(
         sid: String,
         token: CancellationToken
     ) {
-        val session = sessionManager.getSessionById(sid)
-        val audioPath = session?.audioFilePath
-        val audioFile = audioPath?.let { File(it) } ?: config.audioFile
+        // Block A2 — read audio through the repository so multi-segment
+        // sessions are muxed into a single upload file. The repository is
+        // the post-A2 source of truth for `the audio of session sid`;
+        // legacy callers that still pre-allocate `config.audioFile`
+        // (Java IME standalone-prompt path) fall through to the
+        // pre-A2 path when the repo is not wired.
+        val audioFile = resolvePipelineAudio(sid)
+            ?: config.audioFile
+            ?: throw IllegalStateException("No audio for session $sid")
 
         // Step 1: Transcription (always)
         token.throwIfCancelled()
         var text = executeTranscription(
-            audioFile ?: throw IllegalStateException("No audio for session $sid"),
+            audioFile,
             config.language,
             config.stylePrompt,
             sid,
@@ -1005,6 +1124,133 @@ class PipelineOrchestrator @JvmOverloads constructor(
         }
         callback.onPipelineCompleted(currentText, InsertionSource.QUEUED_PROMPT)
         return currentText
+    }
+
+    /**
+     * Block A2 (recording-stack-completion) — resolve the audio file to
+     * upload for the session, reading through the [AudioFileRepository]
+     * when wired.
+     *
+     * **Three outcomes:**
+     *
+     *  - `null` — neither the repository nor the legacy `audioFilePath`
+     *    column produced a file. The caller falls back to
+     *    `config.audioFile` (legacy Java IME standalone-prompt path);
+     *    if that is also null the body throws `IllegalStateException`.
+     *  - [PipelineAudioResult.Complete] — the standard path: every
+     *    segment was readable, muxed into one upload file (or the single
+     *    segment returned zero-copy).
+     *  - [PipelineAudioResult.PartialRecovery] — some segments were
+     *    skipped (corruption, truncation, codec mismatch). The orchestrator
+     *    persists `partial:N` (where N = estimated lost seconds) into
+     *    `last_error_message` so the InfoBar producer surfaces the
+     *    warning. The transcription proceeds with the partial muxed
+     *    file (better N-1 segments than nothing).
+     *
+     * **Threading.** Called from the orchestrator's executor-thread which
+     * is synchronous; [AudioFileRepository.readForPipeline] is `suspend`
+     * (it hops to `Dispatchers.IO` internally for the muxer). Wrapping
+     * with [runBlocking] is safe here because the executor thread is
+     * exactly the background hop the suspend function expects to land
+     * on; there is no UI thread to deadlock.
+     *
+     * **Legacy fallback.** When the repo is null (pre-A2 Java ctor) the
+     * method reads `session.audioFilePath` and wraps it in a File so the
+     * legacy single-segment path still works without re-plumbing. This
+     * lets the Java side migrate incrementally; once all callers route
+     * through the Kotlin orchestrator pipeline this branch can be
+     * deleted (Block A4).
+     */
+    private fun resolvePipelineAudio(sid: String): File? {
+        val repo = audioFileRepository
+        if (repo == null) {
+            val legacyPath = sessionManager.getSessionById(sid)?.audioFilePath
+            return legacyPath?.let { File(it) }
+        }
+        val result = runBlocking { repo.readForPipeline(sid) }
+        return when (result) {
+            null -> {
+                // No segments on disk — fall back to the legacy column in
+                // case an older session row points at a still-present
+                // file. This is the bridge for pre-Block-A1 rows whose
+                // recording started before audio_file_paths was being
+                // populated; A3 + MigrationTo7 close this gap properly.
+                val legacyPath = sessionManager.getSessionById(sid)?.audioFilePath
+                legacyPath?.let { File(it) }
+            }
+            is PipelineAudioResult.Complete ->
+                persistMuxedForUpload(sid, result.file)
+            is PipelineAudioResult.PartialRecovery -> {
+                // Persist the marker so the InfoBar producer surfaces the
+                // warning. `last_error_message = "partial:N"` is the
+                // contract InfoBarSelector.extractPartialRecoverySeconds
+                // already consumes (B4 from the prior plan).
+                runCatching {
+                    database?.sessionDao()?.updateError(
+                        id = sid,
+                        type = null,
+                        message = "partial:${result.estimatedLostSeconds}",
+                    )
+                }.onFailure {
+                    Log.w(TAG, "Failed to persist partial-recovery marker for $sid", it)
+                }
+                Log.i(
+                    TAG,
+                    "Partial-recovery for $sid: ${result.ignoredSegmentIndices.size} " +
+                        "segments skipped, ~${result.estimatedLostSeconds}s lost",
+                )
+                persistMuxedForUpload(sid, result.file)
+            }
+        }
+    }
+
+    /**
+     * Block A4c (recording-stack-completion) — copy the about-to-be-
+     * uploaded audio (single-segment OR muxed multi-segment) into
+     * `filesDir/recordings/{sid}.m4a` so the session's authoritative
+     * audio survives a cache eviction. The session row's
+     * `audio_file_path` is updated to point at the persistent location.
+     *
+     * **Why here, not after upload success:** if the upload itself
+     * crashes, the merged file in the cache could be evicted before a
+     * retry-on-resume runs. Persisting before transcribe is the cheapest
+     * mitigation — copyTo is O(file-size), typically <100 ms for a
+     * 1-minute recording.
+     *
+     * **Segments stay in place.** The rolling segments under
+     * `cacheDir/audio/sess_{sid}_seg*.m4a` are NOT deleted; the
+     * cache-resident state is the "raw take" that recovery /
+     * partial-recovery / future re-mux paths still need. Periodic
+     * cleanup (B-style job, not in this commit) sweeps segments older
+     * than the cache TTL.
+     *
+     * **Idempotent.** Re-running on an already-persisted session
+     * overwrites `{sid}.m4a` with the latest mux (e.g. a re-mux after a
+     * Cold-Resume continuation adds new segments) — `copyTo(..., overwrite=true)`.
+     *
+     * @return the persistent file if the copy + DB-update succeeded;
+     *   otherwise the source (cache-resident) file, so the upload still
+     *   has audio to send. Failure is logged but never throws back to
+     *   the caller (recording-must-never-be-lost discipline).
+     */
+    private fun persistMuxedForUpload(sid: String, source: File): File {
+        val repo = recordingRepository ?: run {
+            // Pre-A4c orchestrator (no recordingRepository wired) —
+            // legacy Java callers; keep returning the source so the
+            // upload still happens.
+            return source
+        }
+        return try {
+            // persistFromCache is a copyTo (NOT a move) — segments and the
+            // cache-resident merged file stay intact. Idempotent across
+            // re-uploads (overwrite=true inside persistFromCache).
+            val recording = repo.persistFromCache(source, sid)
+            database?.sessionDao()?.updateAudioFilePath(sid, recording.audioFile.absolutePath)
+            recording.audioFile
+        } catch (t: Throwable) {
+            Log.w(TAG, "persistMuxedForUpload($sid) failed; falling back to source", t)
+            source
+        }
     }
 
     /**

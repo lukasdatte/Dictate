@@ -269,6 +269,60 @@ Some columns on the `sessions` table are deliberately denormalized — they dupl
 *- When to recreate a table vs. ALTER*
 *- How to test migrations)*
 
+### Data-preservation rule
+
+> Source: B3 sanity-pass findings F-1 + F-2 (2026-05-15). Full
+> derivation in
+> `docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/b3-cleanup-cascade-and-backfill-policy.md`.
+
+When a migration introduces a new column that drives a cleanup
+policy (row eligibility for auto-delete), apply two rules together:
+
+**Rule 1 — NULL is "the marker does not apply"**
+
+Backfill the new column with `NULL` for pre-existing rows when the
+exact value cannot be reconstructed. Cleanup queries filter on
+`<column> IS NOT NULL` so the legacy population is immune. This
+preserves the pre-migration data contract (e.g. "history is
+forever" for an IME that had no automatic cleanup before).
+
+Avoid:
+- Backfilling with a synthetic timestamp like `created_at` that
+  makes the legacy rows immediately eligible.
+- Sentinel values (`-1`, `0L`) — Kotlin nullable types are the
+  idiomatic equivalent and harder for downstream code to
+  misinterpret as a real value.
+- One-shot pref flags that gate the cleanup — they couple
+  cleanup correctness to non-DB state.
+
+**Rule 2 — Row-level DELETE preserves children via SET NULL FK**
+
+Self-referential foreign keys with `ON DELETE CASCADE` propagate
+row-level DELETEs into the child sub-tree. When the cleanup
+policy targets rows whose children may be fresh + user-visible
+(`POST_PROCESSING` chains, future parent-child types), the FK
+must be `ON DELETE SET NULL` — the child survives with
+`parent_session_id = NULL` and surfaces as a root-level history
+entry.
+
+CASCADE is appropriate only for child rows that carry no
+standalone meaning (e.g. `transcriptions`, `processing_steps` —
+both are facts about the parent session; the parent's deletion
+makes them stale).
+
+**Test contract:**
+
+Every migration that touches a cleanup-policy column must include
+two test cases:
+
+1. Pre-existing rows post-migration are immune to the cleanup
+   query (e.g. `pipelineOrphanCleaner_doesNotDeleteLegacyRows`).
+2. Row-level DELETE on a parent preserves children with their FK
+   set to NULL (e.g. `migrate3To4_setsForeignKeyToSetNull`). Note:
+   FK enforcement is disabled during migration; the test must
+   enable it with `PRAGMA foreign_keys = ON` before exercising
+   the cascade behaviour.
+
 ---
 
 ## Versioning & Schema Exports

@@ -40,6 +40,18 @@ import java.util.List;
 
 public class DictateSettingsActivity extends AppCompatActivity {
 
+    /**
+     * Phase 2 §2.2a (Quality-Gate K-7): when set on the launching Intent,
+     * the activity asks {@link PreferencesFragment} to scroll the named
+     * preference into view after the fragment is created. Used by the
+     * keyboard's "⚙ Sprachen verwalten…" PopupMenu action so the user
+     * lands directly on the language curation list.
+     */
+    public static final String EXTRA_SCROLL_TO = "net.devemperor.dictate.scroll_to";
+
+    /** Bundle key forwarded to {@link PreferencesFragment#getArguments()}. */
+    private static final String FRAGMENT_ARG_SCROLL_TO = "scroll_to";
+
     ActivityResultLauncher<Intent> filePickerLauncher;
 
     @Override
@@ -53,9 +65,19 @@ public class DictateSettingsActivity extends AppCompatActivity {
             return insets;
         });
 
+        // Phase 2 §2.2a: forward the optional scroll-to extra to the
+        // PreferencesFragment via Bundle args so the fragment can scroll
+        // to a specific preference key after inflation.
+        PreferencesFragment fragment = new PreferencesFragment();
+        String scrollTo = getIntent().getStringExtra(EXTRA_SCROLL_TO);
+        if (scrollTo != null) {
+            Bundle args = new Bundle();
+            args.putString(FRAGMENT_ARG_SCROLL_TO, scrollTo);
+            fragment.setArguments(args);
+        }
         getSupportFragmentManager()
                 .beginTransaction()
-                .replace(R.id.activity_dictate_settings, new PreferencesFragment())
+                .replace(R.id.activity_dictate_settings, fragment)
                 .commit();
 
         SharedPreferences sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE);
@@ -96,11 +118,23 @@ public class DictateSettingsActivity extends AppCompatActivity {
                                 return;
                             }
 
-                            // copy the inputFileUri file to app cache directory
+                            // copy the inputFileUri file to app cache directory.
+                            //
+                            // B3-VAL-W1 F-5: write into `cacheDir/audio/`
+                            // (the same sub-directory CacheDirAudioFileFactory
+                            // owns) so the imported file participates in
+                            // the M4 orphan-cleanup pass (Spec 1 §4.11.5.1).
+                            // The pre-fix path `cacheDir/<name>` fell outside
+                            // the factory's `audioCacheDir` scope and leaked
+                            // indefinitely unless the user manually cleared
+                            // the cache.
                             Toast.makeText(this, getString(R.string.dictate_file_copying_to_cache), Toast.LENGTH_SHORT).show();
+                            File audioCacheDir = new File(getCacheDir(), "audio");
+                            //noinspection ResultOfMethodCallIgnored
+                            audioCacheDir.mkdirs();
                             try {
                                 InputStream inputStream = getContentResolver().openInputStream(uri);
-                                FileOutputStream outputStream = new FileOutputStream(new File(getCacheDir(), fileName));
+                                FileOutputStream outputStream = new FileOutputStream(new File(audioCacheDir, fileName));
                                 byte[] buffer = new byte[4096];
                                 int bytesRead;
                                 if (inputStream != null) {

@@ -1,6 +1,7 @@
 package net.devemperor.dictate.database
 
 import android.content.Context
+import androidx.annotation.VisibleForTesting
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -24,6 +25,10 @@ import net.devemperor.dictate.database.entity.TranscriptionEntity
 import net.devemperor.dictate.database.entity.UsageEntity
 import net.devemperor.dictate.database.migration.MIGRATION_1_2
 import net.devemperor.dictate.database.migration.MIGRATION_2_3
+import net.devemperor.dictate.database.migration.MIGRATION_3_4
+import net.devemperor.dictate.database.migration.MIGRATION_4_5
+import net.devemperor.dictate.database.migration.MIGRATION_5_6
+import net.devemperor.dictate.database.migration.MIGRATION_6_7
 
 @Database(
     entities = [
@@ -35,7 +40,7 @@ import net.devemperor.dictate.database.migration.MIGRATION_2_3
         CompletionLogEntity::class,
         TextInsertionEntity::class
     ],
-    version = 3,
+    version = 7,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -62,6 +67,50 @@ abstract class DictateDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * **Test-only.** Closes and drops the process-wide singleton so
+         * the next [getInstance] builds a fresh database.
+         *
+         * F-9 (B5): the singleton is shared across the Robolectric JVM
+         * fork. Robolectric reuses application state across tests, and a
+         * test that boots `DictatePipelineService` (which runs
+         * `LegacyAudioFileMigration` + creates session rows on every
+         * `onCreate`) can leave the DB / pref state in a shape a
+         * sibling test's `deleteAll()`-only reset does not fully
+         * neutralise — surfacing as the flaky
+         * `LegacyAudioFileMigrationTest` failure. Affected tests call
+         * this in `@Before`/`@After` so their pre-state is
+         * deterministic regardless of fork co-location, instead of
+         * depending on fork-scheduling. Idempotent — a no-op when no
+         * singleton has been built.
+         */
+        @JvmStatic
+        @VisibleForTesting
+        fun resetForTest(context: Context) {
+            synchronized(this) {
+                instance?.let { db ->
+                    if (db.isOpen) {
+                        try {
+                            db.close()
+                        } catch (ignored: Throwable) {
+                            // Closing an already-closing DB is harmless;
+                            // the reset still drops the reference below.
+                        }
+                    }
+                }
+                instance = null
+                // The production DB is FILE-backed (`dictate.db`), not
+                // in-memory — closing the connection alone leaves the
+                // file (and any rows a sibling test's
+                // `DictatePipelineService` boot wrote) on disk across
+                // the Robolectric JVM fork. Delete the file so the next
+                // `getInstance` truly starts from an empty schema.
+                runCatching {
+                    context.applicationContext.deleteDatabase(DATABASE_NAME)
+                }
+            }
+        }
+
         private fun buildDatabase(context: Context): DictateDatabase {
             val appContext = context.applicationContext
             return Room.databaseBuilder(
@@ -70,7 +119,10 @@ abstract class DictateDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .allowMainThreadQueries()
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
+                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+                )
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)

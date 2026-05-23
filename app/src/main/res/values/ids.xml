@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Resource-id declarations for runtime-only View tags.
+
+    These ids do NOT correspond to physical Views in any layout — they are
+    keys for `View.setTag(int, Object)` / `getTag(int)` so multiple
+    independent callers can attach their own per-View state without
+    colliding (each declared key is a globally-unique tag namespace).
+
+    Spec  : Spec 2 §11.5 — per-tick allocation budget.
+    Block : B4-VAL F-28 — SlotRenderer caches last-applied icon-res id
+            per View to skip redundant `ContextCompat.getDrawable(...)`
+            calls on state emits that don't actually flip the icon.
+-->
+<resources>
+
+    <!-- SlotRenderer caches the last-applied @DrawableRes int per
+         MaterialButton View under this key (B4-VAL F-28). -->
+    <item name="slot_renderer_last_icon_res" type="id" />
+
+    <!-- SlotRenderer caches the last-applied text CharSequence per
+         MaterialButton View under this key (B4-VAL F-28). -->
+    <item name="slot_renderer_last_text" type="id" />
+
+    <!-- SpecialTouchHandlerInstaller (B5 CR2) marks each
+         SPACE/BACKSPACE/ENTER View it built a §11.7 touch handler for
+         under this key, so the single-owner-per-View guard (RR-1,
+         Strict-Mode-Logging, Spec 2 §10) can detect a double-build.
+         Does NOT mean the View's setOnTouchListener is ours — in CR2
+         the handler is built-but-dormant; the legacy MainButtonsController
+         stays the sole live touch owner until CR4. -->
+    <item name="special_touch_owner_tag" type="id" />
+
+    <!-- EditBarController / EmojiController (B5 CR-EXTRACT) mark each
+         edit-bar / emoji View they built a click/long-click listener
+         for under this single shared key (the two owners never tag the
+         same View). Single-owner-per-View guard (RR-1,
+         Strict-Mode-Logging, Spec 2 §10) — detects a double-build.
+         Does NOT mean the View's listener is ours: in CR-EXTRACT the
+         listeners are built-but-dormant; the legacy
+         MainButtonsController.registerEditBarListeners /
+         registerEmojiListeners stay the sole live owner until CR4. -->
+    <item name="editbar_emoji_owner_tag" type="id" />
+
+</resources>

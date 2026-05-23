@@ -48,9 +48,36 @@ android {
 
     testOptions {
         // Return default values instead of throwing for unmocked Android APIs
-        // (e.g. android.util.Log). Keeps unit tests light — Robolectric is
-        // overkill for the pure-logic tests we currently have.
+        // (e.g. android.util.Log). Keeps the pure-logic JVM tests light —
+        // Robolectric is opt-in per Quality-Gate K-4 (no Android Context
+        // unless explicitly justified). Tests under `@RunWith(RobolectricTestRunner)`
+        // are unaffected by this flag — they get a real shadow runtime.
         unitTests.returnDefaultValues = true
+        // Required for Robolectric: it consumes AAR-bundled resources for
+        // tests that need a real Context (channel-order / FGS-budget tests
+        // in Block 1 chunk C2 — Spec 1 §10 Phase-B S-5 acceptance).
+        unitTests.includeAndroidResources = true
+    }
+
+    lint {
+        // KG-SST-4 (Spec 1 §6.1.3): promote EnumSwitch from Warning to
+        // Error. Java's switch on a Kotlin enum is not exhaustive — a
+        // missing `case` after a new enum variant lands would silently
+        // render no badge. The HistoryAdapter switch on SessionStatus
+        // is the motivating example. Lint reports the missing case as
+        // an Error in `./gradlew lintDebug`. The defensive `default:`
+        // branch in HistoryAdapter is the belt-and-suspenders defence.
+        //
+        // Intentional deviation from the spec snippet: `abortOnError`
+        // stays at its default (true, see lint-docs) but the build is
+        // NOT promoted via `warningsAsErrors`, AND a baseline is NOT
+        // generated for the 65 pre-existing lint errors (out-of-scope
+        // for C9). Net effect: new EnumSwitch errors will fail
+        // `./gradlew lintDebug` once the existing inventory is cleaned
+        // up in a separate pass; `./gradlew test` and
+        // `./gradlew assembleDebug` are unaffected because they do
+        // not run lint.
+        error += "EnumSwitch"
     }
 }
 
@@ -67,8 +94,32 @@ dependencies {
     implementation libs.preference
     implementation libs.emoji2.emojipicker
     testImplementation libs.junit
+    // Quality-Gate W-2: real JSONObject/JSONArray/JSONTokener in the JVM
+    // unit-test classpath instead of stubs (cf. ElevenLabsKeytermsParserTest
+    // line 133-135). Required by VersionedPrefs/Serializer roundtrip tests.
+    testImplementation 'org.json:json:20240303'
+    // Robolectric — explicit K-4 exception. Block 1 chunk C2 introduces the
+    // first user (DictatePipelineServiceTest, FGS lifecycle). Future K-4
+    // opt-outs (Spec 2 §11.5 RecordingAnimationController, Spec 3 §14.1
+    // DefaultOverlayPermissionGate) reuse the same dep.
+    testImplementation libs.robolectric
+    // androidx.test:core provides ApplicationProvider — pairs with
+    // Robolectric so JVM unit tests can resolve the shadow application
+    // context.
+    testImplementation libs.androidx.test.core
+    // kotlinx-coroutines-test (C7) — provides TestScope + advanceUntilIdle
+    // for orchestrator init-order tests (Phase-B S-1 acceptance).
+    testImplementation libs.kotlinx.coroutines.test
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core
+    // Room migration test helper + JUnit4 rules — required by
+    // MigrationTo4Test (Spec 1 §11.4.2). androidTest-scope only;
+    // instrumented tests are local-only — no CI invocation today
+    // (Spec 1 §11.7.0a "CI-Integration": connectedDebugAndroidTest
+    // runs locally on a device/emulator before PR merge).
+    androidTestImplementation libs.room.testing
+    androidTestImplementation libs.androidx.test.runner
+    androidTestImplementation libs.androidx.test.rules
 
     implementation libs.openai.java
     implementation libs.anthropic.java
@@ -82,6 +133,12 @@ dependencies {
 
     // Coroutines + Lifecycle (for StateFlow-based ActiveJobRegistry / ViewModels)
     implementation libs.kotlinx.coroutines.android
+    // kotlin-reflect — required by DictateOrchestrator + DictateModuleRegistry
+    // for `KClass.sealedSubclasses` iteration (Spec 1 §4.3 + ADR-0001).
+    implementation libs.kotlin.reflect
+    // kotlinx-collections-immutable — DictateUiState.pendingSessions uses
+    // PersistentList for structurally-shared immutability (Spec 1 §3 F-9).
+    implementation libs.kotlinx.collections.immutable
     implementation libs.lifecycle.viewmodel.ktx
     implementation libs.lifecycle.runtime.ktx
     implementation libs.lifecycle.livedata.ktx

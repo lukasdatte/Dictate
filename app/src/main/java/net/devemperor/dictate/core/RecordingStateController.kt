@@ -1,10 +1,38 @@
 package net.devemperor.dictate.core
 
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Handler
 import java.io.File
+
+/**
+ * Minimal scheduler abstraction over [Handler.postDelayed] / [Handler.removeCallbacks].
+ *
+ * Exists for the same reason as [AudioFocusGate]: the controller's pause-timeout
+ * logic uses an Android [Handler], but [Handler]'s constructor requires a Looper
+ * (Robolectric or instrumentation). Policy K-1 (no Mockito) and K-4 (no Android
+ * Context in unit tests) push us to wrap the two methods we actually need so a
+ * unit test can supply a no-op or capturing fake.
+ *
+ * Production: [HandlerPauseTimeoutScheduler]. Tests: a pure-Kotlin fake.
+ */
+interface PauseTimeoutScheduler {
+    fun postDelayed(action: Runnable, delayMs: Long)
+    fun removeCallbacks(action: Runnable)
+}
+
+/**
+ * Production [PauseTimeoutScheduler] backed by an Android [Handler] (typically
+ * the main-thread Looper, since the controller's threading contract states all
+ * public methods are called on the main thread).
+ */
+class HandlerPauseTimeoutScheduler(private val handler: Handler) : PauseTimeoutScheduler {
+    override fun postDelayed(action: Runnable, delayMs: Long) {
+        handler.postDelayed(action, delayMs)
+    }
+    override fun removeCallbacks(action: Runnable) {
+        handler.removeCallbacks(action)
+    }
+}
 
 /**
  * State machine for the recording lifecycle.
@@ -20,20 +48,61 @@ import java.io.File
  * Threading: all public methods must be called on the main thread.
  * RecordingManager's timer already runs on the main thread, so amplitude
  * and timer callbacks arrive without thread-switching.
+ *
+ * # Post-cutover status (dictate-pipeline-render-and-state-unification §9.3 OQ-3)
+ *
+ * After the render-cutover-vol2 + indirection-cleanup waves, this
+ * controller is **post-cutover dead code on the bound path** — the
+ * orchestrator's [net.devemperor.dictate.state.modules.RecordingHardwareAdapter]
+ * owns `MediaRecorder` directly, and `startRecording()` / `cancelRecording()`
+ * / `togglePause()` are never invoked while the IME is bound. A
+ * handful of read-sites in `DictateInputMethodService` still call
+ * `recordingStateController.getState()` as a defensive pre-bind
+ * fallback (the field is only `null` for the narrow `bindService`
+ * window). The plan §9.3 decided to leave the controller in place and
+ * mark it deprecated rather than delete it in scope — a follow-up
+ * plan `dictate-recording-state-controller-removal` carries the
+ * deletion.
+ *
+ * Do not add new readers / writers. The orchestrator state
+ * (`pipelineBinder.getState().value.recording`) is the
+ * single source of truth.
  */
+@Deprecated(
+    message = "Post-cutover dead code on the bound path. The orchestrator's " +
+        "RecordingHardwareAdapter owns MediaRecorder + the FSM; read " +
+        "recording state from `pipelineBinder.getState().value.recording`. " +
+        "Pre-bind fallback callers in DictateInputMethodService.java are the " +
+        "only legitimate remaining users. Slated for deletion in a " +
+        "follow-up plan (dictate-recording-state-controller-removal).",
+)
 class RecordingStateController(
-    private val audioManager: AudioManager,
-    private val audioFocusRequest: AudioFocusRequest,
+    private val gate: AudioFocusGate,
     private val amplitudeProcessor: AmplitudeProcessor,
-    private val mainHandler: Handler
+    private val pauseTimeoutScheduler: PauseTimeoutScheduler
 ) : RecordingManager.RecordingCallback, BluetoothScoManager.BluetoothScoCallback {
 
-    // Setter-injection: managers are set after construction to break circular dependency
-    // (Manager needs Controller as callback, Controller needs Manager to call methods)
-    private lateinit var recordingManager: RecordingManager
-    private lateinit var bluetoothScoManager: BluetoothScoManager
+    /**
+     * Convenience overload kept so existing [Handler]-based call sites in the
+     * service don't need to change construction. Production wraps the
+     * [Handler] in a [HandlerPauseTimeoutScheduler] internally.
+     */
+    constructor(
+        gate: AudioFocusGate,
+        amplitudeProcessor: AmplitudeProcessor,
+        mainHandler: Handler
+    ) : this(gate, amplitudeProcessor, HandlerPauseTimeoutScheduler(mainHandler))
 
-    fun setManagers(recordingManager: RecordingManager, bluetoothScoManager: BluetoothScoManager) {
+    // Setter-injection: managers are set after construction to break circular dependency
+    // (Manager needs Controller as callback, Controller needs Manager to call methods).
+    // Block 2 / Test Infrastructure: the BT manager is held via the
+    // [BluetoothScoControl] interface so unit tests can substitute a pure-Kotlin
+    // fake without instantiating the concrete BluetoothScoManager (which needs
+    // a Context, AudioManager, and a main-thread Looper).
+    private lateinit var recordingManager: RecordingManager
+    private lateinit var bluetoothScoManager: BluetoothScoControl
+
+    fun setManagers(recordingManager: RecordingManager, bluetoothScoManager: BluetoothScoControl) {
         this.recordingManager = recordingManager
         this.bluetoothScoManager = bluetoothScoManager
     }
@@ -105,7 +174,7 @@ class RecordingStateController(
         val file = recordingManager.stop()
         callback?.onKeepScreenAwakeChanged(false)
         bluetoothScoManager.release()
-        if (audioFocusEnabled) audioManager.abandonAudioFocusRequest(audioFocusRequest)
+        if (audioFocusEnabled) gate.abandon()
         amplitudeProcessor.reset()
 
         if (file != null) {
@@ -123,11 +192,11 @@ class RecordingStateController(
         when (val current = state) {
             is RecordingState.Active -> {
                 recordingManager.pause()
-                if (audioFocusEnabled) audioManager.abandonAudioFocusRequest(audioFocusRequest)
+                if (audioFocusEnabled) gate.abandon()
                 setState(RecordingState.Paused)
             }
             is RecordingState.Paused -> {
-                if (audioFocusEnabled) audioManager.requestAudioFocus(audioFocusRequest)
+                if (audioFocusEnabled) gate.request()
                 recordingManager.resume()
                 // Determine if BT is still connected
                 val useBt = bluetoothScoManager.isScoStarted
@@ -138,13 +207,45 @@ class RecordingStateController(
     }
 
     /**
+     * Mid-recording AudioFocus override. Updates the [audioFocusEnabled] field and,
+     * if currently [RecordingState.Active], immediately requests/abandons audio focus.
+     *
+     * State semantics:
+     *  - Idle / Preparing / Paused: only the field is updated. The next state transition
+     *    uses the new value via late-binding ([proceedStartRecording] re-reads the field
+     *    when transitioning Preparing → Active; [togglePause] re-reads when leaving Paused).
+     *  - Active: the field is updated AND AudioManager is mutated synchronously.
+     *
+     * The next [startRecording] resets the field from the [Pref.AudioFocus] value —
+     * this method only affects the running session. Persistent effect comes from the
+     * SP-write in [DictateInputMethodService.onAudioFocusToggled].
+     *
+     * Idempotent (Quality-Gate K10): a second call with the same value is a no-op
+     * (the `when`-branch matches neither arm because `wasEnabled == enabled`).
+     *
+     * Consumed by Block 2's `onAudioFocusToggled()`.
+     */
+    fun setAudioFocusRuntime(enabled: Boolean) {
+        val wasEnabled = audioFocusEnabled
+        // Always update the field — Idle/Preparing/Paused defer the AudioManager-Call.
+        audioFocusEnabled = enabled
+        val current = state
+        if (current is RecordingState.Active) {
+            when {
+                enabled && !wasEnabled -> gate.request()
+                !enabled && wasEnabled -> gate.abandon()
+            }
+        }
+    }
+
+    /**
      * Cancels the recording and resets everything to Idle.
      */
     fun cancelRecording() {
         cancelScoWaitIfAny()
         recordingManager.release()
         bluetoothScoManager.release()
-        if (audioFocusEnabled) audioManager.abandonAudioFocusRequest(audioFocusRequest)
+        if (audioFocusEnabled) gate.abandon()
         amplitudeProcessor.reset()
         cancelPauseTimeout()
         setState(RecordingState.Idle)
@@ -167,7 +268,7 @@ class RecordingStateController(
         // Release BT SCO when keyboard hidden (will rebuild on resume)
         if (state.isRecordingOrPaused) {
             bluetoothScoManager.release()
-            if (audioFocusEnabled) audioManager.abandonAudioFocusRequest(audioFocusRequest)
+            if (audioFocusEnabled) gate.abandon()
         }
         callback?.onKeepScreenAwakeChanged(false)
     }
@@ -249,12 +350,12 @@ class RecordingStateController(
     // ── Internal ──
 
     private fun proceedStartRecording(audioSource: Int, useBtForThisRecording: Boolean) {
-        if (audioFocusEnabled) audioManager.requestAudioFocus(audioFocusRequest)
+        if (audioFocusEnabled) gate.request()
 
         val file = audioFile ?: return
         val started = recordingManager.start(file, audioSource)
         if (!started) {
-            if (audioFocusEnabled) audioManager.abandonAudioFocusRequest(audioFocusRequest)
+            if (audioFocusEnabled) gate.abandon()
             setState(RecordingState.Idle)
             callback?.onRecordingError("recording_start_failed")
         }
@@ -269,11 +370,11 @@ class RecordingStateController(
 
     private fun startPauseTimeout() {
         cancelPauseTimeout()
-        mainHandler.postDelayed(pauseTimeoutRunnable, 60_000)
+        pauseTimeoutScheduler.postDelayed(pauseTimeoutRunnable, 60_000)
     }
 
     private fun cancelPauseTimeout() {
-        mainHandler.removeCallbacks(pauseTimeoutRunnable)
+        pauseTimeoutScheduler.removeCallbacks(pauseTimeoutRunnable)
     }
 
     private fun setState(newState: RecordingState) {

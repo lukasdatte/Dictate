@@ -10,6 +10,35 @@ import android.os.Handler
 import android.os.Looper
 
 /**
+ * Test-seam abstraction over [BluetoothScoManager] — covers the methods
+ * [RecordingStateController] calls on the concrete manager.
+ *
+ * Block 2 / Test Infrastructure: extracted so unit tests can supply a
+ * pure-Kotlin fake (no Android Context/AudioManager/Looper) without having
+ * to subclass the concrete manager. Production code keeps using the
+ * concrete [BluetoothScoManager] directly; the controller only holds the
+ * interface reference.
+ *
+ * The receiver-lifecycle methods ([BluetoothScoManager.registerReceiver]
+ * and [BluetoothScoManager.unregisterReceiver]) are NOT part of this
+ * interface — they belong to the service's lifecycle wiring, not the
+ * controller's recording state machine.
+ */
+interface BluetoothScoControl {
+    /** Whether SCO is currently started/connected. Read-only from the controller's POV. */
+    val isScoStarted: Boolean
+
+    /** Attempts to start SCO. Returns true if already connected. */
+    fun startSco(timeoutMs: Long = 2500): Boolean
+
+    /** Releases the SCO connection (no-op if not started). */
+    fun release()
+
+    /** Whether Bluetooth SCO is available off-call AND a BT input device exists. */
+    fun isBluetoothAvailable(useBluetoothMic: Boolean): Boolean
+}
+
+/**
  * Manages Bluetooth SCO (Synchronous Connection-Oriented) audio connections.
  *
  * Handles:
@@ -18,11 +47,16 @@ import android.os.Looper
  * - Timeout handling with fallback to built-in microphone
  * - Reconnect after pause
  */
-class BluetoothScoManager(
+// Test Infrastructure: the unit tests inject a `FakeBluetoothScoControl`
+// (an [BluetoothScoControl] interface implementation, NOT a subclass), so the
+// concrete class itself does not strictly need to be `open`. It stays `open`
+// out of an abundance of caution — Kotlin's default `final` would forbid
+// future ad-hoc test subclassing without a class-level diff.
+open class BluetoothScoManager(
     private val context: Context,
     private val audioManager: AudioManager,
     private val callback: BluetoothScoCallback
-) {
+) : BluetoothScoControl {
     interface BluetoothScoCallback {
         fun onScoConnected()
         fun onScoDisconnected()
@@ -33,8 +67,9 @@ class BluetoothScoManager(
     private var broadcastReceiver: BroadcastReceiver? = null
     private var timeoutRunnable: Runnable? = null
 
-    var isScoStarted: Boolean = false
-        private set
+    private var _isScoStarted: Boolean = false
+    override val isScoStarted: Boolean
+        get() = _isScoStarted
     var isWaitingForSco: Boolean = false
         private set
 
@@ -55,7 +90,7 @@ class BluetoothScoManager(
                 )
                 when (state) {
                     AudioManager.SCO_AUDIO_STATE_CONNECTED -> {
-                        isScoStarted = true
+                        _isScoStarted = true
                         if (isWaitingForSco) {
                             isWaitingForSco = false
                             cancelTimeout()
@@ -63,7 +98,7 @@ class BluetoothScoManager(
                         callback.onScoConnected()
                     }
                     AudioManager.SCO_AUDIO_STATE_DISCONNECTED -> {
-                        isScoStarted = false
+                        _isScoStarted = false
                         callback.onScoDisconnected()
                     }
                 }
@@ -83,9 +118,9 @@ class BluetoothScoManager(
      * @param timeoutMs timeout in milliseconds before falling back
      * @return true if SCO was already connected, false if waiting
      */
-    fun startSco(timeoutMs: Long = 2500): Boolean {
+    override fun startSco(timeoutMs: Long): Boolean {
         if (audioManager.isBluetoothScoOn) {
-            isScoStarted = true
+            _isScoStarted = true
             callback.onScoConnected()
             return true
         }
@@ -109,12 +144,12 @@ class BluetoothScoManager(
      * Releases the SCO connection.
      * Call this when pausing recording or when the service is destroyed.
      */
-    fun release() {
+    override fun release() {
         cancelTimeout()
         isWaitingForSco = false
-        if (isScoStarted) {
+        if (_isScoStarted) {
             try { audioManager.stopBluetoothSco() } catch (_: Exception) {}
-            isScoStarted = false
+            _isScoStarted = false
         }
     }
 
@@ -154,7 +189,7 @@ class BluetoothScoManager(
     /**
      * Checks if Bluetooth SCO is available off-call and a BT input device exists.
      */
-    fun isBluetoothAvailable(useBluetoothMic: Boolean): Boolean {
+    override fun isBluetoothAvailable(useBluetoothMic: Boolean): Boolean {
         return useBluetoothMic
                 && audioManager.isBluetoothScoAvailableOffCall
                 && hasBluetoothInputDevice()

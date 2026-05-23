@@ -1,0 +1,452 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Keyboard MotionScene — single source of truth for KEYBOARD-mode button positions.
+
+    Spec  : docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §7
+    ADR   : docs/decisions/0004-ui-layout-catalog-motionlayout.md §3 (visibilityMode=ignore is mandatory)
+    Block : C13 (B4-C13-IMPL-FULL) — creates the scene shell; C14 wires the Kotlin
+            backend that drives `transitionToState()`.
+
+    Why MotionScene drives position (not the layout XML):
+      - eliminates the asymmetric-re-parenting bug class (Spec 2 §1.1 #1 / #2).
+      - one declarative source per visible state — five ConstraintSets ↔ five
+        LayoutModeIds (KEYBOARD_TWO_ROW / KEYBOARD_SINGLE_ROW / two SEND variants
+        / REPROCESS_STAGING).
+      - LayoutCatalog stays the sole Visibility owner: every state-driven button
+        carries `motion:visibilityMode="ignore"` (Spec 2 §7.3 / R.11). MotionScene
+        animates position only; LayoutCatalog predicates animate visibility.
+
+    Derive-from convention:
+      - `two_row_state` is the canonical Two-Row base.
+      - `single_row_state` overrides everything that differs (full re-chain).
+      - `*_send_mode_state` + `reprocess_staging_state` inherit position from
+        their non-send siblings (same layout, different Catalog resolvers).
+
+    B4-deviation notes (B4-VAL F-27 — to be folded into Spec 2 §7.1 in Phase 4.6):
+      - `widget_toggle_btn` Constraints are added in both two_row_state +
+        single_row_state. Spec 2 §3.1 prescribes "neben AUDIO_FOCUS im
+        action_row" but the exact constraint chain is C13's call (the chain
+        avoids the overlap with audio_focus_btn — see F-7).
+      - The `<Constraint android:id="@+id/record_btn">` block carries
+        PropertySet only — record_btn is nested inside record_pulse_layout
+        (PulseLayout wrapper), so MotionLayout's position constraints
+        silently no-op here. The PropertySet stays for symmetry with the
+        other 8 buttons (Spec 2 §7.3 / R.11).
+-->
+<MotionScene xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:motion="http://schemas.android.com/apk/res-auto">
+
+    <!-- ════════════════════════════════════════════════════════════════
+         BASE STATE: Two-Row (default).
+         Row 1 (formerly action_row) chain: record_pulse — resend — backspace
+         (+ audio_focus / widget_toggle pinned to end, visibility-gated by
+         LayoutCatalog).
+         Row 2 (formerly input_row) chain : trash — space — pause — enter.
+         (B4-VAL F-30 — legacy container names appear in commit history.)
+         ════════════════════════════════════════════════════════════════ -->
+    <ConstraintSet android:id="@+id/two_row_state">
+
+        <!-- ── Row 1 (formerly action_row): record_pulse — resend — backspace ── -->
+        <!-- B4-VAL F-26: PropertySet visibilityMode=ignore for the PulseLayout
+             wrapper. Dormant today (nobody toggles its android:visibility) but
+             keeps the catalog-owned-visibility invariant intact for any future
+             consumer. Derive-from carries this to single_row_state + variants. -->
+        <!-- Inter-row gap (Row 1 ↔ Row 2): the 16dp `layout_marginBottom`
+             here is the single anchor for the vertical spacing. It lives on
+             `record_pulse_layout` rather than on a Row-2 button because
+             `record_pulse_layout` is the only Row-1 view that is **never
+             GONE** in any State (Idle / Recording / Sending). Putting the
+             margin on `trash_btn` (or any other Row-2 sibling that the
+             Catalog can hide) causes a ConstraintLayout chain-anchor
+             collapse: when the anchor view is GONE, its size collapses
+             to 0×0 at its position and the `wrap_content` siblings that
+             reference its `Top` AND `Bottom` re-center around the
+             collapsed line — visible to the user as a state-dependent
+             gap (16dp in Recording, ~0dp in Idle/Sending). Anchoring on
+             `record_pulse_layout.marginBottom` sidesteps that completely:
+             the bottom edge of Row 1 is always present, so the 16dp gap
+             is state-independent. Derived states (`single_row_state`,
+             `two_row_send_mode_state`, `reprocess_staging_state`)
+             inherit via `deriveConstraintsFrom`. -->
+        <Constraint
+            android:id="@+id/record_pulse_layout"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            android:layout_marginBottom="16dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintStart_toStartOf="parent"
+            motion:layout_constraintEnd_toStartOf="@+id/resend_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <Constraint
+            android:id="@+id/resend_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            motion:layout_constraintTop_toTopOf="@+id/record_pulse_layout"
+            motion:layout_constraintBottom_toBottomOf="@+id/record_pulse_layout"
+            motion:layout_constraintStart_toEndOf="@+id/record_pulse_layout"
+            motion:layout_constraintEnd_toStartOf="@+id/backspace_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <Constraint
+            android:id="@+id/backspace_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            motion:layout_goneMarginStart="0dp"
+            motion:layout_constraintTop_toTopOf="@+id/record_pulse_layout"
+            motion:layout_constraintBottom_toBottomOf="@+id/record_pulse_layout"
+            motion:layout_constraintStart_toEndOf="@+id/resend_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/widget_toggle_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <!-- widget_toggle_btn — new in Spec 3 OPEN-2 / Phase-1-1.0.2. Spec 2 §3.1
+             positions it "neben AUDIO_FOCUS im action_row"; in Two-Row it sits
+             between backspace and audio_focus and is GONE-when-pipeline-active
+             (Catalog predicate). Position-Override is declared explicitly here
+             so single_row_state's derive-from doesn't accidentally pin it. -->
+        <Constraint
+            android:id="@+id/widget_toggle_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            motion:layout_constraintTop_toTopOf="@+id/record_pulse_layout"
+            motion:layout_constraintBottom_toBottomOf="@+id/record_pulse_layout"
+            motion:layout_constraintStart_toEndOf="@+id/backspace_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/audio_focus_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <!-- audio_focus_btn lives next to backspace in Two-Row but is GONE
+             (Catalog predicate `{ false }` for Two-Row, Spec 2 §8.1).
+             Position is defined so derive-from siblings inherit it. -->
+        <Constraint
+            android:id="@+id/audio_focus_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            motion:layout_constraintTop_toTopOf="@+id/record_pulse_layout"
+            motion:layout_constraintBottom_toBottomOf="@+id/record_pulse_layout"
+            motion:layout_constraintEnd_toEndOf="parent">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <!-- ── Row 2 (formerly input_row): trash — space — pause — enter ── -->
+        <!-- Post-cutover hotfix (R1-DEEP): the inter-row 16dp gap lives on
+             `record_pulse_layout.layout_marginBottom` (Row 1, above). It
+             does NOT live here on `trash_btn`, despite trash_btn being
+             the Row-2 chain root — because the Catalog can drive trash_btn
+             to GONE in Idle and Sending. A GONE chain-anchor collapses
+             to 0×0, and ConstraintLayout then re-centers the wrap_content
+             siblings (space_btn / pause_btn / enter_btn — all top/bottom
+             anchored to trash_btn) around the collapsed line. Visible to
+             the user as 0dp gap in Idle/Sending vs. 16dp gap in Recording.
+             `motion:layout_goneMarginTop` only fixes trash_btn's own
+             position; it does not rescue the siblings' geometry.
+             Anchoring the gap on record_pulse_layout (which is never
+             GONE in any State) makes the spacing state-independent. -->
+        <Constraint
+            android:id="@+id/trash_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            motion:layout_constraintTop_toBottomOf="@+id/record_pulse_layout"
+            motion:layout_constraintStart_toStartOf="parent"
+            motion:layout_constraintEnd_toStartOf="@+id/space_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <!-- Phase 4 of dictate-render-cutover-completion-vol2 — space_btn,
+             pause_btn, enter_btn anchor their Top edge on
+             `record_pulse_layout` (Row 1's always-visible PulseLayout),
+             NOT on `trash_btn`. Pre-fix the three siblings carried Top
+             AND Bottom anchors on `trash_btn`; when the catalog hides
+             `trash_btn` (Send/Idle), ConstraintLayout collapsed the
+             anchor to 0×0 and re-centred the wrap_content siblings
+             around the collapsed line — visible as a state-dependent
+             Row 1 ↔ Row 2 overlap. Anchoring on `record_pulse_layout`
+             eliminates the collapse class entirely (the PulseLayout is
+             never GONE in any KEYBOARD_*_STATE). Bottom anchor is
+             omitted on all three; wrap_content + Top resolves the
+             vertical position deterministically. -->
+        <Constraint
+            android:id="@+id/space_btn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp"
+            motion:layout_constraintTop_toBottomOf="@+id/record_pulse_layout"
+            motion:layout_constraintStart_toEndOf="@+id/trash_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/pause_btn"
+            motion:layout_goneMarginStart="0dp">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <Constraint
+            android:id="@+id/pause_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            motion:layout_constraintTop_toBottomOf="@+id/record_pulse_layout"
+            motion:layout_constraintStart_toEndOf="@+id/space_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/enter_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <Constraint
+            android:id="@+id/enter_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            motion:layout_constraintTop_toBottomOf="@+id/record_pulse_layout"
+            motion:layout_constraintStart_toEndOf="@+id/pause_btn"
+            motion:layout_constraintEnd_toEndOf="parent">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <!-- record_btn lives inside record_pulse_layout (PulseLayout wrapper, L7).
+             It carries visibilityMode=ignore so LayoutCatalog text/visibility
+             resolution stays authoritative. No position override — record_btn is
+             match_parent inside its wrapper. -->
+        <Constraint android:id="@+id/record_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+    </ConstraintSet>
+
+    <!-- ════════════════════════════════════════════════════════════════
+         SINGLE_ROW STATE: all eight visible buttons in a single horizontal
+         chain (replaces the legacy programmatic buildSingleRowConstraintSet).
+         Chain order: trash — record_pulse — space — pause — backspace — enter
+                      — resend — audio_focus.
+         widget_toggle_btn is hidden in this layout (Catalog `{ false }` would
+         apply if it weren't already off-screen) — we override its position to
+         GONE-friendly to keep the chain unaffected.
+         ════════════════════════════════════════════════════════════════ -->
+    <ConstraintSet
+        android:id="@+id/single_row_state"
+        motion:deriveConstraintsFrom="@+id/two_row_state">
+
+        <Constraint
+            android:id="@+id/trash_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintBottom_toBottomOf="parent"
+            motion:layout_constraintStart_toStartOf="parent"
+            motion:layout_constraintEnd_toStartOf="@+id/record_pulse_layout">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <!-- Single-Row override of `record_pulse_layout`. `deriveConstraintsFrom`
+             is a **per-id replace**, not a property-level merge: re-declaring
+             `record_pulse_layout` here discards the parent state's
+             `layout_marginBottom="16dp"` unless this constraint also sets one.
+             Single-Row has no Row 2, so the correct value is **0dp** — without
+             the explicit zero a transition from `two_row_state` would
+             temporarily inherit the 16dp margin (briefly visible as a phantom
+             gap under Row 1) and an inline boot-state margin (`activity_…xml`)
+             would also leak through until the first transition. -->
+        <Constraint
+            android:id="@+id/record_pulse_layout"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:layout_marginBottom="0dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintBottom_toBottomOf="parent"
+            motion:layout_constraintStart_toEndOf="@+id/trash_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/space_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <Constraint
+            android:id="@+id/space_btn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintBottom_toBottomOf="parent"
+            motion:layout_constraintStart_toEndOf="@+id/record_pulse_layout"
+            motion:layout_constraintEnd_toStartOf="@+id/pause_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <Constraint
+            android:id="@+id/pause_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintBottom_toBottomOf="parent"
+            motion:layout_constraintStart_toEndOf="@+id/space_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/backspace_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <Constraint
+            android:id="@+id/backspace_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintBottom_toBottomOf="parent"
+            motion:layout_constraintStart_toEndOf="@+id/pause_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/enter_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <Constraint
+            android:id="@+id/enter_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintBottom_toBottomOf="parent"
+            motion:layout_constraintStart_toEndOf="@+id/backspace_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/resend_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <Constraint
+            android:id="@+id/resend_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintBottom_toBottomOf="parent"
+            motion:layout_constraintStart_toEndOf="@+id/enter_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/widget_toggle_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <!-- widget_toggle_btn chained BEFORE audio_focus_btn (B4-VAL F-7 — when
+             both are visible in Single-Row, the previous parent-end pin on
+             widget_toggle caused it to overlap audio_focus). The chain order
+             is now resend → widget_toggle → audio_focus → parent-end. Catalog
+             still gates visibility; goneMargin keeps spacing sane when
+             widget_toggle is GONE. -->
+        <Constraint
+            android:id="@+id/widget_toggle_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintBottom_toBottomOf="parent"
+            motion:layout_constraintStart_toEndOf="@+id/resend_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/audio_focus_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <Constraint
+            android:id="@+id/audio_focus_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintBottom_toBottomOf="parent"
+            motion:layout_constraintStart_toEndOf="@+id/widget_toggle_btn"
+            motion:layout_constraintEnd_toEndOf="parent">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+    </ConstraintSet>
+
+    <!-- ════════════════════════════════════════════════════════════════
+         SEND-MODE STATES.
+
+         Same chain positions as their non-send siblings — record_btn widens
+         automatically once resend_btn becomes GONE (Catalog predicate). These
+         states exist so MotionLayout has a distinct end-point per Catalog mode
+         (transitioning to the same constraintSet is a no-op and would skip
+         transition listeners that C14 wires up).
+         ════════════════════════════════════════════════════════════════ -->
+    <ConstraintSet
+        android:id="@+id/two_row_send_mode_state"
+        motion:deriveConstraintsFrom="@+id/two_row_state" />
+
+    <ConstraintSet
+        android:id="@+id/single_row_send_mode_state"
+        motion:deriveConstraintsFrom="@+id/single_row_state" />
+
+    <!-- ════════════════════════════════════════════════════════════════
+         REPROCESS_STAGING STATE.
+
+         Same chain positions as Two-Row; Catalog rebinds text/visibility:
+         record_btn becomes "Audio X:YY · Send", pause_btn visible-but-disabled
+         at alpha 0.4, trash_btn becomes "Cancel-Staging". The state is wholly
+         Catalog-driven (visibility/text/enabled) — MotionScene only owns
+         position, which mirrors Two-Row.
+         ════════════════════════════════════════════════════════════════ -->
+    <ConstraintSet
+        android:id="@+id/reprocess_staging_state"
+        motion:deriveConstraintsFrom="@+id/two_row_state" />
+
+    <!-- ════════════════════════════════════════════════════════════════
+         TRANSITIONS.
+
+         Only sibling-pairs that the user actually toggles between are wired
+         explicitly. Anything else falls back to MotionLayout's auto-transition
+         (fade + move, default duration). Durations follow Spec 2 §7.1:
+           - two_row ↔ single_row : 250 ms (layout reflow, perceptible)
+           - * ↔ *_send_mode     : 200 ms (subtle, no chain reshape)
+           - * ↔ reprocess_staging: 200 ms (text/icon swap, no reshape)
+         ════════════════════════════════════════════════════════════════ -->
+    <Transition
+        motion:constraintSetStart="@+id/two_row_state"
+        motion:constraintSetEnd="@+id/single_row_state"
+        motion:duration="250" />
+
+    <Transition
+        motion:constraintSetStart="@+id/two_row_state"
+        motion:constraintSetEnd="@+id/two_row_send_mode_state"
+        motion:duration="200" />
+
+    <Transition
+        motion:constraintSetStart="@+id/single_row_state"
+        motion:constraintSetEnd="@+id/single_row_send_mode_state"
+        motion:duration="200" />
+
+    <Transition
+        motion:constraintSetStart="@+id/two_row_state"
+        motion:constraintSetEnd="@+id/reprocess_staging_state"
+        motion:duration="200" />
+
+    <Transition
+        motion:constraintSetStart="@+id/single_row_state"
+        motion:constraintSetEnd="@+id/reprocess_staging_state"
+        motion:duration="200" />
+
+    <!-- B4-VAL F-25: explicit edges between SEND_MODE / STAGING states.
+         Without these, MotionLayout falls back to its auto-transition (fade
+         default) which doesn't reliably carry `visibilityMode=ignore`,
+         risking a double-write during the transition window. -->
+    <Transition
+        motion:constraintSetStart="@+id/two_row_send_mode_state"
+        motion:constraintSetEnd="@+id/single_row_send_mode_state"
+        motion:duration="250" />
+
+    <Transition
+        motion:constraintSetStart="@+id/two_row_send_mode_state"
+        motion:constraintSetEnd="@+id/reprocess_staging_state"
+        motion:duration="200" />
+
+    <Transition
+        motion:constraintSetStart="@+id/single_row_send_mode_state"
+        motion:constraintSetEnd="@+id/reprocess_staging_state"
+        motion:duration="200" />
+
+</MotionScene>

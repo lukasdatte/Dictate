@@ -300,6 +300,9 @@
     <string name="dictate_status_failed">Fehlgeschlagen</string>
     <string name="dictate_status_cancelled">Abgebrochen</string>
     <string name="dictate_status_running">Wird verarbeitet…</string>
+    <string name="dictate_status_recording">Aufnahme läuft…</string>
+    <string name="dictate_status_transcribing">Transkription läuft…</string>
+    <string name="dictate_cache_clear_blocked_recording">Cache kann während einer aktiven Aufnahme nicht geleert werden.</string>
 
     <!-- History detail actions -->
     <string name="dictate_history_direct_reprocess">Direkt ausführen</string>
@@ -310,10 +313,56 @@
     <string name="dictate_reprocess_audio_available">Audio %1$s · Senden</string>
     <string name="dictate_job_already_active">Verarbeitung läuft bereits</string>
     <string name="dictate_audio_file_missing">Audio-Datei nicht mehr verfügbar</string>
+    <string name="dictate_resend_focus_lost">Eingabefeld nicht mehr verfügbar — Pipeline wird neu gestartet</string>
     <string name="dictate_reprocess_language">Sprache</string>
+    <string name="dictate_language_manage">⚙ Sprachen verwalten…</string>
+    <string name="dictate_language_other_separator">────── andere Sprachen ──────</string>
 
     <!-- Delete audio -->
     <string name="dictate_delete_audio_title">Audio löschen</string>
     <string name="dictate_delete_audio_message">Audio wird unwiderruflich gelöscht. Transkription und Ergebnisse bleiben erhalten.</string>
     <string name="dictate_delete_audio_confirm">Löschen</string>
+
+    <!--
+        Block 2 (DictatePipelineService): notification channel + content
+        + service description + IME bind-race fallback. See Spec 1 §11.1
+        §11.5 §11.3.2a.
+    -->
+    <string name="dictate_pipeline_service_description">Hintergrunddienst für die Dictate-Transkriptions-Pipeline.</string>
+    <string name="dictate_pipeline_channel_name">Dictate-Pipeline</string>
+    <string name="dictate_pipeline_channel_description">Persistente Benachrichtigung, während Dictate im Hintergrund aufnimmt oder Audio verarbeitet.</string>
+    <string name="dictate_pipeline_notif_title">Dictate</string>
+    <string name="dictate_pipeline_notif_idle">Bereit</string>
+    <string name="dictate_service_not_ready">Service startet noch — bitte kurz warten.</string>
+    <string name="dictate_storage_full">Cache voll — Aufnahme kann nicht starten.</string>
+
+    <!-- C4-B2 (Epic OQ-3 / FN-2): PipelineNotificationCoordinator — zustandsabhängige Untertitel + [Pause][Stopp][Senden]-Action-Buttons (Spec 1 §7.6). -->
+    <string name="dictate_notif_recording_active">Aufnahme läuft …</string>
+    <string name="dictate_notif_recording_paused">Aufnahme pausiert</string>
+    <string name="dictate_notif_processing">Verarbeite …</string>
+    <string name="dictate_notif_ready_to_insert">Bereit zum Einfügen</string>
+    <string name="dictate_notif_overlay_permission_required">Schwebe-Widget ausgeblendet — Berechtigung entzogen</string>
+    <string name="dictate_action_pause">Pause</string>
+    <string name="dictate_action_resume">Fortsetzen</string>
+    <string name="dictate_action_stop">Stopp</string>
+    <string name="dictate_action_send">Senden</string>
+    <string name="dictate_action_cancel">Abbrechen</string>
+    <string name="dictate_action_insert">Einfügen</string>
+    <string name="dictate_action_discard">Verwerfen</string>
+
+    <!-- Block 5 / Spec 3 (Floating-Overlay): Inhaltsbeschreibungen für das 5-Tasten-Overlay. -->
+    <string name="overlay_record_cd">Aufnahme starten</string>
+    <string name="overlay_send">Senden</string>
+    <string name="overlay_send_cd">Aufnahme senden</string>
+    <string name="overlay_pause_cd">Aufnahme pausieren oder fortsetzen</string>
+    <string name="overlay_trash_cd">Aufnahme abbrechen</string>
+    <string name="overlay_close_cd">Overlay schließen</string>
+
+    <!-- Block 5 / Spec 3 §5.2-§5.3 — Onboarding-Texte für die Overlay-Berechtigung. -->
+    <string name="overlay_perm_onboarding_title">Berechtigung für schwebendes Overlay</string>
+    <string name="overlay_perm_explainer">Um das schwebende Widget über anderen Apps anzuzeigen, benötigt Dictate die Berechtigung „Über anderen Apps anzeigen“.</string>
+    <string name="overlay_perm_later">Später</string>
+    <string name="overlay_perm_grant">Erlauben</string>
+    <string name="overlay_perm_onboarding_granted">Berechtigung erteilt.</string>
+    <string name="overlay_perm_onboarding_pending">Berechtigung weiterhin erforderlich — tippe auf „Erlauben“, um die Systemeinstellungen zu öffnen.</string>
 </resources>

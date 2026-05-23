@@ -282,6 +282,9 @@
     <string name="dictate_status_failed">Falhou</string>
     <string name="dictate_status_cancelled">Cancelado</string>
     <string name="dictate_status_running">Processando…</string>
+    <string name="dictate_status_recording">Gravando…</string>
+    <string name="dictate_status_transcribing">Transcrevendo…</string>
+    <string name="dictate_cache_clear_blocked_recording">O cache não pode ser limpo enquanto uma gravação está ativa.</string>
 
     <!-- History detail actions -->
     <string name="dictate_history_direct_reprocess">Executar diretamente</string>
@@ -292,10 +295,42 @@
     <string name="dictate_reprocess_audio_available">Áudio %1$s · Enviar</string>
     <string name="dictate_job_already_active">Já existe um processamento em andamento</string>
     <string name="dictate_audio_file_missing">O arquivo de áudio não está mais disponível</string>
+    <string name="dictate_resend_focus_lost">Campo de entrada indisponível — reiniciando o processamento</string>
     <string name="dictate_reprocess_language">Idioma</string>
+    <string name="dictate_language_manage">⚙ Gerenciar idiomas…</string>
+    <string name="dictate_language_other_separator">────── outros idiomas ──────</string>
 
     <!-- Delete audio -->
     <string name="dictate_delete_audio_title">Excluir áudio</string>
     <string name="dictate_delete_audio_message">O áudio será excluído permanentemente. A transcrição e os resultados são preservados.</string>
     <string name="dictate_delete_audio_confirm">Excluir</string>
+
+    <!--
+        Block 2 (DictatePipelineService): notification channel + content
+        + service description + IME bind-race fallback. See Spec 1 §11.1
+        §11.5 §11.3.2a.
+    -->
+    <string name="dictate_pipeline_service_description">Serviço em segundo plano para a transcrição do Dictate.</string>
+    <string name="dictate_pipeline_channel_name">Canal do Dictate</string>
+    <string name="dictate_pipeline_channel_description">Notificação persistente enquanto o Dictate está gravando ou processando áudio em segundo plano.</string>
+    <string name="dictate_pipeline_notif_title">Dictate</string>
+    <string name="dictate_pipeline_notif_idle">Pronto</string>
+    <string name="dictate_service_not_ready">O serviço está iniciando — aguarde um momento, por favor.</string>
+    <string name="dictate_storage_full">Cache cheio — não é possível iniciar a gravação.</string>
+
+    <!-- Block 5 / Spec 3 (Floating-Overlay): descrições de conteúdo para o overlay de 5 botões. -->
+    <string name="overlay_record_cd">Iniciar gravação</string>
+    <string name="overlay_send">Enviar</string>
+    <string name="overlay_send_cd">Enviar gravação</string>
+    <string name="overlay_pause_cd">Pausar ou retomar a gravação</string>
+    <string name="overlay_trash_cd">Cancelar gravação</string>
+    <string name="overlay_close_cd">Fechar overlay</string>
+
+    <!-- Block 5 / Spec 3 §5.2-§5.3 — textos de integração para a permissão do overlay. -->
+    <string name="overlay_perm_onboarding_title">Permissão de overlay flutuante</string>
+    <string name="overlay_perm_explainer">Para exibir o widget flutuante sobre outros apps, o Dictate precisa da permissão «Sobrepor a outros apps».</string>
+    <string name="overlay_perm_later">Mais tarde</string>
+    <string name="overlay_perm_grant">Permitir</string>
+    <string name="overlay_perm_onboarding_granted">Permissão concedida.</string>
+    <string name="overlay_perm_onboarding_pending">A permissão ainda é necessária — toque em «Permitir» para abrir as configurações do sistema.</string>
 </resources>

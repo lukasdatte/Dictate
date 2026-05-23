@@ -72,6 +72,28 @@ class SessionTrackerTest {
     }
 
     @Test
+    fun `findContinuationCandidate returns DAO result with correct floor`() {
+        val now = 10_000_000L
+        val freshness = 24L * 60L * 60L * 1000L  // 24h
+        val expectedFloor = now - freshness
+        val session = makeSession("interrupted-1")
+        val dao = FakeSessionDao().apply { stubbedInterrupted = session }
+        val tracker = SessionTracker(dao)
+
+        val result = tracker.findContinuationCandidate(freshness, now)
+
+        assertSame(session, result)
+        assertEquals(expectedFloor, dao.lastInterruptedFloor)
+    }
+
+    @Test
+    fun `findContinuationCandidate returns null when DAO has no candidate`() {
+        val dao = FakeSessionDao()  // stubbedInterrupted = null
+        val tracker = SessionTracker(dao)
+        assertNull(tracker.findContinuationCandidate(freshnessMs = 1000L, nowMs = 5000L))
+    }
+
+    @Test
     fun `clearCurrent resets transient tracking fields`() {
         val dao = FakeSessionDao()
         val tracker = SessionTracker(dao).apply {
@@ -104,11 +126,20 @@ class SessionTrackerTest {
 private class FakeSessionDao : SessionDao {
     var stubbedLatest: SessionEntity? = null
     var findLatestCallCount: Int = 0
+    var stubbedInterrupted: SessionEntity? = null
+    var lastInterruptedFloor: Long = Long.MIN_VALUE
 
     override fun findLatestByOrigin(origin: String): SessionEntity? {
         findLatestCallCount++
         return if (origin == SessionOrigin.KEYBOARD.name) stubbedLatest else null
     }
+
+    override fun findLatestUnfinishedRecording(createdAtFloor: Long): SessionEntity? {
+        lastInterruptedFloor = createdAtFloor
+        return stubbedInterrupted
+    }
+
+    override fun findActiveSessionIds(): List<String> = notUsed()
 
     // ── Unused — throw so accidental calls fail loud ──
 
@@ -128,6 +159,34 @@ private class FakeSessionDao : SessionDao {
     override fun updateQueuedPromptIds(id: String, ids: String?) = notUsed()
     override fun clearAudioFilePath(id: String) = notUsed()
     override fun updateAudioFilePath(id: String, path: String) = notUsed()
+    override fun updateAudioFilePaths(id: String, paths: String) = notUsed()
+
+    // M4 additions (Spec 1 §6.1) — none of these are exercised by
+    // SessionTracker.getLastKeyboardSession(), but the interface
+    // contract demands an implementation. Throwing keeps the fake's
+    // "fail loud" intent intact.
+    override fun markInserted(id: String, timestamp: Long) = notUsed()
+    override fun finalizeRecordedMetadata(
+        id: String,
+        status: String,
+        targetApp: String?,
+        language: String?,
+        durationSeconds: Long,
+        queuedPromptIds: String?,
+    ) = notUsed()
+    override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> = notUsed()
+    override fun deleteInsertedOlderThan(cutoff: Long): Int = notUsed()
+    override fun findOrphanedTerminalAudio(
+        cutoff: Long
+    ): List<net.devemperor.dictate.database.dao.OrphanedAudioRow> = notUsed()
+    override fun clearAudioFilePathBulk(ids: List<String>) = notUsed()
+    override fun getSessionsByStatuses(statuses: List<String>): List<SessionEntity> = notUsed()
+    override fun findAllAudioFilePaths(): List<String?> = notUsed()
+    override fun markLegacyAudioSessionsFailed(
+        legacyPath: String,
+        reason: String,
+        failedStatus: String
+    ): Int = notUsed()
 
     private fun notUsed(): Nothing = error("FakeSessionDao: method not expected in these tests")
 }

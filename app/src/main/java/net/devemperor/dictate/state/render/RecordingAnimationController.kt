@@ -194,12 +194,16 @@ class RecordingAnimationController(
      */
     fun updateColor(accentColor: Int) {
         animation.updateColor(accentColor)
-        if (lastRecordingState is RecordingState.Active) {
+        val curr = lastRecordingState
+        if (curr is RecordingState.Active) {
             stopBackgroundAnimator()
             startBackgroundAnimator()
-        } else if (lastRecordingState != null) {
-            // Refresh the static colour for non-active states too.
-            val curr = lastRecordingState
+        } else {
+            // Static colour for non-active states. Also covers the
+            // pre-first-tick case (`curr == null`) — without this the
+            // button would keep whatever colour `applyTheme` left
+            // behind and the new accent would not become visible until
+            // the next state-class transition.
             applyBackground(
                 if (curr is RecordingState.Paused || curr is RecordingState.Interrupted)
                     dimmed(accentColor)

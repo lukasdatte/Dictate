@@ -22,7 +22,6 @@ import net.devemperor.dictate.state.render.AutoEnterRenderer
 import net.devemperor.dictate.state.render.RecordButtonColorController
 import net.devemperor.dictate.state.render.RecordingAnimationController
 import net.devemperor.dictate.state.render.applySlotToView
-import net.devemperor.dictate.widget.PulseLayout
 
 /**
  * RenderBackend implementation for the floating-overlay window
@@ -473,9 +472,8 @@ class OverlayBackend(
             Log.w(TAG, "OVERLAY_RECORD view is not a MaterialButton — skipping side-channel renderers.")
             return
         }
-        val pulseLayout = rootView.findViewById<PulseLayout?>(R.id.overlay_pulse_layout)
         rendererBundle = OverlayRendererBundle(
-            recording = recordingAnimationControllerFactory?.create(recordBtn, pulseLayout),
+            recording = recordingAnimationControllerFactory?.create(recordBtn),
             autoEnter = autoEnterRendererFactory?.create(recordBtn),
             color = recordButtonColorControllerFactory?.create(recordBtn),
         )
@@ -749,24 +747,25 @@ class OverlayBackend(
 
 /**
  * Builds a [RecordingAnimationController] bound to the inflated overlay
- * `record_btn` + `overlay_pulse_layout` views.
+ * `record_btn` view.
  *
  * The factory is invoked once per [OverlayBackend.inflateAndAttach],
  * AFTER the views are inflated and attached to the WindowManager. The
- * resulting controller owns the `BorderGlow` + `PulseLayout` animation
- * lifecycle for the overlay surface; it is symmetric to the IME-View
- * backend's `recordingAnimationController` but bound to a different
- * View instance.
+ * resulting controller owns the BorderGlow visualiser and the breathing
+ * background animator for the overlay surface; it is symmetric to the
+ * IME-View backend's `recordingAnimationController` but bound to a
+ * different View instance.
  *
  * Production wiring: the service builds the underlying
  * `RecordingAnimation` (e.g. `BorderGlowAnimation` configured with the
  * accent colour and density), then returns a
- * `RecordingAnimationController(animation, pulseLayout, animationsEnabled)`.
+ * `RecordingAnimationController(animation, recordButton,
+ * accentColorProvider, animationsEnabled)`.
  *
  * @see dictate-widget-integration §8.1 Chunk 1.4
  */
 fun interface RecordingAnimationControllerFactory {
-    fun create(recordButton: MaterialButton, pulseLayout: PulseLayout?): RecordingAnimationController?
+    fun create(recordButton: MaterialButton): RecordingAnimationController?
 }
 
 /**

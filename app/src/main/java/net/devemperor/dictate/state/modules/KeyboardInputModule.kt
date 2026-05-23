@@ -81,19 +81,19 @@ object KeyboardInputModule : DictateModule<KeyboardInputState, Action.KeyboardIn
          * Perform the Enter-button's semantic action against the current
          * `InputConnection`. The reducer pre-computes [role] from
          * [HostEditorState] (via
-         * `net.devemperor.dictate.state.layout.resolveEnterRole`) so the
-         * handler stays a simple dispatcher.
+         * `net.devemperor.dictate.state.layout.resolveEnterRole`) and
+         * [actionId] via `actionIdForEnter`, so the handler stays a
+         * simple two-way branch.
          *
          * @property role what the user expects to happen — drives the
          *   branch in [runEffect]:
          *   `NEWLINE → commitText("\n", 1)`,
-         *   any IME-action role → `performEditorAction(actionIdForRole(role))`,
-         *   `CUSTOM → performEditorAction(actionId)`,
-         *   `PRE_BIND_FALLBACK` (modelled as `role = NEWLINE` with
-         *   [hasEditorInfo] = false in the reducer) → handler still
-         *   commits newline — only the explicit physical-keystroke
-         *   fallback uses `sendKeyEvent` below.
-         * @property actionId payload for `CUSTOM`; ignored otherwise.
+         *   any other role (GO/SEARCH/SEND/NEXT/PREVIOUS/DONE/CUSTOM)
+         *   → `performEditorAction(actionId)`.
+         * @property actionId payload for `performEditorAction` —
+         *   `IME_ACTION_*` constant for the standard roles, the host
+         *   editor's `EditorInfo.actionId` for `CUSTOM`. Ignored when
+         *   [role] is `NEWLINE` (sentinel `0`).
          */
         data class PerformEnter(
             val role: net.devemperor.dictate.state.layout.EnterButtonRole,
@@ -168,18 +168,10 @@ object KeyboardInputModule : DictateModule<KeyboardInputState, Action.KeyboardIn
         is Effect.PerformEnter -> {
             val ic = services.inputConnectionProvider()
             if (ic != null) {
-                when (effect.role) {
-                    net.devemperor.dictate.state.layout.EnterButtonRole.NEWLINE ->
-                        ic.commitText("\n", 1)
-                    net.devemperor.dictate.state.layout.EnterButtonRole.CUSTOM ->
-                        ic.performEditorAction(effect.actionId)
-                    net.devemperor.dictate.state.layout.EnterButtonRole.GO,
-                    net.devemperor.dictate.state.layout.EnterButtonRole.SEARCH,
-                    net.devemperor.dictate.state.layout.EnterButtonRole.SEND,
-                    net.devemperor.dictate.state.layout.EnterButtonRole.NEXT,
-                    net.devemperor.dictate.state.layout.EnterButtonRole.PREVIOUS,
-                    net.devemperor.dictate.state.layout.EnterButtonRole.DONE ->
-                        ic.performEditorAction(effect.actionId)
+                if (effect.role == net.devemperor.dictate.state.layout.EnterButtonRole.NEWLINE) {
+                    ic.commitText("\n", 1)
+                } else {
+                    ic.performEditorAction(effect.actionId)
                 }
             }
             Unit

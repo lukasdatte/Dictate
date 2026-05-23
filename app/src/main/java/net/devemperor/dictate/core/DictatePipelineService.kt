@@ -756,7 +756,7 @@ class DictatePipelineService : Service() {
             }
             val recordingAnimationFactory =
                 net.devemperor.dictate.state.render.overlay.RecordingAnimationControllerFactory {
-                    recordButton, pulseLayout ->
+                    recordButton ->
                     val ctx = recordButton.context
                     val displayDensity = ctx.resources.displayMetrics.density
                     val animation = net.devemperor.dictate.widget.BorderGlowAnimation(

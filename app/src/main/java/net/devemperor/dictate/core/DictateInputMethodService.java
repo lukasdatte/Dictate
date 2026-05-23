@@ -105,7 +105,6 @@ import net.devemperor.dictate.state.render.RealMotionSurface;
 import net.devemperor.dictate.state.render.RecordingAnimationController;
 import net.devemperor.dictate.state.render.RenderGate;
 import net.devemperor.dictate.state.render.SpecialTouchHandlerInstaller;
-import net.devemperor.dictate.widget.PulseLayout;
 
 import androidx.constraintlayout.motion.widget.MotionLayout;
 import java.util.HashMap;
@@ -508,9 +507,6 @@ public class DictateInputMethodService extends InputMethodService
     private QwertzKeyboardController qwertzController;
     private LinearLayout overlayCharactersLl;
 
-    // PulseLayout for recording ripple animation
-    private PulseLayout recordPulseLayout;
-
     // Pipeline cancel button (delegates to PipelineOrchestrator)
     private MaterialButton pipelineCancelBtn;
 
@@ -887,7 +883,6 @@ public class DictateInputMethodService extends InputMethodService
         mainButtonsClGroup = dictateKeyboardView.findViewById(R.id.main_buttons_cl);
         editSettingsButton = dictateKeyboardView.findViewById(R.id.edit_settings_btn);
         editButtonsKeyboardLl = dictateKeyboardView.findViewById(R.id.edit_buttons_keyboard_ll);
-        recordPulseLayout = dictateKeyboardView.findViewById(R.id.record_pulse_layout);
         recordButton = dictateKeyboardView.findViewById(R.id.record_btn);
         resendButton = dictateKeyboardView.findViewById(R.id.resend_btn);
         backspaceButton = dictateKeyboardView.findViewById(R.id.backspace_btn);
@@ -934,12 +929,14 @@ public class DictateInputMethodService extends InputMethodService
                 // QWERTZ-Enter goes through the same orchestrator
                 // dispatch the Catalog ENTER slot uses, so both paths
                 // share one source of truth (HostEditorState → Role →
-                // PerformEnter Effect). Pre-bind window: silently skip
-                // (the user can re-tap once the binder is alive — sub-
-                // second window in practice).
+                // PerformEnter Effect). Pre-bind window (rare but real
+                // — service-bind is async): fall back to a physical
+                // KEYCODE_ENTER so the keystroke is not silently lost.
                 if (pipelineBinder != null) {
                     pipelineBinder.dispatch(
                             net.devemperor.dictate.state.Action.KeyboardInputAction.EnterKey.INSTANCE);
+                } else {
+                    sendPhysicalEnterFallback();
                 }
                 return kotlin.Unit.INSTANCE;
             },
@@ -1302,12 +1299,12 @@ public class DictateInputMethodService extends InputMethodService
 
         keyboardLayoutManager = pipelineBinder.getKeyboardLayoutManager();
 
-        // RecordingAnimationController: drive BorderGlow + PulseLayout from
-        // state.recording transitions. Spec 2 §11.5 keeps the animation
-        // outside the pure-resolver model — the controller is forwarded
-        // from ImeViewBackend.render. animationsEnabled is read live
-        // from Pref.Animations so a settings flip is reflected on the
-        // next state emit.
+        // RecordingAnimationController: drive BorderGlow + the breathing
+        // background animator from state.recording transitions. Spec 2
+        // §11.5 keeps the animation outside the pure-resolver model —
+        // the controller is forwarded from ImeViewBackend.render.
+        // animationsEnabled is read live from Pref.Animations so a
+        // settings flip is reflected on the next state emit.
         float displayDensity = recordButton.getResources().getDisplayMetrics().density;
         net.devemperor.dictate.widget.RecordingAnimation recordingAnimationForBackend =
             new net.devemperor.dictate.widget.BorderGlowAnimation(
@@ -3569,9 +3566,18 @@ public class DictateInputMethodService extends InputMethodService
      * refreshed on every {@code onStartInputView}.
      */
     private void scheduleAutoEnter(String output) {
-        if (pipelineBinder == null) return; // pre-bind: silently skip
-        Runnable dispatchEnter = () -> pipelineBinder.dispatch(
-                net.devemperor.dictate.state.Action.KeyboardInputAction.EnterKey.INSTANCE);
+        Runnable dispatchEnter = () -> {
+            if (pipelineBinder != null) {
+                pipelineBinder.dispatch(
+                        net.devemperor.dictate.state.Action.KeyboardInputAction.EnterKey.INSTANCE);
+            } else {
+                // Pre-bind fallback (rare, post-boot narrow window):
+                // a physical KEYCODE_ENTER preserves the legacy
+                // "no editor info → sendKeyEvent" behaviour and
+                // produces DOM keydown/keyup in WebViews.
+                sendPhysicalEnterFallback();
+            }
+        };
         if (mainHandler == null) {
             // No handler available — fire immediately
             dispatchEnter.run();
@@ -3587,6 +3593,24 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         mainHandler.postDelayed(dispatchEnter, baseDelay);
+    }
+
+    /**
+     * Pre-bind fallback used by QWERTZ-Enter and the
+     * {@link #scheduleAutoEnter} runnable when the orchestrator binder
+     * is still null (sub-second window right after IME boot). Sends a
+     * physical KEYCODE_ENTER directly through the live
+     * {@code InputConnection} — mirrors the
+     * {@link net.devemperor.dictate.state.KeyboardInputModule.Effect.SendPhysicalEnter}
+     * effect the orchestrator emits in the same scenario, so the
+     * pre-bind and bound paths behave identically.
+     */
+    private void sendPhysicalEnterFallback() {
+        InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        long now = android.os.SystemClock.uptimeMillis();
+        ic.sendKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0));
+        ic.sendKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0));
     }
 
     private void openSettingsActivity() {

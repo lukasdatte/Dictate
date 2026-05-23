@@ -564,7 +564,14 @@ class ImeViewBackend @JvmOverloads constructor(
         buttonViews.forEach { (id, view) ->
             val button = view as? MaterialButton ?: return@forEach
             val tier = when (id) {
-                LogicalButtonId.RECORD -> accentColor
+                // RECORD-Background is owned by RecordingAnimationController
+                // (breathing animator + state-tied static colours). Letting
+                // applyTheme write here would race the animator and revert
+                // Paused/Interrupted's dimmed static colour back to the
+                // bright accent until the next state-class transition.
+                // The controller picks up the accent change via its
+                // accentColorProvider lambda and updateColor entry point.
+                LogicalButtonId.RECORD -> return@forEach
                 LogicalButtonId.BACKSPACE, LogicalButtonId.ENTER -> accentDark
                 LogicalButtonId.WIDGET_TOGGLE -> return@forEach
                 else -> accentMedium

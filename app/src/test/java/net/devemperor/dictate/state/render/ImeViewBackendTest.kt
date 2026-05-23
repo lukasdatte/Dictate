@@ -671,9 +671,13 @@ class ImeViewBackendTest {
 
     @Test
     fun `applyTheme colours the owned buttons in the legacy accent tiers`() {
-        // G6: RECORD = accent; BACKSPACE / ENTER = accent darkened 0.35;
-        // the remaining owned buttons = accent darkened 0.18; WIDGET_TOGGLE
-        // untouched (legacy applyTheme never themed it).
+        // BACKSPACE / ENTER = accent darkened 0.35; remaining owned
+        // buttons = accent darkened 0.18; WIDGET_TOGGLE + RECORD
+        // untouched by applyTheme — RECORD is owned by
+        // RecordingAnimationController (state-tied static colour +
+        // breathing animator), so applyTheme writing here would race
+        // and revert Paused/Interrupted's dimmed colour to the bright
+        // accent until the next state-class transition.
         val (backend, recBtns) = recordingBackend()
         backend.attach { captured += it }
 
@@ -685,7 +689,10 @@ class ImeViewBackendTest {
 
         fun bg(id: LogicalButtonId): Int? = recBtns[id]!!.lastBackgroundColor
 
-        assertEquals(accent, bg(LogicalButtonId.RECORD))
+        assertNull(
+            "RECORD must not be re-coloured by applyTheme — owned by RecordingAnimationController",
+            bg(LogicalButtonId.RECORD),
+        )
         assertEquals(dark, bg(LogicalButtonId.BACKSPACE))
         assertEquals(dark, bg(LogicalButtonId.ENTER))
         assertEquals(medium, bg(LogicalButtonId.RESEND))

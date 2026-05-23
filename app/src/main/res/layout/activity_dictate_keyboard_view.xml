@@ -197,12 +197,19 @@
             android:visibility="gone"
             tools:visibility="visible" />
 
+        <!-- enter_btn — DO NOT add android:foreground here. The Return /
+             Send / Search / Check / NEXT icon flip is owned by the
+             catalog `iconResolver = ::resolveEnterIcon` (Plan
+             2026-05-23 - dictate-enter-button-host-action) and written
+             by SlotRenderer.applySlotToView via MaterialButton.icon —
+             the single writer. A static `android:foreground` would
+             render on top of the dynamic icon (same B-B duplication
+             pitfall as pause_btn — see Spec 2 §4.2 / sibling comment
+             on pause_btn above). -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/enter_btn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:foreground="@drawable/ic_baseline_subdirectory_arrow_left_24"
-            android:foregroundGravity="center"
             android:minWidth="56dp" />
 
     </androidx.constraintlayout.motion.widget.MotionLayout>

@@ -4,6 +4,8 @@ import android.view.View
 import net.devemperor.dictate.core.ContentArea
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
+import net.devemperor.dictate.state.WidgetOrigin
+import net.devemperor.dictate.state.WidgetState
 import net.devemperor.dictate.state.layout.BackendType
 import net.devemperor.dictate.state.layout.LayoutMode
 import net.devemperor.dictate.state.layout.RenderBackend
@@ -112,18 +114,37 @@ class ContentAreaController(
         // design. We still receive it because [RenderBackend.render] is
         // a single contract for all backends.
 
-        val area = state.layout.contentArea
+        // 2026-05-23 — derive HIDDEN_STRIP override.
+        //
+        // While the user holds the floating widget overlay open
+        // (`Visible(USER)`), the IME must collapse to a thin strip so
+        // it doesn't visually compete with the widget. The override
+        // only triggers for USER origin: a PIPELINE-origin widget
+        // implies the IME-View is hidden anyway (W3 surfaced the
+        // widget *because* `OnImeViewHidden` fired), so hiding the
+        // keyboard would be redundant. The decision is pure render-
+        // time derivation — `state.layout.contentArea` is untouched
+        // so the user's pre-widget content area pops right back when
+        // the widget is closed.
+        val effectiveArea = if (state.widget is WidgetState.Visible &&
+            state.widget.origin == WidgetOrigin.USER
+        ) {
+            ContentArea.HIDDEN_STRIP
+        } else {
+            state.layout.contentArea
+        }
+
         writeVisibility(
             views.mainButtonsContainer,
-            if (area == ContentArea.MAIN_BUTTONS) View.VISIBLE else View.GONE,
+            if (effectiveArea == ContentArea.MAIN_BUTTONS) View.VISIBLE else View.GONE,
         )
         writeVisibility(
             views.qwertzContainer,
-            if (area == ContentArea.QWERTZ) View.VISIBLE else View.GONE,
+            if (effectiveArea == ContentArea.QWERTZ) View.VISIBLE else View.GONE,
         )
         writeVisibility(
             views.emojiPickerContainer,
-            if (area == ContentArea.EMOJI_PICKER) View.VISIBLE else View.GONE,
+            if (effectiveArea == ContentArea.EMOJI_PICKER) View.VISIBLE else View.GONE,
         )
         // CR-DEL (RR-3 gap) — the 4th ContentArea axis Spec 2 §13 row 2
         // marks `editButtonsLl` BLEIBT (ContentArea-Achse). The (now
@@ -136,11 +157,23 @@ class ContentAreaController(
         views.editButtonsContainer?.let { editButtons ->
             writeVisibility(
                 editButtons,
-                if (area == ContentArea.MAIN_BUTTONS || area == ContentArea.QWERTZ) {
+                if (effectiveArea == ContentArea.MAIN_BUTTONS ||
+                    effectiveArea == ContentArea.QWERTZ
+                ) {
                     View.VISIBLE
                 } else {
                     View.GONE
                 },
+            )
+        }
+        // Minimal-strip view — the visible "the keyboard is hidden,
+        // tap the widget" indicator. Sibling of the three real
+        // containers; visible only in HIDDEN_STRIP. Nullable for the
+        // same byte-identical-tests reason as `editButtonsContainer`.
+        views.minimalStripView?.let { strip ->
+            writeVisibility(
+                strip,
+                if (effectiveArea == ContentArea.HIDDEN_STRIP) View.VISIBLE else View.GONE,
             )
         }
     }
@@ -187,4 +220,12 @@ data class ContentAreaViews(
      * skipped when absent). The IME service supplies the concrete view.
      */
     val editButtonsContainer: View? = null,
+    /**
+     * 2026-05-23 — `keyboard_minimal_strip` view. Visible iff the
+     * derived [ContentArea.HIDDEN_STRIP] mode is active (user-toggled
+     * widget overlay open). The IME service supplies the concrete view
+     * from the layout. Nullable for the same byte-identical-tests
+     * reason as [editButtonsContainer].
+     */
+    val minimalStripView: View? = null,
 )

@@ -6,6 +6,8 @@ import android.widget.FrameLayout
 import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.core.ContentArea
 import net.devemperor.dictate.state.DictateUiState
+import net.devemperor.dictate.state.WidgetOrigin
+import net.devemperor.dictate.state.WidgetState
 import net.devemperor.dictate.state.layout.LayoutCatalog
 import net.devemperor.dictate.state.layout.testLayoutStrings
 import org.junit.Assert.assertEquals
@@ -208,8 +210,135 @@ class ContentAreaControllerTest {
         )
     }
 
+    // ── 2026-05-23 — HIDDEN_STRIP derived from Widget(USER) ──────────
+    //
+    // `ContentAreaController` is the sole owner of the HIDDEN_STRIP
+    // decision: the user holds the floating widget open, the IME
+    // collapses to a thin strip. State.contentArea is left untouched
+    // so the user's pre-widget area pops back when the widget closes.
+
+    @Test
+    fun `HIDDEN_STRIP override - widget Visible USER hides every keyboard container`() {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        val editButtons = FrameLayout(ctx)
+        val strip = FrameLayout(ctx)
+        val c = ContentAreaController(
+            ContentAreaViews(mainButtons, qwertz, emoji, editButtons, strip),
+        )
+        c.attach { }
+
+        c.render(stateWithUserWidget(ContentArea.MAIN_BUTTONS), catalog.KEYBOARD_TWO_ROW)
+
+        assertEquals(
+            "USER widget → main_buttons must collapse",
+            View.GONE, mainButtons.visibility,
+        )
+        assertEquals(View.GONE, qwertz.visibility)
+        assertEquals(View.GONE, emoji.visibility)
+        assertEquals(
+            "edit-bar must hide too — otherwise the IME is not actually a strip",
+            View.GONE, editButtons.visibility,
+        )
+        assertEquals(
+            "the strip itself is the only visible piece of the IME",
+            View.VISIBLE, strip.visibility,
+        )
+    }
+
+    @Test
+    fun `HIDDEN_STRIP override - state contentArea is NOT mutated (controller is derive-only)`() {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        val strip = FrameLayout(ctx)
+        val c = ContentAreaController(
+            ContentAreaViews(mainButtons, qwertz, emoji, minimalStripView = strip),
+        )
+        c.attach { }
+
+        // Seed an EMOJI_PICKER state, then layer a USER widget. The
+        // strip must take over while the widget is open — but if we
+        // then drop the widget, EMOJI_PICKER should pop right back
+        // without any reducer action.
+        val emojiState = stateWithContentArea(ContentArea.EMOJI_PICKER)
+        val emojiPlusWidget = emojiState.copy(
+            widget = WidgetState.Visible(WidgetOrigin.USER),
+        )
+
+        c.render(emojiPlusWidget, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.VISIBLE, strip.visibility)
+        assertEquals(View.GONE, emoji.visibility)
+
+        // Drop the widget — same state.contentArea (EMOJI_PICKER)
+        // must reappear immediately. No reducer involvement needed.
+        c.render(emojiState, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.GONE, strip.visibility)
+        assertEquals(View.VISIBLE, emoji.visibility)
+    }
+
+    @Test
+    fun `HIDDEN_STRIP override - PIPELINE-origin widget does NOT collapse the keyboard`() {
+        // The PIPELINE-origin widget is auto-shown by W3 because the
+        // IME-View is already hidden — there is no visible keyboard
+        // to compete with, so the strip-override would just be visual
+        // noise on the rare race where the IME briefly reappears.
+        // The override is reserved for the user's explicit toggle.
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        val strip = FrameLayout(ctx)
+        val c = ContentAreaController(
+            ContentAreaViews(mainButtons, qwertz, emoji, minimalStripView = strip),
+        )
+        c.attach { }
+
+        val pipelineWidget = stateWithContentArea(ContentArea.MAIN_BUTTONS).copy(
+            widget = WidgetState.Visible(WidgetOrigin.PIPELINE),
+        )
+        c.render(pipelineWidget, catalog.KEYBOARD_TWO_ROW)
+
+        assertEquals(
+            "PIPELINE widget must NOT trigger the strip override",
+            View.VISIBLE, mainButtons.visibility,
+        )
+        assertEquals(View.GONE, strip.visibility)
+    }
+
+    @Test
+    fun `HIDDEN_STRIP override - widget Hidden leaves state contentArea in control`() {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        val strip = FrameLayout(ctx)
+        val c = ContentAreaController(
+            ContentAreaViews(mainButtons, qwertz, emoji, minimalStripView = strip),
+        )
+        c.attach { }
+
+        c.render(stateWithContentArea(ContentArea.QWERTZ), catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.VISIBLE, qwertz.visibility)
+        assertEquals(View.GONE, strip.visibility)
+    }
+
+    @Test
+    fun `HIDDEN_STRIP override - null minimalStripView is a backward-compatible no-op`() {
+        // The pre-strip 4-arg holder (every pre-2026-05-23 caller and
+        // test) must keep compiling and produce the same behaviour
+        // when no widget is open. With a USER widget the keyboard
+        // still collapses; the strip-write is simply skipped.
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        val editButtons = FrameLayout(ctx)
+        val c = ContentAreaController(
+            ContentAreaViews(mainButtons, qwertz, emoji, editButtons),
+        )
+        c.attach { }
+
+        c.render(stateWithUserWidget(ContentArea.MAIN_BUTTONS), catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.GONE, mainButtons.visibility)
+        assertEquals(View.GONE, editButtons.visibility)
+    }
+
     private fun stateWithContentArea(area: ContentArea): DictateUiState =
         DictateUiState.initial().copy(
             layout = DictateUiState.initial().layout.copy(contentArea = area),
+        )
+
+    private fun stateWithUserWidget(area: ContentArea): DictateUiState =
+        stateWithContentArea(area).copy(
+            widget = WidgetState.Visible(WidgetOrigin.USER),
         )
 }

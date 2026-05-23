@@ -671,4 +671,40 @@
         tools:visibility="visible"
         tools:layout_width="72dp" />
 
+    <!-- ════════════════════════════════════════════════════════════
+         2026-05-23 — minimal-strip view.
+
+         Surfaced by `ContentAreaController` when the user holds the
+         floating widget overlay open (`WidgetState.Visible(USER)`).
+         All other content containers (main_buttons_cl, qwertz, emoji
+         picker, edit-bar, info-bars, prompts) are driven to GONE in
+         that same render pass, so the entire IME collapses to this
+         thin bar — the user sees the floating widget without the
+         keyboard competing for screen space underneath.
+
+         Layout shape — anchored to parent-top/start/end at a fixed
+         2dp height. Two dp keeps the visual presence minimal (it
+         reads as a divider line) while still giving the root
+         ConstraintLayout something concrete to size around: a 0dp /
+         GONE root would let Android collapse the IME window
+         entirely, and on some OEM skins that triggers an awkward
+         "input method has no view" flicker before the next
+         touch. The padding-less ascii-strip look matches what the
+         user explicitly asked for ("nur einen Strich rendert").
+
+         Z-order: declared last so it draws on top, but in practice
+         no other container is visible while it is — its visibility
+         is mutually exclusive with the rest of the keyboard.
+         ════════════════════════════════════════════════════════════ -->
+    <View
+        android:id="@+id/keyboard_minimal_strip"
+        android:layout_width="match_parent"
+        android:layout_height="2dp"
+        android:background="@color/dictate_black"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        tools:visibility="visible" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>

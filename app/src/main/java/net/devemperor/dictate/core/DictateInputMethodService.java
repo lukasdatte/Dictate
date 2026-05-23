@@ -1854,7 +1854,8 @@ public class DictateInputMethodService extends InputMethodService
         // axis is stranded by the deletion.
         contentAreaController = new ContentAreaController(
             new ContentAreaViews(mainButtonsClGroup, qwertzContainer, emojiPickerCl,
-                editButtonsKeyboardLl),
+                editButtonsKeyboardLl,
+                dictateKeyboardView.findViewById(R.id.keyboard_minimal_strip)),
             contentAreaGate);
 
         promptVisibilityGate = new RenderGate("PromptVisibilityController", auditLogger);

@@ -29,12 +29,27 @@ import kotlin.reflect.KClass
  * |----|-----------------------------------------------|-------------------|-------------------------------------------|
  * | W1 | `ToggleWidget`                                | `Hidden`          | `Visible(USER)`                           |
  * | W2 | `CloseWidget`                                 | `Visible`         | `Hidden` + suppressBit=true + (Active→Paused) |
- * | W3 | `OnImeViewHidden` + (rec/pipe active)         | `Hidden && !supp` | `Visible(PIPELINE)`                       |
- * | W4 | `OnImeViewShown`                              | `Visible(PIPELINE)` | `Hidden`                                |
- * | W5 | `OnImeViewShown`                              | `Visible(USER)`   | stays — sticky                            |
- * | W6 | `OnPipelineDone` (rec=Idle && pipe=Idle)      | `Visible(PIPELINE)` | `Hidden`                                |
+ * | W3 | `OnImeViewHidden` + (rec/pipe active)         | `Hidden`          | `Visible(PIPELINE)`                       |
+ * | W4 | `OnImeViewShown`                              | `Visible(any)`    | **stays — sticky (both origins)**          |
+ * | W5 | `OnImeViewShown`                              | `Visible(USER)`   | stays — sticky (subsumed by W4)            |
+ * | W6 | `OnPipelineDone`                              | `Visible(any)`    | **stays — no auto-close**                  |
  * | W7 | rec `Idle→Preparing`                          | suppressBit       | suppressBit=false (via RecordingModule observer) |
  * | W8 | rec `Paused→Active`                           | suppressBit       | suppressBit=false (via observer below)    |
+ *
+ * # Sticky-widget lifecycle (2026-05-23)
+ *
+ * **Once the widget is shown — whether by user-toggle (W1) or by the
+ * IME-View vanishing mid-pipeline (W3) — it stays visible until the
+ * user explicitly closes it via [Action.WidgetAction.CloseWidget]
+ * (W2).** Earlier semantics auto-closed a `Visible(PIPELINE)` widget
+ * on `OnImeViewShown` (W4) and on pipeline-end (W6); both were
+ * removed at the user's request — the "transient PIPELINE" lifecycle
+ * surprised users by snapping the surface away the moment they
+ * brought the keyboard back, even when they wanted to keep observing
+ * the pipeline. The [WidgetOrigin] enum still carries the open-source
+ * (USER vs PIPELINE) so other render paths can discriminate (e.g.
+ * `ContentAreaController` only hides the IME for `Visible(USER)`),
+ * but it no longer drives an auto-close decision.
  *
  * # Cross-module cascade emissions
  *
@@ -44,15 +59,14 @@ import kotlin.reflect.KClass
  *   when the current recording is `Active`. The pipeline is
  *   deliberately NOT cancelled — it keeps running in the FGS and the
  *   result surfaces as a Pending-Insert info-bar (B4).
- * - **W6** observed via [onCrossModuleStateChange] — emits
- *   [Action.WidgetAction.OnPipelineDone] only when the state-diff
- *   shows the boundary from any non-Idle pipeline/recording state to
- *   simultaneous Idle.
  * - **W8** observed via [onCrossModuleStateChange] — emits
  *   [Action.OverlayAction.ResetSuppressBit] on `Paused → Active`.
  *   The complementary `Idle → Preparing` (W7) is emitted by
  *   `RecordingModule`'s own observer; both edges clear the bit so
  *   the next IME-hide can re-auto-show the PIPELINE widget.
+ * - **W6 is no longer emitted.** The reducer arm + observer for
+ *   `OnPipelineDone` are retained as no-ops so callers and existing
+ *   tests still compile; new code should not dispatch this action.
  *
  * # Migration safety
  *
@@ -186,18 +200,18 @@ object WidgetModule :
         // ── W3: IME-View hidden ─────────────────────────────────────────
         // Always flips imeViewVisible. Auto-shows a PIPELINE widget iff:
         //   widget == Hidden
-        //   AND !overlay.suppressAutoOverlayUntilNextSession
         //   AND (recording.isActiveOrPaused || pipeline !is Idle)
         //
-        // The suppress-bit guard is what makes W2 stick: after a user
-        // close-during-recording, the IME-tear-down would otherwise
-        // immediately re-show the PIPELINE widget the user just dismissed.
-        // Once the next session starts (RecordingModule's Idle→Preparing
-        // cascade emits OverlayAction.ResetSuppressBit), the guard
-        // releases.
+        // 2026-05-23 sticky-widget refactor: the suppress-bit check
+        // (`!overlay.suppressAutoOverlayUntilNextSession`) is gone.
+        // Pre-refactor it existed to stop an IME-tear-down from
+        // immediately re-showing a widget the user had just dismissed
+        // — but with sticky-widget the user expects the inverse: "auto-
+        // open whenever the keyboard goes away, only manual close ever
+        // closes it". The bit still gets written by W2 (no caller
+        // changes needed) but no longer gates this arm.
         Action.WidgetAction.OnImeViewHidden -> {
             val shouldAutoShow = state.widget == WidgetState.Hidden &&
-                !ctx.global.overlay.suppressAutoOverlayUntilNextSession &&
                 (ctx.global.recording.isActiveOrPaused ||
                     ctx.global.pipeline !is PipelineUiState.Idle)
             val nextWidget = if (shouldAutoShow) {
@@ -214,41 +228,22 @@ object WidgetModule :
         }
 
         // ── W4 / W5: IME-View shown ─────────────────────────────────────
-        // Always flips imeViewVisible. The widget axis depends on
-        // its current origin:
-        //   - Visible(PIPELINE) → Hidden (W4: the IME is back, the
-        //     auto-shown overlay is no longer needed)
-        //   - Visible(USER) → stays (W5: sticky — user explicitly wants
-        //     both surfaces visible side-by-side until they close one)
-        //   - Hidden → stays Hidden (default; no auto-show on IME-show,
-        //     the user didn't ask for the widget)
-        Action.WidgetAction.OnImeViewShown -> {
-            val nextWidget = when (val w = state.widget) {
-                is WidgetState.Visible ->
-                    if (w.origin == WidgetOrigin.PIPELINE) WidgetState.Hidden else w
-                WidgetState.Hidden -> WidgetState.Hidden
-            }
-            TransitionResult(
-                nextState = state.copy(
-                    widget = nextWidget,
-                    imeViewVisible = true,
-                ),
-            )
-        }
+        // Always flips imeViewVisible. The widget axis is left untouched
+        // for every origin (2026-05-23 sticky-widget refactor): once
+        // the widget is visible the user owns the close decision, so
+        // bringing the keyboard back must not snap the widget away.
+        // The PIPELINE → Hidden auto-release that lived here previously
+        // is gone; W5 (sticky USER) is the only remaining semantic.
+        Action.WidgetAction.OnImeViewShown -> TransitionResult(
+            nextState = state.copy(imeViewVisible = true),
+        )
 
-        // ── W6: pipeline / recording both Idle ──────────────────────────
-        // Cross-module cascade target — emitted by onCrossModuleStateChange
-        // when (prev: any non-Idle) → (next: both Idle). Closes a
-        // PIPELINE-origin widget; leaves USER-origin sticky (the user
-        // still wants their widget).
-        Action.WidgetAction.OnPipelineDone -> {
-            val w = state.widget
-            if (w is WidgetState.Visible && w.origin == WidgetOrigin.PIPELINE) {
-                TransitionResult(nextState = state.copy(widget = WidgetState.Hidden))
-            } else {
-                null
-            }
-        }
+        // ── W6: deprecated no-op (sticky-widget refactor 2026-05-23) ────
+        // Pipeline-done used to auto-close a Visible(PIPELINE) widget
+        // here. The reducer arm is retained so callers and tests still
+        // compile; new code should not dispatch this action. The cross-
+        // module observer no longer emits it either.
+        Action.WidgetAction.OnPipelineDone -> null
 
         // ── W7 / W8: suppress-bit reset ─────────────────────────────────
         // Reserved no-op until the suppress-bit migrates from
@@ -260,14 +255,15 @@ object WidgetModule :
     }
 
     /**
-     * Cross-module observers — W6 (pipeline-done widget auto-close) and
-     * W8 (suppress-bit reset on resume).
+     * Cross-module observers — W8 (suppress-bit reset on resume) and
+     * the viewMode-sync bridge for the direct CloseWidget path.
      *
-     * **W6 trigger:** the boundary from any non-Idle pipeline / recording
-     * state to simultaneous Idle. Emits
-     * [Action.WidgetAction.OnPipelineDone] so the reducer's W6 arm runs
-     * with the post-Idle ctx and the auto-close decision sees the right
-     * `widget.origin`.
+     * **W6 trigger (removed 2026-05-23):** pipeline-done used to auto-
+     * close a `Visible(PIPELINE)` widget via
+     * [Action.WidgetAction.OnPipelineDone]. The user wants the widget
+     * sticky once it's shown — see the module KDoc §"Sticky-widget
+     * lifecycle". The emission is gone; the reducer arm survives as a
+     * no-op for compile-compatibility.
      *
      * **W8 trigger:** `Paused → Active` recording-FSM edge. Emits
      * [Action.OverlayAction.ResetSuppressBit] to mirror the W7 cascade
@@ -280,16 +276,6 @@ object WidgetModule :
         next: DictateUiState,
     ): List<Action> {
         val cascade = mutableListOf<Action>()
-
-        // W6 — pipeline+recording quiesced ──────────────────────────────
-        val prevActive = prev.pipeline !is PipelineUiState.Idle ||
-            prev.recording.isActiveOrPaused ||
-            prev.recording is RecordingState.Preparing
-        val nextQuiesced = next.pipeline is PipelineUiState.Idle &&
-            next.recording is RecordingState.Idle
-        if (prevActive && nextQuiesced) {
-            cascade += Action.WidgetAction.OnPipelineDone
-        }
 
         // W8 — Paused → Active resume ───────────────────────────────────
         if (prev.recording is RecordingState.Paused &&

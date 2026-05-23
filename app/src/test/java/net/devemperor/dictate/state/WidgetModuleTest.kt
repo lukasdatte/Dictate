@@ -197,7 +197,13 @@ class WidgetModuleTest {
     }
 
     @Test
-    fun `W3 OnImeViewHidden does NOT auto-show when suppress-bit is set`() {
+    fun `W3 sticky-widget refactor — OnImeViewHidden ignores suppress-bit (auto-show wins)`() {
+        // 2026-05-23: the suppress-bit no longer gates W3. The pre-
+        // refactor expectation ("widget stays Hidden when suppress-bit
+        // is set, because the user just closed it") contradicts the
+        // new "auto-open whenever IME hides + recording active, only
+        // manual close ever closes" contract. Suppress-bit is now an
+        // effectively dead axis (still written by W2, no reader).
         val s = WidgetModule.WidgetSubState(
             widget = WidgetState.Hidden,
             imeViewVisible = true,
@@ -209,8 +215,9 @@ class WidgetModuleTest {
         val r = module.reduce(s, Action.WidgetAction.OnImeViewHidden, ctx(global))
         assertNotNull(r)
         assertEquals(
-            "Widget stays Hidden — the user just closed it; suppress-bit blocks the auto-show",
-            WidgetState.Hidden, r!!.nextState.widget,
+            "Sticky-widget: suppress-bit no longer blocks W3 auto-show",
+            WidgetState.Visible(WidgetOrigin.PIPELINE),
+            r!!.nextState.widget,
         )
         assertEquals(false, r.nextState.imeViewVisible)
     }
@@ -243,16 +250,25 @@ class WidgetModuleTest {
     }
 
     // ─── W4 / W5: OnImeViewShown ──────────────────────────────────────
+    //
+    // 2026-05-23 sticky-widget refactor: W4 no longer auto-closes a
+    // PIPELINE widget — once the surface is up the user owns the close
+    // decision, regardless of origin. Both origins now follow the W5
+    // sticky rule. See `WidgetModule` KDoc §"Sticky-widget lifecycle".
 
     @Test
-    fun `W4 OnImeViewShown closes PIPELINE widget (auto-release)`() {
+    fun `W4 sticky — OnImeViewShown keeps PIPELINE widget visible (no auto-release)`() {
         val s = WidgetModule.WidgetSubState(
             widget = WidgetState.Visible(WidgetOrigin.PIPELINE),
             imeViewVisible = false,
         )
         val r = module.reduce(s, Action.WidgetAction.OnImeViewShown, ctx())
         assertNotNull(r)
-        assertEquals(WidgetState.Hidden, r!!.nextState.widget)
+        assertEquals(
+            "Sticky-widget refactor: PIPELINE widget must survive IME-show",
+            WidgetState.Visible(WidgetOrigin.PIPELINE),
+            r!!.nextState.widget,
+        )
         assertEquals(true, r.nextState.imeViewVisible)
     }
 
@@ -283,17 +299,22 @@ class WidgetModuleTest {
         assertEquals(true, r.nextState.imeViewVisible)
     }
 
-    // ─── W6: OnPipelineDone closes PIPELINE widget ────────────────────
+    // ─── W6: OnPipelineDone is a no-op (sticky-widget refactor) ───────
+    //
+    // 2026-05-23: pipeline-done used to auto-close `Visible(PIPELINE)`.
+    // The reducer arm is retained as a no-op for compile-compat; the
+    // cross-module observer no longer emits the action (covered below).
 
     @Test
-    fun `W6 OnPipelineDone closes PIPELINE widget`() {
+    fun `W6 OnPipelineDone leaves PIPELINE widget sticky (no auto-close)`() {
         val s = WidgetModule.WidgetSubState(
             widget = WidgetState.Visible(WidgetOrigin.PIPELINE),
             imeViewVisible = false,
         )
-        val r = module.reduce(s, Action.WidgetAction.OnPipelineDone, ctx())
-        assertNotNull(r)
-        assertEquals(WidgetState.Hidden, r!!.nextState.widget)
+        assertNull(
+            "Sticky-widget refactor: OnPipelineDone must not auto-close — reducer is a no-op",
+            module.reduce(s, Action.WidgetAction.OnPipelineDone, ctx()),
+        )
     }
 
     @Test
@@ -303,7 +324,7 @@ class WidgetModuleTest {
             imeViewVisible = true,
         )
         assertNull(
-            "USER widget must survive pipeline-done — only PIPELINE-origin closes here",
+            "USER widget must survive pipeline-done — arm is a no-op for every origin",
             module.reduce(s, Action.WidgetAction.OnPipelineDone, ctx()),
         )
     }
@@ -329,31 +350,31 @@ class WidgetModuleTest {
     }
 
     // ─── Cross-module observer ────────────────────────────────────────
+    //
+    // 2026-05-23 sticky-widget refactor: the observer no longer emits
+    // OnPipelineDone on any pipeline/recording-quiesce boundary; the
+    // widget stays visible across pipeline-end. The W8 suppress-bit
+    // reset and the CloseWidget viewMode bridge are unchanged.
 
     @Test
-    fun `observer emits OnPipelineDone on Active → Idle boundary`() {
+    fun `sticky-widget — observer does NOT emit OnPipelineDone on Active → Idle boundary`() {
         val prev = DictateUiState.initial().copy(recording = activeRecording())
         val next = DictateUiState.initial().copy(recording = RecordingState.Idle)
         val cascade = module.onCrossModuleStateChange(prev, next)
-        assertTrue(cascade.contains(Action.WidgetAction.OnPipelineDone))
+        assertTrue(
+            "Pipeline-end must not snap the widget away — OnPipelineDone is gone",
+            cascade.none { it is Action.WidgetAction.OnPipelineDone },
+        )
     }
 
     @Test
-    fun `observer emits OnPipelineDone on Pipeline-Running → Idle boundary`() {
+    fun `sticky-widget — observer does NOT emit OnPipelineDone on Pipeline-Running → Idle boundary`() {
         val prev = DictateUiState.initial().copy(
             pipeline = PipelineUiState.Preparing(sessionId = "sid-pipe"),
         )
         val next = DictateUiState.initial()
         val cascade = module.onCrossModuleStateChange(prev, next)
-        assertTrue(cascade.contains(Action.WidgetAction.OnPipelineDone))
-    }
-
-    @Test
-    fun `observer does NOT emit OnPipelineDone when both states already Idle (no boundary)`() {
-        val s = DictateUiState.initial()
-        val cascade = module.onCrossModuleStateChange(s, s)
         assertTrue(
-            "No boundary crossed → no cascade",
             cascade.none { it is Action.WidgetAction.OnPipelineDone },
         )
     }
@@ -381,15 +402,17 @@ class WidgetModuleTest {
     }
 
     @Test
-    fun `observer detects Preparing → Idle as a quiescing boundary too`() {
-        // Edge case: a recording that failed to allocate goes Preparing
-        // → Idle without ever passing through Active. Should still
-        // trigger the W6 auto-close (the PIPELINE widget was opened on
-        // OnImeViewHidden while Preparing was active and now needs to
-        // close).
+    fun `sticky-widget — observer does NOT emit on Preparing → Idle quiesce`() {
+        // Edge case retained for documentation: a recording that fails
+        // to allocate goes Preparing → Idle without ever passing through
+        // Active. Pre-refactor this triggered the W6 auto-close; post-
+        // sticky-refactor the widget stays visible and the user closes
+        // it manually if/when they want to.
         val prev = DictateUiState.initial().copy(recording = preparingRecording())
         val next = DictateUiState.initial()
         val cascade = module.onCrossModuleStateChange(prev, next)
-        assertTrue(cascade.contains(Action.WidgetAction.OnPipelineDone))
+        assertTrue(
+            cascade.none { it is Action.WidgetAction.OnPipelineDone },
+        )
     }
 }

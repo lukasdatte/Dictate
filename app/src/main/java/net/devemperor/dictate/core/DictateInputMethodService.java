@@ -5750,9 +5750,61 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onEditAction(int actionId) {
-        InputConnection inputConnection = getCurrentInputConnection();
-        if (inputConnection != null) {
-            inputConnection.performContextMenuAction(actionId);
+        InputConnection ic = getCurrentInputConnection();
+        if (ic == null) {
+            Log.w("DictateIME",
+                    "onEditAction(" + actionId + ") — no InputConnection, skipping");
+            return;
+        }
+        // performContextMenuAction is a soft API — many host editors
+        // (WebViews, custom editors, some chat apps) silently ignore
+        // it and return false. We always run the manual clipboard
+        // fallback below so cut/copy/paste work consistently across
+        // hosts, regardless of whether the editor honoured the action.
+        boolean handled = ic.performContextMenuAction(actionId);
+        if (!handled) {
+            Log.i("DictateIME",
+                    "onEditAction(" + actionId + ") — host editor rejected performContextMenuAction, falling back");
+            performClipboardFallback(ic, actionId);
+        }
+    }
+
+    /**
+     * Manual clipboard implementation of cut/copy/paste for host
+     * editors that do not honour {@link InputConnection#performContextMenuAction(int)}.
+     * Mirrors AOSP's default semantics:
+     *
+     * <ul>
+     *   <li>{@code paste} — read primary clip, commit its first item's text at the cursor.</li>
+     *   <li>{@code copy} — read selected text (or "" when nothing selected), put on the clipboard.</li>
+     *   <li>{@code cut}  — copy + delete the selection.</li>
+     * </ul>
+     *
+     * Each step is null-guarded; missing clipboard / empty selection
+     * degrades to a no-op silently (same outcome as the system
+     * implementation).
+     */
+    private void performClipboardFallback(InputConnection ic, int actionId) {
+        android.content.ClipboardManager clipboard =
+                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard == null) return;
+
+        if (actionId == android.R.id.paste) {
+            android.content.ClipData clip = clipboard.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) return;
+            CharSequence text = clip.getItemAt(0).coerceToText(this);
+            if (text != null && text.length() > 0) {
+                ic.commitText(text, 1);
+            }
+        } else if (actionId == android.R.id.copy || actionId == android.R.id.cut) {
+            CharSequence selected = ic.getSelectedText(0);
+            if (selected == null || selected.length() == 0) return;
+            clipboard.setPrimaryClip(
+                    android.content.ClipData.newPlainText("dictate", selected));
+            if (actionId == android.R.id.cut) {
+                // Replace the selection with empty text (which deletes it).
+                ic.commitText("", 1);
+            }
         }
     }
 

@@ -182,7 +182,13 @@ class DictatePipelineServiceOverlayTransitionTest {
             ),
         )
         idle()
+        // 2026-05-23 sticky-widget refactor: production IME service
+        // dispatches BOTH ImeView-axis actions per Spec 3 §6 (see
+        // DictateInputMethodService.onFinishInputView). The overlay
+        // backend's attach gate now keys on `state.widget`, so the
+        // test sequence must mirror production.
         b.dispatch(Action.ViewModeAction.OnImeViewHidden) // T3
+        b.dispatch(Action.WidgetAction.OnImeViewHidden)
         idle()
 
         assertEquals(ViewMode.HOVER, b.state.value.viewMode)
@@ -223,7 +229,14 @@ class DictatePipelineServiceOverlayTransitionTest {
     }
 
     @Test
-    fun `T5 HOVER to KEYBOARD detaches the overlay backend`() {
+    fun `T5-sticky HOVER to KEYBOARD keeps overlay attached (sticky-widget refactor)`() {
+        // 2026-05-23 sticky-widget refactor: pre-refactor T5
+        // (OnImeViewShown in HOVER) detached the overlay because it
+        // flipped viewMode → KEYBOARD and the attach gate keyed on
+        // viewMode. Post-refactor the gate keys on `state.widget` and
+        // the widget stays Visible(PIPELINE) until the user closes it
+        // explicitly. The overlay must therefore SURVIVE the IME
+        // re-show — that's the whole point of the sticky semantic.
         val b = binder()
         idle()
         b.dispatch(
@@ -234,22 +247,30 @@ class DictatePipelineServiceOverlayTransitionTest {
         )
         idle()
         b.dispatch(Action.ViewModeAction.OnImeViewHidden) // → HOVER
+        b.dispatch(Action.WidgetAction.OnImeViewHidden)   // → widget Visible(PIPELINE)
         idle()
         assertEquals(ViewMode.HOVER, b.state.value.viewMode)
         assertTrue(b.keyboardLayoutManager.overlayAttached())
 
-        b.dispatch(Action.ViewModeAction.OnImeViewShown) // T5 → KEYBOARD
+        b.dispatch(Action.ViewModeAction.OnImeViewShown) // T5 viewMode-axis → KEYBOARD
+        b.dispatch(Action.WidgetAction.OnImeViewShown)   // widget axis: stays Visible
         idle()
 
         assertEquals(ViewMode.KEYBOARD, b.state.value.viewMode)
-        assertFalse(
-            "T5 must detach the OverlayBackend",
+        assertTrue(
+            "Sticky-widget refactor: overlay stays attached while widget is Visible",
             b.keyboardLayoutManager.overlayAttached(),
         )
     }
 
     @Test
-    fun `T7 pipeline-done in HOVER cascades to KEYBOARD and detaches (Geist-Widget protection)`() {
+    fun `T7-sticky pipeline-done in HOVER cascades viewMode to KEYBOARD but overlay stays`() {
+        // 2026-05-23 sticky-widget refactor: pre-refactor pipeline-
+        // done in HOVER closed the overlay (W6 auto-close + viewMode
+        // cascade). Post-refactor the widget stays Visible until the
+        // user closes it, so the overlay stays attached even though
+        // viewMode recomputes to KEYBOARD on the Geist-Widget
+        // structural protection.
         val b = binder()
         idle()
         b.dispatch(
@@ -260,19 +281,19 @@ class DictatePipelineServiceOverlayTransitionTest {
         )
         idle()
         b.dispatch(Action.ViewModeAction.OnImeViewHidden) // → HOVER
+        b.dispatch(Action.WidgetAction.OnImeViewHidden)   // widget axis: Visible(PIPELINE)
         idle()
         assertEquals(ViewMode.HOVER, b.state.value.viewMode)
         assertTrue(b.keyboardLayoutManager.overlayAttached())
 
-        // Pipeline settles — PipelineModule cascades OnPipelineDone,
-        // ViewModeModule recomputes to KEYBOARD (T7 Geist-Widget
-        // structural protection).
+        // Pipeline settles — viewMode recomputes to KEYBOARD,
+        // widget axis is left as-is (sticky). Overlay stays.
         b.dispatch(Action.PipelineAction.PipelineDone(sessionId = "s1", finalText = "hi"))
         idle()
 
         assertEquals(ViewMode.KEYBOARD, b.state.value.viewMode)
-        assertFalse(
-            "T7 must detach the overlay (no Geist-Widget)",
+        assertTrue(
+            "Sticky-widget: pipeline-done leaves widget Visible, overlay stays attached",
             b.keyboardLayoutManager.overlayAttached(),
         )
     }
@@ -287,7 +308,8 @@ class DictatePipelineServiceOverlayTransitionTest {
     fun `F-1 recording-active + OnImeViewHidden enters HOVER (primary use-case)`() {
         // The headline HOVER use-case: dictation continues after the
         // user switches the keyboard away (Spec 3 §1.1). Drives the
-        // recording axis active, then the IME-hide boundary.
+        // recording axis active, then the IME-hide boundary on BOTH
+        // axes (production parity — see Spec 3 §6).
         val b = binder()
         idle()
         b.dispatch(
@@ -301,6 +323,7 @@ class DictatePipelineServiceOverlayTransitionTest {
         idle()
 
         b.dispatch(Action.ViewModeAction.OnImeViewHidden) // F-1 T3
+        b.dispatch(Action.WidgetAction.OnImeViewHidden)   // sticky-widget axis
         idle()
 
         assertEquals(

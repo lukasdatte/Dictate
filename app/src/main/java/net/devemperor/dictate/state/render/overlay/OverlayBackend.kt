@@ -283,12 +283,30 @@ class OverlayBackend(
             return
         }
 
-        // 2 — Suppress bit (Issue 3.1.7): the user explicitly closed the
-        //     HOVER overlay during this session — don't auto-reopen.
-        if (state.overlay.suppressAutoOverlayUntilNextSession) {
-            teardownOverlay()
-            return
-        }
+        // 2 — Suppress bit gate (removed 2026-05-23 sticky-widget refactor).
+        //
+        // The old gate tore the window down whenever `state.overlay.suppress-
+        // AutoOverlayUntilNextSession == true`. That made sense pre-refactor
+        // because the auto-open logic was the ONLY way the overlay could
+        // come back — the suppress-bit stopped a just-closed widget from
+        // immediately re-popping when the IME tore down. Post-refactor the
+        // overlay attach/detach is driven by `syncOverlayBackendAttachment`
+        // reading `state.viewMode != KEYBOARD || state.widget is Visible`
+        // (DictatePipelineService.kt), so a closed widget gets a proper
+        // detach() + teardown via the manager — not via an in-render gate.
+        //
+        // Critical: leaving the suppress-bit gate here while the widget axis
+        // is sticky created a window-of-inconsistency. `widget = Visible`
+        // would keep the backend attached, but a stale suppress-bit would
+        // also fire teardownOverlay() on the next render-tick — nulling
+        // stateRef/modeRef while leaving the click-listeners wired to the
+        // (now-null) snapshot. Result: window sometimes visually intact,
+        // every tap silently swallowed by the `stateRef ?: return` guard
+        // in the click sink. Closing via X then did nothing.
+        //
+        // The suppress-bit is now an effectively dead axis; W2 still writes
+        // it for backward-compatibility, no one reads it. A later cleanup
+        // can remove the writes + the axis from `OverlayState`.
 
         stateRef = state
         modeRef = mode

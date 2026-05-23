@@ -491,18 +491,26 @@ fun resolveOverlayRecordEnabled(state: DictateUiState): Boolean {
 fun resolveOverlayCloseAction(
     state: DictateUiState,
     @Suppress("UNUSED_PARAMETER") services: ModuleServices,
-): Action? = when (state.viewMode) {
-    // 2026-05-22 — the overlay's own X button dispatches CloseWidget
-    // with WIDGET_BUTTON source directly (not ToggleViewModeWidget).
-    // The source tells W2's reducer to pause the in-flight recording
-    // (user-req: closing via the widget itself = "I'm done dictating").
-    // WidgetModule's cross-module observer cascades ToggleViewModeWidget
-    // afterwards so the legacy `viewMode` axis stays in sync.
-    ViewMode.WIDGET -> Action.WidgetAction.CloseWidget(
-        WidgetCloseSource.WIDGET_BUTTON,
-    )
-    ViewMode.HOVER -> Action.ViewModeAction.CloseOverlay
-    ViewMode.KEYBOARD -> null
+): Action? {
+    // 2026-05-23 sticky-widget refactor — `state.widget` is the sole
+    // source of truth for the overlay's visibility. Pre-refactor this
+    // resolver discriminated on `state.viewMode` (WIDGET vs HOVER vs
+    // KEYBOARD) and routed the HOVER case to `CloseOverlay`, which
+    // ran a cancel-recording cascade. That coupled overlay-close with
+    // recording-cancel and depended on the (sometimes stale) legacy
+    // `viewMode` axis: the X-click could land in the KEYBOARD arm
+    // (resolver returns null → click is a no-op) when the widget had
+    // been auto-shown via PIPELINE origin and `viewMode` had since
+    // moved on. Post-refactor the X button has one job: close the
+    // widget. W2's `WIDGET_BUTTON` source still pauses the recording
+    // if Active (user-intent: "I'm done dictating"), but recording-
+    // cancel and viewMode bookkeeping flow through the existing
+    // observers — no special-case branch here.
+    return if (state.widget is WidgetState.Visible) {
+        Action.WidgetAction.CloseWidget(WidgetCloseSource.WIDGET_BUTTON)
+    } else {
+        null
+    }
 }
 
 /**

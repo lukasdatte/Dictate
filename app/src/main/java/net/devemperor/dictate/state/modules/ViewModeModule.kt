@@ -228,6 +228,20 @@ object ViewModeModule : DictateModule<ViewMode, Action.ViewModeAction, ViewModeM
                 // next Idle→Preparing transition (per RecordingModule's
                 // reset observer).
                 services.emitAction(Action.OverlayAction.SuppressAutoOverlayUntilNextSession)
+                // 2026-05-23 sticky-widget refactor — the legacy
+                // CloseOverlay arm only mutates the `viewMode` axis;
+                // pre-refactor that was enough because the overlay
+                // backend was attached/detached by viewMode alone, so
+                // flipping HOVER → KEYBOARD also tore down the window.
+                // Post-refactor the backend is also kept attached for
+                // `state.widget is Visible`, so the HOVER X button has
+                // to explicitly close the widget axis too — otherwise
+                // the user's tap on X visibly does nothing. KEYBOARD_-
+                // TOGGLE source = no extra PauseRecording (the cancel
+                // dispatches below already terminate the recording).
+                services.emitAction(
+                    Action.WidgetAction.CloseWidget(WidgetCloseSource.KEYBOARD_TOGGLE)
+                )
                 // Optional sides — only if the user-close happened
                 // while work was in flight. The snapshot was captured
                 // at reducer time so concurrent state changes between

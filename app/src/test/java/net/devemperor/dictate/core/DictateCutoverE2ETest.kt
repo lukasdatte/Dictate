@@ -276,10 +276,14 @@ class DictateCutoverE2ETest {
         startRecordingActive(b, "e2e-t3")
         assertTrue(b.state.value.recording is RecordingState.Active)
 
-        // T3: keystone F-1 tail-dispatch (onFinishInputView →
-        // OnImeViewHidden). Recording-active ⇒ HOVER (recording survives
-        // the keyboard switch — ADR-0003).
+        // T3: keystone F-1 tail-dispatch (onFinishInputView dispatches
+        // BOTH ViewModeAction and WidgetAction). Recording-active ⇒
+        // HOVER (recording survives the keyboard switch — ADR-0003).
+        // 2026-05-23 sticky-widget: the overlay attach gate now reads
+        // `state.widget`, so the test must mirror production's dual
+        // dispatch (DictateInputMethodService.onFinishInputView).
         b.dispatch(Action.ViewModeAction.OnImeViewHidden)
+        b.dispatch(Action.WidgetAction.OnImeViewHidden)
         idle()
         assertEquals(
             "T3: real recording Active + IME hidden ⇒ HOVER",
@@ -295,16 +299,19 @@ class DictateCutoverE2ETest {
             b.state.value.recording is RecordingState.Active,
         )
 
-        // T5: IME returns (OnImeViewShown) ⇒ back to KEYBOARD.
+        // T5: IME returns (OnImeViewShown) ⇒ viewMode back to KEYBOARD,
+        // but post sticky-widget refactor the widget stays Visible and
+        // the overlay stays attached. Pre-refactor T5 expected detach.
         b.dispatch(Action.ViewModeAction.OnImeViewShown)
+        b.dispatch(Action.WidgetAction.OnImeViewShown)
         idle()
         assertEquals(
-            "T5: IME re-shown ⇒ KEYBOARD",
+            "T5: IME re-shown ⇒ viewMode KEYBOARD",
             ViewMode.KEYBOARD,
             b.state.value.viewMode,
         )
-        assertFalse(
-            "T5 must detach the OverlayBackend",
+        assertTrue(
+            "Sticky-widget: overlay stays attached after IME re-show",
             b.keyboardLayoutManager.overlayAttached(),
         )
     }

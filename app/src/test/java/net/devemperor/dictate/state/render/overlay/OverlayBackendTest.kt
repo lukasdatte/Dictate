@@ -92,10 +92,26 @@ class OverlayBackendTest {
         pipeline: PipelineUiState = PipelineUiState.Idle,
         hasPermission: Boolean = true,
         suppress: Boolean = false,
+        // 2026-05-23 sticky-widget refactor: `state.widget` is the
+        // overlay's source of truth. The default mirrors the legacy
+        // viewMode so existing tests keep producing the same overlay
+        // axes — WIDGET → Visible(USER), HOVER → Visible(PIPELINE),
+        // KEYBOARD → Hidden. Tests that need a divergent shape pass
+        // an explicit `widget` arg.
+        widget: net.devemperor.dictate.state.WidgetState = when (viewMode) {
+            ViewMode.WIDGET -> net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.USER,
+            )
+            ViewMode.HOVER -> net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.PIPELINE,
+            )
+            ViewMode.KEYBOARD -> net.devemperor.dictate.state.WidgetState.Hidden
+        },
     ): DictateUiState = DictateUiState.initial().copy(
         viewMode = viewMode,
         recording = recording,
         pipeline = pipeline,
+        widget = widget,
         overlay = OverlayState(
             hasPermission = hasPermission,
             suppressAutoOverlayUntilNextSession = suppress,
@@ -134,20 +150,32 @@ class OverlayBackendTest {
     }
 
     @Test
-    fun `render with suppress bit tears down (Issue 3 1 7)`() {
+    fun `render with suppress bit no longer tears down (sticky-widget refactor 2026-05-23)`() {
+        // Pre-refactor the suppress-bit gate in OverlayBackend.render()
+        // step 2 would teardownOverlay() whenever
+        // suppressAutoOverlayUntilNextSession went true. That collided
+        // with the sticky-widget attachment condition in
+        // DictatePipelineService.syncOverlayBackendAttachment, which
+        // keeps the backend attached whenever `state.widget is Visible`.
+        // The result was a window-of-inconsistency: stateRef nulled by
+        // teardown, click-listeners wired to the null snapshot, taps
+        // silently swallowed. The gate is gone; close-of-overlay is now
+        // driven exclusively by `state.widget == Hidden` going through
+        // syncOverlayBackendAttachment → detach() → teardown.
         val backend = newBackend()
         backend.attach { captured += it }
 
-        // First attach the overlay normally.
         backend.render(stateWithPermission(), catalog.OVERLAY_5BUTTON)
         assertTrue(window.isAttached())
 
-        // Now flip the suppress bit — should tear down.
         backend.render(
             stateWithPermission(suppress = true),
             catalog.OVERLAY_5BUTTON,
         )
-        assertFalse("suppressAutoOverlay must tear down.", window.isAttached())
+        assertTrue(
+            "sticky-widget refactor: suppress-bit is a dead axis, render() must NOT teardown",
+            window.isAttached(),
+        )
     }
 
     @Test
@@ -232,14 +260,17 @@ class OverlayBackendTest {
     }
 
     @Test
-    fun `close click in HOVER emits CloseOverlay`() {
+    fun `close click in HOVER emits CloseWidget(WIDGET_BUTTON) — sticky-widget refactor`() {
+        // 2026-05-23 sticky-widget refactor: the X-button has a single
+        // semantic — close the widget — regardless of legacy viewMode.
+        // Pre-refactor HOVER routed through CloseOverlay (cancel
+        // cascade), which broke when `state.viewMode` raced ahead of
+        // the click and landed in KEYBOARD (resolver returned null,
+        // tap silently no-op). The single CloseWidget path goes
+        // through W2 whose WIDGET_BUTTON source still pauses an
+        // active recording — the user-intent is preserved.
         val backend = newBackend()
         backend.attach { captured += it }
-        // HOVER needs an active recording for the state-axis to be
-        // semantically valid (Spec 3 §7 — HOVER is auto-triggered while
-        // pipeline / recording is live). The Close-resolver itself only
-        // reads viewMode, but the visibility predicates would otherwise
-        // hide all other buttons.
         backend.render(
             stateWithPermission(
                 viewMode = ViewMode.HOVER,
@@ -252,7 +283,11 @@ class OverlayBackendTest {
         closeBtn.performClick()
 
         assertEquals(
-            listOf(Action.ViewModeAction.CloseOverlay),
+            listOf(
+                Action.WidgetAction.CloseWidget(
+                    net.devemperor.dictate.state.WidgetCloseSource.WIDGET_BUTTON,
+                ),
+            ),
             captured,
         )
     }

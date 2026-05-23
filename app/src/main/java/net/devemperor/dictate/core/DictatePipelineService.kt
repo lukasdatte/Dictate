@@ -698,7 +698,7 @@ class DictatePipelineService : Service() {
                 // isolation keeps the pipeline alive; the next emit
                 // re-attempts the render via the manager's fan-out.
                 try {
-                    syncOverlayBackendAttachment(state.viewMode)
+                    syncOverlayBackendAttachment(state)
                     keyboardLayoutManagerImpl.onStateChanged(state)
                 } catch (t: Throwable) {
                     Log.w(TAG, "state-collect render pass failed (isolated, pipeline continues)", t)
@@ -885,9 +885,25 @@ class DictatePipelineService : Service() {
      * @see docs/decisions/0005-ui-triangle-fsm-keyboard-widget-hover.md
      * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §6 §7.2
      */
-    private fun syncOverlayBackendAttachment(viewMode: net.devemperor.dictate.state.ViewMode) {
+    private fun syncOverlayBackendAttachment(state: net.devemperor.dictate.state.DictateUiState) {
         val backend = overlayBackendImpl ?: return
-        val shouldBeAttached = viewMode != net.devemperor.dictate.state.ViewMode.KEYBOARD
+        // 2026-05-23 sticky-widget refactor (final) — `state.widget` is
+        // the sole source of truth for the floating overlay's window
+        // attachment. The legacy `state.viewMode` axis used to drive
+        // this decision, but the post-refactor invariant is "the widget
+        // is open iff `state.widget is Visible`". Reading both axes
+        // (the prior `viewMode != KEYBOARD || widget is Visible` form)
+        // created a class of bugs where a stale `viewMode` blocked the
+        // detach even after the user had explicitly closed the widget,
+        // or vice-versa: the X-click resolver routed through `CloseOverlay`
+        // (which only mutates `viewMode`) and the window stayed alive
+        // because `widget` was still Visible. The OR form was a half-
+        // fix; the proper fix is a single source of truth. ViewMode
+        // bookkeeping continues for the renderer-mode (HOVER vs WIDGET
+        // affects which slots the catalog produces) but no longer
+        // gates window attach/detach.
+        val shouldBeAttached =
+            state.widget is net.devemperor.dictate.state.WidgetState.Visible
         if (shouldBeAttached == overlayBackendAttached) return
 
         if (shouldBeAttached) {

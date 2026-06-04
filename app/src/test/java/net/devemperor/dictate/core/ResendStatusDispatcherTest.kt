@@ -14,17 +14,17 @@ import org.junit.Test
  * Service-integration (IC capture, double-click cooldown, dispatch
  * wiring) is verified manually — see plan §5.7.
  *
- * Decision table (ground truth — keep in sync with the plan's Phase-5
- * Status Matrix):
+ * Decision table — text-first contract (2026-06-04):
  *
- * | Status     | Output     | Action  |
- * |------------|------------|---------|
- * | COMPLETED  | non-empty  | Insert  |
- * | COMPLETED  | empty/null | NoOp    |
- * | CANCELLED  | non-empty  | Insert  |
- * | CANCELLED  | empty/null | Resume  |
- * | RECORDED   | n/a        | Resume  |
- * | FAILED     | n/a        | NoOp    |
+ * | Status                  | Output     | Action  |
+ * |-------------------------|------------|---------|
+ * | *any non in-flight*     | non-empty  | Insert  |
+ * | COMPLETED               | empty/null | NoOp    |
+ * | CANCELLED               | empty/null | Resume  |
+ * | RECORDED                | n/a        | Resume  |
+ * | FAILED                  | empty/null | NoOp    |
+ * | RECORDING / TRANSCRIBING| n/a        | NoOp    |
+ * | RECORDING_INTERRUPTED   | empty/null | NoOp    |
  */
 class ResendStatusDispatcherTest {
 
@@ -89,36 +89,75 @@ class ResendStatusDispatcherTest {
     }
 
     @Test
-    fun `RECORDED returns Resume regardless of output`() {
-        // RECORDED never has output — but we test both paths anyway to
-        // pin the contract that output is irrelevant for this status.
+    fun `RECORDED without output returns Resume`() {
+        // RECORDED in practice never has output (pipeline never ran).
         val withNull = ResendStatusDispatcher.decide(
             SessionStatus.RECORDED, null, sessionId)
         val withEmpty = ResendStatusDispatcher.decide(
             SessionStatus.RECORDED, "", sessionId)
-        val withText = ResendStatusDispatcher.decide(
-            SessionStatus.RECORDED, "should be ignored", sessionId)
 
         assertTrue(withNull is ResendAction.Resume)
         assertTrue(withEmpty is ResendAction.Resume)
-        assertTrue(withText is ResendAction.Resume)
     }
 
     @Test
-    fun `FAILED returns NoOp - Phase 5 behaviour change`() {
-        // Before Phase 5, FAILED triggered an automatic resume. The new
-        // contract: no silent retry on API failures — the user must
-        // long-press to enter ReprocessStaging.
+    fun `RECORDED with output returns Insert - text-first overrides status`() {
+        // Defensive — if a hypothetical recovery path populates
+        // finalOutputText on a RECORDED row, prefer giving the user
+        // their text back over re-running the pipeline.
+        val action = ResendStatusDispatcher.decide(
+            SessionStatus.RECORDED, "stored text", sessionId)
+        assertTrue(action is ResendAction.Insert)
+    }
+
+    @Test
+    fun `FAILED without text returns NoOp - no silent retry on API failure`() {
+        // Phase-5 policy: don't auto-resume on API failure — the user
+        // must long-press to enter ReprocessStaging.
         val withNull = ResendStatusDispatcher.decide(
             SessionStatus.FAILED, null, sessionId)
         val withEmpty = ResendStatusDispatcher.decide(
             SessionStatus.FAILED, "", sessionId)
-        val withText = ResendStatusDispatcher.decide(
-            SessionStatus.FAILED, "partial output", sessionId)
 
         assertTrue(withNull === ResendAction.NoOp)
         assertTrue(withEmpty === ResendAction.NoOp)
-        assertTrue(withText === ResendAction.NoOp)
+    }
+
+    @Test
+    fun `FAILED with text returns Insert - text-first salvages partial output`() {
+        // 2026-06-04: an upstream step (Whisper) succeeded; a
+        // downstream step failed. The user's transcription is still
+        // recoverable — short-press inserts it instead of swallowing
+        // it. Long-press is the path to re-run the pipeline.
+        val action = ResendStatusDispatcher.decide(
+            SessionStatus.FAILED, "partial output", sessionId)
+
+        assertTrue(action is ResendAction.Insert)
+        action as ResendAction.Insert
+        assertEquals("partial output", action.output)
+    }
+
+    @Test
+    fun `RECORDING_INTERRUPTED without text returns NoOp - continuation via Record-button`() {
+        val withNull = ResendStatusDispatcher.decide(
+            SessionStatus.RECORDING_INTERRUPTED, null, sessionId)
+        val withEmpty = ResendStatusDispatcher.decide(
+            SessionStatus.RECORDING_INTERRUPTED, "", sessionId)
+
+        assertTrue(withNull === ResendAction.NoOp)
+        assertTrue(withEmpty === ResendAction.NoOp)
+    }
+
+    @Test
+    fun `RECORDING_INTERRUPTED with text returns Insert - text-first wins`() {
+        // RECORDING_INTERRUPTED rarely carries text (pipeline never
+        // ran), but if a future recovery path populates finalOutputText
+        // the text-first contract still applies. The ADR-0008
+        // continuation hook stays on the Record-button.
+        val action = ResendStatusDispatcher.decide(
+            SessionStatus.RECORDING_INTERRUPTED, "recovered text", sessionId)
+
+        assertTrue(action is ResendAction.Insert)
     }
 
     @Test

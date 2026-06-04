@@ -319,7 +319,6 @@ class SpecialTouchHandlerInstaller(
     private fun buildEnterOverlayHandler(enter: View): View.OnTouchListener =
         EnterOverlayHandler(
             overlayCharactersLl = enter.rootView.findViewById(R.id.overlay_characters_ll),
-            inputConnectionProvider = inputConnectionProvider,
             insertionService = insertionService,
             accentColorProvider = accentColorProvider,
             keyPressAnimationHandler = { v, e -> keyPressAnimator.handlePressAnimationEvent(v, e) },

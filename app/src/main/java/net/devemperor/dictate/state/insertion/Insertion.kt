@@ -154,12 +154,14 @@ sealed interface ControlOp {
     /** Physical KEYCODE_ENTER (pre-bind / no-editor-info path, WebViews). */
     data object PhysicalEnter : ControlOp
 
-    /**
-     * Commit empty text at cursor position [offset]. Doubles as a cursor move
-     * (QWERTZ swipe) and as a selection-delete (`commitText("", n)` replaces
-     * the current selection with nothing).
-     */
+    /** Move the cursor by committing empty text at position [offset] (QWERTZ swipe). */
     data class CursorMove(val offset: Int) : ControlOp
+
+    /**
+     * Delete the current selection (`commitText("", 1)` replaces the selected
+     * range with nothing). A no-op when there is no selection.
+     */
+    data object DeleteSelection : ControlOp
 }
 
 /**

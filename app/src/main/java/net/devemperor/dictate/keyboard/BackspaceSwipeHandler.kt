@@ -139,10 +139,10 @@ class BackspaceSwipeHandler(
                     if (ic != null) {
                         if (swipeSelectedSteps > 0) {
                             // Deleting the active selection: route the empty
-                            // commit through the InsertionService (P4). Over a
-                            // selection, CursorMove(1)/commitText("",1) deletes
-                            // the selected text — identical to the legacy write.
-                            insertionService()?.control(ControlOp.CursorMove(1))
+                            // commit through the InsertionService (P4).
+                            // DeleteSelection → commitText("",1) over the
+                            // selection deletes it — identical to the legacy write.
+                            insertionService()?.control(ControlOp.DeleteSelection)
                             vibrate()
                         } else {
                             ic.setSelection(swipeBaseCursor, swipeBaseCursor)

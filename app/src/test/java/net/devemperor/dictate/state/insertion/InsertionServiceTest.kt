@@ -40,6 +40,9 @@ class InsertionServiceTest {
 
         var autoEnterScheduled = false
         val auditRecords = mutableListOf<String>()
+        var captureReplacedCalls = 0
+        /** Ordered trace of capture/commit/record for ordering assertions. */
+        val events = mutableListOf<String>()
         var focusLost = false
         var resumed: String? = null
         val controlOps = mutableListOf<ControlOp>()
@@ -52,6 +55,7 @@ class InsertionServiceTest {
             guard = { canCommit },
             committer = { ic, text ->
                 committed += ic to text
+                events += "commit"
                 when {
                     rejectAll -> false
                     committerAcceptOn != null -> committerAcceptOn === ic
@@ -64,11 +68,15 @@ class InsertionServiceTest {
                 override fun schedule(text: String) { autoEnterScheduled = true }
             },
             audit = object : InsertionAuditLog {
-                override fun captureReplaced(ic: InputConnection): String? = null
+                override fun captureReplaced(ic: InputConnection): String? {
+                    captureReplacedCalls += 1
+                    events += "capture"
+                    return null
+                }
                 override fun record(
                     text: String, replaced: String?, editor: EditorInfo?,
                     source: InsertionSource, sessionIdOverride: String?,
-                ) { auditRecords += text }
+                ) { auditRecords += text; events += "record" }
             },
             recovery = object : RecoveryHandler {
                 override fun notifyFocusLost() { focusLost = true }
@@ -250,5 +258,122 @@ class InsertionServiceTest {
         val f = Fakes(live = HostTarget(FakeIc(), editor(1))).apply { hostActionHandled = false }
         f.service.editAction(EditAction.PASTE)
         assertTrue(f.fallbackRan)
+    }
+
+    @Test
+    fun `editAction without live IC returns Failed, no host action, no fallback`() {
+        val f = Fakes(live = null)
+        val r = f.service.editAction(EditAction.COPY)
+        assertEquals(InsertionResult.Failed, r)
+        assertFalse(f.fallbackRan)
+    }
+
+    @Test
+    fun `control returns Failed when executor rejects, op still attempted`() {
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1))).apply { controlAccept = false }
+        val r = f.service.control(ControlOp.Backspace)
+        assertEquals(InsertionResult.Failed, r)
+        assertEquals(1, f.controlOps.size)
+    }
+
+    // ── failure-path invariants (review edge-cases) ──
+
+    @Test
+    fun `auto-enter must not fire when the commit fails`() {
+        // schedule lives inside the if(commit-succeeds) block — a refactor that
+        // hoisted it would send Enter into a field that never received the text.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)), autoEnterActive = true)
+            .apply { rejectAll = true }
+
+        val r = f.service.insert(
+            InsertionRequest("x", InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE),
+        )
+
+        assertEquals(InsertionResult.Failed, r)
+        assertFalse("auto-enter must not schedule on a failed commit", f.autoEnterScheduled)
+    }
+
+    @Test
+    fun `resume failure with null session id surfaces focus-lost but does not resume`() {
+        // The `sessionIdOverride?.let { resume(it) }` branch: no id ⇒ no resume.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1))).apply { rejectAll = true }
+
+        val r = f.service.insert(
+            InsertionRequest(
+                "hi", InsertionSource.TRANSCRIPTION, InsertionPolicy.RESEND,
+                captured = HostTarget(FakeIc(), editor(1)), sessionIdOverride = null,
+            ),
+        )
+
+        assertEquals(InsertionResult.ResumedAfterFailure, r)
+        assertTrue(f.focusLost)
+        assertNull("no session id ⇒ no resume job", f.resumed)
+    }
+
+    @Test
+    fun `pipeline without live IC returns Failed, not Resumed`() {
+        // PIPELINE has resumeOnFailure=false — the resend recovery must NOT kick in.
+        val f = Fakes(live = null)
+
+        val r = f.service.insert(
+            InsertionRequest("hi", InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE),
+        )
+
+        assertEquals(InsertionResult.Failed, r)
+        assertTrue(f.committed.isEmpty())
+        assertFalse(f.focusLost)
+    }
+
+    @Test
+    fun `resend with no live IC commits via the captured channel`() {
+        // The typical real resend case: keyboard gone (live==null) but the
+        // click-time captured handle still accepts writes.
+        val captured = FakeIc()
+        val f = Fakes(live = null)
+
+        val r = f.service.insert(
+            InsertionRequest(
+                "hi", InsertionSource.TRANSCRIPTION, InsertionPolicy.RESEND,
+                captured = HostTarget(captured, editor(1)), sessionIdOverride = "s1",
+            ),
+        )
+
+        assertEquals(InsertionResult.Committed(Target.CAPTURED), r)
+        assertSame(captured, f.committed.single().first)
+    }
+
+    // ── audit-suppression invariants ──
+
+    @Test
+    fun `empty text is not audited even with audit policy`() {
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        val r = f.service.insert(
+            InsertionRequest("", InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE),
+        )
+        assertEquals(InsertionResult.Committed(Target.LIVE), r)
+        assertTrue("empty text must not write an audit row", f.auditRecords.isEmpty())
+    }
+
+    @Test
+    fun `null source disables auditing regardless of audit policy`() {
+        // PIPELINE has audit=true, but source==null must skip capture AND record.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        val r = f.service.insert(
+            InsertionRequest("hi", null, InsertionPolicy.PIPELINE),
+        )
+        assertEquals(InsertionResult.Committed(Target.LIVE), r)
+        assertTrue(f.auditRecords.isEmpty())
+        assertEquals("captureReplaced must not run without a source", 0, f.captureReplacedCalls)
+    }
+
+    @Test
+    fun `selected text is captured before the commit`() {
+        // Ordering matters: the replaced selection must be read before it is
+        // overwritten by the commit.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.service.insert(
+            InsertionRequest("hi", InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE),
+        )
+        assertEquals(listOf("capture", "commit", "record"), f.events)
     }
 }

@@ -75,7 +75,13 @@ class InsertionService(
         return InsertionResult.Failed
     }
 
-    /** Execute a non-text control op (backspace / enter / cursor). */
+    /**
+     * Execute a non-text control op (backspace / enter / cursor) on the live
+     * editor. Unlike [insert], this does **not** consult the host-block guard:
+     * control ops originate from the on-screen keyboard, which is only visible
+     * while the IME owns the host window, so there is no wrong-window risk to
+     * guard against.
+     */
     fun control(op: ControlOp): InsertionResult {
         val live = ic.live() ?: return InsertionResult.Failed
         return if (controlExecutor.execute(live.ic, op)) {
@@ -87,7 +93,8 @@ class InsertionService(
 
     /**
      * Run a copy/paste/cut edit action: try the host soft-API first, then the
-     * manual clipboard fallback for hosts that ignore it.
+     * manual clipboard fallback for hosts that ignore it. Like [control] and
+     * for the same reason, this does not consult the host-block guard.
      */
     fun editAction(action: EditAction): InsertionResult {
         val live = ic.live() ?: return InsertionResult.Failed

@@ -6,7 +6,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.view.inputmethod.InputConnection
 import net.devemperor.dictate.state.insertion.InsertionPolicy
 import net.devemperor.dictate.state.insertion.InsertionRequest
 import net.devemperor.dictate.state.insertion.InsertionService
@@ -19,9 +18,6 @@ import net.devemperor.dictate.state.insertion.InsertionService
  * across overlay characters and release to commit the selected one.
  *
  * @param overlayCharactersLl the LinearLayout containing overlay character TextViews
- * @param inputConnectionProvider provides current InputConnection. Retained for
- *   parity but no longer the commit target (P4): the selected-character commit
- *   now routes through [insertionService].
  * @param insertionService supplies the single InsertionService owning all
  *   host-IC writes (may be null → no-op). The selected overlay character is
  *   committed through it with the KEYSTROKE policy.
@@ -30,7 +26,6 @@ import net.devemperor.dictate.state.insertion.InsertionService
  */
 class EnterOverlayHandler(
     private val overlayCharactersLl: LinearLayout,
-    private val inputConnectionProvider: () -> InputConnection?,
     private val insertionService: () -> InsertionService?,
     private val accentColorProvider: () -> Int,
     private val keyPressAnimationHandler: ((View, MotionEvent) -> Unit)? = null

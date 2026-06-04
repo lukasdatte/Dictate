@@ -115,7 +115,7 @@ class EmojiControllerTest {
         )
 
     private fun newController(connection: InputConnection? = ic) =
-        EmojiController(views, rec, { connection }, { keystrokeInsertionService(connection) })
+        EmojiController(views, rec, { keystrokeInsertionService(connection) })
 
     // ── 1. RR-1 single-owner invariant ────────────────────────────────
 
@@ -246,7 +246,7 @@ class EmojiControllerTest {
         val accent = 0xFF3366CC.toInt()
         val medium = net.devemperor.dictate.DictateUtils.darkenColor(accent, 0.18f)
 
-        EmojiController(v, rec, { ic }, { keystrokeInsertionService(ic) }).applyTheme(accent)
+        EmojiController(v, rec, { keystrokeInsertionService(ic) }).applyTheme(accent)
 
         // Legacy MainButtonsController.applyTheme (:421/:424):
         // editEmojiButton = accentMedium; emojiPickerCloseButton = accent.

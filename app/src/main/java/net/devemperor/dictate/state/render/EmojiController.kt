@@ -2,7 +2,6 @@ package net.devemperor.dictate.state.render
 
 import android.util.Log
 import android.view.View
-import android.view.inputmethod.InputConnection
 import androidx.emoji2.emojipicker.EmojiPickerView
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.DictateUtils
@@ -59,10 +58,6 @@ import net.devemperor.dictate.state.insertion.InsertionService
  *   service from the inflated tree).
  * @property callback the emoji action sink — a narrow ISP subset of the
  *   legacy `MainButtonsController.Callback` (parity contract).
- * @property inputConnectionProvider current `InputConnection` (nullable
- *   — the IME's `getCurrentInputConnection`). Retained for parity but no
- *   longer the picked-emoji write target (P4): the emoji commit now routes
- *   through [insertionService].
  * @property insertionService the single InsertionService owning all host-IC
  *   writes (nullable when the IME-View is detached → write is a no-op). The
  *   picked-emoji commit goes through it with the KEYSTROKE policy.
@@ -75,7 +70,6 @@ import net.devemperor.dictate.state.insertion.InsertionService
 class EmojiController(
     private val views: EmojiViews,
     private val callback: Callback,
-    private val inputConnectionProvider: () -> InputConnection?,
     private val insertionService: () -> InsertionService?,
 ) {
 

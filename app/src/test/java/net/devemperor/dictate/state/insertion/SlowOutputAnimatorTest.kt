@@ -95,4 +95,38 @@ class SlowOutputAnimatorTest {
         assertEquals(1, ic.calls)
         assertEquals("", ic.committed.toString())
     }
+
+    @Test
+    fun `empty text propagates an IC rejection`() {
+        val ic = RecordingIc(failFromCall = 1)
+        val started = SlowOutputAnimator(ImmediateScheduler(), { 0L }).run(ic, "")
+        assertFalse("empty-text commit must report the IC rejection", started)
+    }
+
+    @Test
+    fun `single character text commits the first char with no tail`() {
+        val ic = RecordingIc()
+        var tailDropped: String? = null
+        val started = SlowOutputAnimator(
+            ImmediateScheduler(), { 0L }, TailFailureSink { tailDropped = it },
+        ).run(ic, "x")
+
+        assertTrue(started)
+        assertEquals("x", ic.committed.toString())
+        assertEquals(1, ic.calls)
+        assertEquals(null, tailDropped)
+    }
+
+    @Test
+    fun `delayForIndex is queried with ascending tail indices`() {
+        val ic = RecordingIc()
+        val indices = mutableListOf<Int>()
+        SlowOutputAnimator(
+            ImmediateScheduler(),
+            DelayProvider { index -> indices.add(index); 0L },
+        ).run(ic, "hello")
+
+        // First char is synchronous (no delay query); tail chars query 1..4.
+        assertEquals(listOf(1, 2, 3, 4), indices)
+    }
 }

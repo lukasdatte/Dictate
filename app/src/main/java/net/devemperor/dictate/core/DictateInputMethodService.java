@@ -2055,7 +2055,6 @@ public class DictateInputMethodService extends InputMethodService
         emojiController = new EmojiController(
             new EmojiViews(editEmojiButton, emojiPickerCloseButton, emojiPickerView),
             this,
-            this::getCurrentInputConnection,
             // P4: the single InsertionService owner for the picked-emoji commit.
             () -> insertionService());
         emojiController.installDormant();
@@ -3600,6 +3599,22 @@ public class DictateInputMethodService extends InputMethodService
      * fire-time, because the orchestrator's host-editor snapshot is
      * refreshed on every {@code onStartInputView}.
      */
+    /** Base per-character delay (ms) of the slow-output animation at speed 5. */
+    private static final long SLOW_OUTPUT_BASE_DELAY_MS = 20L;
+    /** Speed value that maps to {@link #SLOW_OUTPUT_BASE_DELAY_MS} (1× speed). */
+    private static final float SLOW_OUTPUT_SPEED_REFERENCE = 5f;
+
+    /**
+     * Per-character delay (ms) of the slow-output animation for the 1-based
+     * char {@code index} at the user's {@code speed} pref. Single source of
+     * truth shared by the {@link SlowOutputAnimator} wiring and
+     * {@link #scheduleAutoEnter} (which must fire <i>after</i> the last
+     * animated character lands) so the two cannot drift out of sync.
+     */
+    private static long slowOutputDelayForIndex(int index, int speed) {
+        return (long) (index * (SLOW_OUTPUT_BASE_DELAY_MS / (speed / SLOW_OUTPUT_SPEED_REFERENCE)));
+    }
+
     private void scheduleAutoEnter(String output) {
         Runnable dispatchEnter = () -> {
             if (pipelineBinder != null) {
@@ -3623,7 +3638,7 @@ public class DictateInputMethodService extends InputMethodService
         if (!DictatePrefsKt.get(sp, Pref.InstantOutput.INSTANCE) && output.length() > 0) {
             // Character-by-character: add delay after the last character finishes
             int speed = DictatePrefsKt.get(sp, Pref.OutputSpeed.INSTANCE);
-            long lastCharDelay = (long) ((output.length() - 1) * (20L / (speed / 5f)));
+            long lastCharDelay = slowOutputDelayForIndex(output.length() - 1, speed);
             baseDelay += lastCharDelay;
         }
 
@@ -4758,7 +4773,7 @@ public class DictateInputMethodService extends InputMethodService
                         final int speed = DictatePrefsKt.get(sp, Pref.OutputSpeed.INSTANCE);
                         SlowOutputAnimator animator = new SlowOutputAnimator(
                                 (delayMs, action) -> mainHandler.postDelayed(action::invoke, delayMs),
-                                (index) -> (long) (index * (20L / (speed / 5f))),
+                                (index) -> slowOutputDelayForIndex(index, speed),
                                 (remaining) -> Log.w("DictateIME",
                                         "slow-output tail dropped on stale IC (" + remaining.length() + " chars)"));
                         return animator.run(ic, text);
@@ -4839,6 +4854,8 @@ public class DictateInputMethodService extends InputMethodService
                     android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER, 0));
         } else if (op instanceof ControlOp.CursorMove) {
             ic.commitText("", ((ControlOp.CursorMove) op).getOffset());
+        } else if (op instanceof ControlOp.DeleteSelection) {
+            ic.commitText("", 1);
         }
         return true;
     }
@@ -5008,8 +5025,7 @@ public class DictateInputMethodService extends InputMethodService
 
         CharSequence selectedText = inputConnection.getSelectedText(0);
         if (selectedText != null && selectedText.length() > 0) {
-            // Delete the selection (commit empty text over it).
-            insertionService().control(new ControlOp.CursorMove(1));
+            insertionService().control(ControlOp.DeleteSelection.INSTANCE);
             return;
         }
 

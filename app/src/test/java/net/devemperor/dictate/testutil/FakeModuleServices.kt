@@ -58,6 +58,7 @@ fun fakeModuleServices(
     sessionRepo: PipelineSessionRepoSubsystem = NoopSessionRepo,
     notificationCoordinator: PipelineNotificationCoordinatorSubsystem = NoopNotificationCoordinator,
     inputConnectionProvider: () -> InputConnection? = { null },
+    insertionServiceProvider: () -> net.devemperor.dictate.state.insertion.InsertionService? = { null },
     clipboard: ClipboardManager? = null,
     sharedPrefs: SharedPreferences = FakeSharedPreferences(),
     // Chunk 3.0 — defaults to a service backed by the same `sharedPrefs`
@@ -80,6 +81,7 @@ fun fakeModuleServices(
     sessionRepo = sessionRepo,
     notificationCoordinator = notificationCoordinator,
     inputConnectionProvider = inputConnectionProvider,
+    insertionServiceProvider = insertionServiceProvider,
     clipboard = clipboard,
     sharedPrefs = sharedPrefs,
     prefs = prefs,

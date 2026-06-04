@@ -560,6 +560,7 @@ class DictatePipelineService : Service() {
             sessionRepo = sessionRepoAdapterImpl,
             notificationCoordinator = notificationCoordinatorImpl,
             inputConnectionProvider = { binder.delegateInputConnectionProvider?.invoke() },
+            insertionServiceProvider = { binder.delegateInsertionService?.invoke() },
             clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager,
             sharedPrefs = sharedPrefs,
             // Chunk 3.0 (indirection-cleanup) — typed State → SP write
@@ -1537,6 +1538,20 @@ class DictatePipelineService : Service() {
         internal var delegateInputConnectionProvider: (() -> android.view.inputmethod.InputConnection?)? = null
 
         /**
+         * IME-side [net.devemperor.dictate.state.insertion.InsertionService]
+         * supplier. Mirrors [delegateInputConnectionProvider]: the IME owns
+         * the single [net.devemperor.dictate.state.insertion.InsertionService]
+         * instance (the sole owner of all host-IC writes) and registers it
+         * here so module effects (KeyboardInputModule) route their keystroke
+         * writes through it instead of touching the raw `InputConnection`.
+         * `null` when the IME is not bound — module effects treat that as a
+         * no-op, identical to the legacy null-IC behaviour.
+         */
+        @Volatile
+        internal var delegateInsertionService:
+            (() -> net.devemperor.dictate.state.insertion.InsertionService?)? = null
+
+        /**
          * IME-side affordance hook for the overlay-surface RECORD click
          * (dictate-widget-integration §8.3 Chunk 3.2). The IME registers
          * the same lambda it uses for the keyboard-surface RECORD click
@@ -1602,6 +1617,19 @@ class DictatePipelineService : Service() {
          */
         fun registerInputConnectionProvider(provider: (() -> android.view.inputmethod.InputConnection?)?) {
             delegateInputConnectionProvider = provider
+        }
+
+        /**
+         * Register the IME's
+         * [net.devemperor.dictate.state.insertion.InsertionService] supplier
+         * so module effects can route keystroke writes through the single
+         * IC-write owner via [ModuleServices.insertionServiceProvider].
+         * Pass `null` on unbind.
+         */
+        fun registerInsertionServiceProvider(
+            provider: (() -> net.devemperor.dictate.state.insertion.InsertionService?)?,
+        ) {
+            delegateInsertionService = provider
         }
 
         /**

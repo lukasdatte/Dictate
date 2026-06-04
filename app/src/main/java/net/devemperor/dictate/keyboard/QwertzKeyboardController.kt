@@ -2,6 +2,10 @@ package net.devemperor.dictate.keyboard
 
 import android.annotation.SuppressLint
 import android.view.inputmethod.InputConnection
+import net.devemperor.dictate.state.insertion.ControlOp
+import net.devemperor.dictate.state.insertion.InsertionPolicy
+import net.devemperor.dictate.state.insertion.InsertionRequest
+import net.devemperor.dictate.state.insertion.InsertionService
 
 /**
  * Controller for the QWERTZ keyboard. Implements the state machine for shift
@@ -21,7 +25,13 @@ import android.view.inputmethod.InputConnection
  * - InputConnection lifecycle (provided by the service)
  *
  * @param view the keyboard view to control
- * @param inputConnectionProvider provides the current InputConnection (may be null)
+ * @param inputConnectionProvider provides the current InputConnection (may be null).
+ *   READ-only here (cursor/auto-shift text peeks); all WRITES go through
+ *   [insertionService] (P4 keystroke-path migration).
+ * @param insertionService supplies the single InsertionService that owns all
+ *   host-IC writes (may be null when the IME-View is detached → write is a
+ *   no-op). Character/space commits and cursor moves route through it with the
+ *   KEYSTROKE policy / ControlOp, reproducing the legacy raw-commit behaviour.
  * @param vibrate haptic feedback callback
  * @param deleteOneCharacter callback for single character deletion
  * @param performEnterAction callback for enter/IME action
@@ -29,6 +39,7 @@ import android.view.inputmethod.InputConnection
 class QwertzKeyboardController(
     private val view: QwertzKeyboardView,
     private val inputConnectionProvider: () -> InputConnection?,
+    private val insertionService: () -> InsertionService?,
     private val vibrate: () -> Unit,
     private val deleteOneCharacter: () -> Unit,
     private val performEnterAction: () -> Unit,
@@ -51,12 +62,14 @@ class QwertzKeyboardController(
     private val cursorSwipeTouchHandler = CursorSwipeTouchHandler(
         onTap = { commitSpace() },
         onCursorMove = { direction ->
-            val ic = inputConnectionProvider() ?: return@CursorSwipeTouchHandler
+            // READ the IC only to keep the legacy null-guard (no IC = no-op);
+            // the WRITE goes through the InsertionService (P4).
+            inputConnectionProvider() ?: return@CursorSwipeTouchHandler
             vibrate()
             // commitText newCursorPosition is relative to end of inserted text (empty string = current pos):
             // 2 = one right, -1 = one left (matches DictateInputMethodService lines 746/751)
             val cursorOffset = if (direction > 0) 2 else -1
-            ic.commitText("", cursorOffset)
+            insertionService()?.control(ControlOp.CursorMove(cursorOffset))
         }
     )
 
@@ -140,7 +153,9 @@ class QwertzKeyboardController(
     // ── Input handling ──
 
     private fun handleCharacterInput(keyDef: QwertzKeyDef) {
-        val ic = inputConnectionProvider() ?: return
+        // READ the IC only to keep the legacy null-guard (no IC = no-op); the
+        // character WRITE goes through the InsertionService (P4).
+        inputConnectionProvider() ?: return
         vibrate()
 
         val text = when (shiftState) {
@@ -152,7 +167,8 @@ class QwertzKeyboardController(
         }
 
         if (text != null) {
-            ic.commitText(text, 1)
+            insertionService()?.insert(
+                InsertionRequest(text, null, InsertionPolicy.KEYSTROKE, null, null))
         }
 
         resetShiftIfSingle()
@@ -185,9 +201,13 @@ class QwertzKeyboardController(
      * Shared between the click listener fallback (handleSpace) and CursorSwipeTouchHandler.onTap.
      */
     private fun commitSpace() {
+        // `ic` is still READ here — the auto-shift check below peeks the text
+        // before the cursor. Only the space WRITE goes through the
+        // InsertionService (P4).
         val ic = inputConnectionProvider() ?: return
         vibrate()
-        ic.commitText(" ", 1)
+        insertionService()?.insert(
+            InsertionRequest(" ", null, InsertionPolicy.KEYSTROKE, null, null))
         // Reset shift first (e.g. after typing a shifted letter then space),
         // then check for auto-shift. Order matters: checkAutoShiftAfterSpace
         // only activates when shiftState is OFF.

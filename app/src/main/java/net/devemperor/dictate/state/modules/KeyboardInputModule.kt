@@ -152,13 +152,26 @@ object KeyboardInputModule : DictateModule<KeyboardInputState, Action.KeyboardIn
         return TransitionResult(nextState = state, sideEffects = listOf(effect))
     }
 
+    // P4 keystroke-path migration: every host-IC write funnels through the
+    // single InsertionService owner. KEYSTROKE policy reproduces the legacy
+    // behaviour exactly (instant, no auto-enter, no host-guard, no audit, no
+    // resume). A null provider (IME-View detached) is a no-op, identical to
+    // the legacy `inputConnectionProvider()?.…` null behaviour.
     override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {
         Effect.SendBackspace -> {
-            services.inputConnectionProvider()?.deleteSurroundingText(1, 0)
+            services.insertionServiceProvider()?.control(
+                net.devemperor.dictate.state.insertion.ControlOp.Backspace)
             Unit
         }
         Effect.SendSpace -> {
-            services.inputConnectionProvider()?.commitText(" ", 1)
+            services.insertionServiceProvider()?.insert(
+                net.devemperor.dictate.state.insertion.InsertionRequest(
+                    " ",
+                    null,
+                    net.devemperor.dictate.state.insertion.InsertionPolicy.KEYSTROKE,
+                    null,
+                    null,
+                ))
             Unit
         }
         is Effect.CopyToClipboard -> {
@@ -166,27 +179,13 @@ object KeyboardInputModule : DictateModule<KeyboardInputState, Action.KeyboardIn
             Unit
         }
         is Effect.PerformEnter -> {
-            val ic = services.inputConnectionProvider()
-            if (ic != null) {
-                if (effect.role == net.devemperor.dictate.state.layout.EnterButtonRole.NEWLINE) {
-                    ic.commitText("\n", 1)
-                } else {
-                    ic.performEditorAction(effect.actionId)
-                }
-            }
+            services.insertionServiceProvider()?.control(
+                net.devemperor.dictate.state.insertion.ControlOp.Enter(effect.role, effect.actionId))
             Unit
         }
         Effect.SendPhysicalEnter -> {
-            val ic = services.inputConnectionProvider()
-            if (ic != null) {
-                val now = android.os.SystemClock.uptimeMillis()
-                ic.sendKeyEvent(
-                    android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_DOWN,
-                        android.view.KeyEvent.KEYCODE_ENTER, 0))
-                ic.sendKeyEvent(
-                    android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_UP,
-                        android.view.KeyEvent.KEYCODE_ENTER, 0))
-            }
+            services.insertionServiceProvider()?.control(
+                net.devemperor.dictate.state.insertion.ControlOp.PhysicalEnter)
             Unit
         }
     }

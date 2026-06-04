@@ -7,8 +7,18 @@ import android.view.inputmethod.InputConnection
 import androidx.appcompat.view.ContextThemeWrapper
 import androidx.emoji2.emojipicker.EmojiPickerView
 import androidx.test.core.app.ApplicationProvider
+import android.view.inputmethod.EditorInfo
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.R
+import net.devemperor.dictate.state.insertion.AutoEnterScheduler
+import net.devemperor.dictate.state.insertion.ClipboardGateway
+import net.devemperor.dictate.state.insertion.ControlOp
+import net.devemperor.dictate.state.insertion.EditAction
+import net.devemperor.dictate.state.insertion.HostTarget
+import net.devemperor.dictate.state.insertion.InsertionAuditLog
+import net.devemperor.dictate.database.entity.InsertionSource
+import net.devemperor.dictate.state.insertion.InsertionService
+import net.devemperor.dictate.state.insertion.RecoveryHandler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -69,8 +79,43 @@ class EmojiControllerTest {
         ic = FakeInputConnection(views.editEmojiButton)
     }
 
+    /**
+     * Minimal real [InsertionService] for the P4 keystroke-path: its
+     * `committer` forwards straight to the fake IC's `commitText`, so the
+     * picked-emoji parity assertions on [FakeInputConnection.committed] still
+     * hold after the EmojiController write was routed through the service. A
+     * `null` IC makes `ic.live()` return `null`, reproducing the legacy
+     * null-IC short-circuit. All other collaborators are inert no-ops.
+     */
+    private fun keystrokeInsertionService(connection: InputConnection?): InsertionService =
+        InsertionService(
+            ic = { connection?.let { HostTarget(it, null as EditorInfo?) } },
+            guard = { true },
+            committer = { target, text -> target.commitText(text, 1) },
+            controlExecutor = { _, _: ControlOp -> true },
+            autoEnter = object : AutoEnterScheduler {
+                override fun isActive() = false
+                override fun schedule(text: String) {}
+            },
+            audit = object : InsertionAuditLog {
+                override fun captureReplaced(ic: InputConnection): String? = null
+                override fun record(
+                    text: String, replaced: String?, editor: EditorInfo?,
+                    source: InsertionSource, sessionIdOverride: String?,
+                ) {}
+            },
+            recovery = object : RecoveryHandler {
+                override fun notifyFocusLost() {}
+                override fun resume(sessionId: String) {}
+            },
+            clipboard = object : ClipboardGateway {
+                override fun performHostAction(ic: InputConnection, action: EditAction) = true
+                override fun fallback(ic: InputConnection, action: EditAction) {}
+            },
+        )
+
     private fun newController(connection: InputConnection? = ic) =
-        EmojiController(views, rec) { connection }
+        EmojiController(views, rec, { connection }, { keystrokeInsertionService(connection) })
 
     // ── 1. RR-1 single-owner invariant ────────────────────────────────
 
@@ -201,7 +246,7 @@ class EmojiControllerTest {
         val accent = 0xFF3366CC.toInt()
         val medium = net.devemperor.dictate.DictateUtils.darkenColor(accent, 0.18f)
 
-        EmojiController(v, rec) { ic }.applyTheme(accent)
+        EmojiController(v, rec, { ic }, { keystrokeInsertionService(ic) }).applyTheme(accent)
 
         // Legacy MainButtonsController.applyTheme (:421/:424):
         // editEmojiButton = accentMedium; emojiPickerCloseButton = accent.

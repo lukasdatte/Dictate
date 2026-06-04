@@ -7,6 +7,9 @@ import androidx.emoji2.emojipicker.EmojiPickerView
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.R
+import net.devemperor.dictate.state.insertion.InsertionPolicy
+import net.devemperor.dictate.state.insertion.InsertionRequest
+import net.devemperor.dictate.state.insertion.InsertionService
 
 /**
  * Owns the **emoji-picker** click/picked listeners — the listeners
@@ -57,8 +60,12 @@ import net.devemperor.dictate.R
  * @property callback the emoji action sink — a narrow ISP subset of the
  *   legacy `MainButtonsController.Callback` (parity contract).
  * @property inputConnectionProvider current `InputConnection` (nullable
- *   — the IME's `getCurrentInputConnection`), threaded exactly as the
- *   legacy controller does for the picked-emoji `commitText`.
+ *   — the IME's `getCurrentInputConnection`). Retained for parity but no
+ *   longer the picked-emoji write target (P4): the emoji commit now routes
+ *   through [insertionService].
+ * @property insertionService the single InsertionService owning all host-IC
+ *   writes (nullable when the IME-View is detached → write is a no-op). The
+ *   picked-emoji commit goes through it with the KEYSTROKE policy.
  *
  * @see EditBarController — the sibling owner; full CR4-IMPL-1 narrative.
  * @see SpecialTouchHandlerInstaller — the CR2 staged-pattern precedent.
@@ -69,6 +76,7 @@ class EmojiController(
     private val views: EmojiViews,
     private val callback: Callback,
     private val inputConnectionProvider: () -> InputConnection?,
+    private val insertionService: () -> InsertionService?,
 ) {
 
     /**
@@ -113,7 +121,11 @@ class EmojiController(
             emojiPicked = { emoji ->
                 callback.onVibrate()
                 if (emoji != null) {
-                    inputConnectionProvider()?.commitText(emoji, 1)
+                    // P4: the emoji commit funnels through the single
+                    // InsertionService owner (KEYSTROKE policy = instant,
+                    // no auto-enter/guard/audit). Null = no-op, as before.
+                    insertionService()?.insert(
+                        InsertionRequest(emoji, null, InsertionPolicy.KEYSTROKE, null, null))
                 }
             },
         )

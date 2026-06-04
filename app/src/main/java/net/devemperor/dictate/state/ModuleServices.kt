@@ -109,6 +109,18 @@ class ModuleServices(
     val sessionRepo: PipelineSessionRepoSubsystem,
     val notificationCoordinator: PipelineNotificationCoordinatorSubsystem,
     val inputConnectionProvider: () -> InputConnection?,
+    /**
+     * Lazy supplier of the IME's single
+     * [net.devemperor.dictate.state.insertion.InsertionService] — the sole
+     * owner of all host-`InputConnection` writes. Keystroke-emitting module
+     * effects ([net.devemperor.dictate.state.KeyboardInputModule]) route
+     * their writes through `insertionServiceProvider()?.control(...)` /
+     * `?.insert(...)` instead of touching [inputConnectionProvider]
+     * directly, so every host write funnels through one owner (P4
+     * keystroke-path migration). `null` when the IME-View is detached — a
+     * no-op, identical to the legacy null-IC behaviour.
+     */
+    val insertionServiceProvider: () -> net.devemperor.dictate.state.insertion.InsertionService?,
     val clipboard: ClipboardManager?,
     val sharedPrefs: SharedPreferences,
     val prefs: PrefPersistenceService,

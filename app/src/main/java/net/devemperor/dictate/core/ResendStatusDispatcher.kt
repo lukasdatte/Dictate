@@ -12,9 +12,9 @@ import net.devemperor.dictate.database.entity.SessionStatus
  */
 sealed class ResendAction {
     /**
-     * Run the 3-stage [ResendInsertStrategy] with [output].
-     * Used for COMPLETED + non-empty output and CANCELLED + non-empty
-     * output.
+     * Insert [output] via the InsertionService RESEND policy (live → captured
+     * → resume). Used for COMPLETED + non-empty output and CANCELLED +
+     * non-empty output.
      */
     data class Insert(val output: String, val sessionId: String) : ResendAction()
 

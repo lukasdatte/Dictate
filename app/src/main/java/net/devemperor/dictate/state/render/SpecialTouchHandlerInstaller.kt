@@ -9,6 +9,10 @@ import net.devemperor.dictate.keyboard.BackspaceSwipeHandler
 import net.devemperor.dictate.keyboard.CursorSwipeTouchHandler
 import net.devemperor.dictate.keyboard.EnterOverlayHandler
 import net.devemperor.dictate.keyboard.KeyPressAnimator
+import net.devemperor.dictate.state.insertion.ControlOp
+import net.devemperor.dictate.state.insertion.InsertionPolicy
+import net.devemperor.dictate.state.insertion.InsertionRequest
+import net.devemperor.dictate.state.insertion.InsertionService
 import net.devemperor.dictate.state.layout.LogicalButtonId
 
 /**
@@ -95,6 +99,12 @@ import net.devemperor.dictate.state.layout.LogicalButtonId
  * @property inputConnectionProvider current `InputConnection` (nullable —
  *   the IME's `getCurrentInputConnection`). Threaded into all three
  *   §11.7 handlers exactly as the legacy `MainButtonsController` does.
+ *   READ-only now (null-guards, compound-drawable reset); all host WRITES
+ *   go through [insertionService] (P4 keystroke-path migration).
+ * @property insertionService the single InsertionService owning all host-IC
+ *   writes (nullable → no-op). Threaded into the SPACE handler (tap = space
+ *   insert, swipe = cursor move) and forwarded to the BACKSPACE / ENTER
+ *   handlers so their writes funnel through the same owner.
  * @property accentColorProvider live accent colour (for the ENTER
  *   overlay), `Pref.AccentColor`.
  * @property onVibrate haptic feedback sink (the IME `vibrate()`).
@@ -117,6 +127,7 @@ import net.devemperor.dictate.state.layout.LogicalButtonId
  */
 class SpecialTouchHandlerInstaller(
     private val inputConnectionProvider: () -> InputConnection?,
+    private val insertionService: () -> InsertionService?,
     private val accentColorProvider: () -> Int,
     private val onVibrate: () -> Unit,
     private val onBackspaceDeleteCancelled: () -> Unit,
@@ -246,11 +257,16 @@ class SpecialTouchHandlerInstaller(
             swipeThresholdPx = CursorSwipeTouchHandler.DEFAULT_SWIPE_THRESHOLD,
             onTap = {
                 onVibrate()
-                inputConnectionProvider()?.commitText(" ", 1)
+                // P4: space insert funnels through the InsertionService
+                // (KEYSTROKE policy). Null = no-op, as the legacy null-IC.
+                insertionService()?.insert(
+                    InsertionRequest(" ", null, InsertionPolicy.KEYSTROKE, null, null))
             },
             onCursorMove = { dir ->
                 onVibrate()
-                inputConnectionProvider()?.commitText("", if (dir > 0) 2 else -1)
+                // P4: cursor move funnels through the InsertionService as a
+                // CursorMove ControlOp (empty commit at offset 2 / -1).
+                insertionService()?.control(ControlOp.CursorMove(if (dir > 0) 2 else -1))
             },
             onSwipeStateChanged = { isSwiping ->
                 if (isSwiping) {
@@ -286,6 +302,7 @@ class SpecialTouchHandlerInstaller(
     private fun buildBackspaceSwipeHandler(): View.OnTouchListener =
         BackspaceSwipeHandler(
             inputConnectionProvider = inputConnectionProvider,
+            insertionService = insertionService,
             vibrate = onVibrate,
             onDeleteCancelled = onBackspaceDeleteCancelled,
             keyPressAnimationHandler = { v, e -> keyPressAnimator.handlePressAnimationEvent(v, e) },
@@ -303,6 +320,7 @@ class SpecialTouchHandlerInstaller(
         EnterOverlayHandler(
             overlayCharactersLl = enter.rootView.findViewById(R.id.overlay_characters_ll),
             inputConnectionProvider = inputConnectionProvider,
+            insertionService = insertionService,
             accentColorProvider = accentColorProvider,
             keyPressAnimationHandler = { v, e -> keyPressAnimator.handlePressAnimationEvent(v, e) },
         )

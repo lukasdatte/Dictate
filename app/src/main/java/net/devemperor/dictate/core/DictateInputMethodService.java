@@ -105,6 +105,19 @@ import net.devemperor.dictate.state.render.RealMotionSurface;
 import net.devemperor.dictate.state.render.RecordingAnimationController;
 import net.devemperor.dictate.state.render.RenderGate;
 import net.devemperor.dictate.state.render.SpecialTouchHandlerInstaller;
+import net.devemperor.dictate.state.insertion.AutoEnterScheduler;
+import net.devemperor.dictate.state.insertion.ClipboardGateway;
+import net.devemperor.dictate.state.insertion.ControlOp;
+import net.devemperor.dictate.state.insertion.EditAction;
+import net.devemperor.dictate.state.insertion.HostTarget;
+import net.devemperor.dictate.state.insertion.InsertionAuditLog;
+import net.devemperor.dictate.state.insertion.InsertionPolicy;
+import net.devemperor.dictate.state.insertion.InsertionRequest;
+import net.devemperor.dictate.state.insertion.InsertionResult;
+import net.devemperor.dictate.state.insertion.InsertionService;
+import net.devemperor.dictate.state.insertion.RecoveryHandler;
+import net.devemperor.dictate.state.insertion.SlowOutputAnimator;
+import net.devemperor.dictate.state.layout.EnterButtonRole;
 
 import androidx.constraintlayout.motion.widget.MotionLayout;
 import java.util.HashMap;
@@ -430,6 +443,13 @@ public class DictateInputMethodService extends InputMethodService
     // The overlay-chars owner uses a RenderGate (write axis, CR3
     // pattern) constructed dormant; CR4 arm()s it.
     private EditBarController editBarController;
+
+    /**
+     * Single owner of every host {@link InputConnection} write (insertion
+     * unification). Built lazily on first use via {@link #insertionService()}
+     * because its collaborators close over service state set up in onCreate.
+     */
+    private InsertionService insertionService;
     private EmojiController emojiController;
     private OverlayCharactersController overlayCharactersController;
     private RenderGate overlayCharactersGate;
@@ -791,6 +811,11 @@ public class DictateInputMethodService extends InputMethodService
         binder.registerPipelineCallback(this);
         binder.registerPromptQueueCallback(this);
         binder.registerInputConnectionProvider(this::getCurrentInputConnection);
+        // P4 cross-service delegate: register the IME's single
+        // InsertionService so KeyboardInputModule effects (Space/Backspace/
+        // Enter/PhysicalEnter) route their host writes through the same
+        // owner the IME-side controllers use. Cleared on unbind below.
+        binder.registerInsertionServiceProvider(() -> insertionService());
 
         // C5 (R-1 closure) — install the IME-faithful PipelineConfigResolver
         // so the new recording-drive path builds a JobRequest
@@ -816,6 +841,7 @@ public class DictateInputMethodService extends InputMethodService
             binder.registerPipelineCallback(null);
             binder.registerPromptQueueCallback(null);
             binder.registerInputConnectionProvider(null);
+            binder.registerInsertionServiceProvider(null);
             binder.registerPipelineConfigResolver(null);
             // dictate-widget-integration §8.3 Chunk 3.2 — clear the
             // overlay affordance lambda so a click that races the unbind
@@ -922,6 +948,9 @@ public class DictateInputMethodService extends InputMethodService
         qwertzController = new QwertzKeyboardController(
             qwertzKeyboardView,
             () -> getCurrentInputConnection(),
+            // P4: the single InsertionService owner for all QWERTZ host-IC
+            // writes (char / space / cursor-move). Lazy getter, null-safe.
+            () -> insertionService(),
             () -> { vibrate(); return kotlin.Unit.INSTANCE; },
             () -> { deleteOneCharacter(); return kotlin.Unit.INSTANCE; },
             () -> {
@@ -1366,6 +1395,9 @@ public class DictateInputMethodService extends InputMethodService
         // does the setOnTouchListener (the same cached handler instances).
         specialTouchHandlerInstaller = new SpecialTouchHandlerInstaller(
             () -> getCurrentInputConnection(),
+            // P4: the single InsertionService owner — forwarded to the
+            // SPACE/BACKSPACE/ENTER special-touch handlers for their writes.
+            () -> insertionService(),
             () -> DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE),
             vibrateLambda,
             () -> {
@@ -1668,10 +1700,11 @@ public class DictateInputMethodService extends InputMethodService
                                 // AcceptAndInsert action, so the user
                                 // sees the dismiss outcome (item gone)
                                 // even when the paste itself failed.
-                                android.view.inputmethod.InputConnection ic = getCurrentInputConnection();
-                                if (ic != null) {
-                                    ic.commitText(pendingInsertText, 1);
-                                }
+                                // Insertion unification — pending-insert accept
+                                // routes through the single InsertionService.
+                                insertionService().insert(new InsertionRequest(
+                                        pendingInsertText, null,
+                                        InsertionPolicy.KEYSTROKE, null, null));
                             }
                             return kotlin.Unit.INSTANCE;
                         },
@@ -2022,7 +2055,9 @@ public class DictateInputMethodService extends InputMethodService
         emojiController = new EmojiController(
             new EmojiViews(editEmojiButton, emojiPickerCloseButton, emojiPickerView),
             this,
-            this::getCurrentInputConnection);
+            this::getCurrentInputConnection,
+            // P4: the single InsertionService owner for the picked-emoji commit.
+            () -> insertionService());
         emojiController.installDormant();
         emojiController.attachToViews();
 
@@ -2620,7 +2655,7 @@ public class DictateInputMethodService extends InputMethodService
                         }
                         CharSequence selectedText = currentConnection.getSelectedText(0);
                         if (selectedText == null || selectedText.length() == 0) {
-                            currentConnection.performContextMenuAction(android.R.id.selectAll);
+                            insertionService().editAction(EditAction.SELECT_ALL);
                             selectedText = currentConnection.getSelectedText(0);
                             if (selectedText == null || selectedText.length() == 0) {
                                 return;
@@ -3494,7 +3529,7 @@ public class DictateInputMethodService extends InputMethodService
 
         if ((selectedText == null || selectedText.length() == 0)
                 && extractedText != null && extractedText.text != null && extractedText.text.length() > 0) {
-            inputConnection.performContextMenuAction(android.R.id.selectAll);
+            insertionService().editAction(EditAction.SELECT_ALL);
         } else {
             inputConnection.clearMetaKeyStates(0);
             if (extractedText == null || extractedText.text == null) {
@@ -3606,11 +3641,10 @@ public class DictateInputMethodService extends InputMethodService
      * pre-bind and bound paths behave identically.
      */
     private void sendPhysicalEnterFallback() {
-        InputConnection ic = getCurrentInputConnection();
-        if (ic == null) return;
-        long now = android.os.SystemClock.uptimeMillis();
-        ic.sendKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0));
-        ic.sendKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0));
+        // Routed through the single InsertionService (control → executeControlOp
+        // → sendKeyEvent). The service is lazily built and independent of the
+        // orchestrator binder, so it is available even on this pre-bind path.
+        insertionService().control(ControlOp.PhysicalEnter.INSTANCE);
     }
 
     private void openSettingsActivity() {
@@ -4528,7 +4562,14 @@ public class DictateInputMethodService extends InputMethodService
                 // and the next StartRecording isn't rejected by a stale
                 // pipeline FSM — see git history) — the dispatch still
                 // fires, just 1-2 ms later.
-                boolean committed = commitTextToInputConnection(text, source);
+                // Insertion unification — the pipeline transcript commit now
+                // routes through the single InsertionService (PIPELINE policy
+                // = animate + auto-enter + host-guard + audit). DeferredToPending
+                // (widget host-block) maps to committed=false, preserving the
+                // PipelineDone→RefreshPendingSessions branch below.
+                boolean committed = insertionService().insert(
+                        new InsertionRequest(text, source, InsertionPolicy.PIPELINE, null, null)
+                ) instanceof InsertionResult.Committed;
                 if (sid != null) {
                     // 2026-05-22 — pass the commit-result to PipelineDone so
                     // the reducer can branch: success → MarkSessionInserted,
@@ -4691,169 +4732,113 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * Backward-compat wrapper — captures the live IC + EditorInfo and
-     * delegates to the parametrised overload with auto-enter enabled. All
-     * existing pipeline call sites continue to work unchanged.
+     * Lazily builds the single {@link InsertionService} — the sole owner of
+     * every host {@link InputConnection} write. Each collaborator is a thin
+     * adapter over the service methods that already drive the (robust)
+     * pipeline + resend paths, so behaviour is preserved while every path is
+     * funnelled through one place. The slow-output committer uses the
+     * recovery-aware {@link SlowOutputAnimator} (W1: aborts on a stale IC and
+     * reports the dropped tail instead of silently losing it).
      */
-    private boolean commitTextToInputConnection(String text, InsertionSource source) {
-        return commitTextToInputConnection(
-                getCurrentInputConnection(),
-                getCurrentInputEditorInfo(),
-                text,
-                source,
-                /* sessionIdOverride = */ null,
-                /* enableAutoEnter   = */ true);
+    private InsertionService insertionService() {
+        if (insertionService == null) {
+            insertionService = new InsertionService(
+                    // IcProvider — live IC + EditorInfo (null when detached).
+                    () -> {
+                        InputConnection ic = getCurrentInputConnection();
+                        return ic == null ? null : new HostTarget(ic, getCurrentInputEditorInfo());
+                    },
+                    // HostCommitGuard — widget host-block (B3.5 / ADR-0008).
+                    this::canCommitToHost,
+                    // TextCommitter — instant vs. recovery-aware slow-output.
+                    (ic, text) -> {
+                        if (DictatePrefsKt.get(sp, Pref.InstantOutput.INSTANCE) || mainHandler == null) {
+                            return ic.commitText(text, 1);
+                        }
+                        final int speed = DictatePrefsKt.get(sp, Pref.OutputSpeed.INSTANCE);
+                        SlowOutputAnimator animator = new SlowOutputAnimator(
+                                (delayMs, action) -> mainHandler.postDelayed(action::invoke, delayMs),
+                                (index) -> (long) (index * (20L / (speed / 5f))),
+                                (remaining) -> Log.w("DictateIME",
+                                        "slow-output tail dropped on stale IC (" + remaining.length() + " chars)"));
+                        return animator.run(ic, text);
+                    },
+                    // ControlExecutor — backspace / enter / cursor.
+                    this::executeControlOp,
+                    // AutoEnterScheduler — per-run override + Enter tick.
+                    new AutoEnterScheduler() {
+                        @Override public boolean isActive() { return isAutoEnterActive(); }
+                        @Override public void schedule(@androidx.annotation.NonNull String text) { scheduleAutoEnter(text); }
+                    },
+                    // InsertionAuditLog — pre-commit selection capture + DB row.
+                    new InsertionAuditLog() {
+                        @Override public String captureReplaced(@androidx.annotation.NonNull InputConnection ic) {
+                            return safeReadSelectedText(ic);
+                        }
+                        @Override public void record(@androidx.annotation.NonNull String text, String replaced,
+                                EditorInfo editor, @androidx.annotation.NonNull InsertionSource source,
+                                String sessionIdOverride) {
+                            final String fSessionId = sessionIdOverride != null
+                                    ? sessionIdOverride : sessionTracker.getCurrentSessionId();
+                            final String fStepId = sessionTracker.getCurrentStepId();
+                            final String fTranscriptionId = sessionTracker.getCurrentTranscriptionId();
+                            final String pkg = editor != null ? editor.packageName : null;
+                            dbExecutor.execute(() -> {
+                                sessionManager.logTextInsertion(fSessionId, text, replaced, pkg,
+                                        null, fStepId, fTranscriptionId, InsertionMethod.COMMIT);
+                                if (fSessionId != null) {
+                                    sessionManager.updateFinalOutputText(fSessionId, text);
+                                }
+                            });
+                        }
+                    },
+                    // RecoveryHandler — focus-lost toast + resume job (resend).
+                    new RecoveryHandler() {
+                        @Override public void notifyFocusLost() {
+                            Toast.makeText(DictateInputMethodService.this,
+                                    R.string.dictate_resend_focus_lost, Toast.LENGTH_SHORT).show();
+                        }
+                        @Override public void resume(@androidx.annotation.NonNull String sessionId) {
+                            startResumeJob(sessionId);
+                        }
+                    },
+                    // ClipboardGateway — soft context-menu action + manual fallback.
+                    new ClipboardGateway() {
+                        @Override public boolean performHostAction(@androidx.annotation.NonNull InputConnection ic,
+                                @androidx.annotation.NonNull EditAction action) {
+                            return ic.performContextMenuAction(action.getAndroidId());
+                        }
+                        @Override public void fallback(@androidx.annotation.NonNull InputConnection ic,
+                                @androidx.annotation.NonNull EditAction action) {
+                            performClipboardFallback(ic, action.getAndroidId());
+                        }
+                    });
+        }
+        return insertionService;
     }
 
-    /**
-     * Commit text via an explicit {@link InputConnection}.
-     *
-     * Used by the Phase-5 resend-button short-press path so the IC captured
-     * at click time can be reused if the editor focus has drifted by the
-     * time the DB lookup completes. Side-effects (replaced-text capture,
-     * slow-output animation, auto-enter, DB log) are funnelled through this
-     * single path so all stages of the resend strategy behave consistently.
-     *
-     * @param ic                  the {@link InputConnection} to commit on.
-     *                            {@code null} → returns {@code false} (no-op).
-     * @param editor              the {@link EditorInfo} that pairs with
-     *                            {@code ic}; used only for the audit log
-     *                            (package name).
-     * @param text                the text to insert. {@code null} treated as
-     *                            empty string.
-     * @param source              audit/telemetry classifier; {@code null}
-     *                            disables the DB write.
-     * @param sessionIdOverride   when non-{@code null} the audit log binds
-     *                            to this session id instead of the
-     *                            {@link SessionTracker#getCurrentSessionId() current}
-     *                            one. Resend-clicks pass the
-     *                            {@code lastSession.getId()} here because the
-     *                            tracker has already been cleared by the
-     *                            time the click runs.
-     * @param enableAutoEnter     when {@code true} the auto-enter side-effect
-     *                            ({@link #scheduleAutoEnter}) runs after a
-     *                            successful commit; when {@code false} it is
-     *                            suppressed. The pipeline transcription/
-     *                            standalone-prompt paths pass {@code true} —
-     *                            the resend-button paths (Stage 1 + Stage 2
-     *                            of {@link ResendInsertStrategy}) pass
-     *                            {@code false} because (a) Stage 2 commits
-     *                            on a captured IC while
-     *                            {@link #scheduleAutoEnter} would later
-     *                            dispatch EnterKey against the live IC —
-     *                            Enter would land in the wrong field — and
-     *                            (b) a Resend click is a recovery insert,
-     *                            not a new transcription, so silently
-     *                            appending Enter is unwanted UX in either
-     *                            stage.
-     * @return {@code true} if the commit succeeded, {@code false} if the IC
-     *         was {@code null} or {@code commitText()} reported failure.
-     */
-    private boolean commitTextToInputConnection(
-            InputConnection ic,
-            EditorInfo editor,
-            String text,
-            InsertionSource source,
-            String sessionIdOverride,
-            boolean enableAutoEnter) {
-        if (ic == null) return false;
-
-        // B3.5 host-commit guard (plan §4 B3, ADR-0008 §"Send-during-widget").
-        // When the floating widget is visible the keyboard is collapsed and
-        // `ic` belongs to whatever host window has focus — typically NOT the
-        // app the user was dictating into. Committing transcript here would
-        // leak text into a wrong field. Persist via the Pending-Insert
-        // info-bar (B4) instead; the user re-attaches the IME and taps to
-        // insert. Returning `false` mirrors the contract above (caller
-        // treats it as a silent no-op for that one commit attempt).
-        if (!canCommitToHost()) {
-            android.util.Log.w("DictateIME",
-                    "commitTextToInputConnection blocked — widget is visible, " +
-                    "deferring to Pending-Insert info-bar");
-            return false;
-        }
-
-        // 1. Capture replaced (selected) text before commit for undo-buffer / audit
-        String replacedText = null;
-        if (source != null) {
-            replacedText = safeReadSelectedText(ic);
-        }
-
-        String output = text == null ? "" : text;
-
-        // 2. InstantOutput vs slow-output branch — same path for live and
-        //    captured IC so UX (char-by-char animation) stays consistent.
-        boolean success;
-        if (DictatePrefsKt.get(sp, Pref.InstantOutput.INSTANCE)) {
-            success = ic.commitText(output, 1);
-        } else if (mainHandler != null) {
-            success = commitSlowOutput(ic, output);
-        } else {
-            success = ic.commitText(output, 1);
-        }
-        if (!success) return false;
-
-        // 3. Auto-enter: send as separate control character with delay so
-        //    terminal emulators (e.g. Termux/Claude Code) treat it as a
-        //    distinct keystroke, not part of the paste block. Suppressed
-        //    for resend paths — see KDoc on the {@code enableAutoEnter}
-        //    parameter for the rationale.
-        if (enableAutoEnter && isAutoEnterActive()) {
-            scheduleAutoEnter(output);
-        }
-
-        // 4. Persist text insertion and update session's final output
-        if (source != null && output.length() > 0) {
-            final String fReplacedText = replacedText;
-            final String fSessionId = sessionIdOverride != null
-                    ? sessionIdOverride : sessionTracker.getCurrentSessionId();
-            final String fStepId = sessionTracker.getCurrentStepId();
-            final String fTranscriptionId = sessionTracker.getCurrentTranscriptionId();
-            final String pkg = editor != null ? editor.packageName : null;
-
-            dbExecutor.execute(() -> {
-                sessionManager.logTextInsertion(fSessionId, output, fReplacedText, pkg,
-                    null, fStepId, fTranscriptionId, InsertionMethod.COMMIT);
-                if (fSessionId != null) {
-                    sessionManager.updateFinalOutputText(fSessionId, output);
-                }
-            });
-        }
-        return true;
-    }
-
-    /**
-     * Slow-output animation: char-by-char commit on the captured (or live)
-     * IC, scheduled on {@code mainHandler}. Returns whether the first
-     * character was committed successfully — a {@code false} here signals an
-     * IC that rejects writes (stale / closed) and the caller can fall
-     * through to the next stage.
-     *
-     * <p><b>IC-capture semantics (Phase 5 refactor):</b> the {@link
-     * InputConnection} is captured <i>once</i> at the start of the animation
-     * and reused for every scheduled character. This is a deliberate
-     * behaviour change from the pre-refactor loop, which re-fetched
-     * {@code getCurrentInputConnection()} per character. As a result, if the
-     * user changes editor focus mid-animation, the remaining scheduled
-     * characters will fail silently — {@code commitText()} returns
-     * {@code false} on the now-stale IC and we drop them. For the
-     * captured-IC resend use case (Stage 2 of {@link ResendInsertStrategy})
-     * this is the desired behaviour: the resend explicitly targets the
-     * editor that was focused at click time, not whatever the user has
-     * navigated to since.</p>
-     */
-    private boolean commitSlowOutput(InputConnection ic, String output) {
-        if (output.isEmpty()) return ic.commitText(output, 1);
-
-        int speed = DictatePrefsKt.get(sp, Pref.OutputSpeed.INSTANCE);
-        // Commit first character synchronously so we can detect a dead IC
-        // immediately and report the failure to the caller.
-        boolean firstOk = ic.commitText(String.valueOf(output.charAt(0)), 1);
-        if (!firstOk) return false;
-        for (int i = 1; i < output.length(); i++) {
-            String characterString = String.valueOf(output.charAt(i));
-            long delay = (long) (i * (20L / (speed / 5f)));
-            mainHandler.postDelayed(() -> ic.commitText(characterString, 1), delay);
+    /** Execute a non-text {@link ControlOp} on {@code ic} (always succeeds). */
+    private boolean executeControlOp(InputConnection ic, ControlOp op) {
+        if (op instanceof ControlOp.Backspace) {
+            ic.deleteSurroundingText(1, 0);
+        } else if (op instanceof ControlOp.DeleteSurrounding) {
+            ControlOp.DeleteSurrounding d = (ControlOp.DeleteSurrounding) op;
+            ic.deleteSurroundingText(d.getBefore(), d.getAfter());
+        } else if (op instanceof ControlOp.Enter) {
+            ControlOp.Enter e = (ControlOp.Enter) op;
+            if (e.getRole() == EnterButtonRole.NEWLINE) {
+                ic.commitText("\n", 1);
+            } else {
+                ic.performEditorAction(e.getActionId());
+            }
+        } else if (op instanceof ControlOp.PhysicalEnter) {
+            long now = android.os.SystemClock.uptimeMillis();
+            ic.sendKeyEvent(new android.view.KeyEvent(now, now,
+                    android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER, 0));
+            ic.sendKeyEvent(new android.view.KeyEvent(now, now,
+                    android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER, 0));
+        } else if (op instanceof ControlOp.CursorMove) {
+            ic.commitText("", ((ControlOp.CursorMove) op).getOffset());
         }
         return true;
     }
@@ -5023,13 +5008,14 @@ public class DictateInputMethodService extends InputMethodService
 
         CharSequence selectedText = inputConnection.getSelectedText(0);
         if (selectedText != null && selectedText.length() > 0) {
-            inputConnection.commitText("", 1);
+            // Delete the selection (commit empty text over it).
+            insertionService().control(new ControlOp.CursorMove(1));
             return;
         }
 
         CharSequence textBeforeCursor = inputConnection.getTextBeforeCursor(DELETE_LOOKBACK_CHARACTERS, 0);
         if (textBeforeCursor == null || textBeforeCursor.length() == 0) {
-            inputConnection.deleteSurroundingText(1, 0);
+            insertionService().control(ControlOp.Backspace.INSTANCE);
             return;
         }
 
@@ -5048,7 +5034,7 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         int charsToDelete = Math.max(1, end - start);
-        inputConnection.deleteSurroundingText(charsToDelete, 0);
+        insertionService().control(new ControlOp.DeleteSurrounding(charsToDelete, 0));
     }
 
     // ===== MainButtonsController.Callback =====
@@ -5220,30 +5206,19 @@ public class DictateInputMethodService extends InputMethodService
             EditorInfo capturedEditor,
             String output,
             String sessionId) {
-        // Delegates the strategy to the pure-logic helper so the 3-stage
-        // decision tree stays unit-testable (see ResendInsertStrategy +
-        // InsertOrFallbackTest). Side-effect adapters (commit, toast,
-        // resume) are bound here.
-        ResendInsertStrategy.INSTANCE.execute(
-                getCurrentInputConnection(),
-                getCurrentInputEditorInfo(),
-                capturedIc,
-                capturedEditor,
+        // Insertion unification — the 3-stage resend strategy is now expressed
+        // as the RESEND policy on the single InsertionService:
+        //   live (same editor as the click-time anchor) → captured IC →
+        //   focus-lost toast + resume job.
+        // enableAutoEnter is folded into the policy (RESEND ⇒ autoEnter=false):
+        // a resend is a recovery insert, never a new transcription, and Stage 2
+        // commits on the captured IC while auto-enter would target the live IC.
+        insertionService().insert(new InsertionRequest(
                 output,
-                sessionId,
-                // enableAutoEnter = false in BOTH resend stages:
-                // - Stage 2 (captured IC): scheduleAutoEnter would later fire
-                //   dispatch EnterKey against the *live* IC — Enter would
-                //   land in whatever field has focus now, not the captured one.
-                // - Stage 1 (live IC, same editor): a Resend click is a recovery
-                //   insert, not a new transcription, so appending Enter is
-                //   undesirable UX. Both stages route through this adapter.
-                (ic, editor, text, sid) -> commitTextToInputConnection(
-                        ic, editor, text, InsertionSource.TRANSCRIPTION, sid,
-                        /* enableAutoEnter = */ false),
-                () -> Toast.makeText(
-                        this, R.string.dictate_resend_focus_lost, Toast.LENGTH_SHORT).show(),
-                this::startResumeJob);
+                InsertionSource.TRANSCRIPTION,
+                InsertionPolicy.RESEND,
+                capturedIc == null ? null : new HostTarget(capturedIc, capturedEditor),
+                sessionId));
     }
 
     /**
@@ -5658,7 +5633,8 @@ public class DictateInputMethodService extends InputMethodService
 
             if (lastOutput != null) {
                 String finalOutput = lastOutput;
-                mainHandler.post(() -> commitTextToInputConnection(finalOutput, InsertionSource.TRANSCRIPTION));
+                mainHandler.post(() -> insertionService().insert(new InsertionRequest(
+                        finalOutput, InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE, null, null)));
             }
         });
     }
@@ -5750,23 +5726,24 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onEditAction(int actionId) {
-        InputConnection ic = getCurrentInputConnection();
-        if (ic == null) {
-            Log.w("DictateIME",
-                    "onEditAction(" + actionId + ") — no InputConnection, skipping");
+        // Insertion unification — copy/paste/cut/undo/redo route through the
+        // single InsertionService. It tries the host soft-API
+        // (performContextMenuAction) first and, for the editors that ignore it
+        // (WebViews, custom editors, some chat apps), runs the manual clipboard
+        // fallback so cut/copy/paste work consistently across hosts.
+        EditAction action = EditAction.fromAndroidId(actionId);
+        if (action == null) {
+            // Unmapped context-menu id — soft-API attempt only (no fallback).
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) {
+                ic.performContextMenuAction(actionId);
+            } else {
+                Log.w("DictateIME",
+                        "onEditAction(" + actionId + ") — no InputConnection, skipping");
+            }
             return;
         }
-        // performContextMenuAction is a soft API — many host editors
-        // (WebViews, custom editors, some chat apps) silently ignore
-        // it and return false. We always run the manual clipboard
-        // fallback below so cut/copy/paste work consistently across
-        // hosts, regardless of whether the editor honoured the action.
-        boolean handled = ic.performContextMenuAction(actionId);
-        if (!handled) {
-            Log.i("DictateIME",
-                    "onEditAction(" + actionId + ") — host editor rejected performContextMenuAction, falling back");
-            performClipboardFallback(ic, actionId);
-        }
+        insertionService().editAction(action);
     }
 
     /**
@@ -5797,8 +5774,12 @@ public class DictateInputMethodService extends InputMethodService
                 ic.commitText(text, 1);
             }
         } else if (actionId == android.R.id.copy || actionId == android.R.id.cut) {
-            CharSequence selected = ic.getSelectedText(0);
-            if (selected == null || selected.length() == 0) return;
+            // W4 hardening — safeReadSelectedText wraps getSelectedText in a
+            // try-catch (stale IC implementations are documented to throw on
+            // read), so a copy/cut on a half-dead host degrades to a no-op
+            // instead of crashing the IME.
+            String selected = safeReadSelectedText(ic);
+            if (selected == null || selected.isEmpty()) return;
             clipboard.setPrimaryClip(
                     android.content.ClipData.newPlainText("dictate", selected));
             if (actionId == android.R.id.cut) {

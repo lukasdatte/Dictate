@@ -7,6 +7,9 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.view.inputmethod.InputConnection
+import net.devemperor.dictate.state.insertion.InsertionPolicy
+import net.devemperor.dictate.state.insertion.InsertionRequest
+import net.devemperor.dictate.state.insertion.InsertionService
 
 /**
  * Handles enter button overlay character selection via touch-drag.
@@ -16,13 +19,19 @@ import android.view.inputmethod.InputConnection
  * across overlay characters and release to commit the selected one.
  *
  * @param overlayCharactersLl the LinearLayout containing overlay character TextViews
- * @param inputConnectionProvider provides current InputConnection
+ * @param inputConnectionProvider provides current InputConnection. Retained for
+ *   parity but no longer the commit target (P4): the selected-character commit
+ *   now routes through [insertionService].
+ * @param insertionService supplies the single InsertionService owning all
+ *   host-IC writes (may be null → no-op). The selected overlay character is
+ *   committed through it with the KEYSTROKE policy.
  * @param accentColorProvider provides current accent color for highlighting
  * @param keyPressAnimationHandler optional handler for press animations
  */
 class EnterOverlayHandler(
     private val overlayCharactersLl: LinearLayout,
     private val inputConnectionProvider: () -> InputConnection?,
+    private val insertionService: () -> InsertionService?,
     private val accentColorProvider: () -> Int,
     private val keyPressAnimationHandler: ((View, MotionEvent) -> Unit)? = null
 ) : View.OnTouchListener {
@@ -50,7 +59,14 @@ class EnterOverlayHandler(
 
             MotionEvent.ACTION_UP -> {
                 selectedCharacter?.let { selected ->
-                    inputConnectionProvider()?.commitText(selected.text, 1)
+                    // P4: the selected overlay character funnels through the
+                    // single InsertionService owner (KEYSTROKE policy). Null =
+                    // no-op, identical to the legacy null-IC short-circuit.
+                    insertionService()?.insert(
+                        InsertionRequest(
+                            selected.text.toString(), null,
+                            InsertionPolicy.KEYSTROKE, null, null,
+                        ))
                     selectedCharacter = null
                 }
                 overlayCharactersLl.visibility = View.GONE

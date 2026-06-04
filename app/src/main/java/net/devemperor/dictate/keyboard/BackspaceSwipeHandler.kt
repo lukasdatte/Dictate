@@ -5,6 +5,8 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
+import net.devemperor.dictate.state.insertion.ControlOp
+import net.devemperor.dictate.state.insertion.InsertionService
 import java.util.Collections
 
 /**
@@ -19,13 +21,20 @@ import java.util.Collections
  * - Release with selection → delete selected text
  * - Release without selection → normal click/long-press behavior
  *
- * @param inputConnectionProvider provides current InputConnection (may be null)
+ * @param inputConnectionProvider provides current InputConnection (may be null).
+ *   READ-only here (extracted text, selection); the selection-delete WRITE
+ *   goes through [insertionService] (P4 keystroke-path migration).
+ * @param insertionService supplies the single InsertionService owning all
+ *   host-IC writes (may be null → no-op). The swipe-release selection delete
+ *   routes through it as a `CursorMove(1)` ControlOp (the legacy
+ *   `commitText("", 1)` over a selection deletes the selected text).
  * @param vibrate callback for haptic feedback
  * @param onDeleteCancelled called when swipe-select starts to cancel any running auto-delete
  * @param keyPressAnimationHandler optional handler for press animations on the button
  */
 class BackspaceSwipeHandler(
     private val inputConnectionProvider: () -> InputConnection?,
+    private val insertionService: () -> InsertionService?,
     private val vibrate: () -> Unit,
     private val onDeleteCancelled: () -> Unit,
     private val keyPressAnimationHandler: ((View, MotionEvent) -> Unit)? = null
@@ -129,7 +138,11 @@ class BackspaceSwipeHandler(
                 if (isSwipeSelectingWords) {
                     if (ic != null) {
                         if (swipeSelectedSteps > 0) {
-                            ic.commitText("", 1)
+                            // Deleting the active selection: route the empty
+                            // commit through the InsertionService (P4). Over a
+                            // selection, CursorMove(1)/commitText("",1) deletes
+                            // the selected text — identical to the legacy write.
+                            insertionService()?.control(ControlOp.CursorMove(1))
                             vibrate()
                         } else {
                             ic.setSelection(swipeBaseCursor, swipeBaseCursor)

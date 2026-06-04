@@ -2,6 +2,7 @@ package net.devemperor.dictate.state.render
 
 import android.content.Context
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.widget.LinearLayout
 import androidx.appcompat.view.ContextThemeWrapper
@@ -9,6 +10,15 @@ import androidx.test.core.app.ApplicationProvider
 import com.google.android.material.button.MaterialButton
 import net.devemperor.dictate.R
 import net.devemperor.dictate.keyboard.KeyPressAnimator
+import net.devemperor.dictate.state.insertion.AutoEnterScheduler
+import net.devemperor.dictate.state.insertion.ClipboardGateway
+import net.devemperor.dictate.state.insertion.ControlOp
+import net.devemperor.dictate.state.insertion.EditAction
+import net.devemperor.dictate.state.insertion.HostTarget
+import net.devemperor.dictate.state.insertion.InsertionAuditLog
+import net.devemperor.dictate.database.entity.InsertionSource
+import net.devemperor.dictate.state.insertion.InsertionService
+import net.devemperor.dictate.state.insertion.RecoveryHandler
 import net.devemperor.dictate.state.layout.LogicalButtonId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -90,11 +100,50 @@ class SpecialTouchHandlerInstallerTest {
         ic = FakeInputConnection()
     }
 
+    /**
+     * Minimal real [InsertionService] for the P4 keystroke-path: the
+     * `committer` (space insert) and the CursorMove `controlExecutor` both
+     * forward to the fake IC's `commitText`, so the existing parity
+     * assertions on [FakeInputConnection.committed] / `cursorMoves` still
+     * hold after the installer's writes were routed through the service. A
+     * `null` IC makes `ic.live()` return `null`, reproducing the legacy
+     * null-IC short-circuit. Other collaborators are inert no-ops.
+     */
+    private fun keystrokeInsertionService(connection: InputConnection?): InsertionService =
+        InsertionService(
+            ic = { connection?.let { HostTarget(it, null as EditorInfo?) } },
+            guard = { true },
+            committer = { target, text -> target.commitText(text, 1) },
+            controlExecutor = { target, op ->
+                if (op is ControlOp.CursorMove) target.commitText("", op.offset) else true
+            },
+            autoEnter = object : AutoEnterScheduler {
+                override fun isActive() = false
+                override fun schedule(text: String) {}
+            },
+            audit = object : InsertionAuditLog {
+                override fun captureReplaced(ic: InputConnection): String? = null
+                override fun record(
+                    text: String, replaced: String?, editor: EditorInfo?,
+                    source: InsertionSource, sessionIdOverride: String?,
+                ) {}
+            },
+            recovery = object : RecoveryHandler {
+                override fun notifyFocusLost() {}
+                override fun resume(sessionId: String) {}
+            },
+            clipboard = object : ClipboardGateway {
+                override fun performHostAction(ic: InputConnection, action: EditAction) = true
+                override fun fallback(ic: InputConnection, action: EditAction) {}
+            },
+        )
+
     private fun newInstaller(
         connection: InputConnection? = ic,
     ): SpecialTouchHandlerInstaller =
         SpecialTouchHandlerInstaller(
             inputConnectionProvider = { connection },
+            insertionService = { keystrokeInsertionService(connection) },
             accentColorProvider = { 0xFF0000FF.toInt() },
             onVibrate = { vibrations += Unit },
             onBackspaceDeleteCancelled = { deleteCancels += Unit },

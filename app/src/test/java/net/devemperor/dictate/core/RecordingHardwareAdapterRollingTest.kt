@@ -126,6 +126,114 @@ class RecordingHardwareAdapterRollingTest {
         adapter.release()
     }
 
+    // ──── Always-one-ahead durability fix (2026-06-10) ──────────────
+    //
+    // Regression guard for the "recording continued but only the
+    // beginning was processed" bug. The rolling roll must NOT depend on
+    // the unreliable MAX_FILESIZE_APPROACHING info: a next segment is
+    // pre-armed right after start() and re-armed after each handover, so
+    // MAX_FILESIZE_REACHED always has a target and the native recorder
+    // never silently stops mid-recording.
+    //
+    // NOTE on the assertion seam: Robolectric does not shadow
+    // `MediaRecorder.setNextOutputFile`, so the native stub may reject
+    // the call — but the adapter wraps it in try/catch and `allocateNext`
+    // (the repository touch we assert on) runs BEFORE the native call.
+    // `allocateNext` call-count is therefore the stable observable for
+    // "the adapter attempted to arm the next segment".
+
+    @Test
+    fun `start eagerly pre-arms the next rolling segment`() {
+        val repo = FakeRepo()
+        val adapter = RecordingHardwareAdapter(
+            emitAction = { /* swallow */ },
+            audioFileRepository = repo,
+            rollingIntervalMs = 30_000L,
+        )
+        adapter.allocate(
+            target = InsertionTarget.INPUT_CONNECTION,
+            useBluetooth = false,
+            audioFile = newAudioFile(),
+            codecParams = null,
+            sessionId = "sid-eager-arm",
+        )
+        // Pre-start: no next segment armed yet (allocate only reserves seg1).
+        assertTrue(
+            "allocateNext must NOT run before start()",
+            repo.allocateNextCalls.isEmpty(),
+        )
+
+        adapter.start()
+
+        // Post-start: exactly one eager pre-arm for the next segment —
+        // independent of any MAX_FILESIZE_APPROACHING info. This is the
+        // core of the durability fix: the recorder can never reach the
+        // file-size cap with no next file armed.
+        assertEquals(
+            listOf("sid-eager-arm"),
+            repo.allocateNextCalls,
+        )
+        adapter.release()
+    }
+
+    @Test
+    fun `handover info re-arms the segment after next (always-one-ahead)`() {
+        val repo = FakeRepo()
+        val adapter = RecordingHardwareAdapter(
+            emitAction = { /* swallow */ },
+            audioFileRepository = repo,
+            rollingIntervalMs = 30_000L,
+        )
+        adapter.allocate(
+            target = InsertionTarget.INPUT_CONNECTION,
+            useBluetooth = false,
+            audioFile = newAudioFile(),
+            codecParams = null,
+            sessionId = "sid-handover",
+        )
+        adapter.start()
+        val armsAfterStart = repo.allocateNextCalls.size
+
+        // Simulate the native handover: the pre-armed file became the
+        // active output. The listener must arm the *next* one so the
+        // invariant holds for the following roll. The OnInfoListener is
+        // recovered from the Robolectric shadow (the same listener the
+        // adapter wired in allocate()).
+        val mr = adapter.activeRecorder()!!
+        shadowOf(mr).infoListener.onInfo(
+            mr, MediaRecorder.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED, 0,
+        )
+
+        assertEquals(
+            "each handover must re-arm exactly one further segment",
+            armsAfterStart + 1,
+            repo.allocateNextCalls.size,
+        )
+        adapter.release()
+    }
+
+    @Test
+    fun `start without rolling (no repo) does not pre-arm`() {
+        val adapter = RecordingHardwareAdapter(
+            emitAction = { /* swallow */ },
+            audioFileRepository = null,
+            rollingIntervalMs = 30_000L,
+        )
+        adapter.allocate(
+            target = InsertionTarget.INPUT_CONNECTION,
+            useBluetooth = false,
+            audioFile = newAudioFile(),
+            codecParams = null,
+            sessionId = "sid-no-roll",
+        )
+        // start() must be a no-op for rolling when no repository is wired
+        // (the single-file legacy behaviour stays intact). No crash, no
+        // allocateNext — there is no FakeRepo to touch, the guard returns
+        // early. The assertion is implicit: start() completes cleanly.
+        adapter.start()
+        adapter.release()
+    }
+
     @Test
     fun `release clears session-id reference`() {
         val repo = FakeRepo()

@@ -25,21 +25,38 @@ import java.io.IOException
  *
  * **Rolling-Segments (B1.3 / ADR-0007 §"Activation + Rolling-Segments").**
  * When constructed with an [AudioFileRepository] and [allocate] is
- * called with a non-null `sessionId`, the adapter wires the
- * MediaRecorder's `MAX_DURATION_APPROACHING` callback to call
- * `setNextOutputFile(allocateNext(sessionId))`. The MediaRecorder
- * then rolls automatically when the per-segment duration limit
- * (`rollingIntervalMs`) is reached — finalising the previous segment
- * with a complete `moov` atom, so a crash mid-segment loses at most
- * one rolling interval of audio.
+ * called with a non-null `sessionId`, the adapter caps each segment
+ * with `setMaxFileSize` (a byte budget derived from
+ * `rollingIntervalMs`) and keeps the **next** output file pre-armed via
+ * `setNextOutputFile` (see [armNextSegment]). The MediaRecorder rolls
+ * automatically into the pre-armed file when the cap is reached,
+ * finalising the previous segment with a complete `moov` atom — so a
+ * crash mid-segment loses at most one rolling interval of audio.
+ *
+ * **Why a byte cap, not `setMaxDuration`?** Android has **no**
+ * `MEDIA_RECORDER_INFO_MAX_DURATION_APPROACHING` info — only
+ * `MAX_FILESIZE_APPROACHING`. Seamless rolling needs the next file
+ * armed *before* the cap is reached, which is only possible with the
+ * filesize path. `setMaxDuration` would stop the recorder at the cap
+ * with no chance to hand over.
+ *
+ * **Why pre-arm eagerly (durability fix 2026-06-10)?** The
+ * "approaching" info is unreliable across a recording (fires once / not
+ * at all on several ROMs when quiet passages under-fill the byte
+ * budget). Arming `setNextOutputFile` only in that handler let
+ * `MAX_FILESIZE_REACHED` stop the recorder silently when no next file
+ * was armed — the keyboard kept showing "recording" (the timer is
+ * decoupled) but no audio was captured past that point. The fix is the
+ * always-one-ahead invariant in [armNextSegment]: a next file is armed
+ * right after `start()` and after every handover, so the roll never
+ * depends on the "approaching" signal.
  *
  * **Why callback-driven, not timer-driven?** The earlier B1.3 timer
  * approach (Kotlin coroutine that called `setNextOutputFile` every
  * 30 s) hit Android's MediaRecorder error `-38` (INVALID_OPERATION):
- * `setNextOutputFile` is only valid in the narrow window between the
- * `MAX_DURATION_APPROACHING` and `MAX_DURATION_REACHED` infos.
- * Outside that window the native call rejects. The callback-driven
- * variant matches the API's documented contract.
+ * `setNextOutputFile` is only valid after `start()` and after each
+ * `NEXT_OUTPUT_FILE_STARTED` handover. Outside those windows the native
+ * call rejects. The current arming sites match that contract exactly.
  *
  * **Threading:** all public methods MUST be called on the main thread
  * (the dispatch loop is `Dispatchers.Main.immediate`-confined per
@@ -84,6 +101,17 @@ class RecordingHardwareAdapter(
      * the recorder was configured with.
      */
     private var lastCodecParams: CodecParams? = null
+
+    /**
+     * Whether a `setNextOutputFile` is currently armed for the *next*
+     * rolling segment (the "always-one-ahead" invariant — see
+     * [armNextSegment]). Reset to `false` once the handover fires
+     * ([MediaRecorder.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED]) so
+     * the listener re-arms for the segment after that. Guards against
+     * double-arming when both the proactive arm and a redundant
+     * `MAX_FILESIZE_APPROACHING` info try to set the next file.
+     */
+    private var nextSegmentArmed: Boolean = false
 
     override fun allocate(
         target: InsertionTarget,
@@ -180,7 +208,18 @@ class RecordingHardwareAdapter(
                     reason = e.message ?: "start-failed",
                 )
             )
+            return
         }
+        // Rolling-Segments durability fix (2026-06-10): pre-arm the FIRST
+        // rolling handover immediately after start(), independent of the
+        // `MAX_FILESIZE_APPROACHING` info. See [armNextSegment] for the
+        // silent-stop class this closes — without a pre-armed next file,
+        // a `MAX_FILESIZE_REACHED` with no `setNextOutputFile` armed makes
+        // the native MediaRecorder STOP, while the decoupled
+        // RecordingTimerAdapter keeps ticking (the UI shows "recording"
+        // but no audio is captured → only the leading segment reaches the
+        // pipeline). No-op when rolling is disabled (no repo / no sid).
+        armNextSegment(mr)
     }
 
     override fun pause() {
@@ -236,6 +275,7 @@ class RecordingHardwareAdapter(
         recorder = null
         activeSessionId = null
         lastCodecParams = null
+        nextSegmentArmed = false
     }
 
     /**
@@ -259,76 +299,125 @@ class RecordingHardwareAdapter(
     // ──── Rolling-Segments (B1.3) ───────────────────────────────────
 
     /**
-     * OnInfoListener wired into the MediaRecorder when both an
-     * [AudioFileRepository] and a session-id are present. Reacts to
-     * the two roll-related info codes:
+     * Arm the **next** rolling segment via `setNextOutputFile` so the
+     * native MediaRecorder rolls into it the moment its `setMaxFileSize`
+     * cap is reached.
      *
-     *  - `MEDIA_RECORDER_INFO_MAX_DURATION_APPROACHING` (~800 ms
-     *    before the duration cap): allocate the next segment file
-     *    and arm it via `setNextOutputFile`. MediaRecorder rolls
-     *    on its own once the cap is hit; the previous segment is
-     *    finalised (its `moov` atom is written) so a subsequent
-     *    crash leaves a complete, readable segment behind.
-     *  - `MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED`: the
-     *    handover has completed — log only, for observability.
-     *  - `MEDIA_RECORDER_INFO_MAX_DURATION_REACHED`: re-arm the
-     *    duration cap on the new segment so rolling continues.
-     *    The cap is per-segment, not per-recording.
+     * **The "always-one-ahead" invariant (durability fix 2026-06-10).**
+     * This is called eagerly — right after [start] and again on every
+     * [MediaRecorder.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED]
+     * handover — so a next output file is **always** pre-armed before
+     * the cap is hit. This closes a silent-data-loss class:
+     *
+     * The previous design armed `setNextOutputFile` only inside the
+     * `MAX_FILESIZE_APPROACHING` info handler. But Android emits that
+     * "approaching" info unreliably across a recording (on several ROMs
+     * it fires for the first segment only, or not at all when the
+     * byte-budget cap under-fills on quiet passages). When
+     * `MAX_FILESIZE_REACHED` then fires with **no** next file armed, the
+     * native recorder simply **stops** — while the decoupled
+     * [RecordingTimerAdapter] keeps ticking, so the keyboard still shows
+     * "recording" yet no audio is captured. Only the leading segment(s)
+     * reach the pipeline. This was the on-device "recording continued
+     * but only the beginning was processed" report (small-mode toggle /
+     * keyboard reopen was incidental — it merely correlated with
+     * recordings long enough to cross the cap).
+     *
+     * Pre-arming makes the roll independent of the unreliable
+     * "approaching" signal: `MAX_FILESIZE_REACHED` always has a target.
+     *
+     * **Idempotent** via [nextSegmentArmed] — a redundant
+     * `MAX_FILESIZE_APPROACHING` belt-and-suspenders call after the
+     * eager arm is a no-op. No-op when rolling is disabled (no repo /
+     * no session-id, e.g. tests or the legacy path).
+     *
+     * **Within Android's contract.** `setNextOutputFile` is valid after
+     * `start()` and after each `NEXT_OUTPUT_FILE_STARTED` — exactly the
+     * two call sites here. (The original B1.3 `IllegalStateException`
+     * `-38` came from a coroutine timer calling it at arbitrary moments
+     * with no size-cap mechanism; that anti-pattern is not reintroduced.)
+     */
+    private fun armNextSegment(mr: MediaRecorder) {
+        if (nextSegmentArmed) return
+        val repo = audioFileRepository ?: return
+        val sid = activeSessionId ?: return
+        val params = lastCodecParams ?: return
+        val next = try {
+            repo.allocateNext(sid)
+        } catch (e: IOException) {
+            Log.w(TAG, "Rolling: allocateNext failed for $sid", e)
+            return
+        }
+        try {
+            mr.setNextOutputFile(next)
+            nextSegmentArmed = true
+            Log.d(TAG, "Rolling: setNextOutputFile($next) armed")
+        } catch (e: Exception) {
+            Log.w(TAG, "Rolling: setNextOutputFile failed", e)
+            return
+        }
+        // Re-arm the per-segment byte cap for the segment currently being
+        // written (the cap is per-output-file, not per-recording). Done
+        // here, while the recorder is in the stable Recording state —
+        // setting it inside NEXT_OUTPUT_FILE_STARTED raced with the native
+        // rollover and threw IllegalStateException on Pixel 8 / SM-S948B
+        // (logcat 00:30:48, B1.3-hotfix-2 trigger).
+        try {
+            mr.setMaxFileSize(rollingMaxFileSizeBytes(params, rollingIntervalMs))
+            Log.d(TAG, "Rolling: setMaxFileSize re-armed for current segment")
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "Rolling: setMaxFileSize re-arm failed", e)
+        }
+    }
+
+    /**
+     * OnInfoListener wired into the MediaRecorder when both an
+     * [AudioFileRepository] and a session-id are present. Drives the
+     * rolling-segment continuity:
+     *
+     *  - `MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED`: the handover
+     *    completed — the previous segment is finalised (`moov` written)
+     *    and the recorder now writes into the pre-armed next file. We
+     *    clear [nextSegmentArmed] and immediately [armNextSegment] the
+     *    one after it (always-one-ahead), then dispatch `SegmentRolled`
+     *    so the new path lands in `SessionEntity.audio_file_paths`.
+     *  - `MEDIA_RECORDER_INFO_MAX_FILESIZE_APPROACHING`: belt-and-
+     *    suspenders [armNextSegment] in case the eager post-start /
+     *    post-handover arm was somehow lost (idempotent — no-op when a
+     *    next file is already armed).
+     *  - `MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED`: observability log.
+     *    With a next file always pre-armed the native recorder rolls
+     *    seamlessly here rather than stopping.
      */
     private val rollingInfoListener = MediaRecorder.OnInfoListener { mr, what, _ ->
         when (what) {
-            MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_APPROACHING -> {
-                val repo = audioFileRepository ?: return@OnInfoListener
-                val sid = activeSessionId ?: return@OnInfoListener
-                val params = lastCodecParams ?: return@OnInfoListener
-                val next = try {
-                    repo.allocateNext(sid)
-                } catch (e: IOException) {
-                    Log.w(TAG, "Rolling: allocateNext failed for $sid", e)
-                    return@OnInfoListener
-                }
-                try {
-                    mr.setNextOutputFile(next)
-                    Log.d(TAG, "Rolling: setNextOutputFile($next) armed")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Rolling: setNextOutputFile failed", e)
-                    return@OnInfoListener
-                }
-                // Re-arm setMaxFileSize **in the APPROACHING window**,
-                // before the actual handover happens — the recorder
-                // is still in the stable "Recording" state here.
-                // Setting the cap inside NEXT_OUTPUT_FILE_STARTED
-                // raced with the native rollover and threw
-                // IllegalStateException on Pixel 8 / SM-S948B
-                // (logcat 00:30:48, B1.3-hotfix-2 trigger).
-                try {
-                    mr.setMaxFileSize(
-                        rollingMaxFileSizeBytes(params, rollingIntervalMs)
-                    )
-                    Log.d(TAG, "Rolling: setMaxFileSize re-armed for next segment")
-                } catch (e: IllegalStateException) {
-                    Log.w(TAG, "Rolling: setMaxFileSize re-arm failed", e)
-                }
-            }
+            MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_APPROACHING ->
+                // Defensive re-arm only — the eager post-start /
+                // post-handover arm is the primary mechanism now.
+                armNextSegment(mr)
+
             MediaRecorder.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED -> {
                 Log.d(TAG, "Rolling: handover to next segment complete")
-                // Block A1 (recording-stack-completion) — the previous
-                // segment was finalised and the recorder is now writing
-                // into the next file. Dispatch SegmentRolled so the
-                // RecordingModule emits a `SyncAudioSegments` effect and
-                // the new segment-path lands in
+                // The pre-armed next file is now the active output; clear
+                // the flag and immediately arm the segment after it so the
+                // always-one-ahead invariant holds for the next roll.
+                nextSegmentArmed = false
+                armNextSegment(mr)
+                // Block A1 (recording-stack-completion) — dispatch
+                // SegmentRolled so RecordingModule emits SyncAudioSegments
+                // and the new segment-path lands in
                 // `SessionEntity.audio_file_paths`. A crash *after* this
                 // point leaves the segment recoverable in the DB; a crash
                 // *between* the handover and this callback loses only the
-                // path entry (the file's `moov` was already written at
-                // APPROACHING-time).
+                // path entry (the finalised file's `moov` is already on
+                // disk).
                 activeSessionId?.let { sid ->
                     emitAction(Action.RecordingAction.SegmentRolled(sid))
                 }
             }
-            MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED -> {
-                Log.d(TAG, "Rolling: max file size reached")
-            }
+
+            MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED ->
+                Log.d(TAG, "Rolling: max file size reached — rolling into pre-armed segment")
         }
     }
 

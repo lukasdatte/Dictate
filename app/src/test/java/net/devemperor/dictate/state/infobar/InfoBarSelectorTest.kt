@@ -128,32 +128,87 @@ class InfoBarSelectorTest {
         assertEquals(0L, item.createdAt)
     }
 
-    // ── Pending-Insert / Pending-Recording producers (Block E) ─────────
+    // ── Pending-Parts aggregate producer (R4, ADR-0009 / spec §3.5) ────
+
+    private fun completed(id: String, text: String?, createdAt: Long) =
+        net.devemperor.dictate.state.PendingSession(
+            sessionId = id,
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = text,
+            createdAt = createdAt,
+        )
 
     @Test
-    fun `pending COMPLETED session with text surfaces a pending-insert item`() {
-        val session = net.devemperor.dictate.state.PendingSession(
-            sessionId = "abc",
-            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
-            transcribedText = "hello world",
-            createdAt = 1_000L,
-        )
+    fun `N pending parts surface ONE aggregate item — count, actions, ACTION style`() {
         val state = defaultState().copy(
-            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(
+                completed("a", "one", 3_000L),
+                completed("b", "two", 2_000L),
+            ),
         )
         val items = InfoBarSelector.select(state)
-        assertEquals(1, items.size)
+        assertEquals("exactly one aggregate item for N parts", 1, items.size)
         val item = items.first()
-        assertEquals("pending-insert:abc", item.id)
-        assertEquals(
-            Action.PendingSessionsAction.AcceptAndInsert("abc"),
-            item.confirmAction,
-        )
-        assertEquals(
-            Action.PendingSessionsAction.Dismiss("abc"),
-            item.dismissAction,
-        )
+        assertEquals("pending-parts:aggregate", item.id)
+        assertEquals(net.devemperor.dictate.R.plurals.dictate_pending_parts_insert, item.message.textResId)
+        assertEquals(2, item.message.quantity)
+        assertEquals(listOf<Any>(2), item.message.textArgs)
         assertEquals(InfoBarStyle.ACTION, item.message.style)
+        assertEquals(Action.PendingSessionsAction.AcceptAndInsertAll, item.confirmAction)
+        assertEquals(Action.PendingSessionsAction.DismissAll, item.dismissAction)
+    }
+
+    @Test
+    fun `aggregate createdAt is the oldest part (recording order)`() {
+        // Only COMPLETED+text rows count; ordering is by created_at, so the
+        // aggregate is stamped with the oldest (2_000L here), never 3_000L.
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(
+                completed("a", "one", 3_000L),
+                completed("b", "two", 2_000L),
+                completed("c", null, 1_000L), // no text — excluded
+            ),
+        )
+        val item = InfoBarSelector.select(state).first { it.id == "pending-parts:aggregate" }
+        assertEquals(2_000L, item.createdAt)
+    }
+
+    @Test
+    fun `single pending part uses quantity 1 (singular path)`() {
+        val state = defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(
+                completed("a", "only", 5_000L),
+            ),
+        )
+        val item = InfoBarSelector.select(state).single()
+        assertEquals("pending-parts:aggregate", item.id)
+        assertEquals(1, item.message.quantity)
+        assertEquals(listOf<Any>(1), item.message.textArgs)
+    }
+
+    @Test
+    fun `zero pending parts produce no aggregate item`() {
+        assertTrue(InfoBarSelector.select(defaultState()).none { it.id == "pending-parts:aggregate" })
+    }
+
+    @Test
+    fun `not-insertable variant (imeViewVisible false) has no confirm, keeps dismiss`() {
+        // Bar rendered on the overlay surface: accept must not silently
+        // no-op into a missing InputConnection, so confirm is null and the
+        // label is the informational one.
+        val state = defaultState().copy(
+            imeViewVisible = false,
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(
+                completed("a", "one", 3_000L),
+                completed("b", "two", 2_000L),
+            ),
+        )
+        val item = InfoBarSelector.select(state).first { it.id == "pending-parts:aggregate" }
+        assertNull("no confirm on the overlay surface", item.confirmAction)
+        assertEquals(Action.PendingSessionsAction.DismissAll, item.dismissAction)
+        assertEquals(net.devemperor.dictate.R.plurals.dictate_pending_parts_waiting, item.message.textResId)
+        assertEquals(InfoBarStyle.INFO, item.message.style)
+        assertEquals(2, item.message.quantity)
     }
 
     @Test
@@ -194,12 +249,10 @@ class InfoBarSelectorTest {
     }
 
     @Test
-    fun `pending items sort ascending by createdAt`() {
-        // Post-refactor (2026-05-23) — only COMPLETED rows produce
-        // pending-insert items. The RECORDED row is intentionally
-        // dropped from the InfoBar surface (see test above + Selector
-        // KDoc). Sort order: ascending by createdAt of the remaining
-        // pending-insert items only.
+    fun `only COMPLETED-with-text rows feed the aggregate, stamped by the oldest`() {
+        // Post-R4 — the per-session pending-insert items are gone; a single
+        // aggregate item covers the COMPLETED+text rows. RECORDED rows are
+        // dropped from the InfoBar surface (see test above + Selector KDoc).
         val s1 = net.devemperor.dictate.state.PendingSession(
             "a", net.devemperor.dictate.database.entity.SessionStatus.COMPLETED, "x", 3_000L,
         )
@@ -213,10 +266,8 @@ class InfoBarSelectorTest {
             pendingSessions = kotlinx.collections.immutable.persistentListOf(s1, s2, s3),
         )
         val items = InfoBarSelector.select(state)
-        assertEquals(
-            listOf("pending-insert:c", "pending-insert:a"),
-            items.map { it.id },
-        )
+        assertEquals(listOf("pending-parts:aggregate"), items.map { it.id })
+        assertEquals("stamped by the oldest COMPLETED+text row", 2_000L, items.first().createdAt)
     }
 
     // ── 2026-05-23: recovery-surfaced unfinished recording (pure-info) ────
@@ -280,14 +331,13 @@ class InfoBarSelectorTest {
     }
 
     @Test
-    fun `Interrupted item pinned to top above pending-insert items`() {
-        // When both an Interrupted recording AND a pending-insert exist,
-        // the Interrupted info-text (createdAt=0L) sorts ahead of the
-        // pending-insert (whose createdAt is the session timestamp).
-        // The renderer shows items.first(), so the user sees the
-        // unfinished-recording explanation first — the most actionable
-        // surface until they resolve it.
-        val pendingInsert = net.devemperor.dictate.state.PendingSession(
+    fun `Interrupted item pinned to top above the pending-parts aggregate`() {
+        // When both an Interrupted recording AND pending parts exist, the
+        // Interrupted info-text (createdAt=0L) sorts ahead of the aggregate
+        // (whose createdAt is the oldest part's timestamp). The renderer
+        // shows items.first(), so the user sees the unfinished-recording
+        // explanation first — the most actionable surface.
+        val pendingPart = net.devemperor.dictate.state.PendingSession(
             sessionId = "completed-sid",
             status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
             transcribedText = "hello",
@@ -297,95 +347,12 @@ class InfoBarSelectorTest {
             recording = net.devemperor.dictate.state.RecordingState.Interrupted(
                 sessionId = "interrupted-sid", elapsedMs = 3_000L,
             ),
-            pendingSessions = kotlinx.collections.immutable.persistentListOf(pendingInsert),
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(pendingPart),
         )
         val items = InfoBarSelector.select(state)
         assertEquals(
-            listOf("recovery-unfinished:interrupted-sid", "pending-insert:completed-sid"),
+            listOf("recovery-unfinished:interrupted-sid", "pending-parts:aggregate"),
             items.map { it.id },
-        )
-    }
-
-    // ── B4: Pending-Insert text preview ────────────────────────────────
-
-    @Test
-    fun `B4 pending-insert short text uses preview msg with full text as arg`() {
-        val session = net.devemperor.dictate.state.PendingSession(
-            sessionId = "abc",
-            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
-            transcribedText = "hello world",
-            createdAt = 1_000L,
-        )
-        val state = defaultState().copy(
-            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
-        )
-        val item = InfoBarSelector.select(state).first { it.id == "pending-insert:abc" }
-        assertEquals(
-            net.devemperor.dictate.R.string.dictate_pending_insert_msg_preview,
-            item.message.textResId,
-        )
-        assertEquals(listOf<Any>("hello world"), item.message.textArgs)
-    }
-
-    @Test
-    fun `B4 pending-insert long text truncates to 60 chars with ellipsis`() {
-        val longText = "A very long transcript that exceeds the sixty character preview limit by several extra words"
-        val session = net.devemperor.dictate.state.PendingSession(
-            sessionId = "abc",
-            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
-            transcribedText = longText,
-            createdAt = 1_000L,
-        )
-        val state = defaultState().copy(
-            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
-        )
-        val item = InfoBarSelector.select(state).first { it.id == "pending-insert:abc" }
-        val preview = item.message.textArgs.first() as String
-        assertTrue(
-            "Preview must end with ellipsis when truncated: was '$preview'",
-            preview.endsWith("…"),
-        )
-        assertTrue(
-            "Preview length (incl. ellipsis) must be ≤ 61: was ${preview.length}",
-            preview.length <= 61,
-        )
-    }
-
-    @Test
-    fun `B4 pending-insert empty trimmed text falls back to generic msg`() {
-        val session = net.devemperor.dictate.state.PendingSession(
-            sessionId = "abc",
-            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
-            transcribedText = "   \n   ",
-            createdAt = 1_000L,
-        )
-        val state = defaultState().copy(
-            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
-        )
-        val item = InfoBarSelector.select(state).first { it.id == "pending-insert:abc" }
-        assertEquals(
-            "All-whitespace transcribedText falls back to the legacy generic message",
-            net.devemperor.dictate.R.string.dictate_pending_insert_msg,
-            item.message.textResId,
-        )
-        assertTrue(item.message.textArgs.isEmpty())
-    }
-
-    @Test
-    fun `B4 pending-insert preview replaces newlines with single spaces`() {
-        val session = net.devemperor.dictate.state.PendingSession(
-            sessionId = "abc",
-            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
-            transcribedText = "first line\n\n  second line",
-            createdAt = 1_000L,
-        )
-        val state = defaultState().copy(
-            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
-        )
-        val item = InfoBarSelector.select(state).first { it.id == "pending-insert:abc" }
-        assertEquals(
-            listOf<Any>("first line second line"),
-            item.message.textArgs,
         )
     }
 
@@ -569,7 +536,7 @@ class InfoBarSelectorTest {
             occurredAt = 5_000L,
         ).copy(pendingSessions = kotlinx.collections.immutable.persistentListOf(session))
         assertEquals(
-            listOf("pipeline-error:bad_request", "pending-insert:abc", "partial-recovery:abc"),
+            listOf("pipeline-error:bad_request", "pending-parts:aggregate", "partial-recovery:abc"),
             InfoBarSelector.select(state).map { it.id },
         )
     }
@@ -641,7 +608,7 @@ class InfoBarSelectorTest {
             pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
         )
         assertEquals(
-            listOf("pending-insert:abc", "engagement-hint:donate"),
+            listOf("pending-parts:aggregate", "engagement-hint:donate"),
             InfoBarSelector.select(state).map { it.id },
         )
     }
@@ -657,10 +624,10 @@ class InfoBarSelectorTest {
     }
 
     @Test
-    fun `B4 partial-recovery and pending-insert co-exist for the same session`() {
-        // The two producers run independently; a session that has both
-        // a transcribed text AND a partial-marker generates two stacked
-        // info-bar items (one Pending-Insert, one Partial-Recovery).
+    fun `B4 partial-recovery and the pending-parts aggregate co-exist`() {
+        // The two producers run independently; a session that has both a
+        // transcribed text AND a partial-marker feeds the aggregate AND
+        // generates its own Partial-Recovery item.
         val session = net.devemperor.dictate.state.PendingSession(
             sessionId = "abc",
             status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
@@ -672,7 +639,7 @@ class InfoBarSelectorTest {
             pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
         )
         val items = InfoBarSelector.select(state).map { it.id }
-        assertTrue(items.contains("pending-insert:abc"))
+        assertTrue(items.contains("pending-parts:aggregate"))
         assertTrue(items.contains("partial-recovery:abc"))
     }
 

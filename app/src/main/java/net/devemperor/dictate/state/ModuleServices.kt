@@ -421,6 +421,22 @@ interface PipelineSessionRepoSubsystem {
     fun pendingFlow(): kotlinx.coroutines.flow.Flow<List<PendingSession>>
 
     /**
+     * Resolve the session's DB `created_at` (recording order, ADR-0009
+     * Glossary). Returns `null` when the row is missing so the caller can
+     * fall back to a locally-known timestamp.
+     *
+     * Used by [net.devemperor.dictate.state.PipelineModule]'s
+     * `AddPendingInsertSession` effect handler to key a deferred pending
+     * part by its *creation* time rather than its completion time — the
+     * `created_at` column is written once at session creation and is
+     * race-free (unlike the COMPLETED status write). @see spec §3.5.
+     *
+     * Default no-op (`null`) so test fakes / stub subsystems that do not
+     * model persistence stay valid; the production adapter overrides it.
+     */
+    suspend fun findCreatedAt(sessionId: String): Long? = null
+
+    /**
      * Synchronise the session's `audio_file_paths` column with the live
      * segment list on disk (recording-stack-completion Block A1).
      *

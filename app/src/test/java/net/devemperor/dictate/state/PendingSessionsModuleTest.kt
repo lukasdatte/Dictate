@@ -3,6 +3,7 @@ package net.devemperor.dictate.state
 import kotlinx.collections.immutable.persistentListOf
 import net.devemperor.dictate.database.entity.SessionStatus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -59,6 +60,59 @@ class PendingSessionsModuleTest {
         val state = persistentListOf(session("a"))
         assertNull(module.reduce(state, Action.PendingSessionsAction.Dismiss("missing"), ctx()))
     }
+
+    // ─── R4 aggregate arms (ADR-0009 / spec §3.5) ───────────────────────
+
+    private fun completed(id: String) = PendingSession(
+        sessionId = id,
+        status = SessionStatus.COMPLETED,
+        transcribedText = "text-$id",
+        createdAt = 0L,
+    )
+
+    @Test
+    fun `DismissAll removes only COMPLETED and emits one PersistDismissal each`() {
+        val state = persistentListOf(
+            completed("c1"),
+            session("recorded"),           // RECORDED — must survive
+            completed("c2"),
+            interrupted("interrupted"),    // RECORDING_INTERRUPTED — must survive
+        )
+        val result = module.reduce(state, Action.PendingSessionsAction.DismissAll, ctx())
+        assertEquals(
+            listOf("recorded", "interrupted"),
+            result!!.nextState.map { it.sessionId },
+        )
+        assertEquals(
+            listOf(
+                PendingSessionsModule.Effect.PersistDismissal("c1"),
+                PendingSessionsModule.Effect.PersistDismissal("c2"),
+            ),
+            result.sideEffects,
+        )
+    }
+
+    @Test
+    fun `DismissAll with no COMPLETED entries returns null`() {
+        val state = persistentListOf(session("recorded"), interrupted("i"))
+        assertNull(module.reduce(state, Action.PendingSessionsAction.DismissAll, ctx()))
+    }
+
+    @Test
+    fun `AcceptAndInsertAll is a state-unchanged no-op with no effects (side-channel marker)`() {
+        val state = persistentListOf(completed("c1"), completed("c2"))
+        val result = module.reduce(state, Action.PendingSessionsAction.AcceptAndInsertAll, ctx())
+        assertNotNull("marker action must route (not reducer-null) to keep the log truthful", result)
+        assertEquals(state, result!!.nextState)
+        assertTrue(result.sideEffects.isEmpty())
+    }
+
+    private fun interrupted(id: String) = PendingSession(
+        sessionId = id,
+        status = SessionStatus.RECORDING_INTERRUPTED,
+        transcribedText = null,
+        createdAt = 0L,
+    )
 
     @Test
     fun `module id is PendingSessions`() {

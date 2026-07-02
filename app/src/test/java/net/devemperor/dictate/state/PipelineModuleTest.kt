@@ -903,4 +903,78 @@ class PipelineModuleTest {
         val back = module.write(state, PipelineUiState.Idle)
         assertEquals(PipelineUiState.Idle, back.pipeline)
     }
+
+    // ─── R4 recording-order key (ADR-0009 / spec §3.5) ──────────────────
+
+    /**
+     * Red-proof: the `AddPendingInsertSession` effect handler must key the
+     * emitted `AddOne` by the session's DB `created_at` (recording order),
+     * NOT by `effect.createdAt` (= ctx.now at PipelineDone, i.e. completion
+     * time). Against the pre-R4 handler (which forwarded `effect.createdAt`)
+     * this fails: the emitted session carries 9_000L instead of 1_000L.
+     */
+    @Test
+    fun `AddPendingInsertSession effect keys AddOne by DB created_at not completion time`() {
+        val emitted = mutableListOf<Action>()
+        val repo = object : PipelineSessionRepoSubsystem {
+            override suspend fun loadPending(): List<PendingSession> = emptyList()
+            override suspend fun markInserted(sessionId: String, at: Long) = Unit
+            override suspend fun markFailed(sessionId: String, reason: String) = Unit
+            override fun pendingFlow(): kotlinx.coroutines.flow.Flow<List<PendingSession>> =
+                kotlinx.coroutines.flow.emptyFlow()
+            override suspend fun syncAudioFilePaths(sessionId: String): Int = 0
+            // Recording-order key: DB created_at differs from the effect's
+            // completion timestamp.
+            override suspend fun findCreatedAt(sessionId: String): Long? = 1_000L
+        }
+        val services = net.devemperor.dictate.testutil.fakeModuleServices(
+            sessionRepo = repo,
+            emitAction = { emitted += it },
+        )
+
+        module.runEffect(
+            PipelineModule.Effect.AddPendingInsertSession(
+                sessionId = sid,
+                text = "deferred part",
+                createdAt = 9_000L, // completion time — must NOT be used
+            ),
+            services,
+        )
+
+        val addOne = emitted.filterIsInstance<Action.PendingSessionsAction.AddOne>().single()
+        assertEquals("keyed by DB created_at (recording order)", 1_000L, addOne.session.createdAt)
+        assertEquals(sid, addOne.session.sessionId)
+        assertEquals("deferred part", addOne.session.transcribedText)
+    }
+
+    /**
+     * When the DB row is missing (`findCreatedAt` returns null) the handler
+     * falls back to the effect's own timestamp — the pending part is still
+     * surfaced, just keyed by completion time.
+     */
+    @Test
+    fun `AddPendingInsertSession falls back to effect createdAt when the row is missing`() {
+        val emitted = mutableListOf<Action>()
+        val repo = object : PipelineSessionRepoSubsystem {
+            override suspend fun loadPending(): List<PendingSession> = emptyList()
+            override suspend fun markInserted(sessionId: String, at: Long) = Unit
+            override suspend fun markFailed(sessionId: String, reason: String) = Unit
+            override fun pendingFlow(): kotlinx.coroutines.flow.Flow<List<PendingSession>> =
+                kotlinx.coroutines.flow.emptyFlow()
+            override suspend fun syncAudioFilePaths(sessionId: String): Int = 0
+            override suspend fun findCreatedAt(sessionId: String): Long? = null
+        }
+        val services = net.devemperor.dictate.testutil.fakeModuleServices(
+            sessionRepo = repo,
+            emitAction = { emitted += it },
+        )
+
+        module.runEffect(
+            PipelineModule.Effect.AddPendingInsertSession(sid, "x", createdAt = 7_777L),
+            services,
+        )
+
+        val addOne = emitted.filterIsInstance<Action.PendingSessionsAction.AddOne>().single()
+        assertEquals(7_777L, addOne.session.createdAt)
+    }
 }

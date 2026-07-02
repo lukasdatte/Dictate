@@ -51,6 +51,11 @@ data class HostTarget(
  * - [KEYSTROKE] — space / emoji / qwertz char: instant, no auto-enter,
  *                 no host-guard (keystrokes only happen while the keyboard
  *                 is visible), no audit, no resume.
+ * - [PENDING_PART] — deferred pending-part flush (R4): host-guard +
+ *                 audited (each part gets its own audit row), but no
+ *                 auto-enter, no resume-on-failure, and no animation
+ *                 (these are catch-up parts, not live dictation output).
+ *                 @see PendingPartsFlusher, ADR-0009, spec §3.5.
  */
 data class InsertionPolicy(
     /** Char-by-char slow-output animation when InstantOutput pref is off. */
@@ -88,6 +93,12 @@ data class InsertionPolicy(
         val KEYSTROKE = InsertionPolicy(
             animate = false, autoEnter = false, resumeOnFailure = false,
             respectHostGuard = false, audit = false, anchoredToCaptured = false,
+        )
+
+        @JvmField
+        val PENDING_PART = InsertionPolicy(
+            animate = false, autoEnter = false, resumeOnFailure = false,
+            respectHostGuard = true, audit = true, anchoredToCaptured = false,
         )
     }
 }

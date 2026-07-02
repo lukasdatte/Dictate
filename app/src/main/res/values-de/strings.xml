@@ -286,6 +286,15 @@
     <string name="dictate_keyterms_error_too_long">zu lang (max. 50 Zeichen)</string>
     <string name="dictate_keyterms_error_too_many_words">zu viele Wörter (max. 5)</string>
     <string name="dictate_keyterms_error_too_many_terms">Limit erreicht (max. 100 Begriffe)</string>
+    <!-- R4 (ADR-0009 / spec §3.5) — aggregierte wartende Teile im Info-Bar. -->
+    <plurals name="dictate_pending_parts_insert">
+        <item quantity="one">%d wartenden Teil einfügen</item>
+        <item quantity="other">%d wartende Teile einfügen</item>
+    </plurals>
+    <plurals name="dictate_pending_parts_waiting">
+        <item quantity="one">%d Teil wartet — Tastatur zum Einfügen öffnen</item>
+        <item quantity="other">%d Teile warten — Tastatur zum Einfügen öffnen</item>
+    </plurals>
     <plurals name="dictate_keyterms_status_terms">
         <item quantity="one">%d Begriff</item>
         <item quantity="other">%d Begriffe</item>

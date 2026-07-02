@@ -10,6 +10,8 @@ import net.devemperor.dictate.state.InterruptionReason
 import net.devemperor.dictate.state.PipelineErrorHint
 import net.devemperor.dictate.state.PipelineErrorKind
 import net.devemperor.dictate.state.RecordingState
+import net.devemperor.dictate.state.canCommitToHost
+import net.devemperor.dictate.state.insertion.orderedCompletedParts
 
 /**
  * Pure function `(DictateUiState) -> List<InfoBarItem>` that derives
@@ -103,49 +105,60 @@ object InfoBarSelector {
             )
         }
 
-        // ── Pending-Insert (ADR-0006 §"Cross-Module Producer pattern") ──
-        // Session whose pipeline COMPLETED but whose result text was
-        // never surfaced to a live `InputConnection`. Confirm =
-        // AcceptAndInsert → IME service side-channel calls commitText;
-        // Dismiss = plain Dismiss → session leaves the list with
-        // `inserted_at` stamped, the result text is forfeited.
+        // ── Pending-Parts aggregate (R4, ADR-0009 / spec §3.5) ──────────
+        // COMPLETED sessions whose result text was never surfaced to a
+        // live `InputConnection` become ordered pending parts. Instead of
+        // one InfoBar item per session (pre-R4), a single aggregate item
+        // offers the whole batch: confirm flushes ALL parts in recording
+        // order (oldest `created_at` first) as separate sequential inserts
+        // via the IME's PendingPartsFlusher side-channel; dismiss discards
+        // all of them. `orderedCompletedParts` is the shared selection so
+        // this item, its count, and the IME flush read the exact same set.
         //
-        // B4 (ADR-0008) — Text-preview: the info-bar message now carries
-        // the first ~60 chars of the transcribed text so the user can
-        // judge what they're about to paste. Uses `dictate_pending_insert_msg_preview`
-        // (with %1$s placeholder) when transcribedText is non-empty;
-        // falls back to the legacy generic message when the text is
-        // null or empty (defensive — should not happen for COMPLETED
-        // status but the filter above only guarantees non-null).
-        state.pendingSessions
-            .filter { it.status == SessionStatus.COMPLETED && it.transcribedText != null }
-            .forEach { session ->
-                val text = session.transcribedText
-                val preview = text?.trim()?.takeIf { it.isNotEmpty() }
-                val message = if (preview != null) {
-                    InfoBarMessage(
-                        textResId = R.string.dictate_pending_insert_msg_preview,
-                        textArgs = listOf(buildPreview(preview)),
-                        style = InfoBarStyle.ACTION,
-                    )
-                } else {
-                    // Fallback for the (theoretically impossible)
-                    // COMPLETED-with-empty-text edge case.
-                    InfoBarMessage(
-                        textResId = R.string.dictate_pending_insert_msg,
-                        style = InfoBarStyle.ACTION,
-                    )
-                }
+        // `createdAt` = the oldest part's timestamp so the bar's stable
+        // sort keeps the aggregate ranked by the batch's age.
+        //
+        // Not-insertable variant (`!canCommitToHost`, i.e. bar rendered on
+        // the overlay surface while `imeViewVisible == false`): emit the
+        // item WITHOUT a confirm action and with an informational label, so
+        // an accept can never silently no-op into a missing InputConnection
+        // (the pre-R4 dead-IC trap). Dismiss stays available either way.
+        val pendingParts = orderedCompletedParts(state.pendingSessions)
+        if (pendingParts.isNotEmpty()) {
+            val count = pendingParts.size
+            val oldestCreatedAt = pendingParts.first().createdAt
+            if (state.canCommitToHost) {
                 add(
                     InfoBarItem(
-                        id = "pending-insert:${session.sessionId}",
-                        createdAt = session.createdAt,
-                        message = message,
-                        confirmAction = Action.PendingSessionsAction.AcceptAndInsert(session.sessionId),
-                        dismissAction = Action.PendingSessionsAction.Dismiss(session.sessionId),
+                        id = "pending-parts:aggregate",
+                        createdAt = oldestCreatedAt,
+                        message = InfoBarMessage(
+                            textResId = R.plurals.dictate_pending_parts_insert,
+                            textArgs = listOf(count),
+                            style = InfoBarStyle.ACTION,
+                            quantity = count,
+                        ),
+                        confirmAction = Action.PendingSessionsAction.AcceptAndInsertAll,
+                        dismissAction = Action.PendingSessionsAction.DismissAll,
+                    )
+                )
+            } else {
+                add(
+                    InfoBarItem(
+                        id = "pending-parts:aggregate",
+                        createdAt = oldestCreatedAt,
+                        message = InfoBarMessage(
+                            textResId = R.plurals.dictate_pending_parts_waiting,
+                            textArgs = listOf(count),
+                            style = InfoBarStyle.INFO,
+                            quantity = count,
+                        ),
+                        confirmAction = null,
+                        dismissAction = Action.PendingSessionsAction.DismissAll,
                     )
                 )
             }
+        }
 
         // ── Partial-Recovery warning (B4 / ADR-0008 §"Partial Recovery") ──
         // The pipeline persists a marker substring "partial:<seconds>"
@@ -380,28 +393,6 @@ object InfoBarSelector {
     // ─── B4 helpers ────────────────────────────────────────────────────
 
     /**
-     * Truncate [text] to the first ~60 trimmed characters with an
-     * ellipsis when truncated. Used by the pending-insert info-bar so
-     * the user sees *what* they're about to paste (ADR-0008
-     * §"Pending-Insert text preview", plan §4 B4).
-     *
-     * The 60-char limit matches the user-stated preference
-     * ("Dieser beginnt mit den folgenden Buchstaben: …"); slightly
-     * shorter or longer is fine — the info-bar layout has the room
-     * for one line of body text, and the ellipsis signals truncation
-     * unambiguously. Newlines inside the text are replaced by a
-     * single space so the preview stays on a single visual line.
-     */
-    internal fun buildPreview(text: String): String {
-        val flattened = text.replace(Regex("\\s+"), " ").trim()
-        return if (flattened.length <= PREVIEW_LIMIT) {
-            flattened
-        } else {
-            flattened.substring(0, PREVIEW_LIMIT).trimEnd() + "…"
-        }
-    }
-
-    /**
      * Parse the "partial:<seconds>" marker substring out of a
      * `SessionEntity.lastErrorMessage` value (B4 / ADR-0008
      * §"Partial Recovery"). Returns the seconds count or `null` when
@@ -420,6 +411,5 @@ object InfoBarSelector {
         return match.groupValues[1].toIntOrNull()
     }
 
-    private const val PREVIEW_LIMIT = 60
     private val PARTIAL_MARKER_REGEX = Regex("""partial:(\d+)""")
 }

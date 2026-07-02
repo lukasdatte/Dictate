@@ -1656,6 +1656,7 @@ public class DictateInputMethodService extends InputMethodService
                             // session from pendingSessions, so reading
                             // .transcribedText after dispatch would race).
                             String pendingInsertText = null;
+                            java.util.List<net.devemperor.dictate.state.insertion.PendingPart> pendingPartsBatch = null;
                             if (action instanceof net.devemperor.dictate.state.Action.PendingSessionsAction.AcceptAndInsert) {
                                 String sid = ((net.devemperor.dictate.state.Action.PendingSessionsAction.AcceptAndInsert) action).getSessionId();
                                 for (net.devemperor.dictate.state.PendingSession s : pipelineBinder.getState().getValue().getPendingSessions()) {
@@ -1664,6 +1665,15 @@ public class DictateInputMethodService extends InputMethodService
                                         break;
                                     }
                                 }
+                            } else if (action instanceof net.devemperor.dictate.state.Action.PendingSessionsAction.AcceptAndInsertAll) {
+                                // R4 aggregate confirm (ADR-0009 / spec §3.5) —
+                                // snapshot the ordered COMPLETED+text parts BEFORE
+                                // dispatch (the per-part AcceptAndInsert the flusher
+                                // dispatches removes sessions from state, so reading
+                                // after dispatch would race). Same recording-order
+                                // sort as the InfoBar selector.
+                                pendingPartsBatch = net.devemperor.dictate.state.insertion.PendingPartsFlusherKt
+                                        .pendingPartsToFlush(pipelineBinder.getState().getValue().getPendingSessions());
                             }
 
                             pipelineBinder.dispatch(action);
@@ -1684,6 +1694,12 @@ public class DictateInputMethodService extends InputMethodService
                                 insertionService().insert(new InsertionRequest(
                                         pendingInsertText, null,
                                         InsertionPolicy.KEYSTROKE, null, null));
+                            } else if (pendingPartsBatch != null) {
+                                // R4 flush: insert every part in recording order,
+                                // consuming each only after its own successful
+                                // commit (PendingPartsFlusher — insert-first,
+                                // consume-after; stops at the first failure).
+                                flushPendingParts(pendingPartsBatch);
                             } else {
                                 launchInfoBarSideChannel(action);
                             }
@@ -4584,13 +4600,33 @@ public class DictateInputMethodService extends InputMethodService
                 // and the next StartRecording isn't rejected by a stale
                 // pipeline FSM — see git history) — the dispatch still
                 // fires, just 1-2 ms later.
+                // R4 (ADR-0009 / spec §3.5) — flush older pending parts FIRST
+                // when a host field is available, so document order equals
+                // dictation order. `flushedCount > 0` then space-prefixes the
+                // fresh result (D4 single-space joiner). The flush is a no-op
+                // when there are no COMPLETED pending parts.
+                int flushedCount = 0;
+                if (canCommitToHost()) {
+                    java.util.List<net.devemperor.dictate.state.insertion.PendingPart> olderParts =
+                            net.devemperor.dictate.state.insertion.PendingPartsFlusherKt
+                                    .pendingPartsToFlush(pipelineBinder.getState().getValue().getPendingSessions());
+                    if (!olderParts.isEmpty()) {
+                        flushedCount = flushPendingParts(olderParts);
+                    }
+                }
                 // Insertion unification — the pipeline transcript commit now
                 // routes through the single InsertionService (PIPELINE policy
                 // = animate + auto-enter + host-guard + audit). DeferredToPending
                 // (widget host-block) maps to committed=false, preserving the
                 // PipelineDone→RefreshPendingSessions branch below.
+                //
+                // D7 audit hardening: the request always carries an explicit
+                // sessionIdOverride = sid so the audit never falls back to
+                // SessionTracker.getCurrentSessionId() (ambiguous with queued
+                // runs; 9637fc3 family).
+                String freshText = flushedCount > 0 ? " " + text : text;
                 boolean committed = insertionService().insert(
-                        new InsertionRequest(text, source, InsertionPolicy.PIPELINE, null, null)
+                        new InsertionRequest(freshText, source, InsertionPolicy.PIPELINE, null, sid)
                 ) instanceof InsertionResult.Committed;
                 if (sid != null) {
                     // 2026-05-22 — pass the commit-result to PipelineDone so
@@ -4768,6 +4804,26 @@ public class DictateInputMethodService extends InputMethodService
             pipelineBinder.dispatch(
                     net.devemperor.dictate.state.Action.PipelineAction.ToggleRunningAutoEnter.INSTANCE);
         }
+    }
+
+    /**
+     * Insert the given ordered pending parts (recording order) into the
+     * host field via {@link net.devemperor.dictate.state.insertion.PendingPartsFlusher}
+     * — insert-first, consume-after; stops at the first failed commit. Each
+     * successful commit dispatches its per-part {@code AcceptAndInsert}
+     * through the single dispatch sink (state + DB marking stays
+     * per-session). @see ADR-0009, spec §3.5.
+     *
+     * @return the number of parts successfully inserted.
+     */
+    private int flushPendingParts(java.util.List<net.devemperor.dictate.state.insertion.PendingPart> parts) {
+        return new net.devemperor.dictate.state.insertion.PendingPartsFlusher(
+                insertionService(),
+                action -> {
+                    pipelineBinder.dispatch(action);
+                    return kotlin.Unit.INSTANCE;
+                }
+        ).flush(parts);
     }
 
     /**

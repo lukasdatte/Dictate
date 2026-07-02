@@ -109,6 +109,49 @@ object PendingSessionsModule : DictateModule<PersistentList<PendingSession>, Act
             // KDoc + ADR-0006 §"Cross-Module Producer pattern".
             dismiss(state, action.sessionId)
         }
+
+        is Action.PendingSessionsAction.AcceptAndInsertAll -> {
+            // Side-channel marker (ADR-0009, spec §3.5): the ordered flush
+            // needs the live InputConnection, which the pure reducer cannot
+            // reach — the IME service intercepts this action and runs the
+            // PendingPartsFlusher. Per-part consumption still flows through
+            // the AcceptAndInsert arm above (one dispatch per successfully
+            // inserted session), so state + DB marking stays per-session and
+            // race-free. State is unchanged here; returning an empty-effect
+            // TransitionResult keeps the dispatch-outcome log truthful (the
+            // action routed, it just produced no state mutation) — a `null`
+            // return would log a spurious "reducer-null" rejection.
+            TransitionResult(nextState = state, sideEffects = emptyList())
+        }
+
+        is Action.PendingSessionsAction.DismissAll ->
+            // Remove every COMPLETED pending-insert entry + persist one
+            // dismissal per removed session. RECORDED / RECORDING_INTERRUPTED
+            // rows are left untouched — they belong to the resume-recording
+            // producers, not the deferred-insertion surface (spec §3.5).
+            dismissAllCompleted(state)
+    }
+
+    /**
+     * Remove every [net.devemperor.dictate.database.entity.SessionStatus.COMPLETED]
+     * entry and emit one [Effect.PersistDismissal] per removed session.
+     * Returns `null` (no-op) when nothing COMPLETED is present so an empty
+     * dismiss doesn't churn the state. @see spec §3.5.
+     */
+    private fun dismissAllCompleted(
+        state: PersistentList<PendingSession>,
+    ): TransitionResult<PersistentList<PendingSession>, Effect>? {
+        val toRemove = state.filter {
+            it.status == net.devemperor.dictate.database.entity.SessionStatus.COMPLETED
+        }
+        return if (toRemove.isEmpty()) {
+            null
+        } else {
+            TransitionResult(
+                nextState = state.removeAll(toRemove),
+                sideEffects = toRemove.map { Effect.PersistDismissal(it.sessionId) },
+            )
+        }
     }
 
     private fun dismiss(

@@ -138,10 +138,16 @@ class InfoBarRenderer(
                 return
             }
             val top = items.first()
-            val text = if (top.message.textArgs.isEmpty()) {
-                resources.getString(top.message.textResId)
-            } else {
-                resources.getString(top.message.textResId, *top.message.textArgs.toTypedArray())
+            val msg = top.message
+            val args = msg.textArgs.toTypedArray()
+            val quantity = msg.quantity
+            val text = when {
+                // Plurals: textResId is a @PluralsRes id, pick the form for
+                // `quantity` (the count is interpolated only if the string
+                // references it — Android does not auto-substitute it).
+                quantity != null -> resources.getQuantityString(msg.textResId, quantity, *args)
+                args.isEmpty() -> resources.getString(msg.textResId)
+                else -> resources.getString(msg.textResId, *args)
             }
             messageView.text = text
             messageView.setTextColor(resources.getColor(colorForStyle(top.message.style), themeProvider()))

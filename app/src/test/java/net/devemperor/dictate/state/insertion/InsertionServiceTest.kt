@@ -366,6 +366,19 @@ class InsertionServiceTest {
         assertEquals("captureReplaced must not run without a source", 0, f.captureReplacedCalls)
     }
 
+    // ── PENDING_PART policy (R4, ADR-0009 / spec §3.5) ─────────────────
+
+    @Test
+    fun `PENDING_PART policy has the specced flags`() {
+        val p = InsertionPolicy.PENDING_PART
+        assertTrue("host-guard respected (never leak into a wrong window)", p.respectHostGuard)
+        assertTrue("audited (one row per part)", p.audit)
+        assertFalse("no auto-enter — catch-up parts, not live dictation", p.autoEnter)
+        assertFalse("no resume-on-failure — a failure stops the flush", p.resumeOnFailure)
+        assertFalse("not anchored to a captured IC", p.anchoredToCaptured)
+        assertFalse("animation off — instant paste", p.animate)
+    }
+
     @Test
     fun `selected text is captured before the commit`() {
         // Ordering matters: the replaced selection must be read before it is

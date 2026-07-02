@@ -157,6 +157,21 @@ class PipelineSessionRepoAdapter(
         (recordedWithAudio + interrupted + pendingInsertion).map { it.toPendingSession() }
     }
 
+    /**
+     * Recording-order key lookup (spec §3.5): the session's DB `created_at`,
+     * or `null` when the row is absent. Fail-soft — a DAO/IO failure logs
+     * and returns `null` so the caller falls back to its local timestamp
+     * rather than crashing the dispatch thread.
+     */
+    override suspend fun findCreatedAt(sessionId: String): Long? = withContext(ioContext) {
+        try {
+            sessionDao.getById(sessionId)?.createdAt
+        } catch (t: Throwable) {
+            Log.w(TAG, "findCreatedAt failed for $sessionId", t)
+            null
+        }
+    }
+
     override suspend fun markInserted(sessionId: String, at: Long) {
         withContext(ioContext) {
             try {

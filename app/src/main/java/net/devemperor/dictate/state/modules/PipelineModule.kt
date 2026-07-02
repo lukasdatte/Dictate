@@ -691,23 +691,37 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
             // 2026-05-22 (B3.5 widget-host-block follow-up) — append the
             // freshly-produced session straight to state.pendingSessions
             // so the InfoBar's pending-insert producer surfaces a "Tap to
-            // paste" item live. Race-free: the payload comes off the
+            // paste" item live. Race-free: the text payload comes off the
             // PipelineDone action, not a DB query (see the effect's KDoc).
+            //
+            // ADR-0009 / spec §3.5 — recording-order key. The pending part's
+            // `createdAt` must be the session's DB `created_at` (recording
+            // order == session-creation order), NOT `effect.createdAt`
+            // (= ctx.now at PipelineDone, i.e. completion time). Resolve it
+            // off `sessionRepo` (effects may do IO); fall back to the
+            // effect's timestamp when the row is missing. Note the race the
+            // effect's KDoc warns about concerned the COMPLETED *status*
+            // write — `created_at` is written once at session creation and
+            // is race-free, so this lookup is safe.
             Log.i(
                 "DictateTrace",
                 "AddPendingInsertSession sid=${effect.sessionId.take(8)} " +
                     "textLen=${effect.text.length}",
             )
-            services.emitAction(
-                Action.PendingSessionsAction.AddOne(
-                    net.devemperor.dictate.state.PendingSession(
-                        sessionId = effect.sessionId,
-                        status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
-                        transcribedText = effect.text,
-                        createdAt = effect.createdAt,
+            services.scope.launch {
+                val createdAt =
+                    services.sessionRepo.findCreatedAt(effect.sessionId) ?: effect.createdAt
+                services.emitAction(
+                    Action.PendingSessionsAction.AddOne(
+                        net.devemperor.dictate.state.PendingSession(
+                            sessionId = effect.sessionId,
+                            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+                            transcribedText = effect.text,
+                            createdAt = createdAt,
+                        ),
                     ),
-                ),
-            )
+                )
+            }
             Unit
         }
     }

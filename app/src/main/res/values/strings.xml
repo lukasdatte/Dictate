@@ -72,11 +72,18 @@
     <string name="dictate_internet_error_msg">Couldn\'t connect to the API. Please check your internet connection.</string>
     <string name="dictate_model_not_found_msg">The selected model was not found. Please check your API settings.</string>
     <string name="dictate_bad_request_msg">The API rejected the request. Please check your settings.</string>
-    <!-- ADR-0006 — Info-Bar producers (Block E) -->
-    <string name="dictate_pending_insert_msg">Pending text ready to insert. Tap ✓ to paste.</string>
-    <!-- B4 (ADR-0008) — pending-insert with text preview. Format: %1$s is the first
-         ~60 characters of the transcribed text, ellipsised when truncated. -->
-    <string name="dictate_pending_insert_msg_preview">Text ready: »%1$s« — tap ✓ to paste.</string>
+    <!-- R4 (ADR-0009 / spec §3.5) — aggregate pending-parts info-bar. One
+         item offers the whole batch of deferred results; %d is the count.
+         `_insert` is the actionable (keyboard visible) label, `_waiting`
+         the informational overlay-surface label (no insert affordance). -->
+    <plurals name="dictate_pending_parts_insert">
+        <item quantity="one">Insert %d pending part</item>
+        <item quantity="other">Insert %d pending parts</item>
+    </plurals>
+    <plurals name="dictate_pending_parts_waiting">
+        <item quantity="one">%d part waiting — open the keyboard to insert</item>
+        <item quantity="other">%d parts waiting — open the keyboard to insert</item>
+    </plurals>
     <!-- 2026-05-23 — Recovery-surfaced unfinished recording. Pure-info
          text shown while state.recording is RecordingState.Interrupted
          (PipelineRecovery Phase 5 folds both RECORDING_INTERRUPTED and

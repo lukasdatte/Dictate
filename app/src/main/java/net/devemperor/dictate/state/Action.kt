@@ -1037,6 +1037,34 @@ sealed class Action {
          * ADR-0006 §"Cross-Module Producer pattern".
          */
         data class AcceptAndInsert(val sessionId: String) : PendingSessionsAction()
+
+        /**
+         * User confirmed the **aggregate** pending-parts info-bar item —
+         * flush *all* COMPLETED pending parts into the host field in
+         * recording order (R4). @see ADR-0009, spec §3.5.
+         *
+         * **Marker action (side-channel-intercepted, reducer no-op).**
+         * The ordered flush cannot run in the pure reducer — it needs the
+         * live `InputConnection`. The IME service intercepts this action,
+         * reads the ordered COMPLETED+text parts from the bound state, and
+         * runs [net.devemperor.dictate.state.insertion.PendingPartsFlusher].
+         * Per-part consumption still flows through the existing
+         * [AcceptAndInsert] arm (one per successfully inserted session), so
+         * state + DB marking stays per-session and race-free. The reducer
+         * no-ops this action so the dispatch-outcome log stays truthful
+         * (the marker is still dispatched alongside the side-channel).
+         */
+        data object AcceptAndInsertAll : PendingSessionsAction()
+
+        /**
+         * User dismissed the aggregate pending-parts info-bar item —
+         * remove *every* COMPLETED pending-insert entry (R4). @see spec §3.5.
+         *
+         * RECORDED / RECORDING_INTERRUPTED entries are left untouched —
+         * they belong to the resume-recording producers, not the
+         * deferred-insertion surface.
+         */
+        data object DismissAll : PendingSessionsAction()
     }
 
     // ════════════════════════════════════════════════════════════════

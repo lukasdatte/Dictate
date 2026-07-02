@@ -43,6 +43,9 @@ sealed interface ModuleId {
     /** §15.6 — Unit-state effect-producer for IME direct input. */
     data object KeyboardInput : ModuleId
 
+    /** ADR-0006 completion — transient pipeline-error + engagement hints. */
+    data object InfoHint : ModuleId
+
     /** Phase 2 stub. */
     data object Interruption : ModuleId
 }

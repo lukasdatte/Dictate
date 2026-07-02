@@ -63,7 +63,6 @@
     <string name="dictate_record">Gravar</string>
     <string name="dictate_send">Enviar (%1$s)</string>
     <string name="dictate_sending">Enviando …</string>
-    <string name="dictate_timeout_msg">Tempo limite excedido. Talvez o servidor esteja sobrecarregado ou sua conexão com a Internet esteja ruim.</string>
     <string name="dictate_invalid_api_key_msg">Chave de API inválida. Abrir as configurações para corrigi-la?</string>
     <string name="dictate_quota_exceeded_msg">Sua cota de %s foi excedida. Abrir a página de faturamento para comprar novos créditos?</string>
     <string name="dictate_internet_error_msg">Não foi possível conectar à API. Por favor, verifique sua conexão com a Internet.</string>

@@ -86,7 +86,6 @@ class PipelineStepRowRenderer(
          */
         @Suppress("unused")
         val recordButton: MaterialButton,
-        val infoCl: View,
         val layoutInflater: LayoutInflater,
         val mainHandler: Handler,
     )
@@ -167,9 +166,12 @@ class PipelineStepRowRenderer(
     private fun applyRunning(running: PipelineUiState.Running) {
         // First emit of a new session — wipe whatever rows the previous
         // session left behind (rotation, cancel + retry, etc.).
+        // 2026-07-02 (ADR-0006 completion) — the legacy hard-hide of the
+        // deleted legacy error-bar container on new-session start is gone;
+        // state-driven info bar clears reactively via InfoHintModule's
+        // pipeline-start cascade.
         if (lastApplied?.sessionId != running.sessionId) {
             views.pipelineStepsContainer.removeAllViews()
-            views.infoCl.visibility = View.GONE
             stepRows.clear()
             activeTimer?.stop()
             activeTimer = null

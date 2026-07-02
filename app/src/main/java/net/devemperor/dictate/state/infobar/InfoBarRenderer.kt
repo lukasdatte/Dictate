@@ -19,29 +19,35 @@ import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 
 /**
- * Reactive renderer for the state-derived info-bar (ADR-0006).
+ * Reactive renderer for the state-derived info-bar (ADR-0006). Since
+ * the 2026-07-02 consolidation this is the **single** info-bar surface
+ * — the legacy imperative info-bar controller and its second container
+ * are deleted.
  *
  * # Wiring contract
  *
  * The IME service inflates the keyboard view in `onCreateInputView()`
- * and constructs a renderer with the `info_cl` container plus its three
- * child views (`info_tv` text label, `info_yes_btn` confirm, `info_no_btn`
- * dismiss). The renderer's [start] launches a `Dispatchers.Main`
- * collector against the pipeline `StateFlow`; [stop] cancels it. Same
- * lifecycle envelope as [net.devemperor.dictate.core.OverlayOnboardingObserver]
- * (the legacy single-axis observer this renderer replaces — see ADR-0006
- * §"Big-Bang migration").
+ * and constructs a renderer with the `infobar_cl` container plus its
+ * three child views (`infobar_message_tv` text label,
+ * `infobar_confirm_btn` confirm, `infobar_dismiss_btn` dismiss) from
+ * `activity_dictate_keyboard_view.xml`. The renderer's [start] launches
+ * a `Dispatchers.Main` collector against the pipeline `StateFlow`;
+ * [stop] cancels it (same lifecycle envelope as the legacy single-axis
+ * onboarding observer this renderer replaced — ADR-0006 §"Big-Bang
+ * migration").
  *
  * # Selection contract
  *
  * On every distinct state emit, [InfoBarSelector.select] returns the
  * sorted item list. The renderer:
  *
- *  - **Empty list** → hides [infoCl]. Other surfaces (chips row,
+ *  - **Empty list** → hides [container]. Other surfaces (chips row,
  *    pipeline-step row) take over per the existing visibility
- *    machinery. The renderer does NOT touch them — it owns only
- *    `info_cl`'s visibility (Block D scope; the Mutex with
- *    `prompts_keyboard_cl` enters in Block F).
+ *    machinery. The renderer does NOT touch them — it owns only the
+ *    container's visibility; the mutex with `prompts_keyboard_cl` is
+ *    owned by `PromptVisibilityController` (which derives the same
+ *    `InfoBarSelector.select(state)` signal), and the single-row
+ *    force-expand by `LayoutCatalog.forKeyboard`.
  *  - **Non-empty list** → renders the top item (smallest `createdAt`):
  *    text label gets the resolved string (with [InfoBarMessage.textArgs]
  *    spread into `getString(...)`), style sets the text color
@@ -68,11 +74,11 @@ import net.devemperor.dictate.state.DictateUiState
  * itself runs on `Dispatchers.Main`, so callback dispatch into
  * [onAction] is main-thread by construction.
  *
- * @param infoCl the info-bar container view (`info_cl` from
+ * @param container the info-bar container view (`infobar_cl` from
  *   `activity_dictate_keyboard_view.xml`).
- * @param infoTv text label inside [infoCl] (`info_tv`).
- * @param infoYesButton confirm button (`info_yes_btn`).
- * @param infoNoButton dismiss button (`info_no_btn`).
+ * @param messageView text label inside [container] (`infobar_message_tv`).
+ * @param confirmButton confirm button (`infobar_confirm_btn`).
+ * @param dismissButton dismiss button (`infobar_dismiss_btn`).
  * @param state pipeline state-flow — the renderer's source of truth.
  * @param onAction action dispatcher, typically
  *   `pipelineBinder::dispatch` from the IME service.
@@ -87,10 +93,10 @@ import net.devemperor.dictate.state.DictateUiState
  * @see docs/decisions/0006-ui-info-bar-state-derived-items.md
  */
 class InfoBarRenderer(
-    private val infoCl: ConstraintLayout,
-    private val infoTv: TextView,
-    private val infoYesButton: Button,
-    private val infoNoButton: Button,
+    private val container: ConstraintLayout,
+    private val messageView: TextView,
+    private val confirmButton: Button,
+    private val dismissButton: Button,
     private val state: StateFlow<DictateUiState>,
     private val onAction: (Action) -> Unit,
     private val resources: Resources,
@@ -116,7 +122,7 @@ class InfoBarRenderer(
 
     /**
      * Stop observing and release the collector scope. Idempotent.
-     * Does NOT reset `info_cl`'s visibility — the IME service's
+     * Does NOT reset the container's visibility — the IME service's
      * `onDestroyInputView` handles view teardown.
      */
     fun stop() {
@@ -128,7 +134,7 @@ class InfoBarRenderer(
     internal fun render(items: List<InfoBarItem>) {
         try {
             if (items.isEmpty()) {
-                infoCl.visibility = View.GONE
+                container.visibility = View.GONE
                 return
             }
             val top = items.first()
@@ -137,31 +143,31 @@ class InfoBarRenderer(
             } else {
                 resources.getString(top.message.textResId, *top.message.textArgs.toTypedArray())
             }
-            infoTv.text = text
-            infoTv.setTextColor(resources.getColor(colorForStyle(top.message.style), themeProvider()))
+            messageView.text = text
+            messageView.setTextColor(resources.getColor(colorForStyle(top.message.style), themeProvider()))
 
             if (top.confirmAction != null) {
-                infoYesButton.visibility = View.VISIBLE
-                infoYesButton.setOnClickListener { onAction(top.confirmAction) }
+                confirmButton.visibility = View.VISIBLE
+                confirmButton.setOnClickListener { onAction(top.confirmAction) }
             } else {
-                infoYesButton.visibility = View.GONE
-                infoYesButton.setOnClickListener(null)
+                confirmButton.visibility = View.GONE
+                confirmButton.setOnClickListener(null)
             }
             if (top.dismissAction != null) {
-                infoNoButton.visibility = View.VISIBLE
-                infoNoButton.setOnClickListener { onAction(top.dismissAction) }
+                dismissButton.visibility = View.VISIBLE
+                dismissButton.setOnClickListener { onAction(top.dismissAction) }
             } else {
-                infoNoButton.visibility = View.GONE
-                infoNoButton.setOnClickListener(null)
+                dismissButton.visibility = View.GONE
+                dismissButton.setOnClickListener(null)
             }
 
-            infoCl.visibility = View.VISIBLE
+            container.visibility = View.VISIBLE
         } catch (t: Throwable) {
             // Defensive: a malformed item (e.g. invalid string-resource
             // id) must NOT crash the IME process. Log + hide and let
             // the next state emit retry.
             Log.e(TAG, "render failed for ${items.firstOrNull()?.id}", t)
-            infoCl.visibility = View.GONE
+            container.visibility = View.GONE
         }
     }
 

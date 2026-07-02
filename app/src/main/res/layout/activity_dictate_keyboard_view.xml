@@ -218,8 +218,30 @@
          (C13 deviation). The KeyboardLayoutModeController + all
          remaining legacy `findViewById(R.id.action_row|input_row)`
          resolution sites were deleted in Spec 2 §11.8 5d. -->
+
+    <!-- ════════════════════════════════════════════════════════════
+         The state-derived info bar (ADR-0006).
+
+         The SINGLE info-bar surface of the keyboard: InfoBarRenderer
+         observes `InfoBarSelector.select(state)` and renders the top
+         item (onboarding explainer, pending-insert, recovery info,
+         pipeline errors, Update/Rate/Donate hints) into these views.
+         Visibility + text + button wiring are fully owned by
+         InfoBarRenderer — nothing else writes to this block.
+
+         2026-07-02 consolidation (ADR-0006 completion, pending task
+         #149): the legacy imperative controller container that used to
+         sit above this block is deleted together with its controller
+         — one container, one constraint chain. This container heads
+         the vertical chain (parent-top, `prompts_keyboard_cl` chained
+         below) so a shown info bar pushes the keyboard content down
+         instead of floating over it (Z-order fix 2026-05-22
+         preserved). The `infobar_*` ids replace the historical
+         `overlay_permission_*` names from the block's first life as
+         the onboarding-only surface (Spec 3 §5.3, B5 F-2).
+         ════════════════════════════════════════════════════════════ -->
     <androidx.constraintlayout.widget.ConstraintLayout
-        android:id="@+id/info_cl"
+        android:id="@+id/infobar_cl"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginHorizontal="16dp"
@@ -231,90 +253,7 @@
         tools:visibility="visible">
 
         <TextView
-            android:id="@+id/info_tv"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginHorizontal="8dp"
-            android:text="@string/dictate_internet_error_msg"
-            android:textColor="@color/dictate_red"
-            android:textSize="16sp"
-            android:textStyle="italic"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/info_yes_btn"
-            app:layout_constraintHorizontal_bias="0.5"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
-
-        <Button
-            android:id="@+id/info_yes_btn"
-            style="@style/Widget.AppCompat.Button.Small"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@android:color/transparent"
-            android:foreground="@drawable/ic_baseline_check_circle_outline_24"
-            android:foregroundGravity="center"
-            android:visibility="gone"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/info_no_btn"
-            app:layout_constraintHorizontal_bias="0.5"
-            app:layout_constraintStart_toEndOf="@+id/info_tv"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:visibility="visible" />
-
-        <Button
-            android:id="@+id/info_no_btn"
-            style="@style/Widget.AppCompat.Button.Small"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@android:color/transparent"
-            android:foreground="@drawable/ic_baseline_not_interested_24"
-            android:foregroundGravity="center"
-            android:visibility="gone"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintHorizontal_bias="0.5"
-            app:layout_constraintStart_toEndOf="@+id/info_yes_btn"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:visibility="visible" />
-    </androidx.constraintlayout.widget.ConstraintLayout>
-
-    <!-- ════════════════════════════════════════════════════════════
-         Overlay-permission onboarding info-bar (Spec 3 §5.3, B5 F-2).
-
-         Surfaced above the keyboard buttons when the user taps the
-         WIDGET_TOGGLE without SYSTEM_ALERT_WINDOW permission
-         (resolveWidgetToggleAction → ShowOverlayOnboarding →
-         state.overlay.onboardingPending = true). Bound + visibility-
-         toggled from the IME service's pipeline-state observation
-         (DictateInputMethodService), co-located with the existing
-         InfoBarController surface — see ADR-0005 Decision-History
-         2026-05-15.
-
-         Z-order fix (2026-05-22): this container is the live render
-         target of the state-driven InfoBarRenderer — not just the
-         first-run overlay-permission flow. It is therefore chained
-         INTO the vertical layout (`Top_toBottomOf=info_cl`, with
-         prompts_keyboard_cl chained below it) so a shown InfoBar
-         pushes the keyboard content down instead of floating over —
-         and behind — it. Before the fix it floated at parent-top and
-         was drawn underneath the later-declared button rows. info_cl
-         stays the legacy-InfoBarController container; the two now
-         stack cleanly if both ever show simultaneously.
-         ════════════════════════════════════════════════════════════ -->
-    <androidx.constraintlayout.widget.ConstraintLayout
-        android:id="@+id/overlay_permission_infobar"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginHorizontal="16dp"
-        android:layout_marginTop="16dp"
-        android:visibility="gone"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/info_cl"
-        tools:visibility="visible">
-
-        <TextView
-            android:id="@+id/overlay_permission_message"
+            android:id="@+id/infobar_message_tv"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginHorizontal="8dp"
@@ -323,13 +262,13 @@
             android:textSize="16sp"
             android:textStyle="italic"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/overlay_perm_grant_btn"
+            app:layout_constraintEnd_toStartOf="@+id/infobar_confirm_btn"
             app:layout_constraintHorizontal_bias="0.5"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
         <Button
-            android:id="@+id/overlay_perm_grant_btn"
+            android:id="@+id/infobar_confirm_btn"
             style="@style/Widget.AppCompat.Button.Small"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -338,13 +277,13 @@
             android:foregroundGravity="center"
             android:contentDescription="@string/overlay_perm_grant"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/overlay_perm_dismiss_btn"
+            app:layout_constraintEnd_toStartOf="@+id/infobar_dismiss_btn"
             app:layout_constraintHorizontal_bias="0.5"
-            app:layout_constraintStart_toEndOf="@+id/overlay_permission_message"
+            app:layout_constraintStart_toEndOf="@+id/infobar_message_tv"
             app:layout_constraintTop_toTopOf="parent" />
 
         <Button
-            android:id="@+id/overlay_perm_dismiss_btn"
+            android:id="@+id/infobar_dismiss_btn"
             style="@style/Widget.AppCompat.Button.Small"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -355,7 +294,7 @@
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintHorizontal_bias="0.5"
-            app:layout_constraintStart_toEndOf="@+id/overlay_perm_grant_btn"
+            app:layout_constraintStart_toEndOf="@+id/infobar_confirm_btn"
             app:layout_constraintTop_toTopOf="parent" />
     </androidx.constraintlayout.widget.ConstraintLayout>
 
@@ -540,7 +479,7 @@
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/overlay_permission_infobar"
+        app:layout_constraintTop_toBottomOf="@id/infobar_cl"
         tools:visibility="visible">
 
         <LinearLayout

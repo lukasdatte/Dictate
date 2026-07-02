@@ -1076,6 +1076,85 @@ sealed class Action {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // Info-hint-axis actions (InfoHintModule — ADR-0006 completion)
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Actions on the [InfoHintState] axis — transient pipeline errors +
+     * Update/Rate/Donate engagement hints, both rendered by the
+     * state-derived info bar (`InfoBarSelector`). Replaces the legacy
+     * legacy imperative `showInfo(type)` / `dismiss()` controller API
+     * (research `2026-07-02 - infobar-consolidation.md`).
+     *
+     * **Confirm vs Dismiss:** both clear the hint from state (the
+     * no-resurrection guarantee, ADR-0006 §"Dismiss = natural-source
+     * mutation"). Confirm additionally triggers an IME-side launch
+     * side-channel (settings / billing / Play Store / PayPal — Activity
+     * launches need a `Context`, which reducers do not have; same seam
+     * as [OverlayAction.RequestOverlayPermission]). Persistence of the
+     * engagement `Pref.*` flags happens via `InfoHintModule` effects.
+     *
+     * @see net.devemperor.dictate.state.InfoHintState
+     */
+    sealed class InfoHintAction : Action() {
+
+        /**
+         * The pipeline reported a user-facing transient error.
+         * Dispatched by the IME service's `onPipelineError` callback
+         * after parsing the string key via
+         * [PipelineErrorKind.fromInfoKey] (cancellation and unknown
+         * keys never reach this action — they parse to `null`, F-076).
+         * The reducer stamps `occurredAt` from `ReducerContext.now`.
+         */
+        data class PipelineErrorOccurred(
+            val kind: PipelineErrorKind,
+            val providerKey: String?,
+        ) : InfoHintAction()
+
+        /**
+         * Confirm-button on a pipeline-error bar. Carries the payload
+         * the IME-side launch side-channel needs (settings for
+         * key/model/request errors, billing URL for quota) so the
+         * side-channel does not have to re-read state post-dispatch.
+         */
+        data class ConfirmPipelineError(
+            val kind: PipelineErrorKind,
+            val providerKey: String?,
+        ) : InfoHintAction()
+
+        /** Dismiss-button on a pipeline-error bar — clears the hint. */
+        data object DismissPipelineError : InfoHintAction()
+
+        /**
+         * IME-side trigger evaluation (`onStartInputView` pref +
+         * usage-DB checks) decided that [hint] should surface.
+         */
+        data class ShowEngagementHint(val hint: EngagementHint) : InfoHintAction()
+
+        /**
+         * Confirm-button on an engagement bar. Clears the hint,
+         * persists the matching pref flag (RATE / DONATE — UPDATE
+         * deliberately persists nothing on confirm, mirroring the
+         * legacy behaviour where only "No" wrote `Pref.LastVersionCode`),
+         * and triggers the IME-side launch side-channel.
+         */
+        data class ConfirmEngagementHint(val hint: EngagementHint) : InfoHintAction()
+
+        /** Dismiss-button on an engagement bar — clears + persists the flag. */
+        data class DismissEngagementHint(val hint: EngagementHint) : InfoHintAction()
+
+        /**
+         * Clear all in-RAM hints without persisting anything. Emitted
+         * by `InfoHintModule`'s cross-module observer (new recording /
+         * pipeline run starts; IME view hides while idle) and
+         * dispatched by the IME when the user opens the settings —
+         * the moments the legacy `infoBarController.dismiss()` call
+         * sites covered.
+         */
+        data object ClearTransientHints : InfoHintAction()
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // Interruption-axis actions (InterruptionModule — Phase 2)
     // ════════════════════════════════════════════════════════════════
 

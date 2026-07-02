@@ -1,9 +1,13 @@
 package net.devemperor.dictate.state.infobar
 
 import net.devemperor.dictate.R
+import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.database.entity.SessionStatus
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
+import net.devemperor.dictate.state.EngagementHint
+import net.devemperor.dictate.state.PipelineErrorHint
+import net.devemperor.dictate.state.PipelineErrorKind
 import net.devemperor.dictate.state.RecordingState
 
 /**
@@ -31,15 +35,30 @@ import net.devemperor.dictate.state.RecordingState
  *
  *   - **Overlay-Permission-Onboarding** (Block D) — pinned to top
  *     with `createdAt = 0L` so the explainer outranks any later
- *     transient item. Replaces the legacy
- *     `overlay_permission_infobar` surface + `OverlayPermissionInfobarRenderer`
- *     + `OverlayOnboardingObserver`.
- *   - **Pipeline-Errors** (planned Block D.2) — transient network /
- *     quota / model / api-key error surfaces. Replaces the nine
- *     `InfoBarController.showInfo(type)` cases.
- *   - **Pending-Insert / Pending-Recording / Recovery / API-Key**
- *     (Block E) — new producers driven by `pendingSessions`,
- *     recovery acknowledgements, and pref-mirror flags.
+ *     transient item. Replaces the legacy overlay-permission
+ *     onboarding surface (`OverlayPermissionInfobarRenderer`
+ *     + `OverlayOnboardingObserver`).
+ *   - **Pipeline-Errors** (2026-07-02, ADR-0006 completion) —
+ *     transient network / quota / model / api-key / bad-request
+ *     error surfaces driven by `state.infoHints.pipelineError`.
+ *     Replaces the legacy imperative `showInfo(type)` error
+ *     cases.
+ *   - **Engagement hints** (2026-07-02, ADR-0006 completion) —
+ *     Update / Rate / Donate nags driven by
+ *     `state.infoHints.engagementHint`. Replaces the remaining three
+ *     legacy imperative `showInfo(type)` cases.
+ *   - **Pending-Insert / Recovery** (Block E) — producers driven by
+ *     `pendingSessions` and the recording-recovery state.
+ *
+ * **Priority note (consolidation research Gap 2, 2026-07-02):** items
+ * for the *same* session share a `createdAt` — the stable sort plus
+ * build order then puts the pending-insert item ahead of the
+ * partial-recovery item, and the renderer shows only `items.first()`.
+ * A partial-recovery warning is therefore effectively shadowed while
+ * a transcript exists for that session (it can only surface alone
+ * when `transcribedText == null`). This is the accepted current
+ * behaviour — kept deliberately, documented here so nobody
+ * re-diagnoses it as a sorting bug (refuted finding F-030).
  *
  * @see InfoBarItem
  * @see InfoBarMessage
@@ -123,16 +142,23 @@ object InfoBarSelector {
         // The pipeline persists a marker substring "partial:<seconds>"
         // into SessionEntity.lastErrorMessage when a multi-segment
         // upload had to skip an unreadable segment. The producer
-        // surfaces a one-shot ERROR-style info-bar that estimates the
-        // number of lost seconds; dismissing it clears the marker by
-        // routing through the same PendingSessionsAction.Dismiss that
-        // the pending-insert path uses (the session row stays as
-        // COMPLETED; only the info-bar item leaves the list).
+        // surfaces an ERROR-style info-bar that estimates the number
+        // of lost seconds.
         //
-        // Sort-key: same createdAt as the pending-insert item, so when
-        // both fire for the same session they cluster together. The
-        // partial-warning item has a different id so the renderer
-        // shows them as two stacked entries.
+        // Dismissal (2026-07-02 KDoc fix, F-030 residue): the dismiss
+        // routes through the same PendingSessionsAction.Dismiss the
+        // pending-insert item uses — which removes the ENTIRE session
+        // from state.pendingSessions and stamps `inserted_at` in the
+        // DB. Both items of the session (pending-insert AND this
+        // warning) leave the bar together; the "partial:<N>" marker in
+        // lastErrorMessage is NOT cleared (it stays as the session's
+        // persisted failure context).
+        //
+        // Sort-key: same createdAt as the pending-insert item. With
+        // the stable sort + build order the pending-insert item ranks
+        // first, so this warning is shadowed while a transcript exists
+        // (see the class-KDoc "Priority note" — accepted behaviour,
+        // not a bug).
         state.pendingSessions
             .filter { it.status == SessionStatus.COMPLETED }
             .forEach { session ->
@@ -200,7 +226,118 @@ object InfoBarSelector {
                 )
             )
         }
+
+        // ── Pipeline-Errors (2026-07-02, ADR-0006 completion) ───────────
+        // Transient AI-pipeline errors surfaced via the
+        // state.infoHints.pipelineError axis (set by the IME's
+        // onPipelineError callback → InfoHintAction.PipelineErrorOccurred,
+        // cleared by dismiss/confirm or InfoHintModule's cascade when a
+        // new run starts). Replaces the legacy
+        // legacy imperative showInfo(errorInfoKey) routing — force-expand
+        // and the prompts-mutex now apply to error bars by construction
+        // (both key on this selector's output). `createdAt = occurredAt`
+        // gives the error its authentic event timestamp.
+        state.infoHints.pipelineError?.let { add(pipelineErrorItem(it)) }
+
+        // ── Engagement hints: Update / Rate / Donate (2026-07-02) ───────
+        // Driven by state.infoHints.engagementHint; the trigger
+        // conditions (pref + usage-DB reads) are evaluated IME-side on
+        // onStartInputView and dispatched as ShowEngagementHint —
+        // mirroring the legacy showInfo("update"/"rate"/"donate")
+        // trigger sites (consolidation research Gap 1 fallback).
+        //
+        // `createdAt = Long.MAX_VALUE`: pref-/usage-driven nags have no
+        // event timestamp (ADR-0006 §"createdAt drift" — its suggested
+        // `VERSION_BUILD_TIME` proxy does not exist in this project's
+        // BuildConfig). MAX_VALUE is an equally stable proxy that
+        // additionally encodes the intended priority: a nag always
+        // yields to any real-event item (errors, pending inserts).
+        state.infoHints.engagementHint?.let { add(engagementHintItem(it)) }
     }.sortedBy { it.createdAt }
+
+    // ─── Info-hint producers (ADR-0006 completion) ─────────────────────
+
+    /**
+     * Build the ERROR-style item for a transient pipeline error.
+     *
+     * Confirm-button mapping (parity with the deleted
+     * legacy imperative info-bar controller cases):
+     *
+     *  - [PipelineErrorKind.INVALID_API_KEY] / [PipelineErrorKind.MODEL_NOT_FOUND] /
+     *    [PipelineErrorKind.BAD_REQUEST] → confirm opens the settings.
+     *  - [PipelineErrorKind.QUOTA_EXCEEDED] → confirm opens the
+     *    provider's billing page — only offered when the provider has
+     *    one; the message carries the provider display name.
+     *  - [PipelineErrorKind.INTERNET_ERROR] → dismiss-only.
+     *
+     * The confirm/dismiss actions mutate the natural source
+     * (`InfoHintModule` clears `state.infoHints.pipelineError`), so
+     * the no-resurrection guarantee holds; the Activity launches are
+     * the IME-side side-channel keyed on the dispatched action.
+     */
+    private fun pipelineErrorItem(hint: PipelineErrorHint): InfoBarItem {
+        val confirm = Action.InfoHintAction.ConfirmPipelineError(hint.kind, hint.providerKey)
+        val message: InfoBarMessage
+        val confirmAction: Action?
+        when (hint.kind) {
+            PipelineErrorKind.INVALID_API_KEY -> {
+                message = InfoBarMessage(R.string.dictate_invalid_api_key_msg, style = InfoBarStyle.ERROR)
+                confirmAction = confirm
+            }
+            PipelineErrorKind.MODEL_NOT_FOUND -> {
+                message = InfoBarMessage(R.string.dictate_model_not_found_msg, style = InfoBarStyle.ERROR)
+                confirmAction = confirm
+            }
+            PipelineErrorKind.BAD_REQUEST -> {
+                message = InfoBarMessage(R.string.dictate_bad_request_msg, style = InfoBarStyle.ERROR)
+                confirmAction = confirm
+            }
+            PipelineErrorKind.QUOTA_EXCEEDED -> {
+                // Legacy parity: an unknown/null provider key renders a
+                // generic "API" display name and offers no billing link.
+                val provider = hint.providerKey?.let { AIProvider.fromPersistKey(it) }
+                message = InfoBarMessage(
+                    textResId = R.string.dictate_quota_exceeded_msg,
+                    textArgs = listOf(provider?.displayName ?: "API"),
+                    style = InfoBarStyle.ERROR,
+                )
+                confirmAction = if (provider?.billingUrl != null) confirm else null
+            }
+            PipelineErrorKind.INTERNET_ERROR -> {
+                message = InfoBarMessage(R.string.dictate_internet_error_msg, style = InfoBarStyle.ERROR)
+                confirmAction = null
+            }
+        }
+        return InfoBarItem(
+            id = "pipeline-error:${hint.kind.name.lowercase()}",
+            createdAt = hint.occurredAt,
+            message = message,
+            confirmAction = confirmAction,
+            dismissAction = Action.InfoHintAction.DismissPipelineError,
+        )
+    }
+
+    /**
+     * Build the INFO-style item for an Update / Rate / Donate nag.
+     * Confirm and dismiss both clear the hint via `InfoHintModule`;
+     * dismiss additionally persists the matching `Pref.*` flag so the
+     * IME-side trigger stops re-firing (see [EngagementHint] KDoc for
+     * the per-hint persistence table).
+     */
+    private fun engagementHintItem(hint: EngagementHint): InfoBarItem = InfoBarItem(
+        id = "engagement-hint:${hint.name.lowercase()}",
+        createdAt = Long.MAX_VALUE,
+        message = InfoBarMessage(
+            textResId = when (hint) {
+                EngagementHint.UPDATE -> R.string.dictate_update_installed_msg
+                EngagementHint.RATE -> R.string.dictate_rate_app_msg
+                EngagementHint.DONATE -> R.string.dictate_donate_msg
+            },
+            style = InfoBarStyle.INFO,
+        ),
+        confirmAction = Action.InfoHintAction.ConfirmEngagementHint(hint),
+        dismissAction = Action.InfoHintAction.DismissEngagementHint(hint),
+    )
 
     // ─── B4 helpers ────────────────────────────────────────────────────
 

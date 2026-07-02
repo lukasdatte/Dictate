@@ -116,7 +116,7 @@ class PromptVisibilityController(
 
         // 2026-05-22 — InfoBar mutex (the "enters in Block F" TODO from
         // InfoBarRenderer's KDoc that was never implemented). When the
-        // state-derived info-bar has at least one item, `info_cl`
+        // state-derived info-bar has at least one item, `infobar_cl`
         // renders at the top of the keyboard view; without this mutex
         // `prompts_keyboard_cl` stayed VISIBLE underneath and (because
         // it is declared later in the XML → higher Z-order) painted
@@ -126,6 +126,9 @@ class PromptVisibilityController(
         // a pure (DictateUiState) -> List function, so calling it here
         // keeps PromptVisibilityController the single owner of
         // `prompts_keyboard_cl`'s visibility (no two-controller race).
+        // 2026-07-02 (ADR-0006 completion) — pipeline errors + the
+        // Update/Rate/Donate hints now flow through the same selector,
+        // so this mutex covers them by construction.
         val infoBarActive = net.devemperor.dictate.state.infobar.InfoBarSelector
             .select(state).isNotEmpty()
 

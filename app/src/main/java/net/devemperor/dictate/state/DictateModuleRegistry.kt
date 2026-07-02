@@ -34,7 +34,7 @@ import kotlin.reflect.KClass
  *
  * **Phase-1 vs. Phase-2 note:** Chunks C5 + C6 populate the singleton's
  * `all` list with the 13 production modules; Phase 2's `InterruptionModule`
- * is added at that time. Until C5 runs, the singleton's `all` is empty
+ * is added at that time (activated with real producers 2026-07-02, F-036). Until C5 runs, the singleton's `all` is empty
  * and the orchestrator does no routing — Block 2 dispatches go through
  * the no-op stub in `DictatePipelineService.LocalBinder.dispatch`
  * (C7 wires the orchestrator into the binder).
@@ -117,7 +117,8 @@ open class DictateModuleRegistry(
      *   `AudioModule`, `ViewModeModule`, `OverlayModule`.
      * - **C6** adds the 8 auxiliary modules: `ResendModule`, `LivePromptModule`,
      *   `LanguageModule`, `LayoutModule`, `FeatureToggleModule`, `ThemingModule`,
-     *   `PendingSessionsModule`, `KeyboardInputModule` (+ Phase-2 `InterruptionModule`).
+     *   `PendingSessionsModule`, `KeyboardInputModule` (+ `InterruptionModule`,
+     *   activated 2026-07-02, F-036).
      *
      * Order in this list is the **cascade-emission order** (ADR-0002 §"Cascade
      * order"). The core modules go first because they sit on the hot path

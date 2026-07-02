@@ -229,6 +229,7 @@ object DictateModuleRegistry {
         PipelineModule,
         AudioModule,
         ViewModeModule,
+        WidgetModule,
         OverlayModule,
         ResendModule,
         LivePromptModule,
@@ -238,6 +239,7 @@ object DictateModuleRegistry {
         ThemingModule,
         PendingSessionsModule,
         KeyboardInputModule,
+        InfoHintModule,
         InterruptionModule,
     )
 
@@ -265,7 +267,7 @@ every concrete (`data class` / `data object`) Action variant is
 routed at O(1). The init-time `require` catches doubly-routed
 actions before the service starts.
 
-### 7.1 Module-Inventar (14 active)
+### 7.1 Module-Inventar (16 active)
 
 | # | Module | Axis | Cross-Module Observer? |
 |---|---|---|---|
@@ -273,16 +275,18 @@ actions before the service starts.
 | 2 | PipelineModule | `pipeline` (sealed PipelineUiState) | yes (PipelineDone → Resend, LivePrompt, ViewMode T7) |
 | 3 | AudioModule | `audio` | yes (recording-lifecycle → focus/SCO effects; focus-loss pause moved to InterruptionModule, F-007 consolidation 2026-07-02) |
 | 4 | ViewModeModule | `viewMode` (enum) | yes (Triangle-FSM transitions, ADR-0005) |
-| 5 | OverlayModule | `overlay` (position + permission + suppress + onboarding) | yes (T1/T2 `userPrefersWidget` cascades) |
-| 6 | ResendModule | `resend` | yes (Pipeline-Done → `MarkAvailable`) |
-| 7 | LivePromptModule | `livePrompt` | yes (Pipeline-Done → `ChainNext`) |
-| 8 | LanguageModule | `language` | yes (Reprocess-Override) |
-| 9 | LayoutModule | `layout` | yes (T2 → `SetSmallMode(true)`) |
-| 10 | FeatureToggleModule | `features` | no |
-| 11 | ThemingModule | `theming` | no |
-| 12 | PendingSessionsModule | `pendingSessions` | no (DB-subscriber-driven, no reducer) |
-| 13 | KeyboardInputModule | n/a (Unit state, effect-only) | no |
-| 14 | InterruptionModule (F-036, 2026-07-02) | `interruption` | yes (audio-focus loss / headset unplug while Active → `PauseRecording`; self-clear on leaving Paused) |
+| 5 | WidgetModule (B3.1, ADR-0008) | `widget` + `imeViewVisible` | yes (W1-W8 transitions, sticky-widget lifecycle) |
+| 6 | OverlayModule | `overlay` (position + permission + suppress + onboarding) | yes (T1/T2 `userPrefersWidget` cascades) |
+| 7 | ResendModule | `resend` | yes (Pipeline-Done → `MarkAvailable`) |
+| 8 | LivePromptModule | `livePrompt` | yes (Pipeline-Done → `ChainNext`) |
+| 9 | LanguageModule | `language` | yes (Reprocess-Override) |
+| 10 | LayoutModule | `layout` | yes (T2 → `SetSmallMode(true)`) |
+| 11 | FeatureToggleModule | `features` | no |
+| 12 | ThemingModule | `theming` | no |
+| 13 | PendingSessionsModule | `pendingSessions` | no (DB-subscriber-driven, no reducer) |
+| 14 | KeyboardInputModule | n/a (Unit state, effect-only) | no |
+| 15 | InfoHintModule (ADR-0006 completion, 2026-07-02) | `infoHints` | yes (`ClearTransientHints` cascade on recording/pipeline start + IME-hide-while-idle) |
+| 16 | InterruptionModule (F-036, 2026-07-02) | `interruption` | yes (audio-focus loss / headset unplug while Active → `PauseRecording`; self-clear on leaving Paused) |
 
 See Spec 1 §15.1 for the canonical inventory + the
 Cross-Module-Coupling-Matrix.

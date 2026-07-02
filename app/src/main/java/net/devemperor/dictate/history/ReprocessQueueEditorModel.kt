@@ -32,7 +32,9 @@ class ReprocessQueueEditorModel private constructor(
 
     private val mutableEntries = initialEntries.toMutableList()
 
-    val entries: List<Entry> get() = mutableEntries
+    // Defensive copy — a downcast of the backing MutableList must not be
+    // able to bypass the model's invariants.
+    val entries: List<Entry> get() = mutableEntries.toList()
 
     val size: Int get() = mutableEntries.size
 

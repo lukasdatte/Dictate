@@ -730,4 +730,37 @@ class InfoBarSelectorTest {
         // lastInterruption == null (the default) → the producer is silent.
         assertTrue(InfoBarSelector.select(defaultState()).isEmpty())
     }
+
+    @Test
+    fun `interruption item slots between pinned items and engagement hints by occurredAt`() {
+        // Full-ordering regression for the F-036 producer: pinned items
+        // (createdAt = 0L) first, then timestamped items by authentic
+        // event time (error at 5s before interruption at 7s), engagement
+        // nags (Long.MAX_VALUE) always last.
+        val state = stateWithInterruption(
+            net.devemperor.dictate.state.InterruptionReason.AUDIO_FOCUS_LOST,
+            occurredAt = 7_000L,
+        ).let {
+            it.copy(
+                overlay = it.overlay.copy(onboardingPending = true),
+                infoHints = net.devemperor.dictate.state.InfoHintState(
+                    pipelineError = net.devemperor.dictate.state.PipelineErrorHint(
+                        kind = net.devemperor.dictate.state.PipelineErrorKind.INTERNET_ERROR,
+                        providerKey = null,
+                        occurredAt = 5_000L,
+                    ),
+                    engagementHint = net.devemperor.dictate.state.EngagementHint.RATE,
+                ),
+            )
+        }
+        assertEquals(
+            listOf(
+                "overlay-permission:onboarding",   // pinned 0L
+                "pipeline-error:internet_error",   // occurredAt 5_000
+                "interruption:audio_focus_lost",   // occurredAt 7_000
+                "engagement-hint:rate",            // Long.MAX_VALUE — always last
+            ),
+            InfoBarSelector.select(state).map { it.id },
+        )
+    }
 }

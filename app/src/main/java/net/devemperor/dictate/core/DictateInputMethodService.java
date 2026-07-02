@@ -718,14 +718,18 @@ public class DictateInputMethodService extends InputMethodService
                     // 2026-05-21 indirection-cleanup Chunk 3.6 (C-1) —
                     // route AudioManager focus events through the
                     // orchestrator instead of bypassing it with a direct
-                    // `recordingStateController.togglePause()`. The
-                    // `AudioModule.onCrossModuleStateChange` cascade
-                    // already detects `prev.audio.audioFocusGranted &&
-                    // !next.audio.audioFocusGranted && Active|Paused` →
-                    // cascades `RecordingAction.PauseRecording`. The
-                    // legacy `togglePause()` direct-call bypassed the
-                    // orchestrator entirely; now the AudioModule reducer
-                    // is the single source of truth.
+                    // `recordingStateController.togglePause()`.
+                    //
+                    // NOTE (F-036/F-007 consolidation, 2026-07-02): this
+                    // IME-side listener is effectively dead — its
+                    // AudioFocusRequest is only requested by the
+                    // never-started legacy RecordingStateController.
+                    // The live interruption authority is the FGS-side
+                    // AudioFocusChangeClassifier → InterruptionModule
+                    // (pause cascade); AudioModule keeps focus grant as
+                    // bookkeeping only. Even if this listener fired, it
+                    // would only update that bookkeeping. Removal belongs
+                    // to the RecordingStateController retirement.
                     //
                     // **Legacy parity contract:** the legacy code only
                     // paused on full AUDIOFOCUS_LOSS — transient losses

@@ -75,5 +75,5 @@ The history screen works today because the table is young. It degrades structura
 ## 6. References
 
 - Parent catalog: [`2026-07-02 - feature-wiring-code-review.md`](<2026-07-02 - feature-wiring-code-review.md>) — F-054.
-- Code: `history/HistoryActivity.java:120-181`, `database/dao/SessionDao.kt:62-69`, `database/DictateDatabase.kt:121`, `core/PipelineOrphanCleaner.kt:26-28`.
+- Code (pre-fix citations): `history/HistoryActivity.java:120-181` (since converted to `HistoryActivity.kt`), `database/dao/SessionDao.kt:62-69`, `database/DictateDatabase.kt:121`, `state/PipelineOrphanCleaner.kt:26-28`.
 - `docs/DATABASE-PATTERNS.md` — index + migration conventions.

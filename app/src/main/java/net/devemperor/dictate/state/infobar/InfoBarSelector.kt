@@ -50,6 +50,14 @@ import net.devemperor.dictate.state.RecordingState
  *     legacy imperative `showInfo(type)` cases.
  *   - **Pending-Insert / Recovery** (Block E) — producers driven by
  *     `pendingSessions` and the recording-recovery state.
+ *   - **Interruption-paused recording** (2026-07-02, F-036) —
+ *     pure-info item driven by `state.interruption.lastInterruption`;
+ *     lifetime bound to the interruption-caused pause (module
+ *     self-clear). Accepted shadowing (F-030 precedent): an older
+ *     timestamped item (e.g. a pending-insert transcript) outranks a
+ *     fresh interruption notice; nothing is lost — the hidden item
+ *     resurfaces as `items.first()` once the shown one's source
+ *     clears, and the pause itself is visible in the keyboard UI.
  *
  * **Priority note (consolidation research Gap 2, 2026-07-02):** items
  * for the *same* session share a `createdAt` — the stable sort plus
@@ -263,7 +271,7 @@ object InfoBarSelector {
         // onPipelineError callback → InfoHintAction.PipelineErrorOccurred,
         // cleared by dismiss/confirm or InfoHintModule's cascade when a
         // new run starts). Replaces the legacy
-        // legacy imperative showInfo(errorInfoKey) routing — force-expand
+        // imperative showInfo(errorInfoKey) routing — force-expand
         // and the prompts-mutex now apply to error bars by construction
         // (both key on this selector's output). `createdAt = occurredAt`
         // gives the error its authentic event timestamp.

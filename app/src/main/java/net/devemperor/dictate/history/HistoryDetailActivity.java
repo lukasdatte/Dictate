@@ -144,7 +144,7 @@ public class HistoryDetailActivity extends AppCompatActivity
 
             @Override
             public void onOtherPrompt(ProcessingStepEntity step, int chainIndex) {
-                showPromptChooser(step, chainIndex);
+                showPromptChooser(step);
             }
 
             @Override
@@ -608,7 +608,7 @@ public class HistoryDetailActivity extends AppCompatActivity
      * fragment tag so the context survives Activity recreation — the step is
      * re-loaded from the DB in {@link #onPromptChosen}.
      */
-    private void showPromptChooser(ProcessingStepEntity step, int chainIndex) {
+    private void showPromptChooser(ProcessingStepEntity step) {
         PromptChooserBottomSheet.newInstance(TAG_REGENERATE_PREFIX + step.getId())
                 .show(getSupportFragmentManager(), "prompt_chooser");
     }
@@ -632,6 +632,9 @@ public class HistoryDetailActivity extends AppCompatActivity
         if (tag.startsWith(TAG_REGENERATE_PREFIX)) {
             ProcessingStepEntity step = stepDao.getById(tag.substring(TAG_REGENERATE_PREFIX.length()));
             if (step == null) return; // step vanished (e.g. session deleted meanwhile)
+            // An "Other prompt" choice without text (pathological null prompt row)
+            // must not silently degrade into a plain regenerate of the old prompt.
+            if (promptText == null || promptText.isEmpty()) return;
             dispatchRegenerate(step, promptText, promptEntityId);
         } else if (tag.startsWith(TAG_POST_PROCESS_PREFIX)) {
             ProcessingStepEntity step = stepDao.getById(tag.substring(TAG_POST_PROCESS_PREFIX.length()));

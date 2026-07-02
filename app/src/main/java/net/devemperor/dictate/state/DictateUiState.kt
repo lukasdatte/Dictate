@@ -23,7 +23,7 @@ import java.io.File
  * `toMutableList()` is forbidden pattern (e) — see
  * `docs/architecture/state-architecture/forbidden-patterns.md`.
  *
- * **Axes (13 sub-state fields, single-owner-per-axis throughout):**
+ * **Axes (15 sub-state fields, single-owner-per-axis throughout):**
  *
  * | # | Field | Owner module | Notes |
  * |---|-------|--------------|-------|
@@ -41,7 +41,7 @@ import java.io.File
  * | 10 | [features] | FeatureToggleModule | 5 user-toggles |
  * | 11 | [theming] | ThemingModule | theme + accent + overlay-chars + speed |
  * | 12 | [pendingSessions] | PendingSessionsModule | PersistentList, DB-subscriber-driven |
- * | 13 | [interruption] | InterruptionModule (Phase 2) | null in Phase 1 |
+ * | 13 | [interruption] | InterruptionModule | audio-focus / headset interruption events; `lastInterruption` non-null while an interruption-caused pause is live (active since F-036, 2026-07-02) |
  * | 14 | [keyboardInput] | KeyboardInputModule | host-editor `EditorInfo` snapshot driving Enter-button icon + action |
  * | 15 | [infoHints] | InfoHintModule | transient pipeline errors + Update/Rate/Donate hints (info-bar producers, ADR-0006) |
  *

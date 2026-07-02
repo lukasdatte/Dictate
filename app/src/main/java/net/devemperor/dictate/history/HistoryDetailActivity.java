@@ -60,8 +60,12 @@ import java.util.concurrent.Executors;
 public class HistoryDetailActivity extends AppCompatActivity
         implements PromptChooserBottomSheet.OnPromptChosenListener {
 
-    private static final String TAG_REGENERATE = "regenerate";
-    private static final String TAG_POST_PROCESS = "post_process";
+    // F-111: All chooser tags encode their full context (step id / session id)
+    // in the fragment tag, mirroring the reprocess-edit pattern. The BottomSheet
+    // (and its arguments) survive rotation while bare Activity fields do not —
+    // so no pending-* instance state may back a chooser flow.
+    private static final String TAG_REGENERATE_PREFIX = "history_regenerate:";
+    private static final String TAG_POST_PROCESS_PREFIX = "history_post_process:";
     private static final String TAG_REPROCESS_EDIT_PREFIX = "history_reprocess_edit:";
 
     private enum UiState { IDLE, LOADING, ERROR }
@@ -75,13 +79,6 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     private String sessionId;
     private SessionEntity session;
-
-    // Pending prompt chooser context (survives only within same Activity instance,
-    // but that's fine — the BottomSheet listener survives config changes via onAttach)
-    private ProcessingStepEntity pendingStep;
-    private int pendingChainIndex;
-    private String pendingPostProcessOutputText;
-    private String pendingPostProcessNewSessionId;
 
     private List<PipelineStepAdapter.PipelineStep> pipelineSteps;
     private PipelineStepAdapter pipelineAdapter;
@@ -144,7 +141,7 @@ public class HistoryDetailActivity extends AppCompatActivity
 
             @Override
             public void onPostProcess(ProcessingStepEntity step) {
-                createPostProcessingSession(step);
+                showPostProcessChooser(step);
             }
 
             @Override
@@ -565,45 +562,41 @@ public class HistoryDetailActivity extends AppCompatActivity
         });
     }
 
+    /**
+     * F-111: Shows the "Other prompt" chooser. The step id is encoded in the
+     * fragment tag so the context survives Activity recreation — the step is
+     * re-loaded from the DB in {@link #onPromptChosen}.
+     */
     private void showPromptChooser(ProcessingStepEntity step, int chainIndex) {
-        pendingStep = step;
-        pendingChainIndex = chainIndex;
-        PromptChooserBottomSheet.newInstance(TAG_REGENERATE)
+        PromptChooserBottomSheet.newInstance(TAG_REGENERATE_PREFIX + step.getId())
                 .show(getSupportFragmentManager(), "prompt_chooser");
     }
 
-    private void createPostProcessingSession(ProcessingStepEntity step) {
+    /**
+     * F-111: Shows the post-process chooser WITHOUT creating any DB row.
+     * The POST_PROCESSING session is created only after a prompt is actually
+     * chosen — dismissing the sheet must leave no orphan session behind.
+     */
+    private void showPostProcessChooser(ProcessingStepEntity step) {
         String outputText = step.getOutputText();
         if (outputText == null || outputText.isEmpty()) return;
 
-        String newSessionId = UUID.randomUUID().toString();
-        sessionManager.createSession(
-                newSessionId,
-                SessionType.POST_PROCESSING,
-                session.getTargetAppPackage(),
-                session.getLanguage(),
-                /* audioFilePath */ null,
-                /* audioDurationSeconds */ 0L,
-                /* parentId */ sessionId,
-                SessionOrigin.POST_PROCESSING,
-                /* queuedPromptIds */ null,
-                SessionStatus.RECORDED
-        );
-        sessionManager.updateInputText(newSessionId, outputText);
-
-        pendingPostProcessOutputText = outputText;
-        pendingPostProcessNewSessionId = newSessionId;
-        PromptChooserBottomSheet.newInstance(TAG_POST_PROCESS)
+        PromptChooserBottomSheet.newInstance(TAG_POST_PROCESS_PREFIX + step.getId())
                 .show(getSupportFragmentManager(), "prompt_chooser_post");
     }
 
     @Override
     public void onPromptChosen(String tag, String promptText, Integer promptEntityId) {
-        if (TAG_REGENERATE.equals(tag) && pendingStep != null) {
-            regenerateStep(pendingStep, pendingChainIndex, promptText, promptEntityId);
-        } else if (TAG_POST_PROCESS.equals(tag) && pendingPostProcessNewSessionId != null) {
-            runPostProcessing(pendingPostProcessNewSessionId, pendingPostProcessOutputText, promptText, promptEntityId);
-        } else if (tag != null && tag.startsWith(TAG_REPROCESS_EDIT_PREFIX)) {
+        if (tag == null) return;
+        if (tag.startsWith(TAG_REGENERATE_PREFIX)) {
+            ProcessingStepEntity step = stepDao.getById(tag.substring(TAG_REGENERATE_PREFIX.length()));
+            if (step == null) return; // step vanished (e.g. session deleted meanwhile)
+            regenerateStep(step, step.getChainIndex(), promptText, promptEntityId);
+        } else if (tag.startsWith(TAG_POST_PROCESS_PREFIX)) {
+            ProcessingStepEntity step = stepDao.getById(tag.substring(TAG_POST_PROCESS_PREFIX.length()));
+            if (step == null || step.getOutputText() == null || step.getOutputText().isEmpty()) return;
+            startPostProcessing(step.getOutputText(), promptText, promptEntityId);
+        } else if (tag.startsWith(TAG_REPROCESS_EDIT_PREFIX)) {
             // K2 minimal-fallback: V1 chooser feeds a single-prompt queue into
             // the reprocess pipeline. Free-text prompts (promptEntityId == null)
             // are skipped because JobRequest's queuedPromptIds carries entity
@@ -618,6 +611,29 @@ public class HistoryDetailActivity extends AppCompatActivity
                         Toast.LENGTH_LONG).show();
             }
         }
+    }
+
+    /**
+     * F-111: Creates the POST_PROCESSING session at choose-time (not at
+     * chooser-open-time) and runs the completion. A dismissed chooser therefore
+     * never leaves an empty orphan session in the history list.
+     */
+    private void startPostProcessing(String outputText, String promptText, Integer promptEntityId) {
+        String newSessionId = UUID.randomUUID().toString();
+        sessionManager.createSession(
+                newSessionId,
+                SessionType.POST_PROCESSING,
+                session.getTargetAppPackage(),
+                session.getLanguage(),
+                /* audioFilePath */ null,
+                /* audioDurationSeconds */ 0L,
+                /* parentId */ sessionId,
+                SessionOrigin.POST_PROCESSING,
+                /* queuedPromptIds */ null,
+                SessionStatus.RECORDED
+        );
+        sessionManager.updateInputText(newSessionId, outputText);
+        runPostProcessing(newSessionId, outputText, promptText, promptEntityId);
     }
 
     private void runPostProcessing(String newSessionId, String outputText, String promptText, Integer promptEntityId) {

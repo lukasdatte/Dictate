@@ -66,7 +66,7 @@ class ImePipelineConfigResolverTest {
         assertEquals(audio.absolutePath, req.audioFilePath)
         assertEquals("de", req.language)
         assertNull(req.modelOverride)
-        assertEquals(listOf(4, 8), req.queuedPromptIds)
+        assertEquals(PromptQueueSlot.fromIds(listOf(4, 8)), req.queuedPromptSlots)
         assertEquals("com.example.app", req.targetAppPackage)
         assertEquals(File(filesDir, "recordings"), req.recordingsDir)
         assertNull("fresh recording → reuseSessionId is null", req.reuseSessionId)
@@ -161,7 +161,7 @@ class ImePipelineConfigResolverTest {
         assertEquals(importedFile.absolutePath, req.audioFilePath)
         assertEquals("it", req.language)
         assertNull(req.modelOverride)
-        assertEquals(listOf(11, 12), req.queuedPromptIds)
+        assertEquals(PromptQueueSlot.fromIds(listOf(11, 12)), req.queuedPromptSlots)
         assertEquals("com.imported.target", req.targetAppPackage)
         assertEquals(File(filesDir, "recordings"), req.recordingsDir)
         assertNull("imported file is a fresh session → reuseSessionId null", req.reuseSessionId)
@@ -198,7 +198,7 @@ class ImePipelineConfigResolverTest {
         // C3-IMPL-2: modelOverride / targetAppPackage no longer null.
         assertEquals("whisper-large", req.modelOverride)
         assertEquals("com.target.pkg", req.targetAppPackage)
-        assertEquals(listOf(1, 2), req.queuedPromptIds)
+        assertEquals(PromptQueueSlot.fromIds(listOf(1, 2)), req.queuedPromptSlots)
         assertEquals("sid-rp", req.reuseSessionId)
         assertEquals(SessionOrigin.KEYBOARD, req.origin)
     }

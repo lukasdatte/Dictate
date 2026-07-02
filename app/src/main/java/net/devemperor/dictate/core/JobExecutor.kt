@@ -268,7 +268,14 @@ sealed class JobRequest {
         val audioFilePath: String? = null,
         val language: String? = null,
         val modelOverride: String? = null,
-        val queuedPromptIds: List<Int> = emptyList(),
+        /**
+         * Prompt queue as content-capable slots (queue-editor transport
+         * model, research doc "reprocess-queue-editor" §2.1). ID-only
+         * slots preserve the legacy entity-ID semantics; text-carrying
+         * slots let free-text prompts and since-deleted saved prompts
+         * survive the trip. See [PromptQueueSlot] for the three shapes.
+         */
+        val queuedPromptSlots: List<PromptQueueSlot> = emptyList(),
         val targetAppPackage: String? = null,
         val recordingsDir: java.io.File,
         /** null = brand-new session; non-null = reprocess an existing session. */
@@ -316,7 +323,7 @@ sealed class JobRequest {
             // job-request surface. See PipelineOrchestrator.PipelineConfig.modelOverride.
             // TODO(Chunk 3): wire `modelOverride` through AIOrchestrator.
             modelOverride = modelOverride,
-            queuedPromptIds = queuedPromptIds,
+            queuedPromptSlots = queuedPromptSlots,
             // W3: for a brand-new session (reuseSessionId == null) the
             // orchestrator must persist under THIS sessionId, because
             // JobExecutor has already registered this ID in ActiveJobRegistry
@@ -342,19 +349,26 @@ sealed class JobRequest {
      *
      * Without an override, the job layer re-derives the prompt from the
      * persisted step (`promptUsed`) — see
-     * [PipelineOrchestrator.regenerateStepBlocking]. The override pair
-     * `(promptOverride, promptOverrideEntityId)` intentionally matches the
-     * "(text, optional entityId)" queue-slot transport model planned for the
-     * reprocess queue editor (research doc "reprocess-queue-editor" §2.1), so
-     * free-text prompts and since-deleted saved prompts both work.
+     * [PipelineOrchestrator.regenerateStepBlocking]. The override is a
+     * [PromptQueueSlot] — the same "(text, optional entityId)" queue-slot
+     * type the reprocess queue editor transports — so free-text prompts and
+     * since-deleted saved prompts both work. An override slot must carry
+     * text (an ID-only slot has nothing to override *with*; the init guard
+     * keeps that unconstructible).
      */
     data class StepRegenerate @JvmOverloads constructor(
         override val sessionId: String,
         override val totalSteps: Int,
         val stepChainIndex: Int,
-        val promptOverride: String? = null,
-        val promptOverrideEntityId: Int? = null
-    ) : JobRequest()
+        val promptOverride: PromptQueueSlot? = null
+    ) : JobRequest() {
+        init {
+            require(promptOverride == null || promptOverride.text != null) {
+                "StepRegenerate.promptOverride must carry prompt text — " +
+                    "an ID-only slot cannot serve as an override"
+            }
+        }
+    }
 
     /**
      * Post-processing completion on a NEW session (history "Post-process" —
@@ -417,8 +431,8 @@ class PipelineOrchestratorRunner(
             request.sessionId,
             request.stepChainIndex,
             token,
-            request.promptOverride,
-            request.promptOverrideEntityId
+            request.promptOverride?.text,
+            request.promptOverride?.entityId
         )
 
     override fun postProcess(request: JobRequest.PostProcess) =

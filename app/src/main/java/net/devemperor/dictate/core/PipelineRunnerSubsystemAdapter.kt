@@ -244,7 +244,10 @@ class DefaultPipelineConfigResolver(
             /* audioFilePath */ audioFile?.absolutePath,
             /* language */ language,
             /* modelOverride */ null,
-            /* queuedPromptIds */ queue,
+            // ID-only slots — the staging FSM carries entity IDs (see
+            // PromptQueueSlot shape 1; content-carrying slots are the
+            // history queue-editor's transport).
+            /* queuedPromptSlots */ PromptQueueSlot.fromIds(queue),
             /* targetAppPackage */ null,
             /* recordingsDir */ File(filesDirProvider(), "recordings"),
             /* reuseSessionId */ sessionId,

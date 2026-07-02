@@ -29,6 +29,7 @@ import net.devemperor.dictate.core.ActiveJobRegistry;
 import net.devemperor.dictate.core.ActiveJobRegistryObserver;
 import net.devemperor.dictate.core.JobExecutor;
 import net.devemperor.dictate.core.JobRequest;
+import net.devemperor.dictate.core.PromptQueueSlot;
 import net.devemperor.dictate.core.RecordingRepository;
 import net.devemperor.dictate.core.SessionManager;
 import net.devemperor.dictate.database.DictateDatabase;
@@ -480,7 +481,7 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     // region Reprocess actions (Phase 10.3)
 
-    private void startHistoryReprocess(String targetSessionId, List<Integer> editedQueue) {
+    private void startHistoryReprocess(String targetSessionId, List<PromptQueueSlot> editedQueue) {
         if (ActiveJobRegistry.INSTANCE.isAnyActive()) {
             Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
             return;
@@ -495,9 +496,12 @@ public class HistoryDetailActivity extends AppCompatActivity
             return;
         }
 
-        List<Integer> queue = editedQueue != null
+        // Direct reprocess (editedQueue == null) re-runs the historical
+        // queue as ID-only slots — the pipeline resolves the prompts'
+        // current text at execution, exactly like the original run did.
+        List<PromptQueueSlot> queue = editedQueue != null
                 ? editedQueue
-                : sessionManager.getHistoricalQueuedPromptIds(targetSessionId);
+                : PromptQueueSlot.fromIds(sessionManager.getHistoricalQueuedPromptIds(targetSessionId));
 
         int totalSteps = 1; // transcription
         totalSteps += queue.size();
@@ -509,7 +513,7 @@ public class HistoryDetailActivity extends AppCompatActivity
                 /* audioFilePath */ audioPath,
                 /* language */ target.getLanguage(),
                 /* modelOverride */ null,
-                /* queuedPromptIds */ queue,
+                /* queuedPromptSlots */ queue,
                 /* targetAppPackage */ target.getTargetAppPackage(),
                 /* recordingsDir */ new File(audioPath).getParentFile() != null
                         ? new File(audioPath).getParentFile()
@@ -560,8 +564,11 @@ public class HistoryDetailActivity extends AppCompatActivity
                 sessionId,
                 /* totalSteps */ 1,
                 step.getChainIndex(),
-                promptOverride,
-                promptOverrideEntityId
+                // Slot transport: "(text, optional entityId)" — free-text
+                // overrides carry no entity id (PromptQueueSlot shape 2/3).
+                promptOverride != null
+                        ? PromptQueueSlot.ofContent(promptOverride, promptOverrideEntityId)
+                        : null
         );
         if (!JobExecutor.INSTANCE.start(this, request)) {
             Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
@@ -640,7 +647,8 @@ public class HistoryDetailActivity extends AppCompatActivity
             String targetSessionId = tag.substring(TAG_REPROCESS_EDIT_PREFIX.length());
             if (promptEntityId != null) {
                 startHistoryReprocess(targetSessionId,
-                        java.util.Collections.singletonList(promptEntityId));
+                        java.util.Collections.singletonList(
+                                PromptQueueSlot.ofContent(promptText, promptEntityId)));
             } else {
                 Toast.makeText(this,
                         getString(R.string.dictate_history_reprocess_edit_needs_saved_prompt),

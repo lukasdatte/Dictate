@@ -287,7 +287,7 @@ class ImeRecordingDriveCutoverTest {
         assertEquals("c5-sid-send", capturedSessionId.get())
         val req = capturedRequest.get()!!
         assertEquals("de", req.language)
-        assertEquals(listOf(5), req.queuedPromptIds)
+        assertEquals(PromptQueueSlot.fromIds(listOf(5)), req.queuedPromptSlots)
         assertEquals("tone", req.stylePrompt)
         assertEquals(true, req.autoSwitchKeyboard)
         assertEquals(true, req.showResendButton)
@@ -386,7 +386,7 @@ class ImeRecordingDriveCutoverTest {
         assertEquals(JobRequest.TranscriptionKind.RECORDING, req.kind)
         assertEquals(imported.absolutePath, req.audioFilePath)
         assertEquals("fr", req.language)
-        assertEquals(listOf(7), req.queuedPromptIds)
+        assertEquals(PromptQueueSlot.fromIds(listOf(7)), req.queuedPromptSlots)
         assertEquals("verbatim", req.stylePrompt)
         assertEquals("com.imported.app", req.targetAppPackage)
         assertEquals(2, req.totalSteps)

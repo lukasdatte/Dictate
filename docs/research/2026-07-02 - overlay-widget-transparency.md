@@ -4,7 +4,7 @@
 date: 2026-07-02
 author: Lukas + Claude (multi-agent review session)
 type: Spec
-status: Spec — programmer-ready
+status: Accepted
 context: Configurable background transparency for the floating overlay widget, plus the two theming defects that must ship with it (Pref.Theme ignored, no config-change reaction).
 related-plan: n/a (seeded by 2026-07-02 - feature-wiring-code-review.md, F-118/F-119/F-120/F-121)
 related-adrs: —
@@ -132,6 +132,17 @@ Each step compiles and tests independently; steps 3–5 each have a visible devi
 2. **Whether opacity should also apply to the keyboard-hidden strip mode** (`KEYBOARD_HIDDEN_STRIP`) — owner: user decision at implementation time; fallback: apply to the card background uniformly (same drawable).
 
 ## 7. Change History
+
+### 2026-07-02 — Implemented (status → Accepted)
+
+- **Trigger:** Implementation of the full spec in migration order §4 (branch `worktree-agent-ad9f1f03e41e0e4d2`, commits `[widget-transparency]`).
+- **What changed:** All five steps landed — F-121 dead-branch delete; shared `state/render/EffectiveNightMode.kt` helper + keyboard call-site switch (`DictateInputMethodService`); F-119 `createConfigurationContext` night-override before the overlay's `ContextThemeWrapper` + re-inflate on effective-night-mode change; F-120 `DictatePipelineService.onConfigurationChanged` → `OverlayBackend.reinflate()` on night-bits/density delta; F-118 `Pref.WidgetOpacity` + SeekBar settings entry + `ThemingState.widgetOpacity` + mirror/reducer wiring + fill-only drawable mutation. Full JVM test coverage per §5 (fill alpha 20/55/100, opaque stroke via constant-state reflection, per-tick idempotency, re-apply after reinflate, night-mode truth table, mirror/reducer/effect tests).
+- **Deviations:**
+  - **§3.5 `reinflate()` semantics:** re-renders *immediately* from the backend's cached state/mode snapshot instead of waiting for "the next render tick" — a uiMode flip does not emit state, so waiting would leave the window gone indefinitely. Density changes route through the same `reinflate()` (which re-runs `OverlayLayoutParamsFactory.create()`), covering the layout-params recompute without a second code path.
+  - **§3.2 / F-037 rider:** the four dead `ThemingAction` setters were **deleted** (trivially possible; only reducer tests referenced them). The new `SetWidgetOpacity` arm additionally emits a `PersistWidgetOpacity` effect (per F-037's own guidance) so a future dispatcher cannot hit the unpersisted-write revert trap; the SP mirror remains the sole production update path.
+  - **§6 gap 1 (strings):** repo-conventional names `dictate_settings_widget_opacity_title`/`_summary` instead of the `dictate_widget_opacity` placeholder; translations added for de/es/pt alongside the English default.
+  - **§3.7 elevation clamp below ~50 %:** not implemented (spec marked it optional); the proportional shadow fade is accepted as-is.
+  - **§6 gap 2:** opacity applies uniformly to the card background (same drawable in all widget modes), per the documented fallback.
 
 ### 2026-07-02 — Initial spec
 

@@ -97,6 +97,38 @@ class PromptVisibilityControllerTest {
     }
 
     @Test
+    fun `pipeline-error info-bar item hides the prompts (mutex regression)`() {
+        // ADR-0006-completion regression: error bars now flow through
+        // InfoBarSelector, so the InfoBar-prompts mutex applies to them
+        // by construction — even in the "prompts would show" idle +
+        // rewordingEnabled configuration.
+        val state = DictateUiState.initial().copy(
+            features = DictateUiState.initial().features.copy(rewordingEnabled = true),
+            infoHints = net.devemperor.dictate.state.InfoHintState(
+                pipelineError = net.devemperor.dictate.state.PipelineErrorHint(
+                    kind = net.devemperor.dictate.state.PipelineErrorKind.INTERNET_ERROR,
+                    providerKey = null,
+                    occurredAt = 1L,
+                ),
+            ),
+        )
+        controller.render(state, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.GONE, promptsContainer.visibility)
+    }
+
+    @Test
+    fun `engagement-hint info-bar item hides the prompts (mutex regression)`() {
+        val state = DictateUiState.initial().copy(
+            features = DictateUiState.initial().features.copy(rewordingEnabled = true),
+            infoHints = net.devemperor.dictate.state.InfoHintState(
+                engagementHint = net.devemperor.dictate.state.EngagementHint.RATE,
+            ),
+        )
+        controller.render(state, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.GONE, promptsContainer.visibility)
+    }
+
+    @Test
     fun `rewordingEnabled with idle state shows prompts`() {
         val state = DictateUiState.initial().copy(
             features = DictateUiState.initial().features.copy(rewordingEnabled = true),

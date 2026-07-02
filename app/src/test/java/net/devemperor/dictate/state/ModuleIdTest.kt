@@ -9,7 +9,7 @@ import org.junit.Test
  * Tests for [ModuleId] sealed-interface enumeration.
  *
  * Verifies:
- * - All 14 module identifiers exist (13 Phase-1 + 1 Phase-2 stub).
+ * - All 15 module identifiers exist (14 Phase-1 + 1 Phase-2 stub).
  * - Each id is a singleton (`data object` identity).
  * - Identity comparison (`===`) discriminates distinct ids.
  *
@@ -35,13 +35,15 @@ class ModuleIdTest {
             ModuleId.Theming,
             ModuleId.PendingSessions,
             ModuleId.KeyboardInput,
+            ModuleId.InfoHint,
             ModuleId.Interruption,
         )
-        // 13 Phase-1 modules + 1 Phase-2 stub (Interruption).
-        assertEquals("Spec 1 §15.1 ⇒ 14 module ids", 14, ids.size)
+        // 14 Phase-1 modules (incl. the 2026-07-02 InfoHint axis,
+        // ADR-0006 completion) + 1 Phase-2 stub (Interruption).
+        assertEquals("Spec 1 §15.1 + InfoHint ⇒ 15 module ids", 15, ids.size)
         // All entries must be distinct singletons — `id is ModuleId` would be
         // statically-true (list is typed), so we check distinctness via toSet().
-        assertEquals("All ModuleId entries must be distinct singletons", 14, ids.toSet().size)
+        assertEquals("All ModuleId entries must be distinct singletons", 15, ids.toSet().size)
     }
 
     @Test
@@ -59,6 +61,7 @@ class ModuleIdTest {
         assertSame(ModuleId.Theming, ModuleId.Theming)
         assertSame(ModuleId.PendingSessions, ModuleId.PendingSessions)
         assertSame(ModuleId.KeyboardInput, ModuleId.KeyboardInput)
+        assertSame(ModuleId.InfoHint, ModuleId.InfoHint)
         assertSame(ModuleId.Interruption, ModuleId.Interruption)
     }
 

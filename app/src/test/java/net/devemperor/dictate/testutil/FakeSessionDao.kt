@@ -1,5 +1,7 @@
 package net.devemperor.dictate.testutil
 
+import androidx.paging.PagingSource
+import androidx.paging.PagingState
 import net.devemperor.dictate.database.dao.OrphanedAudioRow
 import net.devemperor.dictate.database.dao.SessionDao
 import net.devemperor.dictate.database.entity.SessionEntity
@@ -47,16 +49,43 @@ class FakeSessionDao : SessionDao {
         rows[sessionId]?.let { rows[sessionId] = it.copy(audioDurationSeconds = durationSeconds) }
     }
 
-    override fun getAll(): List<SessionEntity> = rows.values.toList()
+    /**
+     * In-memory analogue of the paged history query. Filter semantics
+     * approximate the SQL: [searchPattern] arrives pre-escaped (see
+     * `LikeEscape`), so the backslashes are stripped before the
+     * substring check. NOT a full `LIKE` emulation — tests that assert
+     * real wildcard/ESCAPE behaviour run against Room
+     * (`SessionDaoHistoryTest`).
+     */
+    override fun pagedHistory(
+        type: String?,
+        searchPattern: String?,
+    ): PagingSource<Int, SessionEntity> {
+        val needle = searchPattern?.let(::unescapeLike)
+        val snapshot = rows.values
+            .filter { type == null || it.type == type }
+            .filter {
+                needle == null ||
+                    (it.finalOutputText?.contains(needle) == true) ||
+                    (it.inputText?.contains(needle) == true)
+            }
+            .sortedByDescending { it.createdAt }
+        return ListPagingSource(snapshot)
+    }
 
-    override fun getByType(type: String): List<SessionEntity> =
-        rows.values.filter { it.type == type }
-
-    override fun search(query: String): List<SessionEntity> =
-        rows.values.filter {
-            (it.finalOutputText?.contains(query) == true) ||
-                (it.inputText?.contains(query) == true)
+    /** Reverses `LikeEscape.escape`: drops each escape-backslash, keeps the escaped char. */
+    private fun unescapeLike(pattern: String): String = buildString {
+        var i = 0
+        while (i < pattern.length) {
+            if (pattern[i] == '\\' && i + 1 < pattern.length) {
+                append(pattern[i + 1])
+                i += 2
+            } else {
+                append(pattern[i])
+                i++
+            }
         }
+    }
 
     override fun deleteById(id: String) {
         rows.remove(id)
@@ -174,6 +203,14 @@ class FakeSessionDao : SessionDao {
         return victims.size
     }
 
+    override fun deleteCancelledOlderThan(cutoff: Long): Int {
+        val victims = rows.values.filter {
+            it.status == "CANCELLED" && it.createdAt < cutoff
+        }
+        victims.forEach { rows.remove(it.id) }
+        return victims.size
+    }
+
     override fun findOrphanedTerminalAudio(cutoff: Long): List<OrphanedAudioRow> =
         rows.values
             .filter {
@@ -214,4 +251,28 @@ class FakeSessionDao : SessionDao {
         }
         return updated
     }
+}
+
+/**
+ * Minimal offset-keyed [PagingSource] over a pre-filtered list —
+ * backs [FakeSessionDao.pagedHistory] (and [EmptySessionDao]) so DAO
+ * fakes satisfy the paging DAO surface without Room. Mirrors the
+ * key semantics of Room's `LimitOffsetPagingSource`: key == start
+ * offset, `nextKey == null` at the end of the list.
+ */
+class ListPagingSource(
+    private val items: List<SessionEntity>,
+) : PagingSource<Int, SessionEntity>() {
+
+    override suspend fun load(params: LoadParams<Int>): LoadResult<Int, SessionEntity> {
+        val start = params.key ?: 0
+        val page = items.drop(start).take(params.loadSize)
+        return LoadResult.Page(
+            data = page,
+            prevKey = if (start == 0) null else (start - params.loadSize).coerceAtLeast(0),
+            nextKey = if (start + page.size >= items.size) null else start + page.size,
+        )
+    }
+
+    override fun getRefreshKey(state: PagingState<Int, SessionEntity>): Int? = null
 }

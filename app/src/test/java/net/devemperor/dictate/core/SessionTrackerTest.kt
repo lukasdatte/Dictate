@@ -1,5 +1,6 @@
 package net.devemperor.dictate.core
 
+import androidx.paging.PagingSource
 import net.devemperor.dictate.database.dao.SessionDao
 import net.devemperor.dictate.database.entity.SessionEntity
 import net.devemperor.dictate.database.entity.SessionOrigin
@@ -148,9 +149,7 @@ private class FakeSessionDao : SessionDao {
     override fun updateFinalOutputText(sessionId: String, text: String?) = notUsed()
     override fun updateInputText(sessionId: String, text: String?) = notUsed()
     override fun updateAudioDuration(sessionId: String, durationSeconds: Long) = notUsed()
-    override fun getAll(): List<SessionEntity> = notUsed()
-    override fun getByType(type: String): List<SessionEntity> = notUsed()
-    override fun search(query: String): List<SessionEntity> = notUsed()
+    override fun pagedHistory(type: String?, searchPattern: String?): PagingSource<Int, SessionEntity> = notUsed()
     override fun deleteById(id: String) = notUsed()
     override fun deleteAll() = notUsed()
     override fun findWithMissingDuration(): List<SessionEntity> = notUsed()
@@ -176,6 +175,7 @@ private class FakeSessionDao : SessionDao {
     ) = notUsed()
     override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> = notUsed()
     override fun deleteInsertedOlderThan(cutoff: Long): Int = notUsed()
+    override fun deleteCancelledOlderThan(cutoff: Long): Int = notUsed()
     override fun findOrphanedTerminalAudio(
         cutoff: Long
     ): List<net.devemperor.dictate.database.dao.OrphanedAudioRow> = notUsed()

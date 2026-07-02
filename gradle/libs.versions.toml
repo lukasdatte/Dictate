@@ -22,6 +22,11 @@ kotlinxCoroutines = "1.7.3"
 # (PersistentList, ~50 KB APK impact). See Spec 1 §3 F-9 architecture correction.
 kotlinxCollectionsImmutable = "0.3.7"
 lifecycle = "2.7.0"
+# Paging3 — history-list pagination (F-054, docs/research/
+# "2026-07-02 - history-pagination-and-scale.md" §2.1). Runtime-ktx for
+# PagingDataAdapter + Flow<PagingData>; room-paging (versioned with Room)
+# generates the PagingSource implementation for SessionDao.pagedHistory.
+paging = "3.3.6"
 # Robolectric — explicit Quality-Gate K-4 exception for FGS / Service /
 # IME-lifecycle / DB-migration tests where an Android Context is
 # unavoidable (state file §"Test-Strategy"). Block 1 chunk C2 is the
@@ -52,6 +57,9 @@ anthropic-java = { module = "com.anthropic:anthropic-java", version.ref = "anthr
 room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+# Room ↔ Paging3 bridge — lets @Query methods return PagingSource<Int, T>.
+room-paging = { module = "androidx.room:room-paging", version.ref = "room" }
+paging-runtime-ktx = { module = "androidx.paging:paging-runtime-ktx", version.ref = "paging" }
 preference = { group = "androidx.preference", name = "preference", version.ref = "preference" }
 emoji2-emojipicker = { module = "androidx.emoji2:emoji2-emojipicker", version.ref = "emojiPicker" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }

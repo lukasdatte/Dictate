@@ -1,5 +1,6 @@
 package net.devemperor.dictate.core
 
+import androidx.paging.PagingSource
 import net.devemperor.dictate.audio.AudioFileRepository
 import net.devemperor.dictate.audio.PipelineAudioResult
 import net.devemperor.dictate.database.dao.OrphanedAudioRow
@@ -149,9 +150,7 @@ class RecordingContinuationLookupTest {
         override fun updateFinalOutputText(sessionId: String, text: String?) = unused()
         override fun updateInputText(sessionId: String, text: String?) = unused()
         override fun updateAudioDuration(sessionId: String, durationSeconds: Long) = unused()
-        override fun getAll(): List<SessionEntity> = unused()
-        override fun getByType(type: String): List<SessionEntity> = unused()
-        override fun search(query: String): List<SessionEntity> = unused()
+        override fun pagedHistory(type: String?, searchPattern: String?): PagingSource<Int, SessionEntity> = unused()
         override fun deleteById(id: String) = unused()
         override fun deleteAll() = unused()
         override fun findLatestByOrigin(origin: String): SessionEntity? = null
@@ -173,6 +172,7 @@ class RecordingContinuationLookupTest {
         ) = unused()
         override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> = unused()
         override fun deleteInsertedOlderThan(cutoff: Long): Int = unused()
+        override fun deleteCancelledOlderThan(cutoff: Long): Int = unused()
         override fun findOrphanedTerminalAudio(cutoff: Long): List<OrphanedAudioRow> = unused()
         override fun clearAudioFilePathBulk(ids: List<String>) = unused()
         override fun getSessionsByStatuses(statuses: List<String>): List<SessionEntity> = unused()

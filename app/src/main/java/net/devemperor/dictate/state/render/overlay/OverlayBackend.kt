@@ -407,6 +407,35 @@ class OverlayBackend(
         rendererBundle?.recording?.updateColor(color)
     }
 
+    /**
+     * Tear the attached overlay down and immediately re-render from the
+     * last state/mode snapshot (F-120).
+     *
+     * Called by `DictatePipelineService.onConfigurationChanged` when
+     * the uiMode night bits or the display density change while the
+     * widget is attached — the once-inflated view tree would otherwise
+     * keep stale colors (an auto night-schedule flip on a multi-hour
+     * sticky widget) and stale pixel-derived layout params (the fixed
+     * window width is computed from `displayMetrics.density` at
+     * `create()` time). Re-rendering re-runs [inflateAndAttach], which
+     * resolves both freshly; the position survives via the
+     * `OverlayPosition` prefs mirrored into `state.overlay`.
+     *
+     * No-op while detached or before the first render — the next
+     * regular render tick inflates against the fresh configuration
+     * anyway.
+     */
+    fun reinflate() {
+        if (overlayView == null) return
+        val state = stateRef ?: return
+        val mode = modeRef ?: return
+        // teardownOverlay() nulls stateRef/modeRef — the locals above
+        // carry the snapshot into the immediate re-render (waiting for
+        // the next state emit would leave the window gone until then).
+        teardownOverlay()
+        render(state, mode)
+    }
+
     // ─── Internal — render helpers ───────────────────────────────────
 
     /**

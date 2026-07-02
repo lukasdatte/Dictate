@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -244,6 +245,18 @@ class DictatePipelineService : Service() {
     private var overlayBackendImpl: OverlayBackend? = null
     private lateinit var overlayPermissionGateImpl: OverlayPermissionGate
     private lateinit var overlayPermissionObserverImpl: OverlayPermissionObserver
+
+    /**
+     * Last-seen configuration facets that invalidate an attached
+     * overlay view tree (F-120): the uiMode night bits (stale
+     * day/night colors after an auto night-schedule flip) and the
+     * display density (the fixed overlay window width is computed in
+     * pixels at `OverlayLayoutParamsFactory.create()` time). Seeded at
+     * the end of [onCreate], compared + refreshed in
+     * [onConfigurationChanged].
+     */
+    private var lastNightModeBits: Int = 0
+    private var lastDensityDpi: Int = 0
 
     /**
      * Tracks whether [overlayBackendImpl] is currently registered with
@@ -838,6 +851,49 @@ class DictatePipelineService : Service() {
         // so a repeat boot with the same value produces a Rejected
         // outcome rather than a cascade.
         overlayPermissionObserverImpl.init()
+
+        // F-120 — seed the config facets [onConfigurationChanged]
+        // compares against; without the seed, the first config-change
+        // callback after boot would always look like a delta.
+        resources.configuration.let { config ->
+            lastNightModeBits = config.uiMode and Configuration.UI_MODE_NIGHT_MASK
+            lastDensityDpi = config.densityDpi
+        }
+    }
+
+    /**
+     * Configuration-change hook (F-120). Services receive
+     * [onConfigurationChanged] without any manifest flag; the overlay,
+     * however, inflates once and stays attached indefinitely (sticky
+     * widget) — a system dark/light flip or a density/font-scale change
+     * would otherwise leave stale colors and a stale pixel window
+     * width until the user closes + reopens the widget.
+     *
+     * When the night bits or density differ from the last-seen values,
+     * [OverlayBackend.reinflate] tears the view down and immediately
+     * re-renders from its last state snapshot — re-running both the
+     * themed inflate (fresh `colorSurface` palette; the `Pref.Theme`
+     * override composes via `effectiveNight`) and
+     * `OverlayLayoutParamsFactory.create()` (fresh density-derived
+     * window width). Position survives via the `OverlayPosition` prefs
+     * mirrored into `state.overlay`.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val nightBits = newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        val densityDpi = newConfig.densityDpi
+        val changed = nightBits != lastNightModeBits || densityDpi != lastDensityDpi
+        lastNightModeBits = nightBits
+        lastDensityDpi = densityDpi
+        if (!changed) return
+
+        try {
+            overlayBackendImpl?.reinflate()
+        } catch (t: Throwable) {
+            // A transient inflate failure must not crash the FGS — the
+            // next state emit retries the attach via the render loop.
+            Log.w(TAG, "overlay reinflate on configuration change failed", t)
+        }
     }
 
     /**

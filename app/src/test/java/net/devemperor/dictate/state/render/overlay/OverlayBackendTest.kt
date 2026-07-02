@@ -812,6 +812,48 @@ class OverlayBackendTest {
         )
     }
 
+    // ─── F-120 — reinflate() on configuration change ──────────────────
+
+    @Test
+    fun `reinflate tears down and immediately re-attaches from the last snapshot`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+        assertEquals(1, window.events.count { it == "attach" })
+
+        backend.reinflate()
+
+        assertTrue("The stale view must be torn down.", "detach" in window.events)
+        assertEquals(
+            "reinflate must re-attach immediately (no wait for the next state emit).",
+            2, window.events.count { it == "attach" },
+        )
+        assertTrue(window.isAttached())
+
+        // The re-inflated view must be fully functional — click sink
+        // re-wired against the snapshot carried across the teardown.
+        findOverlayButton(LogicalButtonId.OVERLAY_CLOSE).performClick()
+        assertEquals(
+            listOf(
+                Action.WidgetAction.CloseWidget(
+                    net.devemperor.dictate.state.WidgetCloseSource.WIDGET_BUTTON,
+                ),
+            ),
+            captured,
+        )
+    }
+
+    @Test
+    fun `reinflate before the first render is a no-op`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+
+        backend.reinflate()
+
+        assertTrue("No attach may happen without a prior render.", "attach" !in window.events)
+        assertFalse(window.isAttached())
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────
 
     /** Night bits of the configuration the attached view was inflated with. */

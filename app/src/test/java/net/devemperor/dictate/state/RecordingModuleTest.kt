@@ -139,6 +139,30 @@ class RecordingModuleTest {
     }
 
     @Test
+    fun `StartRecording from Idle transitions even while a pipeline run is live (ADR-0009)`() {
+        // Spec criterion 3 pin: the recording FSM does not consult the
+        // pipeline axis — a secondary recording starts while a run
+        // processes, and the pipeline continues undisturbed (independent
+        // axes; the queue absorbs the eventual send).
+        val global = DictateUiState.initial().copy(
+            audio = AudioState(useBluetoothMic = false),
+            pipeline = PipelineUiState.Running(
+                sessionId = "active-run",
+                target = InsertionTarget.INPUT_CONNECTION,
+            ),
+        )
+        val result = module.reduce(
+            state = RecordingState.Idle,
+            action = Action.RecordingAction.StartRecording(
+                InsertionTarget.INPUT_CONNECTION, testFile, sessionId = "sid-secondary",
+            ),
+            ctx = ctx(global),
+        )
+        val next = result!!.nextState as RecordingState.Preparing
+        assertEquals("sid-secondary", next.sessionId)
+    }
+
+    @Test
     fun `StartRecording captures audio_useBluetoothMic = false correctly`() {
         val global = DictateUiState.initial().copy(audio = AudioState(useBluetoothMic = false))
         val result = module.reduce(

@@ -1,6 +1,6 @@
 # ADR-0009: Pipeline — Ordered Run-Queue with Serialized Execution
 
-**Status:** Proposed
+**Status:** Accepted
 **Subsystem:** state, service
 **Date:** 2026-07-02
 **Supersedes:** —
@@ -208,6 +208,28 @@ chain, as today during a single run).
 - **Implementation pointers:** `state/modules/PipelineModule.kt` (FSM), `core/JobExecutor.kt` + `core/ActiveJobRegistry.kt` (execution layer), `core/ImePipelineConfigResolver.kt` (sessionId-keyed config snapshots).
 
 ## Decision History
+
+### 2026-07-02 — Accepted (implementation landed)
+
+**Trigger:** the companion spec's implementation completed on `main`
+(commits `c1bfceb`, `46383b1`, `28da773`, `169f55d` + closure), full
+unit suite green at every step.
+
+**Before:** Status: Proposed — the decision was a design commitment
+pending implementation.
+
+**After:** Status: Accepted (body now append-only per
+knowledge-adr-format §"Lifecycle and editing rules"). One
+implementation-time refinement worth recording: the queue must be
+explicitly carried across the `Preparing → Running` transition
+(`StartPipeline` constructs `Running` fresh); the lead review caught
+the silent second-in-line drop and a red-proven regression test pins
+it (spec §Decision Log D9).
+
+**Reasoning:** all acceptance criteria of the companion spec verified
+against the code; the serialized-queue model behaved as designed
+(empty-queue paths byte-identical to the pre-ADR behavior, pinned by
+the pre-existing test suite).
 
 ### 2026-07-02 — Initial proposal
 

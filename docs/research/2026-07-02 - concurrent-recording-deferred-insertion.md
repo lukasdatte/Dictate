@@ -1,7 +1,7 @@
 ---
 date: 2026-07-02
 author: Lukas + Claude (planning session)
-status: Spec — programmer-ready, no invented detail
+status: Accepted
 context: Concurrent secondary recording during pipeline processing + deferred ordered insertion of finished results (R1–R5), built on the existing state-module / InsertionService / pending-sessions machinery.
 related-plan: n/a (plan-free spec; implemented directly from this file)
 related-adrs: ADR-0009, ADR-0001, ADR-0002, ADR-0003, ADR-0006, ADR-0008
@@ -720,6 +720,28 @@ longer on the audit path for these inserts.
 construction (9637fc3 family). Full SessionTracker retirement is out
 of scope (ADR-0009 §Negative).
 
+### D8 — Aggregate pending item shows a count, not a text preview
+
+**Trigger:** implementation of §3.5 — the pre-R4 per-session item
+carried a ~60-char text preview; an aggregate item for N parts has no
+single text to preview.
+**Decision:** the aggregate item's label is a plurals-backed count
+("Insert N pending parts"); the preview helper was removed as dead
+code. **Trade-off accepted:** the single-part case loses its preview;
+a future refinement may re-add a preview for `count == 1` — additive,
+not a revert. The overlay (not-insertable) variant keeps its dismiss
+affordance (only confirm is dropped) so waiting parts remain
+discardable from the widget surface.
+
+### D9 — Queue survives the Preparing → Running hop (review fix)
+
+**Trigger:** lead review of migration step 1 — `StartPipeline`
+constructed `Running` fresh, silently dropping every second-in-line
+run at the chain-start (and any mid-upload enqueue).
+**Decision:** `StartPipeline` explicitly carries
+`queued = state.queued` into `Running`; a red-proven regression test
+pins it (`StartPipeline carries the queue from Preparing into Running`).
+
 ## 8. Information Gaps
 
 1. **Exact adapter file/shape for the submit gate** — the class name
@@ -765,6 +787,35 @@ of scope (ADR-0009 §Negative).
   pending-insert side-channel, view map)
 
 ## Change History
+
+### 2026-07-02 — Implemented; status → Accepted
+
+Implemented in five commits on `main`, each with the full unit suite
+green:
+
+1. `c1bfceb` — run-queue core + submit-when-free gate (steps 1-2),
+   incl. the review-found D9 fix (queue carried across
+   `Preparing → Running`, red-proven).
+2. `46383b1` — secondary record button + recording-wins layout
+   precedence (step 3).
+3. `28da773` — ordered pending parts: aggregate offer +
+   recording-order flush (step 4); D8 recorded.
+4. `169f55d` — cancel surfacing via typed info-bar notice (step 5).
+5. closure commit (step 6) — docs, spec/ADR promotion, criterion-3
+   pin in `RecordingModuleTest`.
+
+Acceptance criteria 1-18 verified by the lead against the code; every
+behavior change landed with a red-provable regression test (silent
+TriggerPipeline drop; queue drop at the Running hop; completion-time
+ordering; missing cancel surfacing; SEND_MODE-vs-recording layout
+precedence). Information Gaps 1-4 were closed by the implementation:
+the adapter is `PipelineRunnerSubsystemAdapter` (gap 1); the derived
+MotionScene ConstraintSets inherit the base chain, so only the two
+base sets were re-linked (gap 2); `InsertionSource.PENDING_PART` is
+not DB-persisted — the Double-Enum migration rule does not apply
+(gap 3); the side-channel seam is the InfoBar `onAction` closure
+(gap 4). Gap 5 (notification queue-count badge) remains open by
+design.
 
 ### 2026-07-02 — Initial spec
 

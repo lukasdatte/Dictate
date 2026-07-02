@@ -2,7 +2,6 @@ package net.devemperor.dictate.state.render.overlay
 
 import android.content.Context
 import android.graphics.PixelFormat
-import android.os.Build
 import android.view.Gravity
 import android.view.WindowManager
 
@@ -39,9 +38,9 @@ import android.view.WindowManager
  *
  * # Window type
  *
- * - API ≥ 26: [WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY].
- * - API < 26: deprecated [WindowManager.LayoutParams.TYPE_PHONE] —
- *   sufficient for our use-case (Spec 3 §4.3 fallback rationale).
+ * [WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY] unconditionally —
+ * minSdk 26 guarantees its availability (F-121 cleanup; the historic
+ * API<26 `TYPE_PHONE` fallback was unreachable dead code).
  *
  * @see net.devemperor.dictate.state.render.overlay.OverlayBackend
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §4.3 + §4.4 + §4.5
@@ -68,12 +67,8 @@ class DefaultOverlayLayoutParamsFactory(
 ) : OverlayLayoutParamsFactory {
 
     override fun create(): WindowManager.LayoutParams {
-        val type: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
+        // minSdk 26 ⇒ TYPE_APPLICATION_OVERLAY is always available (F-121).
+        val type: Int = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
 
         val flags: Int = (
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE

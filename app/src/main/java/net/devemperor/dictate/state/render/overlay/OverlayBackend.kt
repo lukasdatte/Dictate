@@ -2,12 +2,15 @@ package net.devemperor.dictate.state.render.overlay
 
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
+import androidx.core.graphics.ColorUtils
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.color.MaterialColors
 import net.devemperor.dictate.R
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
@@ -22,6 +25,7 @@ import net.devemperor.dictate.state.render.AutoEnterRenderer
 import net.devemperor.dictate.state.render.RecordButtonColorController
 import net.devemperor.dictate.state.render.RecordingAnimationController
 import net.devemperor.dictate.state.render.applySlotToView
+import net.devemperor.dictate.state.render.effectiveNight
 
 /**
  * RenderBackend implementation for the floating-overlay window
@@ -228,6 +232,25 @@ class OverlayBackend(
     private var dragController: OverlayDragController? = null
 
     /**
+     * The effective night mode the current [overlayView] was inflated
+     * with (F-119) — `null` while detached. [render] compares this
+     * against the freshly-resolved [effectiveNight] per tick and tears
+     * the view down on divergence, so a `Pref.Theme` change (mirrored
+     * into `state.theming.theme`) or a system uiMode flip re-inflates
+     * with the correct `colorSurface` palette.
+     */
+    private var inflatedNightMode: Boolean? = null
+
+    /**
+     * The opacity percent last written into the card background's fill
+     * (F-118) — `null` while detached or before the first
+     * [applyBackgroundOpacity] pass. Makes the per-render-tick mutation
+     * idempotent; nulled in [teardownOverlay] because a re-inflate
+     * recreates the drawable (the fresh XML fill is opaque again).
+     */
+    private var lastAppliedOpacityPercent: Int? = null
+
+    /**
      * The last normalised position (`(portrait?, normX, normY)`) the
      * backend pushed through [overlayWindow.update]. Used to dedup
      * `applyPosition` calls per render — comparing against
@@ -307,6 +330,18 @@ class OverlayBackend(
         // it for backward-compatibility, no one reads it. A later cleanup
         // can remove the writes + the axis from `OverlayState`.
 
+        // 2.5 — Theme unification (F-119). The attached view is bound
+        //       to the effective night mode resolved at inflate time;
+        //       when `state.theming.theme` (the Pref.Theme mirror) or
+        //       the system uiMode flips the resolved mode, tear down so
+        //       step 3 re-inflates against the correct palette. Runs
+        //       BEFORE the stateRef/modeRef capture because
+        //       teardownOverlay() nulls both.
+        val nightWanted = effectiveNight(state.theming.theme, ctx.resources.configuration)
+        if (overlayView != null && inflatedNightMode != nightWanted) {
+            teardownOverlay()
+        }
+
         stateRef = state
         modeRef = mode
 
@@ -337,6 +372,12 @@ class OverlayBackend(
         rendererBundle?.autoEnter?.onState(state)
         rendererBundle?.color?.onState(state)
         rendererBundle?.recording?.onState(state)
+
+        // 5.5 — Card-background opacity (F-118). Idempotent per render
+        //       tick (cached percent); re-runs after every
+        //       inflateAndAttach because teardown recreates the
+        //       drawable with the opaque XML fill.
+        applyBackgroundOpacity(state.theming.widgetOpacity)
 
         // 6 — Position apply — de-normalises the persisted [0..1]
         //     coordinates from `state.overlay.position{Portrait,Landscape}{X,Y}`
@@ -384,6 +425,35 @@ class OverlayBackend(
         rendererBundle?.recording?.updateColor(color)
     }
 
+    /**
+     * Tear the attached overlay down and immediately re-render from the
+     * last state/mode snapshot (F-120).
+     *
+     * Called by `DictatePipelineService.onConfigurationChanged` when
+     * the uiMode night bits or the display density change while the
+     * widget is attached — the once-inflated view tree would otherwise
+     * keep stale colors (an auto night-schedule flip on a multi-hour
+     * sticky widget) and stale pixel-derived layout params (the fixed
+     * window width is computed from `displayMetrics.density` at
+     * `create()` time). Re-rendering re-runs [inflateAndAttach], which
+     * resolves both freshly; the position survives via the
+     * `OverlayPosition` prefs mirrored into `state.overlay`.
+     *
+     * No-op while detached or before the first render — the next
+     * regular render tick inflates against the fresh configuration
+     * anyway.
+     */
+    fun reinflate() {
+        if (overlayView == null) return
+        val state = stateRef ?: return
+        val mode = modeRef ?: return
+        // teardownOverlay() nulls stateRef/modeRef — the locals above
+        // carry the snapshot into the immediate re-render (waiting for
+        // the next state emit would leave the window gone until then).
+        teardownOverlay()
+        render(state, mode)
+    }
+
     // ─── Internal — render helpers ───────────────────────────────────
 
     /**
@@ -423,7 +493,20 @@ class OverlayBackend(
         // Wrap in a ContextThemeWrapper to match the IME view's theming —
         // same R.style.Theme_Dictate the IME service uses for its own
         // ContextThemeWrapper sites (DictateInputMethodService:539/766/2540).
-        val themedCtx = ContextThemeWrapper(ctx, R.style.Theme_Dictate)
+        //
+        // F-119 — honour Pref.Theme, not just the system uiMode: the
+        // day/night variant of Theme.Dictate is selected by the
+        // Configuration's night bits, so a uiMode-overriding
+        // configuration context is interposed BEFORE the theme wrapper
+        // whenever the user's theme pref diverges from the system.
+        // `stateRef` is always populated here (render() assigns it
+        // before calling inflateAndAttach); the "system" fallback only
+        // covers a hypothetical future direct call.
+        val nightWanted = effectiveNight(
+            stateRef?.theming?.theme ?: "system",
+            ctx.resources.configuration,
+        )
+        val themedCtx = ContextThemeWrapper(contextForNightMode(nightWanted), R.style.Theme_Dictate)
         val inflater = LayoutInflater.from(themedCtx)
         val view = inflater.inflate(R.layout.overlay_5button_layout, null)
         // Variante 2a (dictate-widget-integration §6.5): OVERLAY_SEND was
@@ -447,10 +530,63 @@ class OverlayBackend(
         overlayView = view
         currentParams = params
         buttonViews = views
+        inflatedNightMode = nightWanted
 
         wireStaticOverlayHandlers()
         wireDragController(view)
         buildRendererBundle(view, views)
+    }
+
+    /**
+     * Mutate the card background's **fill** to `colorSurface` at
+     * [opacityPercent] alpha (F-118). The 1 dp `colorOutlineVariant`
+     * stroke and the buttons' own Material backgrounds stay fully
+     * opaque so the card boundary and controls remain legible.
+     *
+     * `mutate()` detaches the drawable's constant state so the shared
+     * `overlay_background.xml` resource (also used by other inflations)
+     * is not affected. The percent is clamped defensively to the
+     * settings floor — the SeekBar enforces 20..100, but the SP value
+     * is user-writable via backup restore / adb.
+     *
+     * Idempotent per render tick via [lastAppliedOpacityPercent].
+     */
+    private fun applyBackgroundOpacity(opacityPercent: Int) {
+        val view = overlayView ?: return
+        if (lastAppliedOpacityPercent == opacityPercent) return
+
+        val background = view.background?.mutate() as? GradientDrawable
+        if (background == null) {
+            Log.w(TAG, "overlay background is not a GradientDrawable — opacity not applied")
+            return
+        }
+        val surface = MaterialColors.getColor(
+            view, com.google.android.material.R.attr.colorSurface,
+        )
+        val alpha = opacityPercent.coerceIn(MIN_OPACITY_PERCENT, MAX_OPACITY_PERCENT) * 255 / 100
+        background.setColor(ColorUtils.setAlphaComponent(surface, alpha))
+        lastAppliedOpacityPercent = opacityPercent
+    }
+
+    /**
+     * Return [ctx] itself when the system configuration already
+     * resolves to [night], otherwise a `createConfigurationContext`
+     * wrap whose `uiMode` night bits force the requested mode (F-119).
+     * The caller layers the `Theme.Dictate` [ContextThemeWrapper] on
+     * top so the day/night resource qualifiers pick the right palette.
+     */
+    private fun contextForNightMode(night: Boolean): Context {
+        val systemConfig = ctx.resources.configuration
+        val systemNight =
+            (systemConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+                Configuration.UI_MODE_NIGHT_YES
+        if (night == systemNight) return ctx
+
+        val override = Configuration(systemConfig).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                (if (night) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO)
+        }
+        return ctx.createConfigurationContext(override)
     }
 
     /**
@@ -724,6 +860,8 @@ class OverlayBackend(
         stateRef = null
         modeRef = null
         lastAppliedPosition = null
+        inflatedNightMode = null
+        lastAppliedOpacityPercent = null
     }
 
     /**
@@ -740,6 +878,15 @@ class OverlayBackend(
 
     private companion object {
         const val TAG: String = "OverlayBackend"
+
+        /**
+         * Clamp bounds for [applyBackgroundOpacity] — mirror the
+         * settings SeekBar range (`fragment_preferences.xml`,
+         * `Pref.WidgetOpacity`). The 20 % floor keeps the card
+         * discoverable over matching content.
+         */
+        const val MIN_OPACITY_PERCENT: Int = 20
+        const val MAX_OPACITY_PERCENT: Int = 100
     }
 }
 

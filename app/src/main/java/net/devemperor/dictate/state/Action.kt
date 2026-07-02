@@ -971,16 +971,27 @@ sealed class Action {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Theme, accent-colour, overlay-characters, output-speed setters.
-     * All four mirror `Pref.Theme` / `Pref.AccentColor` /
-     * `Pref.OverlayCharacters` / `Pref.OutputSpeed`; SP writes are
-     * performed by `PipelinePrefMirror` (C7) on state changes.
+     * Theming setters.
+     *
+     * **Production update path is the SP mirror, not these actions:**
+     * every [ThemingState] field mirrors a `Pref.*` entry via
+     * `PipelinePrefMirror` (C7) — the Settings Activity writes
+     * SharedPreferences and the mirror pushes the change into the
+     * store. The former `SetTheme` / `SetAccentColor` /
+     * `SetOverlayCharacters` / `SetOutputSpeed` leaves had zero
+     * dispatch sites and were deleted (F-037 trim, widget-transparency
+     * spec 2026-07-02).
+     *
+     * [SetWidgetOpacity] is the state-side setter for in-IME producers
+     * (e.g. a future keyboard-surface opacity slider). Unlike the
+     * deleted siblings it is safe to dispatch: the reducer emits a
+     * persist effect so SharedPreferences and state stay consistent
+     * (the F-037 failure mode was a setter whose unpersisted state
+     * write got silently reverted on the next mirror sync).
      */
     sealed class ThemingAction : Action() {
-        data class SetTheme(val theme: String) : ThemingAction()
-        data class SetAccentColor(val color: Int) : ThemingAction()
-        data class SetOverlayCharacters(val chars: String) : ThemingAction()
-        data class SetOutputSpeed(val speed: Int) : ThemingAction()
+        /** Overlay-widget card opacity in percent (20..100) — F-118. */
+        data class SetWidgetOpacity(val opacityPercent: Int) : ThemingAction()
     }
 
     // ════════════════════════════════════════════════════════════════

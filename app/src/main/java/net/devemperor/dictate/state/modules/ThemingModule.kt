@@ -4,24 +4,35 @@
 // to the same package.
 package net.devemperor.dictate.state
 
+import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.put
 import kotlin.reflect.KClass
 
 /**
  * Owns the [ThemingState] axis — `theme`, `accentColor`,
- * `overlayCharacters`, and `outputSpeed`. All four are Pref-mirrored
- * via `PipelinePrefMirror` (C7).
+ * `overlayCharacters`, `outputSpeed`, and `widgetOpacity`. All five are
+ * Pref-mirrored via `PipelinePrefMirror` (C7); the SP mirror is the
+ * **sole production update path** for this axis (the Settings Activity
+ * writes SharedPreferences, the mirror pushes the change into the
+ * store).
+ *
+ * The former dead setters (`SetTheme` / `SetAccentColor` /
+ * `SetOverlayCharacters` / `SetOutputSpeed`) were deleted per F-037
+ * (widget-transparency spec 2026-07-02) — they had no dispatch sites,
+ * and dispatching one would have mutated state without an SP write,
+ * silently reverting on the next mirror sync. The remaining
+ * [Action.ThemingAction.SetWidgetOpacity] closes that trap by emitting
+ * [Effect.PersistWidgetOpacity] alongside the state write.
  *
  * **No cross-module observer:** Spec 1 §15.1 lists this module as
  * observer-free. Theming changes are observed by the rendering side
  * (KeyboardLayoutManager via `state.collect`); other modules do not
  * react to theming.
  *
- * **No effects.** All four fields are Pref-mirrored — SP writes happen
- * through `PipelinePrefMirror` (C7).
- *
  * @see net.devemperor.dictate.state.ThemingState
  * @see net.devemperor.dictate.state.Action.ThemingAction
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §15.1
+ * @see docs/research/2026-07-02 - overlay-widget-transparency.md §3.2
  */
 object ThemingModule : DictateModule<ThemingState, Action.ThemingAction, ThemingModule.Effect> {
 
@@ -34,10 +45,16 @@ object ThemingModule : DictateModule<ThemingState, Action.ThemingAction, Theming
 
     override fun initialState(): ThemingState = ThemingState()
 
-    /**
-     * No module-local effects — see Pref-mirror note in the module KDoc.
-     */
-    sealed interface Effect : SideEffect
+    sealed interface Effect : SideEffect {
+        /**
+         * Belt-and-suspenders SP write for [Action.ThemingAction.SetWidgetOpacity]
+         * — mirrors the `OverlayModule.Effect.PersistOverlayPosition`
+         * pattern. Without it, a dispatched setter would be silently
+         * reverted the next time the C7 mirror syncs the key (the exact
+         * F-037 failure mode).
+         */
+        data class PersistWidgetOpacity(val opacityPercent: Int) : Effect
+    }
 
     override fun reduce(
         state: ThemingState,
@@ -45,40 +62,23 @@ object ThemingModule : DictateModule<ThemingState, Action.ThemingAction, Theming
         ctx: ReducerContext,
     ): TransitionResult<ThemingState, Effect>? = when (action) {
 
-        is Action.ThemingAction.SetTheme ->
-            if (action.theme != state.theme) {
+        is Action.ThemingAction.SetWidgetOpacity ->
+            if (action.opacityPercent != state.widgetOpacity) {
                 TransitionResult(
-                    nextState = state.copy(theme = action.theme),
-                    sideEffects = emptyList(),
-                )
-            } else null
-
-        is Action.ThemingAction.SetAccentColor ->
-            if (action.color != state.accentColor) {
-                TransitionResult(
-                    nextState = state.copy(accentColor = action.color),
-                    sideEffects = emptyList(),
-                )
-            } else null
-
-        is Action.ThemingAction.SetOverlayCharacters ->
-            if (action.chars != state.overlayCharacters) {
-                TransitionResult(
-                    nextState = state.copy(overlayCharacters = action.chars),
-                    sideEffects = emptyList(),
-                )
-            } else null
-
-        is Action.ThemingAction.SetOutputSpeed ->
-            if (action.speed != state.outputSpeed) {
-                TransitionResult(
-                    nextState = state.copy(outputSpeed = action.speed),
-                    sideEffects = emptyList(),
+                    nextState = state.copy(widgetOpacity = action.opacityPercent),
+                    sideEffects = listOf(Effect.PersistWidgetOpacity(action.opacityPercent)),
                 )
             } else null
     }
 
-    override fun runEffect(effect: Effect, services: ModuleServices) {
-        // No effects — see [Effect] KDoc. Empty sealed interface.
+    override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
+        is Effect.PersistWidgetOpacity -> {
+            // SharedPreferences are the canonical persistence mirror;
+            // the C7 PrefMirror hears this write and re-applies the
+            // (value-equal, hence no-op) state copy.
+            services.sharedPrefs.edit()
+                .put(Pref.WidgetOpacity, effect.opacityPercent)
+                .apply()
+        }
     }
 }

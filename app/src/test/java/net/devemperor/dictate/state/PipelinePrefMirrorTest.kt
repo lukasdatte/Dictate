@@ -12,7 +12,7 @@ import org.junit.Test
 /**
  * Pure-JVM tests for [PipelinePrefMirror].
  *
- * Covers Spec 1 §4.5 — 19 prefs mirrored from [FakeSharedPreferences]
+ * Covers Spec 1 §4.5 (+ F-118 widget opacity) — 20 prefs mirrored from [FakeSharedPreferences]
  * into the store's sub-states, both for the initial-snapshot path
  * (`attach`) and for the listener path (`applyChange` driven by
  * `SharedPreferences.Editor.apply()`).
@@ -37,7 +37,7 @@ private fun storeOnlyDispatcher(store: DictateUiStateStore): MirrorSyncDispatche
 class PipelinePrefMirrorTest {
 
     // ────────────────────────────────────────────────────────────────
-    // attach() — initial snapshot of 19 prefs
+    // attach() — initial snapshot of 20 prefs
     // ────────────────────────────────────────────────────────────────
 
     @Test
@@ -66,6 +66,7 @@ class PipelinePrefMirrorTest {
         assertEquals(-14700810, s.theming.accentColor)
         assertEquals("()-:!?,.", s.theming.overlayCharacters)
         assertEquals(5, s.theming.outputSpeed)
+        assertEquals(100, s.theming.widgetOpacity)
         assertEquals(1.0f, s.overlay.positionPortraitX, 0.0001f)
         assertEquals(0.1f, s.overlay.positionPortraitY, 0.0001f)
         assertEquals(1.0f, s.overlay.positionLandscapeX, 0.0001f)
@@ -132,13 +133,14 @@ class PipelinePrefMirrorTest {
     }
 
     @Test
-    fun `attach reads all 4 theming prefs into ThemingState`() {
+    fun `attach reads all 5 theming prefs into ThemingState`() {
         val sp = FakeSharedPreferences()
         sp.edit()
             .put(Pref.Theme, "dark")
             .put(Pref.AccentColor, -1)
             .put(Pref.OverlayCharacters, ".")
             .put(Pref.OutputSpeed, 9)
+            .put(Pref.WidgetOpacity, 45)
             .apply()
         val store = DictateUiStateStore(DictateUiState.initial())
 
@@ -149,6 +151,7 @@ class PipelinePrefMirrorTest {
         assertEquals(-1, s.theming.accentColor)
         assertEquals(".", s.theming.overlayCharacters)
         assertEquals(9, s.theming.outputSpeed)
+        assertEquals(45, s.theming.widgetOpacity)
     }
 
     @Test
@@ -219,6 +222,7 @@ class PipelinePrefMirrorTest {
             .put(Pref.AccentColor, -1)
             .put(Pref.OverlayCharacters, ".")
             .put(Pref.OutputSpeed, 9)
+            .put(Pref.WidgetOpacity, 45)
             .apply()
         val mirror = PipelinePrefMirror(sp)
 
@@ -233,6 +237,7 @@ class PipelinePrefMirrorTest {
             Pref.InstantOutput.key, Pref.AutoEnter.key,
             Pref.Theme.key, Pref.AccentColor.key,
             Pref.OverlayCharacters.key, Pref.OutputSpeed.key,
+            Pref.WidgetOpacity.key,
         ).forEach { key ->
             current = mirror.applyChange(current, key)
         }
@@ -253,6 +258,7 @@ class PipelinePrefMirrorTest {
         assertEquals(-1, current.theming.accentColor)
         assertEquals(".", current.theming.overlayCharacters)
         assertEquals(9, current.theming.outputSpeed)
+        assertEquals(45, current.theming.widgetOpacity)
     }
 
     @Test

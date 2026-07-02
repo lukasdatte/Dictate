@@ -46,6 +46,6 @@ sealed interface ModuleId {
     /** ADR-0006 completion — transient pipeline-error + engagement hints. */
     data object InfoHint : ModuleId
 
-    /** Phase 2 stub. */
+    /** F-036 (2026-07-02) — audio-focus / headset interruption axis. */
     data object Interruption : ModuleId
 }

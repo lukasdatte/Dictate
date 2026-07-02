@@ -15,10 +15,9 @@ import java.io.File
  * - OnAudioFocusGrantChanged updates the granted flag (idempotent)
  * - OnBluetoothScoStateChanged updates the SCO state (idempotent)
  * - ToggleAudioFocusPref flips the pref
- * - Cross-module cascade: AudioFocus-loss during Active recording → PauseRecording
- * - Cross-module cascade: AudioFocus-loss during Paused recording → PauseRecording
- *   (the spec lists `isActiveOrPaused` which covers Paused too — but pausing an
- *   already-paused recorder is no-op via the reducer's reject path)
+ * - Cross-module: focus-loss no longer cascades PauseRecording here —
+ *   the interruption authority moved to InterruptionModule
+ *   (F-007 consolidation, 2026-07-02; see InterruptionModuleTest)
  * - Cross-module: no cascade when no recording is active
  * - Cross-module: no cascade on focus regain (Spec 1 §15.3 leaves resume to user)
  */
@@ -82,26 +81,30 @@ class AudioModuleTest {
     // ─── Cross-module cascade ───────────────────────────────────────────
 
     @Test
-    fun `cross-module AudioFocus loss during Active recording cascades PauseRecording`() {
+    fun `cross-module AudioFocus loss during Active recording does NOT pause here (F-007 consolidation)`() {
+        // 2026-07-02: the granted-edge → PauseRecording cascade moved to
+        // InterruptionModule (single interruption authority; the service
+        // classifier dispatches InterruptionAction.AudioFocusInterrupted
+        // for interrupting losses). AudioModule's granted flag is pure
+        // bookkeeping now — see InterruptionModuleTest for the pause.
         val prev = DictateUiState.initial().copy(
             audio = AudioState(audioFocusGranted = true),
             recording = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-test"),
         )
         val next = prev.copy(audio = prev.audio.copy(audioFocusGranted = false))
         val cascade = module.onCrossModuleStateChange(prev, next)
-        assertEquals(listOf<Action>(Action.RecordingAction.PauseRecording), cascade)
+        assertEquals(emptyList<Action>(), cascade)
     }
 
     @Test
-    fun `cross-module AudioFocus loss during Paused recording cascades PauseRecording`() {
-        // Per `isActiveOrPaused` semantics — Paused is included.
+    fun `cross-module AudioFocus loss during Paused recording does NOT cascade (F-007 consolidation)`() {
         val prev = DictateUiState.initial().copy(
             audio = AudioState(audioFocusGranted = true),
             recording = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "sid-test"),
         )
         val next = prev.copy(audio = prev.audio.copy(audioFocusGranted = false))
         val cascade = module.onCrossModuleStateChange(prev, next)
-        assertEquals(listOf<Action>(Action.RecordingAction.PauseRecording), cascade)
+        assertEquals(emptyList<Action>(), cascade)
     }
 
     @Test

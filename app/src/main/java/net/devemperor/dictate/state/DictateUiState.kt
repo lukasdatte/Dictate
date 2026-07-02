@@ -96,8 +96,8 @@ data class DictateUiState(
     // ─── DB-subscriber-driven ───
     val pendingSessions: PersistentList<PendingSession>,
 
-    // ─── Phase 2 stub (default null = not modelled) ───
-    val interruption: InterruptionState? = null,
+    // ─── Interruption axis (audio-focus loss / headset unplug) ───
+    val interruption: InterruptionState = InterruptionState(),
 
     /**
      * Keyboard-input sub-state. Currently carries the host-editor
@@ -135,7 +135,7 @@ data class DictateUiState(
             features = FeatureToggles(),
             theming = ThemingState(),
             pendingSessions = persistentListOf(),
-            interruption = null,
+            interruption = InterruptionState(),
             keyboardInput = KeyboardInputState(),
             infoHints = InfoHintState(),
         )
@@ -825,15 +825,50 @@ data class ThemingState(
 )
 
 /**
- * Phase-2 InterruptionState. Default `null` in Phase 1 — InterruptionModule
- * is a stub. Phase 2 will populate this from call-state + headset-plug +
- * screen-state listeners and cascade `RecordingAction.CancelRecording`.
+ * Interruption sub-state — owned by `InterruptionModule` (2026-07-02,
+ * F-036 implementation).
+ *
+ * @property lastInterruption the interruption event that paused the
+ *   current recording, or `null` when no interruption-caused pause is
+ *   live. **Lifecycle invariant:** set only when an
+ *   [Action.InterruptionAction] arrives while the recording is
+ *   `Active` (the reducer gates on it; the module's observer then
+ *   cascades `PauseRecording` in the same dispatch pass); cleared via
+ *   the self-cascaded `ClearInterruption` the moment the recording
+ *   leaves `Paused`. Non-null therefore implies "the recording is
+ *   paused *because of* this event" — the info-bar producer keys on
+ *   exactly that.
  */
 data class InterruptionState(
-    val callIncoming: Boolean = false,
-    val headsetPlugged: Boolean = false,
-    val screenAwake: Boolean = true,
+    val lastInterruption: InterruptionEvent? = null,
 )
+
+/**
+ * One recorded interruption occurrence.
+ *
+ * @property reason typed classifier — see [InterruptionReason].
+ * @property occurredAt wall-clock ms from `ReducerContext.now`
+ *   (reducers never read the clock directly). Doubles as the
+ *   info-bar item's `createdAt` sort key.
+ */
+data class InterruptionEvent(
+    val reason: InterruptionReason,
+    val occurredAt: Long,
+)
+
+/**
+ * Why a recording was interruption-paused. Mirrors the two
+ * [Action.InterruptionAction] producer leaves — see their KDoc for the
+ * detection semantics (audio-focus classification, device-removal
+ * classification).
+ */
+enum class InterruptionReason {
+    /** Another app took audio focus (call, assistant, other recorder). */
+    AUDIO_FOCUS_LOST,
+
+    /** External input-capable device (wired/USB/BT headset) disconnected. */
+    HEADSET_DISCONNECTED,
+}
 
 /**
  * One entry in [DictateUiState.pendingSessions] — a recorded-but-not-

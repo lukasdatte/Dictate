@@ -36,11 +36,12 @@ class DictateUiStateTest {
     }
 
     @Test
-    fun `initial state has empty pendingSessions and Phase-2 interruption null`() {
+    fun `initial state has empty pendingSessions and no recorded interruption`() {
         val s = DictateUiState.initial()
 
         assertTrue(s.pendingSessions.isEmpty())
-        assertNull(s.interruption)
+        assertEquals(InterruptionState(), s.interruption)
+        assertNull(s.interruption.lastInterruption)
         // F-1 — flag now lives on ResendState (was top-level pre-F-1).
         assertFalse(s.resend.lastResultNeedsManualPaste)
     }

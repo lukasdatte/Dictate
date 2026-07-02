@@ -1166,12 +1166,53 @@ sealed class Action {
     }
 
     // ════════════════════════════════════════════════════════════════
-    // Interruption-axis actions (InterruptionModule — Phase 2)
+    // Interruption-axis actions (InterruptionModule)
     // ════════════════════════════════════════════════════════════════
 
+    /**
+     * External events that make continued audio capture undesirable.
+     * Produced FGS-side by `DictatePipelineService` (recording survives
+     * IME teardown, so interruption detection must too).
+     *
+     * **Audio-focus-based call detection (2026-07-02, F-036 Gap-2
+     * fallback):** the earlier Phase-2 sketch (`PhoneCallStateChanged`
+     * with telephony semantics) would have required `READ_PHONE_STATE`
+     * — a heavy permission ask for an IME. Detection is instead based
+     * on audio-focus-loss classification
+     * (`AudioFocusChangeClassifier`): an incoming call takes transient
+     * or permanent audio focus, which is indistinguishable from other
+     * focus-taking apps — so the action honestly says *focus was
+     * taken*, not *a call arrived*. `ScreenStateChanged` was deleted
+     * (Gap-3: no consumer use case existed).
+     *
+     * @see net.devemperor.dictate.core.AudioFocusChangeClassifier
+     * @see net.devemperor.dictate.core.HeadsetDeviceClassifier
+     * @see docs/research/2026-07-02 - recording-interruption-handling.md
+     */
     sealed class InterruptionAction : Action() {
-        data class PhoneCallStateChanged(val incoming: Boolean) : InterruptionAction()
-        data class HeadsetPlugChanged(val plugged: Boolean) : InterruptionAction()
-        data class ScreenStateChanged(val awake: Boolean) : InterruptionAction()
+        /**
+         * Another app took audio focus in an interrupting way (hard
+         * `AUDIOFOCUS_LOSS` or `AUDIOFOCUS_LOSS_TRANSIENT` — e.g. an
+         * incoming call, the assistant, another recorder). Duck-only
+         * losses (`…_CAN_DUCK`, notification dings) are classified out
+         * and never reach the reducer (F-007 fix).
+         */
+        data object AudioFocusInterrupted : InterruptionAction()
+
+        /**
+         * An external input-capable audio device (wired / USB / BT
+         * headset) disconnected — the classic pocket-unplug. Without a
+         * pause, capture silently switches to the built-in mic.
+         */
+        data object HeadsetDisconnected : InterruptionAction()
+
+        /**
+         * Self-cascade housekeeping — clears
+         * `InterruptionState.lastInterruption` when the recording
+         * leaves `Paused` (user resumed / stopped / cancelled).
+         * Emitted only by `InterruptionModule`'s own cross-module
+         * observer; no external producer dispatches it.
+         */
+        data object ClearInterruption : InterruptionAction()
     }
 }

@@ -38,8 +38,9 @@ class ModuleIdTest {
             ModuleId.InfoHint,
             ModuleId.Interruption,
         )
-        // 14 Phase-1 modules (incl. the 2026-07-02 InfoHint axis,
-        // ADR-0006 completion) + 1 Phase-2 stub (Interruption).
+        // 15 active modules (incl. the 2026-07-02 InfoHint axis,
+        // ADR-0006 completion, and the 2026-07-02 Interruption axis,
+        // F-036 activation).
         assertEquals("Spec 1 §15.1 + InfoHint ⇒ 15 module ids", 15, ids.size)
         // All entries must be distinct singletons — `id is ModuleId` would be
         // statically-true (list is typed), so we check distinctness via toSet().

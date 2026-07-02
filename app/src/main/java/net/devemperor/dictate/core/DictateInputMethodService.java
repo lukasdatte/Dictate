@@ -496,6 +496,8 @@ public class DictateInputMethodService extends InputMethodService
     private ConstraintLayout editButtonsKeyboardLl;
     private MaterialButton recordButton;
     private MaterialButton resendButton;
+    // ADR-0009 secondary-recording mic button (rendered in SEND_MODE only).
+    private MaterialButton secondaryRecordButton;
     private MaterialButton backspaceButton;
     private MaterialButton trashButton;
     private MaterialButton spaceButton;
@@ -916,6 +918,7 @@ public class DictateInputMethodService extends InputMethodService
         editButtonsKeyboardLl = dictateKeyboardView.findViewById(R.id.edit_buttons_keyboard_ll);
         recordButton = dictateKeyboardView.findViewById(R.id.record_btn);
         resendButton = dictateKeyboardView.findViewById(R.id.resend_btn);
+        secondaryRecordButton = dictateKeyboardView.findViewById(R.id.secondary_record_btn);
         backspaceButton = dictateKeyboardView.findViewById(R.id.backspace_btn);
         trashButton = dictateKeyboardView.findViewById(R.id.trash_btn);
         spaceButton = dictateKeyboardView.findViewById(R.id.space_btn);
@@ -1298,6 +1301,9 @@ public class DictateInputMethodService extends InputMethodService
         Map<LogicalButtonId, View> buttonViews = new HashMap<>();
         buttonViews.put(LogicalButtonId.RECORD, recordButton);
         buttonViews.put(LogicalButtonId.RESEND, resendButton);
+        // ADR-0009: mandatory slot — RECORD_SECONDARY is declared in every
+        // keyboard mode, so a missing map entry would be a render-time error(...).
+        buttonViews.put(LogicalButtonId.RECORD_SECONDARY, secondaryRecordButton);
         buttonViews.put(LogicalButtonId.BACKSPACE, backspaceButton);
         buttonViews.put(LogicalButtonId.AUDIO_FOCUS, audioFocusButton);
         buttonViews.put(LogicalButtonId.TRASH, trashButton);

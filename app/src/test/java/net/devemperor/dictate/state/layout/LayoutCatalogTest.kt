@@ -6,6 +6,7 @@ import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
 import net.devemperor.dictate.state.ResendState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -103,16 +104,20 @@ class LayoutCatalogTest {
     }
 
     @Test
-    fun `KEYBOARD_TWO_ROW has all nine keyboard-modus slots`() {
-        // Per Spec 2 §8.1 the two-row layout contains all nine logical
-        // keyboard buttons (record / resend / backspace / audio-focus /
-        // widget-toggle / trash / space / pause / enter), each visible
-        // or hidden per predicate. The audio-focus slot is gone-by-default
-        // but the slot itself must exist so the render-loop's silent-skip
-        // guard never trips when the user toggles into single-row.
+    fun `KEYBOARD_TWO_ROW has all ten keyboard-modus slots`() {
+        // Per Spec 2 §8.1 the two-row layout contains all logical keyboard
+        // buttons (record / resend / backspace / audio-focus /
+        // widget-toggle / trash / space / pause / enter — plus the
+        // ADR-0009 secondary-record mic), each visible or hidden per
+        // predicate. The audio-focus slot is gone-by-default but the slot
+        // itself must exist so the render-loop's silent-skip guard never
+        // trips when the user toggles into single-row; RECORD_SECONDARY is
+        // listed with `{ false }` here for the same reason (it only ever
+        // shows in the SEND_MODE layouts).
         val expected = setOf(
             LogicalButtonId.RECORD,
             LogicalButtonId.RESEND,
+            LogicalButtonId.RECORD_SECONDARY,
             LogicalButtonId.BACKSPACE,
             LogicalButtonId.AUDIO_FOCUS,
             LogicalButtonId.WIDGET_TOGGLE,
@@ -126,10 +131,11 @@ class LayoutCatalogTest {
     }
 
     @Test
-    fun `KEYBOARD_SINGLE_ROW has all nine keyboard-modus slots`() {
+    fun `KEYBOARD_SINGLE_ROW has all ten keyboard-modus slots`() {
         val expected = setOf(
             LogicalButtonId.RECORD,
             LogicalButtonId.RESEND,
+            LogicalButtonId.RECORD_SECONDARY,
             LogicalButtonId.BACKSPACE,
             LogicalButtonId.AUDIO_FOCUS,
             LogicalButtonId.WIDGET_TOGGLE,
@@ -157,6 +163,74 @@ class LayoutCatalogTest {
                 "Mode ${mode.id} must declare a WIDGET_TOGGLE slot " +
                     "(silent-skip guard in §6 ImeViewBackend renders error otherwise)",
                 slot,
+            )
+        }
+    }
+
+    @Test
+    fun `RECORD_SECONDARY slot exists in all 5 KEYBOARD modes (ADR-0009 anchor)`() {
+        // Mirrors the WIDGET_TOGGLE anchor: the slot is declared in every
+        // keyboard mode (predicate `{ false }` outside SEND_MODE) so the
+        // render-loop's silent-skip guard never trips and the view can
+        // never linger stale across mode switches.
+        val modes = listOf(
+            catalog.KEYBOARD_TWO_ROW,
+            catalog.KEYBOARD_SINGLE_ROW,
+            catalog.KEYBOARD_TWO_ROW_SEND_MODE,
+            catalog.KEYBOARD_SINGLE_ROW_SEND_MODE,
+            catalog.KEYBOARD_REPROCESS_STAGING,
+        )
+        modes.forEach { mode ->
+            val slot = mode.slots.firstOrNull { it.logicalId == LogicalButtonId.RECORD_SECONDARY }
+            assertNotNull(
+                "Mode ${mode.id} must declare a RECORD_SECONDARY slot " +
+                    "(silent-skip guard in §6 ImeViewBackend renders error otherwise)",
+                slot,
+            )
+        }
+    }
+
+    @Test
+    fun `RECORD_SECONDARY is visible in SEND_MODE modes only while recording is Idle`() {
+        // Spec criteria 1 + 4: visible iff pipeline live AND no recording
+        // in flight (single-MediaRecorder gate, belt-and-braces to the
+        // forKeyboard precedence which already leaves SEND_MODE when a
+        // recording starts).
+        val pipelineLiveIdleRecording = stateWithPipeline(
+            PipelineUiState.Running(
+                sessionId = "s1",
+                target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+            ),
+            singleRow = false,
+        )
+        val pipelineLiveRecordingActive = stateRecordingWithPipeline(
+            PipelineUiState.Running(
+                sessionId = "s1",
+                target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+            ),
+            singleRow = false,
+        )
+        listOf(catalog.KEYBOARD_TWO_ROW_SEND_MODE, catalog.KEYBOARD_SINGLE_ROW_SEND_MODE)
+            .forEach { mode ->
+                val slot = mode.slots.first { it.logicalId == LogicalButtonId.RECORD_SECONDARY }
+                assertTrue(
+                    "visible in ${mode.id} while pipeline live + recording Idle",
+                    slot.visibilityPredicate(pipelineLiveIdleRecording),
+                )
+                assertFalse(
+                    "hidden in ${mode.id} while a recording is in flight",
+                    slot.visibilityPredicate(pipelineLiveRecordingActive),
+                )
+            }
+        listOf(
+            catalog.KEYBOARD_TWO_ROW,
+            catalog.KEYBOARD_SINGLE_ROW,
+            catalog.KEYBOARD_REPROCESS_STAGING,
+        ).forEach { mode ->
+            val slot = mode.slots.first { it.logicalId == LogicalButtonId.RECORD_SECONDARY }
+            assertFalse(
+                "structurally hidden in ${mode.id}",
+                slot.visibilityPredicate(pipelineLiveIdleRecording),
             )
         }
     }
@@ -270,6 +344,36 @@ class LayoutCatalogTest {
     }
 
     @Test
+    fun `RED-PROOF forKeyboard — live recording wins over SEND_MODE (two-row)`() {
+        // ADR-0009 secondary-recording precedence: while a recording is
+        // live the user needs the recording controls (timer / pause /
+        // trash / stop&send), even though a pipeline run is processing in
+        // the background. `recordingLive` must therefore outrank
+        // `isPipelineLive` in forKeyboard. Written FIRST as the red-proof
+        // for Chunk 2 (fails on the pre-change catalog, which returned
+        // KEYBOARD_TWO_ROW_SEND_MODE here).
+        val state = stateRecordingWithPipeline(
+            PipelineUiState.Running(
+                sessionId = "s1",
+                target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+            ),
+            singleRow = false,
+        )
+        assertSame(catalog.KEYBOARD_TWO_ROW, catalog.forKeyboard(state))
+    }
+
+    @Test
+    fun `forKeyboard — live recording wins over SEND_MODE (single-row)`() {
+        // Single-row twin of the red-proof above: the precedence holds
+        // under the user's single-row preference too.
+        val state = stateRecordingWithPipeline(
+            PipelineUiState.Preparing(sessionId = "s1"),
+            singleRow = true,
+        )
+        assertSame(catalog.KEYBOARD_SINGLE_ROW, catalog.forKeyboard(state))
+    }
+
+    @Test
     fun `forKeyboard treats pipeline Running same as Preparing for mode-selection`() {
         // Spec 2 §8.6: both `Preparing` and `Running` count as `isPipelineLive`,
         // so both select the SEND_MODE family.
@@ -322,6 +426,15 @@ class LayoutCatalogTest {
     private fun stateWithPipeline(pipe: PipelineUiState, singleRow: Boolean): DictateUiState =
         DictateUiState.initial().copy(
             recording = RecordingState.Idle,
+            pipeline = pipe,
+            layout = LayoutState(singleRowMode = singleRow),
+        )
+
+    private fun stateRecordingWithPipeline(pipe: PipelineUiState, singleRow: Boolean): DictateUiState =
+        DictateUiState.initial().copy(
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sec-rec",
+            ),
             pipeline = pipe,
             layout = LayoutState(singleRowMode = singleRow),
         )

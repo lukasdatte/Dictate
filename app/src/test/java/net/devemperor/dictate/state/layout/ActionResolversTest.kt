@@ -97,6 +97,72 @@ class ActionResolversTest {
         assertTrue(resolveRecordAction(s, fakeModuleServices()) is Action.RecordingAction.StopRecordingAndSend)
     }
 
+    // ─── resolveSecondaryRecordAction (ADR-0009) ────────────────────────
+
+    @Test
+    fun `resolveSecondaryRecordAction emits StartRecording from Idle with allocated file`() {
+        // ADR-0009 / spec §3.4 criterion 2: the secondary mic button arms a
+        // fresh recording exactly like the primary button's Idle arm.
+        val recordingFile = File("/tmp/dictate-test-secondary.m4a")
+        val factory = FixedAudioFileFactory(recordingFile)
+        val services = fakeModuleServices(audioFileRepository = factory)
+        val s = state.copy(
+            recording = RecordingState.Idle,
+            pipeline = PipelineUiState.Running(
+                sessionId = "active-run",
+                target = InsertionTarget.INPUT_CONNECTION,
+            ),
+        )
+
+        val action = resolveSecondaryRecordAction(s, services)
+            as? Action.RecordingAction.StartRecording
+            ?: error("Expected StartRecording, got ${resolveSecondaryRecordAction(s, services)}")
+
+        assertEquals(recordingFile, action.audioFile)
+        assertEquals(InsertionTarget.INPUT_CONNECTION, action.target)
+        assertEquals(1, factory.allocateCallCount)
+        assertTrue(action.sessionId.isNotEmpty())
+        assertTrue(action.sessionId.matches(Regex("[0-9a-fA-F-]{36}")))
+    }
+
+    @Test
+    fun `resolveSecondaryRecordAction produces the same action shape as the primary Idle arm`() {
+        // Parity pin (spec §3.4): both resolvers delegate to the shared
+        // resolveStartRecordingFromIdle helper — same allocation contract,
+        // same target, fresh UUID each. Guards against the copy-paste
+        // drift the extraction exists to prevent.
+        val factory = FixedAudioFileFactory(File("/tmp/parity.m4a"))
+        val services = fakeModuleServices(audioFileRepository = factory)
+        val s = state.copy(recording = RecordingState.Idle)
+
+        val primary = resolveRecordAction(s, services) as Action.RecordingAction.StartRecording
+        val secondary = resolveSecondaryRecordAction(s, services) as Action.RecordingAction.StartRecording
+
+        assertEquals(primary.target, secondary.target)
+        assertEquals(primary.audioFile, secondary.audioFile)
+        assertEquals(2, factory.allocateCallCount)
+        assertTrue(primary.sessionId != secondary.sessionId) // fresh UUID per tap
+    }
+
+    @Test
+    fun `resolveSecondaryRecordAction returns null for every non-Idle recording state`() {
+        // Single-MediaRecorder gate (spec criterion 4): a secondary
+        // recording may never start while another recording is in flight.
+        val nonIdle = listOf(
+            RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid"),
+            RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid"),
+            RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid"),
+            RecordingState.Interrupted(sessionId = "sid", elapsedMs = 1_000L),
+        )
+        for (rec in nonIdle) {
+            val s = state.copy(recording = rec)
+            assertNull(
+                "secondary record must be null for ${rec::class.simpleName}",
+                resolveSecondaryRecordAction(s, fakeModuleServices()),
+            )
+        }
+    }
+
     @Test
     fun `resolveRecordAction emits StartRecordingContinuation when lookup returns a candidate`() {
         // B2 / ADR-0008 §"Auto-Continuation". Eligible continuation must

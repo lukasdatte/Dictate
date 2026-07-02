@@ -88,6 +88,24 @@
             motion:layout_constraintTop_toTopOf="@+id/record_pulse_layout"
             motion:layout_constraintBottom_toBottomOf="@+id/record_pulse_layout"
             motion:layout_constraintStart_toEndOf="@+id/record_pulse_layout"
+            motion:layout_constraintEnd_toStartOf="@+id/secondary_record_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <!-- secondary_record_btn — ADR-0009. Chained between resend_btn and
+             backspace_btn (resend → secondary → backspace). GONE in
+             two_row_state (Catalog predicate {false}); visible when the
+             derived two_row_send_mode_state renders. goneMarginStart keeps
+             the chain tight when resend_btn is GONE (SEND_MODE). -->
+        <Constraint
+            android:id="@+id/secondary_record_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            motion:layout_goneMarginStart="0dp"
+            motion:layout_constraintTop_toTopOf="@+id/record_pulse_layout"
+            motion:layout_constraintBottom_toBottomOf="@+id/record_pulse_layout"
+            motion:layout_constraintStart_toEndOf="@+id/resend_btn"
             motion:layout_constraintEnd_toStartOf="@+id/backspace_btn">
             <PropertySet motion:visibilityMode="ignore" />
         </Constraint>
@@ -100,7 +118,7 @@
             motion:layout_goneMarginStart="0dp"
             motion:layout_constraintTop_toTopOf="@+id/record_pulse_layout"
             motion:layout_constraintBottom_toBottomOf="@+id/record_pulse_layout"
-            motion:layout_constraintStart_toEndOf="@+id/resend_btn"
+            motion:layout_constraintStart_toEndOf="@+id/secondary_record_btn"
             motion:layout_constraintEnd_toStartOf="@+id/widget_toggle_btn">
             <PropertySet motion:visibilityMode="ignore" />
         </Constraint>
@@ -288,6 +306,28 @@
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
             motion:layout_constraintStart_toEndOf="@+id/space_btn"
+            motion:layout_constraintEnd_toStartOf="@+id/secondary_record_btn">
+            <PropertySet motion:visibilityMode="ignore" />
+        </Constraint>
+
+        <!-- secondary_record_btn — ADR-0009. The single-row chain has no
+             adjacent resend↔backspace pair (resend sits far right, next to
+             widget_toggle), so the two-row "between resend and backspace"
+             placement maps here to "immediately left of backspace"
+             (pause → secondary → backspace). GONE in single_row_state;
+             visible when the derived single_row_send_mode_state renders.
+             goneMarginStart keeps the chain tight while pause_btn is GONE
+             (SEND_MODE hides pause). -->
+        <Constraint
+            android:id="@+id/secondary_record_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            motion:layout_goneMarginStart="0dp"
+            motion:layout_constraintTop_toTopOf="parent"
+            motion:layout_constraintBottom_toBottomOf="parent"
+            motion:layout_constraintStart_toEndOf="@+id/pause_btn"
             motion:layout_constraintEnd_toStartOf="@+id/backspace_btn">
             <PropertySet motion:visibilityMode="ignore" />
         </Constraint>
@@ -298,9 +338,10 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="4dp"
             android:layout_marginEnd="4dp"
+            motion:layout_goneMarginStart="0dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
-            motion:layout_constraintStart_toEndOf="@+id/pause_btn"
+            motion:layout_constraintStart_toEndOf="@+id/secondary_record_btn"
             motion:layout_constraintEnd_toStartOf="@+id/enter_btn">
             <PropertySet motion:visibilityMode="ignore" />
         </Constraint>

@@ -88,54 +88,7 @@ private fun newSessionId(): String = UUID.randomUUID().toString()
  */
 fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action? {
     return when (state.recording) {
-        RecordingState.Idle -> {
-            // B2 / ADR-0008 §"Auto-Continuation". On every Idle Record-tap
-            // we first ask the ContinuationLookup whether the most recent
-            // session is a fresh RECORDING_INTERRUPTED row eligible for
-            // continuation. The composite (RecordingContinuationLookup)
-            // does the DB lookup, segment-list probe, MediaExtractor codec
-            // read, and allocateNext — see its KDoc for the eligibility
-            // chain. A non-null result has already mutated repository
-            // state (next segment is reserved on disk + appended to
-            // audio_file_paths). Returning the StartRecordingContinuation
-            // action skips the fresh allocate + UUID mint below — both
-            // would be wasteful and the new fresh allocate would orphan
-            // a file the user could see in cleanup logs.
-            val continuation = services.continuationLookup.lookup()
-            if (continuation != null) {
-                return Action.RecordingAction.StartRecordingContinuation(
-                    target = InsertionTarget.INPUT_CONNECTION,
-                    audioFile = continuation.nextSegmentFile,
-                    sessionId = continuation.sessionId,
-                    codecParams = continuation.codecParams,
-                )
-            }
-            // Block A4 (recording-stack-completion) — Initial-File-Cutover.
-            // Mint the sessionId BEFORE allocate so we can ask the
-            // AudioFileRepository for `sess_{sid}_seg1.m4a`. This unifies
-            // the naming convention: initial file + every rolling segment
-            // share the `sess_{sid}_seg*` prefix that `segments(sid)`
-            // scans for. Without this the initial file was named
-            // `rec_{ts}_{uuid8}.m4a` (from CacheDirAudioFileFactory) and
-            // therefore invisible to the multi-segment muxer at upload
-            // time — which is exactly the "only the latest audio chunk
-            // reached the AI" bug observed on-device on 2026-05-22.
-            val sessionId = newSessionId()
-            val file = try {
-                services.audioFileRepository.allocateFirst(sessionId)
-            } catch (e: java.io.IOException) {
-                // B4-VAL F-4: toast via @StringRes overload so the user-visible
-                // message goes through Android's i18n machinery (Spec 2 §8.5).
-                services.toastSink.show(R.string.dictate_storage_full)
-                Log.w(TAG, "audioFileRepository.allocateFirst failed", e)
-                return null
-            }
-            Action.RecordingAction.StartRecording(
-                target = InsertionTarget.INPUT_CONNECTION,
-                audioFile = file,
-                sessionId = sessionId,
-            )
-        }
+        RecordingState.Idle -> resolveStartRecordingFromIdle(services)
 
         is RecordingState.Active -> Action.RecordingAction.StopRecordingAndSend
         is RecordingState.Paused -> Action.RecordingAction.StopRecordingAndSend
@@ -162,6 +115,87 @@ fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action
         }
     }
 }
+
+/**
+ * Shared "arm a fresh recording from Idle" body, extracted so the primary
+ * [resolveRecordAction] and the secondary [resolveSecondaryRecordAction]
+ * produce byte-identical start-recording actions (no duplicated
+ * allocation / UUID-mint / continuation-lookup logic).
+ *
+ * B2 / ADR-0008 §"Auto-Continuation": we first ask the ContinuationLookup
+ * whether the most recent session is a fresh RECORDING_INTERRUPTED row
+ * eligible for continuation. The composite (RecordingContinuationLookup)
+ * does the DB lookup, segment-list probe, MediaExtractor codec read, and
+ * allocateNext — see its KDoc for the eligibility chain. A non-null
+ * result has already mutated repository state (next segment is reserved
+ * on disk + appended to audio_file_paths). Returning the
+ * StartRecordingContinuation action skips the fresh allocate + UUID mint
+ * below — both would be wasteful and the fresh allocate would orphan a
+ * file the user could see in cleanup logs.
+ *
+ * Block A4 (recording-stack-completion) — Initial-File-Cutover: the
+ * sessionId is minted BEFORE allocate so the AudioFileRepository can hand
+ * back `sess_{sid}_seg1.m4a`, unifying the naming convention (initial
+ * file + every rolling segment share the `sess_{sid}_seg*` prefix that
+ * `segments(sid)` scans for). Without this the initial file was named
+ * `rec_{ts}_{uuid8}.m4a` and therefore invisible to the multi-segment
+ * muxer at upload time — the "only the latest audio chunk reached the
+ * AI" bug observed on-device on 2026-05-22.
+ *
+ * **IOException side-channel.** `audioFileRepository.allocateFirst()` may
+ * fail (mkdirs/storage); the helper fires a toast on `services.toastSink`
+ * and returns `null` (R.3 silent-no-op; the reducer never sees the IO
+ * failure — Pure-Reducer invariant).
+ */
+private fun resolveStartRecordingFromIdle(services: ModuleServices): Action? {
+    val continuation = services.continuationLookup.lookup()
+    if (continuation != null) {
+        return Action.RecordingAction.StartRecordingContinuation(
+            target = InsertionTarget.INPUT_CONNECTION,
+            audioFile = continuation.nextSegmentFile,
+            sessionId = continuation.sessionId,
+            codecParams = continuation.codecParams,
+        )
+    }
+    val sessionId = newSessionId()
+    val file = try {
+        services.audioFileRepository.allocateFirst(sessionId)
+    } catch (e: java.io.IOException) {
+        // B4-VAL F-4: toast via @StringRes overload so the user-visible
+        // message goes through Android's i18n machinery (Spec 2 §8.5).
+        services.toastSink.show(R.string.dictate_storage_full)
+        Log.w(TAG, "audioFileRepository.allocateFirst failed", e)
+        return null
+    }
+    return Action.RecordingAction.StartRecording(
+        target = InsertionTarget.INPUT_CONNECTION,
+        audioFile = file,
+        sessionId = sessionId,
+    )
+}
+
+/**
+ * Secondary record-button click resolver — the mic button offered in the
+ * SEND_MODE layouts while a pipeline run processes (ADR-0009).
+ *
+ * A tap starts a **new** recording that will queue behind the active
+ * pipeline run. The single-MediaRecorder gate is the recording-`Idle`
+ * check here: a secondary recording is only possible while no recording
+ * is in flight (`recording is Idle`), so any non-Idle state yields `null`.
+ * Pipeline-live is implied by the slot's placement in the SEND_MODE modes
+ * (the slot only renders there); the slot's `visibilityPredicate` also
+ * carries the recording-Idle check as belt-and-braces.
+ *
+ * The arm delegates to the shared [resolveStartRecordingFromIdle] body,
+ * so the produced action is identical to what [resolveRecordAction]
+ * returns from its Idle arm.
+ *
+ * @see resolveRecordAction (primary record body — same Idle arm)
+ * @see docs/research/2026-07-02 - concurrent-recording-deferred-insertion.md §3.4
+ * @see docs/decisions/0009-pipeline-run-queue-serialized-concurrency.md
+ */
+fun resolveSecondaryRecordAction(state: DictateUiState, services: ModuleServices): Action? =
+    if (state.recording is RecordingState.Idle) resolveStartRecordingFromIdle(services) else null
 
 /**
  * Record-button **long-press** resolver (behaviour group G2,

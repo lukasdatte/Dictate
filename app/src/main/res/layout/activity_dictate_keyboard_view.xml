@@ -131,6 +131,26 @@
             android:visibility="gone"
             tools:visibility="visible" />
 
+        <!-- secondary_record_btn — ADR-0009 secondary-recording mic button.
+             Rendered only in the SEND_MODE layouts while a pipeline run
+             processes; a tap starts a NEW recording that queues behind the
+             active run. Static mic foreground (no iconResolver, never
+             swapped) mirrors resend_btn / backspace_btn — the LayoutCatalog
+             RECORD_SECONDARY slot owns visibility only. Position lives in
+             motion_scene_keyboard.xml (between resend_btn and backspace_btn);
+             visibilityMode="ignore" is carried by the MotionScene PropertySets
+             like every other state-driven button. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/secondary_record_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:foreground="@drawable/ic_baseline_mic_24"
+            android:foregroundGravity="center"
+            android:contentDescription="@string/dictate_secondary_record_description"
+            android:minWidth="56dp"
+            android:visibility="gone"
+            tools:visibility="visible" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/backspace_btn"
             android:layout_width="wrap_content"

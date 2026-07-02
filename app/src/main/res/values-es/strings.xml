@@ -61,6 +61,7 @@
     <string name="dictate_microphone_permission_granted">Permiso de micrófono concedido ✅.</string>
     <string name="dictate_microphone_permission_denied">Permiso de micrófono denegado ❌.</string>
     <string name="dictate_record">Grabar</string>
+    <string name="dictate_secondary_record_description">Nueva grabación durante el procesamiento</string>
     <string name="dictate_send">Enviar (%1$s)</string>
     <string name="dictate_sending">Enviando …</string>
     <string name="dictate_invalid_api_key_msg">Clave API no válida. ¿Abrir los ajustes para corregirla?</string>

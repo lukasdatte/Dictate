@@ -97,6 +97,16 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         longClickResolver = { _, _ -> Action.ResendAction.ResendLastAudioLong },
                     ),
                     ButtonSlot(
+                        logicalId = LogicalButtonId.RECORD_SECONDARY,
+                        widthPolicy = WidthPolicy.WrapContent,
+                        // ADR-0009: the secondary mic button only renders in
+                        // the SEND_MODE layouts. Here (standard mode) it is
+                        // structurally hidden so the view can never linger
+                        // stale — mirrors the RESEND `{ false }` convention.
+                        visibilityPredicate = { false },
+                        actionResolver = ::resolveSecondaryRecordAction,
+                    ),
+                    ButtonSlot(
                         logicalId = LogicalButtonId.BACKSPACE,
                         widthPolicy = WidthPolicy.WrapContent,
                         visibilityPredicate = { true },
@@ -224,6 +234,15 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     longClickResolver = { _, _ -> Action.ResendAction.ResendLastAudioLong },
                 ),
                 ButtonSlot(
+                    logicalId = LogicalButtonId.RECORD_SECONDARY,
+                    widthPolicy = WidthPolicy.WrapContent,
+                    // ADR-0009: hidden in standard mode (see KEYBOARD_TWO_ROW
+                    // RECORD_SECONDARY slot) — only the SEND_MODE layouts
+                    // render the secondary mic button.
+                    visibilityPredicate = { false },
+                    actionResolver = ::resolveSecondaryRecordAction,
+                ),
+                ButtonSlot(
                     logicalId = LogicalButtonId.AUDIO_FOCUS,
                     widthPolicy = WidthPolicy.WrapContent,
                     // Single-row layout: audio-focus is the one slot that differs from two-row.
@@ -284,6 +303,23 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         widthPolicy = WidthPolicy.WrapContent,
                         visibilityPredicate = { false },
                         actionResolver = { _, _ -> null },
+                    ),
+                    ButtonSlot(
+                        logicalId = LogicalButtonId.RECORD_SECONDARY,
+                        widthPolicy = WidthPolicy.WrapContent,
+                        // ADR-0009: the secondary mic button. Visible while a
+                        // pipeline run processes AND no recording is in flight
+                        // (single-MediaRecorder gate). A tap starts a NEW
+                        // recording that queues behind the active run.
+                        // Pipeline-live is implied by this SEND_MODE placement;
+                        // the explicit check is belt-and-braces so a stale
+                        // render-tick can't show the button.
+                        visibilityPredicate = { state ->
+                            (state.pipeline is PipelineUiState.Preparing ||
+                                state.pipeline is PipelineUiState.Running) &&
+                                state.recording is RecordingState.Idle
+                        },
+                        actionResolver = ::resolveSecondaryRecordAction,
                     ),
                     ButtonSlot(
                         logicalId = LogicalButtonId.BACKSPACE,
@@ -396,6 +432,22 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                     actionResolver = { _, _ -> null },
                 ),
                 ButtonSlot(
+                    logicalId = LogicalButtonId.RECORD_SECONDARY,
+                    widthPolicy = WidthPolicy.WrapContent,
+                    // ADR-0009: the secondary mic button. Visible while a
+                    // pipeline run processes AND no recording is in flight
+                    // (single-MediaRecorder gate); a tap starts a NEW
+                    // recording that queues behind the active run.
+                    // Belt-and-braces pipeline-live check (see TWO_ROW_SEND
+                    // RECORD_SECONDARY slot).
+                    visibilityPredicate = { state ->
+                        (state.pipeline is PipelineUiState.Preparing ||
+                            state.pipeline is PipelineUiState.Running) &&
+                            state.recording is RecordingState.Idle
+                    },
+                    actionResolver = ::resolveSecondaryRecordAction,
+                ),
+                ButtonSlot(
                     logicalId = LogicalButtonId.AUDIO_FOCUS,
                     widthPolicy = WidthPolicy.WrapContent,
                     visibilityPredicate = { true },
@@ -440,6 +492,16 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         widthPolicy = WidthPolicy.WrapContent,
                         visibilityPredicate = { false },
                         actionResolver = { _, _ -> null },
+                    ),
+                    ButtonSlot(
+                        logicalId = LogicalButtonId.RECORD_SECONDARY,
+                        widthPolicy = WidthPolicy.WrapContent,
+                        // ADR-0009: staging is entered from Idle and is not a
+                        // pipeline-live mode, so the secondary mic button is
+                        // structurally hidden here (see KEYBOARD_TWO_ROW
+                        // RECORD_SECONDARY slot).
+                        visibilityPredicate = { false },
+                        actionResolver = ::resolveSecondaryRecordAction,
                     ),
                     ButtonSlot(
                         logicalId = LogicalButtonId.BACKSPACE,
@@ -618,15 +680,28 @@ class LayoutCatalog(private val strings: LayoutStrings) {
     /**
      * Deterministic state-→-mode mapping for the KEYBOARD ViewMode.
      *
-     * Decision tree (Spec 2 §8.6):
+     * Decision tree (Spec 2 §8.6, extended by ADR-0009):
      *
-     * | Pipeline state                 | smallRow? | → LayoutMode                  |
-     * |--------------------------------|-----------|-------------------------------|
-     * | `ReprocessStaging`             | any       | KEYBOARD_REPROCESS_STAGING    |
-     * | `Preparing` / `Running`        | `true`    | KEYBOARD_SINGLE_ROW_SEND_MODE |
-     * | `Preparing` / `Running`        | `false`   | KEYBOARD_TWO_ROW_SEND_MODE    |
-     * | `Idle`                         | `true`    | KEYBOARD_SINGLE_ROW           |
-     * | `Idle`                         | `false`   | KEYBOARD_TWO_ROW              |
+     * | Recording   | Pipeline state          | smallRow? | → LayoutMode                  |
+     * |-------------|-------------------------|-----------|-------------------------------|
+     * | any         | `ReprocessStaging`      | any       | KEYBOARD_REPROCESS_STAGING    |
+     * | **live**    | any                     | `true`    | KEYBOARD_SINGLE_ROW           |
+     * | **live**    | any                     | `false`   | KEYBOARD_TWO_ROW              |
+     * | `Idle`      | `Preparing` / `Running` | `true`    | KEYBOARD_SINGLE_ROW_SEND_MODE |
+     * | `Idle`      | `Preparing` / `Running` | `false`   | KEYBOARD_TWO_ROW_SEND_MODE    |
+     * | `Idle`      | `Idle`                  | `true`    | KEYBOARD_SINGLE_ROW           |
+     * | `Idle`      | `Idle`                  | `false`   | KEYBOARD_TWO_ROW              |
+     *
+     * **Recording wins over SEND_MODE (ADR-0009).** A live recording
+     * (`state.recording !is Idle`) outranks a live pipeline: the user
+     * needs the recording controls (timer / pause / trash / stop&send)
+     * even while a run processes in the background. This row is only
+     * reachable once the RECORD_SECONDARY button ships — before ADR-0009 a
+     * recording could never coexist with a live pipeline, so
+     * `recordingLive && isPipelineLive` was unreachable and this change is
+     * behaviour-neutral for every legacy flow (pinned by tests). While the
+     * secondary recording is live the pipeline axis is untouched; its
+     * progress continues to surface in the FGS notification.
      *
      * **Why no `singleRow` branch for ReprocessStaging?** Spec 2 §8.8
      * Edge-Case 1: staging is workflow-fokussiert (editable queue +
@@ -650,6 +725,10 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         val pipe = state.pipeline
         val isStaging = pipe is PipelineUiState.ReprocessStaging
         val isPipelineLive = pipe is PipelineUiState.Preparing || pipe is PipelineUiState.Running
+        // ADR-0009: a live recording (secondary recording started during a
+        // pipeline run) needs the recording controls and therefore outranks
+        // SEND_MODE — see KDoc precedence note.
+        val recordingLive = state.recording !is RecordingState.Idle
         // InfoBar force-expand: a visible info-bar masks the single-row
         // preference (see KDoc). Computed, not persisted.
         val infoBarActive = InfoBarSelector.select(state).isNotEmpty()
@@ -658,10 +737,12 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         // against future state-shape changes that break exhaustiveness.
         return when {
             isStaging -> KEYBOARD_REPROCESS_STAGING
+            recordingLive && singleRow -> KEYBOARD_SINGLE_ROW
+            recordingLive && !singleRow -> KEYBOARD_TWO_ROW
             isPipelineLive && singleRow -> KEYBOARD_SINGLE_ROW_SEND_MODE
             isPipelineLive && !singleRow -> KEYBOARD_TWO_ROW_SEND_MODE
-            !isPipelineLive && singleRow -> KEYBOARD_SINGLE_ROW
-            !isPipelineLive && !singleRow -> KEYBOARD_TWO_ROW
+            singleRow -> KEYBOARD_SINGLE_ROW
+            !singleRow -> KEYBOARD_TWO_ROW
             else -> error("forKeyboard: impossible state shape (pipe=$pipe, layout=${state.layout})")
         }
     }

@@ -37,6 +37,17 @@ enum class LogicalButtonId {
     /** `resend_btn` — gated by [net.devemperor.dictate.state.layout.isResendVisible]. */
     RESEND,
 
+    /**
+     * `secondary_record_btn` — the mic button offered **only** during a live
+     * pipeline run (the SEND_MODE layouts). A tap starts a NEW recording
+     * that queues behind the active run, letting the user dictate the next
+     * thought while the current one is still processing (ADR-0009). Never
+     * rendered in the standard / staging modes (slot predicate `{ false }`)
+     * and never while a recording is already in flight (single-MediaRecorder
+     * gate). @see docs/decisions/0009-pipeline-run-queue-serialized-concurrency.md
+     */
+    RECORD_SECONDARY,
+
     /** `backspace_btn`. */
     BACKSPACE,
 

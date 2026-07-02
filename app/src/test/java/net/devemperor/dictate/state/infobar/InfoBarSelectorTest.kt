@@ -675,4 +675,59 @@ class InfoBarSelectorTest {
         assertTrue(items.contains("pending-insert:abc"))
         assertTrue(items.contains("partial-recovery:abc"))
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // Interruption-paused producer (F-036, 2026-07-02)
+    // ────────────────────────────────────────────────────────────────
+
+    private fun stateWithInterruption(
+        reason: net.devemperor.dictate.state.InterruptionReason,
+        occurredAt: Long = 7_000L,
+    ): DictateUiState = defaultState().copy(
+        interruption = net.devemperor.dictate.state.InterruptionState(
+            lastInterruption = net.devemperor.dictate.state.InterruptionEvent(
+                reason = reason,
+                occurredAt = occurredAt,
+            ),
+        ),
+    )
+
+    @Test
+    fun `audio-focus interruption surfaces a pure-info item with no buttons`() {
+        val items = InfoBarSelector.select(
+            stateWithInterruption(net.devemperor.dictate.state.InterruptionReason.AUDIO_FOCUS_LOST),
+        )
+        assertEquals(1, items.size)
+        val item = items.first()
+        assertEquals("interruption:audio_focus_lost", item.id)
+        assertEquals(InfoBarStyle.INFO, item.message.style)
+        assertEquals(
+            net.devemperor.dictate.R.string.dictate_interruption_audio_focus_msg,
+            item.message.textResId,
+        )
+        // Pure-info: the item's lifetime is bound to its natural source
+        // (InterruptionModule clears lastInterruption when the recording
+        // leaves Paused) — no confirm/dismiss affordances.
+        assertNull(item.confirmAction)
+        assertNull(item.dismissAction)
+        assertEquals("createdAt is the event's occurredAt", 7_000L, item.createdAt)
+    }
+
+    @Test
+    fun `headset interruption maps to the headset message resource`() {
+        val item = InfoBarSelector.select(
+            stateWithInterruption(net.devemperor.dictate.state.InterruptionReason.HEADSET_DISCONNECTED),
+        ).first()
+        assertEquals("interruption:headset_disconnected", item.id)
+        assertEquals(
+            net.devemperor.dictate.R.string.dictate_interruption_headset_msg,
+            item.message.textResId,
+        )
+    }
+
+    @Test
+    fun `cleared interruption produces no item`() {
+        // lastInterruption == null (the default) → the producer is silent.
+        assertTrue(InfoBarSelector.select(defaultState()).isEmpty())
+    }
 }

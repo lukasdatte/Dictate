@@ -407,8 +407,11 @@ sub-state shape is itself uncertain. The sub-state defaults to
 `null` and the reducer returns `null` for every action.
 
 ```kotlin
-object InterruptionModule : DictateModule<InterruptionState?, ...> {
-    override fun initialState(): InterruptionState? = null
+// Historical example — InterruptionModule used this shape from C6
+// until its Phase-2 activation (2026-07-02, F-036), when the axis
+// became a non-null InterruptionState with a real reducer.
+object SomeFutureModule : DictateModule<SomeState?, ...> {
+    override fun initialState(): SomeState? = null
     override fun reduce(...): TransitionResult<...>? = null
 }
 ```
@@ -433,7 +436,9 @@ Both shapes preserve the `assertCompleteCoverage()` invariant
 (the action sealed class IS owned by a module). The key contract:
 **stub-registered ≠ removed**. The C6 deviations table records
 which modules use which shape; the canonical example for shape (I)
-is `InterruptionModule`.
+was `InterruptionModule` until its 2026-07-02 activation (F-036) —
+it graduated from the nullable stub to a real module exactly as the
+pattern intends. No shape-(I) stub is currently registered.
 
 ## 8. Information Gaps
 

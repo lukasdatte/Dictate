@@ -238,7 +238,7 @@ object DictateModuleRegistry {
         ThemingModule,
         PendingSessionsModule,
         KeyboardInputModule,
-        // InterruptionModule (Phase 2)
+        InterruptionModule,
     )
 
     init {
@@ -265,13 +265,13 @@ every concrete (`data class` / `data object`) Action variant is
 routed at O(1). The init-time `require` catches doubly-routed
 actions before the service starts.
 
-### 7.1 Module-Inventar (13 active + 1 Phase-2 stub)
+### 7.1 Module-Inventar (14 active)
 
 | # | Module | Axis | Cross-Module Observer? |
 |---|---|---|---|
 | 1 | RecordingModule | `recording` (sealed RecordingState) | yes (Idle → Preparing → `OverlayAction.ResetSuppressBit`) |
 | 2 | PipelineModule | `pipeline` (sealed PipelineUiState) | yes (PipelineDone → Resend, LivePrompt, ViewMode T7) |
-| 3 | AudioModule | `audio` | yes (AudioFocus-Loss → `RecordingAction.PauseRecording`) |
+| 3 | AudioModule | `audio` | yes (recording-lifecycle → focus/SCO effects; focus-loss pause moved to InterruptionModule, F-007 consolidation 2026-07-02) |
 | 4 | ViewModeModule | `viewMode` (enum) | yes (Triangle-FSM transitions, ADR-0005) |
 | 5 | OverlayModule | `overlay` (position + permission + suppress + onboarding) | yes (T1/T2 `userPrefersWidget` cascades) |
 | 6 | ResendModule | `resend` | yes (Pipeline-Done → `MarkAvailable`) |
@@ -282,7 +282,7 @@ actions before the service starts.
 | 11 | ThemingModule | `theming` | no |
 | 12 | PendingSessionsModule | `pendingSessions` | no (DB-subscriber-driven, no reducer) |
 | 13 | KeyboardInputModule | n/a (Unit state, effect-only) | no |
-| 14 | InterruptionModule (Phase 2) | `interruption` | yes (call-incoming → `CancelRecording`) |
+| 14 | InterruptionModule (F-036, 2026-07-02) | `interruption` | yes (audio-focus loss / headset unplug while Active → `PauseRecording`; self-clear on leaving Paused) |
 
 See Spec 1 §15.1 for the canonical inventory + the
 Cross-Module-Coupling-Matrix.

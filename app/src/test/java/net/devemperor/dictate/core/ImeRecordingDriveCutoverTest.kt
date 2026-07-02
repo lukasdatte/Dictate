@@ -63,8 +63,8 @@ class ImeRecordingDriveCutoverTest {
         }
 
         override fun resume(sessionId: String, token: CancellationToken) = Unit
-        override fun regenerate(sessionId: String, stepChainIndex: Int, token: CancellationToken) = Unit
-        override fun postProcess(sessionId: String, inputText: String, promptText: String, promptId: Int?) = Unit
+        override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
+        override fun postProcess(request: JobRequest.PostProcess) = Unit
 
         fun awaitStarted() = check(done.await(2, TimeUnit.SECONDS)) { "runner did not start" }
     }
@@ -229,8 +229,8 @@ class ImeRecordingDriveCutoverTest {
                 token: CancellationToken,
             ) = Unit
             override fun resume(sessionId: String, token: CancellationToken) = Unit
-            override fun regenerate(sessionId: String, stepChainIndex: Int, token: CancellationToken) = Unit
-            override fun postProcess(sessionId: String, inputText: String, promptText: String, promptId: Int?) = Unit
+            override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
+            override fun postProcess(request: JobRequest.PostProcess) = Unit
         })
         val b = boot()
         val audio = File.createTempFile("c5rec", ".m4a", app.cacheDir)
@@ -324,8 +324,8 @@ class ImeRecordingDriveCutoverTest {
                 token: CancellationToken,
             ) = Unit
             override fun resume(sessionId: String, token: CancellationToken) = Unit
-            override fun regenerate(sessionId: String, stepChainIndex: Int, token: CancellationToken) = Unit
-            override fun postProcess(sessionId: String, inputText: String, promptText: String, promptId: Int?) = Unit
+            override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
+            override fun postProcess(request: JobRequest.PostProcess) = Unit
         })
         val b = boot()
         val imported = File.createTempFile("imported", ".m4a", app.cacheDir)

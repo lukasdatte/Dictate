@@ -121,37 +121,6 @@ class JobExecutorTest {
         val tokenRef = AtomicReference<CancellationToken>()
         val observedInterrupt = AtomicReference<Boolean>(false)
 
-        val runner = object : PipelineRunner {
-            override fun runTranscription(
-                config: PipelineOrchestrator.PipelineConfig,
-                reuseSessionId: String?,
-                token: CancellationToken
-            ) = unused()
-
-            override fun resume(sessionId: String, token: CancellationToken) = unused()
-
-            override fun regenerate(
-                sessionId: String,
-                stepChainIndex: Int,
-                token: CancellationToken
-            ) = unused()
-
-            override fun postProcess(
-                sessionId: String,
-                inputText: String,
-                promptText: String,
-                promptId: Int?
-            ) {
-                // We don't use the token in postProcess, but JobExecutor holds
-                // the same token in `activeToken` — we observe it via the
-                // PipelineRunner's StepRegenerate path instead.
-                unused()
-            }
-
-            private fun unused(): Nothing =
-                throw AssertionError("postProcess path not expected here")
-        }
-
         // Use a StepRegenerate request so the token is exposed to the runner.
         val blockingRunner = object : PipelineRunner {
             override fun runTranscription(
@@ -163,8 +132,7 @@ class JobExecutorTest {
             override fun resume(sessionId: String, token: CancellationToken) = Unit
 
             override fun regenerate(
-                sessionId: String,
-                stepChainIndex: Int,
+                request: JobRequest.StepRegenerate,
                 token: CancellationToken
             ) {
                 threadRef.set(Thread.currentThread())
@@ -187,12 +155,7 @@ class JobExecutorTest {
                 }
             }
 
-            override fun postProcess(
-                sessionId: String,
-                inputText: String,
-                promptText: String,
-                promptId: Int?
-            ) = Unit
+            override fun postProcess(request: JobRequest.PostProcess) = Unit
         }
 
         JobExecutor.initializeForTest(blockingRunner)
@@ -219,11 +182,71 @@ class JobExecutorTest {
         assertFalse(ActiveJobRegistry.isAnyActive())
     }
 
+    // ── F-055 regression tests (history-reprocess-hardening §3) ─────────
+
+    @Test
+    fun `regenerate job registers in ActiveJobRegistry while running and unregisters after`() {
+        val released = CountDownLatch(1)
+        val started = CountDownLatch(1)
+        val runner = BlockingRunner(started, released)
+        JobExecutor.initializeForTest(runner)
+
+        assertTrue(JobExecutor.start(ctx, regenerateRequest("s1")))
+        assertTrue(started.await(2, TimeUnit.SECONDS))
+
+        // Registered while the regenerate runs — this is what makes it
+        // mutually exclusive with reprocess and visible to the history UI.
+        assertTrue(ActiveJobRegistry.isActive("s1"))
+
+        released.countDown()
+        runner.awaitDone()
+        assertFalse(ActiveJobRegistry.isActive("s1"))
+    }
+
+    @Test
+    fun `reprocess is blocked while a regenerate is active on the same session`() {
+        val released = CountDownLatch(1)
+        val started = CountDownLatch(1)
+        val runner = BlockingRunner(started, released)
+        JobExecutor.initializeForTest(runner)
+
+        assertTrue(JobExecutor.start(ctx, regenerateRequest("s1")))
+        assertTrue(started.await(2, TimeUnit.SECONDS))
+
+        // A history reprocess on the SAME session must be rejected while the
+        // regenerate is in flight (pre-F-055 these raced on the same
+        // processing-step chain because regenerate bypassed the registry).
+        val reprocess = JobRequest.TranscriptionPipeline(
+            sessionId = "s1",
+            totalSteps = 1,
+            kind = JobRequest.TranscriptionKind.HISTORY_REPROCESS,
+            recordingsDir = java.io.File("."),
+            reuseSessionId = "s1"
+        )
+        assertFalse(JobExecutor.start(ctx, reprocess))
+
+        released.countDown()
+        runner.awaitDone()
+
+        // Once the regenerate finished, the reprocess may start.
+        val runner2 = BlockingRunner(CountDownLatch(1), CountDownLatch(0))
+        JobExecutor.initializeForTest(runner2)
+        assertTrue(JobExecutor.start(ctx, reprocess))
+        runner2.awaitDone()
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
+
+    private fun regenerateRequest(sessionId: String) = JobRequest.StepRegenerate(
+        sessionId = sessionId,
+        totalSteps = 1,
+        stepChainIndex = 0
+    )
 
     private fun postProcessRequest(sessionId: String) = JobRequest.PostProcess(
         sessionId = sessionId,
         totalSteps = 1,
+        parentSessionId = "parent-of-$sessionId",
         inputText = "hi",
         promptText = "do something",
         promptId = null
@@ -249,19 +272,13 @@ class JobExecutorTest {
         }
 
         override fun regenerate(
-            sessionId: String,
-            stepChainIndex: Int,
+            request: JobRequest.StepRegenerate,
             token: CancellationToken
         ) {
             done.countDown()
         }
 
-        override fun postProcess(
-            sessionId: String,
-            inputText: String,
-            promptText: String,
-            promptId: Int?
-        ) {
+        override fun postProcess(request: JobRequest.PostProcess) {
             done.countDown()
         }
 
@@ -291,17 +308,11 @@ class JobExecutorTest {
         override fun resume(sessionId: String, token: CancellationToken) = block()
 
         override fun regenerate(
-            sessionId: String,
-            stepChainIndex: Int,
+            request: JobRequest.StepRegenerate,
             token: CancellationToken
         ) = block()
 
-        override fun postProcess(
-            sessionId: String,
-            inputText: String,
-            promptText: String,
-            promptId: Int?
-        ) = block()
+        override fun postProcess(request: JobRequest.PostProcess) = block()
 
         private fun block() {
             started.countDown()

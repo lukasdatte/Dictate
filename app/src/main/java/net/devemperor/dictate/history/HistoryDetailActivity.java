@@ -4,7 +4,6 @@ import android.annotation.SuppressLint;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.media.MediaPlayer;
 import android.os.Bundle;
 import android.view.MenuItem;
@@ -26,9 +25,6 @@ import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import net.devemperor.dictate.R;
-import net.devemperor.dictate.ai.AIOrchestrator;
-import net.devemperor.dictate.ai.runner.CompletionResult;
-import net.devemperor.dictate.ai.AIFunction;
 import net.devemperor.dictate.core.ActiveJobRegistry;
 import net.devemperor.dictate.core.ActiveJobRegistryObserver;
 import net.devemperor.dictate.core.JobExecutor;
@@ -72,7 +68,6 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     private DictateDatabase db;
     private SessionManager sessionManager;
-    private AIOrchestrator orchestrator;
     private ProcessingStepDao stepDao;
     private TranscriptionDao transcriptionDao;
     private RecordingRepository recordingRepository;
@@ -80,12 +75,24 @@ public class HistoryDetailActivity extends AppCompatActivity
     private String sessionId;
     private SessionEntity session;
 
+    /**
+     * F-055: session id of a post-process job started from this screen. Used
+     * only to navigate to the result when the job leaves [ActiveJobRegistry].
+     * Deliberately plain instance state: if the Activity is recreated
+     * mid-job, the job itself survives (JobExecutor) and the new session is
+     * reachable via the history list — only the auto-navigation is skipped.
+     */
+    private String pendingPostProcessNavigateId;
+
     private List<PipelineStepAdapter.PipelineStep> pipelineSteps;
     private PipelineStepAdapter pipelineAdapter;
     private ProgressBar progressBar;
 
     private MediaPlayer mediaPlayer;
-    private final ExecutorService regenerateExecutor = Executors.newSingleThreadExecutor();
+    // F-055: strictly for quick LOCAL file I/O (delete audio). AI work must
+    // never run here — it goes through JobExecutor so it survives the Activity
+    // and registers in ActiveJobRegistry.
+    private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private final SimpleDateFormat dateFormat = new SimpleDateFormat("dd.MM.yyyy, HH:mm", Locale.getDefault());
 
     @Override
@@ -117,9 +124,6 @@ public class HistoryDetailActivity extends AppCompatActivity
         transcriptionDao = db.transcriptionDao();
         recordingRepository = new RecordingRepository(this);
 
-        SharedPreferences sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE);
-        orchestrator = new AIOrchestrator(sp, db.usageDao());
-
         progressBar = findViewById(R.id.history_detail_progress_bar);
 
         pipelineSteps = new ArrayList<>();
@@ -131,7 +135,9 @@ public class HistoryDetailActivity extends AppCompatActivity
 
             @Override
             public void onRegenerate(ProcessingStepEntity step, int chainIndex) {
-                regenerateStep(step, chainIndex, step.getPromptUsed(), step.getPromptEntityId());
+                // No override: the job layer re-derives the prompt from the
+                // persisted step (F-109) or the auto-format service (F-108).
+                dispatchRegenerate(step, null, null);
             }
 
             @Override
@@ -202,8 +208,31 @@ public class HistoryDetailActivity extends AppCompatActivity
         // immediately — no more `onResume`-only refresh. The observer is
         // lifecycle-scoped, so it idles while the Activity is stopped and
         // resumes on return with the latest snapshot.
+        //
+        // F-055: the progress bar is registry-driven too — regenerate /
+        // post-process / reprocess run in JobExecutor, so there is no local
+        // completion callback anymore. A job relevant to this screen is either
+        // this session itself or the post-process session started from here.
         ActiveJobRegistryObserver.observe(this, snapshot -> {
-            if (sessionId != null) loadSession();
+            if (sessionId == null) return;
+            boolean relevantJobActive = snapshot.containsKey(sessionId)
+                    || (pendingPostProcessNavigateId != null
+                        && snapshot.containsKey(pendingPostProcessNavigateId));
+            setUiState(relevantJobActive ? UiState.LOADING : UiState.IDLE);
+
+            // Post-process finished (or was never observed running thanks to
+            // StateFlow conflation) — open the resulting session.
+            if (pendingPostProcessNavigateId != null
+                    && !snapshot.containsKey(pendingPostProcessNavigateId)) {
+                String target = pendingPostProcessNavigateId;
+                pendingPostProcessNavigateId = null;
+                if (db.sessionDao().getById(target) != null) {
+                    Intent intent = new Intent(HistoryDetailActivity.this, HistoryDetailActivity.class);
+                    intent.putExtra(HistoryActivity.EXTRA_SESSION_ID, target);
+                    startActivity(intent);
+                }
+            }
+            loadSession();
         });
     }
 
@@ -365,6 +394,10 @@ public class HistoryDetailActivity extends AppCompatActivity
     }
 
     private void addProcessingSteps() {
+        // F-055 gating fallback: mirror the reprocess buttons — hide the AI
+        // actions while a job runs on this session (the JobExecutor single-job
+        // lock is the hard guard; this is the UX layer on top).
+        boolean jobActive = ActiveJobRegistry.INSTANCE.isActive(sessionId);
         List<ProcessingStepEntity> currentChain = stepDao.getCurrentChain(sessionId);
         for (int i = 0; i < currentChain.size(); i++) {
             ProcessingStepEntity step = currentChain.get(i);
@@ -417,9 +450,9 @@ public class HistoryDetailActivity extends AppCompatActivity
                     .stepEntity(step)
                     .versions(versions)
                     .chainIndex(step.getChainIndex())
-                    .showRegenerate(true)
-                    .showOtherPrompt(true)
-                    .showPostProcess(isLastStep)
+                    .showRegenerate(!jobActive)
+                    .showOtherPrompt(!jobActive)
+                    .showPostProcess(isLastStep && !jobActive)
                     .build());
         }
     }
@@ -499,7 +532,7 @@ public class HistoryDetailActivity extends AppCompatActivity
                 .setTitle(R.string.dictate_delete_audio_title)
                 .setMessage(R.string.dictate_delete_audio_message)
                 .setPositiveButton(R.string.dictate_delete_audio_confirm, (dialog, which) -> {
-                    regenerateExecutor.execute(() -> {
+                    ioExecutor.execute(() -> {
                         recordingRepository.deleteBySessionId(targetSessionId);
                         if (!isFinishing()) runOnUiThread(this::loadSession);
                     });
@@ -510,56 +543,59 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     // endregion
 
-    // region Regeneration
+    // region Regeneration (F-055: thin JobExecutor dispatchers, like reprocess)
 
-    private void regenerateStep(ProcessingStepEntity step, int chainIndex, String promptText, Integer promptEntityId) {
+    /**
+     * Dispatches a step regeneration as a [JobRequest.StepRegenerate]. The job
+     * survives this Activity, registers in [ActiveJobRegistry] (mutually
+     * exclusive with reprocess by construction) and rebuilds the prompt inside
+     * the job layer. UI updates arrive via the registry observer.
+     */
+    private void dispatchRegenerate(ProcessingStepEntity step, String promptOverride, Integer promptOverrideEntityId) {
+        if (ActiveJobRegistry.INSTANCE.isAnyActive()) {
+            Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        JobRequest.StepRegenerate request = new JobRequest.StepRegenerate(
+                sessionId,
+                /* totalSteps */ 1,
+                step.getChainIndex(),
+                promptOverride,
+                promptOverrideEntityId
+        );
+        if (!JobExecutor.INSTANCE.start(this, request)) {
+            Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+            return;
+        }
         setUiState(UiState.LOADING);
-        regenerateExecutor.execute(() -> {
-            try {
-                long startTime = System.currentTimeMillis();
-                CompletionResult result = orchestrator.complete(step.getInputText(), promptText);
-                long durationMs = System.currentTimeMillis() - startTime;
+    }
 
-                String provider = orchestrator.getProvider(AIFunction.COMPLETION).name();
-                String model = result.getModelName();
-
-                StepType stepType;
-                try {
-                    stepType = StepType.valueOf(step.getStepType());
-                } catch (IllegalArgumentException e) {
-                    stepType = StepType.QUEUED_PROMPT;
-                }
-
-                sessionManager.regenerateProcessingStep(
-                        sessionId, chainIndex, stepType,
-                        step.getInputText(), result.getText(),
-                        model, provider,
-                        promptText, promptEntityId,
-                        step.getPreviousStepId(), step.getPreviousTranscriptionId(),
-                        step.getSourceSessionId(),
-                        result.getPromptTokens(), result.getCompletionTokens(),
-                        durationMs,
-                        StepStatus.SUCCESS, null
-                );
-                // Use getFinalOutput() to correctly resolve the chain's last current step,
-                // which may differ from result.getText() when regenerating a mid-chain step.
-                sessionManager.updateFinalOutputText(sessionId, sessionManager.getFinalOutput(sessionId));
-
-                if (!isFinishing()) {
-                    runOnUiThread(() -> {
-                        setUiState(UiState.IDLE);
-                        loadSession();
-                    });
-                }
-            } catch (Exception e) {
-                if (!isFinishing()) {
-                    runOnUiThread(() -> {
-                        setUiState(UiState.ERROR);
-                        Toast.makeText(this, getString(R.string.dictate_history_regenerate_failed, e.getMessage()), Toast.LENGTH_LONG).show();
-                    });
-                }
-            }
-        });
+    /**
+     * Dispatches post-processing as a [JobRequest.PostProcess]. The new
+     * POST_PROCESSING session row is created inside the job body (F-111), so a
+     * rejected start leaves no orphan row either.
+     */
+    private void dispatchPostProcess(String outputText, String promptText, Integer promptEntityId) {
+        if (ActiveJobRegistry.INSTANCE.isAnyActive()) {
+            Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String newSessionId = UUID.randomUUID().toString();
+        JobRequest.PostProcess request = new JobRequest.PostProcess(
+                newSessionId,
+                /* totalSteps */ 1,
+                /* parentSessionId */ sessionId,
+                outputText,
+                promptText,
+                promptEntityId
+        );
+        pendingPostProcessNavigateId = newSessionId;
+        if (!JobExecutor.INSTANCE.start(this, request)) {
+            pendingPostProcessNavigateId = null;
+            Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        setUiState(UiState.LOADING);
     }
 
     /**
@@ -591,11 +627,11 @@ public class HistoryDetailActivity extends AppCompatActivity
         if (tag.startsWith(TAG_REGENERATE_PREFIX)) {
             ProcessingStepEntity step = stepDao.getById(tag.substring(TAG_REGENERATE_PREFIX.length()));
             if (step == null) return; // step vanished (e.g. session deleted meanwhile)
-            regenerateStep(step, step.getChainIndex(), promptText, promptEntityId);
+            dispatchRegenerate(step, promptText, promptEntityId);
         } else if (tag.startsWith(TAG_POST_PROCESS_PREFIX)) {
             ProcessingStepEntity step = stepDao.getById(tag.substring(TAG_POST_PROCESS_PREFIX.length()));
             if (step == null || step.getOutputText() == null || step.getOutputText().isEmpty()) return;
-            startPostProcessing(step.getOutputText(), promptText, promptEntityId);
+            dispatchPostProcess(step.getOutputText(), promptText, promptEntityId);
         } else if (tag.startsWith(TAG_REPROCESS_EDIT_PREFIX)) {
             // K2 minimal-fallback: V1 chooser feeds a single-prompt queue into
             // the reprocess pipeline. Free-text prompts (promptEntityId == null)
@@ -611,70 +647,6 @@ public class HistoryDetailActivity extends AppCompatActivity
                         Toast.LENGTH_LONG).show();
             }
         }
-    }
-
-    /**
-     * F-111: Creates the POST_PROCESSING session at choose-time (not at
-     * chooser-open-time) and runs the completion. A dismissed chooser therefore
-     * never leaves an empty orphan session in the history list.
-     */
-    private void startPostProcessing(String outputText, String promptText, Integer promptEntityId) {
-        String newSessionId = UUID.randomUUID().toString();
-        sessionManager.createSession(
-                newSessionId,
-                SessionType.POST_PROCESSING,
-                session.getTargetAppPackage(),
-                session.getLanguage(),
-                /* audioFilePath */ null,
-                /* audioDurationSeconds */ 0L,
-                /* parentId */ sessionId,
-                SessionOrigin.POST_PROCESSING,
-                /* queuedPromptIds */ null,
-                SessionStatus.RECORDED
-        );
-        sessionManager.updateInputText(newSessionId, outputText);
-        runPostProcessing(newSessionId, outputText, promptText, promptEntityId);
-    }
-
-    private void runPostProcessing(String newSessionId, String outputText, String promptText, Integer promptEntityId) {
-        setUiState(UiState.LOADING);
-        regenerateExecutor.execute(() -> {
-            try {
-                long startTime = System.currentTimeMillis();
-                CompletionResult result = orchestrator.complete(outputText, promptText);
-                long durationMs = System.currentTimeMillis() - startTime;
-                String provider = orchestrator.getProvider(AIFunction.COMPLETION).name();
-
-                sessionManager.appendProcessingStep(
-                        newSessionId, StepType.QUEUED_PROMPT,
-                        outputText, result.getText(),
-                        result.getModelName(), provider,
-                        promptText, promptEntityId,
-                        null, null, sessionId,
-                        result.getPromptTokens(), result.getCompletionTokens(),
-                        durationMs,
-                        StepStatus.SUCCESS, null
-                );
-                sessionManager.updateFinalOutputText(newSessionId, result.getText());
-                sessionManager.finalizeCompleted(newSessionId);
-
-                if (!isFinishing()) {
-                    runOnUiThread(() -> {
-                        setUiState(UiState.IDLE);
-                        Intent intent = new Intent(HistoryDetailActivity.this, HistoryDetailActivity.class);
-                        intent.putExtra(HistoryActivity.EXTRA_SESSION_ID, newSessionId);
-                        startActivity(intent);
-                    });
-                }
-            } catch (Exception e) {
-                if (!isFinishing()) {
-                    runOnUiThread(() -> {
-                        setUiState(UiState.ERROR);
-                        Toast.makeText(this, getString(R.string.dictate_history_regenerate_failed, e.getMessage()), Toast.LENGTH_LONG).show();
-                    });
-                }
-            }
-        });
     }
 
     @SuppressLint("NotifyDataSetChanged")
@@ -744,7 +716,7 @@ public class HistoryDetailActivity extends AppCompatActivity
             mediaPlayer.release();
             mediaPlayer = null;
         }
-        regenerateExecutor.shutdownNow();
+        ioExecutor.shutdownNow();
         super.onDestroy();
     }
 

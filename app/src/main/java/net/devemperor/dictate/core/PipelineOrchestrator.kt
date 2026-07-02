@@ -558,37 +558,32 @@ class PipelineOrchestrator @JvmOverloads constructor(
     }
 
     /**
-     * Regenerates a single processing step. Loads the step's original input +
-     * prompt, re-runs the completion, and writes a new version via
-     * [SessionManager.regenerateProcessingStep].
+     * Synchronous regenerate — regenerates a single processing step. Loads the
+     * step's original input + prompt, re-runs the completion, and writes a new
+     * version via [SessionManager.regenerateProcessingStep]. K1 fix: called
+     * directly from [JobExecutor]'s thread so the registry lifecycle is correct.
      *
-     * Does not abort the pipeline on individual step errors — errors propagate
-     * up to [JobExecutor.start]'s catch block, which finalises the session as
-     * FAILED.
-     */
-    fun regenerateStep(
-        sessionId: String,
-        stepChainIndex: Int,
-        cancellationToken: CancellationToken = CancellationToken()
-    ) {
-        executor.execute {
-            try {
-                regenerateStepBlocking(sessionId, stepChainIndex, cancellationToken)
-            } catch (t: Throwable) {
-                Log.d(TAG, "Legacy wrapper caught regenerate exception", t)
-            }
-        }
-    }
-
-    /**
-     * Synchronous regenerate. K1 fix: called directly from [JobExecutor]'s
-     * thread so the registry lifecycle is correct.
+     * F-055: this is the ONLY regenerate path — history "Regenerate" and
+     * "Other prompt" dispatch a [JobRequest.StepRegenerate] instead of running
+     * an Activity-scoped completion.
+     *
+     * @param promptOverride "Other prompt" flow: replaces the step's persisted
+     *   `promptUsed` for this new version (persisted as the new version's
+     *   prompt). `null` = re-run with the step's own prompt.
+     * @param promptOverrideEntityId entity id belonging to [promptOverride]
+     *   (null for free-text prompts). Only consulted when [promptOverride] is
+     *   non-null.
+     *
+     * Errors propagate up to [JobExecutor.start]'s catch block, which
+     * finalises the session as FAILED.
      */
     @JvmOverloads
     fun regenerateStepBlocking(
         sessionId: String,
         stepChainIndex: Int,
-        cancellationToken: CancellationToken = CancellationToken()
+        cancellationToken: CancellationToken = CancellationToken(),
+        promptOverride: String? = null,
+        promptOverrideEntityId: Int? = null
     ) {
         val sDao = stepDao ?: throw IllegalStateException(
             "PipelineOrchestrator.regenerateStepBlocking requires stepDao — construct " +
@@ -619,9 +614,17 @@ class PipelineOrchestrator @JvmOverloads constructor(
             val displayName = stepType.name
             trackAndNotifyStepStarted(displayName)
 
+            // "Other prompt" replaces the persisted prompt for the new version;
+            // a plain regenerate re-uses the step's own prompt. The entity id
+            // follows the effective prompt (a free-text override must NOT keep
+            // the old step's entity id).
+            val effectivePrompt = promptOverride ?: target.promptUsed
+            val effectivePromptId =
+                if (promptOverride != null) promptOverrideEntityId else target.promptEntityId
+
             val startTime = System.nanoTime()
             val pp = promptService.buildQueuedPrompt(
-                target.promptUsed ?: "",
+                effectivePrompt ?: "",
                 if (stepType == StepType.QUEUED_PROMPT) target.inputText else null
             )
             val result = aiOrchestrator.complete(pp.userPrompt, pp.systemPrompt)
@@ -633,7 +636,7 @@ class PipelineOrchestrator @JvmOverloads constructor(
                 sessionId, stepChainIndex, stepType,
                 target.inputText, result.text,
                 result.modelName, provider,
-                target.promptUsed, target.promptEntityId,
+                effectivePrompt, effectivePromptId,
                 target.previousStepId, target.previousTranscriptionId,
                 target.sourceSessionId,
                 result.promptTokens, result.completionTokens,
@@ -655,35 +658,24 @@ class PipelineOrchestrator @JvmOverloads constructor(
     }
 
     /**
-     * Runs a post-processing completion on an existing session. Creates a new
-     * QUEUED_PROMPT step on the session with the given [promptText] applied to
-     * [inputText].
+     * Synchronous post-processing — runs a completion with [promptText] applied
+     * to [inputText] and persists it as a QUEUED_PROMPT step. K1 fix: called
+     * directly from [JobExecutor]'s thread.
      *
-     * This is the JobExecutor-routed variant; HistoryDetailActivity's direct
-     * post-process path remains for the UX that needs an immediate tie-in
-     * with the local executor (loading spinner, navigation on completion).
-     */
-    fun runPostProcessing(
-        sessionId: String,
-        inputText: String,
-        promptText: String,
-        promptId: Int?
-    ) {
-        executor.execute {
-            try {
-                runPostProcessingBlocking(sessionId, inputText, promptText, promptId)
-            } catch (t: Throwable) {
-                Log.d(TAG, "Legacy wrapper caught post-process exception", t)
-            }
-        }
-    }
-
-    /**
-     * Synchronous post-processing. K1 fix: called directly from [JobExecutor]'s
-     * thread.
+     * F-055/F-111: this is the ONLY post-process path. The POST_PROCESSING
+     * session row for [sessionId] (caller-pre-allocated id) is created HERE,
+     * inside the job body — not in the Activity. A dismissed chooser or a
+     * rejected [JobExecutor.start] therefore never leaves an orphan session.
+     * If the completion fails after creation, [JobExecutor] finalises the row
+     * as FAILED, so the attempt stays visible in history (same lifecycle as a
+     * failed reprocess).
+     *
+     * @param parentSessionId session whose step output is being post-processed;
+     *   supplies the parent link plus targetAppPackage/language for the new row.
      */
     fun runPostProcessingBlocking(
         sessionId: String,
+        parentSessionId: String,
         inputText: String,
         promptText: String,
         promptId: Int?
@@ -698,6 +690,23 @@ class PipelineOrchestrator @JvmOverloads constructor(
         sessionTracker.currentSessionId = sessionId
 
         try {
+            if (sessionManager.getSessionById(sessionId) == null) {
+                val parent = sessionManager.getSessionById(parentSessionId)
+                sessionManager.createSession(
+                    id = sessionId,
+                    type = SessionType.POST_PROCESSING,
+                    targetApp = parent?.targetAppPackage,
+                    language = parent?.language,
+                    audioFilePath = null,
+                    audioDurationSeconds = 0L,
+                    parentId = parentSessionId,
+                    origin = SessionOrigin.POST_PROCESSING,
+                    queuedPromptIds = null,
+                    initialStatus = SessionStatus.RECORDED
+                )
+                sessionManager.updateInputText(sessionId, inputText)
+            }
+
             val displayName = "Post-process"
             trackAndNotifyStepStarted(displayName)
 
@@ -712,7 +721,9 @@ class PipelineOrchestrator @JvmOverloads constructor(
                 inputText, result.text,
                 result.modelName, provider,
                 promptText, promptId,
-                null, null, null,
+                // sourceSessionId: the step's text came from the parent session
+                // (mirrors the pre-F-055 HistoryDetailActivity behaviour).
+                null, null, parentSessionId,
                 result.promptTokens, result.completionTokens,
                 durationMs, StepStatus.SUCCESS, null
             )

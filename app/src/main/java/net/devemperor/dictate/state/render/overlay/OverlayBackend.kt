@@ -22,6 +22,7 @@ import net.devemperor.dictate.state.render.AutoEnterRenderer
 import net.devemperor.dictate.state.render.RecordButtonColorController
 import net.devemperor.dictate.state.render.RecordingAnimationController
 import net.devemperor.dictate.state.render.applySlotToView
+import net.devemperor.dictate.state.render.effectiveNight
 
 /**
  * RenderBackend implementation for the floating-overlay window
@@ -228,6 +229,16 @@ class OverlayBackend(
     private var dragController: OverlayDragController? = null
 
     /**
+     * The effective night mode the current [overlayView] was inflated
+     * with (F-119) — `null` while detached. [render] compares this
+     * against the freshly-resolved [effectiveNight] per tick and tears
+     * the view down on divergence, so a `Pref.Theme` change (mirrored
+     * into `state.theming.theme`) or a system uiMode flip re-inflates
+     * with the correct `colorSurface` palette.
+     */
+    private var inflatedNightMode: Boolean? = null
+
+    /**
      * The last normalised position (`(portrait?, normX, normY)`) the
      * backend pushed through [overlayWindow.update]. Used to dedup
      * `applyPosition` calls per render — comparing against
@@ -306,6 +317,18 @@ class OverlayBackend(
         // The suppress-bit is now an effectively dead axis; W2 still writes
         // it for backward-compatibility, no one reads it. A later cleanup
         // can remove the writes + the axis from `OverlayState`.
+
+        // 2.5 — Theme unification (F-119). The attached view is bound
+        //       to the effective night mode resolved at inflate time;
+        //       when `state.theming.theme` (the Pref.Theme mirror) or
+        //       the system uiMode flips the resolved mode, tear down so
+        //       step 3 re-inflates against the correct palette. Runs
+        //       BEFORE the stateRef/modeRef capture because
+        //       teardownOverlay() nulls both.
+        val nightWanted = effectiveNight(state.theming.theme, ctx.resources.configuration)
+        if (overlayView != null && inflatedNightMode != nightWanted) {
+            teardownOverlay()
+        }
 
         stateRef = state
         modeRef = mode
@@ -423,7 +446,20 @@ class OverlayBackend(
         // Wrap in a ContextThemeWrapper to match the IME view's theming —
         // same R.style.Theme_Dictate the IME service uses for its own
         // ContextThemeWrapper sites (DictateInputMethodService:539/766/2540).
-        val themedCtx = ContextThemeWrapper(ctx, R.style.Theme_Dictate)
+        //
+        // F-119 — honour Pref.Theme, not just the system uiMode: the
+        // day/night variant of Theme.Dictate is selected by the
+        // Configuration's night bits, so a uiMode-overriding
+        // configuration context is interposed BEFORE the theme wrapper
+        // whenever the user's theme pref diverges from the system.
+        // `stateRef` is always populated here (render() assigns it
+        // before calling inflateAndAttach); the "system" fallback only
+        // covers a hypothetical future direct call.
+        val nightWanted = effectiveNight(
+            stateRef?.theming?.theme ?: "system",
+            ctx.resources.configuration,
+        )
+        val themedCtx = ContextThemeWrapper(contextForNightMode(nightWanted), R.style.Theme_Dictate)
         val inflater = LayoutInflater.from(themedCtx)
         val view = inflater.inflate(R.layout.overlay_5button_layout, null)
         // Variante 2a (dictate-widget-integration §6.5): OVERLAY_SEND was
@@ -447,10 +483,32 @@ class OverlayBackend(
         overlayView = view
         currentParams = params
         buttonViews = views
+        inflatedNightMode = nightWanted
 
         wireStaticOverlayHandlers()
         wireDragController(view)
         buildRendererBundle(view, views)
+    }
+
+    /**
+     * Return [ctx] itself when the system configuration already
+     * resolves to [night], otherwise a `createConfigurationContext`
+     * wrap whose `uiMode` night bits force the requested mode (F-119).
+     * The caller layers the `Theme.Dictate` [ContextThemeWrapper] on
+     * top so the day/night resource qualifiers pick the right palette.
+     */
+    private fun contextForNightMode(night: Boolean): Context {
+        val systemConfig = ctx.resources.configuration
+        val systemNight =
+            (systemConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+                Configuration.UI_MODE_NIGHT_YES
+        if (night == systemNight) return ctx
+
+        val override = Configuration(systemConfig).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                (if (night) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO)
+        }
+        return ctx.createConfigurationContext(override)
     }
 
     /**
@@ -724,6 +782,7 @@ class OverlayBackend(
         stateRef = null
         modeRef = null
         lastAppliedPosition = null
+        inflatedNightMode = null
     }
 
     /**

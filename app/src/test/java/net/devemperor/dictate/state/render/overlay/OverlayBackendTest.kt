@@ -735,7 +735,92 @@ class OverlayBackendTest {
         assertTrue("detach call must be recorded", "detach" in window.events)
     }
 
+    // ─── F-119 — Pref.Theme honoured by the overlay inflate ──────────
+
+    @Test
+    fun `theme=dark on a day system inflates against a night configuration`() {
+        // Robolectric's default test configuration is notnight; with the
+        // user pref forcing dark, the inflate context must carry the
+        // night uiMode override so ?attr/colorSurface resolves from the
+        // values-night Theme.Dictate variant.
+        val backend = newBackend()
+        backend.attach { captured += it }
+
+        backend.render(
+            stateWithPermission().copy(theming = net.devemperor.dictate.state.ThemingState(theme = "dark")),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        assertEquals(
+            android.content.res.Configuration.UI_MODE_NIGHT_YES,
+            attachedViewNightBits(),
+        )
+    }
+
+    @Test
+    fun `theme=system on a day system inflates against the day configuration`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+
+        backend.render(stateWithPermission(), catalog.OVERLAY_5BUTTON)
+
+        assertEquals(
+            android.content.res.Configuration.UI_MODE_NIGHT_NO,
+            attachedViewNightBits(),
+        )
+    }
+
+    @Test
+    fun `theme change while attached re-inflates the overlay with fresh colors`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+
+        backend.render(stateWithPermission(), catalog.OVERLAY_5BUTTON)
+        assertEquals(1, window.events.count { it == "attach" })
+        assertEquals(android.content.res.Configuration.UI_MODE_NIGHT_NO, attachedViewNightBits())
+
+        backend.render(
+            stateWithPermission().copy(theming = net.devemperor.dictate.state.ThemingState(theme = "dark")),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        assertTrue("The stale day view must be torn down.", "detach" in window.events)
+        assertEquals(
+            "Theme flip while attached must re-inflate exactly once.",
+            2, window.events.count { it == "attach" },
+        )
+        assertEquals(android.content.res.Configuration.UI_MODE_NIGHT_YES, attachedViewNightBits())
+        assertTrue("Window must be attached after the re-inflate.", window.isAttached())
+    }
+
+    @Test
+    fun `theme change that does not flip the effective night mode does NOT re-inflate`() {
+        // system→light on a day system resolves to the same (day) mode —
+        // tearing down would churn the window for nothing.
+        val backend = newBackend()
+        backend.attach { captured += it }
+
+        backend.render(stateWithPermission(), catalog.OVERLAY_5BUTTON)
+        backend.render(
+            stateWithPermission().copy(theming = net.devemperor.dictate.state.ThemingState(theme = "light")),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        assertEquals(
+            "Same effective night mode must not re-inflate.",
+            1, window.events.count { it == "attach" },
+        )
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────
+
+    /** Night bits of the configuration the attached view was inflated with. */
+    private fun attachedViewNightBits(): Int {
+        val view = window.lastAttachedView
+            ?: error("No View attached — render() must run with hasPermission=true first.")
+        return view.context.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK
+    }
 
     /**
      * [OverlayPositionMapper] that always maps to a fixed pixel pair

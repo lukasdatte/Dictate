@@ -624,6 +624,44 @@ class PipelineModuleTest {
         assertNull(result)
     }
 
+    // ─── Cancellation notice effect (R5, ADR-0009 / spec §3.6) ──────────
+
+    @Test
+    fun `CancelPipeline on a Running run emits NotifyCancellationHint (empty queue)`() {
+        val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION)
+        val result = module.reduce(state, Action.PipelineAction.CancelPipeline(sid), ctx())
+        assertTrue(
+            result!!.sideEffects.contains(PipelineModule.Effect.NotifyCancellationHint),
+        )
+    }
+
+    @Test
+    fun `CancelPipeline with a non-empty queue still emits NotifyCancellationHint`() {
+        // The notice concerns the cancelled ACTIVE run; the chain-start of
+        // the next queued run happens in the same transition (D5) and must
+        // not swallow the surfacing.
+        val queued = persistentListOf(QueuedRun("sess-2", File("/tmp/b.m4a"), 1_000L))
+        val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION, queued = queued)
+        val result = module.reduce(state, Action.PipelineAction.CancelPipeline(sid), ctx())
+        assertTrue(
+            result!!.sideEffects.contains(PipelineModule.Effect.NotifyCancellationHint),
+        )
+        assertTrue(
+            result.sideEffects.contains(PipelineModule.Effect.SubmitPipeline("sess-2", File("/tmp/b.m4a"))),
+        )
+    }
+
+    @Test
+    fun `CancelPipeline on ReprocessStaging does NOT emit NotifyCancellationHint`() {
+        // Leaving the staging editor routes through the same arm but is
+        // not a cancelled generation — no notice (spec §3.6).
+        val state = PipelineUiState.ReprocessStaging(sid, transcript = "t")
+        val result = module.reduce(state, Action.PipelineAction.CancelPipeline(sid), ctx())
+        assertFalse(
+            result!!.sideEffects.contains(PipelineModule.Effect.NotifyCancellationHint),
+        )
+    }
+
     // ─── ReprocessStaging sub-FSM ───────────────────────────────────────
 
     @Test

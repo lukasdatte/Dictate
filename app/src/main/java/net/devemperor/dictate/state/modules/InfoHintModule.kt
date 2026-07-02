@@ -159,6 +159,26 @@ object InfoHintModule : DictateModule<InfoHintState, Action.InfoHintAction, Info
                 )
             } else null
 
+        Action.InfoHintAction.PipelineCancelled -> TransitionResult(
+            // A newer cancellation replaces an older one — one notice,
+            // the most recent event's timestamp (mirrors the
+            // pipeline-error replace semantics above).
+            nextState = state.copy(
+                cancellation = CancellationHint(occurredAt = ctx.now),
+            ),
+            sideEffects = emptyList(),
+        )
+
+        Action.InfoHintAction.DismissCancellationHint ->
+            // Stale click (notice already gone) → null (Rejected, no
+            // re-emit) — same contract as DismissPipelineError.
+            if (state.cancellation != null) {
+                TransitionResult(
+                    nextState = state.copy(cancellation = null),
+                    sideEffects = emptyList(),
+                )
+            } else null
+
         Action.InfoHintAction.ClearTransientHints ->
             // In-RAM clear only — no pref writes: the hints may
             // legitimately re-fire later (that is exactly the legacy

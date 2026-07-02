@@ -84,6 +84,10 @@
         <item quantity="one">%d part waiting — open the keyboard to insert</item>
         <item quantity="other">%d parts waiting — open the keyboard to insert</item>
     </plurals>
+    <!-- R5 (ADR-0009 / spec §3.6) — dismiss-only notice after the user
+         cancels the active pipeline run. Deliberately a typed INFO notice,
+         not an error (F-076 keeps the "cancelled" error key silent). -->
+    <string name="dictate_pipeline_cancelled_msg">Processing cancelled.</string>
     <!-- 2026-05-23 — Recovery-surfaced unfinished recording. Pure-info
          text shown while state.recording is RecordingState.Interrupted
          (PipelineRecovery Phase 5 folds both RECORDING_INTERRUPTED and

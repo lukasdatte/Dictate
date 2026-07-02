@@ -112,6 +112,17 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         /** Cancel a running pipeline job by id. */
         data class CancelPipelineJob(val sessionId: String) : Effect
 
+        /**
+         * Surface the just-cancelled run as a typed info-bar notice
+         * (R5, spec §3.6) — Mode-1 cross-module emit into
+         * [Action.InfoHintAction.PipelineCancelled]. Fired only by the
+         * real `CancelPipeline` arm for a Preparing/Running state, so
+         * every cancel origin (keyboard button, FGS notification
+         * action) is covered by one seam while leaving the
+         * ReprocessStaging editor exit silent.
+         */
+        data object NotifyCancellationHint : Effect
+
         /** Mark a session as inserted in the DB (post-Done). */
         data class MarkSessionInserted(val sessionId: String, val at: Long) : Effect
 
@@ -455,6 +466,16 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                         nextState = nextState,
                         sideEffects = buildList {
                             sid?.let { add(Effect.CancelPipelineJob(it)) }
+                            // R5 (spec §3.6): surface the cancel as a typed
+                            // info-bar notice — but only for a cancelled RUN
+                            // (Preparing/Running). Leaving the
+                            // ReprocessStaging editor also routes through
+                            // this arm and is not a cancelled generation.
+                            if (state is PipelineUiState.Preparing ||
+                                state is PipelineUiState.Running
+                            ) {
+                                add(Effect.NotifyCancellationHint)
+                            }
                             addAll(terminalEffects)
                         },
                     )
@@ -673,6 +694,8 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
             language = effect.language,
         )
         is Effect.CancelPipelineJob -> services.pipelineRunner.cancel(effect.sessionId)
+        Effect.NotifyCancellationHint ->
+            services.emitAction(Action.InfoHintAction.PipelineCancelled)
         is Effect.MarkSessionInserted -> {
             services.scope.launch {
                 services.sessionRepo.markInserted(effect.sessionId, effect.at)

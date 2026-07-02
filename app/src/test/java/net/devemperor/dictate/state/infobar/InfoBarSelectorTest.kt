@@ -419,6 +419,39 @@ class InfoBarSelectorTest {
         assertEquals(listOf<Any>(12), partial.message.textArgs)
     }
 
+    // ── Cancellation-notice producer (R5, ADR-0009 / spec §3.6) ────────
+
+    @Test
+    fun `cancelled run surfaces a dismiss-only INFO notice`() {
+        // R5 red-proof (spec criterion 16): before this producer existed a
+        // cancel vanished without user-visible trace (F-076 keeps the
+        // error path silent by design — this typed notice is the
+        // deliberate surfacing).
+        val state = defaultState().copy(
+            infoHints = net.devemperor.dictate.state.InfoHintState(
+                cancellation = net.devemperor.dictate.state.CancellationHint(occurredAt = 7_000L),
+            ),
+        )
+        val items = InfoBarSelector.select(state)
+        assertEquals(1, items.size)
+        val item = items.first()
+        assertEquals("pipeline-cancelled", item.id)
+        assertEquals(InfoBarStyle.INFO, item.message.style)
+        assertEquals(
+            net.devemperor.dictate.R.string.dictate_pipeline_cancelled_msg,
+            item.message.textResId,
+        )
+        assertNull("cancellation notice is dismiss-only", item.confirmAction)
+        assertEquals(Action.InfoHintAction.DismissCancellationHint, item.dismissAction)
+        assertEquals("createdAt is the cancel's occurredAt", 7_000L, item.createdAt)
+    }
+
+    @Test
+    fun `no cancellation hint - no cancellation item`() {
+        val ids = InfoBarSelector.select(defaultState()).map { it.id }
+        assertTrue(ids.none { it == "pipeline-cancelled" })
+    }
+
     // ── Pipeline-error producer (2026-07-02, ADR-0006 completion) ──────
 
     private fun stateWithError(

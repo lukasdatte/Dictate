@@ -290,6 +290,28 @@ object InfoBarSelector {
         // gives the error its authentic event timestamp.
         state.infoHints.pipelineError?.let { add(pipelineErrorItem(it)) }
 
+        // ── Cancellation notice (R5, ADR-0009 / spec §3.6) ──────────────
+        // The user cancelled the active run; before R5 a cancel vanished
+        // without user-visible trace (F-076 deliberately keeps the
+        // "cancelled" error key silent — this typed, dismiss-only INFO
+        // notice is the intended surfacing, not an error resurrection).
+        // Set via PipelineModule's NotifyCancellationHint effect; cleared
+        // by dismiss or InfoHintModule's transient cross-clear.
+        state.infoHints.cancellation?.let { hint ->
+            add(
+                InfoBarItem(
+                    id = "pipeline-cancelled",
+                    createdAt = hint.occurredAt,
+                    message = InfoBarMessage(
+                        textResId = R.string.dictate_pipeline_cancelled_msg,
+                        style = InfoBarStyle.INFO,
+                    ),
+                    confirmAction = null,
+                    dismissAction = Action.InfoHintAction.DismissCancellationHint,
+                ),
+            )
+        }
+
         // ── Engagement hints: Update / Rate / Donate (2026-07-02) ───────
         // Driven by state.infoHints.engagementHint; the trigger
         // conditions (pref + usage-DB reads) are evaluated IME-side on

@@ -1183,6 +1183,23 @@ sealed class Action {
         data class DismissEngagementHint(val hint: EngagementHint) : InfoHintAction()
 
         /**
+         * The ACTIVE pipeline run was cancelled (R5, ADR-0009 / spec
+         * §3.6). Emitted by `PipelineModule.Effect.NotifyCancellationHint`
+         * from the real `CancelPipeline` arm — every cancel origin
+         * (keyboard button, FGS notification action) routes through
+         * that arm, so this single seam covers them all. The reducer
+         * stamps `occurredAt` from `ReducerContext.now`.
+         *
+         * Deliberately NOT the error path: `PipelineErrorKind.fromInfoKey`
+         * keeps mapping `"cancelled"` to `null` (F-076) — this is a
+         * typed, dismiss-only notice, not an error resurrection.
+         */
+        data object PipelineCancelled : InfoHintAction()
+
+        /** Dismiss-button on the cancellation notice — clears the hint. */
+        data object DismissCancellationHint : InfoHintAction()
+
+        /**
          * Clear all in-RAM hints without persisting anything. Emitted
          * by `InfoHintModule`'s cross-module observer (new recording /
          * pipeline run starts; IME view hides while idle) and

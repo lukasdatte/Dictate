@@ -198,6 +198,47 @@ class InfoHintModuleTest {
         )
     }
 
+    // ─── Cancellation notice (R5, ADR-0009 / spec §3.6) ─────────────────
+
+    @Test
+    fun `PipelineCancelled stores the hint with occurredAt from ctx now`() {
+        val result = module.reduce(
+            InfoHintState(),
+            Action.InfoHintAction.PipelineCancelled,
+            ctx(now = 7_000L),
+        )
+        assertEquals(CancellationHint(occurredAt = 7_000L), result!!.nextState.cancellation)
+        assertTrue(result.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `PipelineCancelled replaces an older notice`() {
+        val result = module.reduce(
+            InfoHintState(cancellation = CancellationHint(occurredAt = 1_000L)),
+            Action.InfoHintAction.PipelineCancelled,
+            ctx(now = 9_000L),
+        )
+        assertEquals(CancellationHint(occurredAt = 9_000L), result!!.nextState.cancellation)
+    }
+
+    @Test
+    fun `DismissCancellationHint clears the notice without effects`() {
+        val result = module.reduce(
+            InfoHintState(cancellation = CancellationHint(occurredAt = 1_000L)),
+            Action.InfoHintAction.DismissCancellationHint,
+            ctx(),
+        )
+        assertNull(result!!.nextState.cancellation)
+        assertTrue(result.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `stale cancellation dismiss reduces to null`() {
+        assertNull(
+            module.reduce(InfoHintState(), Action.InfoHintAction.DismissCancellationHint, ctx()),
+        )
+    }
+
     // ─── ClearTransientHints ────────────────────────────────────────────
 
     @Test
@@ -209,6 +250,19 @@ class InfoHintModuleTest {
         )
         assertEquals(InfoHintState(), result!!.nextState)
         assertTrue("in-RAM clear only — no pref writes", result.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `ClearTransientHints wipes the cancellation notice too`() {
+        // R5: the notice is transient like every other hint — a new
+        // recording / pipeline start or IME-hide-while-idle clears it via
+        // the module's cross-clear cascade (which dispatches this action).
+        val result = module.reduce(
+            InfoHintState(cancellation = CancellationHint(occurredAt = 1_000L)),
+            Action.InfoHintAction.ClearTransientHints,
+            ctx(),
+        )
+        assertEquals(InfoHintState(), result!!.nextState)
     }
 
     @Test

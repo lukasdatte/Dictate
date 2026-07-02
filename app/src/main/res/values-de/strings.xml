@@ -295,6 +295,7 @@
         <item quantity="one">%d Teil wartet — Tastatur zum Einfügen öffnen</item>
         <item quantity="other">%d Teile warten — Tastatur zum Einfügen öffnen</item>
     </plurals>
+    <string name="dictate_pipeline_cancelled_msg">Verarbeitung abgebrochen.</string>
     <plurals name="dictate_keyterms_status_terms">
         <item quantity="one">%d Begriff</item>
         <item quantity="other">%d Begriffe</item>

@@ -41,6 +41,31 @@ package net.devemperor.dictate.state
 data class InfoHintState(
     val pipelineError: PipelineErrorHint? = null,
     val engagementHint: EngagementHint? = null,
+    /**
+     * Non-null while a "processing cancelled" notice is live (R5,
+     * ADR-0009 / spec §3.6). Set when the ACTIVE pipeline run is
+     * cancelled ([Action.InfoHintAction.PipelineCancelled], emitted by
+     * `PipelineModule`'s real `CancelPipeline` arm); cleared by the
+     * notice's dismiss button or the module's transient cross-clear.
+     * Queued runs survive the cancel (ADR-0009 D5), so the notice can
+     * legitimately coexist with a live pipeline (the chain-started
+     * next run).
+     */
+    val cancellation: CancellationHint? = null,
+)
+
+/**
+ * One "processing cancelled" occurrence (R5). Deliberately a typed
+ * notice and not a [PipelineErrorKind]: [PipelineErrorKind.fromInfoKey]
+ * keeps mapping `"cancelled"` to `null` (F-076) — cancellation is not
+ * an error, it just must no longer vanish without user-visible trace.
+ *
+ * @property occurredAt wall-clock ms from `ReducerContext.now`
+ *   (reducers never read the clock directly). Doubles as the info-bar
+ *   item's `createdAt` sort key.
+ */
+data class CancellationHint(
+    val occurredAt: Long,
 )
 
 /**

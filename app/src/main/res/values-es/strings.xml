@@ -277,6 +277,7 @@
         <item quantity="one">%d parte en espera — abre el teclado para insertar</item>
         <item quantity="other">%d partes en espera — abre el teclado para insertar</item>
     </plurals>
+    <string name="dictate_pipeline_cancelled_msg">Procesamiento cancelado.</string>
     <plurals name="dictate_keyterms_status_terms">
         <item quantity="one">%d término</item>
         <item quantity="other">%d términos</item>

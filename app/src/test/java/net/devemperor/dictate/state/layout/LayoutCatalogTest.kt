@@ -216,6 +216,43 @@ class LayoutCatalogTest {
     }
 
     @Test
+    fun `info-bar force-expand — pipeline error masks singleRowMode (idle)`() {
+        // ADR-0006-completion regression: error bars now flow through
+        // InfoBarSelector, so the 2026-05-22 force-expand ("komplett
+        // expandierter Modus" whenever an info message is present)
+        // applies to them by construction. A single-row user still gets
+        // the two-row layout while the error bar is up.
+        val state = stateIdle(singleRow = true).copy(
+            infoHints = net.devemperor.dictate.state.InfoHintState(
+                pipelineError = net.devemperor.dictate.state.PipelineErrorHint(
+                    kind = net.devemperor.dictate.state.PipelineErrorKind.INTERNET_ERROR,
+                    providerKey = null,
+                    occurredAt = 1L,
+                ),
+            ),
+        )
+        assertSame(catalog.KEYBOARD_TWO_ROW, catalog.forKeyboard(state))
+    }
+
+    @Test
+    fun `info-bar force-expand — engagement hint masks singleRowMode during pipeline`() {
+        val state = stateWithPipeline(PipelineUiState.Preparing("s1"), singleRow = true).copy(
+            infoHints = net.devemperor.dictate.state.InfoHintState(
+                engagementHint = net.devemperor.dictate.state.EngagementHint.UPDATE,
+            ),
+        )
+        assertSame(catalog.KEYBOARD_TWO_ROW_SEND_MODE, catalog.forKeyboard(state))
+    }
+
+    @Test
+    fun `info-bar force-expand ends when the hint clears`() {
+        // The override is transient + computed — clearing the hint
+        // restores the persisted single-row preference.
+        val state = stateIdle(singleRow = true)
+        assertSame(catalog.KEYBOARD_SINGLE_ROW, catalog.forKeyboard(state))
+    }
+
+    @Test
     fun `forKeyboard returns REPROCESS_STAGING regardless of singleRow setting`() {
         // Spec 2 §8.8 Edge-Case 1: staging has only a two-row variant; even
         // if the user has enabled single-row, the mode falls back to the

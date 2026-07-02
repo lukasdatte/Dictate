@@ -4,7 +4,7 @@
 date: 2026-07-02
 author: Lukas + Claude (multi-agent review session)
 type: Research
-status: Research
+status: Accepted
 context: Two live info-bar systems coexist; the legacy one escapes all state-driven UX machinery. Findings F-040 + F-039 (both adversarially confirmed), plus doc-drift satellites.
 related-plan: n/a (seeded by 2026-07-02 - feature-wiring-code-review.md; continues pending tasks #149/#150)
 related-adrs: ADR-0006
@@ -61,6 +61,15 @@ Wire the suppression reactively: a small observer on `state.layout.contentArea` 
 2. **Whether the shadowed partial-recovery item should gain its own visibility rule** (F-030 refutation showed it is effectively never shown when a transcript exists) — owner: user decision during implementation; fallback: keep current priority order, document it.
 
 ## 5. Change History
+
+### 2026-07-02 — Implemented; status promoted to Accepted
+
+- **Trigger:** Consolidation implemented (branch `worktree-agent-af4c23f39e15de6b6`, commits prefixed `[infobar-consolidation]`).
+- **What changed:** The §2 target picture is fully in place:
+  1. New `InfoBarSelector` producers for pipeline errors (typed `PipelineErrorKind` on the new `state.infoHints` axis, owned by `InfoHintModule`) and Update/Rate/Donate engagement hints (trigger evaluation stays IME-side per Information Gap 1's fallback; the result is dispatched onto state). F-076 is defused via `PipelineErrorKind.fromInfoKey` — `"cancelled"` and unknown keys parse to `null` and never surface a bar.
+  2. `InfoBarController` and the legacy `info_cl` container are deleted (task #149); the surviving container was renamed `overlay_permission_infobar` → `infobar_cl` (+ `infobar_message_tv` / `infobar_confirm_btn` / `infobar_dismiss_btn`). Zero-grep on `InfoBarController` / `info_cl` holds across code, layouts, and comments. Force-expand + prompts-mutex apply to all bars by construction (regression-tested).
+  3. Doc fixes landed: `InfoBarRenderer` KDoc/params renamed to the real views; `InfoBarSelector` dismissal KDoc corrected (F-030 residue — `PendingSessionsAction.Dismiss` removes the whole session and stamps `inserted_at`; the partial-marker is not cleared); the stale "planned Block D.2" comment removed. Gap 2 fallback applied: priority order kept, shadowing documented in the selector KDoc.
+- **Deviations from §2:** engagement hints use `Long.MAX_VALUE` as the `createdAt` proxy (ADR-0006's suggested `VERSION_BUILD_TIME` does not exist in BuildConfig; MAX_VALUE also encodes "nags always yield to real events"). The dead legacy `"timeout"` case and its `dictate_timeout_msg` strings were dropped (no producer existed). §3's interim mitigation was skipped — the real consolidation shipped instead.
 
 ### 2026-07-02 — Initial research consolidation
 

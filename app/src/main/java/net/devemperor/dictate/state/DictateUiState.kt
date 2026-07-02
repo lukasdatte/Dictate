@@ -43,6 +43,7 @@ import java.io.File
  * | 12 | [pendingSessions] | PendingSessionsModule | PersistentList, DB-subscriber-driven |
  * | 13 | [interruption] | InterruptionModule (Phase 2) | null in Phase 1 |
  * | 14 | [keyboardInput] | KeyboardInputModule | host-editor `EditorInfo` snapshot driving Enter-button icon + action |
+ * | 15 | [infoHints] | InfoHintModule | transient pipeline errors + Update/Rate/Donate hints (info-bar producers, ADR-0006) |
  *
  * @see net.devemperor.dictate.state.DictateModule
  * @see docs/decisions/0001-state-modular-orchestrator-pattern.md §"Module inventory"
@@ -105,6 +106,14 @@ data class DictateUiState(
      * `KeyboardInputModule` (`docs/plans/2026-05-23 - dictate-enter-button-host-action`).
      */
     val keyboardInput: KeyboardInputState = KeyboardInputState(),
+
+    /**
+     * Info-hint sub-state — transient pipeline errors + engagement
+     * hints surfaced through the state-derived info bar. Owned by
+     * `InfoHintModule` (ADR-0006 migration completion, research
+     * `2026-07-02 - infobar-consolidation.md`).
+     */
+    val infoHints: InfoHintState = InfoHintState(),
 ) {
     companion object {
         /**
@@ -128,6 +137,7 @@ data class DictateUiState(
             pendingSessions = persistentListOf(),
             interruption = null,
             keyboardInput = KeyboardInputState(),
+            infoHints = InfoHintState(),
         )
     }
 }

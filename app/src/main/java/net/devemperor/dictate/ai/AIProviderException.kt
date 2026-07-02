@@ -26,7 +26,19 @@ class AIProviderException(
         UNKNOWN
     }
 
-    /** Produces the matching UI info string key (as showInfo() expects). */
+    /**
+     * Produces the string key carried through
+     * `PipelineCallback.onPipelineError(errorInfoKey, …)`.
+     *
+     * The IME-side consumer parses it back into the typed
+     * [net.devemperor.dictate.state.PipelineErrorKind] via
+     * `PipelineErrorKind.fromInfoKey` (ADR-0006 completion,
+     * 2026-07-02). Note `"cancelled"` deliberately parses to `null`
+     * there — user-initiated cancellation never surfaces an error bar
+     * (F-076); today `PipelineOrchestrator.isCancellation` already
+     * short-circuits before `onPipelineError`, so the mapping below is
+     * a defensive belt for future runners that report CANCELLED.
+     */
     fun toInfoKey(): String = when (errorType) {
         ErrorType.INVALID_API_KEY -> "invalid_api_key"
         ErrorType.RATE_LIMITED -> "quota_exceeded"

@@ -452,6 +452,210 @@ class InfoBarSelectorTest {
         assertEquals(listOf<Any>(12), partial.message.textArgs)
     }
 
+    // ── Pipeline-error producer (2026-07-02, ADR-0006 completion) ──────
+
+    private fun stateWithError(
+        kind: net.devemperor.dictate.state.PipelineErrorKind,
+        providerKey: String? = null,
+        occurredAt: Long = 5_000L,
+    ): DictateUiState = defaultState().copy(
+        infoHints = net.devemperor.dictate.state.InfoHintState(
+            pipelineError = net.devemperor.dictate.state.PipelineErrorHint(
+                kind = kind, providerKey = providerKey, occurredAt = occurredAt,
+            ),
+        ),
+    )
+
+    @Test
+    fun `pipeline error surfaces an ERROR item with dismiss + confirm-to-settings`() {
+        val items = InfoBarSelector.select(
+            stateWithError(net.devemperor.dictate.state.PipelineErrorKind.INVALID_API_KEY),
+        )
+        assertEquals(1, items.size)
+        val item = items.first()
+        assertEquals("pipeline-error:invalid_api_key", item.id)
+        assertEquals(InfoBarStyle.ERROR, item.message.style)
+        assertEquals(net.devemperor.dictate.R.string.dictate_invalid_api_key_msg, item.message.textResId)
+        assertEquals(
+            Action.InfoHintAction.ConfirmPipelineError(
+                net.devemperor.dictate.state.PipelineErrorKind.INVALID_API_KEY, null,
+            ),
+            item.confirmAction,
+        )
+        assertEquals(Action.InfoHintAction.DismissPipelineError, item.dismissAction)
+        assertEquals("createdAt is the error's occurredAt", 5_000L, item.createdAt)
+    }
+
+    @Test
+    fun `internet error is dismiss-only (no confirm affordance)`() {
+        val item = InfoBarSelector.select(
+            stateWithError(net.devemperor.dictate.state.PipelineErrorKind.INTERNET_ERROR),
+        ).first()
+        assertEquals(net.devemperor.dictate.R.string.dictate_internet_error_msg, item.message.textResId)
+        assertNull("internet errors have no settings/billing target", item.confirmAction)
+        assertEquals(Action.InfoHintAction.DismissPipelineError, item.dismissAction)
+    }
+
+    @Test
+    fun `quota error carries the provider display name and a billing confirm`() {
+        val item = InfoBarSelector.select(
+            stateWithError(
+                net.devemperor.dictate.state.PipelineErrorKind.QUOTA_EXCEEDED,
+                providerKey = "OPENAI",
+            ),
+        ).first()
+        assertEquals(net.devemperor.dictate.R.string.dictate_quota_exceeded_msg, item.message.textResId)
+        assertEquals(listOf<Any>("OpenAI"), item.message.textArgs)
+        assertEquals(
+            "OpenAI has a billing URL — confirm button offered",
+            Action.InfoHintAction.ConfirmPipelineError(
+                net.devemperor.dictate.state.PipelineErrorKind.QUOTA_EXCEEDED, "OPENAI",
+            ),
+            item.confirmAction,
+        )
+    }
+
+    @Test
+    fun `quota error without provider falls back to generic API name, no confirm`() {
+        // Legacy parity: providerName == null rendered "API" and hid the
+        // yes-button (no billing page to open).
+        val item = InfoBarSelector.select(
+            stateWithError(
+                net.devemperor.dictate.state.PipelineErrorKind.QUOTA_EXCEEDED,
+                providerKey = null,
+            ),
+        ).first()
+        assertEquals(listOf<Any>("API"), item.message.textArgs)
+        assertNull(item.confirmAction)
+    }
+
+    @Test
+    fun `error item sorts after onboarding but before engagement hints`() {
+        val state = stateWithError(
+            net.devemperor.dictate.state.PipelineErrorKind.INTERNET_ERROR,
+            occurredAt = 5_000L,
+        ).let {
+            it.copy(
+                overlay = it.overlay.copy(onboardingPending = true),
+                infoHints = it.infoHints.copy(
+                    engagementHint = net.devemperor.dictate.state.EngagementHint.RATE,
+                ),
+            )
+        }
+        assertEquals(
+            listOf(
+                "overlay-permission:onboarding",   // pinned 0L
+                "pipeline-error:internet_error",   // occurredAt
+                "engagement-hint:rate",            // Long.MAX_VALUE — always last
+            ),
+            InfoBarSelector.select(state).map { it.id },
+        )
+    }
+
+    @Test
+    fun `error item ranks above pending-insert and partial-recovery items`() {
+        // Priority regression for the consolidation: an error stamped
+        // BEFORE the pending session was created renders first (pure
+        // createdAt ordering — errors get authentic event timestamps).
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "hello",
+            createdAt = 9_000L,
+            lastErrorMessage = "partial:3",
+        )
+        val state = stateWithError(
+            net.devemperor.dictate.state.PipelineErrorKind.BAD_REQUEST,
+            occurredAt = 5_000L,
+        ).copy(pendingSessions = kotlinx.collections.immutable.persistentListOf(session))
+        assertEquals(
+            listOf("pipeline-error:bad_request", "pending-insert:abc", "partial-recovery:abc"),
+            InfoBarSelector.select(state).map { it.id },
+        )
+    }
+
+    @Test
+    fun `dismissing the error hint removes the item on the next select`() {
+        // Dismissal semantics: DismissPipelineError clears
+        // state.infoHints.pipelineError (InfoHintModule); the selector
+        // re-run must drop the item — the no-resurrection guarantee.
+        val withError = stateWithError(net.devemperor.dictate.state.PipelineErrorKind.INTERNET_ERROR)
+        assertEquals(1, InfoBarSelector.select(withError).size)
+        val cleared = withError.copy(
+            infoHints = withError.infoHints.copy(pipelineError = null),
+        )
+        assertTrue(InfoBarSelector.select(cleared).isEmpty())
+    }
+
+    // ── Engagement-hint producer (2026-07-02, ADR-0006 completion) ─────
+
+    private fun stateWithHint(hint: net.devemperor.dictate.state.EngagementHint): DictateUiState =
+        defaultState().copy(
+            infoHints = net.devemperor.dictate.state.InfoHintState(engagementHint = hint),
+        )
+
+    @Test
+    fun `update hint surfaces INFO item with confirm and dismiss`() {
+        val item = InfoBarSelector.select(
+            stateWithHint(net.devemperor.dictate.state.EngagementHint.UPDATE),
+        ).single()
+        assertEquals("engagement-hint:update", item.id)
+        assertEquals(InfoBarStyle.INFO, item.message.style)
+        assertEquals(net.devemperor.dictate.R.string.dictate_update_installed_msg, item.message.textResId)
+        assertEquals(
+            Action.InfoHintAction.ConfirmEngagementHint(net.devemperor.dictate.state.EngagementHint.UPDATE),
+            item.confirmAction,
+        )
+        assertEquals(
+            Action.InfoHintAction.DismissEngagementHint(net.devemperor.dictate.state.EngagementHint.UPDATE),
+            item.dismissAction,
+        )
+    }
+
+    @Test
+    fun `rate and donate hints map to their message resources`() {
+        assertEquals(
+            net.devemperor.dictate.R.string.dictate_rate_app_msg,
+            InfoBarSelector.select(stateWithHint(net.devemperor.dictate.state.EngagementHint.RATE))
+                .single().message.textResId,
+        )
+        assertEquals(
+            net.devemperor.dictate.R.string.dictate_donate_msg,
+            InfoBarSelector.select(stateWithHint(net.devemperor.dictate.state.EngagementHint.DONATE))
+                .single().message.textResId,
+        )
+    }
+
+    @Test
+    fun `engagement hint always sorts last (MAX_VALUE proxy)`() {
+        // Pref-driven nags have no event timestamp; the MAX_VALUE proxy
+        // makes them yield to every real-event item (here: a very
+        // recent pending-insert).
+        val session = net.devemperor.dictate.state.PendingSession(
+            sessionId = "abc",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "hi",
+            createdAt = Long.MAX_VALUE - 1,
+        )
+        val state = stateWithHint(net.devemperor.dictate.state.EngagementHint.DONATE).copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(session),
+        )
+        assertEquals(
+            listOf("pending-insert:abc", "engagement-hint:donate"),
+            InfoBarSelector.select(state).map { it.id },
+        )
+    }
+
+    @Test
+    fun `dismissing an engagement hint removes the item on the next select`() {
+        val withHint = stateWithHint(net.devemperor.dictate.state.EngagementHint.RATE)
+        assertEquals(1, InfoBarSelector.select(withHint).size)
+        val cleared = withHint.copy(
+            infoHints = withHint.infoHints.copy(engagementHint = null),
+        )
+        assertTrue(InfoBarSelector.select(cleared).isEmpty())
+    }
+
     @Test
     fun `B4 partial-recovery and pending-insert co-exist for the same session`() {
         // The two producers run independently; a session that has both

@@ -152,6 +152,12 @@ public class DictateInputMethodService extends InputMethodService
     // define handlers and runnables for background tasks
     private static final int DELETE_LOOKBACK_CHARACTERS = 64;
 
+    // Engagement-hint confirm targets (2026-07-02, ADR-0006 completion —
+    // carried over from the deleted legacy info-bar controller handlers).
+    private static final String PLAY_STORE_URL =
+            "https://play.google.com/store/apps/details?id=net.devemperor.dictate";
+    private static final String DONATE_URL = "https://paypal.me/DevEmperor";
+
     private Handler mainHandler;
     private Handler deleteHandler;
     private Runnable deleteRunnable;
@@ -330,23 +336,22 @@ public class DictateInputMethodService extends InputMethodService
     // axes owned by the armed CR3 controllers / catalog resolvers /
     // ImeViewBackend / EditBar+Emoji+OverlayChars owners — RR-3 trace
     // PASS). No unbound fallback (point-of-no-return).
-    private InfoBarController infoBarController;
+    //
+    // 2026-07-02 (ADR-0006 completion) — the legacy imperative info-bar controller
+    // is DELETED too: pipeline errors + Update/Rate/Donate hints now
+    // surface as state (state.infoHints, InfoHintModule) and render
+    // through the single state-driven InfoBarRenderer below.
 
-    // B5 F-2 — in-IME overlay-permission onboarding info-bar (Spec 3
-    // §5.3). The IME owns this view surface (co-located with
-    // infoBarController) rather than ImeViewBackend (documented
-    // deviation, ADR-0005 Decision-History 2026-05-15). The observer
-    // bridges the pipeline StateFlow's onboardingPending axis to the
-    // view's visibility; it is (re)started in onCreateInputView once
-    // the views + binder exist and stopped in onDestroyInputView.
-    private View overlayPermissionInfobar;
-    // 2026-05-21 ADR-0006 — state-driven info-bar renderer. Replaces
-    // the legacy OverlayPermissionInfobarRenderer + OverlayOnboardingObserver
-    // duo with a single generic component that observes
+    // The single info-bar container (`infobar_cl` + message + two
+    // buttons). The IME owns this view surface rather than
+    // ImeViewBackend (documented deviation, ADR-0005 Decision-History
+    // 2026-05-15).
+    private View infoBarContainer;
+    // 2026-05-21 ADR-0006 — state-driven info-bar renderer. Observes
     // `InfoBarSelector.select(state)` and renders the top item into the
-    // overlay_permission_infobar views (container + text + two buttons).
-    // The container ID retains its legacy `overlay_permission_*` name
-    // for now; renaming is a cosmetic follow-up tracked in ADR-0006.
+    // `infobar_*` views (container + text + two buttons). Since
+    // 2026-07-02 this is the ONLY info-bar surface — the legacy
+    // info-bar controller + its second container are gone.
     private net.devemperor.dictate.state.infobar.InfoBarRenderer infoBarRenderer;
 
     // 2026-05-21 indirection-cleanup Chunk 3.3 — reactive bridge for the
@@ -496,10 +501,6 @@ public class DictateInputMethodService extends InputMethodService
     private MaterialButton spaceButton;
     private MaterialButton pauseButton;
     private MaterialButton enterButton;
-    private ConstraintLayout infoCl;
-    private TextView infoTv;
-    private Button infoYesButton;
-    private Button infoNoButton;
     private ConstraintLayout promptsCl;
     private RecyclerView promptsRv;
     private LinearLayout promptRecordingControlsLl;
@@ -917,11 +918,6 @@ public class DictateInputMethodService extends InputMethodService
         pauseButton = dictateKeyboardView.findViewById(R.id.pause_btn);
         enterButton = dictateKeyboardView.findViewById(R.id.enter_btn);
 
-        infoCl = dictateKeyboardView.findViewById(R.id.info_cl);
-        infoTv = dictateKeyboardView.findViewById(R.id.info_tv);
-        infoYesButton = dictateKeyboardView.findViewById(R.id.info_yes_btn);
-        infoNoButton = dictateKeyboardView.findViewById(R.id.info_no_btn);
-
         promptsCl = dictateKeyboardView.findViewById(R.id.prompts_keyboard_cl);
         promptsRv = dictateKeyboardView.findViewById(R.id.prompts_keyboard_rv);
         promptRecordingControlsLl = dictateKeyboardView.findViewById(R.id.prompt_recording_controls_ll);
@@ -999,39 +995,23 @@ public class DictateInputMethodService extends InputMethodService
         pipelineCancelBtn = dictateKeyboardView.findViewById(R.id.pipeline_cancel_btn);
 
         // ── 4. View-dependent controllers ──
-        infoBarController = new InfoBarController(
-            infoCl, infoTv, infoYesButton, infoNoButton,
-            () -> { openSettingsActivity(); return kotlin.Unit.INSTANCE; },
-            intent -> { startActivity(intent); return kotlin.Unit.INSTANCE; },
-            sp, getResources(), () -> getTheme()
-        );
-
-        // B5 F-2 — in-IME overlay-permission onboarding info-bar
-        // (Spec 3 §5.3). The IME owns this surface (research §4.3 /
-        // ADR-0005 Decision-History 2026-05-15 deviation: NOT in
-        // ImeViewBackend, which has a button-map-only contract). Grant
-        // launches the System Settings deep-link (the IME is a Context;
-        // FLAG_ACTIVITY_NEW_TASK is mandatory from a non-Activity) and
-        // dispatches RequestOverlayPermission; the permission result is
-        // picked up by F-3's onStartInputView refresh() on return.
-        // "Later" permanently dismisses via DismissOverlayOnboarding.
-        overlayPermissionInfobar = dictateKeyboardView.findViewById(R.id.overlay_permission_infobar);
-        // 2026-05-21 ADR-0006 — info-bar surface is now state-driven.
-        // InfoBarRenderer subscribes to `InfoBarSelector.select(state)`
-        // and renders the top item into the existing overlay_permission_*
-        // views (container + text + two buttons). The button click
-        // listeners are owned by InfoBarRenderer; the imperative
-        // setOnClickListener calls + the OverlayPermissionInfobarRenderer
-        // visibility-writer are gone (replaced by the reactive collector).
+        // 2026-05-21 ADR-0006 / 2026-07-02 completion — the info-bar
+        // surface is fully state-driven. InfoBarRenderer subscribes to
+        // `InfoBarSelector.select(state)` and renders the top item into
+        // the single `infobar_*` container (text + two buttons). Button
+        // click listeners are owned by InfoBarRenderer; the legacy
+        // imperative info-bar controller (update/rate/donate + error
+        // cases) is deleted — its triggers live on state.infoHints.
         //
-        // Settings-Activity launch side-channel: when the dispatched
-        // action is RequestOverlayPermission, the IME also starts the
-        // overlay-permission settings activity. This is unavoidable
-        // imperative because Service contexts cannot startActivity
-        // (FLAG_ACTIVITY_NEW_TASK helps but the launcher seam has to
-        // live somewhere with a real Context — the IME service IS that
-        // context). ADR-0005 Decision-History 2026-05-15 acknowledges
-        // this seam.
+        // Activity-launch side-channel: some dispatched actions also
+        // need an Activity launch (overlay-permission settings, app
+        // settings, billing / Play-Store / PayPal pages). This is
+        // unavoidable imperative because reducers cannot startActivity
+        // (the launcher seam has to live somewhere with a real Context
+        // — the IME service IS that context). ADR-0005 Decision-History
+        // 2026-05-15 acknowledges this seam; see
+        // launchInfoBarSideChannel(...).
+        infoBarContainer = dictateKeyboardView.findViewById(R.id.infobar_cl);
         infoBarRenderer = null;  // built below if all views inflated
 
         // History button
@@ -1073,7 +1053,6 @@ public class DictateInputMethodService extends InputMethodService
             dictateKeyboardView.findViewById(R.id.pipeline_steps_container),
             dictateKeyboardView.findViewById(R.id.pipeline_scroll_view),
             recordButton,
-            infoCl,
             LayoutInflater.from(context),
             mainHandler
         ));
@@ -1558,7 +1537,9 @@ public class DictateInputMethodService extends InputMethodService
         if (emojiPickerCl != null) themedContainers.add(emojiPickerCl);
         if (qwertzContainer != null) themedContainers.add(qwertzContainer);
         java.util.List<TextView> accentTextViews = new java.util.ArrayList<>();
-        if (infoTv != null) accentTextViews.add(infoTv);
+        // 2026-07-02 — the info-bar message view is deliberately NOT in
+        // this list: InfoBarRenderer owns its text colour per item style
+        // (INFO/ERROR/ACTION) and re-resolves it on every render.
         if (emojiPickerTitleTv != null) accentTextViews.add(emojiPickerTitleTv);
 
         imeViewBackend = new ImeViewBackend(
@@ -1634,16 +1615,16 @@ public class DictateInputMethodService extends InputMethodService
         if (infoBarRenderer != null) {
             infoBarRenderer.stop();
         }
-        if (overlayPermissionInfobar != null) {
+        if (infoBarContainer != null) {
             android.widget.TextView infoBarText =
-                    dictateKeyboardView.findViewById(R.id.overlay_permission_message);
+                    dictateKeyboardView.findViewById(R.id.infobar_message_tv);
             android.widget.Button infoBarYes =
-                    dictateKeyboardView.findViewById(R.id.overlay_perm_grant_btn);
+                    dictateKeyboardView.findViewById(R.id.infobar_confirm_btn);
             android.widget.Button infoBarNo =
-                    dictateKeyboardView.findViewById(R.id.overlay_perm_dismiss_btn);
+                    dictateKeyboardView.findViewById(R.id.infobar_dismiss_btn);
             if (infoBarText != null && infoBarYes != null && infoBarNo != null) {
                 infoBarRenderer = new net.devemperor.dictate.state.infobar.InfoBarRenderer(
-                        (androidx.constraintlayout.widget.ConstraintLayout) overlayPermissionInfobar,
+                        (androidx.constraintlayout.widget.ConstraintLayout) infoBarContainer,
                         infoBarText,
                         infoBarYes,
                         infoBarNo,
@@ -1677,19 +1658,7 @@ public class DictateInputMethodService extends InputMethodService
 
                             pipelineBinder.dispatch(action);
 
-                            if (action == net.devemperor.dictate.state.Action.OverlayAction
-                                    .RequestOverlayPermission.INSTANCE) {
-                                try {
-                                    Intent intent = new Intent(
-                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:" + getPackageName()));
-                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                    startActivity(intent);
-                                } catch (Exception e) {
-                                    Log.w("DictateIME",
-                                            "Failed to launch overlay-permission settings", e);
-                                }
-                            } else if (pendingInsertText != null) {
+                            if (pendingInsertText != null) {
                                 // Pending-Insert confirm: drop the
                                 // transcribed text at the current
                                 // cursor. If the InputConnection went
@@ -1705,6 +1674,8 @@ public class DictateInputMethodService extends InputMethodService
                                 insertionService().insert(new InsertionRequest(
                                         pendingInsertText, null,
                                         InsertionPolicy.KEYSTROKE, null, null));
+                            } else {
+                                launchInfoBarSideChannel(action);
                             }
                             return kotlin.Unit.INSTANCE;
                         },
@@ -2208,7 +2179,12 @@ public class DictateInputMethodService extends InputMethodService
 
             bluetoothScoManager.unregisterReceiver();
 
-            infoBarController.dismiss();
+            // 2026-07-02 (ADR-0006 completion) — the legacy
+            // infoBarController.dismiss() here is replaced by
+            // InfoHintModule's cross-module observer: the IME-hide
+            // dispatch (OnImeViewHidden above) flips imeViewVisible,
+            // and the observer clears state.infoHints when recording +
+            // pipeline are idle — exactly this "State (C)" branch.
             setEffectiveContentArea(ContentArea.MAIN_BUTTONS);
             // CR-DEL (RR-2): the legacy KSM refresh unbound fallback is
             // GONE (KeyboardStateManager deleted). The SetContentArea
@@ -3322,8 +3298,7 @@ public class DictateInputMethodService extends InputMethodService
             dictateKeyboardView.setBackgroundColor(keyboardBackgroundColor);
             emojiPickerCl.setBackgroundColor(keyboardBackgroundColor);
             qwertzContainer.setBackgroundColor(keyboardBackgroundColor);
-            TextView[] textColorViews = { infoTv, emojiPickerTitleTv };
-            for (TextView tv : textColorViews) tv.setTextColor(accentColor);
+            emojiPickerTitleTv.setTextColor(accentColor);
         }
         // CR-DEL (Theme C-R / G6 — Spec 2 §9.2 "Theme-Mutation ist eine
         // separate Achse, nicht state-getrieben"): the theme axis now has
@@ -3358,18 +3333,34 @@ public class DictateInputMethodService extends InputMethodService
         }
         qwertzController.applyColors(accentColor, DictateUtils.darkenColor(accentColor, 0.18f), DictateUtils.darkenColor(accentColor, 0.35f));
 
-        // show infos for updates, ratings or donations (DB query on background thread)
+        // Show infos for updates, ratings or donations (DB query on
+        // background thread). 2026-07-02 (ADR-0006 completion): the
+        // trigger conditions stay IME-side (pref + usage-DB reads that a
+        // pure reducer cannot perform) but the RESULT is dispatched onto
+        // state.infoHints.engagementHint — the InfoBarSelector derives
+        // the bar, InfoHintModule owns the dismiss persistence. Pre-bind
+        // window: dispatchPipelineActionToOrchestrator no-ops without a
+        // binder; the trigger re-fires on the next onStartInputView.
         if (DictatePrefsKt.get(sp, Pref.LastVersionCode.INSTANCE) < BuildConfig.VERSION_CODE) {
-            showInfo("update");
+            dispatchPipelineActionToOrchestrator(
+                    new net.devemperor.dictate.state.Action.InfoHintAction.ShowEngagementHint(
+                            net.devemperor.dictate.state.EngagementHint.UPDATE),
+                    "ShowEngagementHint(UPDATE)");
         } else {
             dbExecutor.execute(() -> {
                 Long totalAudioTimeOrNull = usageDao.getTotalAudioTime();
                 long totalAudioTime = totalAudioTimeOrNull != null ? totalAudioTimeOrNull : 0;
                 mainHandler.post(() -> {
                     if (totalAudioTime > 180 && totalAudioTime <= 600 && !DictatePrefsKt.get(sp, Pref.FlagHasRated.INSTANCE)) {
-                        showInfo("rate");
+                        dispatchPipelineActionToOrchestrator(
+                                new net.devemperor.dictate.state.Action.InfoHintAction.ShowEngagementHint(
+                                        net.devemperor.dictate.state.EngagementHint.RATE),
+                                "ShowEngagementHint(RATE)");
                     } else if (totalAudioTime > 600 && !DictatePrefsKt.get(sp, Pref.FlagHasDonated.INSTANCE)) {
-                        showInfo("donate");
+                        dispatchPipelineActionToOrchestrator(
+                                new net.devemperor.dictate.state.Action.InfoHintAction.ShowEngagementHint(
+                                        net.devemperor.dictate.state.EngagementHint.DONATE),
+                                "ShowEngagementHint(DONATE)");
                     }
                 });
             });
@@ -4164,7 +4155,11 @@ public class DictateInputMethodService extends InputMethodService
             // (on the first runner-callback) `Preparing → Running` via the
             // `onStepStarted_dispatchOrchestratorSync` bridge. No
             // imperative step-row drive remains.
-            infoBarController.dismiss();
+            //
+            // 2026-07-02 (ADR-0006 completion) — the legacy
+            // infoBarController.dismiss() is replaced by InfoHintModule's
+            // cross-module observer (pipeline Idle → non-Idle clears
+            // state.infoHints).
             updatePromptButtonsEnabledState();
         } catch (RuntimeException e) {
             // UI bookkeeping is best-effort -- a view-recreation race must
@@ -4271,7 +4266,8 @@ public class DictateInputMethodService extends InputMethodService
         // Preparing state: keyboard shows "Sending..."/progress exactly as
         // the legacy trigger did (the orchestrator owns the authoritative
         // state.pipeline; this is the same thin IME-side UI bookkeeping).
-        infoBarController.dismiss();
+        // 2026-07-02 — stale info-hints clear reactively via
+        // InfoHintModule's observer once the pipeline leaves Idle.
         updatePromptButtonsEnabledState();
         primePipelineUiForNewPath();
 
@@ -4612,8 +4608,25 @@ public class DictateInputMethodService extends InputMethodService
                         new net.devemperor.dictate.state.Action.PipelineAction.PipelineFailed(sid, reason),
                         "PipelineFailed");
             }
-            if (infoBarController == null) return;  // View recreation not yet complete
-            showInfo(errorInfoKey, providerName);
+            // 2026-07-02 (ADR-0006 completion) — error info surfaces as
+            // STATE: the typed kind lands on state.infoHints.pipelineError
+            // (InfoHintModule) and the InfoBarSelector derives the error
+            // bar from it. Replaces the legacy showInfo(errorInfoKey)
+            // view mutation — force-expand + prompts-mutex now apply to
+            // error bars by construction, and the bar survives a view
+            // recreation because it re-derives from state.
+            //
+            // fromInfoKey returns null for "cancelled" (user-initiated,
+            // silent by design — F-076) and for unknown keys
+            // (fail-closed instead of the legacy stale-bar trap).
+            net.devemperor.dictate.state.PipelineErrorKind kind =
+                    net.devemperor.dictate.state.PipelineErrorKind.Companion.fromInfoKey(errorInfoKey);
+            if (kind != null) {
+                dispatchPipelineActionToOrchestrator(
+                        new net.devemperor.dictate.state.Action.InfoHintAction.PipelineErrorOccurred(
+                                kind, providerName),
+                        "PipelineErrorOccurred");
+            }
         });
         if (vibrate && vibrationEnabled) {
             vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
@@ -4990,12 +5003,82 @@ public class DictateInputMethodService extends InputMethodService
         }
     }
 
-    private void showInfo(String type) {
-        infoBarController.showInfo(type);
+    /**
+     * Activity-launch side-channel for info-bar confirm actions
+     * (2026-07-02, ADR-0006 completion). The state mutation (clearing
+     * the hint) happens via the dispatched {@code InfoHintAction} /
+     * {@code OverlayAction}; this method performs only the launch that
+     * a pure reducer cannot (the IME service is the Context-bearing
+     * seam — ADR-0005 Decision-History 2026-05-15).
+     *
+     * <p>Launch mapping (parity with the deleted legacy
+     * legacy info-bar controller click handlers):
+     * <ul>
+     *   <li>{@code RequestOverlayPermission} → system overlay-permission
+     *       settings deep-link</li>
+     *   <li>{@code ConfirmPipelineError} — INVALID_API_KEY /
+     *       MODEL_NOT_FOUND / BAD_REQUEST → app settings;
+     *       QUOTA_EXCEEDED → provider billing page (the selector only
+     *       offers the confirm button when the provider has one)</li>
+     *   <li>{@code ConfirmEngagementHint} — UPDATE → app settings
+     *       (changelog); RATE → Play-Store page; DONATE → PayPal</li>
+     * </ul>
+     */
+    private void launchInfoBarSideChannel(net.devemperor.dictate.state.Action action) {
+        if (action == net.devemperor.dictate.state.Action.OverlayAction
+                .RequestOverlayPermission.INSTANCE) {
+            try {
+                Intent intent = new Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            } catch (Exception e) {
+                Log.w("DictateIME", "Failed to launch overlay-permission settings", e);
+            }
+        } else if (action instanceof net.devemperor.dictate.state.Action.InfoHintAction.ConfirmPipelineError) {
+            net.devemperor.dictate.state.Action.InfoHintAction.ConfirmPipelineError confirm =
+                    (net.devemperor.dictate.state.Action.InfoHintAction.ConfirmPipelineError) action;
+            switch (confirm.getKind()) {
+                case INVALID_API_KEY:
+                case MODEL_NOT_FOUND:
+                case BAD_REQUEST:
+                    openSettingsActivity();
+                    break;
+                case QUOTA_EXCEEDED:
+                    String billingUrl = net.devemperor.dictate.ai.AIProvider
+                            .fromPersistKey(confirm.getProviderKey()).getBillingUrl();
+                    if (billingUrl != null) openUrlInBrowser(billingUrl);
+                    break;
+                case INTERNET_ERROR:
+                    // Dismiss-only kind — the selector never offers a
+                    // confirm button; nothing to launch.
+                    break;
+            }
+        } else if (action instanceof net.devemperor.dictate.state.Action.InfoHintAction.ConfirmEngagementHint) {
+            switch (((net.devemperor.dictate.state.Action.InfoHintAction.ConfirmEngagementHint) action).getHint()) {
+                case UPDATE:
+                    openSettingsActivity();
+                    break;
+                case RATE:
+                    openUrlInBrowser(PLAY_STORE_URL);
+                    break;
+                case DONATE:
+                    openUrlInBrowser(DONATE_URL);
+                    break;
+            }
+        }
     }
 
-    private void showInfo(String type, String providerName) {
-        infoBarController.showInfo(type, providerName);
+    /** Best-effort ACTION_VIEW launch from the IME context. */
+    private void openUrlInBrowser(String url) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            Log.w("DictateIME", "Failed to open URL " + url, e);
+        }
     }
 
     /**
@@ -5063,7 +5146,10 @@ public class DictateInputMethodService extends InputMethodService
     // CR-DEL: was MainButtonsController.Callback (deleted); now invoked
     // via the ImeViewBackend imeSideAffordance hook (RECORD click).
     public void onRecordClicked() {
-        infoBarController.dismiss();
+        // 2026-07-02 (ADR-0006 completion) — the legacy
+        // infoBarController.dismiss() is replaced by InfoHintModule's
+        // cross-module observer (recording Idle → non-Idle clears
+        // state.infoHints when the tap actually starts a recording).
 
         // Phase 5.B (Vol 2): read the active pipeline phase off the
         // orchestrator state (the renderer is reactive and no longer
@@ -5594,7 +5680,15 @@ public class DictateInputMethodService extends InputMethodService
         // cancelled) and openLanguageSettings() (also no cancel).
         // Trash-button + WidgetClose-X remain the explicit
         // user-driven cancel paths.
-        infoBarController.dismiss();
+        //
+        // 2026-07-02 (ADR-0006 completion) — clear the in-RAM info
+        // hints when heading into the settings (the user is likely
+        // fixing the surfaced problem; a stale error bar on return
+        // would mislead). Pref-persisted triggers re-evaluate on the
+        // next onStartInputView, mirroring the legacy dismiss() here.
+        dispatchPipelineActionToOrchestrator(
+                net.devemperor.dictate.state.Action.InfoHintAction.ClearTransientHints.INSTANCE,
+                "ClearTransientHints(settings-open)");
         openSettingsActivity();
     }
 

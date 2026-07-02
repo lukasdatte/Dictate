@@ -1,6 +1,6 @@
 # ADR-0006: UI — Info-Bar State-Derived Items with Cross-Module Producers
 
-**Status:** Proposed
+**Status:** Accepted
 **Subsystem:** ui-architecture, state-management
 **Date:** 2026-05-21
 **Supersedes:** —
@@ -517,3 +517,69 @@ extension to `RECORDED`), `PipelineRecovery.kt` (Phase 5 caller +
 KDoc), `SessionTracker.kt` (caller), test updates +
 `PipelineRecoveryFullTest` Phase-5-RECORDED test, this
 Decision-History entry.
+
+### 2026-07-02 — Big-Bang migration completed; Status → Accepted
+
+**Trigger:** Whole-app review findings F-040/F-039 (research
+`docs/research/2026-07-02 - infobar-consolidation.md`) confirmed the
+migration had stalled halfway: the legacy `InfoBarController` still
+owned all pipeline-error types plus the Update/Rate/Donate hints, so
+the state-driven UX machinery (force-expand, prompts-mutex) covered
+only the selector-driven bars, and the legacy small-mode suppression
+contract was dead (`onStateChanged` caller deleted in `cc5803e`).
+
+**Before:** Two live systems — `InfoBarSelector`/`InfoBarRenderer`
+(rendering into the `overlay_permission_infobar` container) beside the
+imperative `InfoBarController` (rendering into `info_cl`). The
+§"Big-Bang migration" section of this ADR was unimplemented for the
+nine legacy `showInfo` cases.
+
+**After:** One system, one container.
+
+1. **New state axis `DictateUiState.infoHints` (`InfoHintState`),
+   owned by `InfoHintModule`.** Carries `pipelineError:
+   PipelineErrorHint?` (typed `PipelineErrorKind` — the §Decision
+   "PipelineModule will gain a `transientError` field" landed as a
+   dedicated axis instead, because `PipelineUiState` is a sealed FSM
+   whose variants would each have had to carry the field; a sibling
+   axis keeps the single-owner-per-axis lens intact) and
+   `engagementHint: EngagementHint?` (Update/Rate/Donate, single slot
+   mirroring the legacy mutually-exclusive trigger chain). Dismiss
+   semantics follow §"Dismiss = natural-source mutation": errors are
+   in-RAM (`DismissPipelineError`), engagement hints persist their
+   `Pref.*` flags via module effects. `InfoHintModule`'s cross-module
+   observer replaces the scattered legacy `dismiss()` call sites
+   (recording start / pipeline start / IME-hide-while-idle).
+2. **Selector producers** for both hint families; the legacy
+   `InfoBarController` + its container are deleted (zero-grep). The
+   surviving container is renamed to `infobar_cl` (+ `infobar_*`
+   children); `prompts_keyboard_cl` chains directly below it.
+3. **Force-expand + prompts-mutex now apply to error and engagement
+   bars by construction** (both key on `InfoBarSelector.select`),
+   closing F-040. The dead legacy suppression contract (F-039) is
+   retired with the controller rather than re-wired.
+
+**Reasoning:** Finishing the migration was cheaper and strictly better
+than re-wiring the legacy suppression (the research's discarded
+alternative): every info surface now derives from state, survives view
+recreation, and inherits all selector-keyed UX mechanisms without a
+parallel contract to maintain. Deviations from the original sketch:
+`createdAt` for pref-driven hints uses `Long.MAX_VALUE` (not the
+suggested `VERSION_BUILD_TIME`, which does not exist in BuildConfig —
+MAX_VALUE also encodes "nags yield to real events"); the never-produced
+legacy `"timeout"` case was dropped; F-076's loaded trap
+(`toInfoKey() == "cancelled"` with no consumer branch) is defused by
+`PipelineErrorKind.fromInfoKey` parsing `"cancelled"`/unknown keys to
+`null` (fail-closed).
+
+**Reference implementation:** commits prefixed
+`[infobar-consolidation]` (2026-07-02) — `InfoHintState.kt`,
+`InfoHintModule.kt`, `Action.InfoHintAction`, `InfoBarSelector.kt`
+(two new producers + Gap-2 priority note), `InfoBarRenderer.kt`
+(param/KDoc rename to the `infobar_*` views),
+`DictateInputMethodService.java` (dispatch rewiring +
+`launchInfoBarSideChannel`), `activity_dictate_keyboard_view.xml`
+(container merge), deletions (`InfoBarController.kt`,
+`dictate_timeout_msg` strings), tests (`InfoHintModuleTest`,
+`InfoBarSelectorTest`, `LayoutCatalogTest` force-expand,
+`PromptVisibilityControllerTest` mutex regressions).

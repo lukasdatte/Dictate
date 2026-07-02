@@ -148,6 +148,9 @@ open class DictateModuleRegistry(
             ThemingModule,
             PendingSessionsModule,
             KeyboardInputModule,
+            // ADR-0006 completion (2026-07-02) — transient pipeline-error
+            // + engagement hints feeding the state-derived info bar.
+            InfoHintModule,
             // ─── Phase-2 stub (C6) ────────────────────────────────────
             // Registered now to keep the action-coverage invariant
             // intact — see InterruptionModule KDoc.

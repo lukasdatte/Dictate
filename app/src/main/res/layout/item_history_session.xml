@@ -59,6 +59,7 @@
             android:layout_height="16dp"
             android:visibility="gone"
             android:importantForAccessibility="no"
+            app:tint="?attr/colorOnSurfaceVariant"
             tools:src="@drawable/ic_baseline_pending_24"
             tools:visibility="visible" />
 

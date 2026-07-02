@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark-mode warning: lighter amber so it stays legible on a dark surface
+         (light value #B26A00 in values/colors.xml). -->
+    <color name="dictate_warning">#FFB74D</color>
+</resources>

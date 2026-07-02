@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- App-defined semantic warning color (light + night values in colors.xml).
+         M3 has no built-in warning role, so history's downstream-staleness
+         warning resolves its color through this attr (ADR-0010 point 4). -->
+    <attr name="dictateColorWarning" format="color" />
+
     <declare-styleable name="PulseLayout">
         <attr name="pulseCount" format="integer" />
         <attr name="pulseDuration" format="integer" />

@@ -12,8 +12,23 @@
         <!-- Status bar color. -->
         <item name="android:statusBarColor" >?attr/colorPrimaryVariant</item>
 
+        <!-- App-defined warning color (dark override in values-night/themes.xml). -->
+        <item name="dictateColorWarning">@color/dictate_warning</item>
+
         <!-- Customize your theme here. -->
 
+    </style>
+
+    <!-- Single style for all history step-card / status icon buttons.
+         Icon color comes from the theme attr (?attr/colorOnSurfaceVariant), so
+         it stays DayNight-correct regardless of the drawable's baked tint —
+         per ADR-0010 (usage-site theme-attr tint). -->
+    <style name="Widget.Dictate.HistoryIconButton" parent="">
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="tint">?attr/colorOnSurfaceVariant</item>
+        <item name="android:minWidth">48dp</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:scaleType">centerInside</item>
     </style>
 
     <style name="roundedImageView" parent="">

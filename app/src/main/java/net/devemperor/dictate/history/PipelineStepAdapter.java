@@ -48,6 +48,10 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
         public final String errorText;
         public final String metaText;
         public final String audioFilePath;
+        // F-113/F-115: reflects HistoryAudioPlayer state so the play button
+        // swaps play <-> pause. Set on the AUDIO step; the Activity rebinds the
+        // audio row when playback state flips.
+        public final boolean audioPlaying;
 
         // For processing steps with versions
         public final ProcessingStepEntity stepEntity;
@@ -74,6 +78,7 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
             this.errorText = builder.errorText;
             this.metaText = builder.metaText;
             this.audioFilePath = builder.audioFilePath;
+            this.audioPlaying = builder.audioPlaying;
             this.stepEntity = builder.stepEntity;
             this.versions = builder.versions;
             this.chainIndex = builder.chainIndex;
@@ -95,6 +100,7 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
             private String errorText;
             private String metaText;
             private String audioFilePath;
+            private boolean audioPlaying;
             private ProcessingStepEntity stepEntity;
             private List<ProcessingStepEntity> versions;
             private int chainIndex;
@@ -117,6 +123,7 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
             public Builder errorText(String text) { this.errorText = text; return this; }
             public Builder metaText(String text) { this.metaText = text; return this; }
             public Builder audioFilePath(String path) { this.audioFilePath = path; return this; }
+            public Builder audioPlaying(boolean playing) { this.audioPlaying = playing; return this; }
             public Builder stepEntity(ProcessingStepEntity entity) { this.stepEntity = entity; return this; }
             public Builder versions(List<ProcessingStepEntity> versions) { this.versions = versions; return this; }
             public Builder chainIndex(int index) { this.chainIndex = index; return this; }
@@ -192,12 +199,21 @@ public class PipelineStepAdapter extends RecyclerView.Adapter<PipelineStepAdapte
             holder.metaTv.setVisibility(View.GONE);
         }
 
-        // Play button (audio only)
+        // Play/pause button (audio only). F-113/F-115: the icon reflects the
+        // HistoryAudioPlayer state; the click is a play/pause TOGGLE, not the
+        // old one-shot. The tint stays theme-driven via the button style
+        // (ADR-0010) — swapping only the src keeps the invariant test green.
         if (step.type == PipelineStep.Type.AUDIO && step.audioFilePath != null) {
             holder.playBtn.setVisibility(View.VISIBLE);
+            holder.playBtn.setImageResource(step.audioPlaying
+                    ? R.drawable.ic_baseline_pause_24
+                    : android.R.drawable.ic_media_play);
+            holder.playBtn.setContentDescription(holder.itemView.getContext().getString(
+                    step.audioPlaying ? R.string.dictate_history_pause : R.string.dictate_history_play));
             holder.playBtn.setOnClickListener(v -> callback.onPlayAudio(step.audioFilePath));
         } else {
             holder.playBtn.setVisibility(View.GONE);
+            holder.playBtn.setOnClickListener(null);
         }
 
         // Audio-row actions (Phase 10.4)

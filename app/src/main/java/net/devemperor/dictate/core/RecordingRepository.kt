@@ -43,7 +43,7 @@ class RecordingRepository(private val context: Context) {
      * @throws java.io.IOException if the copy fails
      */
     fun persistFromCache(cacheFile: File, sessionId: String): Recording {
-        val dest = File(recordingsDir, "$sessionId.$EXT_M4A")
+        val dest = persistentFileFor(sessionId)
         cacheFile.copyTo(dest, overwrite = true)
         return Recording(dest, sessionId)
     }
@@ -118,27 +118,45 @@ class RecordingRepository(private val context: Context) {
     }
 
     /**
-     * Deletes the audio file for a session and sets `audio_file_path = null` in the DB.
-     * Transcription and processing results are preserved.
+     * Deletes **all** audio files a session references, then clears both audio
+     * columns. Transcription and processing results are preserved.
      *
-     * After deletion, [loadBySessionId] will return [LoadResult.FileMissing],
-     * causing the reprocess buttons in the UI to be hidden automatically.
+     * F-113 (delete side): a RECORDED multi-segment session owns N files listed
+     * in `audio_file_paths` (ADR-0007) plus, potentially, the persistent
+     * `filesDir/recordings/{sid}.m4a` copy. The previous implementation deleted
+     * only the single legacy `audio_file_path`, orphaning segments 2..N (and any
+     * persistent copy) on disk indefinitely. This now sweeps:
+     *   - every `audio_file_paths` entry,
+     *   - the legacy `audio_file_path`,
+     *   - the persistent `recordings/{sid}.m4a` copy (via [persistentFileFor],
+     *     the same path logic [persistFromCache] writes).
      *
-     * Best-effort ordering: the file is removed from disk before the DB row is
+     * After deletion, [loadBySessionId] returns [LoadResult.FileMissing],
+     * hiding the reprocess/play buttons automatically.
+     *
+     * Best-effort ordering: files are removed from disk before the DB row is
      * cleared. If the process dies between the file-delete and the DB-update,
      * [net.devemperor.dictate.database.DurationHealingJob] reconciles the
-     * inconsistency on the next launch — it promotes sessions whose
-     * `audio_file_path` points at a missing file to FAILED with a UNKNOWN
-     * error type, so the UI stays consistent.
+     * inconsistency on the next launch — it promotes sessions whose audio
+     * points at a missing file to FAILED with an UNKNOWN error type, so the UI
+     * stays consistent.
      *
-     * @return true if the file was deleted (or didn't exist), false on DB error
+     * @return true if deletion ran (files gone or already absent), false on DB error
      */
     fun deleteBySessionId(sessionId: String): Boolean {
         val dao = DictateDatabase.getInstance(context).sessionDao()
         val session = dao.getById(sessionId) ?: return false
 
-        val path = session.audioFilePath
-        if (path != null) {
+        // De-dupe: the legacy column commonly mirrors segment 1, and the
+        // persistent copy shares the recordings/{sid}.m4a path with nothing
+        // else — but a set keeps a double-delete harmless if they ever alias.
+        val paths = buildSet {
+            addAll(session.audioFilePaths)
+            session.audioFilePath?.let { add(it) }
+            add(persistentFileFor(sessionId).absolutePath)
+        }
+        for (path in paths) {
+            if (path.isEmpty()) continue
             val file = File(path)
             if (file.exists()) file.delete()
         }
@@ -146,6 +164,15 @@ class RecordingRepository(private val context: Context) {
         dao.clearAudioFilePath(sessionId)
         return true
     }
+
+    /**
+     * The persistent-storage path for a session's promoted audio copy.
+     * Single source of the `recordings/{sid}.m4a` layout that
+     * [persistFromCache] writes — reused here so the delete side cannot drift
+     * from the write side.
+     */
+    private fun persistentFileFor(sessionId: String): File =
+        File(recordingsDir, "$sessionId.$EXT_M4A")
 
     sealed class LoadResult {
         data class Available(val recording: Recording, val session: SessionEntity) : LoadResult()

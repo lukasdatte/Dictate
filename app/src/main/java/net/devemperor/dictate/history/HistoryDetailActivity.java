@@ -4,7 +4,6 @@ import android.annotation.SuppressLint;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
-import android.media.MediaPlayer;
 import android.os.Bundle;
 import android.view.MenuItem;
 import android.view.View;
@@ -73,6 +72,7 @@ public class HistoryDetailActivity extends AppCompatActivity
     private ProcessingStepDao stepDao;
     private TranscriptionDao transcriptionDao;
     private RecordingRepository recordingRepository;
+    private final HistoryAudioResolver audioResolver = new HistoryAudioResolver();
 
     private String sessionId;
     private SessionEntity session;
@@ -90,7 +90,9 @@ public class HistoryDetailActivity extends AppCompatActivity
     private PipelineStepAdapter pipelineAdapter;
     private ProgressBar progressBar;
 
-    private MediaPlayer mediaPlayer;
+    // F-113/F-115: sequential multi-segment play/pause. Replaces the one-shot
+    // MediaPlayer that only ever played segment 1. Released in onPause().
+    private HistoryAudioPlayer audioPlayer;
     // F-055: strictly for quick LOCAL file I/O (delete audio). AI work must
     // never run here — it goes through JobExecutor so it survives the Activity
     // and registers in ActiveJobRegistry.
@@ -132,7 +134,10 @@ public class HistoryDetailActivity extends AppCompatActivity
         pipelineAdapter = new PipelineStepAdapter(pipelineSteps, new PipelineStepAdapter.StepActionCallback() {
             @Override
             public void onPlayAudio(String audioFilePath) {
-                playAudio(audioFilePath);
+                // F-113/F-115: the button is now a play/pause toggle over the
+                // full resolved segment list (the path argument is retained for
+                // the adapter's visibility gate only).
+                toggleAudioPlayback();
             }
 
             @Override
@@ -243,6 +248,18 @@ public class HistoryDetailActivity extends AppCompatActivity
         loadSession();
     }
 
+    @Override
+    protected void onPause() {
+        // F-113/F-115: playback must never outlive the visible screen.
+        // Releasing here (not only in onDestroy) stops audio when the user
+        // navigates away or the screen is backgrounded.
+        if (audioPlayer != null) {
+            audioPlayer.release();
+            audioPlayer = null;
+        }
+        super.onPause();
+    }
+
     @SuppressLint("NotifyDataSetChanged")
     private void loadSession() {
         session = db.sessionDao().getById(sessionId);
@@ -306,7 +323,8 @@ public class HistoryDetailActivity extends AppCompatActivity
         // Audio step — with reprocess actions (Phase 10.4)
         long dur = session.getAudioDurationSeconds();
         String durationStr = getString(R.string.dictate_history_duration, dur / 60, dur % 60);
-        boolean audioAvailable = resolveAudioAvailability();
+        HistoryAudioResolver.Resolution audio = resolveAudio();
+        boolean audioAvailable = audio.getAvailable();
         boolean jobActive = ActiveJobRegistry.INSTANCE.isActive(sessionId);
 
         SessionStatus status;
@@ -328,7 +346,10 @@ public class HistoryDetailActivity extends AppCompatActivity
         pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.AUDIO)
                 .icon("\uD83C\uDFA4") // mic
                 .title(getString(R.string.dictate_history_audio) + " (" + durationStr + ")")
-                .audioFilePath(audioAvailable ? session.getAudioFilePath() : null)
+                // F-113: play visibility keys off the multi-segment resolver's
+                // primary path, not the legacy column alone.
+                .audioFilePath(audioAvailable ? audio.getPrimaryPath() : null)
+                .audioPlaying(audioPlayer != null && audioPlayer.isPlaying())
                 .sessionId(sessionId)
                 .showDirectReprocess(showDirect)
                 .showReprocessWithEdit(showEdit)
@@ -354,10 +375,14 @@ public class HistoryDetailActivity extends AppCompatActivity
         addProcessingSteps();
     }
 
-    private boolean resolveAudioAvailability() {
-        String path = session.getAudioFilePath();
-        if (path == null) return false;
-        return new File(path).exists();
+    /**
+     * F-113: single-source audio resolution for this session — multi-segment
+     * column first, legacy column fallback, file-existence checked
+     * ({@link HistoryAudioResolver}, ADR-0007). Consumed by the audio-step
+     * builder and {@link #startHistoryReprocess}.
+     */
+    private HistoryAudioResolver.Resolution resolveAudio() {
+        return audioResolver.resolve(session.getAudioFilePaths(), session.getAudioFilePath());
     }
 
     private void buildRewordingPipeline() {
@@ -458,21 +483,23 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     // region Audio playback
 
-    private void playAudio(String audioFilePath) {
-        try {
-            if (mediaPlayer != null) {
-                mediaPlayer.release();
+    /**
+     * F-113/F-115: play/pause toggle for the resolved segment list. The first
+     * toggle builds a {@link HistoryAudioPlayer} over ALL existing segments
+     * (multi-segment aware, sequential — spec D5, no muxing on the UI path);
+     * later toggles pause/resume. Completion resets to the play icon via the
+     * state callback, which reloads so the audio step rebinds.
+     */
+    private void toggleAudioPlayback() {
+        if (audioPlayer == null) {
+            List<String> segments = resolveAudio().getPlayablePaths();
+            if (segments.isEmpty()) {
+                Toast.makeText(this, R.string.dictate_audio_file_missing, Toast.LENGTH_SHORT).show();
+                return;
             }
-            mediaPlayer = new MediaPlayer();
-            mediaPlayer.setDataSource(audioFilePath);
-            mediaPlayer.prepare();
-            mediaPlayer.start();
-            mediaPlayer.setOnCompletionListener(mp -> {
-                // Reset play button state if needed
-            });
-        } catch (Exception e) {
-            Toast.makeText(this, getString(R.string.dictate_history_error, e.getMessage()), Toast.LENGTH_SHORT).show();
+            audioPlayer = new HistoryAudioPlayer(segments, isPlaying -> loadSession());
         }
+        audioPlayer.toggle();
     }
 
     // endregion
@@ -488,8 +515,15 @@ public class HistoryDetailActivity extends AppCompatActivity
         SessionEntity target = db.sessionDao().getById(targetSessionId);
         if (target == null) return;
 
-        String audioPath = target.getAudioFilePath();
-        if (audioPath == null || !new File(audioPath).exists()) {
+        // F-113: gate on the multi-segment resolver, not the legacy column
+        // alone. The pipeline itself re-resolves the audio via
+        // PipelineOrchestrator.resolvePipelineAudio (multi-segment merge), so
+        // the primary path is passed only for the legacy JobRequest parameter
+        // and the recordingsDir derivation — the JobRequest shape is unchanged.
+        HistoryAudioResolver.Resolution targetAudio =
+                audioResolver.resolve(target.getAudioFilePaths(), target.getAudioFilePath());
+        String audioPath = targetAudio.getPrimaryPath();
+        if (audioPath == null) {
             Toast.makeText(this, R.string.dictate_audio_file_missing, Toast.LENGTH_SHORT).show();
             return;
         }
@@ -726,9 +760,12 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     @Override
     protected void onDestroy() {
-        if (mediaPlayer != null) {
-            mediaPlayer.release();
-            mediaPlayer = null;
+        // Defensive: onPause already releases, but a direct destroy path
+        // (config change without pause is not possible, but be safe) keeps
+        // the invariant that no player outlives the Activity.
+        if (audioPlayer != null) {
+            audioPlayer.release();
+            audioPlayer = null;
         }
         ioExecutor.shutdownNow();
         super.onDestroy();

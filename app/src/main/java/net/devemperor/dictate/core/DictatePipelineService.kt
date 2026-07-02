@@ -1043,13 +1043,15 @@ class DictatePipelineService : Service() {
     )
 
     /**
-     * Kick off the dual cleanup pass (Spec 1 §6.2 R.17 + §6.3.1):
+     * Kick off the cleanup pass (Spec 1 §6.2 R.17 + §6.3.1):
      *
      *  1. `deleteInsertedOlderThan(cutoff)` — drop COMPLETED rows whose
      *     `inserted_at` is older than `now − Pref.SessionCleanupGracePeriodMs`.
      *  2. `cleanupOrphanedTerminalAudio(cutoff)` — drop audio files for
      *     FAILED/CANCELLED rows older than the same cutoff; bulk-clear
      *     `audio_file_path` in DB.
+     *  3. `deleteCancelledOlderThan(now − 60 d)` — long-horizon retention
+     *     for CANCELLED rows (history-pagination-and-scale §2.5).
      *
      * Launches into [serviceScope] so the cleanup doesn't block
      * `onDestroy` (Android can SIGKILL the service mid-flight; every step
@@ -1075,7 +1077,8 @@ class DictatePipelineService : Service() {
                     TAG,
                     "orphan-cleanup: deletedCompletedRows=${result.deletedCompletedRows}, " +
                         "filesActuallyDeleted=${result.filesActuallyDeleted}, " +
-                        "clearedAudioPathRows=${result.clearedAudioPathRows}",
+                        "clearedAudioPathRows=${result.clearedAudioPathRows}, " +
+                        "deletedCancelledRows=${result.deletedCancelledRows}",
                 )
             } catch (t: Throwable) {
                 Log.w(TAG, "orphan-cleanup failed", t)

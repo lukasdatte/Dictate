@@ -9,7 +9,6 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.content.res.Configuration;
 import android.inputmethodservice.InputMethodService;
 import android.icu.text.BreakIterator;
 import android.media.AudioAttributes;
@@ -90,6 +89,7 @@ import net.devemperor.dictate.state.render.ContentAreaController;
 import net.devemperor.dictate.state.render.ContentAreaViews;
 import net.devemperor.dictate.state.render.EditBarController;
 import net.devemperor.dictate.state.render.EditBarViews;
+import net.devemperor.dictate.state.render.EffectiveNightModeKt;
 import net.devemperor.dictate.state.render.EmojiController;
 import net.devemperor.dictate.state.render.EmojiViews;
 import net.devemperor.dictate.state.render.ImeViewBackend;
@@ -3299,10 +3299,11 @@ public class DictateInputMethodService extends InputMethodService
             overlayCharactersController.update(charactersString, accentColor);
         }
 
-        // update theme
+        // update theme — the "does Pref.Theme force night?" rule is shared
+        // with the overlay inflate (F-119); see EffectiveNightMode.kt.
         String theme = DictatePrefsKt.get(sp, Pref.Theme.INSTANCE);
         int keyboardBackgroundColor;
-        if ("dark".equals(theme) || ("system".equals(theme) && (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES)) {
+        if (EffectiveNightModeKt.effectiveNight(theme, getResources().getConfiguration())) {
             keyboardBackgroundColor = getResources().getColor(R.color.dictate_keyboard_background_dark, getTheme());
         } else {
             keyboardBackgroundColor = getResources().getColor(R.color.dictate_keyboard_background_light, getTheme());

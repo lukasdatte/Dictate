@@ -591,8 +591,10 @@ public class HistoryDetailActivity extends AppCompatActivity
                 /* totalSteps */ 1,
                 /* parentSessionId */ sessionId,
                 outputText,
-                promptText,
-                promptEntityId
+                // Slot transport: "(text, optional entityId)" — same single
+                // queue-slot type as regenerate overrides and the reprocess
+                // queue (free-text prompts carry no entity id).
+                PromptQueueSlot.ofContent(promptText, promptEntityId)
         );
         pendingPostProcessNavigateId = newSessionId;
         if (!JobExecutor.INSTANCE.start(this, request)) {
@@ -639,6 +641,10 @@ public class HistoryDetailActivity extends AppCompatActivity
         } else if (tag.startsWith(TAG_POST_PROCESS_PREFIX)) {
             ProcessingStepEntity step = stepDao.getById(tag.substring(TAG_POST_PROCESS_PREFIX.length()));
             if (step == null || step.getOutputText() == null || step.getOutputText().isEmpty()) return;
+            // Same guard as the regenerate branch: a choice without text
+            // (pathological null prompt row) has no content to apply — and
+            // PostProcess.promptSlot enforces a text-bearing slot.
+            if (promptText == null || promptText.isEmpty()) return;
             dispatchPostProcess(step.getOutputText(), promptText, promptEntityId);
         }
         // "Reprocess with edit" no longer routes through the V1 chooser —

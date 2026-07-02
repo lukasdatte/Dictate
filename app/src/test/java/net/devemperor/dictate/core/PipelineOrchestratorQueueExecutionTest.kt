@@ -22,7 +22,9 @@ import net.devemperor.dictate.database.entity.SessionStatus
 import net.devemperor.dictate.database.entity.SessionType
 import net.devemperor.dictate.testutil.FakeSharedPreferences
 import org.junit.After
+import net.devemperor.dictate.ai.AIProviderException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -57,6 +59,7 @@ class PipelineOrchestratorQueueExecutionTest {
     private lateinit var factory: CapturingRunnerFactory
     private lateinit var promptService: PromptService
     private lateinit var sessionManager: SessionManager
+    private lateinit var promptQueueManager: PromptQueueManager
     private lateinit var orchestrator: PipelineOrchestrator
 
     @Before
@@ -66,16 +69,17 @@ class PipelineOrchestratorQueueExecutionTest {
         val aiOrchestrator = AIOrchestrator(sp, db.usageDao(), factory)
         promptService = PromptService.create(sp)
         sessionManager = SessionManager(db)
+        promptQueueManager = PromptQueueManager(
+            { emptyList() },
+            sp,
+            object : PromptQueueManager.PromptQueueCallback {
+                override fun onQueueChanged(queuedIds: List<Int>) = Unit
+            }
+        )
         orchestrator = PipelineOrchestrator(
             aiOrchestrator,
             AutoFormattingService(sp, aiOrchestrator),
-            PromptQueueManager(
-                { emptyList() },
-                sp,
-                object : PromptQueueManager.PromptQueueCallback {
-                    override fun onQueueChanged(queuedIds: List<Int>) = Unit
-                }
-            ),
+            promptQueueManager,
             promptService,
             sessionManager,
             SessionTracker(db.sessionDao()),
@@ -182,6 +186,85 @@ class PipelineOrchestratorQueueExecutionTest {
         assertEquals(7, step.promptEntityId)
     }
 
+    // ── Empty-vs-unset queue semantics (verification defect 1) ────────────
+
+    @Test
+    fun `explicitly empty edited queue runs zero prompts even when the live keyboard queue is non-empty`() {
+        val sid = createRecordingSession()
+        // The IME's live auto-apply queue lingers with a real saved prompt
+        // (F-003 documents exactly this state) — it must NOT leak into a
+        // history reprocess whose editor queue was explicitly emptied.
+        db.promptDao().insert(
+            PromptEntity(
+                id = 11, pos = 0, name = "Lingering", prompt = "Lingering keyboard prompt",
+                requiresSelection = true, autoApply = true
+            )
+        )
+        promptQueueManager.togglePrompt(11)
+
+        reprocess(sid, emptyList())
+
+        assertEquals(
+            "explicitly empty queue must run transcription only",
+            0, factory.completionCalls.size
+        )
+        assertEquals(SessionStatus.COMPLETED.name, db.sessionDao().getById(sid)!!.status)
+        assertEquals(factory.transcriptText, sessionManager.getFinalOutput(sid))
+    }
+
+    @Test
+    fun `unset queue - keyboard path - still falls back to the live auto-apply queue`() {
+        val sid = createRecordingSession()
+        db.promptDao().insert(
+            PromptEntity(
+                id = 11, pos = 0, name = "Live", prompt = "Live keyboard prompt",
+                requiresSelection = true, autoApply = true
+            )
+        )
+        promptQueueManager.togglePrompt(11)
+
+        reprocess(sid, /* slots (null = unset) */ null)
+
+        assertEquals(1, factory.completionCalls.size)
+        assertPromptCall(0, promptService.buildQueuedPrompt("Live keyboard prompt", factory.transcriptText))
+    }
+
+    // ── Resume loop: provider-cancel mid-chain (N4 parity) ───────────────
+
+    @Test
+    fun `resume - provider-level cancel mid-chain finalises CANCELLED and stops the loop`() {
+        db.promptDao().insert(
+            PromptEntity(
+                id = 7, pos = 0, name = "First", prompt = "First instruction",
+                requiresSelection = true, autoApply = false
+            )
+        )
+        db.promptDao().insert(
+            PromptEntity(
+                id = 5, pos = 1, name = "Second", prompt = "Second instruction",
+                requiresSelection = true, autoApply = false
+            )
+        )
+        val sid = createRecordingSession(queuedPromptIds = "7,5")
+        sessionManager.addTranscriptionVersion(
+            sid, factory.transcriptText, "test-transcribe", "OPENAI", durationMs = 10
+        )
+        factory.cancelAtCompletionCall = 1
+
+        // The N4 arm rethrows as CancellationException so the caller's
+        // cancel-handling (finalizeCancelled + JobExecutor's cancel path)
+        // engages — identical to the fresh-run loop.
+        assertThrows(java.util.concurrent.CancellationException::class.java) {
+            orchestrator.resumePipelineBlocking(sid)
+        }
+
+        assertEquals(
+            "the loop must stop at the cancelled step, not march on to prompt 5",
+            1, factory.completionCalls.size
+        )
+        assertEquals(SessionStatus.CANCELLED.name, db.sessionDao().getById(sid)!!.status)
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private fun assertPromptCall(index: Int, expected: PromptService.PromptPair) {
@@ -190,7 +273,7 @@ class PipelineOrchestratorQueueExecutionTest {
         assertEquals(expected.systemPrompt, call.systemPrompt)
     }
 
-    private fun createRecordingSession(): String {
+    private fun createRecordingSession(queuedPromptIds: String? = null): String {
         val id = "reproc-" + System.nanoTime()
         sessionManager.createSession(
             id = id,
@@ -203,14 +286,18 @@ class PipelineOrchestratorQueueExecutionTest {
             audioDurationSeconds = 3L,
             parentId = null,
             origin = SessionOrigin.KEYBOARD,
-            queuedPromptIds = null,
+            queuedPromptIds = queuedPromptIds,
             initialStatus = SessionStatus.COMPLETED
         )
         return id
     }
 
-    /** History-reprocess run: reuse the session, slot queue from the editor. */
-    private fun reprocess(sid: String, slots: List<PromptQueueSlot>) {
+    /**
+     * History-reprocess run: reuse the session, slot queue from the editor.
+     * `slots = null` = unset (no explicit queue → live-queue fallback);
+     * an empty list = explicitly none.
+     */
+    private fun reprocess(sid: String, slots: List<PromptQueueSlot>?) {
         orchestrator.runTranscriptionPipelineBlocking(
             PipelineOrchestrator.PipelineConfig(
                 audioFile = null,
@@ -233,6 +320,13 @@ class PipelineOrchestratorQueueExecutionTest {
         val transcriptText = "raw transcript"
         val completionCalls = mutableListOf<CompletionOptions>()
 
+        /**
+         * When set, the Nth completion call (1-based) throws a provider-level
+         * CANCELLED — emulates `JobExecutor.cancel()`'s interrupt landing in
+         * the HTTP layer mid-step (the N4 scenario).
+         */
+        var cancelAtCompletionCall: Int? = null
+
         override fun createTranscriptionRunner(): TranscriptionRunner =
             object : TranscriptionRunner {
                 override fun transcribe(options: TranscriptionOptions): TranscriptionResult =
@@ -247,6 +341,12 @@ class PipelineOrchestratorQueueExecutionTest {
             object : CompletionRunner {
                 override fun complete(options: CompletionOptions): CompletionResult {
                     completionCalls += options
+                    if (completionCalls.size == cancelAtCompletionCall) {
+                        throw AIProviderException(
+                            AIProviderException.ErrorType.CANCELLED,
+                            "cancelled mid-step"
+                        )
+                    }
                     return CompletionResult(
                         text = "generated-output-${completionCalls.size}",
                         promptTokens = 1,

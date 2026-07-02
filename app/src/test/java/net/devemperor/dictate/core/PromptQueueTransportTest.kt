@@ -61,6 +61,19 @@ class PromptQueueTransportTest {
         }
     }
 
+    @Test
+    fun `post-process prompt slot must carry text - an ID-only slot is rejected`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            JobRequest.PostProcess(
+                sessionId = "s1",
+                totalSteps = 1,
+                parentSessionId = "p1",
+                inputText = "hi",
+                promptSlot = PromptQueueSlot.ofSavedPrompt(3)
+            )
+        }
+    }
+
     // ── JobRequest → PipelineConfig ───────────────────────────────────────
 
     @Test
@@ -108,12 +121,26 @@ class PromptQueueTransportTest {
         assertEquals(mixedQueue, config.queuedPromptSlots)
         // Order matters (Gap-2: queue executes as a sequential chain) —
         // spot-check the shape mix survived, not just list equality.
-        assertEquals(7, config.queuedPromptSlots[0].entityId)
-        assertEquals(null, config.queuedPromptSlots[0].text)
-        assertEquals("Translate to English", config.queuedPromptSlots[1].text)
-        assertEquals(null, config.queuedPromptSlots[1].entityId)
-        assertEquals("Make it formal", config.queuedPromptSlots[2].text)
-        assertEquals(9, config.queuedPromptSlots[2].entityId)
+        val slots = requireNotNull(config.queuedPromptSlots)
+        assertEquals(7, slots[0].entityId)
+        assertEquals(null, slots[0].text)
+        assertEquals("Translate to English", slots[1].text)
+        assertEquals(null, slots[1].entityId)
+        assertEquals("Make it formal", slots[2].text)
+        assertEquals(9, slots[2].entityId)
+    }
+
+    // ── Empty-vs-unset at the keyboard seams ──────────────────────────────
+
+    @Test
+    fun `fromIdsOrUnset maps an empty id list to unset and keeps non-empty lists explicit`() {
+        // Empty = the seam had no staged queue → null = unset → the
+        // pipeline's run-time live-queue fallback stays reachable.
+        assertEquals(null, PromptQueueSlot.fromIdsOrUnset(emptyList()))
+        assertEquals(
+            listOf(PromptQueueSlot.ofSavedPrompt(3), PromptQueueSlot.ofSavedPrompt(4)),
+            PromptQueueSlot.fromIdsOrUnset(listOf(3, 4))
+        )
     }
 
     /** Records the [PipelineOrchestrator.PipelineConfig] it was started with. */

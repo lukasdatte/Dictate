@@ -161,8 +161,10 @@ class ImePipelineConfigResolver(
             /* modelOverride */ null,
             // ID-only slots: the keyboard queue is entity-ID-based; the
             // pipeline resolves the prompts' current text at execution
-            // (legacy semantics — see PromptQueueSlot shape 1).
-            /* queuedPromptSlots */ PromptQueueSlot.fromIds(cfg.queuedPromptIds),
+            // (legacy semantics — see PromptQueueSlot shape 1). An empty
+            // snapshot means UNSET (→ run-time live-queue fallback), not
+            // "explicitly none" — fromIdsOrUnset keeps that distinction.
+            /* queuedPromptSlots */ PromptQueueSlot.fromIdsOrUnset(cfg.queuedPromptIds),
             /* targetAppPackage */ cfg.targetAppPackage,
             /* recordingsDir */ File(recordingsDirProvider(), "recordings"),
             /* reuseSessionId */ null,
@@ -193,7 +195,10 @@ class ImePipelineConfigResolver(
             /* audioFilePath */ audioFile?.absolutePath,
             /* language */ language,
             /* modelOverride */ cfg.modelOverride,
-            /* queuedPromptSlots */ PromptQueueSlot.fromIds(queue),
+            // fromIdsOrUnset: an empty staging queue means UNSET (F-001 —
+            // Effect.SubmitReprocess still carries emptyList), preserving
+            // the run-time live-queue fallback that path relies on today.
+            /* queuedPromptSlots */ PromptQueueSlot.fromIdsOrUnset(queue),
             /* targetAppPackage */ cfg.targetAppPackage,
             /* recordingsDir */ File(recordingsDirProvider(), "recordings"),
             /* reuseSessionId */ sessionId,

@@ -246,8 +246,11 @@ class DefaultPipelineConfigResolver(
             /* modelOverride */ null,
             // ID-only slots — the staging FSM carries entity IDs (see
             // PromptQueueSlot shape 1; content-carrying slots are the
-            // history queue-editor's transport).
-            /* queuedPromptSlots */ PromptQueueSlot.fromIds(queue),
+            // history queue-editor's transport). fromIdsOrUnset: an empty
+            // staging queue means UNSET (F-001 — Effect.SubmitReprocess
+            // still carries emptyList), keeping the run-time live-queue
+            // fallback that path relies on today.
+            /* queuedPromptSlots */ PromptQueueSlot.fromIdsOrUnset(queue),
             /* targetAppPackage */ null,
             /* recordingsDir */ File(filesDirProvider(), "recordings"),
             /* reuseSessionId */ sessionId,

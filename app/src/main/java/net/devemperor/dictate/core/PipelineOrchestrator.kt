@@ -170,10 +170,15 @@ class PipelineOrchestrator @JvmOverloads constructor(
         val modelOverride: String? = null,
         /**
          * Prompt queue as content-capable [PromptQueueSlot]s (queue-editor
-         * transport model). Empty = fall back to the live
-         * [PromptQueueManager] auto-apply queue (legacy keyboard path).
+         * transport model). `null` = UNSET → fall back to the live
+         * [PromptQueueManager] auto-apply queue at run time (legacy
+         * keyboard path); an empty list = EXPLICITLY NONE → run zero
+         * prompts (e.g. an emptied reprocess-editor queue must never leak
+         * the live keyboard queue — verification defect 1). See
+         * [JobRequest.TranscriptionPipeline.queuedPromptSlots] for the
+         * full contract + design rationale.
          */
-        val queuedPromptSlots: List<PromptQueueSlot> = emptyList(),
+        val queuedPromptSlots: List<PromptQueueSlot>? = null,
         /**
          * W3: Caller-provided session ID for brand-new sessions. When non-null
          * (and [reuseSessionId] is null), [persistNewSession] uses this ID
@@ -321,7 +326,7 @@ class PipelineOrchestrator @JvmOverloads constructor(
             }
 
             // ── Stage PROCESS ──
-            runTranscriptionPipelineBody(config, sid, cancellationToken)
+            runTranscriptionPipelineBody(config, sid, cancellationToken, queuedSlotsAtStart)
 
             // Terminal success
             sessionManager.finalizeCompleted(sid)
@@ -1050,11 +1055,17 @@ class PipelineOrchestrator @JvmOverloads constructor(
      *
      * Throws on cancel (CancellationException / InterruptedException) or on
      * provider errors — the caller maps exceptions to the correct finalize call.
+     *
+     * @param queuedSlotsAtStart the queue resolved ONCE by the caller (via
+     *   [resolveQueueSlotsAtStart]) — passed down instead of re-resolved so
+     *   `totalSteps`, the persisted session queue and the executed queue can
+     *   never diverge on the live-queue fallback path.
      */
     private fun runTranscriptionPipelineBody(
         config: PipelineConfig,
         sid: String,
-        token: CancellationToken
+        token: CancellationToken,
+        queuedSlotsAtStart: List<PromptQueueSlot>
     ) {
         // Block A2 — read audio through the repository so multi-segment
         // sessions are muxed into a single upload file. The repository is
@@ -1085,16 +1096,14 @@ class PipelineOrchestrator @JvmOverloads constructor(
         if (cancelled) throw java.util.concurrent.CancellationException("cancelled flag set")
 
         // Step 3: Queued prompts (unless live-prompt mode)
-        if (!config.livePrompt) {
-            val queuedSlots = resolveQueueSlotsAtStart(config)
-            if (queuedSlots.isNotEmpty()) {
-                text = executeQueuedPrompts(text, queuedSlots, sid, token)
-            }
+        if (!config.livePrompt && queuedSlotsAtStart.isNotEmpty()) {
+            text = executeQueuedPrompts(text, queuedSlotsAtStart, sid, token)
         }
 
-        // Step 4: Deliver result
-        val hadQueued = config.queuedPromptSlots.isNotEmpty() ||
-            promptQueueManager.getQueuedIds().isNotEmpty()
+        // Step 4: Deliver result. The insertion source follows the queue
+        // that actually ran — an explicitly-empty queue is a TRANSCRIPTION
+        // result even when the live keyboard queue happens to be non-empty.
+        val hadQueued = queuedSlotsAtStart.isNotEmpty()
         val source = if (hadQueued && !config.livePrompt)
             InsertionSource.QUEUED_PROMPT else InsertionSource.TRANSCRIPTION
         callback.onPipelineCompleted(text, source)
@@ -1149,6 +1158,17 @@ class PipelineOrchestrator @JvmOverloads constructor(
             } catch (ie: InterruptedException) {
                 throw ie
             } catch (e: Exception) {
+                // N4 parity with executeQueuedPrompts: a provider-level
+                // CANCELLED must abort the loop and finalise the session as
+                // CANCELLED (resumePipelineBlocking's CancellationException
+                // arm) — pre-fix it was swallowed as a step error and the
+                // loop marched on to the next prompt, ending in COMPLETED.
+                if (isCancellation(e)) {
+                    callback.onStepFailed(displayName)
+                    throw java.util.concurrent.CancellationException(
+                        "Provider reported cancellation"
+                    ).apply { initCause(e) }
+                }
                 val durationMs = (System.nanoTime() - startTime) / 1_000_000
                 handleCompletionError(e, ctx, pp, sessionId, displayName, durationMs, textForPrompt)
                 // Pipeline continues on error (same as the full-run path).
@@ -1388,16 +1408,23 @@ class PipelineOrchestrator @JvmOverloads constructor(
     }
 
     /**
-     * The prompt queue a pipeline run executes, resolved ONCE per run so
-     * `totalSteps`, the persisted session queue, and the execution loop all
-     * agree. Explicit slots from the request win; the legacy keyboard path
-     * (empty request queue) falls back to the live auto-apply queue as
-     * ID-only slots.
+     * The prompt queue a pipeline run executes, resolved ONCE per run
+     * ([runTranscriptionPipelineBlocking] passes the result down into the
+     * PROCESS stage) so `totalSteps`, the persisted session queue, and the
+     * execution loop all agree — and so a live-queue mutation mid-run
+     * cannot make two reads diverge (verification defect 2).
+     *
+     * `null` = unset → fall back to the live auto-apply queue (legacy
+     * keyboard semantics). An EMPTY list is explicit ("run zero prompts")
+     * and must not fall back — an emptied reprocess-editor queue would
+     * otherwise silently execute whatever lingers in the IME's live queue
+     * (verification defect 1). Expressed via nullability on the transport
+     * rather than an origin-gate: the intent belongs to the queue itself,
+     * not to session provenance.
      */
     private fun resolveQueueSlotsAtStart(config: PipelineConfig): List<PromptQueueSlot> =
-        config.queuedPromptSlots.ifEmpty {
-            PromptQueueSlot.fromIds(promptQueueManager.getQueuedIds())
-        }
+        config.queuedPromptSlots
+            ?: PromptQueueSlot.fromIds(promptQueueManager.getQueuedIds())
 
     /**
      * Execution-ready view of one [PromptQueueSlot] — the single resolution

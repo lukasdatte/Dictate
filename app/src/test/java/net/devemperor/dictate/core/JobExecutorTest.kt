@@ -248,8 +248,7 @@ class JobExecutorTest {
         totalSteps = 1,
         parentSessionId = "parent-of-$sessionId",
         inputText = "hi",
-        promptText = "do something",
-        promptId = null
+        promptSlot = PromptQueueSlot.ofFreeText("do something")
     )
 
     /**

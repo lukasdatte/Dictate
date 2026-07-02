@@ -57,5 +57,20 @@ data class PromptQueueSlot(
         @JvmStatic
         fun fromIds(entityIds: List<Int>): List<PromptQueueSlot> =
             entityIds.map { ofSavedPrompt(it) }
+
+        /**
+         * [fromIds] for the keyboard seams, where an EMPTY id list means
+         * "no explicit queue was staged" rather than "explicitly none":
+         * returns `null` (= unset), which makes the pipeline fall back to
+         * the live auto-apply queue at run time — the pre-slot legacy
+         * semantics those seams rely on (F-001/F-003 territory).
+         *
+         * History/editor callers must NOT use this: they build their
+         * explicit queue directly, where an empty list genuinely means
+         * "run zero prompts".
+         */
+        @JvmStatic
+        fun fromIdsOrUnset(entityIds: List<Int>): List<PromptQueueSlot>? =
+            if (entityIds.isEmpty()) null else fromIds(entityIds)
     }
 }

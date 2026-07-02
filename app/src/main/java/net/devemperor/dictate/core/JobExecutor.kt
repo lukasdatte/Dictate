@@ -274,8 +274,22 @@ sealed class JobRequest {
          * slots preserve the legacy entity-ID semantics; text-carrying
          * slots let free-text prompts and since-deleted saved prompts
          * survive the trip. See [PromptQueueSlot] for the three shapes.
+         *
+         * Nullability is load-bearing (verification defect 1):
+         *  - `null`  = UNSET — no explicit queue travelled with the request;
+         *    the pipeline falls back to the live auto-apply queue at run
+         *    time (legacy keyboard semantics; see
+         *    [PromptQueueSlot.fromIdsOrUnset]).
+         *  - empty   = EXPLICITLY NONE — e.g. the reprocess queue editor
+         *    was emptied; the pipeline runs zero prompts and must NOT read
+         *    the live keyboard queue.
+         * Chosen over gating the fallback on [origin] because the intent
+         * lives in the queue itself, not in session provenance — and the
+         * F-001 staged-queue fix simply switches its seam from
+         * `fromIdsOrUnset` to an explicit list without another transport
+         * change.
          */
-        val queuedPromptSlots: List<PromptQueueSlot> = emptyList(),
+        val queuedPromptSlots: List<PromptQueueSlot>? = null,
         val targetAppPackage: String? = null,
         val recordingsDir: java.io.File,
         /** null = brand-new session; non-null = reprocess an existing session. */
@@ -378,16 +392,28 @@ sealed class JobRequest {
      * is created inside the job body (F-111 — a chooser dismissed before this
      * request is built must leave no orphan row, and a rejected `start` must
      * not either).
+     *
+     * The prompt travels as a [PromptQueueSlot] — the one queue-slot type of
+     * the transport model (same as [StepRegenerate.promptOverride] and
+     * [TranscriptionPipeline.queuedPromptSlots]) — instead of a raw
+     * `(promptText, promptId)` pair. Must carry text: an ID-only slot has no
+     * content to apply (same init-guard pattern as [StepRegenerate]).
      */
-    data class PostProcess @JvmOverloads constructor(
+    data class PostProcess(
         override val sessionId: String,
         override val totalSteps: Int,
         /** Session whose step output is being post-processed (parent link). */
         val parentSessionId: String,
         val inputText: String,
-        val promptText: String,
-        val promptId: Int? = null
-    ) : JobRequest()
+        val promptSlot: PromptQueueSlot
+    ) : JobRequest() {
+        init {
+            require(promptSlot.text != null) {
+                "PostProcess.promptSlot must carry prompt text — " +
+                    "an ID-only slot has no content to apply"
+            }
+        }
+    }
 }
 
 /**
@@ -440,7 +466,8 @@ class PipelineOrchestratorRunner(
             request.sessionId,
             request.parentSessionId,
             request.inputText,
-            request.promptText,
-            request.promptId
+            // Non-null by the PostProcess init guard (text-bearing slot).
+            requireNotNull(request.promptSlot.text),
+            request.promptSlot.entityId
         )
 }

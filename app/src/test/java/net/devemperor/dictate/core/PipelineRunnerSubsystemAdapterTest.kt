@@ -161,7 +161,9 @@ class PipelineRunnerSubsystemAdapterTest {
         assertEquals(null, req.audioFilePath)
         assertEquals(null, req.language)
         assertEquals(1, req.totalSteps) // 1 + 0
-        assertEquals(emptyList<PromptQueueSlot>(), req.queuedPromptSlots)
+        // Empty staging queue = UNSET (F-001: Effect.SubmitReprocess still
+        // carries emptyList) → null slots → run-time live-queue fallback.
+        assertEquals(null, req.queuedPromptSlots)
     }
 
     @Test

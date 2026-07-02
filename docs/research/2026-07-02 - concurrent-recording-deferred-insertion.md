@@ -788,6 +788,36 @@ pins it (`StartPipeline carries the queue from Preparing into Running`).
 
 ## Change History
 
+### 2026-07-02 — Post-release fix: double record-icon on RECORD_SECONDARY
+
+On-device, starting a secondary recording during a live pipeline run
+(and, latently, every normal pipeline completion) left
+`secondary_record_btn` stranded VISIBLE next to the primary record
+controls — two record surfaces at once.
+
+Root cause: `MotionScene.setTransition(int,int)` matches a declared
+`<Transition>` in **one direction only** (verified against the
+constraintlayout-2.2.1 bytecode). The scene declared only the forward
+edges `base → SEND_MODE`. ADR-0009's recording-wins precedence makes
+the **reverse** edge (`SEND_MODE → base`) reachable for the first time
+(a `RECORD_SECONDARY` tap starts a recording, and `forKeyboard` then
+returns the base recording layout). That undeclared reverse edge fell
+back to MotionLayout's synthesized fade auto-transition, which does not
+carry the per-view `visibilityMode="ignore"` PropertySets — the exact
+hazard the scene's F-25 note warns about. `secondary_record_btn` is the
+only button that flips VISIBLE→GONE across that edge, so the fade
+stranded it visible after the slot renderer had already set it GONE.
+
+Fix: declare the two reverse transitions explicitly
+(`two_row_send_mode_state → two_row_state`,
+`single_row_send_mode_state → single_row_state`, 200 ms) in
+`motion_scene_keyboard.xml`, so the catalog stays the sole visibility
+owner across the recording-starts-during-pipeline transition.
+Red-proven by a new `MotionSceneSchemaTest` case asserting the reverse
+edges are declared; `secondary_record_btn` was also added to the
+`visibilityMode=ignore` schema invariant. No catalog/reducer logic
+changed — `forKeyboard`'s precedence was already correct and tested.
+
 ### 2026-07-02 — Implemented; status → Accepted
 
 Implemented in five commits on `main`, each with the full unit suite

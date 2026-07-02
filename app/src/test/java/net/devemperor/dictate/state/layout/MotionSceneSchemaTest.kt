@@ -47,14 +47,19 @@ class MotionSceneSchemaTest {
     )
 
     /**
-     * The nine button view-ids the LayoutCatalog hands to
-     * `ImeViewBackend.buttonViews` (Spec 2 §6). Every one of them MUST
-     * carry `motion:visibilityMode="ignore"` so the Catalog stays the
-     * sole Visibility owner (Spec 2 §7.3 / R.11 — non-negotiable).
+     * The ten button view-ids the LayoutCatalog hands to
+     * `ImeViewBackend.buttonViews` (Spec 2 §6, plus the ADR-0009
+     * `secondary_record_btn`). Every one of them MUST carry
+     * `motion:visibilityMode="ignore"` so the Catalog stays the sole
+     * Visibility owner (Spec 2 §7.3 / R.11 — non-negotiable). Missing the
+     * marker on `secondary_record_btn` would compound the reverse-transition
+     * fade hazard (see the SEND_MODE→base reverse-transition test) into a
+     * permanent stranded-visible bug rather than a transition-window one.
      */
     private val visibilityIgnoreButtonIds = setOf(
         "record_btn",
         "resend_btn",
+        "secondary_record_btn",
         "backspace_btn",
         "audio_focus_btn",
         "widget_toggle_btn",
@@ -162,6 +167,48 @@ class MotionSceneSchemaTest {
         val missing = expectedPairs - actualPairs
         if (missing.isNotEmpty()) {
             fail("MotionScene missing transition pairs: $missing (found: $actualPairs)")
+        }
+    }
+
+    @Test
+    fun `SEND_MODE to base reverse transitions are declared (ADR-0009 recording-wins)`() {
+        // Regression pin for the concurrent-recording double-record-icon bug.
+        //
+        // ADR-0009's `forKeyboard` recording-wins precedence makes a NEW
+        // scene edge reachable: while a pipeline run processes (SEND_MODE),
+        // a RECORD_SECONDARY tap starts a recording and the scene moves
+        // SEND_MODE → base (two_row_send_mode_state → two_row_state, and the
+        // single-row twin). Before this feature that edge was unreachable —
+        // a recording could never coexist with a live pipeline.
+        //
+        // `MotionScene.setTransition(int,int)` matches a declared
+        // `<Transition>` in ONE direction only (verified against the
+        // constraintlayout-2.2.1 bytecode). An UNDECLARED edge falls back to
+        // a synthesized `mDefaultTransition` (plain fade) that does NOT carry
+        // the per-view `visibilityMode="ignore"` PropertySets — the exact
+        // hazard the F-25 note in the scene warns about. `secondary_record_btn`
+        // is the only button that flips VISIBLE→GONE across this edge, so the
+        // fade leaves it stranded VISIBLE while the catalog already set it
+        // GONE → the primary record surface AND the secondary mic render at
+        // once (the on-device "two record icons" report).
+        //
+        // Only the forward edges (base → SEND_MODE) were declared; both
+        // reverse edges must exist so the catalog stays the sole visibility
+        // owner across the recording-starts-during-pipeline transition.
+        val transitions = parseTransitions()
+        val actualPairs = transitions.map { it.start to it.end }.toSet()
+        val requiredReversePairs = setOf(
+            "two_row_send_mode_state" to "two_row_state",
+            "single_row_send_mode_state" to "single_row_state",
+        )
+        val missing = requiredReversePairs - actualPairs
+        if (missing.isNotEmpty()) {
+            fail(
+                "MotionScene is missing the SEND_MODE→base reverse transitions " +
+                    "$missing — the undeclared edge falls back to a fade that drops " +
+                    "visibilityMode=ignore, stranding secondary_record_btn visible " +
+                    "(ADR-0009 double-record-icon regression). Found: $actualPairs",
+            )
         }
     }
 

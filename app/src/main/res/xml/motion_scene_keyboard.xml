@@ -471,6 +471,28 @@
         motion:constraintSetEnd="@+id/reprocess_staging_state"
         motion:duration="200" />
 
+    <!-- ADR-0009 recording-wins reverse edges (SEND_MODE → base).
+         `MotionScene.setTransition(int,int)` matches a declared <Transition>
+         in ONE direction only; the forward edges above cover base → SEND_MODE
+         (entering a pipeline run). The concurrent-recording feature makes the
+         REVERSE reachable: a RECORD_SECONDARY tap during a live pipeline run
+         starts a recording, and `forKeyboard`'s recording-wins precedence
+         moves the scene SEND_MODE → base. Without these explicit reverse
+         edges MotionLayout synthesizes a fade auto-transition that drops
+         `visibilityMode=ignore` (the F-25 hazard below), stranding
+         `secondary_record_btn` VISIBLE after the catalog set it GONE → two
+         record surfaces at once. Durations mirror the 200 ms forward
+         SEND_MODE edges. -->
+    <Transition
+        motion:constraintSetStart="@+id/two_row_send_mode_state"
+        motion:constraintSetEnd="@+id/two_row_state"
+        motion:duration="200" />
+
+    <Transition
+        motion:constraintSetStart="@+id/single_row_send_mode_state"
+        motion:constraintSetEnd="@+id/single_row_state"
+        motion:duration="200" />
+
     <!-- B4-VAL F-25: explicit edges between SEND_MODE / STAGING states.
          Without these, MotionLayout falls back to its auto-transition (fade
          default) which doesn't reliably carry `visibilityMode=ignore`,

@@ -11,6 +11,8 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Binder
@@ -158,6 +160,24 @@ class DictatePipelineService : Service() {
     // ── C8 — Subsystem adapters (production-quality) ───────────────────
     private lateinit var audioFocusGateImpl: AudioFocusGate
     private var bluetoothScoSubsystemAdapterImpl: BluetoothScoSubsystemAdapter? = null
+
+    // F-013 fix (2026-07-02) — the service-owned BluetoothScoManager is
+    // held as a field so `onDestroy` can unregister the SCO
+    // BroadcastReceiver that `onCreate` registers. Before this fix the
+    // receiver was NEVER registered on the live path: `startSco()`
+    // could only succeed via the rare `isBluetoothScoOn` early-return,
+    // so every BT-mic recording waited out the 2500 ms timeout and
+    // silently fell back to the phone mic.
+    private var bluetoothScoManagerImpl: BluetoothScoManager? = null
+
+    // F-036 (2026-07-02) — headset-unplug interruption producer. The
+    // AudioDeviceCallback registered in `onCreate` dispatches
+    // `InterruptionAction.HeadsetDisconnected` when an external mic
+    // device disappears (classification: [HeadsetDeviceClassifier]).
+    // Held (together with the AudioManager it was registered on) for
+    // the `onDestroy` unregister.
+    private var audioManagerImpl: AudioManager? = null
+    private var audioDeviceCallbackImpl: AudioDeviceCallback? = null
 
     // Post-cutover hotfix #3+#4 — service-owned RecordingHardwareAdapter so
     // the LocalBinder can expose its [maxAmplitudeOrNull] poll for the IME's
@@ -368,7 +388,33 @@ class DictatePipelineService : Service() {
         // ──────────────────────────────────────────────────────────────
         val store = DictateUiStateStore(DictateUiState.initial())
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        audioManagerImpl = audioManager
         audioFocusGateImpl = buildAudioFocusGate(audioManager)
+
+        // F-036 (2026-07-02) — headset-unplug interruption producer.
+        // Lives FGS-side because recording survives IME teardown.
+        // `AudioDeviceCallback` is preferred over the sticky
+        // ACTION_HEADSET_PLUG broadcast (no stale re-delivery on
+        // registration; also covers USB + BT devices uniformly). The
+        // `orchestrator` reference resolves lazily at callback time
+        // (same forward-reference pattern as the SCO callback below).
+        audioManager?.let { am ->
+            val callback = object : AudioDeviceCallback() {
+                override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                    val micLost = removedDevices.any {
+                        HeadsetDeviceClassifier.isExternalMicInput(it.type, it.isSource)
+                    }
+                    if (micLost) {
+                        orchestrator.emitAction(
+                            Action.InterruptionAction.HeadsetDisconnected,
+                        )
+                    }
+                }
+            }
+            // null handler → callbacks arrive on the main looper.
+            am.registerAudioDeviceCallback(callback, null)
+            audioDeviceCallbackImpl = callback
+        }
 
         // RecordingHardware + Timer + Amplitude + BorderGlow adapters are
         // service-owned. They emit follow-up actions via the orchestrator
@@ -442,6 +488,16 @@ class DictatePipelineService : Service() {
                 }
             })
         }
+        // F-013 fix (2026-07-02) — register the SCO BroadcastReceiver.
+        // The receiver lifecycle deliberately lives here (service
+        // onCreate/onDestroy, mirroring the legacy IME wiring), not in
+        // the BluetoothScoControl interface. Without this call the
+        // manager never observed ACTION_SCO_AUDIO_STATE_UPDATED, so
+        // `startSco()` always timed out (2500 ms) → onScoFailed →
+        // ScoRouteResolved(useBluetooth = false) → the recording
+        // silently used the phone mic instead of the BT headset.
+        bluetoothScoManager?.registerReceiver()
+        bluetoothScoManagerImpl = bluetoothScoManager
         bluetoothScoSubsystemAdapterImpl = bluetoothScoManager?.let {
             BluetoothScoSubsystemAdapter(it)
         }
@@ -1174,15 +1230,18 @@ class DictatePipelineService : Service() {
             )
             .setAcceptsDelayedFocusGain(true)
             .setOnAudioFocusChangeListener { focusChange ->
-                // Bridge AudioFocus loss/gain into the orchestrator so the
-                // AudioModule observes the focus axis. The reducer's
-                // cross-module-cascade then pauses the recording if
-                // active (Spec 1 §15.3).
-                val granted = focusChange == AudioManager.AUDIOFOCUS_GAIN ||
-                    focusChange == AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
-                orchestrator.emitAction(
-                    Action.AudioAction.OnAudioFocusGrantChanged(granted = granted)
-                )
+                // F-007 consolidation (2026-07-02): classification is
+                // delegated to AudioFocusChangeClassifier — GAIN
+                // variants update the grant flag, interrupting losses
+                // (hard LOSS + LOSS_TRANSIENT) additionally dispatch
+                // InterruptionAction.AudioFocusInterrupted (which
+                // InterruptionModule turns into the recording pause),
+                // and duck-only losses are ignored. The old inline
+                // `granted = GAIN || GAIN_TRANSIENT` paused dictation
+                // on notification dings via AudioModule's granted-edge
+                // cascade — both halves of that bug are gone.
+                AudioFocusChangeClassifier.actionsFor(focusChange)
+                    .forEach { orchestrator.emitAction(it) }
             }
             .build()
         return RealAudioFocusGate(audioManager, request)
@@ -1281,6 +1340,26 @@ class DictatePipelineService : Service() {
                 Log.w(TAG, "keyboardLayoutManager.detachAll failed", t)
             }
         }
+
+        // F-036 / F-013 (2026-07-02) — tear down the interruption
+        // producers + the SCO receiver FIRST so no late system callback
+        // dispatches into an orchestrator that is about to shut down.
+        // All three calls are idempotent / null-safe.
+        try {
+            audioDeviceCallbackImpl?.let { cb ->
+                audioManagerImpl?.unregisterAudioDeviceCallback(cb)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "AudioDeviceCallback unregister failed", t)
+        }
+        audioDeviceCallbackImpl = null
+        try {
+            // unregisterReceiver() also release()s the SCO link.
+            bluetoothScoManagerImpl?.unregisterReceiver()
+        } catch (t: Throwable) {
+            Log.w(TAG, "BluetoothScoManager unregisterReceiver failed", t)
+        }
+        bluetoothScoManagerImpl = null
 
         // C10 — Service-idle cleanup slot (Spec 1 §6.2 R.17 + §6.3.1).
         // When the service is reaching its terminal state (onDestroy =

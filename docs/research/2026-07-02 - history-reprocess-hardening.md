@@ -4,7 +4,7 @@
 date: 2026-07-02
 author: Lukas + Claude (multi-agent review session)
 type: Research
-status: Research
+status: Accepted
 context: Four confirmed findings show HistoryDetailActivity's AI operations bypass the app's job, prompt, and formatting infrastructure — one consolidation fixes all four.
 related-plan: n/a (seeded by 2026-07-02 - feature-wiring-code-review.md, F-055/F-108/F-109/F-111)
 related-adrs: —
@@ -60,6 +60,17 @@ The redesigned history detail screen runs its AI operations (Regenerate, Other p
 
 - **Trigger:** Whole-app review; history seed agent + history sweep agent converged on the shared root cause.
 - **What changed:** Document created from F-055 (big topic) + F-108/F-109/F-111 satellites.
+
+### 2026-07-02 — Implemented (status → Accepted)
+
+- **Trigger:** Implementation of §2 target architecture on branch `worktree-agent-aa3fa774c93384cd3` (5 commits, `[reprocess-hardening]` prefix).
+- **What changed:**
+  - **F-111:** chooser context is tag-encoded (`history_regenerate:<stepId>` / `history_post_process:<stepId>`, same pattern as `TAG_REPROCESS_EDIT_PREFIX`); all pending-* Activity fields deleted. The POST_PROCESSING row is created **inside the job body** (`PipelineOrchestrator.runPostProcessingBlocking`) rather than literally in `onPromptChosen` — a *stronger* guarantee than §2.3's wording: a dismissed chooser AND a rejected `JobExecutor.start` both leave no orphan row. Failures surface as a FAILED session (same lifecycle as a failed reprocess).
+  - **F-055:** Regenerate / "Other prompt" / Post-process dispatch `JobRequest.StepRegenerate` / `JobRequest.PostProcess` through `JobExecutor`; the Activity is a thin dispatcher + `ActiveJobRegistry` observer. `regenerateExecutor` and the Activity's private `AIOrchestrator` are deleted (a local `ioExecutor` remains strictly for delete-audio file I/O). `StepRegenerate` carries an optional `(promptOverride, promptOverrideEntityId)` pair — deliberately the "(text, optional entityId)" queue-slot shape from the queue-editor research §2.1. `PipelineRunner.regenerate/postProcess` take the sealed request objects so future slot fields don't re-touch every implementation. UX gating per the §4.2 fallback: buttons gated on `ActiveJobRegistry.isActive(sessionId)`, dispatchers on `isAnyActive()`; the progress bar is registry-driven (side effect: it now also clears after reprocess — F-049's symptom on this screen). Deleted dead async wrappers `regenerateStep()` / `runPostProcessing()`.
+  - **F-109:** §4.1 fallback taken — **no schema addition**. `input_text` now persists the RAW text a prompt was applied to (success + error steps); the built prompt stays audited via `logCompletion`. New `RegenerationPromptFactory` reproduces the original `PromptService` call per step type (REWORDING → `buildRewording`, else → `buildQueuedPrompt`); `regenerateStepBlocking` delegates to it and honours prompt overrides. Pre-fix steps regenerate from the built prompt (accepted status quo; documented on `executeCompletion`, no UI copy added).
+  - **F-108:** `AutoFormattingService.buildPrompts(transcript, languageHint)` extracted as the single prompt-set source; the factory's AUTO_FORMAT branch uses it (session language from the session row). Regeneration re-runs the formatter even if auto-formatting was disabled since. An "Other prompt" on an auto-format row applies the instruction to the transcript (queued shape).
+  - **Tests (§3):** Robolectric + real Room + capturing fake runner (via a new `open RunnerFactory` production-owned seam, K-1 no-Mockito): regenerate of a QUEUED_PROMPT step sends the byte-identical built prompt of the original call (double-wrap guard, verified RED on unfixed persistence); AUTO_FORMAT regenerate assembles the formatter prompt set; JobExecutor registers/unregisters regenerate jobs and blocks reprocess on the same session; F-111 job-body session lifecycle; plus a source-scan invariant lock on `HistoryDetailActivity` (no `createSession`, no `AIOrchestrator`, no `regenerateExecutor`).
+- **Deviations / open ends:** the §3 "choosing after simulated recreation still completes" case is covered structurally (tag-encoded context + DB reload in `onPromptChosen` + invariant lock), not by an Activity-recreation harness; the §3 device rotation test remains a manual verification step. Post-rotation auto-navigation to a finished post-process result is best-effort (plain instance field, documented in `HistoryDetailActivity`) — the job itself always survives.
 
 ## 6. References
 

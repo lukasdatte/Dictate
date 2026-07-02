@@ -94,8 +94,8 @@ class DictateCutoverE2ETest {
         ) = Unit
 
         override fun resume(sessionId: String, token: CancellationToken) = Unit
-        override fun regenerate(sessionId: String, stepChainIndex: Int, token: CancellationToken) = Unit
-        override fun postProcess(sessionId: String, inputText: String, promptText: String, promptId: Int?) = Unit
+        override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
+        override fun postProcess(request: JobRequest.PostProcess) = Unit
     }
 
     private val controller = Robolectric.buildService(DictatePipelineService::class.java)

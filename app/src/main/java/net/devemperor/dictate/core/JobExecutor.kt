@@ -158,16 +158,10 @@ object JobExecutor {
                         token
                     )
                     is JobRequest.StepRegenerate -> orchestrator.regenerate(
-                        request.sessionId,
-                        request.stepChainIndex,
+                        request,
                         token
                     )
-                    is JobRequest.PostProcess -> orchestrator.postProcess(
-                        request.sessionId,
-                        request.inputText,
-                        request.promptText,
-                        request.promptId
-                    )
+                    is JobRequest.PostProcess -> orchestrator.postProcess(request)
                 }
                 // Orchestrator writes terminal COMPLETED itself (via
                 // sessionManager.finalizeCompleted). Nothing to do here.
@@ -340,17 +334,42 @@ sealed class JobRequest {
         override val totalSteps: Int
     ) : JobRequest()
 
-    /** Regenerate a single processing step. */
-    data class StepRegenerate(
+    /**
+     * Regenerate a single processing step (history "Regenerate" / "Other
+     * prompt" — F-055: routed through [JobExecutor] so the operation survives
+     * the Activity, registers in [ActiveJobRegistry] and is mutually exclusive
+     * with reprocess).
+     *
+     * Without an override, the job layer re-derives the prompt from the
+     * persisted step (`promptUsed`) — see
+     * [PipelineOrchestrator.regenerateStepBlocking]. The override pair
+     * `(promptOverride, promptOverrideEntityId)` intentionally matches the
+     * "(text, optional entityId)" queue-slot transport model planned for the
+     * reprocess queue editor (research doc "reprocess-queue-editor" §2.1), so
+     * free-text prompts and since-deleted saved prompts both work.
+     */
+    data class StepRegenerate @JvmOverloads constructor(
         override val sessionId: String,
         override val totalSteps: Int,
-        val stepChainIndex: Int
+        val stepChainIndex: Int,
+        val promptOverride: String? = null,
+        val promptOverrideEntityId: Int? = null
     ) : JobRequest()
 
-    /** Post-processing chain. */
-    data class PostProcess(
+    /**
+     * Post-processing completion on a NEW session (history "Post-process" —
+     * F-055/F-111). [sessionId] is caller-pre-allocated (like
+     * [TranscriptionPipeline]'s `preAllocatedSessionId`) so [JobExecutor] can
+     * register it in [ActiveJobRegistry] before the job runs; the session ROW
+     * is created inside the job body (F-111 — a chooser dismissed before this
+     * request is built must leave no orphan row, and a rejected `start` must
+     * not either).
+     */
+    data class PostProcess @JvmOverloads constructor(
         override val sessionId: String,
         override val totalSteps: Int,
+        /** Session whose step output is being post-processed (parent link). */
+        val parentSessionId: String,
         val inputText: String,
         val promptText: String,
         val promptId: Int? = null
@@ -372,9 +391,12 @@ interface PipelineRunner {
 
     fun resume(sessionId: String, token: CancellationToken)
 
-    fun regenerate(sessionId: String, stepChainIndex: Int, token: CancellationToken)
+    // regenerate/postProcess take the sealed request objects so future fields
+    // (e.g. the queue-editor's queue slots) extend the transport without
+    // re-touching every PipelineRunner implementation/fake.
+    fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken)
 
-    fun postProcess(sessionId: String, inputText: String, promptText: String, promptId: Int?)
+    fun postProcess(request: JobRequest.PostProcess)
 }
 
 /** Production [PipelineRunner] that delegates to a real [PipelineOrchestrator]. */
@@ -390,9 +412,21 @@ class PipelineOrchestratorRunner(
     override fun resume(sessionId: String, token: CancellationToken) =
         orchestrator.resumePipelineBlocking(sessionId, token)
 
-    override fun regenerate(sessionId: String, stepChainIndex: Int, token: CancellationToken) =
-        orchestrator.regenerateStepBlocking(sessionId, stepChainIndex, token)
+    override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) =
+        orchestrator.regenerateStepBlocking(
+            request.sessionId,
+            request.stepChainIndex,
+            token,
+            request.promptOverride,
+            request.promptOverrideEntityId
+        )
 
-    override fun postProcess(sessionId: String, inputText: String, promptText: String, promptId: Int?) =
-        orchestrator.runPostProcessingBlocking(sessionId, inputText, promptText, promptId)
+    override fun postProcess(request: JobRequest.PostProcess) =
+        orchestrator.runPostProcessingBlocking(
+            request.sessionId,
+            request.parentSessionId,
+            request.inputText,
+            request.promptText,
+            request.promptId
+        )
 }

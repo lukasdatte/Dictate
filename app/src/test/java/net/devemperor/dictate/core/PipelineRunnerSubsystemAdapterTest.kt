@@ -64,8 +64,8 @@ class PipelineRunnerSubsystemAdapterTest {
         }
 
         override fun resume(sessionId: String, token: CancellationToken) = Unit
-        override fun regenerate(sessionId: String, stepChainIndex: Int, token: CancellationToken) = Unit
-        override fun postProcess(sessionId: String, inputText: String, promptText: String, promptId: Int?) = Unit
+        override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
+        override fun postProcess(request: JobRequest.PostProcess) = Unit
 
         fun awaitStarted() {
             check(done.await(2, TimeUnit.SECONDS)) { "runner did not start" }
@@ -219,8 +219,8 @@ class PipelineRunnerSubsystemAdapterTest {
             }
 
             override fun resume(sessionId: String, token: CancellationToken) = Unit
-            override fun regenerate(sessionId: String, stepChainIndex: Int, token: CancellationToken) = Unit
-            override fun postProcess(sessionId: String, inputText: String, promptText: String, promptId: Int?) = Unit
+            override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
+            override fun postProcess(request: JobRequest.PostProcess) = Unit
         }
         JobExecutor.initializeForTest(blocking)
         val filesDir = tempFilesDir()
@@ -269,8 +269,8 @@ class PipelineRunnerSubsystemAdapterTest {
             }
 
             override fun resume(sessionId: String, token: CancellationToken) = Unit
-            override fun regenerate(sessionId: String, stepChainIndex: Int, token: CancellationToken) = Unit
-            override fun postProcess(sessionId: String, inputText: String, promptText: String, promptId: Int?) = Unit
+            override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
+            override fun postProcess(request: JobRequest.PostProcess) = Unit
         }
         JobExecutor.initializeForTest(cancellableRunner)
         val filesDir = tempFilesDir()

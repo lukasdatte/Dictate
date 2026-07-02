@@ -11,9 +11,16 @@ import net.devemperor.dictate.ai.runner.TranscriptionRunner
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 
-class RunnerFactory(private val sp: SharedPreferences) {
+/**
+ * `open` (class + the four public entry points) is a production-owned test
+ * seam (K-1 convention — no mocking framework): tests subclass this factory
+ * to install fake runners / fixed provider+model, which makes the whole
+ * AIOrchestrator → PipelineOrchestrator chain drivable without network. See
+ * PipelineOrchestratorRegenerationTest.
+ */
+open class RunnerFactory(private val sp: SharedPreferences) {
 
-    fun createTranscriptionRunner(): TranscriptionRunner {
+    open fun createTranscriptionRunner(): TranscriptionRunner {
         val provider = getProvider(AIFunction.TRANSCRIPTION)
         require(provider.supportsTranscription) {
             "${provider.displayName} does not support transcription"
@@ -28,7 +35,7 @@ class RunnerFactory(private val sp: SharedPreferences) {
         }
     }
 
-    fun createCompletionRunner(): CompletionRunner {
+    open fun createCompletionRunner(): CompletionRunner {
         val provider = getProvider(AIFunction.COMPLETION)
         return if (provider == AIProvider.ANTHROPIC) {
             AnthropicCompletionRunner(
@@ -40,7 +47,7 @@ class RunnerFactory(private val sp: SharedPreferences) {
         }
     }
 
-    fun getProvider(function: AIFunction): AIProvider {
+    open fun getProvider(function: AIFunction): AIProvider {
         val key = when (function) {
             AIFunction.TRANSCRIPTION -> sp.get(Pref.TranscriptionProvider)
             AIFunction.COMPLETION -> sp.get(Pref.RewordingProvider)
@@ -48,7 +55,7 @@ class RunnerFactory(private val sp: SharedPreferences) {
         return AIProvider.fromPersistKey(key)
     }
 
-    fun getModelName(function: AIFunction): String {
+    open fun getModelName(function: AIFunction): String {
         val provider = getProvider(function)
         return when (function) {
             AIFunction.TRANSCRIPTION -> getTranscriptionModel(provider)

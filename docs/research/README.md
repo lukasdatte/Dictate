@@ -21,3 +21,4 @@ Research findings **not tied to an active plan**: probes, audits, operational ba
 | 2026-07-02 | [`history-pagination-and-scale`](<2026-07-02 - history-pagination-and-scale.md>) | Research | Paging, background queries, retention for history (F-054) |
 | 2026-07-02 | [`reprocess-queue-editor`](<2026-07-02 - reprocess-queue-editor.md>) | Research | Ship the staged-queue editor UI (F-110) |
 | 2026-07-02 | [`concurrent-recording-deferred-insertion`](<2026-07-02 - concurrent-recording-deferred-insertion.md>) | Accepted | Secondary recording during processing + pipeline run-queue + ordered deferred insertion + cancel surfacing (R1–R5, ADR-0009) |
+| 2026-07-02 | [`history-ui-overhaul`](<2026-07-02 - history-ui-overhaul.md>) | Spec — programmer-ready | History list + detail UI overhaul: per-step copy, tap-to-expand, systemic icon-tint fix (ADR-0010), multi-segment playback, transcription re-run job (R1–R6, F-053/107/113/114/115/117) |

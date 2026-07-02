@@ -75,6 +75,7 @@ editing rules".
 | [0007](0007-audio-multi-file-repository.md) | Audio — Multi-File Recording Repository (Resume-after-Cold-Start) | audio-pipeline, database | Proposed | 2026-05-21 |
 | [0008](0008-ui-surface-axes-widget-state-and-ime-view.md) | UI — Surface-Axes (WidgetState + ImeView) | ui-mode · *Project-Wide* | Proposed | 2026-05-21 |
 | [0009](0009-pipeline-run-queue-serialized-concurrency.md) | Pipeline — Ordered Run-Queue with Serialized Execution | state, service | Accepted | 2026-07-02 |
+| [0010](0010-ui-icon-tint-theme-attrs.md) | UI — Icon Color via Theme Attributes at the Usage Site | ui-rendering · *Project-Wide* | Proposed | 2026-07-02 |
 
 ## Relationship graph
 

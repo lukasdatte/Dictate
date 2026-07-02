@@ -73,6 +73,46 @@ interface AudioFileRepository {
     fun segments(sessionId: String): List<File>
 
     /**
+     * Return every segment of [sessionId] that holds actual recorded
+     * audio — i.e. [segments] minus zero-length artifacts.
+     *
+     * **Why this exists (F-012 / F-014 / F-047 — the rolling-segment
+     * consumer trio).** The rolling-segment durability fix
+     * ([net.devemperor.dictate.core.RecordingHardwareAdapter]'s
+     * always-one-ahead pre-arm, 2026-06-10) hands the framework the
+     * *next* output file via `setNextOutputFile` eagerly. Android
+     * creates that file immediately (0 bytes) but the recorder never
+     * rolls into it before `stop()`, so **every healthy recording**
+     * ends with a guaranteed empty trailing `sess_{sid}_seg{N}.m4a`.
+     *
+     * Three read consumers must ignore that artifact, and each used to
+     * mis-interpret the raw [segments] list:
+     *  - [readForPipeline] saw ≥2 segments and muxed every recording,
+     *    counting the empty tail as a skipped segment →
+     *    false [PipelineAudioResult.PartialRecovery] (F-012).
+     *  - the continuation codec-param lookup read the *last* segment —
+     *    now always the unreadable empty tail → aborted continuation
+     *    (F-014).
+     *  - history duration summed only the first segment (F-047).
+     *
+     * This method is the **single place** the "which segments carry
+     * real audio" rule lives, so consumers migrate onto it instead of
+     * re-filtering the raw list locally.
+     *
+     * Only zero-length files are dropped. A non-empty but truncated
+     * segment (crash without a `moov` atom) is genuine partial data
+     * and stays in the list — the muxer skips it and reports a *real*
+     * PartialRecovery, and the continuation lookup skips past it to the
+     * last readable segment.
+     *
+     * [allocateNext] intentionally keeps using raw [segments]: the
+     * pre-armed empty file still occupies its index, so the next
+     * allocation must go beyond it.
+     */
+    fun significantSegments(sessionId: String): List<File> =
+        segments(sessionId).filter { it.length() > 0L }
+
+    /**
      * Return a [PipelineAudioResult] the Pipeline layer can upload.
      * The semantic contract: regardless of segment count, the
      * result's `file` holds the readable audio for [sessionId].

@@ -113,7 +113,15 @@ class CacheDirAudioFileRepository(
 
     override suspend fun readForPipeline(sessionId: String): PipelineAudioResult? =
         withContext(ioDispatcher) {
-            val segs = segments(sessionId)
+            // F-012: read through significantSegments, not raw segments().
+            // The always-one-ahead pre-arm leaves a guaranteed 0-byte
+            // trailing segment after every healthy recording; counting it
+            // would force every recording down the merge path and skip the
+            // empty file into ignoredIndices → a false PartialRecovery
+            // (~30 s "audio lost"). Filtering it here restores the
+            // single-segment zero-copy fast path and reserves
+            // PartialRecovery for genuinely truncated (non-empty) segments.
+            val segs = significantSegments(sessionId)
             when {
                 segs.isEmpty() -> null
                 segs.size == 1 -> PipelineAudioResult.Complete(segs.first())

@@ -132,8 +132,8 @@ data class DictateUiState(
     // ─── Top-level Pipeline-Service-Death flag ───
     val lastResultNeedsManualPaste: Boolean = false,
 
-    // ─── Phase 2 stub ───
-    val interruption: InterruptionState? = null,
+    // ─── Interruption axis (audio-focus loss / headset unplug) ───
+    val interruption: InterruptionState = InterruptionState(),
 )
 ```
 
@@ -154,7 +154,7 @@ maps each axis to its owner module and the canonical Spec-section:
 | 10 | `features` | `FeatureToggleModule` | `FeatureToggles` (5 booleans, Pref-mirror) |
 | 11 | `theming` | `ThemingModule` | `ThemingState` (4 Pref-mirror values) |
 | 12 | `pendingSessions` | `PendingSessionsModule` | PersistentList, DB-subscriber-driven |
-| 13 | `interruption` | `InterruptionModule` (Phase 2) | `InterruptionState` — default null |
+| 13 | `interruption` | `InterruptionModule` (F-036, 2026-07-02) | `InterruptionState` — `lastInterruption: InterruptionEvent?` (reason + occurredAt), non-null while an interruption-caused pause is live |
 | top | `lastResultNeedsManualPaste` | `PipelineModule` | boolean — IME-Service-death recovery hint |
 
 ### 3.1 `PersistentList`-mutation idiom

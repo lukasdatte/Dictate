@@ -7,85 +7,185 @@ package net.devemperor.dictate.state
 import kotlin.reflect.KClass
 
 /**
- * **Phase-2 stub** — owns the [InterruptionState] axis (currently
- * `null` in Phase 1, populated in Phase 2 by call-state, headset-plug,
- * and screen-state listeners).
+ * Owns the [InterruptionState] axis — pauses an `Active` recording when
+ * an external interruption arrives (another app took audio focus, or
+ * the headset disconnected) and records the reason so the info bar can
+ * surface it.
  *
- * **Phase-stub pattern (F-3 — nullable-state shape):** this module is
- * the canonical example of pattern (I) in
- * `docs/architecture/state-architecture/adding-a-module.md` §7.1
- * "Phase-stub patterns": nullable sub-state (`InterruptionState?`)
- * with the reducer returning `null` for every action. The pattern
- * fits modules whose Phase-2 sub-state shape is still uncertain —
- * choosing a non-null default today would commit to fields that may
- * change. Spec 1 §4.8's note that this module is "auskommentiert bis
- * aktiv" is **stale**: registration is required (the action sealed
- * leaves are dispatched by the IME-side listeners today, and
- * `assertCompleteCoverage()` would throw if no module claimed them).
+ * **The single interruption authority (F-007 consolidation,
+ * 2026-07-02).** Before this implementation two things were wrong:
  *
- * **Why register the stub at all (Spec 1 §15.1, ADR-0001):**
+ *  1. This module was a Phase-2 stub whose KDoc falsely claimed the
+ *     action leaves were "dispatched by the IME-side listeners today"
+ *     — no producer existed anywhere (F-036).
+ *  2. The de-facto interruption reactor was the service-side
+ *     audio-focus listener: it classified *every* non-GAIN focus
+ *     change (including duck-only notification dings) as focus-lost,
+ *     and [AudioModule]'s observer paused the recording on the
+ *     granted-flag edge (F-007) — the wrong channel with the wrong
+ *     classification.
  *
- * - The [Action.InterruptionAction] sealed leaves
- *   ([PhoneCallStateChanged], [HeadsetPlugChanged],
- *   [ScreenStateChanged]) exist in the action hierarchy because the
- *   IME-side listeners are wired today. Without a module owner, the
- *   orchestrator would emit `DispatchOutcome.Unrouted` for every
- *   inbound interruption signal, breaking the F-8 single-dispatch
- *   coverage invariant.
- * - Reserving the [ModuleId.Interruption] slot at C6 lets B3 / Phase-2
- *   land a real implementation without touching the registry surface
- *   (OCP).
+ * Now `DictatePipelineService`'s focus listener routes through
+ * `AudioFocusChangeClassifier`, which dispatches
+ * [Action.InterruptionAction.AudioFocusInterrupted] for interrupting
+ * losses only (hard LOSS + LOSS_TRANSIENT; duck-only losses are
+ * ignored), and AudioModule no longer pauses on the granted edge —
+ * this module's reducer + observer are the only recording-pause
+ * authority for external interruptions.
  *
- * **Stub semantics:** reducer returns `null` (Rejected) for every
- * inbound action; no state mutation, no side-effects, no cascade.
- * Phase 2 will populate:
+ * **Producers live FGS-side** (`DictatePipelineService`, not the IME):
+ * recording survives IME teardown, so interruption detection must too
+ * — the same ownership reasoning as the recording hardware.
  *
- * - `PhoneCallStateChanged(incoming = true)` ⇒ cascade
- *   [Action.RecordingAction.CancelRecording] (Coupling-Matrix §15.1.x
- *   row `Interruption × Recording`).
- * - `HeadsetPlugChanged(plugged)` ⇒ update mic routing.
- * - `ScreenStateChanged(awake)` ⇒ optional recording pause on
- *   screen-off (config-driven).
+ *  - Audio focus: `buildAudioFocusGate`'s listener →
+ *    `AudioFocusChangeClassifier.actionsFor(focusChange)`.
+ *  - Headset: `AudioDeviceCallback.onAudioDevicesRemoved` →
+ *    `HeadsetDeviceClassifier.isExternalMicInput(type, isSource)` →
+ *    [Action.InterruptionAction.HeadsetDisconnected].
+ *
+ * **Reducer cascade (Coupling-Matrix row `Interruption × Recording`,
+ * F-036 Gap-1 fallback):**
+ *
+ *  - Interruption while recording `Active` ⇒ record
+ *    [InterruptionState.lastInterruption] on the own axis; the
+ *    [onCrossModuleStateChange] observer sees the event edge and
+ *    cascades [Action.RecordingAction.PauseRecording] (ADR-0002
+ *    Mode 2). The original Phase-2 sketch said `CancelRecording`; the
+ *    Gap-1 fallback decided **pause** — audio captured so far stays
+ *    valuable, and the paused state is already visible in the UI.
+ *  - Interruption while `Idle` / `Preparing` / `Paused` / `Interrupted`
+ *    ⇒ `null` (Rejected) — nothing to pause, nothing to record.
+ *  - **No auto-resume.** Focus regain / device re-attach never resumes;
+ *    the user resumes manually (same rationale as Spec 1 §15.3 for the
+ *    old focus-loss pause).
+ *
+ * **Self-cascade lifecycle:** when the recording leaves `Paused`
+ * (resume / stop / cancel) while an interruption event is recorded, the
+ * observer cascades [Action.InterruptionAction.ClearInterruption] so
+ * the recorded reason (and the info-bar item derived from it) lives
+ * exactly as long as the interruption-caused pause.
  *
  * @see net.devemperor.dictate.state.InterruptionState
  * @see net.devemperor.dictate.state.Action.InterruptionAction
- * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §15.1
+ * @see net.devemperor.dictate.core.AudioFocusChangeClassifier
+ * @see net.devemperor.dictate.core.HeadsetDeviceClassifier
+ * @see net.devemperor.dictate.state.infobar.InfoBarSelector
+ * @see docs/research/2026-07-02 - recording-interruption-handling.md
+ * @see docs/decisions/0002-state-cross-module-cascade.md §"Mode 2"
  */
-object InterruptionModule : DictateModule<InterruptionState?, Action.InterruptionAction, InterruptionModule.Effect> {
+object InterruptionModule : DictateModule<InterruptionState, Action.InterruptionAction, InterruptionModule.Effect> {
 
     override val id: ModuleId = ModuleId.Interruption
     override val actionClass: KClass<Action.InterruptionAction> = Action.InterruptionAction::class
 
-    override fun read(global: DictateUiState): InterruptionState? = global.interruption
-    override fun write(global: DictateUiState, sub: InterruptionState?): DictateUiState =
+    override fun read(global: DictateUiState): InterruptionState = global.interruption
+    override fun write(global: DictateUiState, sub: InterruptionState): DictateUiState =
         global.copy(interruption = sub)
 
-    /**
-     * `null` in Phase 1 — the axis is unmodelled until Phase-2 populates
-     * the listener wiring. Reducer returns `null` for all actions, so
-     * the state never leaves this initial value in Phase 1.
-     */
-    override fun initialState(): InterruptionState? = null
+    override fun initialState(): InterruptionState = InterruptionState()
 
     /**
-     * No Phase-1 effects. Phase 2 adds entries for the listener
-     * (un)registration when the module-owner becomes a real
-     * lifecycle owner of the call-state / headset-plug receivers.
+     * No effects — the pause is a Mode-2 action-cascade (see module
+     * KDoc), the state is in-RAM only, and the producers' lifecycle
+     * (listener registration) is owned by the service's
+     * `onCreate`/`onDestroy`, not by this module. Empty sealed
+     * interface keeps the [DictateModule] type parameters honest.
      */
     sealed interface Effect : SideEffect
 
-    /**
-     * Phase-1 stub: every action is silently rejected
-     * (`DispatchOutcome.Rejected("reducer-null")`). Phase 2 replaces
-     * this body with the real reducer arms.
-     */
     override fun reduce(
-        state: InterruptionState?,
+        state: InterruptionState,
         action: Action.InterruptionAction,
         ctx: ReducerContext,
-    ): TransitionResult<InterruptionState?, Effect>? = null
+    ): TransitionResult<InterruptionState, Effect>? = when (action) {
+        Action.InterruptionAction.AudioFocusInterrupted ->
+            recordIfActive(state, InterruptionReason.AUDIO_FOCUS_LOST, ctx)
+
+        Action.InterruptionAction.HeadsetDisconnected ->
+            recordIfActive(state, InterruptionReason.HEADSET_DISCONNECTED, ctx)
+
+        Action.InterruptionAction.ClearInterruption ->
+            if (state.lastInterruption != null) {
+                TransitionResult(
+                    nextState = InterruptionState(),
+                    sideEffects = emptyList(),
+                )
+            } else {
+                // Stale clear (nothing recorded) → Rejected, no re-emit.
+                null
+            }
+    }
+
+    /**
+     * Shared arm for both interruption kinds: record the event iff a
+     * recording is currently `Active` (Gap-1 fallback — `Idle`,
+     * `Preparing`, `Paused`, `Interrupted` are all no-ops). The
+     * observer turns the resulting event edge into the
+     * `PauseRecording` cascade.
+     */
+    private fun recordIfActive(
+        state: InterruptionState,
+        reason: InterruptionReason,
+        ctx: ReducerContext,
+    ): TransitionResult<InterruptionState, Effect>? =
+        if (ctx.global.recording is RecordingState.Active) {
+            TransitionResult(
+                nextState = state.copy(
+                    lastInterruption = InterruptionEvent(
+                        reason = reason,
+                        occurredAt = ctx.now,
+                    ),
+                ),
+                sideEffects = emptyList(),
+            )
+        } else {
+            null
+        }
 
     override fun runEffect(effect: Effect, services: ModuleServices) {
         // No effects — see [Effect] KDoc. Empty sealed interface.
+    }
+
+    /**
+     * Cross-module observer (ADR-0002 Mode 2) — two arms:
+     *
+     *  1. **Pause cascade:** a freshly recorded interruption event
+     *     (edge on the own axis) while the recording is still `Active`
+     *     in the frozen snapshot ⇒ [Action.RecordingAction.PauseRecording].
+     *     The reducer already gated on `Active`, so within the same
+     *     dispatch pass `next.recording` is provably still `Active`;
+     *     the extra check is defence-in-depth against future
+     *     reducer-arm drift.
+     *  2. **Self-clear:** the recording leaves `Paused` while an event
+     *     is recorded ⇒ [Action.InterruptionAction.ClearInterruption]
+     *     (self-cascade — allowed since the KG-RSB-2 fix). Keeps the
+     *     "non-null implies interruption-paused" invariant on
+     *     [InterruptionState.lastInterruption].
+     */
+    override fun onCrossModuleStateChange(
+        prev: DictateUiState,
+        next: DictateUiState,
+    ): List<Action> {
+        val cascade = mutableListOf<Action>()
+
+        val prevEvent = prev.interruption.lastInterruption
+        val nextEvent = next.interruption.lastInterruption
+
+        // Arm 1 — Interruption × Recording: fresh event ⇒ pause.
+        if (nextEvent != null && nextEvent != prevEvent &&
+            next.recording is RecordingState.Active
+        ) {
+            cascade += Action.RecordingAction.PauseRecording
+        }
+
+        // Arm 2 — recording left Paused ⇒ the interruption is resolved.
+        if (nextEvent != null &&
+            prev.recording is RecordingState.Paused &&
+            next.recording !is RecordingState.Paused
+        ) {
+            cascade += Action.InterruptionAction.ClearInterruption
+        }
+
+        return cascade
     }
 }

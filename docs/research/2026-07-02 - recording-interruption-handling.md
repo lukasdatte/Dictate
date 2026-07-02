@@ -4,7 +4,7 @@
 date: 2026-07-02
 author: Lukas + Claude (multi-agent review session)
 type: Research
-status: Research
+status: Accepted
 context: Call/headset/screen interruption handling is entirely absent — the state-machine slot exists (InterruptionModule stub) but no producer dispatches its actions. Finding F-036.
 related-plan: n/a (seeded by 2026-07-02 - feature-wiring-code-review.md, F-036)
 related-adrs: —
@@ -49,6 +49,22 @@ The stub registration itself is legitimate (`assertCompleteCoverage()` needs an 
 4. **F-036 is unverified** (feature-gap pass-through) — the zero-producer grep is strong evidence, but re-verify the audio-focus listener interplay (F-007 *is* confirmed) before building.
 
 ## 4. Change History
+
+### 2026-07-02 — Implemented (status → Accepted)
+
+- **Trigger:** Implementation session per §2 sketch + the documented Information-Gap fallbacks.
+- **What changed:**
+  - **KDoc lie fixed and made true.** `InterruptionModule` is no longer a stub — it owns a real `InterruptionState` axis (`lastInterruption: InterruptionEvent?`, non-null while an interruption-caused pause is live) and the pause cascade.
+  - **Action surface renamed to the audio-focus truth (§1.1 latitude + Gap 2 fallback):** `PhoneCallStateChanged`/`HeadsetPlugChanged` were replaced by `AudioFocusInterrupted` and `HeadsetDisconnected` (plus the module-internal `ClearInterruption` self-cascade). Telephony semantics would have been a lie — detection is audio-focus-based, **no `READ_PHONE_STATE`**. `ScreenStateChanged` was **deleted** (Gap 3: no consumer use case). Enumeration tests (`ActionHierarchyTest`, `ModuleIdTest`, `DictateModuleRegistryTest`) updated.
+  - **Producers live FGS-side** (`DictatePipelineService.onCreate`/`onDestroy`): the audio-focus listener now routes through `AudioFocusChangeClassifier` (`core/InterruptionClassifiers.kt`) — GAIN → grant flag, hard LOSS → grant flag + interruption, LOSS_TRANSIENT → interruption only, CAN_DUCK → ignored; headset unplug via `AudioDeviceCallback` + `HeadsetDeviceClassifier` (preferred over the sticky `ACTION_HEADSET_PLUG` broadcast).
+  - **F-007 consolidated — exactly one interruption authority.** `AudioModule`'s granted-edge → `PauseRecording` cascade was removed; `audioFocusGranted` is bookkeeping only. A notification duck no longer pauses dictation; interrupting losses pause via `InterruptionModule`.
+  - **F-013 fixed:** `DictatePipelineService.onCreate` now calls `BluetoothScoManager.registerReceiver()` (+ `unregisterReceiver()` in `onDestroy`); Robolectric regression test `DictatePipelineServiceScoReceiverTest` pins both lifecycle points.
+  - **Reducer cascade per Gap 1 fallback:** interruption while `Active` ⇒ **pause** (not the old sketch's `CancelRecording`); `Idle`/`Preparing`/`Paused`/`Interrupted` ⇒ no-op. **No auto-resume** — the user resumes manually.
+  - **Surfacing:** the interruption reason renders as a pure-info (button-less) state-derived info-bar item (`InfoBarSelector` producer reading `state.interruption`), lifetime bound to the interruption-caused pause via the module's self-clear cascade. New strings `dictate_interruption_audio_focus_msg` / `dictate_interruption_headset_msg` (default locale only, matching the `dictate_recovery_unfinished_info` precedent).
+- **Deviations / deliberately left out:**
+  - The dead IME-side parity audio-focus listener (`DictateInputMethodService.java:716`) was **not** deleted — it hangs off the never-started legacy `RecordingStateController` and its removal belongs to that controller's retirement (out of scope here; noted in F-007's suggested fix).
+  - No telephony (`TelephonyCallback`) path at all — an interruption is reported as "audio focus taken", which cannot distinguish a call from another focus-taking app. Accepted trade-off of the no-permission design.
+  - Headset *re-plug* produces no action (no mic-routing update — the old `HeadsetPlugChanged(plugged = true)` semantics had no consumer).
 
 ### 2026-07-02 — Initial scoping
 

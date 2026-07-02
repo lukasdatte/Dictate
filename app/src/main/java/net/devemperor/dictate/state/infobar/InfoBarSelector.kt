@@ -6,6 +6,7 @@ import net.devemperor.dictate.database.entity.SessionStatus
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.EngagementHint
+import net.devemperor.dictate.state.InterruptionReason
 import net.devemperor.dictate.state.PipelineErrorHint
 import net.devemperor.dictate.state.PipelineErrorKind
 import net.devemperor.dictate.state.RecordingState
@@ -219,6 +220,35 @@ object InfoBarSelector {
                     createdAt = 0L,
                     message = InfoBarMessage(
                         textResId = R.string.dictate_recovery_unfinished_info,
+                        style = InfoBarStyle.INFO,
+                    ),
+                    confirmAction = null,
+                    dismissAction = null,
+                )
+            )
+        }
+
+        // ── Interruption-paused recording (2026-07-02, F-036) ───────────
+        // The recording was auto-paused by InterruptionModule (another
+        // app took audio focus, or the headset disconnected). Pure-info
+        // item like the recovery-unfinished producer above: no buttons —
+        // `InterruptionState.lastInterruption` is non-null exactly while
+        // the interruption-caused pause is live (the module's
+        // self-cascade clears it when the recording leaves Paused), so
+        // the item's lifetime is bound to its natural source. Resume is
+        // user-driven via the existing paused-state keyboard UI.
+        state.interruption.lastInterruption?.let { event ->
+            add(
+                InfoBarItem(
+                    id = "interruption:${event.reason.name.lowercase()}",
+                    createdAt = event.occurredAt,
+                    message = InfoBarMessage(
+                        textResId = when (event.reason) {
+                            InterruptionReason.AUDIO_FOCUS_LOST ->
+                                R.string.dictate_interruption_audio_focus_msg
+                            InterruptionReason.HEADSET_DISCONNECTED ->
+                                R.string.dictate_interruption_headset_msg
+                        },
                         style = InfoBarStyle.INFO,
                     ),
                     confirmAction = null,

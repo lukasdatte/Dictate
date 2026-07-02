@@ -15,16 +15,20 @@ import net.devemperor.dictate.preferences.Pref
  * release) and [ModuleServices.bluetoothSco] (SCO mic-route start /
  * stop).
  *
- * **Cross-module cascade (Coupling-Matrix §15.1.x row "Audio"):**
- *
- * - `Audio → Recording`: when AudioFocus is **lost** mid-recording
- *   (`prev.audio.audioFocusGranted == true && next.audio.audioFocusGranted == false`
- *   AND `next.recording.isActiveOrPaused`), cascade
- *   [Action.RecordingAction.PauseRecording]. Resume on focus-regain is
- *   intentionally **not** automatic — Spec 1 §15.3 explicitly leaves
- *   that to the user (Resume button) because focus regains can be
- *   transient and an auto-resume to recording without UI feedback is
- *   surprising.
+ * **Focus-loss no longer pauses here (F-007 consolidation,
+ * 2026-07-02).** The former `Audio → Recording` cascade (granted-flag
+ * `true → false` edge ⇒ `PauseRecording`) was the de-facto — and
+ * mis-classified — interruption reactor: the service-side listener
+ * dispatched `granted = false` for *every* non-GAIN change, so a mere
+ * notification duck paused the dictation. The recording-pause
+ * authority for external interruptions is now exclusively
+ * [InterruptionModule]; the service's focus listener classifies via
+ * `AudioFocusChangeClassifier` and dispatches
+ * `InterruptionAction.AudioFocusInterrupted` for interrupting losses.
+ * This module's `audioFocusGranted` flag remains as pure bookkeeping
+ * (the pref-toggle idempotency gates below read it). Resume on
+ * focus-regain stays user-driven (Spec 1 §15.3) — no module
+ * auto-resumes.
  *
  * **AudioFocus + Bluetooth-SCO emission (C6-IMPL-1 / B2-C6-W1 — the
  * real path).** This module's reducer emits `Effect.RequestAudioFocus`
@@ -333,14 +337,10 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
     ): List<Action> {
         val cascade = mutableListOf<Action>()
 
-        // AudioFocus-Loss during an active/paused recording → automatic
-        // pause. Resume is user-driven (Spec 1 §15.3).
-        if (prev.audio.audioFocusGranted &&
-            !next.audio.audioFocusGranted &&
-            next.recording.isActiveOrPaused
-        ) {
-            cascade += Action.RecordingAction.PauseRecording
-        }
+        // NOTE (F-007 consolidation, 2026-07-02): the focus-loss →
+        // PauseRecording cascade that used to live here moved to
+        // InterruptionModule (single interruption authority) — see the
+        // module KDoc §"Focus-loss no longer pauses here".
 
         // ── C6-IMPL-1 / B2-C6-W1 — recording-lifecycle → audio-focus +
         // SCO (Spec 1 §15.1 row 3 observer arm, restored). ADR-0002

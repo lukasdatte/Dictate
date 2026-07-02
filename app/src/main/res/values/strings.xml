@@ -87,6 +87,12 @@
     <!-- B4 (ADR-0008) — Partial-Recovery warning. %1$d is the estimated
          number of seconds of audio lost from unreadable segments. -->
     <string name="dictate_recovery_partial_msg">%1$d seconds of audio were skipped while sending — some words may be missing.</string>
+    <!-- F-036 (2026-07-02) — interruption-paused recording. Pure-info
+         InfoBar items (no buttons); the paused-state keyboard UI already
+         exposes resume/stop. Text is honest about the audio-focus-based
+         detection: we know focus was taken, not that a call arrived. -->
+    <string name="dictate_interruption_audio_focus_msg">Recording paused — another app took over audio (e.g. an incoming call).</string>
+    <string name="dictate_interruption_headset_msg">Recording paused — the headset was disconnected.</string>
     <string name="dictate_okay">Okay</string>
     <string name="dictate_cancel">Cancel</string>
     <string name="dictate_settings_api_key_title">Change OpenAI API key 🔑</string>

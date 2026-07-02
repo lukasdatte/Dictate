@@ -149,7 +149,9 @@ class CacheDirAudioFileRepositoryTest {
     @Test
     fun `readForPipeline returns Complete with the single segment`() = runBlocking {
         audioDir.mkdirs()
-        val single = File(audioDir, "sess_x_seg1.m4a").also { it.createNewFile() }
+        // Non-empty: a real recording's seg1 always carries bytes. The
+        // significantSegments filter drops only zero-length artifacts.
+        val single = File(audioDir, "sess_x_seg1.m4a").apply { writeBytes(ByteArray(64)) }
         val result = repo.readForPipeline("x")
         assertTrue("expected Complete, got $result", result is PipelineAudioResult.Complete)
         assertEquals(single, (result as PipelineAudioResult.Complete).file)
@@ -161,14 +163,82 @@ class CacheDirAudioFileRepositoryTest {
         assertNull(repo.readForPipeline("nonexistent"))
     }
 
+    // ── significantSegments() + the pre-armed 0-byte tail (F-012/F-047) ──
+
+    @Test
+    fun `significantSegments drops the trailing 0-byte pre-armed segment`() {
+        audioDir.mkdirs()
+        // seg1 + seg2 hold real audio; seg3 is the always-one-ahead
+        // pre-armed file the recorder never rolled into (0 bytes).
+        File(audioDir, "sess_x_seg1.m4a").writeBytes(ByteArray(128))
+        File(audioDir, "sess_x_seg2.m4a").writeBytes(ByteArray(64))
+        File(audioDir, "sess_x_seg3.m4a").createNewFile()  // 0-byte pre-arm
+
+        // Raw segments() still sees all three (allocateNext relies on it).
+        assertEquals(3, repo.segments("x").size)
+        // significantSegments() filters the empty tail.
+        assertEquals(
+            listOf("sess_x_seg1.m4a", "sess_x_seg2.m4a"),
+            repo.significantSegments("x").map { it.name },
+        )
+    }
+
+    @Test
+    fun `readForPipeline treats a single real segment plus 0-byte tail as Complete not PartialRecovery`() = runBlocking {
+        // F-012 regression: the pre-arm leaves a guaranteed empty trailing
+        // segment. On the unfixed code segments().size == 2 forced the
+        // merge path, skipped the empty file into ignoredIndices, and
+        // returned a false PartialRecovery (~30s "audio lost"). With the
+        // significantSegments filter the empty tail is dropped, so the
+        // single real segment takes the zero-copy Complete fast path.
+        audioDir.mkdirs()
+        val real = File(audioDir, "sess_x_seg1.m4a").apply { writeBytes(ByteArray(256)) }
+        File(audioDir, "sess_x_seg2.m4a").createNewFile()  // 0-byte pre-arm
+
+        val result = repo.readForPipeline("x")
+
+        assertTrue(
+            "expected Complete (zero-copy) for [real, 0-byte], got $result",
+            result is PipelineAudioResult.Complete,
+        )
+        assertEquals(real, (result as PipelineAudioResult.Complete).file)
+    }
+
+    @Test
+    fun `duration sums across significant segments not just the first (F-047)`() {
+        // F-047 root cause: history duration was extracted from the FIRST
+        // segment only, so any recording longer than one rolling segment
+        // showed that segment's byte-budget length (~16s) forever. The fix
+        // sums extractDurationSeconds over significantSegments (the same
+        // expression PipelineOrchestrator.persistNewSession now uses). This
+        // test injects a fake extractor so it needs no Android media stack.
+        audioDir.mkdirs()
+        val seg1 = File(audioDir, "sess_x_seg1.m4a").apply { writeBytes(ByteArray(128)) }
+        File(audioDir, "sess_x_seg2.m4a").writeBytes(ByteArray(128))
+        File(audioDir, "sess_x_seg3.m4a").createNewFile()  // 0-byte pre-arm
+        val fakeDurationSeconds: (File) -> Long = { f ->
+            when (f.name) {
+                "sess_x_seg1.m4a" -> 16L
+                "sess_x_seg2.m4a" -> 10L
+                else -> 30L  // a 0-byte tail must never be reached
+            }
+        }
+
+        val summed = repo.significantSegments("x").sumOf(fakeDurationSeconds)
+
+        assertEquals("whole recording = seg1 + seg2", 26L, summed)
+        // The unfixed first-segment-only path would have stored 16L.
+        assertTrue("regression: summed must exceed first-only", summed > fakeDurationSeconds(seg1))
+    }
+
     @Test
     fun `readForPipeline single-segment fast path skips track validation`() = runBlocking {
-        // Empty file would be rejected by MediaExtractor — but the
-        // single-segment fast path is zero-copy by design. Corrupted
-        // single segments surface as Whisper 4xx errors, not as a
-        // recovery decision. This locks the fast-path contract.
+        // A non-empty but non-m4a blob: the single-segment fast path is
+        // zero-copy by design and does NOT validate the container.
+        // Corrupted single segments surface as Whisper 4xx errors, not as
+        // a recovery decision. This locks the fast-path contract.
         audioDir.mkdirs()
-        val single = File(audioDir, "sess_x_seg1.m4a").also { it.createNewFile() }
+        val single = File(audioDir, "sess_x_seg1.m4a").apply { writeBytes(ByteArray(64)) }
         val result = repo.readForPipeline("x")
         assertTrue(result is PipelineAudioResult.Complete)
         assertEquals(single, (result as PipelineAudioResult.Complete).file)

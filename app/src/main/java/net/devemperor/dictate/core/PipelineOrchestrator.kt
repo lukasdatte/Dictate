@@ -980,11 +980,25 @@ class PipelineOrchestrator @JvmOverloads constructor(
                 }
         } else if (repo != null) {
             // Multi-Segment path — segments stay in cache; readForPipeline()
-            // does the muxer concat at upload-time. Duration extraction
-            // still runs on the first segment for the denormalised cache
-            // (DurationHealingJob re-syncs to sum-of-segments later if a
-            // rolling-roll lands after this point).
-            audioDurationSec = repo.extractDurationSeconds(audioFile)
+            // does the muxer concat at upload-time.
+            //
+            // F-047: the stored duration must reflect the WHOLE recording,
+            // not just the first rolling segment. Summing only the first
+            // segment made every multi-segment recording show that
+            // segment's byte-budget length (~16 s on the reporter's device)
+            // forever, and the DurationHealingJob "re-sync" the old comment
+            // promised never existed (it only heals rows whose duration is
+            // exactly 0). Sum every significant segment instead — the same
+            // pattern the recovery path already uses (DictatePipelineService
+            // interruptedRecordingElapsedMsProvider). significantSegments()
+            // drops the always-one-ahead 0-byte pre-armed tail. Fall back to
+            // the single-file extraction only when the repository is absent
+            // or yields nothing readable.
+            audioDurationSec = audioFileRepository
+                ?.significantSegments(sessionId)
+                ?.sumOf { repo.extractDurationSeconds(it) }
+                ?.takeIf { it > 0L }
+                ?: repo.extractDurationSeconds(audioFile)
             audioPathForRow = audioFile.absolutePath
         } else {
             // Legacy path: copy to recordingsDir, no synchronous duration.
@@ -1298,6 +1312,21 @@ class PipelineOrchestrator @JvmOverloads constructor(
             // re-uploads (overwrite=true inside persistFromCache).
             val recording = repo.persistFromCache(source, sid)
             database?.sessionDao()?.updateAudioFilePath(sid, recording.audioFile.absolutePath)
+            // F-047 self-heal: [source] is the authoritative upload audio
+            // (single segment OR the muxed multi-segment file), so its
+            // duration is the true recording length. Re-extract and update
+            // the row here so sessions whose initial persist ran before
+            // later segments landed — e.g. a Cold-Resume continuation that
+            // appends segments — converge to the correct duration instead
+            // of keeping the first-segment estimate.
+            runCatching {
+                val mergedDurationSec = repo.extractDurationSeconds(recording.audioFile)
+                if (mergedDurationSec > 0L) {
+                    database?.sessionDao()?.updateAudioDuration(sid, mergedDurationSec)
+                }
+            }.onFailure {
+                Log.w(TAG, "persistMuxedForUpload($sid) duration re-sync failed", it)
+            }
             recording.audioFile
         } catch (t: Throwable) {
             Log.w(TAG, "persistMuxedForUpload($sid) failed; falling back to source", t)

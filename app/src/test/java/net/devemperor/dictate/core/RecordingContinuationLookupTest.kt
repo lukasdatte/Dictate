@@ -2,14 +2,18 @@ package net.devemperor.dictate.core
 
 import androidx.paging.PagingSource
 import net.devemperor.dictate.audio.AudioFileRepository
+import net.devemperor.dictate.audio.CodecParams
 import net.devemperor.dictate.audio.PipelineAudioResult
 import net.devemperor.dictate.database.dao.OrphanedAudioRow
 import net.devemperor.dictate.database.dao.SessionDao
 import net.devemperor.dictate.database.entity.SessionEntity
 import net.devemperor.dictate.database.entity.SessionOrigin
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.io.File
 
 /**
@@ -28,6 +32,55 @@ import java.io.File
  *     floor = now - freshness)
  */
 class RecordingContinuationLookupTest {
+
+    @get:Rule
+    val tmp = TemporaryFolder()
+
+    @Test
+    fun `walks backwards to the last readable segment past the 0-byte pre-armed tail (F-014)`() {
+        // F-014 regression. Fixture shape (the shared trailing-0-byte
+        // fixture): [readable seg1, truncated seg2 (non-empty but
+        // unreadable), empty seg3 (0-byte pre-armed tail)].
+        //
+        // Unfixed code read AudioCodecReader.readCodecParams on
+        // segments().last() — after the always-one-ahead pre-arm that is
+        // the 0-byte seg3, which reads null → continuation aborted on
+        // EVERY genuine interruption. The fix reads significantSegments
+        // (drops the 0-byte tail) and walks backwards to the last readable
+        // segment, inheriting seg1's codec params.
+        val seg1 = tmp.newFile("sess_sid-3_seg1.m4a").apply { writeBytes(ByteArray(256)) }
+        val seg2 = tmp.newFile("sess_sid-3_seg2.m4a").apply { writeBytes(ByteArray(128)) }
+        val seg3 = tmp.newFile("sess_sid-3_seg3.m4a")  // 0-byte pre-arm
+        val nextFile = File(tmp.root, "sess_sid-3_seg4.m4a")
+        val seg1Params = CodecParams(
+            sampleRate = 44_100,
+            channelCount = 1,
+            bitRate = 64_000,
+            mimeType = "audio/mp4a-latm",
+        )
+
+        val dao = StubSessionDao(candidate = makeRow("sid-3"))
+        val repo = StubAudioFileRepository(
+            stubbedSegments = mapOf("sid-3" to listOf(seg1, seg2, seg3)),
+            stubbedNextFile = mapOf("sid-3" to nextFile),
+        )
+        val lookup = RecordingContinuationLookup(
+            sessionTracker = SessionTracker(dao),
+            audioFileRepository = repo,
+            freshnessMsSupplier = { 86_400_000L },
+            // Only seg1 is readable; the truncated seg2 and the empty seg3
+            // yield null (as the real AudioCodecReader would).
+            codecParamsReader = { f -> if (f == seg1) seg1Params else null },
+        )
+
+        val result = lookup.lookup()
+
+        assertNotNull("expected an EligibleContinuation, got null", result)
+        assertEquals("sid-3", result!!.sessionId)
+        assertEquals("must mint the NEXT segment file", nextFile, result.nextSegmentFile)
+        assertEquals("codec params inherited from the last readable segment", seg1Params, result.codecParams)
+        assertEquals("allocateNext called exactly once", 1, repo.allocateNextCallCount)
+    }
 
     @Test
     fun `null when no candidate row exists`() {

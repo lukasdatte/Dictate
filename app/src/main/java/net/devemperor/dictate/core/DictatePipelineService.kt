@@ -676,9 +676,12 @@ class DictatePipelineService : Service() {
             // 2026-05-22 — elapsed-ms for the recovery auto-surfacing:
             // sum the on-disk segment durations so the surfaced
             // RecordingState.Interrupted freezes its timer at the real
-            // recorded length (the user's "0:08").
+            // recorded length (the user's "0:08"). Reads through
+            // significantSegments so the always-one-ahead 0-byte pre-armed
+            // tail is skipped (same "significant segments" rule the
+            // pipeline duration + partial-recovery paths use — F-012/F-047).
             interruptedRecordingElapsedMsProvider = { sessionId ->
-                audioFileRepository.segments(sessionId).sumOf { segment ->
+                audioFileRepository.significantSegments(sessionId).sumOf { segment ->
                     recordingRepositoryImpl.extractDurationSeconds(segment)
                 } * 1000L
             },

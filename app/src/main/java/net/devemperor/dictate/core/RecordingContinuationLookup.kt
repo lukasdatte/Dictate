@@ -3,8 +3,10 @@ package net.devemperor.dictate.core
 import android.util.Log
 import net.devemperor.dictate.audio.AudioCodecReader
 import net.devemperor.dictate.audio.AudioFileRepository
+import net.devemperor.dictate.audio.CodecParams
 import net.devemperor.dictate.state.ContinuationLookup
 import net.devemperor.dictate.state.EligibleContinuation
+import java.io.File
 
 /**
  * Production [ContinuationLookup] composite (B2 / ADR-0008
@@ -20,13 +22,17 @@ import net.devemperor.dictate.state.EligibleContinuation
  *     the candidate session. If the list is empty the row is unusable
  *     for continuation (likely a write-side race where the row was
  *     persisted before the first segment landed) — fall back to null.
- *  3. [AudioCodecReader.readCodecParams] on the **last existing**
+ *  3. [AudioCodecReader.readCodecParams] on the **last readable**
  *     segment — the new MediaRecorder must be configured identically
  *     so MediaMuxer-concat in [AudioFileRepository.readForPipeline]
- *     does not reject heterogeneous formats. Returns `null` when the
- *     last segment is unreadable (corrupted or truncated). Treated
- *     here as an abort: the caller falls back to a fresh session and
- *     the next pipeline run shows a Partial-Recovery info-bar.
+ *     does not reject heterogeneous formats. The lookup walks the
+ *     significant segments backwards and takes the first that reads
+ *     (F-014): the always-one-ahead pre-arm and crash-truncated tails
+ *     leave unreadable trailing segments, so reading the literal last
+ *     segment would abort **every** genuine interruption. Only when
+ *     *no* segment is readable is this an abort: the caller falls back
+ *     to a fresh session and the next pipeline run shows a
+ *     Partial-Recovery info-bar.
  *
  * After all three checks pass, the composite calls
  * [AudioFileRepository.allocateNext] to mint the next segment file
@@ -47,6 +53,13 @@ class RecordingContinuationLookup(
     private val audioFileRepository: AudioFileRepository,
     private val freshnessMsSupplier: () -> Long,
     private val nowMs: () -> Long = { System.currentTimeMillis() },
+    /**
+     * Codec-param reader seam — defaults to the production
+     * [AudioCodecReader]. Injected so the backwards-walk selection
+     * logic is unit-testable without a real Android media stack.
+     */
+    private val codecParamsReader: (File) -> CodecParams? =
+        AudioCodecReader::readCodecParams,
 ) : ContinuationLookup {
 
     override fun lookup(): EligibleContinuation? {
@@ -55,22 +68,27 @@ class RecordingContinuationLookup(
             nowMs = nowMs(),
         ) ?: return null
 
-        val existingSegments = audioFileRepository.segments(candidate.id)
+        // F-014: read through significantSegments (drops the pre-armed
+        // 0-byte tail) and walk backwards to the last *readable* segment.
+        // The literal last segment is, after the always-one-ahead
+        // pre-arm, virtually always unreadable (empty pre-armed file or a
+        // crash-truncated active segment), so keying codec params off it
+        // aborted continuation on every genuine interruption.
+        val existingSegments = audioFileRepository.significantSegments(candidate.id)
         if (existingSegments.isEmpty()) {
             Log.w(
                 TAG,
-                "Continuation-candidate ${candidate.id} has no segments on disk — skipping",
+                "Continuation-candidate ${candidate.id} has no significant segments on disk — skipping",
             )
             return null
         }
-        val lastSegment = existingSegments.last()
-        val codecParams = AudioCodecReader.readCodecParams(lastSegment)
+        val codecParams = existingSegments.asReversed()
+            .firstNotNullOfOrNull { codecParamsReader(it) }
         if (codecParams == null) {
             Log.w(
                 TAG,
-                "Continuation-candidate ${candidate.id}: last segment " +
-                    "${lastSegment.name} is unreadable — partial recovery " +
-                    "scenario, abort continuation",
+                "Continuation-candidate ${candidate.id}: no readable segment among " +
+                    "${existingSegments.size} — partial recovery scenario, abort continuation",
             )
             return null
         }

@@ -800,14 +800,18 @@ data class FeatureToggles(
 )
 
 /**
- * Theming Pref-mirror. Owned by `ThemingModule`. All four fields mirror
+ * Theming Pref-mirror. Owned by `ThemingModule`. All five fields mirror
  * their `Pref.*` counterparts.
+ *
+ * @property widgetOpacity floating-overlay card opacity in percent
+ *   (20..100, 100 = opaque) — mirrors `Pref.WidgetOpacity` (F-118).
  */
 data class ThemingState(
     val theme: String = "system",
     val accentColor: Int = -14700810,
     val overlayCharacters: String = "()-:!?,.",
     val outputSpeed: Int = 5,
+    val widgetOpacity: Int = 100,
 )
 
 /**

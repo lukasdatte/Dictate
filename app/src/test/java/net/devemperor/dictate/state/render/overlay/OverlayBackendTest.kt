@@ -812,6 +812,109 @@ class OverlayBackendTest {
         )
     }
 
+    // ─── F-118 — card-background opacity ──────────────────────────────
+
+    @Test
+    fun `background fill alpha follows ThemingState widgetOpacity`() {
+        // Spec §5 — assert the drawable fill alpha for 20 / 55 / 100 %.
+        listOf(20 to 51, 55 to 140, 100 to 255).forEach { (opacity, expectedAlpha) ->
+            window = FakeOverlayWindow()
+            val backend = newBackend()
+            backend.attach { captured += it }
+
+            backend.render(
+                stateWithPermission().copy(
+                    theming = net.devemperor.dictate.state.ThemingState(widgetOpacity = opacity),
+                ),
+                catalog.OVERLAY_5BUTTON,
+            )
+
+            assertEquals(
+                "fill alpha for widgetOpacity=$opacity",
+                expectedAlpha,
+                android.graphics.Color.alpha(cardBackground().color!!.defaultColor),
+            )
+        }
+    }
+
+    @Test
+    fun `card stroke stays opaque while the fill is translucent`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+
+        backend.render(
+            stateWithPermission().copy(
+                theming = net.devemperor.dictate.state.ThemingState(widgetOpacity = 20),
+            ),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        val bg = cardBackground()
+        assertEquals(51, android.graphics.Color.alpha(bg.color!!.defaultColor))
+        // The 1 dp colorOutlineVariant stroke must survive the fill
+        // mutation untouched — width still set, color fully opaque.
+        assertTrue("stroke width must stay > 0", strokeWidthOf(bg) > 0)
+        assertEquals(
+            "stroke must stay fully opaque",
+            255,
+            android.graphics.Color.alpha(strokeColorsOf(bg).defaultColor),
+        )
+    }
+
+    @Test
+    fun `opacity application is idempotent per render tick`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+        val state = stateWithPermission().copy(
+            theming = net.devemperor.dictate.state.ThemingState(widgetOpacity = 55),
+        )
+        backend.render(state, catalog.OVERLAY_5BUTTON)
+
+        // Sentinel: overwrite the fill out-of-band. A re-render with the
+        // SAME opacity must short-circuit (cached percent) and leave the
+        // sentinel in place; a render with a DIFFERENT opacity must
+        // overwrite it.
+        cardBackground().setColor(android.graphics.Color.RED)
+        backend.render(state, catalog.OVERLAY_5BUTTON)
+        assertEquals(
+            "same-opacity re-render must not re-mutate the fill",
+            android.graphics.Color.RED,
+            cardBackground().color!!.defaultColor,
+        )
+
+        backend.render(
+            state.copy(theming = net.devemperor.dictate.state.ThemingState(widgetOpacity = 60)),
+            catalog.OVERLAY_5BUTTON,
+        )
+        assertEquals(
+            "opacity change must re-mutate the fill",
+            153, // 60 * 255 / 100
+            android.graphics.Color.alpha(cardBackground().color!!.defaultColor),
+        )
+    }
+
+    @Test
+    fun `opacity is re-applied after reinflate`() {
+        // Teardown recreates the drawable with the opaque XML fill —
+        // the cache must reset so the next render re-applies (the
+        // "idempotent per render tick, not one-shot" contract).
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(
+            stateWithPermission().copy(
+                theming = net.devemperor.dictate.state.ThemingState(widgetOpacity = 40),
+            ),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        backend.reinflate()
+
+        assertEquals(
+            102, // 40 * 255 / 100
+            android.graphics.Color.alpha(cardBackground().color!!.defaultColor),
+        )
+    }
+
     // ─── F-120 — reinflate() on configuration change ──────────────────
 
     @Test
@@ -862,6 +965,42 @@ class OverlayBackendTest {
             ?: error("No View attached — render() must run with hasPermission=true first.")
         return view.context.resources.configuration.uiMode and
             android.content.res.Configuration.UI_MODE_NIGHT_MASK
+    }
+
+    /** The overlay card's background shape (`overlay_background.xml`). */
+    private fun cardBackground(): android.graphics.drawable.GradientDrawable {
+        val view = window.lastAttachedView
+            ?: error("No View attached — render() must run with hasPermission=true first.")
+        return view.background as android.graphics.drawable.GradientDrawable
+    }
+
+    /**
+     * Reflection helpers for the stroke assertions — [android.graphics.drawable.GradientDrawable]
+     * exposes no public stroke getters. Robolectric runs the real AOSP
+     * implementation, whose constant state (`mGradientState`) carries
+     * `mStrokeWidth` / `mStrokeColors`. If a future SDK level renames
+     * the fields these helpers fail loudly (NoSuchFieldException) —
+     * adjust the field names, the production code is unaffected.
+     */
+    private fun gradientStateOf(d: android.graphics.drawable.GradientDrawable): Any {
+        val field = android.graphics.drawable.GradientDrawable::class.java
+            .getDeclaredField("mGradientState")
+        field.isAccessible = true
+        return field.get(d)!!
+    }
+
+    private fun strokeWidthOf(d: android.graphics.drawable.GradientDrawable): Int {
+        val state = gradientStateOf(d)
+        val field = state.javaClass.getDeclaredField("mStrokeWidth")
+        field.isAccessible = true
+        return field.getInt(state)
+    }
+
+    private fun strokeColorsOf(d: android.graphics.drawable.GradientDrawable): android.content.res.ColorStateList {
+        val state = gradientStateOf(d)
+        val field = state.javaClass.getDeclaredField("mStrokeColors")
+        field.isAccessible = true
+        return field.get(state) as android.content.res.ColorStateList
     }
 
     /**

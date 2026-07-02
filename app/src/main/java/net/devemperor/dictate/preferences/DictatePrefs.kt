@@ -40,6 +40,16 @@ sealed class Pref<T>(val key: String, val default: T) {
     object OverlayCharacters : Pref<String>("net.devemperor.dictate.overlay_characters", "()-:!?,.")
     object OutputSpeed : Pref<Int>("net.devemperor.dictate.output_speed", 5)
 
+    /**
+     * Floating-overlay widget card opacity in percent (20..100).
+     * 100 = fully opaque. The settings SeekBar enforces the 20 % floor
+     * so the card never becomes invisible over matching content; the
+     * render path clamps defensively (`OverlayBackend`).
+     *
+     * @see net.devemperor.dictate.state.render.overlay.OverlayBackend
+     */
+    object WidgetOpacity : Pref<Int>("net.devemperor.dictate.widget_opacity", 100)
+
     // ── Language Selection ──
     // InputLanguages (Set<String>) needs separate access – not via get()
     object InputLanguagePos : Pref<Int>("net.devemperor.dictate.input_language_pos", 0)

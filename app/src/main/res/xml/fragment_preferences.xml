@@ -156,6 +156,20 @@
             android:defaultValue="true"
             app:iconSpaceReserved="false"/>
 
+        <!-- F-118 — floating-widget card opacity in percent. The 20 %
+             floor keeps the card discoverable over matching content
+             (spec: docs/research/2026-07-02 - overlay-widget-transparency.md). -->
+        <androidx.preference.SeekBarPreference
+            android:key="net.devemperor.dictate.widget_opacity"
+            android:title="@string/dictate_settings_widget_opacity_title"
+            android:summary="@string/dictate_settings_widget_opacity_summary"
+            android:defaultValue="100"
+            android:max="100"
+            app:min="20"
+            app:seekBarIncrement="5"
+            app:showSeekBarValue="true"
+            app:iconSpaceReserved="false"/>
+
         <androidx.preference.ListPreference
             android:key="net.devemperor.dictate.app_language"
             android:title="@string/dictate_settings_app_language_title"

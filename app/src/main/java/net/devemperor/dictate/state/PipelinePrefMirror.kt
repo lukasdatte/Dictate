@@ -45,7 +45,7 @@ fun interface MirrorSyncDispatcher {
  * SharedPreferences ↔ [DictateUiStateStore] mirror.
  *
  * **Phase 1 (today) — hardcoded.** [attach] writes a one-shot snapshot
- * of 19 UI-state-relevant prefs into the store on startup, then
+ * of 20 UI-state-relevant prefs into the store on startup, then
  * registers an [SharedPreferences.OnSharedPreferenceChangeListener]
  * that translates every subsequent pref change into a focused
  * `dispatcher.apply { … }` call on the matching sub-state axis (which
@@ -53,7 +53,7 @@ fun interface MirrorSyncDispatcher {
  * mapping is hand-rolled here because [DictateModule.prefBindings]
  * is Phase-2 surface — see [PrefBinding] KDoc.
  *
- * **The 19 mirrored prefs (Spec 1 §4.5):**
+ * **The 20 mirrored prefs (Spec 1 §4.5 + F-118 widget opacity):**
  *
  * | Axis | Count | Prefs |
  * |------|-------|-------|
@@ -61,7 +61,7 @@ fun interface MirrorSyncDispatcher {
  * | [AudioState] | 3 | `AudioFocus` (→ `audioFocusEnabledPref`), `UseBluetoothMic`, `Vibration` |
  * | [ResendState] | 1 | `ResendButton` (→ `resendEnabled`) |
  * | [FeatureToggles] | 4 | `RewordingEnabled`, `AutoFormattingEnabled`, `InstantOutput`, `AutoEnter` |
- * | [ThemingState] | 4 | `Theme`, `AccentColor`, `OverlayCharacters`, `OutputSpeed` |
+ * | [ThemingState] | 5 | `Theme`, `AccentColor`, `OverlayCharacters`, `OutputSpeed`, `WidgetOpacity` |
  * | [OverlayState] | 4 | `Pref.OverlayPositionPortraitX/Y`, `Pref.OverlayPositionLandscapeX/Y` (typed since F-4; mirrors [OverlayModule.Effect.PersistOverlayPosition] write site) |
  * | [LanguageState] | 2 (computed) | `Pref.InputLanguages` + `Pref.InputLanguagePos` together resolve to `LanguageState.effective` via `LanguageResolver.effectiveLanguage(sp)` (indirection-cleanup 2026-05-21, OQ-1 Option A). Both keys fan into the same `effective`-write because either changes the resolved code. |
  *
@@ -217,6 +217,7 @@ class PipelinePrefMirror(
             accentColor = sp.get(Pref.AccentColor),
             overlayCharacters = sp.get(Pref.OverlayCharacters),
             outputSpeed = sp.get(Pref.OutputSpeed),
+            widgetOpacity = sp.get(Pref.WidgetOpacity),
         ),
         overlay = current.overlay.copy(
             positionPortraitX = sp.get(Pref.OverlayPositionPortraitX),
@@ -306,6 +307,8 @@ class PipelinePrefMirror(
             current.copy(theming = current.theming.copy(overlayCharacters = sp.get(Pref.OverlayCharacters)))
         Pref.OutputSpeed.key ->
             current.copy(theming = current.theming.copy(outputSpeed = sp.get(Pref.OutputSpeed)))
+        Pref.WidgetOpacity.key ->
+            current.copy(theming = current.theming.copy(widgetOpacity = sp.get(Pref.WidgetOpacity)))
 
         Pref.OverlayPositionPortraitX.key -> current.copy(
             overlay = current.overlay.copy(

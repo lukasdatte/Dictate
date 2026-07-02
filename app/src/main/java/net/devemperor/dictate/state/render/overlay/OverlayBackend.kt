@@ -2,12 +2,15 @@ package net.devemperor.dictate.state.render.overlay
 
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
+import androidx.core.graphics.ColorUtils
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.color.MaterialColors
 import net.devemperor.dictate.R
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
@@ -239,6 +242,15 @@ class OverlayBackend(
     private var inflatedNightMode: Boolean? = null
 
     /**
+     * The opacity percent last written into the card background's fill
+     * (F-118) — `null` while detached or before the first
+     * [applyBackgroundOpacity] pass. Makes the per-render-tick mutation
+     * idempotent; nulled in [teardownOverlay] because a re-inflate
+     * recreates the drawable (the fresh XML fill is opaque again).
+     */
+    private var lastAppliedOpacityPercent: Int? = null
+
+    /**
      * The last normalised position (`(portrait?, normX, normY)`) the
      * backend pushed through [overlayWindow.update]. Used to dedup
      * `applyPosition` calls per render — comparing against
@@ -360,6 +372,12 @@ class OverlayBackend(
         rendererBundle?.autoEnter?.onState(state)
         rendererBundle?.color?.onState(state)
         rendererBundle?.recording?.onState(state)
+
+        // 5.5 — Card-background opacity (F-118). Idempotent per render
+        //       tick (cached percent); re-runs after every
+        //       inflateAndAttach because teardown recreates the
+        //       drawable with the opaque XML fill.
+        applyBackgroundOpacity(state.theming.widgetOpacity)
 
         // 6 — Position apply — de-normalises the persisted [0..1]
         //     coordinates from `state.overlay.position{Portrait,Landscape}{X,Y}`
@@ -517,6 +535,37 @@ class OverlayBackend(
         wireStaticOverlayHandlers()
         wireDragController(view)
         buildRendererBundle(view, views)
+    }
+
+    /**
+     * Mutate the card background's **fill** to `colorSurface` at
+     * [opacityPercent] alpha (F-118). The 1 dp `colorOutlineVariant`
+     * stroke and the buttons' own Material backgrounds stay fully
+     * opaque so the card boundary and controls remain legible.
+     *
+     * `mutate()` detaches the drawable's constant state so the shared
+     * `overlay_background.xml` resource (also used by other inflations)
+     * is not affected. The percent is clamped defensively to the
+     * settings floor — the SeekBar enforces 20..100, but the SP value
+     * is user-writable via backup restore / adb.
+     *
+     * Idempotent per render tick via [lastAppliedOpacityPercent].
+     */
+    private fun applyBackgroundOpacity(opacityPercent: Int) {
+        val view = overlayView ?: return
+        if (lastAppliedOpacityPercent == opacityPercent) return
+
+        val background = view.background?.mutate() as? GradientDrawable
+        if (background == null) {
+            Log.w(TAG, "overlay background is not a GradientDrawable — opacity not applied")
+            return
+        }
+        val surface = MaterialColors.getColor(
+            view, com.google.android.material.R.attr.colorSurface,
+        )
+        val alpha = opacityPercent.coerceIn(MIN_OPACITY_PERCENT, MAX_OPACITY_PERCENT) * 255 / 100
+        background.setColor(ColorUtils.setAlphaComponent(surface, alpha))
+        lastAppliedOpacityPercent = opacityPercent
     }
 
     /**
@@ -812,6 +861,7 @@ class OverlayBackend(
         modeRef = null
         lastAppliedPosition = null
         inflatedNightMode = null
+        lastAppliedOpacityPercent = null
     }
 
     /**
@@ -828,6 +878,15 @@ class OverlayBackend(
 
     private companion object {
         const val TAG: String = "OverlayBackend"
+
+        /**
+         * Clamp bounds for [applyBackgroundOpacity] — mirror the
+         * settings SeekBar range (`fragment_preferences.xml`,
+         * `Pref.WidgetOpacity`). The 20 % floor keeps the card
+         * discoverable over matching content.
+         */
+        const val MIN_OPACITY_PERCENT: Int = 20
+        const val MAX_OPACITY_PERCENT: Int = 100
     }
 }
 

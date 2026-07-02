@@ -1,5 +1,6 @@
 package net.devemperor.dictate.database.dao
 
+import androidx.paging.PagingSource
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
@@ -59,14 +60,43 @@ interface SessionDao {
     @Query("UPDATE sessions SET audio_duration_seconds = :durationSeconds WHERE id = :sessionId")
     fun updateAudioDuration(sessionId: String, durationSeconds: Long)
 
-    @Query("SELECT * FROM sessions ORDER BY created_at DESC")
-    fun getAll(): List<SessionEntity>
-
-    @Query("SELECT * FROM sessions WHERE type = :type ORDER BY created_at DESC")
-    fun getByType(type: String): List<SessionEntity>
-
-    @Query("SELECT * FROM sessions WHERE final_output_text LIKE '%' || :query || '%' OR input_text LIKE '%' || :query || '%' ORDER BY created_at DESC")
-    fun search(query: String): List<SessionEntity>
+    /**
+     * Paged history query (F-054 / history-pagination-and-scale §2) —
+     * replaces the former unbounded `getAll()` / `getByType()` /
+     * `search()` trio. Room + room-paging generate a
+     * `LimitOffsetPagingSource` that loads pages on Room's background
+     * query executor, so the history screen no longer depends on
+     * `allowMainThreadQueries()`.
+     *
+     * **Parameter contract:**
+     *
+     *  - [type] — `SessionType.name` filter, or `null` for all types
+     *    (Double-Enum convention: enum→String at the call boundary).
+     *  - [searchPattern] — pre-escaped search fragment (see
+     *    [LikeEscape.escape]), or `null` for no text filter. The
+     *    `ESCAPE '\'` clause makes user-typed `%`/`_` match literally.
+     *
+     * **Index verification (spec §2.6):** the `ORDER BY created_at
+     * DESC` walk is served by `index_sessions_created_at`; the planner
+     * scans it newest-first and applies the residual `type`/`LIKE`
+     * filters, stopping after LIMIT+OFFSET matches — cheap for the
+     * front-loaded access pattern of a paged list. A composite
+     * `(type, created_at)` index was deliberately NOT added: the
+     * nullable-parameter `(:type IS NULL OR ...)` shape can't use it,
+     * and the substring `LIKE '%…%'` is unindexable without FTS. No
+     * schema migration needed.
+     */
+    @Query(
+        """
+        SELECT * FROM sessions
+        WHERE (:type IS NULL OR type = :type)
+          AND (:searchPattern IS NULL
+               OR final_output_text LIKE '%' || :searchPattern || '%' ESCAPE '\'
+               OR input_text LIKE '%' || :searchPattern || '%' ESCAPE '\')
+        ORDER BY created_at DESC
+        """
+    )
+    fun pagedHistory(type: String?, searchPattern: String?): PagingSource<Int, SessionEntity>
 
     @Query("DELETE FROM sessions WHERE id = :id")
     fun deleteById(id: String)
@@ -294,6 +324,31 @@ interface SessionDao {
      */
     @Query("DELETE FROM sessions WHERE inserted_at IS NOT NULL AND inserted_at < :cutoff")
     fun deleteInsertedOlderThan(cutoff: Long): Int
+
+    /**
+     * Long-horizon retention for never-inserted terminal rows
+     * (history-pagination-and-scale §2.5, Information-Gap-1 fallback):
+     * deletes CANCELLED sessions whose `created_at` is older than
+     * [cutoff] (callers pass `now − 60 d`).
+     *
+     * **Why CANCELLED only:** FAILED rows are user-visible "what went
+     * wrong" entries and are kept forever per the documented
+     * non-destructive philosophy ([net.devemperor.dictate.state.PipelineOrphanCleaner]
+     * doc — "auto-deleting them would silently lose information").
+     * A user-cancelled session carries no comparable diagnostic value
+     * once it is two months old, so it may age out.
+     *
+     * `created_at` is a pre-existing NOT-NULL column, so the
+     * DATABASE-PATTERNS "NULL is the marker does not apply" backfill
+     * rule is not in play; the SET-NULL FK on `parent_session_id`
+     * guarantees row-level DELETEs preserve child sessions (they
+     * resurface as root-level history entries).
+     *
+     * Returns the deleted-row count for diagnostics. CASCADE removes
+     * the matching `transcriptions` + `processing_steps` child rows.
+     */
+    @Query("DELETE FROM sessions WHERE status = 'CANCELLED' AND created_at < :cutoff")
+    fun deleteCancelledOlderThan(cutoff: Long): Int
 
     /**
      * Orphan-audio cleanup helper (KG-SST-2, Spec 1 §11.7.0 + §6.3.1).

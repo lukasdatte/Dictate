@@ -33,6 +33,10 @@ import java.io.File
  *  - Best-effort behaviour: missing audio files counted as "deleted"
  *    successes (idempotent re-runs).
  *  - DAO failures are absorbed (logged, not propagated).
+ *  - Long-horizon CANCELLED retention (path 3,
+ *    history-pagination-and-scale §2.5): only CANCELLED rows past the
+ *    horizon are deleted; fresh CANCELLED rows and FAILED rows of any
+ *    age are never touched.
  */
 class PipelineOrphanCleanerTest {
 
@@ -220,6 +224,64 @@ class PipelineOrphanCleanerTest {
         // Second pass: audio_file_path was cleared, no orphans found.
         assertEquals(0, r2.clearedAudioPathRows)
         assertEquals(0, r2.clearedAudioPathRows)
+    }
+
+    // ── Path 3: long-horizon CANCELLED retention ──────────────────
+
+    /** Cleaner with a compact injectable horizon (production default is 60 d). */
+    private fun retentionCleaner(retentionMs: Long) = PipelineOrphanCleaner(
+        sessionDao = dao,
+        nowProvider = { fixedNow },
+        cancelledRetentionMs = retentionMs,
+    )
+
+    @Test
+    fun `cleanup deletes only CANCELLED rows past the retention horizon`() {
+        // horizon cutoff = fixedNow - 5000 = 9_995_000
+        seed("cxl-old", SessionStatus.CANCELLED, createdAt = 1_000L)
+        seed("cxl-fresh", SessionStatus.CANCELLED, createdAt = fixedNow - 100)
+        seed("failed-old", SessionStatus.FAILED, createdAt = 1_000L)
+        seed("compl-pending", SessionStatus.COMPLETED, createdAt = 1_000L, insertedAt = null)
+
+        val result = runBlocking { retentionCleaner(retentionMs = 5_000L).cleanup(gracePeriodMs = 1_000L) }
+
+        assertEquals(1, result.deletedCancelledRows)
+        assertNull("past-horizon CANCELLED row deleted", dao.getById("cxl-old"))
+        assertNotNull("in-window CANCELLED row kept", dao.getById("cxl-fresh"))
+        assertNotNull("FAILED rows are kept forever", dao.getById("failed-old"))
+        assertNotNull("never-inserted COMPLETED row untouched", dao.getById("compl-pending"))
+    }
+
+    @Test
+    fun `default 60-day horizon leaves young CANCELLED rows alone`() {
+        // fixedNow (10^7 ms) is far inside the 60-day default window —
+        // the cutoff is negative, so nothing can age out.
+        seed("cxl-any", SessionStatus.CANCELLED, createdAt = 0L)
+
+        val result = runBlocking { cleaner.cleanup(gracePeriodMs = 1_000L) }
+
+        assertEquals(0, result.deletedCancelledRows)
+        assertNotNull(dao.getById("cxl-any"))
+    }
+
+    @Test
+    fun `cleanup absorbs deleteCancelledOlderThan failures and keeps other counters`() {
+        seed("c-old", SessionStatus.COMPLETED, insertedAt = 1_000L)
+        val throwingDao = object : net.devemperor.dictate.database.dao.SessionDao by dao {
+            override fun deleteCancelledOlderThan(cutoff: Long): Int {
+                throw RuntimeException("simulated SQL failure")
+            }
+        }
+        val resilient = PipelineOrphanCleaner(
+            sessionDao = throwingDao,
+            nowProvider = { fixedNow },
+            cancelledRetentionMs = 5_000L,
+        )
+
+        val result = runBlocking { resilient.cleanup(gracePeriodMs = 1_000L) }
+
+        assertEquals(0, result.deletedCancelledRows) // failure absorbed
+        assertEquals(1, result.deletedCompletedRows) // step 1 still ran
     }
 
     // ── DAO failure absorption ────────────────────────────────────

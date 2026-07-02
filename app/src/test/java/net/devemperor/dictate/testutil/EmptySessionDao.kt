@@ -30,9 +30,8 @@ object EmptySessionDao : SessionDao {
     override fun updateFinalOutputText(sessionId: String, text: String?) = Unit
     override fun updateInputText(sessionId: String, text: String?) = Unit
     override fun updateAudioDuration(sessionId: String, durationSeconds: Long) = Unit
-    override fun getAll(): List<SessionEntity> = emptyList()
-    override fun getByType(type: String): List<SessionEntity> = emptyList()
-    override fun search(query: String): List<SessionEntity> = emptyList()
+    override fun pagedHistory(type: String?, searchPattern: String?) =
+        ListPagingSource(emptyList())
     override fun deleteById(id: String) = Unit
     override fun deleteAll() = Unit
     override fun findLatestByOrigin(origin: String): SessionEntity? = null
@@ -56,6 +55,7 @@ object EmptySessionDao : SessionDao {
     ) = Unit
     override fun findPendingInsertion(freshnessFloor: Long): List<SessionEntity> = emptyList()
     override fun deleteInsertedOlderThan(cutoff: Long): Int = 0
+    override fun deleteCancelledOlderThan(cutoff: Long): Int = 0
     override fun findOrphanedTerminalAudio(cutoff: Long): List<OrphanedAudioRow> = emptyList()
     override fun clearAudioFilePathBulk(ids: List<String>) = Unit
     override fun getSessionsByStatuses(statuses: List<String>): List<SessionEntity> = emptyList()

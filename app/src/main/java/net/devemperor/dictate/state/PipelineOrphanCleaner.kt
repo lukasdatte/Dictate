@@ -8,11 +8,11 @@ import net.devemperor.dictate.database.dao.SessionDao
 import java.io.File
 
 /**
- * Service-Idle-Stop cleanup pass that combines the two
+ * Service-Idle-Stop cleanup pass that combines the
  * row-level retention policies into one entry point (Spec 1 §6.2 R.17 +
  * §6.3.1 KG-SST-2 RESOLVED).
  *
- * **Two cleanup paths, one trigger:**
+ * **Three cleanup paths, one trigger:**
  *
  *  1. **`deleteInsertedOlderThan(cutoff)`** — drop COMPLETED rows whose
  *     `inserted_at` is older than `now - gracePeriod`. The text has been
@@ -26,14 +26,20 @@ import java.io.File
  *     `audio_file_path` column. **The DB rows themselves stay** (Spec 1
  *     §6.3.1 — FAILED/CANCELLED rows are user-visible "what went wrong"
  *     entries; auto-deleting them would silently lose information).
+ *  3. **`deleteCancelledOlderThan(now − cancelledRetentionMs)`** —
+ *     long-horizon retention (history-pagination-and-scale §2.5,
+ *     Information-Gap-1 fallback): CANCELLED rows older than 60 days
+ *     are deleted outright. FAILED rows stay forever — the
+ *     non-destructive philosophy above applies to diagnostic
+ *     failure entries, not to two-month-old user cancellations.
  *
- * **Why one class with two methods (not two top-level functions)?**
- * Both methods share the cutoff-computation pattern (`now -
- * Pref.SessionCleanupGracePeriodMs`) and the same DAO; bundling makes
+ * **Why one class with several methods (not top-level functions)?**
+ * The methods share the cutoff-computation pattern (`now -
+ * <retention window>`) and the same DAO; bundling makes
  * the call-site at the service-idle slot a single object-method chain
- * and the cutoff-source is canonical. Future cleanup phases (e.g. a
- * `deleteFailedOlderThan(60d)` per Spec 1 §6.3.1 follow-up) can join
- * the same class without rewiring callers.
+ * and the cutoff-source is canonical. Future cleanup phases can join
+ * the same class without rewiring callers (path 3 above joined this
+ * way, as the original doc anticipated).
  *
  * **Layer-Trennung:** the DAO is responsible for SELECT/UPDATE/DELETE;
  * this class is the only place File-IO touches the DB-cleanup pipeline
@@ -70,6 +76,13 @@ class PipelineOrphanCleaner(
      * (B3-VAL-W1 F-25 — same-operation-three-ways drift fix).
      */
     private val ioContext: CoroutineContext = Dispatchers.IO,
+    /**
+     * Long-horizon retention window for CANCELLED rows (path 3).
+     * Production uses the 60-day default (Information-Gap-1 fallback,
+     * "revisit with real table-size data"); tests inject a small
+     * window so the cutoff is exercisable with compact timestamps.
+     */
+    private val cancelledRetentionMs: Long = CANCELLED_RETENTION_MS_DEFAULT,
 ) {
 
     /**
@@ -101,10 +114,24 @@ class PipelineOrphanCleaner(
         // Step 2 — delete orphan audio files for old FAILED/CANCELLED rows.
         val (filesDeleted, idsCleared) = cleanupOrphanedTerminalAudio(cutoff)
 
+        // Step 3 — long-horizon retention: drop CANCELLED rows older
+        // than the 60-day window. Runs after step 2 on purpose: a
+        // CANCELLED row aging past the horizon in this very pass has
+        // its audio file deleted by step 2 first, so the row DELETE
+        // never strands a file on disk.
+        val cancelledCutoff = nowProvider() - cancelledRetentionMs
+        val deletedCancelled = try {
+            sessionDao.deleteCancelledOlderThan(cancelledCutoff)
+        } catch (t: Throwable) {
+            Log.w(TAG, "deleteCancelledOlderThan failed at cutoff=$cancelledCutoff", t)
+            0
+        }
+
         CleanupResult(
             deletedCompletedRows = deletedRows,
             filesActuallyDeleted = filesDeleted,
             clearedAudioPathRows = idsCleared.size,
+            deletedCancelledRows = deletedCancelled,
         )
     }
 
@@ -190,6 +217,12 @@ class PipelineOrphanCleaner(
          * `deletedAudioFiles` headline metric.
          */
         val clearedAudioPathRows: Int,
+        /**
+         * CANCELLED rows removed by the long-horizon retention pass
+         * (path 3). Defaults to 0 so pre-existing three-arg
+         * constructions (tests, diagnostics) stay valid.
+         */
+        val deletedCancelledRows: Int = 0,
     ) {
         /**
          * Backwards-compat alias for code that still reads the
@@ -203,7 +236,13 @@ class PipelineOrphanCleaner(
         val deletedAudioFiles: Int get() = clearedAudioPathRows
     }
 
-    private companion object {
+    companion object {
         private const val TAG = "PipelineOrphanCleaner"
+
+        /**
+         * 60-day CANCELLED-row retention horizon
+         * (history-pagination-and-scale §4 gap 1 fallback).
+         */
+        const val CANCELLED_RETENTION_MS_DEFAULT: Long = 60L * 24 * 60 * 60 * 1000
     }
 }

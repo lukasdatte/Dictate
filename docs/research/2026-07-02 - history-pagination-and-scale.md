@@ -4,7 +4,7 @@
 date: 2026-07-02
 author: Lukas + Claude (multi-agent review session)
 type: Research
-status: Research
+status: Accepted
 context: The history list runs unbounded full-table queries synchronously on the main thread, per keystroke, over a table that grows forever. Finding F-054.
 related-plan: n/a (seeded by 2026-07-02 - feature-wiring-code-review.md, F-054)
 related-adrs: —
@@ -50,6 +50,22 @@ The history screen works today because the table is young. It degrades structura
 3. **F-054 is unverified** (feature-gap pass-through) — the code citations are concrete, but re-confirm the trigger frequency claims (`:120-124`, `:148`) before building.
 
 ## 5. Change History
+
+### 2026-07-02 — Implemented (status → Accepted)
+
+- **Trigger:** Implementation of the target design (§2).
+- **What changed:**
+  - **§2.1 Paging:** `SessionDao.pagedHistory(type, searchPattern): PagingSource<Int, SessionEntity>` (Room + `androidx.room:room-paging`, `androidx.paging:paging-runtime-ktx 3.3.6` via the version catalog) replaces the unbounded `getAll()`/`getByType()`/`search()` trio (removed — no remaining callers). `HistoryActivity` + `HistoryAdapter` were converted Java → Kotlin: `PagingDataAdapter` + DiffUtil instead of `notifyDataSetChanged()`, with a new `HistoryViewModel` owning the `Pager`/filter state (`cachedIn` across config changes).
+  - **§2.2 Off the main thread:** all history queries run on Room's paging executor; deletes run on `Dispatchers.IO` in the view model. `allowMainThreadQueries()` stays app-wide (out of scope, per spec).
+  - **§2.3 Debounce/coalesce:** search input debounced 300 ms (initial emission exempt); `ActiveJobRegistry` ticks coalesced via `sample(300 ms)` (not `debounce` — a busy pipeline's continuous ticks would starve a debounced refresh) into `refreshEvents` → `adapter.refresh()`. Running-badge state is folded into the diffed item (`HistoryRow.isRunning`) so refreshes rebind only changed rows.
+  - **§2.4 Escaping:** `LIKE ... ESCAPE '\'` in the DAO + `LikeEscape.escape()` (escapes `\`, `%`, `_`) applied at the view-model boundary.
+  - **§2.5 Retention (gap-1 fallback):** `SessionDao.deleteCancelledOlderThan` wired as path 3 of `PipelineOrphanCleaner` — CANCELLED rows older than 60 d are deleted; FAILED rows are kept forever. Horizon is constructor-injectable (`CANCELLED_RETENTION_MS_DEFAULT`).
+  - **§2.6 Index check:** verified — `index_sessions_created_at` serves the `ORDER BY created_at DESC` walk; a composite `(type, created_at)` index was deliberately not added (the nullable-parameter query shape can't use it; substring `LIKE` is unindexable without FTS). No migration.
+  - **§3 Tests:** `SessionDaoHistoryTest` (Robolectric, real in-memory Room — paging windows, ESCAPE incl. unescaped-over-match controls, retention SQL), `HistoryViewModelTest` (virtual clock — ≤ 1 query per debounce window, escaping, tick coalescing), `PipelineOrphanCleanerTest` extensions (horizon semantics, FAILED immunity, failure absorption).
+- **Deviations:**
+  - `RECORDING_INTERRUPTED` rows now show the RECORDED ("Not processed") badge; the Java adapter let them fall into the `default:` branch (`Log.wtf` + no badge). Forced by Kotlin's exhaustive `when`; semantically both are "unfinished recording, continuable".
+  - §1.1 citation correction: `PipelineOrphanCleaner` lives in `state/`, not `core/`.
+  - Gap-3 trigger-frequency claims re-confirmed before building (`HistoryActivity.java:120-124`, `:148`, `:158-181` as cited).
 
 ### 2026-07-02 — Initial scoping
 

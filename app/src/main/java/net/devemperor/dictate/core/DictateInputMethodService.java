@@ -5253,9 +5253,29 @@ public class DictateInputMethodService extends InputMethodService
                 SessionEntity lastSession = sessionTracker.getLastKeyboardSession();
                 if (lastSession == null) return;
 
+                // Resolve the resend text through the authoritative
+                // fallback chain (last step output → current transcription
+                // → denormalized column) rather than the raw
+                // `final_output_text` cache. The transcription-only pipeline
+                // never writes that denormalized column itself — it is
+                // populated only as a best-effort side-effect of the IME
+                // insertion-audit callback, which is skipped whenever the
+                // SessionTracker's currentSessionId has already been cleared
+                // (end-of-run) by the time the audit's dbExecutor task runs.
+                // Reading the column directly therefore left short-press
+                // resend with an empty output for every plain dictation, so
+                // the dispatcher returned NoOp/Resume and nothing was
+                // inserted. `getFinalOutput` reads the transcription row,
+                // which IS reliably persisted. See ResendStatusDispatcher +
+                // SessionManager.getFinalOutput.
+                String resolvedOutput = sessionManager.getFinalOutput(lastSession.getId());
+                if (resolvedOutput == null || resolvedOutput.isEmpty()) {
+                    resolvedOutput = lastSession.getFinalOutputText();
+                }
+
                 ResendAction action = ResendStatusDispatcher.INSTANCE.decide(
                         lastSession.getStatusEnum(),
-                        lastSession.getFinalOutputText(),
+                        resolvedOutput,
                         lastSession.getId());
 
                 if (action instanceof ResendAction.Insert) {

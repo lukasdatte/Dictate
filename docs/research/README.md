@@ -20,3 +20,4 @@ Research findings **not tied to an active plan**: probes, audits, operational ba
 | 2026-07-02 | [`recording-interruption-handling`](<2026-07-02 - recording-interruption-handling.md>) | Research | Produce InterruptionAction — call/headset/screen interruptions (F-036) |
 | 2026-07-02 | [`history-pagination-and-scale`](<2026-07-02 - history-pagination-and-scale.md>) | Research | Paging, background queries, retention for history (F-054) |
 | 2026-07-02 | [`reprocess-queue-editor`](<2026-07-02 - reprocess-queue-editor.md>) | Research | Ship the staged-queue editor UI (F-110) |
+| 2026-07-02 | [`concurrent-recording-deferred-insertion`](<2026-07-02 - concurrent-recording-deferred-insertion.md>) | Spec — programmer-ready | Secondary recording during processing + pipeline run-queue + ordered deferred insertion + cancel surfacing (R1–R5, ADR-0009) |

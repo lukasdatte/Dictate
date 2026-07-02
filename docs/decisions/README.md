@@ -74,6 +74,7 @@ editing rules".
 | [0006](0006-ui-info-bar-state-derived-items.md) | UI — Info-Bar State-Derived Items with Cross-Module Producers | ui-architecture, state-management | Accepted | 2026-05-21 |
 | [0007](0007-audio-multi-file-repository.md) | Audio — Multi-File Recording Repository (Resume-after-Cold-Start) | audio-pipeline, database | Proposed | 2026-05-21 |
 | [0008](0008-ui-surface-axes-widget-state-and-ime-view.md) | UI — Surface-Axes (WidgetState + ImeView) | ui-mode · *Project-Wide* | Proposed | 2026-05-21 |
+| [0009](0009-pipeline-run-queue-serialized-concurrency.md) | Pipeline — Ordered Run-Queue with Serialized Execution | state, service | Proposed | 2026-07-02 |
 
 ## Relationship graph
 

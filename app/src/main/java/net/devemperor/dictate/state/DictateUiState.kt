@@ -340,13 +340,6 @@ val DictateUiState.canCommitToHost: Boolean
     get() = imeViewVisible
 
 /**
- * Pipeline progress FSM. Owned by `PipelineModule`.
- *
- * Each non-idle state carries the `sessionId` (UUID string per R.15)
- * so callers can disambiguate concurrent submissions. ReprocessStaging
- * is a sub-state of the pipeline FSM, not a separate axis.
- */
-/**
  * Lifecycle status of one [StepRowItem] inside [PipelineUiState.Running.stepHistory].
  *
  * Phase 5.A of `2026-05-21 - dictate-render-cutover-completion-vol2`
@@ -391,6 +384,44 @@ data class StepRowItem(
     val durationMs: Long = 0L,
 )
 
+/**
+ * One pipeline run waiting behind the active run. Enqueued by
+ * [net.devemperor.dictate.state.modules.PipelineModule]'s `TriggerPipeline`
+ * arm while the FSM is [PipelineUiState.Preparing] / [PipelineUiState.Running];
+ * chain-started by the terminal arms when the active run finishes.
+ * @see docs/decisions/0009-pipeline-run-queue-serialized-concurrency.md
+ *
+ * The per-session `JobRequest` config is deliberately **not** carried
+ * here — it already lives sessionId-keyed in
+ * `ImePipelineConfigResolver`'s snapshot map (a `ConcurrentHashMap`
+ * captured at the send-tap and consumed by `resolveFresh` at submit), so
+ * duplicating it on the queued run would create a second source of truth.
+ *
+ * @property sessionId UUID of the waiting run (matches the run's DB row +
+ *   its `ImePipelineConfigResolver` snapshot key).
+ * @property audioFile the recorded audio to submit when the run
+ *   chain-starts.
+ * @property enqueuedAt wall-clock ms (from `ReducerContext.now`) at which
+ *   the run was appended — reducers never read the clock directly.
+ */
+data class QueuedRun(
+    val sessionId: String,
+    val audioFile: File,
+    val enqueuedAt: Long,
+)
+
+/**
+ * Pipeline progress FSM. Owned by `PipelineModule`.
+ *
+ * **Serialized run-queue (ADR-0009).** [Preparing] and [Running] each
+ * carry a [queued] list of [QueuedRun]s that arrived (via
+ * `TriggerPipeline`) while a run was already active. Execution stays
+ * strictly one-run-at-a-time: the terminal arms chain-start the head of
+ * the queue instead of returning to [Idle]. [Idle] and [ReprocessStaging]
+ * carry **no** queue — "Idle with waiting work" is structurally
+ * unrepresentable.
+ * @see docs/decisions/0009-pipeline-run-queue-serialized-concurrency.md
+ */
 sealed interface PipelineUiState {
     /** No pipeline running. */
     data object Idle : PipelineUiState
@@ -412,6 +443,13 @@ sealed interface PipelineUiState {
     data class Preparing(
         val sessionId: String,
         val autoEnterActive: Boolean = false,
+        /**
+         * Runs waiting behind this one (ADR-0009). Defaulted empty →
+         * every existing `Preparing(...)` construction site stays
+         * source-compatible. Populated by `TriggerPipeline` while
+         * non-Idle; drained head-first by the terminal arms.
+         */
+        val queued: PersistentList<QueuedRun> = persistentListOf(),
     ) : PipelineUiState
 
     /**
@@ -483,6 +521,13 @@ sealed interface PipelineUiState {
          */
         val stepHistory: kotlinx.collections.immutable.PersistentList<StepRowItem> =
             kotlinx.collections.immutable.persistentListOf(),
+        /**
+         * Runs waiting behind this one (ADR-0009). Defaulted empty →
+         * every existing `Running(...)` construction site stays
+         * source-compatible. Populated by `TriggerPipeline` while
+         * non-Idle; drained head-first by the terminal arms.
+         */
+        val queued: PersistentList<QueuedRun> = persistentListOf(),
     ) : PipelineUiState
 
     /**

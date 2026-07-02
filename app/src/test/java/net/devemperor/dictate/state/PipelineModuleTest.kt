@@ -1,5 +1,6 @@
 package net.devemperor.dictate.state
 
+import kotlinx.collections.immutable.persistentListOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -50,6 +51,226 @@ class PipelineModuleTest {
         assertTrue(result.sideEffects.any { it is PipelineModule.Effect.UpdateNotification })
     }
 
+    // ─── ADR-0009: serialized run-queue (enqueue + chain-start) ─────────
+
+    @Test
+    fun `StartPipeline carries the queue from Preparing into Running`() {
+        // Regression (ADR-0009 review): StartPipeline constructs Running
+        // fresh; without an explicit carry-over the defaulted `queued`
+        // silently drops every second-in-line run at the Preparing→Running
+        // hop — both mid-upload enqueues and the chain-start's handed-over
+        // rest would vanish.
+        val waiting = QueuedRun("sess-2", File("/tmp/b.m4a"), enqueuedAt = 1_000L)
+        val result = module.reduce(
+            state = PipelineUiState.Preparing(sessionId = sid, queued = persistentListOf(waiting)),
+            action = Action.PipelineAction.StartPipeline(sid, totalSteps = 2, autoEnterActive = false),
+            ctx = ctx(),
+        )
+        val running = result!!.nextState as PipelineUiState.Running
+        assertEquals(persistentListOf(waiting), running.queued)
+    }
+
+    @Test
+    fun `TriggerPipeline while Running appends a QueuedRun instead of being dropped`() {
+        // Red-proof (ADR-0009 / spec §3.2, criterion 5): the pre-change
+        // reducer silently rejected a second TriggerPipeline while busy
+        // (returned null → the user's part-B send was lost). Now it must
+        // enqueue the run behind the active one, with NO submit effect.
+        val state = PipelineUiState.Running(sessionId = sid, target = InsertionTarget.INPUT_CONNECTION)
+        val result = module.reduce(
+            state,
+            Action.PipelineAction.TriggerPipeline("sess-2", File("/tmp/b.m4a")),
+            ctx(),
+        )
+        val next = result!!.nextState as PipelineUiState.Running
+        assertEquals(1, next.queued.size)
+        val q = next.queued.first()
+        assertEquals("sess-2", q.sessionId)
+        assertEquals(File("/tmp/b.m4a"), q.audioFile)
+        assertEquals(5_000L, q.enqueuedAt)   // ctx() injects now = 5_000L
+        // Enqueue never submits — only the chain-start (terminal) does.
+        assertTrue(
+            "enqueue must not emit any SubmitPipeline effect",
+            result.sideEffects.none { it is PipelineModule.Effect.SubmitPipeline },
+        )
+    }
+
+    @Test
+    fun `TriggerPipeline while Preparing appends a QueuedRun`() {
+        val state = PipelineUiState.Preparing(sid)
+        val result = module.reduce(
+            state,
+            Action.PipelineAction.TriggerPipeline("sess-2", File("/tmp/b.m4a")),
+            ctx(),
+        )
+        val next = result!!.nextState as PipelineUiState.Preparing
+        assertEquals(sid, next.sessionId)
+        assertEquals(1, next.queued.size)
+        assertEquals("sess-2", next.queued.first().sessionId)
+        assertTrue(result.sideEffects.none { it is PipelineModule.Effect.SubmitPipeline })
+    }
+
+    @Test
+    fun `TriggerPipeline dedups a sessionId already queued`() {
+        // Double-tap guard: a second trigger for a sessionId already
+        // waiting is not-relevant (return null), not a duplicate entry.
+        val state = PipelineUiState.Running(
+            sessionId = sid,
+            target = InsertionTarget.INPUT_CONNECTION,
+            queued = persistentListOf(QueuedRun("sess-2", File("/tmp/b.m4a"), 1_000L)),
+        )
+        val result = module.reduce(
+            state,
+            Action.PipelineAction.TriggerPipeline("sess-2", File("/tmp/b.m4a")),
+            ctx(),
+        )
+        assertNull(result)
+    }
+
+    @Test
+    fun `TriggerPipeline dedups a sessionId equal to the active run`() {
+        // A re-trigger of the currently-running session is a double-tap,
+        // not a queue-behind-itself request (none exists today —
+        // resend/reprocess route through different actions).
+        val state = PipelineUiState.Running(sessionId = sid, target = InsertionTarget.INPUT_CONNECTION)
+        val result = module.reduce(
+            state,
+            Action.PipelineAction.TriggerPipeline(sid, audioFile),
+            ctx(),
+        )
+        assertNull(result)
+    }
+
+    @Test
+    fun `TriggerPipeline from ReprocessStaging is still rejected`() {
+        val state = PipelineUiState.ReprocessStaging(sid, transcript = "")
+        val result = module.reduce(
+            state,
+            Action.PipelineAction.TriggerPipeline("sess-2", File("/tmp/b.m4a")),
+            ctx(),
+        )
+        assertNull(result)
+    }
+
+    @Test
+    fun `PipelineDone(committed=true) with a non-empty queue chain-starts the next run`() {
+        val queued = persistentListOf(QueuedRun("sess-2", File("/tmp/b.m4a"), 1_000L))
+        val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION, queued = queued)
+        val result = module.reduce(state, Action.PipelineAction.PipelineDone(sid, "hello"), ctx())
+        val next = result!!.nextState as PipelineUiState.Preparing
+        assertEquals("sess-2", next.sessionId)
+        assertTrue("rest of the queue carries over", next.queued.isEmpty())
+        // Finished-session effect stays exactly as-is.
+        assertTrue(result.sideEffects.contains(PipelineModule.Effect.MarkSessionInserted(sid, 5_000L)))
+        // Chain-start effects.
+        assertTrue(
+            result.sideEffects.contains(PipelineModule.Effect.SubmitPipeline("sess-2", File("/tmp/b.m4a"))),
+        )
+        assertTrue(
+            result.sideEffects.any {
+                it is PipelineModule.Effect.UpdateNotification &&
+                    it.status is NotificationStatus.Pipeline
+            },
+        )
+        // No DismissNotification mid-chain — the notification stays up.
+        assertFalse(result.sideEffects.contains(PipelineModule.Effect.DismissNotification))
+    }
+
+    @Test
+    fun `PipelineDone(committed=false) with a non-empty queue chain-starts and keeps AddPendingInsertSession`() {
+        val queued = persistentListOf(QueuedRun("sess-2", File("/tmp/b.m4a"), 1_000L))
+        val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION, queued = queued)
+        val result = module.reduce(
+            state,
+            Action.PipelineAction.PipelineDone(sid, "hello", committed = false),
+            ctx(),
+        )
+        val next = result!!.nextState as PipelineUiState.Preparing
+        assertEquals("sess-2", next.sessionId)
+        assertTrue(
+            result.sideEffects.any { it is PipelineModule.Effect.AddPendingInsertSession },
+        )
+        assertTrue(
+            result.sideEffects.contains(PipelineModule.Effect.SubmitPipeline("sess-2", File("/tmp/b.m4a"))),
+        )
+        assertFalse(result.sideEffects.contains(PipelineModule.Effect.DismissNotification))
+    }
+
+    @Test
+    fun `PipelineFailed with a non-empty queue chain-starts the next run`() {
+        val queued = persistentListOf(QueuedRun("sess-2", File("/tmp/b.m4a"), 1_000L))
+        val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION, queued = queued)
+        val result = module.reduce(state, Action.PipelineAction.PipelineFailed(sid, "rate-limit"), ctx())
+        val next = result!!.nextState as PipelineUiState.Preparing
+        assertEquals("sess-2", next.sessionId)
+        assertTrue(result.sideEffects.contains(PipelineModule.Effect.MarkSessionFailed(sid, "rate-limit")))
+        assertTrue(
+            result.sideEffects.contains(PipelineModule.Effect.SubmitPipeline("sess-2", File("/tmp/b.m4a"))),
+        )
+        assertFalse(result.sideEffects.contains(PipelineModule.Effect.DismissNotification))
+    }
+
+    @Test
+    fun `CancelPipeline with a non-empty queue cancels the active run and chain-starts the next`() {
+        // D5: cancel targets the active run only; queued runs survive and
+        // chain-start.
+        val queued = persistentListOf(QueuedRun("sess-2", File("/tmp/b.m4a"), 1_000L))
+        val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION, queued = queued)
+        val result = module.reduce(state, Action.PipelineAction.CancelPipeline(sid), ctx())
+        val next = result!!.nextState as PipelineUiState.Preparing
+        assertEquals("sess-2", next.sessionId)
+        assertTrue(result.sideEffects.contains(PipelineModule.Effect.CancelPipelineJob(sid)))
+        assertTrue(
+            result.sideEffects.contains(PipelineModule.Effect.SubmitPipeline("sess-2", File("/tmp/b.m4a"))),
+        )
+        assertFalse(result.sideEffects.contains(PipelineModule.Effect.DismissNotification))
+    }
+
+    @Test
+    fun `RejectedJobAlreadyActive with a non-empty queue chain-starts the next run`() {
+        val queued = persistentListOf(QueuedRun("sess-2", File("/tmp/b.m4a"), 1_000L))
+        val state = PipelineUiState.Preparing(sid, queued = queued)
+        val result = module.reduce(state, Action.PipelineAction.RejectedJobAlreadyActive(sid), ctx())
+        val next = result!!.nextState as PipelineUiState.Preparing
+        assertEquals("sess-2", next.sessionId)
+        assertTrue(
+            result.sideEffects.contains(PipelineModule.Effect.SubmitPipeline("sess-2", File("/tmp/b.m4a"))),
+        )
+        assertFalse(result.sideEffects.contains(PipelineModule.Effect.DismissNotification))
+    }
+
+    @Test
+    fun `multi-entry queue drains FIFO across successive terminals`() {
+        val queued = persistentListOf(
+            QueuedRun("sess-2", File("/tmp/b.m4a"), 1_000L),
+            QueuedRun("sess-3", File("/tmp/c.m4a"), 2_000L),
+        )
+        val running = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION, queued = queued)
+
+        // First terminal → sess-2 starts, sess-3 stays queued.
+        val r1 = module.reduce(running, Action.PipelineAction.PipelineDone(sid, "a"), ctx())
+        val p2 = r1!!.nextState as PipelineUiState.Preparing
+        assertEquals("sess-2", p2.sessionId)
+        assertEquals(1, p2.queued.size)
+        assertEquals("sess-3", p2.queued.first().sessionId)
+
+        // Promote sess-2 to Running (carry its queue), then finish it →
+        // sess-3 chain-starts, queue now empty.
+        val running2 = PipelineUiState.Running(
+            "sess-2", InsertionTarget.INPUT_CONNECTION, queued = p2.queued,
+        )
+        val r2 = module.reduce(running2, Action.PipelineAction.PipelineDone("sess-2", "b"), ctx())
+        val p3 = r2!!.nextState as PipelineUiState.Preparing
+        assertEquals("sess-3", p3.sessionId)
+        assertTrue(p3.queued.isEmpty())
+
+        // Final terminal with an empty queue → Idle + DismissNotification.
+        val running3 = PipelineUiState.Running("sess-3", InsertionTarget.INPUT_CONNECTION)
+        val r3 = module.reduce(running3, Action.PipelineAction.PipelineDone("sess-3", "c"), ctx())
+        assertEquals(PipelineUiState.Idle, r3!!.nextState)
+        assertTrue(r3.sideEffects.contains(PipelineModule.Effect.DismissNotification))
+    }
+
     @Test
     fun `TriggerPipeline from Running is rejected`() {
         val state = PipelineUiState.Running(sessionId = sid, target = InsertionTarget.INPUT_CONNECTION)
@@ -58,6 +279,7 @@ class PipelineModuleTest {
             Action.PipelineAction.TriggerPipeline(sid, audioFile),
             ctx(),
         )
+        // Same sessionId as the active run → dedup → not-relevant (null).
         assertNull(result)
     }
 

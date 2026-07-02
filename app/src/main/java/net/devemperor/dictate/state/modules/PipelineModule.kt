@@ -165,9 +165,40 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                     ),
                 ),
             )
-            // Already running — silently reject (caller should have checked
-            // `pipeline is Idle` before triggering).
-            else -> null
+            // ADR-0009: a run arrived while another is active — enqueue it
+            // behind the active run instead of dropping it (the old silent
+            // reject lost the user's part-B send). No submit effect: the
+            // chain-start (terminal arms) is what submits. Dedup by
+            // sessionId — a re-trigger of the active or an already-queued
+            // session is a double-tap (return null; resend/reprocess route
+            // through different actions, so none legitimately re-queues).
+            is PipelineUiState.Preparing ->
+                if (isDuplicateTrigger(state.sessionId, state.queued, action.sessionId)) {
+                    null
+                } else {
+                    TransitionResult(
+                        nextState = state.copy(
+                            queued = state.queued.add(
+                                QueuedRun(action.sessionId, action.audioFile, ctx.now),
+                            ),
+                        ),
+                    )
+                }
+            is PipelineUiState.Running ->
+                if (isDuplicateTrigger(state.sessionId, state.queued, action.sessionId)) {
+                    null
+                } else {
+                    TransitionResult(
+                        nextState = state.copy(
+                            queued = state.queued.add(
+                                QueuedRun(action.sessionId, action.audioFile, ctx.now),
+                            ),
+                        ),
+                    )
+                }
+            // Staging is entered from Idle and the secondary record button is
+            // not offered there — no run can arrive to queue (unchanged).
+            is PipelineUiState.ReprocessStaging -> null
         }
 
         is Action.PipelineAction.StartPipeline -> when (state) {
@@ -199,6 +230,11 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                         elapsedMs = 0L,
                         hasFailure = false,
                         stepHistory = kotlinx.collections.immutable.persistentListOf(),
+                        // ADR-0009: the run-queue survives the Preparing →
+                        // Running hop — a fresh default here would silently
+                        // drop every second-in-line run (mid-upload enqueues
+                        // and the chain-start's handed-over rest alike).
+                        queued = state.queued,
                     ),
                     sideEffects = listOf(
                         Effect.UpdateNotification(
@@ -322,14 +358,16 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
             } else null
             // The Preparing arm preserves the pre-Q6 behaviour: an
             // upload-time failure happens BEFORE any step row exists, so
-            // it ends the pipeline and dismisses the notification.
+            // it ends the pipeline. ADR-0009: the failed run's
+            // MarkSessionFailed stays; the queue drains (chain-start next,
+            // or Idle + DismissNotification when empty).
             is PipelineUiState.Preparing -> if (state.sessionId == action.sessionId) {
+                val (nextState, terminalEffects) = nextAfterTerminal(queuedOf(state))
                 TransitionResult(
-                    nextState = PipelineUiState.Idle,
+                    nextState = nextState,
                     sideEffects = listOf(
                         Effect.MarkSessionFailed(action.sessionId, action.reason),
-                        Effect.DismissNotification,
-                    ),
+                    ) + terminalEffects,
                 )
             } else null
             else -> null
@@ -353,12 +391,12 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                             createdAt = ctx.now,
                         )
                     }
+                    // ADR-0009: keep the finished-session effect, then drain
+                    // the queue (chain-start next) or return to Idle.
+                    val (nextState, terminalEffects) = nextAfterTerminal(queuedOf(state))
                     TransitionResult(
-                        nextState = PipelineUiState.Idle,
-                        sideEffects = listOf(
-                            followUp,
-                            Effect.DismissNotification,
-                        ),
+                        nextState = nextState,
+                        sideEffects = listOf(followUp) + terminalEffects,
                     )
                 } else null
             else -> null
@@ -367,12 +405,15 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         is Action.PipelineAction.PipelineFailed -> when (state) {
             is PipelineUiState.Running, is PipelineUiState.Preparing ->
                 if (sessionIdOf(state) == action.sessionId) {
+                    // ADR-0009: the failed run's MarkSessionFailed stays;
+                    // the queue drains (a failure does not cancel queued
+                    // runs — D5).
+                    val (nextState, terminalEffects) = nextAfterTerminal(queuedOf(state))
                     TransitionResult(
-                        nextState = PipelineUiState.Idle,
+                        nextState = nextState,
                         sideEffects = listOf(
                             Effect.MarkSessionFailed(action.sessionId, action.reason),
-                            Effect.DismissNotification,
-                        ),
+                        ) + terminalEffects,
                     )
                 } else null
             else -> null
@@ -407,11 +448,14 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                     // Stale cancel — target id doesn't match the current job.
                     null
                 } else {
+                    // ADR-0009 (D5): cancel targets the active run only —
+                    // queued runs survive and chain-start.
+                    val (nextState, terminalEffects) = nextAfterTerminal(queuedOf(state))
                     TransitionResult(
-                        nextState = PipelineUiState.Idle,
+                        nextState = nextState,
                         sideEffects = buildList {
                             sid?.let { add(Effect.CancelPipelineJob(it)) }
-                            add(Effect.DismissNotification)
+                            addAll(terminalEffects)
                         },
                     )
                 }
@@ -489,20 +533,22 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         is Action.PipelineAction.PersistenceError -> when (state) {
             is PipelineUiState.Running, is PipelineUiState.Preparing ->
                 if (sessionIdOf(state) == action.sessionId) {
-                    TransitionResult(
-                        nextState = PipelineUiState.Idle,
-                        sideEffects = listOf(Effect.DismissNotification),
-                    )
+                    // ADR-0009: Idle-producing terminal — drain the queue.
+                    val (nextState, terminalEffects) = nextAfterTerminal(queuedOf(state))
+                    TransitionResult(nextState = nextState, sideEffects = terminalEffects)
                 } else null
             else -> null
         }
 
         is Action.PipelineAction.RejectedJobAlreadyActive ->
             // R.17 state-first race mitigation: a parallel job is active;
-            // roll back to Idle if we're still in Preparing.
+            // roll back if we're still in Preparing. ADR-0009: route through
+            // the terminal helper so a queued run chain-starts instead of
+            // stalling behind the rejected one.
             when (state) {
                 is PipelineUiState.Preparing -> if (state.sessionId == action.sessionId) {
-                    TransitionResult(nextState = PipelineUiState.Idle, sideEffects = emptyList())
+                    val (nextState, terminalEffects) = nextAfterTerminal(queuedOf(state))
+                    TransitionResult(nextState = nextState, sideEffects = terminalEffects)
                 } else null
                 else -> null
             }
@@ -557,6 +603,66 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         is PipelineUiState.Running -> state.sessionId
         is PipelineUiState.ReprocessStaging -> state.sessionId
     }
+
+    /**
+     * The run-queue carried by [state], or empty for the states that hold
+     * none ([PipelineUiState.Idle] / [PipelineUiState.ReprocessStaging] —
+     * invariant #7: Idle-with-queue is unrepresentable). @see ADR-0009.
+     */
+    private fun queuedOf(
+        state: PipelineUiState,
+    ): kotlinx.collections.immutable.PersistentList<QueuedRun> = when (state) {
+        is PipelineUiState.Preparing -> state.queued
+        is PipelineUiState.Running -> state.queued
+        is PipelineUiState.Idle -> kotlinx.collections.immutable.persistentListOf()
+        is PipelineUiState.ReprocessStaging -> kotlinx.collections.immutable.persistentListOf()
+    }
+
+    /**
+     * `true` when a `TriggerPipeline` for [sessionId] is a double-tap: it
+     * matches either the active run or a run already queued. Such a
+     * trigger is not-relevant (the enqueue arms return `null`), because
+     * no legitimate re-trigger of the same session queues behind itself —
+     * resend / reprocess route through different actions. @see ADR-0009.
+     */
+    private fun isDuplicateTrigger(
+        activeSessionId: String,
+        queued: kotlinx.collections.immutable.PersistentList<QueuedRun>,
+        sessionId: String,
+    ): Boolean =
+        activeSessionId == sessionId || queued.any { it.sessionId == sessionId }
+
+    /**
+     * Terminal transition (ADR-0009 §3.2): drain the queue or return to
+     * Idle. Empty queue → [PipelineUiState.Idle] + [Effect.DismissNotification]
+     * (today's behaviour, byte-identical). Non-empty → chain-start the head
+     * run: [PipelineUiState.Preparing] carrying the rest, plus a
+     * [Effect.SubmitPipeline] and an [Effect.UpdateNotification]. The
+     * [Effect.DismissNotification] lives here (not in the arms) so it fires
+     * only when the chain actually ends — never mid-chain.
+     *
+     * The caller concatenates its own finished-session effects
+     * ([Effect.MarkSessionInserted] / [Effect.MarkSessionFailed] /
+     * [Effect.AddPendingInsertSession] / [Effect.CancelPipelineJob]) before
+     * this result.
+     */
+    private fun nextAfterTerminal(
+        queued: kotlinx.collections.immutable.PersistentList<QueuedRun>,
+    ): Pair<PipelineUiState, List<Effect>> =
+        if (queued.isEmpty()) {
+            PipelineUiState.Idle to listOf(Effect.DismissNotification)
+        } else {
+            val next = queued.first()
+            PipelineUiState.Preparing(
+                sessionId = next.sessionId,
+                queued = queued.removeAt(0),
+            ) to listOf(
+                Effect.SubmitPipeline(next.sessionId, next.audioFile),
+                Effect.UpdateNotification(
+                    NotificationStatus.Pipeline(next.sessionId, step = "preparing"),
+                ),
+            )
+        }
 
     override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
         is Effect.SubmitPipeline -> services.pipelineRunner.submit(effect.sessionId, effect.audioFile)

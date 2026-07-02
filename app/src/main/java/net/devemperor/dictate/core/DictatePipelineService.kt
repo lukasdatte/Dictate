@@ -587,6 +587,14 @@ class DictatePipelineService : Service() {
                 ),
                 imeResolverProvider = { binder.delegatePipelineConfigResolver },
             ),
+            // ADR-0009 §3.3 submit-when-free gate: the deferred submit
+            // launches on the service scope and, on timeout, fails the
+            // session loudly via the orchestrator's action pipe. emitAction
+            // is a late-bound lambda (orchestrator is constructed below —
+            // same construction-order pattern as the notification router
+            // and recovery wiring).
+            scope = serviceScope,
+            emitAction = { action -> orchestrator.emitAction(action) },
         )
 
         // C4-B2 — real notification coordinator + action router (Spec 1

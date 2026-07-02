@@ -2,6 +2,12 @@ package net.devemperor.dictate.core
 
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import net.devemperor.dictate.database.entity.SessionOrigin
 import net.devemperor.dictate.state.Action
 import org.junit.After
@@ -103,7 +109,18 @@ class PipelineRunnerSubsystemAdapterTest {
 
     private fun newAdapter(
         resolver: PipelineConfigResolver,
-    ) = PipelineRunnerSubsystemAdapter(appContext(), resolver)
+        scope: CoroutineScope = CoroutineScope(Dispatchers.Unconfined),
+        emitAction: (Action) -> Unit = {},
+        timeoutMs: Long = PipelineRunnerSubsystemAdapter.SUBMIT_WHEN_FREE_TIMEOUT_MS,
+    ) = PipelineRunnerSubsystemAdapter(appContext(), resolver, scope, emitAction, timeoutMs)
+
+    private fun running(sessionId: String) = JobState.Running(
+        sessionId = sessionId,
+        currentStepIndex = 0,
+        totalSteps = 1,
+        currentStepName = "",
+        startedAt = 0L,
+    )
 
     private fun tempFilesDir(): File =
         File(System.getProperty("java.io.tmpdir"), "c3b1-files-${System.nanoTime()}").apply { mkdirs() }
@@ -287,6 +304,88 @@ class PipelineRunnerSubsystemAdapterTest {
             "adapter.cancel() must propagate to JobExecutor's cooperative token"
         }
         waitForRegistryEmpty()
+    }
+
+    // ── Submit-when-free gate (ADR-0009 §3.3) ─────────────────────────
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `submit-when-free starts immediately when the registry is empty`() = runTest {
+        val runner = RecordingRunner()
+        JobExecutor.initializeForTest(runner)
+        val filesDir = tempFilesDir()
+        val adapter = newAdapter(
+            DefaultPipelineConfigResolver(filesDirProvider = { filesDir }),
+            scope = this,
+        )
+
+        // Registry empty at submit → fast path, no deferral.
+        adapter.submitReprocess("free", File(filesDir, "a.m4a"), emptyList(), null)
+
+        runner.awaitStarted()
+        waitForRegistryEmpty()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `submit-when-free defers while occupied and starts once the registry empties`() = runTest {
+        val runner = RecordingRunner()
+        JobExecutor.initializeForTest(runner)
+        val filesDir = tempFilesDir()
+        // Occupy the registry — simulates the finishing job's teardown window
+        // (completion callback dispatched PipelineDone → chain-start submit
+        // before JobExecutor's finally unregistered the old job).
+        ActiveJobRegistry.register("blocker", running("blocker"))
+        val adapter = newAdapter(
+            DefaultPipelineConfigResolver(filesDirProvider = { filesDir }),
+            scope = this,
+        )
+
+        adapter.submitReprocess("gated", File(filesDir, "a.m4a"), emptyList(), null)
+        runCurrent()   // gate coroutine suspends on registry-empty — no start yet
+        assertEquals(
+            "deferred while occupied — runner must NOT start yet",
+            1L,
+            runner.done.count,
+        )
+
+        // The previous job's teardown empties the registry.
+        ActiveJobRegistry.unregister("blocker")
+        runCurrent()   // gate resumes → JobExecutor.start
+
+        runner.awaitStarted()
+        waitForRegistryEmpty()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `submit-when-free fails the session loudly via PipelineFailed on timeout`() = runTest {
+        val runner = RecordingRunner()
+        JobExecutor.initializeForTest(runner)
+        val filesDir = tempFilesDir()
+        val captured = mutableListOf<Action>()
+        // Registry stays occupied forever → the bounded await times out.
+        ActiveJobRegistry.register("blocker", running("blocker"))
+        val adapter = newAdapter(
+            DefaultPipelineConfigResolver(filesDirProvider = { filesDir }),
+            scope = this,
+            emitAction = { captured.add(it) },
+        )
+
+        adapter.submitReprocess("gated", File(filesDir, "a.m4a"), emptyList(), null)
+        advanceUntilIdle()   // advance virtual time past SUBMIT_WHEN_FREE_TIMEOUT_MS
+
+        val failed = captured.filterIsInstance<Action.PipelineAction.PipelineFailed>()
+        assertEquals("exactly one PipelineFailed emitted", 1, failed.size)
+        assertEquals("gated", failed.first().sessionId)
+        assertEquals(
+            PipelineRunnerSubsystemAdapter.SUBMIT_GATE_TIMEOUT_REASON,
+            failed.first().reason,
+        )
+        // The job never started — it was gated, not submitted.
+        assertEquals("runner must NOT start on timeout", 1L, runner.done.count)
+
+        ActiveJobRegistry.unregister("blocker")
     }
 
     // ── Binder integration — production wiring reaches the real adapter ─

@@ -1,7 +1,13 @@
 package net.devemperor.dictate.core
 
 import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import net.devemperor.dictate.database.entity.SessionOrigin
+import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.PipelineRunnerSubsystem
 import java.io.File
 
@@ -82,9 +88,15 @@ import java.io.File
 class PipelineRunnerSubsystemAdapter(
     private val context: Context,
     private val configResolver: PipelineConfigResolver,
+    private val scope: CoroutineScope,
+    private val emitAction: (Action) -> Unit,
+    private val submitWhenFreeTimeoutMs: Long = SUBMIT_WHEN_FREE_TIMEOUT_MS,
 ) : PipelineRunnerSubsystem {
 
     override fun submit(sessionId: String, audioFile: File) {
+        // `resolveFresh` is called synchronously so its R-1 guard throw
+        // surfaces via `PipelineModule.runEffect`'s EffectFailure arm (a
+        // deferred throw inside the launched coroutine would escape it).
         val request = configResolver.resolveFresh(sessionId, audioFile)
         // `JobExecutor.start`'s `Boolean` (false = another job active) is
         // intentionally not propagated: on the new path the single-submit
@@ -92,7 +104,7 @@ class PipelineRunnerSubsystemAdapter(
         // `Idle` pipeline emits `SubmitPipeline`), so a busy-collision
         // cannot originate here. The IME's legacy busy-toast lives on the
         // legacy call-site, which C3 leaves intact.
-        JobExecutor.start(context, request)
+        startWhenFree(sessionId, request)
     }
 
     override fun submitReprocess(
@@ -102,7 +114,51 @@ class PipelineRunnerSubsystemAdapter(
         language: String?,
     ) {
         val request = configResolver.resolveReprocess(sessionId, audioFile, queue, language)
-        JobExecutor.start(context, request)
+        startWhenFree(sessionId, request)
+    }
+
+    /**
+     * Submit-when-free gate (ADR-0009 §3.3, spec §3.3). A chain-start
+     * `SubmitPipeline` can race the finishing job's teardown: the
+     * completion callback dispatches `PipelineDone` (→ chain-start) from
+     * *inside* the worker's run, before [JobExecutor]'s `finally`
+     * unregisters the job (`JobExecutor.kt:189-193`). So
+     * [ActiveJobRegistry] may still show the old entry for a few ms and a
+     * synchronous [JobExecutor.start] would be rejected.
+     *
+     * If the registry is already free, start immediately (unchanged fast
+     * path). Otherwise defer on the service [scope]: await the registry's
+     * reactive state becoming empty (bounded by [submitWhenFreeTimeoutMs]),
+     * then start. On timeout, fail the session **loudly** through the
+     * existing [Action.PipelineAction.PipelineFailed] path (never silent) —
+     * the standard error surfacing + terminal handling (incl. queue drain)
+     * then applies. [JobExecutor] / [ActiveJobRegistry] stay unchanged; the
+     * FSM guarantees at most one job is submitted at a time, so this gate
+     * only absorbs the teardown window.
+     */
+    private fun startWhenFree(sessionId: String, request: JobRequest) {
+        if (!ActiveJobRegistry.isAnyActive()) {
+            JobExecutor.start(context, request)
+            return
+        }
+        scope.launch {
+            val freed = withTimeoutOrNull(submitWhenFreeTimeoutMs) {
+                // StateFlow replays its current value, so this returns the
+                // moment the previous job's teardown empties the registry.
+                ActiveJobRegistry.state.first { it.isEmpty() }
+            }
+            if (freed != null) {
+                JobExecutor.start(context, request)
+            } else {
+                Log.w(
+                    "PipelineRunnerAdapter",
+                    "submit-gate timeout for $sessionId — failing session loudly",
+                )
+                emitAction(
+                    Action.PipelineAction.PipelineFailed(sessionId, SUBMIT_GATE_TIMEOUT_REASON),
+                )
+            }
+        }
     }
 
     override fun cancel(sessionId: String) {
@@ -120,6 +176,20 @@ class PipelineRunnerSubsystemAdapter(
 
     override fun activeJobCount(): Int =
         ActiveJobRegistry.state.value.size
+
+    companion object {
+        /**
+         * Upper bound on the submit-when-free wait (ADR-0009 §3.3). The
+         * teardown window is milliseconds in practice; a value this large
+         * only matters for a wedged worker, which fails the session loudly
+         * (never silently) — a wedged worker was already fatal pre-ADR.
+         */
+        const val SUBMIT_WHEN_FREE_TIMEOUT_MS: Long = 15_000L
+
+        /** Reason string for the loud [Action.PipelineAction.PipelineFailed] on gate timeout. */
+        const val SUBMIT_GATE_TIMEOUT_REASON: String =
+            "submit-gate timeout: previous job did not release the registry"
+    }
 }
 
 /**

@@ -2,7 +2,6 @@ package net.devemperor.dictate.state.render.overlay
 
 import android.content.Context
 import android.graphics.PixelFormat
-import android.os.Build
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.test.core.app.ApplicationProvider
@@ -41,9 +40,9 @@ class OverlayLayoutParamsFactoryTest {
     private val factory = DefaultOverlayLayoutParamsFactory(ctx)
 
     @Test
-    fun `window type is TYPE_APPLICATION_OVERLAY on API 26+`() {
-        // Robolectric default API >= 26.
-        assertTrue("Test runs on API >= 26", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+    fun `window type is TYPE_APPLICATION_OVERLAY`() {
+        // minSdk 26 ⇒ unconditional (F-121 — the API<26 TYPE_PHONE
+        // fallback branch was deleted as unreachable dead code).
         val params = factory.create()
         assertEquals(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, params.type)
     }

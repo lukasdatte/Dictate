@@ -29,6 +29,7 @@ import net.devemperor.dictate.core.ActiveJobRegistry;
 import net.devemperor.dictate.core.ActiveJobRegistryObserver;
 import net.devemperor.dictate.core.JobExecutor;
 import net.devemperor.dictate.core.JobRequest;
+import net.devemperor.dictate.core.PromptQueueSlot;
 import net.devemperor.dictate.core.RecordingRepository;
 import net.devemperor.dictate.core.SessionManager;
 import net.devemperor.dictate.database.DictateDatabase;
@@ -54,7 +55,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class HistoryDetailActivity extends AppCompatActivity
-        implements PromptChooserBottomSheet.OnPromptChosenListener {
+        implements PromptChooserBottomSheet.OnPromptChosenListener,
+        ReprocessQueueEditorBottomSheet.OnReprocessQueueConfirmedListener {
 
     // F-111: All chooser tags encode their full context (step id / session id)
     // in the fragment tag, mirroring the reprocess-edit pattern. The BottomSheet
@@ -169,18 +171,15 @@ public class HistoryDetailActivity extends AppCompatActivity
 
             @Override
             public void onReprocessWithEdit(String sessionId) {
-                // Plan 10.6 calls for a full drag-to-reorder queue-editor
-                // (PromptChooserBottomSheetV2). That UI is tracked as a
-                // follow-up. Until it ships, we reuse the existing V1 chooser
-                // as a minimal queue-editor: the user picks a single prompt
-                // and that prompt becomes the one-element edited queue.
-                //
-                // This differs from onDirectReprocess (above) which reuses the
-                // session's historical queue unchanged — so the two buttons
-                // are no longer identical.
-                PromptChooserBottomSheet
-                        .newInstance(TAG_REPROCESS_EDIT_PREFIX + sessionId)
-                        .show(getSupportFragmentManager(), "prompt_chooser_reprocess");
+                // Plan 10.6 / F-110: full queue editor (multi-select, drag
+                // to reorder, free-text) — the session id travels in the
+                // fragment arguments AND the fragment-manager tag, so the
+                // flow survives rotation without Activity fields. This
+                // differs from onDirectReprocess (above), which re-runs the
+                // session's historical queue unchanged.
+                ReprocessQueueEditorBottomSheet
+                        .newInstance(sessionId)
+                        .show(getSupportFragmentManager(), TAG_REPROCESS_EDIT_PREFIX + sessionId);
             }
 
             @Override
@@ -480,7 +479,7 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     // region Reprocess actions (Phase 10.3)
 
-    private void startHistoryReprocess(String targetSessionId, List<Integer> editedQueue) {
+    private void startHistoryReprocess(String targetSessionId, List<PromptQueueSlot> editedQueue) {
         if (ActiveJobRegistry.INSTANCE.isAnyActive()) {
             Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
             return;
@@ -495,9 +494,12 @@ public class HistoryDetailActivity extends AppCompatActivity
             return;
         }
 
-        List<Integer> queue = editedQueue != null
+        // Direct reprocess (editedQueue == null) re-runs the historical
+        // queue as ID-only slots — the pipeline resolves the prompts'
+        // current text at execution, exactly like the original run did.
+        List<PromptQueueSlot> queue = editedQueue != null
                 ? editedQueue
-                : sessionManager.getHistoricalQueuedPromptIds(targetSessionId);
+                : PromptQueueSlot.fromIds(sessionManager.getHistoricalQueuedPromptIds(targetSessionId));
 
         int totalSteps = 1; // transcription
         totalSteps += queue.size();
@@ -509,7 +511,7 @@ public class HistoryDetailActivity extends AppCompatActivity
                 /* audioFilePath */ audioPath,
                 /* language */ target.getLanguage(),
                 /* modelOverride */ null,
-                /* queuedPromptIds */ queue,
+                /* queuedPromptSlots */ queue,
                 /* targetAppPackage */ target.getTargetAppPackage(),
                 /* recordingsDir */ new File(audioPath).getParentFile() != null
                         ? new File(audioPath).getParentFile()
@@ -560,8 +562,11 @@ public class HistoryDetailActivity extends AppCompatActivity
                 sessionId,
                 /* totalSteps */ 1,
                 step.getChainIndex(),
-                promptOverride,
-                promptOverrideEntityId
+                // Slot transport: "(text, optional entityId)" — free-text
+                // overrides carry no entity id (PromptQueueSlot shape 2/3).
+                promptOverride != null
+                        ? PromptQueueSlot.ofContent(promptOverride, promptOverrideEntityId)
+                        : null
         );
         if (!JobExecutor.INSTANCE.start(this, request)) {
             Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
@@ -632,21 +637,21 @@ public class HistoryDetailActivity extends AppCompatActivity
             ProcessingStepEntity step = stepDao.getById(tag.substring(TAG_POST_PROCESS_PREFIX.length()));
             if (step == null || step.getOutputText() == null || step.getOutputText().isEmpty()) return;
             dispatchPostProcess(step.getOutputText(), promptText, promptEntityId);
-        } else if (tag.startsWith(TAG_REPROCESS_EDIT_PREFIX)) {
-            // K2 minimal-fallback: V1 chooser feeds a single-prompt queue into
-            // the reprocess pipeline. Free-text prompts (promptEntityId == null)
-            // are skipped because JobRequest's queuedPromptIds carries entity
-            // IDs only — the V2 editor will supersede this path.
-            String targetSessionId = tag.substring(TAG_REPROCESS_EDIT_PREFIX.length());
-            if (promptEntityId != null) {
-                startHistoryReprocess(targetSessionId,
-                        java.util.Collections.singletonList(promptEntityId));
-            } else {
-                Toast.makeText(this,
-                        getString(R.string.dictate_history_reprocess_edit_needs_saved_prompt),
-                        Toast.LENGTH_LONG).show();
-            }
         }
+        // "Reprocess with edit" no longer routes through the V1 chooser —
+        // the ReprocessQueueEditorBottomSheet reports via
+        // onReprocessQueueConfirmed below (F-110: the old single-prompt
+        // fallback rejected free-text after entry).
+    }
+
+    /**
+     * F-110: result callback of the reprocess queue editor. The slot queue
+     * carries prompt CONTENT, so free-text entries and since-deleted saved
+     * prompts execute — no "pick a saved prompt" dead-end anymore.
+     */
+    @Override
+    public void onReprocessQueueConfirmed(String targetSessionId, List<PromptQueueSlot> queue) {
+        startHistoryReprocess(targetSessionId, queue);
     }
 
     @SuppressLint("NotifyDataSetChanged")

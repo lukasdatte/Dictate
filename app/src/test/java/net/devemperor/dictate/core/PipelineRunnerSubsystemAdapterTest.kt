@@ -136,7 +136,7 @@ class PipelineRunnerSubsystemAdapterTest {
         // IME :3043 selectedLanguage
         assertEquals("de", req.language)
         // IME :3045 editableQueue
-        assertEquals(listOf(7, 9, 11), req.queuedPromptIds)
+        assertEquals(PromptQueueSlot.fromIds(listOf(7, 9, 11)), req.queuedPromptSlots)
         // IME :3047 new File(getFilesDir(), "recordings")
         assertEquals(File(filesDir, "recordings"), req.recordingsDir)
         // IME :3048 reuseSessionId = targetSessionId
@@ -161,7 +161,7 @@ class PipelineRunnerSubsystemAdapterTest {
         assertEquals(null, req.audioFilePath)
         assertEquals(null, req.language)
         assertEquals(1, req.totalSteps) // 1 + 0
-        assertEquals(emptyList<Int>(), req.queuedPromptIds)
+        assertEquals(emptyList<PromptQueueSlot>(), req.queuedPromptSlots)
     }
 
     @Test
@@ -199,7 +199,7 @@ class PipelineRunnerSubsystemAdapterTest {
         assertEquals("sx", runner.reuseSessionId.get())
         val cfg = runner.transcriptionConfig.get()!!
         assertEquals("en", cfg.language)
-        assertEquals(listOf(3), cfg.queuedPromptIds)
+        assertEquals(PromptQueueSlot.fromIds(listOf(3)), cfg.queuedPromptSlots)
         assertEquals(SessionOrigin.KEYBOARD, cfg.origin)
         waitForRegistryEmpty()
     }

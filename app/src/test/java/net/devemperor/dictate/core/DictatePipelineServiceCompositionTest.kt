@@ -268,7 +268,7 @@ class DictatePipelineServiceCompositionTest {
             audioFilePath = null,
             language = null,
             modelOverride = null,
-            queuedPromptIds = emptyList(),
+            queuedPromptSlots = emptyList(),
             targetAppPackage = null,
             recordingsDir = java.io.File("/tmp"),
             reuseSessionId = null,

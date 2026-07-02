@@ -4,7 +4,7 @@
 date: 2026-07-02
 author: Lukas + Claude (multi-agent review session)
 type: Research
-status: Research
+status: Accepted
 context: The planned drag-to-reorder queue editor for "Reprocess with edit" (Plan 10.6) was never shipped; the V1 fallback rejects free-text after entry and cannot reproduce multi-prompt queues. Finding F-110.
 related-plan: n/a (seeded by 2026-07-02 - feature-wiring-code-review.md, F-110; original scope: Plan 10.6)
 related-adrs: —
@@ -46,6 +46,19 @@ The review found the queue plumbing this editor would sit on is itself defective
 
 - **Trigger:** Whole-app review, history-redesign seed agent (+ history sweep duplicate, merged).
 - **What changed:** Document created from F-110; cross-linked to the F-001/F-003 queue-correctness findings.
+
+### 2026-07-02 — Implemented (status → Accepted)
+
+- **Trigger:** Implementation of §2 on branch `worktree-agent-a1081b6fb1222dc27` (`[queue-editor]` commits, on top of the merged wave-1 reprocess-hardening).
+- **What changed:**
+  - **§2.1 transport (made once):** `JobRequest.TranscriptionPipeline.queuedPromptIds: List<Int>` replaced by `queuedPromptSlots: List<PromptQueueSlot>` (same on `PipelineConfig`) — one slot type `(text, optional entityId)` with three shapes: ID-only (legacy keyboard semantics, current text resolved at execution, deleted → skip), content-carrying saved prompt (editor slot; survives deletion/edit of the saved prompt), free-text. Wave-1's `StepRegenerate` override pair was unified onto the same type (`promptOverride: PromptQueueSlot?`, text-bearing enforced). The pipeline resolves slots in ONE seam (`PipelineOrchestrator.resolveQueueSlot`) shared by the fresh-run and resume loops. The keyboard-side seams (`FreshConfig`, `PipelineConfigResolver`, `PipelineRunnerSubsystem.submitReprocess`) deliberately stay `List<Int>` — they are F-001/F-003 territory; conversion to slots happens at `JobRequest` construction (`PromptQueueSlot.fromIds`), so the F-001 fix can widen those seams to content slots without another transport change.
+  - **§2.2 UI:** `ReprocessQueueEditorBottomSheet` (Kotlin, Material 3; named for its function rather than "PromptChooserBottomSheetV2") + plain unit-tested `ReprocessQueueEditorModel`: original queue pre-loaded from `session.queued_prompt_ids`, drag-to-reorder (`ItemTouchHelper`), per-row remove, tap-to-append saved prompts (filtered to not-yet-queued, per Plan 10.6), free-text row. Confirming an *empty* queue is valid (transcription-only re-run). V1 `PromptChooserBottomSheet` unchanged for regenerate "Other prompt" / post-process.
+  - **§2.3 interim fix:** obsolete — superseded directly by V2; instead of hiding the V1 free-text row, the V1 reprocess-edit path (incl. the `dictate_history_reprocess_edit_needs_saved_prompt` toast dead-end, removed in all four locales) was deleted and regression-locked in `HistoryDetailJobRoutingInvariantTest`.
+  - **§2.4 lifecycle:** session id in fragment arguments + `TAG_REPROCESS_EDIT_PREFIX + sessionId` fragment tag; edited queue in saved instance state (`ReprocessQueueEditorModel.Snapshot` primitive lists); listener re-bound in `onAttach`. No Activity fields back the flow.
+  - **Gap 1 (Plan 10.6 text):** located (`docs/plans/dictate-reprocess-refactor.md` §10.6) and reconciled — UI shape (drag handle left, remove right, add-filtered-to-remaining, confirm button) adopted; its `List<Int>` callback superseded by the §2.1 slot transport; free-text support added on top (10.6 had none).
+  - **Gap 2 (reorder semantics):** fallback taken — the edited queue executes exactly like the pipeline's queued prompts: one sequential chain, each step persisted (`executeQueuedPrompts` is the shared loop). Covered by `PipelineOrchestratorQueueExecutionTest` (chain order, per-step persistence, free-text via the exact `buildQueuedPrompt` construction, editor-content-wins, dead-ID-slot skip) and `PromptQueueTransportTest` (round-trip order/shape fidelity).
+  - **Gap 3 (F-110 unverified):** verified during implementation — `:606-619` matched the described dead-end before removal.
+- **Deviations:** none against §2. Note: a mid-run *resume* of an edited reprocess still re-derives the queue from the session row's entity IDs (free-text slots are not persisted on the session row — schema unchanged, documented at `PipelineOrchestrator.resumePipelineBlocking` / `persistNewSession`); pre-existing resume semantics, out of scope here.
 
 ## 5. References
 

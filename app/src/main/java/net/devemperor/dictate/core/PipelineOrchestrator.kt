@@ -141,7 +141,7 @@ class PipelineOrchestrator @JvmOverloads constructor(
     /**
      * Configuration for a transcription-pipeline run. `@JvmOverloads` makes the
      * legacy 8-arg constructor keep working from Java while still allowing
-     * Kotlin callers to pass the new fields (origin, modelOverride, queuedPromptIds).
+     * Kotlin callers to pass the new fields (origin, modelOverride, queuedPromptSlots).
      */
     data class PipelineConfig @JvmOverloads constructor(
         val audioFile: File?,
@@ -168,7 +168,12 @@ class PipelineOrchestrator @JvmOverloads constructor(
          * contract.
          */
         val modelOverride: String? = null,
-        val queuedPromptIds: List<Int> = emptyList(),
+        /**
+         * Prompt queue as content-capable [PromptQueueSlot]s (queue-editor
+         * transport model). Empty = fall back to the live
+         * [PromptQueueManager] auto-apply queue (legacy keyboard path).
+         */
+        val queuedPromptSlots: List<PromptQueueSlot> = emptyList(),
         /**
          * W3: Caller-provided session ID for brand-new sessions. When non-null
          * (and [reuseSessionId] is null), [persistNewSession] uses this ID
@@ -282,12 +287,8 @@ class PipelineOrchestrator @JvmOverloads constructor(
         // Calculate total steps for state restoration
         totalSteps = 1 // transcription always
         if (autoFormattingService.isEnabled()) totalSteps++
-        val queuedIdsAtStart = if (config.queuedPromptIds.isNotEmpty()) {
-            config.queuedPromptIds
-        } else {
-            promptQueueManager.getQueuedIds()
-        }
-        if (!config.livePrompt) totalSteps += queuedIdsAtStart.size
+        val queuedSlotsAtStart = resolveQueueSlotsAtStart(config)
+        if (!config.livePrompt) totalSteps += queuedSlotsAtStart.size
         currentStepIndex = 0
         currentStepName = null
 
@@ -300,7 +301,7 @@ class PipelineOrchestrator @JvmOverloads constructor(
                         ?: throw IllegalStateException("Session $it not found")
                 }
             } else {
-                persistNewSession(config, queuedIdsAtStart)
+                persistNewSession(config, queuedSlotsAtStart)
             }
 
             // K4 Fix: currentSessionId was previously only set for new sessions
@@ -495,15 +496,19 @@ class PipelineOrchestrator @JvmOverloads constructor(
         sDao.invalidateDownstream(sessionId, lastSuccessChainIndex)
 
         // Calculate total steps for UI restore — just the queued prompts still
-        // to run.
-        val queuedIdsAtStart = sessionManager.getHistoricalQueuedPromptIds(sessionId)
-        totalSteps = (queuedIdsAtStart.size - resumeFromPromptIndex).coerceAtLeast(0)
+        // to run. The session row stores entity IDs only, so a resumed run
+        // executes ID-only slots (an edited slot queue lives solely in its
+        // original JobRequest — pre-existing resume semantics).
+        val queuedSlotsAtStart = PromptQueueSlot.fromIds(
+            sessionManager.getHistoricalQueuedPromptIds(sessionId)
+        )
+        totalSteps = (queuedSlotsAtStart.size - resumeFromPromptIndex).coerceAtLeast(0)
         currentStepIndex = 0
         currentStepName = null
 
         try {
             cancellationToken.throwIfCancelled()
-            executeStepsFrom(sessionId, resumeFromPromptIndex, inputText, queuedIdsAtStart, cancellationToken)
+            executeStepsFrom(sessionId, resumeFromPromptIndex, inputText, queuedSlotsAtStart, cancellationToken)
             sessionManager.finalizeCompleted(sessionId)
         } catch (cancelEx: java.util.concurrent.CancellationException) {
             sessionManager.finalizeCancelled(sessionId)
@@ -911,8 +916,14 @@ class PipelineOrchestrator @JvmOverloads constructor(
      */
     private fun persistNewSession(
         config: PipelineConfig,
-        queuedIdsAtStart: List<Int>
+        queuedSlotsAtStart: List<PromptQueueSlot>
     ): String {
+        // The sessions.queued_prompt_ids column stores entity IDs only
+        // (schema unchanged) — free-text slots are not representable there.
+        // Fresh keyboard sessions only ever carry ID-backed slots; edited
+        // slot queues enter via history reprocess, which reuses an existing
+        // session and never reaches this persist path.
+        val queuedIdsAtStart = queuedSlotsAtStart.mapNotNull { it.entityId }
         val audioFile = config.audioFile
             ?: throw IllegalStateException("Audio file required for new session")
 
@@ -1075,18 +1086,14 @@ class PipelineOrchestrator @JvmOverloads constructor(
 
         // Step 3: Queued prompts (unless live-prompt mode)
         if (!config.livePrompt) {
-            val queuedIds = if (config.queuedPromptIds.isNotEmpty()) {
-                config.queuedPromptIds
-            } else {
-                promptQueueManager.getQueuedIds()
-            }
-            if (queuedIds.isNotEmpty()) {
-                text = executeQueuedPrompts(text, queuedIds, sid, token)
+            val queuedSlots = resolveQueueSlotsAtStart(config)
+            if (queuedSlots.isNotEmpty()) {
+                text = executeQueuedPrompts(text, queuedSlots, sid, token)
             }
         }
 
         // Step 4: Deliver result
-        val hadQueued = config.queuedPromptIds.isNotEmpty() ||
+        val hadQueued = config.queuedPromptSlots.isNotEmpty() ||
             promptQueueManager.getQueuedIds().isNotEmpty()
         val source = if (hadQueued && !config.livePrompt)
             InsertionSource.QUEUED_PROMPT else InsertionSource.TRANSCRIPTION
@@ -1107,26 +1114,28 @@ class PipelineOrchestrator @JvmOverloads constructor(
         sessionId: String,
         fromIndex: Int,
         initialText: String,
-        queuedIds: List<Int>,
+        slots: List<PromptQueueSlot>,
         token: CancellationToken
     ): String {
         var currentText = initialText
-        if (fromIndex >= queuedIds.size) {
+        if (fromIndex >= slots.size) {
             callback.onPipelineCompleted(currentText, InsertionSource.QUEUED_PROMPT)
             return currentText
         }
 
-        for (i in fromIndex until queuedIds.size) {
+        for (i in fromIndex until slots.size) {
             token.throwIfCancelled()
             if (cancelled) throw java.util.concurrent.CancellationException("cancelled flag set")
 
-            val prompt = promptDao.getById(queuedIds[i]) ?: continue
-            if (prompt.requiresSelection && currentText.isEmpty()) continue
+            val resolved = resolveQueueSlot(slots[i]) ?: continue
+            if (resolved.skipWhenTextEmpty && currentText.isEmpty()) continue
 
-            val textForPrompt = if (prompt.requiresSelection) currentText else null
-            val pp = promptService.buildQueuedPrompt(prompt.prompt ?: "", textForPrompt)
-            val ctx = ProcessingContext(StepType.QUEUED_PROMPT, prompt.prompt, prompt.id)
-            val displayName = prompt.name ?: ""
+            val textForPrompt = if (resolved.appliesToPipelineText) currentText else null
+            val pp = promptService.buildQueuedPrompt(resolved.instruction, textForPrompt)
+            val ctx = ProcessingContext(
+                StepType.QUEUED_PROMPT, resolved.instruction, resolved.promptEntityId
+            )
+            val displayName = resolved.displayName
 
             trackAndNotifyStepStarted(displayName)
             val startTime = System.nanoTime()
@@ -1379,31 +1388,95 @@ class PipelineOrchestrator @JvmOverloads constructor(
     }
 
     /**
-     * Executes queued prompts ITERATIVELY (no recursion).
+     * The prompt queue a pipeline run executes, resolved ONCE per run so
+     * `totalSteps`, the persisted session queue, and the execution loop all
+     * agree. Explicit slots from the request win; the legacy keyboard path
+     * (empty request queue) falls back to the live auto-apply queue as
+     * ID-only slots.
+     */
+    private fun resolveQueueSlotsAtStart(config: PipelineConfig): List<PromptQueueSlot> =
+        config.queuedPromptSlots.ifEmpty {
+            PromptQueueSlot.fromIds(promptQueueManager.getQueuedIds())
+        }
+
+    /**
+     * Execution-ready view of one [PromptQueueSlot] — the single resolution
+     * seam shared by [executeQueuedPrompts] (fresh run) and
+     * [executeStepsFrom] (resume).
+     */
+    private data class ResolvedQueueSlot(
+        /** Raw instruction sent through [PromptService.buildQueuedPrompt]. */
+        val instruction: String,
+        /** Whether the current pipeline text is passed as text-to-process. */
+        val appliesToPipelineText: Boolean,
+        /** Legacy `requiresSelection` guard: skip when the pipeline text is empty. */
+        val skipWhenTextEmpty: Boolean,
+        val displayName: String,
+        /** Persisted as the step's `prompt_entity_id` (plain column, no FK to prompts). */
+        val promptEntityId: Int?
+    )
+
+    /**
+     * Resolves a queue slot for execution, or `null` to skip it:
+     *
+     *  - live saved prompt → entity semantics (`requiresSelection`, display
+     *    name); the slot's carried text (editor-confirmed content) wins over
+     *    the entity's current text when present
+     *  - text-carrying slot without a live entity (free-text, or a saved
+     *    prompt deleted since the editor confirmed) → the instruction is
+     *    applied to the current pipeline text (queued shape — same
+     *    construction as a regenerate "Other prompt")
+     *  - ID-only slot whose entity is gone → `null` (legacy skip semantics)
+     */
+    private fun resolveQueueSlot(slot: PromptQueueSlot): ResolvedQueueSlot? {
+        val entity = slot.entityId?.let { promptDao.getById(it) }
+        return when {
+            entity != null -> ResolvedQueueSlot(
+                instruction = slot.text ?: entity.prompt ?: "",
+                appliesToPipelineText = entity.requiresSelection,
+                skipWhenTextEmpty = entity.requiresSelection,
+                displayName = entity.name ?: "",
+                promptEntityId = entity.id
+            )
+            slot.text != null -> ResolvedQueueSlot(
+                instruction = slot.text,
+                appliesToPipelineText = true,
+                skipWhenTextEmpty = false,
+                displayName = slot.text.lineSequence().first().take(30),
+                promptEntityId = slot.entityId
+            )
+            else -> null
+        }
+    }
+
+    /**
+     * Executes queued prompt slots ITERATIVELY (no recursion).
      * Each prompt builds on the previous result. Errors do NOT abort the chain -
      * currentText stays at the last successful value. The cancellation token is
      * checked before each prompt and after each API call returns.
      */
     private fun executeQueuedPrompts(
         text: String,
-        promptIds: List<Int>,
+        slots: List<PromptQueueSlot>,
         sid: String,
         token: CancellationToken
     ): String {
         var currentText = text
-        for (promptId in promptIds) {
+        for (slot in slots) {
             token.throwIfCancelled()
             if (cancelled) break
 
-            val prompt = promptDao.getById(promptId) ?: continue
+            val resolved = resolveQueueSlot(slot) ?: continue
 
             // Skip prompts that require selection when text is empty
-            if (prompt.requiresSelection && currentText.isEmpty()) continue
+            if (resolved.skipWhenTextEmpty && currentText.isEmpty()) continue
 
-            val textForPrompt = if (prompt.requiresSelection) currentText else null
-            val pp = promptService.buildQueuedPrompt(prompt.prompt ?: "", textForPrompt)
-            val ctx = ProcessingContext(StepType.QUEUED_PROMPT, prompt.prompt, prompt.id)
-            val displayName = prompt.name ?: ""
+            val textForPrompt = if (resolved.appliesToPipelineText) currentText else null
+            val pp = promptService.buildQueuedPrompt(resolved.instruction, textForPrompt)
+            val ctx = ProcessingContext(
+                StepType.QUEUED_PROMPT, resolved.instruction, resolved.promptEntityId
+            )
+            val displayName = resolved.displayName
 
             trackAndNotifyStepStarted(displayName)
             val startTime = System.nanoTime()

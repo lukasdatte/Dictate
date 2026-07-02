@@ -159,7 +159,10 @@ class ImePipelineConfigResolver(
             /* audioFilePath */ cfg.audioFilePath,
             /* language */ cfg.language,
             /* modelOverride */ null,
-            /* queuedPromptIds */ cfg.queuedPromptIds,
+            // ID-only slots: the keyboard queue is entity-ID-based; the
+            // pipeline resolves the prompts' current text at execution
+            // (legacy semantics — see PromptQueueSlot shape 1).
+            /* queuedPromptSlots */ PromptQueueSlot.fromIds(cfg.queuedPromptIds),
             /* targetAppPackage */ cfg.targetAppPackage,
             /* recordingsDir */ File(recordingsDirProvider(), "recordings"),
             /* reuseSessionId */ null,
@@ -190,7 +193,7 @@ class ImePipelineConfigResolver(
             /* audioFilePath */ audioFile?.absolutePath,
             /* language */ language,
             /* modelOverride */ cfg.modelOverride,
-            /* queuedPromptIds */ queue,
+            /* queuedPromptSlots */ PromptQueueSlot.fromIds(queue),
             /* targetAppPackage */ cfg.targetAppPackage,
             /* recordingsDir */ File(recordingsDirProvider(), "recordings"),
             /* reuseSessionId */ sessionId,

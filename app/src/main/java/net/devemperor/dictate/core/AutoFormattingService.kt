@@ -5,6 +5,7 @@ import android.text.TextUtils
 import android.util.Log
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.prompt.PromptBuilder
+import net.devemperor.dictate.ai.prompt.PromptService
 import net.devemperor.dictate.ai.prompt.PromptTemplates
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
@@ -24,18 +25,8 @@ class AutoFormattingService(
         }
 
         return try {
-            val systemPrompt = PromptBuilder.create()
-                .instruction(PromptTemplates.AUTO_FORMATTING_SYSTEM)
-                .rules(PromptTemplates.AUTO_FORMATTING_RULES)
-                .examples(PromptTemplates.AUTO_FORMATTING_EXAMPLES)
-                .build()
-
-            val userPrompt = PromptBuilder.create()
-                .languageHint(languageHint)
-                .transcript(transcript)
-                .build()
-
-            val result = aiOrchestrator.complete(userPrompt, systemPrompt)
+            val pp = buildPrompts(transcript, languageHint)
+            val result = aiOrchestrator.complete(pp.userPrompt, pp.systemPrompt)
             FormatResult(result.text.trim().ifEmpty { transcript }, result, null) // success
         } catch (e: Exception) {
             Log.w("AutoFormattingService", "Auto-formatting failed", e)
@@ -47,5 +38,28 @@ class AutoFormattingService(
         @JvmStatic
         fun create(sp: SharedPreferences, orchestrator: AIOrchestrator) =
             AutoFormattingService(sp, orchestrator)
+
+        /**
+         * The auto-formatting prompt set — single source of truth, used by
+         * [formatIfEnabled] AND by AUTO_FORMAT step regeneration
+         * (F-108, `RegenerationPromptFactory`). Pure function: independent of
+         * the enable-prefs so a regenerate re-runs the formatter even if the
+         * user has since disabled auto-formatting.
+         */
+        @JvmStatic
+        fun buildPrompts(transcript: String, languageHint: String?): PromptService.PromptPair {
+            val systemPrompt = PromptBuilder.create()
+                .instruction(PromptTemplates.AUTO_FORMATTING_SYSTEM)
+                .rules(PromptTemplates.AUTO_FORMATTING_RULES)
+                .examples(PromptTemplates.AUTO_FORMATTING_EXAMPLES)
+                .build()
+
+            val userPrompt = PromptBuilder.create()
+                .languageHint(languageHint)
+                .transcript(transcript)
+                .build()
+
+            return PromptService.PromptPair(userPrompt, systemPrompt)
+        }
     }
 }

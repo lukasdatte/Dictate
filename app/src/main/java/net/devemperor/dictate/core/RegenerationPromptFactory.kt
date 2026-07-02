@@ -27,17 +27,29 @@ object RegenerationPromptFactory {
      *   `promptUsed`, or an "Other prompt" override). Null only for
      *   AUTO_FORMAT steps, which carry no per-step instruction.
      * @param inputText the step's persisted `input_text` (raw contract above)
+     * @param languageHint session language — consulted only by the
+     *   AUTO_FORMAT branch (part of the formatter's user prompt)
      */
     @JvmStatic
     fun build(
         stepType: StepType,
         promptInstruction: String?,
         inputText: String,
+        languageHint: String?,
         promptService: PromptService
-    ): PromptService.PromptPair = when (stepType) {
+    ): PromptService.PromptPair = when {
+        // F-108: an AUTO_FORMAT step regenerates through the formatter's own
+        // prompt set (system/rules/examples + languageHint/transcript user
+        // prompt) — pre-fix this sent the bare transcript with a NULL prompt
+        // and the model answered the transcript instead of reformatting it.
+        // An explicit "Other prompt" override applies that instruction to the
+        // transcript instead (queued-prompt shape, else-branch below).
+        stepType == StepType.AUTO_FORMAT && promptInstruction == null ->
+            AutoFormattingService.buildPrompts(inputText, languageHint)
+
         // Original call: PromptService.buildRewording(prompt, selectedText)
         // with the REWORDING system prompt (see runStandalonePrompt).
-        StepType.REWORDING ->
+        stepType == StepType.REWORDING ->
             promptService.buildRewording(
                 promptInstruction,
                 inputText.takeIf { it.isNotEmpty() }

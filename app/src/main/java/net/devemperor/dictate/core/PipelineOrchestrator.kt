@@ -631,6 +631,10 @@ class PipelineOrchestrator @JvmOverloads constructor(
                 stepType,
                 effectivePrompt,
                 target.inputText,
+                // Language hint for the AUTO_FORMAT branch — the original
+                // pipeline call passed config.language, which was persisted
+                // on the session row.
+                sessionManager.getSessionById(sessionId)?.language,
                 promptService
             )
             val result = aiOrchestrator.complete(pp.userPrompt, pp.systemPrompt)

@@ -216,6 +216,45 @@ class PipelineOrchestratorRegenerationTest {
         assertEquals(original.systemPrompt, regenerated.systemPrompt)
     }
 
+    // ── F-108: AUTO_FORMAT regeneration ──────────────────────────────────
+
+    @Test
+    fun `regenerating an AUTO_FORMAT step assembles the AutoFormattingService prompt set`() {
+        val sid = createParentSession()
+        // Persist the step exactly like the pipeline's executeAutoFormat does:
+        // raw transcript as input_text, promptUsed = null.
+        sessionManager.appendProcessingStep(
+            sessionId = sid,
+            stepType = net.devemperor.dictate.database.entity.StepType.AUTO_FORMAT,
+            inputText = "raw transcript",
+            outputText = "Formatted transcript.",
+            modelUsed = "test-model",
+            provider = "OPENAI",
+            promptUsed = null,
+            promptEntityId = null,
+            durationMs = 10,
+            status = net.devemperor.dictate.database.entity.StepStatus.SUCCESS
+        )
+        val chainIndex = db.processingStepDao().getCurrentChain(sid).single().chainIndex
+
+        orchestrator.regenerateStepBlocking(sid, chainIndex)
+
+        // Pre-F-108 this call carried a NULL system prompt and the bare
+        // transcript — the model answered the transcript instead of
+        // reformatting it. Now it must be the formatter's own prompt set
+        // (session language "de" flows into the user prompt).
+        val expected = AutoFormattingService.buildPrompts("raw transcript", "de")
+        val call = factory.calls.single()
+        assertEquals(expected.userPrompt, call.prompt)
+        assertEquals(expected.systemPrompt, call.systemPrompt)
+
+        // The regenerated version stays an AUTO_FORMAT step without a prompt.
+        val current = db.processingStepDao().getCurrentChain(sid).single()
+        assertEquals(2, current.version)
+        assertEquals("raw transcript", current.inputText)
+        assertNull(current.promptUsed)
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private fun createParentSession(): String {

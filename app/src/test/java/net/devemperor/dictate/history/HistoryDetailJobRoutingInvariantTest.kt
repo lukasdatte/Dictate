@@ -1,6 +1,7 @@
 package net.devemperor.dictate.history
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -65,6 +66,45 @@ class HistoryDetailJobRoutingInvariantTest {
             0,
             Regex("""\bregenerateExecutor\b""").findAll(code).count()
         )
+    }
+
+    // ── F-110: the V1 free-text dead-end is gone ─────────────────────────
+
+    @Test
+    fun `reprocess-with-edit no longer routes through the V1 chooser dead-end`() {
+        val code = functionalCode()
+        assertEquals(
+            "The 'Please pick a saved prompt' toast dead-end was removed " +
+                "(F-110) — reprocess-with-edit goes through " +
+                "ReprocessQueueEditorBottomSheet, whose slot queue carries " +
+                "free-text content. Do not reintroduce the string reference.",
+            0,
+            Regex("""dictate_history_reprocess_edit_needs_saved_prompt""")
+                .findAll(code).count()
+        )
+        assertEquals(
+            "Reprocess-with-edit must open the queue editor, not the V1 " +
+                "single-prompt chooser (F-110).",
+            1,
+            Regex("""ReprocessQueueEditorBottomSheet\s*\n?\s*\.newInstance""")
+                .findAll(code).count()
+        )
+    }
+
+    @Test
+    fun `the dead-end string resource is deleted in every locale`() {
+        val resDir = File("src/main/res")
+        val stringsFiles = resDir.listFiles { f -> f.isDirectory && f.name.startsWith("values") }
+            ?.mapNotNull { dir -> File(dir, "strings.xml").takeIf { it.isFile } }
+            .orEmpty()
+        assertTrue("expected locale strings.xml files under $resDir", stringsFiles.size >= 4)
+        stringsFiles.forEach { file ->
+            assertFalse(
+                "${file.path}: dictate_history_reprocess_edit_needs_saved_prompt existed " +
+                    "solely for the V1 free-text dead-end (F-110) and must stay deleted.",
+                file.readText().contains("dictate_history_reprocess_edit_needs_saved_prompt")
+            )
+        }
     }
 
     // ── Non-vacuity: the stripper keeps code hits and drops doc hits ─────

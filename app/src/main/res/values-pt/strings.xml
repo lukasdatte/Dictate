@@ -290,7 +290,15 @@
     <!-- History detail actions -->
     <string name="dictate_history_direct_reprocess">Executar diretamente</string>
     <string name="dictate_history_reprocess_edit">Reprocessar</string>
-    <string name="dictate_history_reprocess_edit_needs_saved_prompt">Escolha um prompt salvo.</string>
+
+    <!-- Reprocess queue editor (F-110) -->
+    <string name="dictate_reprocess_queue_editor_title">Editar fila de prompts</string>
+    <string name="dictate_reprocess_queue_empty">Nenhum prompt na fila — apenas a transcrição será executada.</string>
+    <string name="dictate_reprocess_queue_add_saved">Adicionar prompt salvo</string>
+    <string name="dictate_reprocess_queue_add_free_text">Adicionar prompt personalizado</string>
+    <string name="dictate_reprocess_queue_run">Reprocessar</string>
+    <string name="dictate_reprocess_queue_drag_handle">Reordenar prompt</string>
+    <string name="dictate_reprocess_queue_remove">Remover prompt</string>
 
     <!-- Reprocess staging -->
     <string name="dictate_reprocess_audio_available">Áudio %1$s · Enviar</string>

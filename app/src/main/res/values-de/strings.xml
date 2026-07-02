@@ -308,7 +308,15 @@
     <!-- History detail actions -->
     <string name="dictate_history_direct_reprocess">Direkt ausführen</string>
     <string name="dictate_history_reprocess_edit">Erneut verarbeiten</string>
-    <string name="dictate_history_reprocess_edit_needs_saved_prompt">Bitte einen gespeicherten Prompt wählen.</string>
+
+    <!-- Reprocess queue editor (F-110) -->
+    <string name="dictate_reprocess_queue_editor_title">Prompt-Warteschlange bearbeiten</string>
+    <string name="dictate_reprocess_queue_empty">Keine Prompts in der Warteschlange — nur die Transkription wird ausgeführt.</string>
+    <string name="dictate_reprocess_queue_add_saved">Gespeicherten Prompt hinzufügen</string>
+    <string name="dictate_reprocess_queue_add_free_text">Eigenen Prompt hinzufügen</string>
+    <string name="dictate_reprocess_queue_run">Erneut verarbeiten</string>
+    <string name="dictate_reprocess_queue_drag_handle">Prompt verschieben</string>
+    <string name="dictate_reprocess_queue_remove">Prompt entfernen</string>
 
     <!-- Reprocess staging -->
     <string name="dictate_reprocess_audio_available">Audio %1$s · Senden</string>

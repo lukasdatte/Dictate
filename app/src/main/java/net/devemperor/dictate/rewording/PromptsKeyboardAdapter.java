@@ -60,6 +60,14 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
     public interface AdapterCallback {
         void onItemClicked(Integer position);
         void onItemLongClicked(Integer position);
+
+        /**
+         * Long-press on a greyed-out text-only pill (a non-selection prompt
+         * disabled while recording/pipeline is busy). The pill is applied
+         * exactly as an idle short-press would apply it — see
+         * {@link PromptPillPressPolicy} and {@link PromptPillAction#APPLY_DISABLED}.
+         */
+        void onTextOnlyItemApplyRequested(Integer position);
     }
 
     public interface LanguageChipClickListener {
@@ -253,9 +261,17 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
             }
             holder.promptBtn.setForeground(null);
         }
-        boolean shouldDisable = disableNonSelectionPrompts && model.getId() >= 0 && !model.getRequiresSelection();
-        holder.promptBtn.setEnabled(!shouldDisable);
-        holder.promptBtn.setAlpha(shouldDisable ? 0.5f : 1f);
+        // A "text-only pill" = a saved prompt (id >= 0) that does not require a
+        // selection; these are greyed while recording/pipeline is busy. We keep
+        // the view ENABLED even when greyed — an isEnabled=false View receives no
+        // MotionEvents, so a long-press could never fire on it. The disabled look
+        // is rendered via alpha only; the short/long press is gated through
+        // PromptPillPressPolicy in the listeners below so a long-press still
+        // applies the pill while a short-press stays inert.
+        final boolean textOnlyDisabled =
+                disableNonSelectionPrompts && model.getId() >= 0 && !model.getRequiresSelection();
+        holder.promptBtn.setEnabled(true);
+        holder.promptBtn.setAlpha(textOnlyDisabled ? 0.5f : 1f);
         if (model.getId() >= 0) {
             holder.promptBtn.setIcon(queuedPromptOrder.contains(model.getId())
                     ? AppCompatResources.getDrawable(holder.promptBtn.getContext(), R.drawable.ic_baseline_check_circle_outline_24)
@@ -265,9 +281,20 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
             holder.promptBtn.setIcon(null);
         }
         final int dataPos = toDataIndex(position);
-        holder.promptBtn.setOnClickListener(v -> callback.onItemClicked(dataPos));
+        holder.promptBtn.setOnClickListener(v -> {
+            if (PromptPillPressPolicy.decide(PromptPillPress.SHORT, textOnlyDisabled)
+                    == PromptPillAction.ACTIVATE) {
+                callback.onItemClicked(dataPos);
+            }
+            // IGNORE (greyed text-only pill) → short press stays inert.
+        });
         holder.promptBtn.setOnLongClickListener(v -> {
-            callback.onItemLongClicked(dataPos);
+            if (PromptPillPressPolicy.decide(PromptPillPress.LONG, textOnlyDisabled)
+                    == PromptPillAction.APPLY_DISABLED) {
+                callback.onTextOnlyItemApplyRequested(dataPos);
+            } else {
+                callback.onItemLongClicked(dataPos);
+            }
             return true;
         });
         int accentColor = DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);

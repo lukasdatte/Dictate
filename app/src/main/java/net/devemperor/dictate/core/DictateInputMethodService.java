@@ -2678,6 +2678,19 @@ public class DictateInputMethodService extends InputMethodService
                     startActivity(intent);
                 }
             }
+
+            @Override
+            public void onTextOnlyItemApplyRequested(Integer position) {
+                // Long-press on a greyed (recording/pipeline-busy) text-only pill:
+                // apply it exactly as an idle short-press would. Text-only pills are
+                // requiresSelection == false by definition, so the standalone
+                // orchestrator path is the full enabled behaviour — there is no
+                // selection step and no queue-toggle branch to reuse here.
+                PromptEntity model = promptsAdapter.getItem(position);
+                if (model == null || model.getId() < 0) return;
+                vibrate();
+                runStandalonePromptViaOrchestrator(model);
+            }
         });
         promptsRv.setAdapter(promptsAdapter);
         // Phase 2 §2.4: chip-click listener is wired ONCE here (not per mode).

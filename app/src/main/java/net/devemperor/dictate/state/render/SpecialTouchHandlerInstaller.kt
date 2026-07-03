@@ -265,8 +265,9 @@ class SpecialTouchHandlerInstaller(
             onCursorMove = { dir ->
                 onVibrate()
                 // P4: cursor move funnels through the InsertionService as a
-                // CursorMove ControlOp (empty commit at offset 2 / -1).
-                insertionService()?.control(ControlOp.CursorMove(if (dir > 0) 2 else -1))
+                // CursorMove ControlOp carrying the raw swipe direction; the
+                // service owns the selection-safe, grapheme-clamped move (F-021).
+                insertionService()?.control(ControlOp.CursorMove(dir))
             },
             onSwipeStateChanged = { isSwiping ->
                 if (isSwiping) {

@@ -159,8 +159,12 @@ object KeyboardInputModule : DictateModule<KeyboardInputState, Action.KeyboardIn
     // the legacy `inputConnectionProvider()?.…` null behaviour.
     override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {
         Effect.SendBackspace -> {
+            // F-018: DeleteGrapheme (selection- + grapheme-aware) instead of the
+            // raw one-UTF-16-unit Backspace, so the main-keyboard tap matches the
+            // QWERTZ/long-press paths and never splits an emoji or ignores a
+            // selection. The semantics live once in InsertionService.control().
             services.insertionServiceProvider()?.control(
-                net.devemperor.dictate.state.insertion.ControlOp.Backspace)
+                net.devemperor.dictate.state.insertion.ControlOp.DeleteGrapheme)
             Unit
         }
         Effect.SendSpace -> {

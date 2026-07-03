@@ -1,6 +1,21 @@
 package net.devemperor.dictate.state
 
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import net.devemperor.dictate.core.FakeInputConnection
+import net.devemperor.dictate.database.entity.InsertionSource
+import net.devemperor.dictate.state.insertion.AutoEnterScheduler
+import net.devemperor.dictate.state.insertion.ClipboardGateway
+import net.devemperor.dictate.state.insertion.ControlOp
+import net.devemperor.dictate.state.insertion.EditAction
+import net.devemperor.dictate.state.insertion.HostSelection
+import net.devemperor.dictate.state.insertion.HostTarget
+import net.devemperor.dictate.state.insertion.InsertionAuditLog
+import net.devemperor.dictate.state.insertion.InsertionService
+import net.devemperor.dictate.state.insertion.RecoveryHandler
 import net.devemperor.dictate.state.layout.EnterButtonRole
+import net.devemperor.dictate.testutil.FakeHostTextReader
+import net.devemperor.dictate.testutil.fakeModuleServices
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -165,6 +180,78 @@ class KeyboardInputModuleTest {
     fun `EnterKey with customActionId emits PerformEnter(CUSTOM, customId)`() {
         val eff = enterEffect(boundHost(customActionId = 42, imeAction = 4))
         assertEquals(KeyboardInputModule.Effect.PerformEnter(EnterButtonRole.CUSTOM, 42), eff)
+    }
+
+    // ─── SendBackspace effect — F-018 DeleteGrapheme dispatch ─────────
+
+    /**
+     * Real [InsertionService] with a recording executor + configurable
+     * [FakeHostTextReader]: the resolved primitive proves *which* ControlOp
+     * the module dispatched (DeleteGrapheme resolves through the reader; the
+     * pre-fix raw Backspace passes through unresolved).
+     */
+    private class RecordingInsertion(reader: FakeHostTextReader) {
+        val controlOps = mutableListOf<ControlOp>()
+        val service = InsertionService(
+            ic = { HostTarget(FakeInputConnection(), null as EditorInfo?) },
+            guard = { true },
+            committer = { _, _ -> true },
+            controlExecutor = { _, op -> controlOps += op; true },
+            autoEnter = object : AutoEnterScheduler {
+                override fun isActive() = false
+                override fun schedule(text: String) {}
+            },
+            audit = object : InsertionAuditLog {
+                override fun captureReplaced(ic: InputConnection): String? = null
+                override fun record(
+                    text: String, replaced: String?, editor: EditorInfo?,
+                    source: InsertionSource, sessionIdOverride: String?,
+                ) {}
+            },
+            recovery = object : RecoveryHandler {
+                override fun notifyFocusLost() {}
+                override fun resume(sessionId: String) {}
+            },
+            clipboard = object : ClipboardGateway {
+                override fun performHostAction(ic: InputConnection, action: EditAction) = true
+                override fun fallback(ic: InputConnection, action: EditAction) {}
+            },
+            textReader = reader,
+        )
+    }
+
+    @Test
+    fun `SendBackspace with an active selection deletes the selection`() {
+        // F-018 regression: the pre-fix handler dispatched the raw
+        // ControlOp.Backspace (deleteSurroundingText(1,0)), which per Android
+        // contract deletes AROUND an active selection instead of deleting it.
+        val rec = RecordingInsertion(FakeHostTextReader(selection = HostSelection(2, 5)))
+        val services = fakeModuleServices(insertionServiceProvider = { rec.service })
+
+        module.runEffect(KeyboardInputModule.Effect.SendBackspace, services)
+
+        assertEquals(listOf<ControlOp>(ControlOp.DeleteSelection), rec.controlOps)
+    }
+
+    @Test
+    fun `SendBackspace with an emoji before the cursor deletes the whole pair`() {
+        // F-018 regression: the pre-fix raw Backspace deleted one UTF-16 unit,
+        // splitting the surrogate pair.
+        val rec = RecordingInsertion(
+            FakeHostTextReader(selection = HostSelection(3, 3), beforeCursor = "x😀"),
+        )
+        val services = fakeModuleServices(insertionServiceProvider = { rec.service })
+
+        module.runEffect(KeyboardInputModule.Effect.SendBackspace, services)
+
+        assertEquals(listOf<ControlOp>(ControlOp.DeleteSurrounding(2, 0)), rec.controlOps)
+    }
+
+    @Test
+    fun `SendBackspace without insertion service is a no-op`() {
+        val services = fakeModuleServices(insertionServiceProvider = { null })
+        // Must not throw — legacy null-IC behaviour.
+        module.runEffect(KeyboardInputModule.Effect.SendBackspace, services)
     }
 
     // ─── Module wiring sanity ─────────────────────────────────────────

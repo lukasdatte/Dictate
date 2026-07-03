@@ -19,6 +19,7 @@ import net.devemperor.dictate.state.insertion.InsertionAuditLog
 import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.state.insertion.InsertionService
 import net.devemperor.dictate.state.insertion.RecoveryHandler
+import net.devemperor.dictate.testutil.FakeHostTextReader
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -112,6 +113,7 @@ class EmojiControllerTest {
                 override fun performHostAction(ic: InputConnection, action: EditAction) = true
                 override fun fallback(ic: InputConnection, action: EditAction) {}
             },
+            textReader = FakeHostTextReader(),
         )
 
     private fun newController(connection: InputConnection? = ic) =

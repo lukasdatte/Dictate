@@ -66,10 +66,9 @@ class QwertzKeyboardController(
             // the WRITE goes through the InsertionService (P4).
             inputConnectionProvider() ?: return@CursorSwipeTouchHandler
             vibrate()
-            // commitText newCursorPosition is relative to end of inserted text (empty string = current pos):
-            // 2 = one right, -1 = one left (matches DictateInputMethodService lines 746/751)
-            val cursorOffset = if (direction > 0) 2 else -1
-            insertionService()?.control(ControlOp.CursorMove(cursorOffset))
+            // Pass the raw swipe direction (>0 = right, <0 = left). The service
+            // owns the selection-safe, grapheme-clamped move (F-021).
+            insertionService()?.control(ControlOp.CursorMove(direction))
         }
     )
 

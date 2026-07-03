@@ -20,6 +20,7 @@ import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.state.insertion.InsertionService
 import net.devemperor.dictate.state.insertion.RecoveryHandler
 import net.devemperor.dictate.state.layout.LogicalButtonId
+import net.devemperor.dictate.testutil.FakeHostTextReader
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -102,12 +103,16 @@ class SpecialTouchHandlerInstallerTest {
 
     /**
      * Minimal real [InsertionService] for the P4 keystroke-path: the
-     * `committer` (space insert) and the CursorMove `controlExecutor` both
+     * `committer` (space insert) and the cursor-move `controlExecutor` both
      * forward to the fake IC's `commitText`, so the existing parity
      * assertions on [FakeInputConnection.committed] / `cursorMoves` still
      * hold after the installer's writes were routed through the service. A
      * `null` IC makes `ic.live()` return `null`, reproducing the legacy
-     * null-IC short-circuit. Other collaborators are inert no-ops.
+     * null-IC short-circuit. Other collaborators are inert no-ops. The inert
+     * [FakeHostTextReader] reports no readable selection, so a `CursorMove`
+     * intent resolves to the legacy `CursorNudge` empty-commit (F-021
+     * fallback branch) — which is exactly the write the parity assertions
+     * count.
      */
     private fun keystrokeInsertionService(connection: InputConnection?): InsertionService =
         InsertionService(
@@ -115,7 +120,7 @@ class SpecialTouchHandlerInstallerTest {
             guard = { true },
             committer = { target, text -> target.commitText(text, 1) },
             controlExecutor = { target, op ->
-                if (op is ControlOp.CursorMove) target.commitText("", op.offset) else true
+                if (op is ControlOp.CursorNudge) target.commitText("", op.offset) else true
             },
             autoEnter = object : AutoEnterScheduler {
                 override fun isActive() = false
@@ -136,6 +141,7 @@ class SpecialTouchHandlerInstallerTest {
                 override fun performHostAction(ic: InputConnection, action: EditAction) = true
                 override fun fallback(ic: InputConnection, action: EditAction) {}
             },
+            textReader = FakeHostTextReader(),
         )
 
     private fun newInstaller(

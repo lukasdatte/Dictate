@@ -26,7 +26,7 @@ import java.util.Collections
  *   goes through [insertionService] (P4 keystroke-path migration).
  * @param insertionService supplies the single InsertionService owning all
  *   host-IC writes (may be null → no-op). The swipe-release selection delete
- *   routes through it as a `CursorMove(1)` ControlOp (the legacy
+ *   routes through it as a `DeleteSelection` ControlOp (the legacy
  *   `commitText("", 1)` over a selection deletes the selected text).
  * @param vibrate callback for haptic feedback
  * @param onDeleteCancelled called when swipe-select starts to cancel any running auto-delete
@@ -40,10 +40,17 @@ class BackspaceSwipeHandler(
     private val keyPressAnimationHandler: ((View, MotionEvent) -> Unit)? = null
 ) : View.OnTouchListener {
 
-    // Swipe-to-select-words state
+    // Swipe-to-select-words state.
+    //
+    // swipeBaseCursor + the boundaries in swipeWordBoundaries are all indices
+    // into the *extracted* text window (relative to swipeStartOffset). setSelection
+    // takes ABSOLUTE document offsets, so swipeStartOffset (ExtractedText.startOffset)
+    // is added at every setSelection call site — F-023: hosts that return a
+    // windowed extract (startOffset > 0) otherwise select/delete the wrong range.
     private var isSwipeSelectingWords = false
     private var backspaceStartX = 0f
     private var swipeBaseCursor = -1
+    private var swipeStartOffset = 0
     private var swipeWordBoundaries: List<Int>? = null
     private var swipeSelectedSteps = 0
 
@@ -64,6 +71,7 @@ class BackspaceSwipeHandler(
                 swipeSelectedSteps = 0
                 swipeWordBoundaries = null
                 swipeBaseCursor = -1
+                swipeStartOffset = 0
                 backspaceStartX = event.x
                 return false // allow click/long-press detection
             }
@@ -85,6 +93,9 @@ class BackspaceSwipeHandler(
                         if (ic != null) {
                             val et = ic.getExtractedText(ExtractedTextRequest(), 0)
                             if (et?.text != null) {
+                                // startOffset can be negative ("unknown") on some
+                                // hosts — clamp to 0 so we never shift the wrong way.
+                                swipeStartOffset = et.startOffset.coerceAtLeast(0)
                                 swipeBaseCursor = maxOf(et.selectionStart, et.selectionEnd)
                                 val before = et.text.subSequence(0, swipeBaseCursor).toString()
                                 swipeWordBoundaries = computeWordBoundaries(before)
@@ -104,7 +115,10 @@ class BackspaceSwipeHandler(
 
                         if (steps != swipeSelectedSteps) {
                             swipeSelectedSteps = steps
-                            ic.setSelection(boundaries[steps], swipeBaseCursor)
+                            ic.setSelection(
+                                swipeStartOffset + boundaries[steps],
+                                swipeStartOffset + swipeBaseCursor,
+                            )
                             vibrate()
                         }
                     }
@@ -117,11 +131,17 @@ class BackspaceSwipeHandler(
 
                         if (steps != swipeSelectedSteps) {
                             swipeSelectedSteps = steps
-                            ic.setSelection(boundaries[steps], swipeBaseCursor)
+                            ic.setSelection(
+                                swipeStartOffset + boundaries[steps],
+                                swipeStartOffset + swipeBaseCursor,
+                            )
                             vibrate()
                         }
                         if (steps == 0) {
-                            ic.setSelection(swipeBaseCursor, swipeBaseCursor)
+                            ic.setSelection(
+                                swipeStartOffset + swipeBaseCursor,
+                                swipeStartOffset + swipeBaseCursor,
+                            )
                         }
                     }
                     return true
@@ -145,7 +165,10 @@ class BackspaceSwipeHandler(
                             insertionService()?.control(ControlOp.DeleteSelection)
                             vibrate()
                         } else {
-                            ic.setSelection(swipeBaseCursor, swipeBaseCursor)
+                            ic.setSelection(
+                                swipeStartOffset + swipeBaseCursor,
+                                swipeStartOffset + swipeBaseCursor,
+                            )
                         }
                     }
                     isSwipeSelectingWords = false

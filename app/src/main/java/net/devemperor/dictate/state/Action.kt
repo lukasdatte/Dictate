@@ -476,7 +476,37 @@ sealed class Action {
         data class StartReprocessStaging(val sessionId: String) : PipelineAction()
         data class UpdateReprocessQueue(val sessionId: String, val newQueue: List<Int>) : PipelineAction()
         data class UpdateReprocessLanguage(val sessionId: String, val code: String?) : PipelineAction()
-        data class SendStaging(val sessionId: String) : PipelineAction()
+
+        /**
+         * Submit the staged reprocess queue for [sessionId].
+         *
+         * **F-001 (2026-07-03) — the staged edits travel on the action.**
+         * The staged prompt queue + language previously lived only in the
+         * IME's mirror fields; the reducer emitted
+         * `Effect.SubmitReprocess(queue = emptyList())`, so the staged
+         * edits never reached the runner (the orchestrator fell back to
+         * the live auto-apply queue). The staged content now rides the
+         * action so both send surfaces (the catalog record button and the
+         * QWERTZ record button) feed the exact same explicit queue into
+         * the pipeline.
+         *
+         * @property queuedPromptSlots the staged queue as **explicit**
+         *   content slots (keyboard staging is entity-ID-based, so these
+         *   are ID-only slots — [net.devemperor.dictate.core.PromptQueueSlot]
+         *   shape 1). An **empty** list means "run zero prompts" (the user
+         *   emptied the staged queue) — it must NOT fall back to the live
+         *   queue. Non-null throughout: staging always carries an explicit
+         *   intent (contrast the fresh-recording seam, where an unset
+         *   `null` still means "use the live queue").
+         * @property language the staging language override snapshotted at
+         *   the send-tap (the per-staging-session transient), or `null`
+         *   for auto-detect.
+         */
+        data class SendStaging(
+            val sessionId: String,
+            val queuedPromptSlots: List<net.devemperor.dictate.core.PromptQueueSlot> = emptyList(),
+            val language: String? = null,
+        ) : PipelineAction()
         data class CancelReprocessStaging(val sessionId: String) : PipelineAction()
 
         // ─── Result handling (post-Done) ───

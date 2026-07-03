@@ -452,11 +452,17 @@ class ActionResolversTest {
     // ─── Staging resolvers ────────────────────────────────────────────
 
     @Test
-    fun `resolveSendStagingAction reads sessionId from current state`() {
+    fun `resolveSendStagingAction returns null even in staging (F-001 - IME affordance hook owns the dispatch)`() {
+        // F-001 regression lock: the catalog resolver dispatching a
+        // queue-less SendStaging was exactly what discarded the staged
+        // edits (the reducer arm emitted SubmitReprocess(queue=emptyList)
+        // → live-queue fallback) and consumed the reprocess snapshot
+        // before the IME's correctly-parameterised submit could run. The
+        // staged payload lives in the IME mirror fields, so only the
+        // IME-side affordance hook (handleReprocessSend) can build the
+        // real SendStaging — the catalog resolver must stay silent.
         val s = state.copy(pipeline = PipelineUiState.ReprocessStaging("s99", "txt"))
-        val result = resolveSendStagingAction(s, fakeModuleServices()) as? Action.PipelineAction.SendStaging
-            ?: error("Expected SendStaging, got ${resolveSendStagingAction(s, fakeModuleServices())}")
-        assertEquals("s99", result.sessionId)
+        assertNull(resolveSendStagingAction(s, fakeModuleServices()))
     }
 
     @Test

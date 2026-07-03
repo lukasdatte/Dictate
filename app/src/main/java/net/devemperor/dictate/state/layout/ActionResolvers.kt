@@ -337,16 +337,27 @@ fun resolvePauseAction(
 /**
  * Resolver for the SendStaging click in `KEYBOARD_REPROCESS_STAGING`.
  *
- * Reads the active `ReprocessStaging.sessionId` from the state and emits
- * [Action.PipelineAction.SendStaging]; `null` when the pipeline isn't in
- * staging (defensive — the visibility predicate excludes this case).
+ * **F-001 (2026-07-03) — always `null`; the IME affordance hook owns the
+ * dispatch.** The staged prompt queue + language live in the IME's
+ * mirror fields, not in `state` — a pure resolver (R.2) cannot build the
+ * `SendStaging` payload. So the catalog RECORD slot no longer dispatches
+ * `SendStaging` here; instead the IME-side affordance hook
+ * (`DictateInputMethodService.imeSideAffordance` RECORD branch → the
+ * staging `handleReprocessSend()`) is the single dispatcher — it
+ * snapshots the reprocess config and dispatches `SendStaging` carrying
+ * the staged queue as explicit content slots. This mirrors the RESEND
+ * slot, whose catalog resolver likewise defers the real work to the
+ * affordance hook. Returning `null` keeps the catalog dispatch path a
+ * silent no-op (R.3) so there is exactly one submit.
+ *
+ * The resolver (and its slot wiring) is kept rather than deleted so the
+ * catalog's typed seam stays stable and this KDoc marks the ownership
+ * hand-off for the next reader.
  */
 fun resolveSendStagingAction(
-    state: DictateUiState,
+    @Suppress("UNUSED_PARAMETER") state: DictateUiState,
     @Suppress("UNUSED_PARAMETER") services: ModuleServices,
-): Action? =
-    (state.pipeline as? PipelineUiState.ReprocessStaging)
-        ?.let { Action.PipelineAction.SendStaging(it.sessionId) }
+): Action? = null
 
 /**
  * Resolver for the trash-button click in `KEYBOARD_REPROCESS_STAGING` —

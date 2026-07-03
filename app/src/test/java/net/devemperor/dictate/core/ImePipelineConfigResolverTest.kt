@@ -186,7 +186,7 @@ class ImePipelineConfigResolverTest {
             ),
         )
 
-        val req = r.resolveReprocess("sid-rp", audio, listOf(1, 2), "en")
+        val req = r.resolveReprocess("sid-rp", audio, PromptQueueSlot.fromIds(listOf(1, 2)), "en")
 
         assertEquals("sid-rp", req.sessionId)
         // C3-IMPL-2: totalSteps from the IME (AutoFormatting +1 folded
@@ -204,11 +204,46 @@ class ImePipelineConfigResolverTest {
     }
 
     @Test
+    fun `resolveReprocess keeps an explicitly empty staged queue empty (F-001)`() {
+        // Red-proof (F-001): pre-fix the resolver ran the queue through
+        // fromIdsOrUnset, so an explicitly EMPTIED staged queue (user
+        // removed every prompt) collapsed into UNSET → the orchestrator
+        // fell back to the live auto-apply queue and ran prompts the user
+        // had explicitly removed. The empty list must reach the JobRequest.
+        val r = resolver()
+        r.snapshotReprocess(
+            "sid-empty",
+            ImePipelineConfigResolver.ReprocessConfig(1, null, null),
+        )
+
+        val req = r.resolveReprocess("sid-empty", audio, emptyList(), "de")
+
+        assertEquals(emptyList<PromptQueueSlot>(), req.queuedPromptSlots)
+    }
+
+    @Test
+    fun `resolveReprocess passes null (unset) through for the live-queue fallback`() {
+        // F-001 counterpart: null = UNSET is still available for callers
+        // that genuinely want the run-time live-queue fallback
+        // (PipelineOrchestrator.resolveQueueSlotsAtStart).
+        val r = resolver()
+        r.snapshotReprocess(
+            "sid-unset",
+            ImePipelineConfigResolver.ReprocessConfig(1, null, null),
+        )
+
+        val req = r.resolveReprocess("sid-unset", audio, null, "de")
+
+        assertNull(req.queuedPromptSlots)
+    }
+
+    @Test
     fun `resolveReprocess falls back to the C3 default when no snapshot`() {
         // No snapshotReprocess() → the staging-FSM path the IME does not
         // flip in C5: delegate to the C3 DefaultPipelineConfigResolver
         // (near-1:1, modelOverride/targetApp null).
-        val req = resolver().resolveReprocess("sid-fb", audio, listOf(3), "fr")
+        val req = resolver()
+            .resolveReprocess("sid-fb", audio, PromptQueueSlot.fromIds(listOf(3)), "fr")
         assertEquals(1 + 1, req.totalSteps) // C3 default: 1 + queue.size
         assertNull(req.modelOverride)
         assertNull(req.targetAppPackage)
@@ -262,7 +297,8 @@ class ImePipelineConfigResolverTest {
             fallback = DefaultPipelineConfigResolver { filesDir },
             imeResolverProvider = { ime },
         )
-        val req = delegating.resolveReprocess("sid-dr", audio, listOf(1), "it")
+        val req =
+            delegating.resolveReprocess("sid-dr", audio, PromptQueueSlot.fromIds(listOf(1)), "it")
         assertEquals("m", req.modelOverride)
         assertEquals("p", req.targetAppPackage)
         assertEquals(4, req.totalSteps)
@@ -302,8 +338,9 @@ class ImePipelineConfigResolverTest {
             imeResolverProvider = { null },
         )
         // Reprocess with no IME resolver → must go through exactly `fb`.
-        val viaDelegate = delegating.resolveReprocess("s", audio, listOf(1), "x")
-        val direct = fb.resolveReprocess("s", audio, listOf(1), "x")
+        val viaDelegate =
+            delegating.resolveReprocess("s", audio, PromptQueueSlot.fromIds(listOf(1)), "x")
+        val direct = fb.resolveReprocess("s", audio, PromptQueueSlot.fromIds(listOf(1)), "x")
         assertEquals(direct.totalSteps, viaDelegate.totalSteps)
         assertEquals(direct.kind, viaDelegate.kind)
         assertSame(fb, fb) // documents the no-rewrap intent

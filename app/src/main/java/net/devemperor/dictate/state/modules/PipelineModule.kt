@@ -101,11 +101,26 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
          * record is the authoritative path source (the Phase-1
          * SendStaging case). Passing `File("")` is forbidden — use
          * `null` instead.
+         *
+         * **F-001 (2026-07-03) — content slots, explicit-vs-unset.**
+         * `queue: List<Int>` was replaced by
+         * `queuedPromptSlots: List<PromptQueueSlot>?` (the transport's
+         * content-capable slot type). The nullability is load-bearing and
+         * mirrors [JobRequest.TranscriptionPipeline.queuedPromptSlots]:
+         *  - **empty** = EXPLICITLY NONE — the user emptied the staged
+         *    queue; the pipeline runs zero prompts and must NOT read the
+         *    live keyboard queue.
+         *  - **null**  = UNSET — no explicit queue travelled; the pipeline
+         *    falls back to the live auto-apply queue (legacy semantics).
+         *
+         * The `SendStaging` reducer arm always emits an **explicit** list
+         * (the staged queue) — the `null` shape stays available for any
+         * future caller that genuinely wants the run-time fallback.
          */
         data class SubmitReprocess(
             val sessionId: String,
             val audioFile: File?,
-            val queue: List<Int>,
+            val queuedPromptSlots: List<net.devemperor.dictate.core.PromptQueueSlot>?,
             val language: String?,
         ) : Effect
 
@@ -526,8 +541,19 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                             // (Phase-1 staging-FSM is pure-state-only,
                             // no file in the state).
                             audioFile = null,
-                            queue = emptyList(),
-                            language = ctx.global.language.override,
+                            // F-001 (2026-07-03) — the staged queue rides
+                            // the action (an EXPLICIT list, empty = run
+                            // zero prompts). Pre-fix this was
+                            // `queue = emptyList()`, which the resolver
+                            // read as UNSET → live-queue fallback, silently
+                            // discarding the user's staged edits both ways.
+                            queuedPromptSlots = action.queuedPromptSlots,
+                            // F-001 — the staging language snapshotted at
+                            // the send-tap now travels on the action too
+                            // (was `ctx.global.language.override`, which the
+                            // IME cleared before the async submit ran on the
+                            // catalog path).
+                            language = action.language,
                         ),
                         Effect.UpdateNotification(
                             NotificationStatus.Pipeline(action.sessionId, step = "reprocess"),
@@ -690,7 +716,7 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
         is Effect.SubmitReprocess -> services.pipelineRunner.submitReprocess(
             sessionId = effect.sessionId,
             audioFile = effect.audioFile,
-            queue = effect.queue,
+            queuedPromptSlots = effect.queuedPromptSlots,
             language = effect.language,
         )
         is Effect.CancelPipelineJob -> services.pipelineRunner.cancel(effect.sessionId)

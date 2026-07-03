@@ -47,25 +47,30 @@ class SlowOutputAnimator(
     private val onTailFailure: TailFailureSink = TailFailureSink {},
 ) {
     /**
-     * @return `true` if the first character committed (insert is considered
-     *   started); `false` if the IC rejected the very first write.
+     * @return `true` if the first grapheme cluster committed (insert is
+     *   considered started); `false` if the IC rejected the very first write.
      */
     fun run(ic: InputConnection, text: String): Boolean {
         if (text.isEmpty()) return ic.commitText(text, 1)
-        if (!ic.commitText(text[0].toString(), 1)) return false
-        scheduleFrom(ic, text, 1)
+        // F-020: commit one whole grapheme cluster per tick, never a lone
+        // surrogate — an astral emoji is a surrogate pair, a family emoji a ZWJ
+        // sequence; splitting them flashes replacement glyphs (or corrupts the
+        // text permanently in hosts that sanitise per commit).
+        val clusters = GraphemeTextOps.graphemeClusters(text)
+        if (!ic.commitText(clusters[0], 1)) return false
+        scheduleFrom(ic, clusters, 1)
         return true
     }
 
-    private fun scheduleFrom(ic: InputConnection, text: String, index: Int) {
-        if (index >= text.length) return
+    private fun scheduleFrom(ic: InputConnection, clusters: List<String>, index: Int) {
+        if (index >= clusters.size) return
         scheduler.postDelayed(delayForIndex.delayFor(index)) {
-            if (ic.commitText(text[index].toString(), 1)) {
-                scheduleFrom(ic, text, index + 1)
+            if (ic.commitText(clusters[index], 1)) {
+                scheduleFrom(ic, clusters, index + 1)
             } else {
                 // W1 fix: stop feeding a stale IC, report the dropped tail
-                // instead of silently losing it character by character.
-                onTailFailure.onDropped(text.substring(index))
+                // instead of silently losing it cluster by cluster.
+                onTailFailure.onDropped(clusters.subList(index, clusters.size).joinToString(""))
             }
         }
     }

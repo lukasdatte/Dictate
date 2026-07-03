@@ -44,6 +44,41 @@ fun interface ControlExecutor {
     fun execute(ic: InputConnection, op: ControlOp): Boolean
 }
 
+/**
+ * Read-only peek at the host editor's current selection + surrounding text.
+ * Lets [InsertionService.control] make the selection-/grapheme-aware backspace
+ * and cursor-move decisions (F-018 / F-021) in pure Kotlin, with only the raw
+ * Android IC reads behind this interface.
+ *
+ * All reads are fail-soft: a stale/throwing IC yields the safe "nothing" value
+ * ([HostSelection.NONE] / empty string), so a control op degrades to the raw
+ * primitive rather than crashing.
+ */
+interface HostTextReader {
+    /** Current selection, or [HostSelection.NONE] when unreadable / collapsed-unknown. */
+    fun selection(ic: InputConnection): HostSelection
+
+    /** Up to [maxChars] UTF-16 units immediately before the cursor (`""` if none). */
+    fun textBeforeCursor(ic: InputConnection, maxChars: Int): String
+}
+
+/**
+ * A host selection snapshot in absolute document offsets. [start] may be greater
+ * than [end] when the user dragged right-to-left; [isRange] is true only when
+ * the two differ (i.e. text is actually selected).
+ */
+data class HostSelection(val start: Int, val end: Int) {
+    val isRange: Boolean get() = start != end
+    val leftEdge: Int get() = minOf(start, end)
+    val rightEdge: Int get() = maxOf(start, end)
+
+    companion object {
+        /** Sentinel for "no readable selection" — treated as a collapsed caret. */
+        @JvmField
+        val NONE = HostSelection(-1, -1)
+    }
+}
+
 /** Auto-enter side-effect (reads per-run override, schedules the Enter tick). */
 interface AutoEnterScheduler {
     fun isActive(): Boolean

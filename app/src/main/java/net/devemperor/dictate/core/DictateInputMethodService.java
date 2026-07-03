@@ -10,7 +10,6 @@ import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.inputmethodservice.InputMethodService;
-import android.icu.text.BreakIterator;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
@@ -109,7 +108,9 @@ import net.devemperor.dictate.state.insertion.AutoEnterScheduler;
 import net.devemperor.dictate.state.insertion.ClipboardGateway;
 import net.devemperor.dictate.state.insertion.ControlOp;
 import net.devemperor.dictate.state.insertion.EditAction;
+import net.devemperor.dictate.state.insertion.HostSelection;
 import net.devemperor.dictate.state.insertion.HostTarget;
+import net.devemperor.dictate.state.insertion.HostTextReader;
 import net.devemperor.dictate.state.insertion.InsertionAuditLog;
 import net.devemperor.dictate.state.insertion.InsertionPolicy;
 import net.devemperor.dictate.state.insertion.InsertionRequest;
@@ -129,7 +130,6 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -149,8 +149,6 @@ public class DictateInputMethodService extends InputMethodService
                    EditBarController.Callback,
                    EmojiController.Callback {
 
-    // define handlers and runnables for background tasks
-    private static final int DELETE_LOOKBACK_CHARACTERS = 64;
 
     // Engagement-hint confirm targets (2026-07-02, ADR-0006 completion —
     // carried over from the deleted legacy info-bar controller handlers).
@@ -4920,6 +4918,32 @@ public class DictateInputMethodService extends InputMethodService
                                 @androidx.annotation.NonNull EditAction action) {
                             performClipboardFallback(ic, action.getAndroidId());
                         }
+                    },
+                    // HostTextReader — selection + surrounding-text peek that lets
+                    // InsertionService.control() own the grapheme/selection-aware
+                    // backspace + cursor-move decisions (F-018 / F-021). Fail-soft:
+                    // a throwing/stale IC yields the safe "nothing" value.
+                    new HostTextReader() {
+                        @Override public HostSelection selection(@androidx.annotation.NonNull InputConnection ic) {
+                            try {
+                                ExtractedText et = ic.getExtractedText(new ExtractedTextRequest(), 0);
+                                if (et == null || et.selectionStart < 0 || et.selectionEnd < 0) {
+                                    return HostSelection.NONE;
+                                }
+                                int base = et.startOffset < 0 ? 0 : et.startOffset;
+                                return new HostSelection(base + et.selectionStart, base + et.selectionEnd);
+                            } catch (Exception e) {
+                                return HostSelection.NONE;
+                            }
+                        }
+                        @Override public String textBeforeCursor(@androidx.annotation.NonNull InputConnection ic, int maxChars) {
+                            try {
+                                CharSequence before = ic.getTextBeforeCursor(maxChars, 0);
+                                return before == null ? "" : before.toString();
+                            } catch (Exception e) {
+                                return "";
+                            }
+                        }
                     });
         }
         return insertionService;
@@ -4945,11 +4969,18 @@ public class DictateInputMethodService extends InputMethodService
                     android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER, 0));
             ic.sendKeyEvent(new android.view.KeyEvent(now, now,
                     android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER, 0));
-        } else if (op instanceof ControlOp.CursorMove) {
-            ic.commitText("", ((ControlOp.CursorMove) op).getOffset());
+        } else if (op instanceof ControlOp.CursorNudge) {
+            // Legacy empty-commit caret nudge (offset 2 = right, -1 = left).
+            ic.commitText("", ((ControlOp.CursorNudge) op).getOffset());
+        } else if (op instanceof ControlOp.SetSelection) {
+            ControlOp.SetSelection s = (ControlOp.SetSelection) op;
+            ic.setSelection(s.getStart(), s.getEnd());
         } else if (op instanceof ControlOp.DeleteSelection) {
             ic.commitText("", 1);
         }
+        // ControlOp.Backspace / DeleteGrapheme / CursorMove are resolved into
+        // concrete primitives by InsertionService.control() before they reach
+        // here; DeleteGrapheme/CursorMove never arrive raw.
         return true;
     }
 
@@ -5182,38 +5213,16 @@ public class DictateInputMethodService extends InputMethodService
         return LanguageLabelResolver.INSTANCE.recordLabelFor(code);
     }
 
+    /**
+     * User backspace. The selection- and grapheme-aware decision (delete the
+     * selection vs. remove exactly one grapheme cluster) now lives once in
+     * {@link InsertionService#control} behind {@link ControlOp.DeleteGrapheme}
+     * (F-018) — every backspace path (main-keyboard tap, QWERTZ tap, long-press
+     * repeat) dispatches the same op, so short-tap and hold can no longer
+     * diverge.
+     */
     private void deleteOneCharacter() {
-        InputConnection inputConnection = getCurrentInputConnection();
-        if (inputConnection == null) return;
-
-        CharSequence selectedText = inputConnection.getSelectedText(0);
-        if (selectedText != null && selectedText.length() > 0) {
-            insertionService().control(ControlOp.DeleteSelection.INSTANCE);
-            return;
-        }
-
-        CharSequence textBeforeCursor = inputConnection.getTextBeforeCursor(DELETE_LOOKBACK_CHARACTERS, 0);
-        if (textBeforeCursor == null || textBeforeCursor.length() == 0) {
-            insertionService().control(ControlOp.Backspace.INSTANCE);
-            return;
-        }
-
-        String before = textBeforeCursor.toString();
-        BreakIterator breakIterator = BreakIterator.getCharacterInstance(Locale.getDefault());
-        breakIterator.setText(before);
-
-        int end = before.length();
-        int start = breakIterator.preceding(end);
-        if (start == BreakIterator.DONE) {
-            try {
-                start = before.offsetByCodePoints(end, -1);
-            } catch (IndexOutOfBoundsException ignored) {
-                start = Math.max(0, end - 1);
-            }
-        }
-
-        int charsToDelete = Math.max(1, end - start);
-        insertionService().control(new ControlOp.DeleteSurrounding(charsToDelete, 0));
+        insertionService().control(ControlOp.DeleteGrapheme.INSTANCE);
     }
 
     // ===== MainButtonsController.Callback =====

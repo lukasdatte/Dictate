@@ -5,6 +5,7 @@ import android.view.inputmethod.InputConnection
 import net.devemperor.dictate.core.FakeInputConnection
 import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.state.Action
+import net.devemperor.dictate.testutil.FakeHostTextReader
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -67,6 +68,7 @@ class PendingPartsFlusherTest {
                 override fun performHostAction(ic: InputConnection, action: EditAction) = true
                 override fun fallback(ic: InputConnection, action: EditAction) = Unit
             },
+            textReader = FakeHostTextReader(),
         )
 
         val flusher = PendingPartsFlusher(service) { dispatched += it }

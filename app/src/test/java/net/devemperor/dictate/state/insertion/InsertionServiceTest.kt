@@ -5,6 +5,7 @@ import android.view.inputmethod.InputConnection
 import net.devemperor.dictate.core.FakeInputConnection
 import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.state.layout.EnterButtonRole
+import net.devemperor.dictate.testutil.FakeHostTextReader
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -49,6 +50,7 @@ class InsertionServiceTest {
         var controlAccept = true
         var hostActionHandled = true
         var fallbackRan = false
+        val textReader = FakeHostTextReader()
 
         val service = InsertionService(
             ic = { live },
@@ -86,6 +88,7 @@ class InsertionServiceTest {
                 override fun performHostAction(ic: InputConnection, action: EditAction) = hostActionHandled
                 override fun fallback(ic: InputConnection, action: EditAction) { fallbackRan = true }
             },
+            textReader = textReader,
         )
     }
 
@@ -274,6 +277,171 @@ class InsertionServiceTest {
         val r = f.service.control(ControlOp.Backspace)
         assertEquals(InsertionResult.Failed, r)
         assertEquals(1, f.controlOps.size)
+    }
+
+    // ── DeleteGrapheme — the F-018 single home of backspace semantics ──
+
+    @Test
+    fun `DeleteGrapheme with active selection resolves to DeleteSelection`() {
+        // User expectation: backspace with text selected deletes the selection —
+        // the pre-fix raw deleteSurroundingText(1,0) deleted AROUND it instead.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(3, 7)
+
+        f.service.control(ControlOp.DeleteGrapheme)
+
+        assertEquals(listOf<ControlOp>(ControlOp.DeleteSelection), f.controlOps)
+    }
+
+    @Test
+    fun `DeleteGrapheme with surrogate-pair emoji deletes both units`() {
+        // Regression for F-018: the pre-fix ControlOp.Backspace deleted one
+        // UTF-16 unit, leaving a corrupt lone high surrogate in the editor.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(5, 5)
+        f.textReader.beforeCursor = "hi 😀" // "hi 😀"
+
+        f.service.control(ControlOp.DeleteGrapheme)
+
+        assertEquals(listOf<ControlOp>(ControlOp.DeleteSurrounding(2, 0)), f.controlOps)
+    }
+
+    @Test
+    fun `DeleteGrapheme with ZWJ family emoji deletes the whole sequence`() {
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(9, 9)
+        f.textReader.beforeCursor = "x👨‍👩‍👧" // 8 UTF-16 units
+
+        f.service.control(ControlOp.DeleteGrapheme)
+
+        assertEquals(listOf<ControlOp>(ControlOp.DeleteSurrounding(8, 0)), f.controlOps)
+    }
+
+    @Test
+    fun `DeleteGrapheme with ascii deletes exactly one unit`() {
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(3, 3)
+        f.textReader.beforeCursor = "abc"
+
+        f.service.control(ControlOp.DeleteGrapheme)
+
+        assertEquals(listOf<ControlOp>(ControlOp.DeleteSurrounding(1, 0)), f.controlOps)
+    }
+
+    @Test
+    fun `DeleteGrapheme with no readable text degrades to raw Backspace`() {
+        // Cursor at 0 / unreadable IC: fall back to the raw primitive so the
+        // key is never a silent no-op.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+
+        f.service.control(ControlOp.DeleteGrapheme)
+
+        assertEquals(listOf<ControlOp>(ControlOp.Backspace), f.controlOps)
+    }
+
+    @Test
+    fun `DeleteGrapheme with unreadable selection still grapheme-deletes`() {
+        // HostSelection.NONE is not a range — the grapheme path must still run.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection.NONE
+        f.textReader.beforeCursor = "x😀"
+
+        f.service.control(ControlOp.DeleteGrapheme)
+
+        assertEquals(listOf<ControlOp>(ControlOp.DeleteSurrounding(2, 0)), f.controlOps)
+    }
+
+    // ── CursorMove — the F-021 selection-safe, grapheme-clamped move ───
+
+    @Test
+    fun `CursorMove left with selection collapses to left edge instead of deleting it`() {
+        // Pre-fix: commitText("", -1) DELETED the active selection.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(3, 7)
+
+        f.service.control(ControlOp.CursorMove(-1))
+
+        assertEquals(listOf<ControlOp>(ControlOp.SetSelection(3, 3)), f.controlOps)
+    }
+
+    @Test
+    fun `CursorMove right with selection collapses to right edge`() {
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(3, 7)
+
+        f.service.control(ControlOp.CursorMove(1))
+
+        assertEquals(listOf<ControlOp>(ControlOp.SetSelection(7, 7)), f.controlOps)
+    }
+
+    @Test
+    fun `CursorMove left with reversed selection uses the true left edge`() {
+        // start > end happens when the user dragged right-to-left.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(7, 3)
+
+        f.service.control(ControlOp.CursorMove(-1))
+
+        assertEquals(listOf<ControlOp>(ControlOp.SetSelection(3, 3)), f.controlOps)
+    }
+
+    @Test
+    fun `CursorMove left steps over a whole emoji`() {
+        // Pre-fix: one code unit per step — the caret landed inside the pair.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(5, 5)
+        f.textReader.beforeCursor = "hi 😀"
+
+        f.service.control(ControlOp.CursorMove(-1))
+
+        assertEquals(listOf<ControlOp>(ControlOp.SetSelection(3, 3)), f.controlOps)
+    }
+
+    @Test
+    fun `CursorMove left never goes below zero`() {
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(1, 1)
+        f.textReader.beforeCursor = "😀" // cluster larger than caret pos
+
+        f.service.control(ControlOp.CursorMove(-1))
+
+        assertEquals(listOf<ControlOp>(ControlOp.SetSelection(0, 0)), f.controlOps)
+    }
+
+    @Test
+    fun `CursorMove right without selection keeps the legacy nudge`() {
+        // Rightward grapheme scan needs text-after-cursor (not exposed);
+        // documented fallback is the legacy relative commit (offset 2).
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(5, 5)
+
+        f.service.control(ControlOp.CursorMove(1))
+
+        assertEquals(listOf<ControlOp>(ControlOp.CursorNudge(2)), f.controlOps)
+    }
+
+    @Test
+    fun `CursorMove with unreadable selection falls back to the legacy nudge`() {
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection.NONE
+
+        f.service.control(ControlOp.CursorMove(-1))
+
+        assertEquals(listOf<ControlOp>(ControlOp.CursorNudge(-1)), f.controlOps)
+    }
+
+    @Test
+    fun `CursorMove left with empty before-text falls back to the legacy nudge`() {
+        // Caret readable but at position 0 with nothing before it: the host is
+        // free to ignore the no-op nudge; a SetSelection(0,0) would be fine too
+        // but the nudge preserves exact legacy behaviour.
+        val f = Fakes(live = HostTarget(FakeIc(), editor(1)))
+        f.textReader.selection = HostSelection(0, 0)
+        f.textReader.beforeCursor = ""
+
+        f.service.control(ControlOp.CursorMove(-1))
+
+        assertEquals(listOf<ControlOp>(ControlOp.CursorNudge(-1)), f.controlOps)
     }
 
     // ── failure-path invariants (review edge-cases) ──

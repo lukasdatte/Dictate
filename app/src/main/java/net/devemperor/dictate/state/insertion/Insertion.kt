@@ -150,8 +150,28 @@ sealed interface InsertionResult {
  * touches the InputConnection directly.
  */
 sealed interface ControlOp {
-    /** Delete one char before the cursor (`deleteSurroundingText(1, 0)`). */
+    /**
+     * Raw single-UTF-16-unit backspace (`deleteSurroundingText(1, 0)`).
+     *
+     * Kept only as the last-resort primitive used *by* [DeleteGrapheme] when
+     * there is no text to scan (cursor at position 0 / unreadable IC). No
+     * caller should dispatch this directly for a user backspace — it splits
+     * surrogate pairs and ignores selections (F-018). Use [DeleteGrapheme].
+     */
     data object Backspace : ControlOp
+
+    /**
+     * The user-facing backspace: selection- and grapheme-aware, owned entirely
+     * by [InsertionService.control]. With an active selection it deletes the
+     * selection; otherwise it removes exactly one grapheme cluster before the
+     * cursor (whole emoji / ZWJ sequence / combining mark), never a lone
+     * surrogate. This is the single home the F-018 fix consolidated every
+     * backspace path onto.
+     *
+     * @see GraphemeTextOps.lastGraphemeUnitCount
+     * @see docs/research/2026-07-02 - feature-wiring-code-review.md (F-018)
+     */
+    data object DeleteGrapheme : ControlOp
 
     /** Delete [before]/[after] units around the cursor (grapheme-aware backspace). */
     data class DeleteSurrounding(val before: Int, val after: Int) : ControlOp
@@ -165,8 +185,36 @@ sealed interface ControlOp {
     /** Physical KEYCODE_ENTER (pre-bind / no-editor-info path, WebViews). */
     data object PhysicalEnter : ControlOp
 
-    /** Move the cursor by committing empty text at position [offset] (QWERTZ swipe). */
-    data class CursorMove(val offset: Int) : ControlOp
+    /**
+     * Move the cursor one step left/right (space-swipe). [direction] < 0 = left,
+     * ≥ 0 = right.
+     *
+     * Owned by [InsertionService.control], which is selection- and
+     * grapheme-aware: with an active selection it collapses the selection to the
+     * moved-toward edge instead of destroying it; otherwise it steps over a
+     * *whole* grapheme cluster (so the caret never lands inside a surrogate
+     * pair). Falls back to the legacy empty-commit nudge only when the IC text
+     * cannot be read (F-021).
+     *
+     * @see docs/research/2026-07-02 - feature-wiring-code-review.md (F-021)
+     */
+    data class CursorMove(val direction: Int) : ControlOp
+
+    /**
+     * Low-level empty-commit caret nudge (`commitText("", offset)`): the legacy
+     * fallback [CursorMove] resolves to when the host text cannot be read.
+     * `offset` follows `commitText`'s relative-position contract: `2` = one
+     * right, `-1` = one left. Not dispatched directly by callers.
+     */
+    data class CursorNudge(val offset: Int) : ControlOp
+
+    /**
+     * Set the host selection to the absolute document offsets [start]..[end].
+     * Thin wrapper over `setSelection` so swipe-select offset math (which must
+     * account for `ExtractedText.startOffset`, F-023) still routes through the
+     * single insertion owner.
+     */
+    data class SetSelection(val start: Int, val end: Int) : ControlOp
 
     /**
      * Delete the current selection (`commitText("", 1)` replaces the selected

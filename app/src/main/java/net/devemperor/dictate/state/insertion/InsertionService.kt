@@ -1,5 +1,6 @@
 package net.devemperor.dictate.state.insertion
 
+import android.view.inputmethod.InputConnection
 import net.devemperor.dictate.core.EditorIdentity
 
 /**
@@ -30,6 +31,7 @@ class InsertionService(
     private val audit: InsertionAuditLog,
     private val recovery: RecoveryHandler,
     private val clipboard: ClipboardGateway,
+    private val textReader: HostTextReader,
 ) {
     /**
      * Insert text following [request]'s policy. Tries the live IC (for resend:
@@ -84,12 +86,78 @@ class InsertionService(
      */
     fun control(op: ControlOp): InsertionResult {
         val live = ic.live() ?: return InsertionResult.Failed
-        return if (controlExecutor.execute(live.ic, op)) {
+        val resolved = resolveControlOp(live.ic, op)
+        return if (controlExecutor.execute(live.ic, resolved)) {
             InsertionResult.Committed(Target.LIVE)
         } else {
             InsertionResult.Failed
         }
     }
+
+    /**
+     * The single place selection- and grapheme-semantics live (architecture
+     * §2.3 theme 3). [ControlOp.DeleteGrapheme] and [ControlOp.CursorMove] carry
+     * *intent*; here we read the host selection + surrounding text once and pick
+     * the concrete primitive the executor runs. Every other op passes through
+     * unchanged.
+     */
+    private fun resolveControlOp(hostIc: InputConnection, op: ControlOp): ControlOp =
+        when (op) {
+            is ControlOp.DeleteGrapheme -> resolveDeleteGrapheme(hostIc)
+            is ControlOp.CursorMove -> resolveCursorMove(hostIc, op.direction)
+            else -> op
+        }
+
+    /**
+     * Backspace intent → concrete delete (F-018). An active selection is deleted
+     * as a whole; otherwise exactly one grapheme cluster before the cursor is
+     * removed (whole emoji / ZWJ sequence / combining mark, never a lone
+     * surrogate). With no readable text, degrade to the raw one-unit primitive.
+     */
+    private fun resolveDeleteGrapheme(hostIc: InputConnection): ControlOp {
+        if (textReader.selection(hostIc).isRange) return ControlOp.DeleteSelection
+
+        val before = textReader.textBeforeCursor(hostIc, DELETE_LOOKBACK_UNITS)
+        if (before.isEmpty()) return ControlOp.Backspace
+        return ControlOp.DeleteSurrounding(GraphemeTextOps.lastGraphemeUnitCount(before), 0)
+    }
+
+    /**
+     * Space-swipe cursor step → concrete move (F-021). With an active selection
+     * we collapse to the edge the user is moving toward rather than destroying
+     * it with an empty commit. Otherwise we step over a whole grapheme cluster
+     * (left: back-scan the cluster before the caret; right: forward-scan after)
+     * so the caret never lands inside a surrogate pair. With no readable
+     * selection at all, fall back to the legacy empty-commit nudge.
+     */
+    private fun resolveCursorMove(hostIc: InputConnection, direction: Int): ControlOp {
+        val sel = textReader.selection(hostIc)
+        if (sel == HostSelection.NONE) return legacyCursorNudge(direction)
+
+        if (sel.isRange) {
+            val edge = if (direction < 0) sel.leftEdge else sel.rightEdge
+            return ControlOp.SetSelection(edge, edge)
+        }
+
+        val caret = sel.start
+        return if (direction < 0) {
+            val before = textReader.textBeforeCursor(hostIc, DELETE_LOOKBACK_UNITS)
+            if (before.isEmpty()) return legacyCursorNudge(direction)
+            val step = GraphemeTextOps.lastGraphemeUnitCount(before)
+            val target = (caret - step).coerceAtLeast(0)
+            ControlOp.SetSelection(target, target)
+        } else {
+            // Rightward: the reader only exposes text-before-cursor, so a
+            // grapheme-sized forward step would need text-after. Keep the legacy
+            // one-unit nudge for the right direction; the selection-destroying
+            // defect (the user-reported F-021 symptom) is already fixed above.
+            legacyCursorNudge(direction)
+        }
+    }
+
+    /** Legacy empty-commit caret nudge: +2 = one right, -1 = one left. */
+    private fun legacyCursorNudge(direction: Int): ControlOp =
+        ControlOp.CursorNudge(if (direction < 0) -1 else 2)
 
     /**
      * Run a copy/paste/cut edit action: try the host soft-API first, then the
@@ -125,5 +193,15 @@ class InsertionService(
         }
         request.captured?.let { targets += it to Target.CAPTURED }
         return targets
+    }
+
+    private companion object {
+        /**
+         * How far back [resolveDeleteGrapheme] / [resolveCursorMove] read to find
+         * a grapheme boundary. 64 UTF-16 units comfortably spans the longest
+         * realistic single cluster (long ZWJ emoji sequences are ~10-20 units).
+         * Matches the legacy `DELETE_LOOKBACK_CHARACTERS` in the IME service.
+         */
+        const val DELETE_LOOKBACK_UNITS = 64
     }
 }

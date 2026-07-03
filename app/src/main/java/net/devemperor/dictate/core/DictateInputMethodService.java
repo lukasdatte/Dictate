@@ -5298,30 +5298,19 @@ public class DictateInputMethodService extends InputMethodService
         // fallback is GONE (MainButtonsController deleted at the
         // point-of-no-return).
 
-        // CR4-IMPL-2 (Theme C-R / B5-CR4-MID-W1) — the resend-cooldown
-        // *state* model is fully present (ResendState.resendCooldown +
-        // ResendModule arming on ResendLastAudio + the RESEND-slot
-        // enabledResolver `{ !resendCooldown }`), but nothing dispatched
-        // the *clear* half: ResendModule's own KDoc says "the Phase-1
-        // placeholder relies on the UI side scheduling that action via
-        // Handler.postDelayed" — that scheduling was never wired. Wire
-        // the missing ResendCooldownExpired dispatch here, ADDITIVE +
-        // dormant-safe (idempotent — a no-op while resendCooldown is
-        // false, ResendModule.kt:97). When CR4 flips the RESEND click
-        // to the catalog actionResolver (which dispatches ResendLastAudio
-        // → arms resendCooldown), this completes the round-trip so CR4
-        // can remove the imperative setResendEnabled WITHOUT latching
-        // the cooldown forever (the regression CR4-IMPL-2 flagged). The
-        // 500 ms window matches the imperative re-enable below.
-        if (pipelineBinder != null) {
-            mainHandler.postDelayed(() -> {
-                if (pipelineBinder != null) {
-                    pipelineBinder.dispatch(
-                        net.devemperor.dictate.state.Action.ResendAction
-                            .ResendCooldownExpired.INSTANCE);
-                }
-            }, 500);
-        }
+        // F-029 (2026-07-03) — the resend-cooldown *clear* is no longer
+        // scheduled here. ResendModule now owns the cooldown timer: both
+        // arm actions (ResendLastAudio / ResendLastAudioLong) emit
+        // Effect.ScheduleCooldownExpiry, whose handler dispatches
+        // ResendCooldownExpired after 500 ms on the service scope. Doing
+        // it UI-side only covered the short-press path (this method) — a
+        // RESEND long-press armed the cooldown via the catalog
+        // ResendLastAudioLong dispatch but nothing here ran, so the
+        // enabledResolver `{ !resendCooldown }` latched the button
+        // disabled until service restart. Moving the timer into the
+        // module makes the arm→expiry round-trip hold for every arming
+        // path. The catalog `ResendLastAudio` dispatch fired alongside
+        // this affordance call now schedules the clear itself.
 
         dbExecutor.execute(() -> {
             try {

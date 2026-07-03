@@ -133,6 +133,41 @@ Each step compiles and tests independently; steps 3–5 each have a visible devi
 
 ## 7. Change History
 
+### 2026-07-03 — Buttons kept opaque over the translucent card (§3.3 follow-up)
+
+- **Trigger:** User report — in transparent-widget mode the *buttons*
+  also lost opacity ("im transparenten Widget-Modus sollen auch die
+  Buttons selbst opak sein"), contradicting §3.3's "buttons keep their
+  own opaque Material backgrounds".
+- **Root cause:** §3.3 was correct that `applyBackgroundOpacity` mutates
+  *only* the card fill — the buttons were never touched by the opacity
+  code. But the three icon buttons (Trash/Pause/Close) inherited
+  `Widget.Material3.Button.IconButton` (`styles_overlay.xml`), a
+  *standard* icon button whose container `backgroundTint` is
+  `@android:color/transparent` (alpha 0). Over an opaque card that reads
+  fine; once the card fill went translucent, those transparent-container
+  buttons let the host content behind the card bleed straight through the
+  whole button box. The icons stayed opaque; the button *background* was
+  never opaque to begin with. So §3.3's assumption ("buttons keep their
+  own opaque Material backgrounds") only held for the filled record
+  button, not the icon buttons — a *visual-blending* cause, not an
+  alpha-strip in the opacity code.
+- **What changed:** `OverlayButton.Icon` now inherits
+  `Widget.Material3.Button.IconButton.Filled.Tonal` — an opaque
+  `colorSecondaryContainer` container. Every overlay button now carries
+  an alpha-255 container tint (record button = filled `colorPrimary`,
+  icon buttons = filled-tonal `colorSecondaryContainer`), so the
+  translucent card shows through only in the gaps *between* the buttons.
+  Single-style fix, no per-button code. `OverlayBackend.applyBackgroundOpacity`
+  KDoc updated to state the buttons stay opaque by style, not by the
+  opacity code.
+- **Test:** new `OverlayBackendTest.overlay button backgrounds stay fully
+  opaque at low widgetOpacity` — renders at `widgetOpacity = 20`, asserts
+  the card fill is translucent (alpha 51) AND every button's
+  `backgroundTintList.defaultColor` alpha is 255. Red-proven against the
+  old transparent-container style (first icon button had alpha 0), green
+  after the filled-tonal switch.
+
 ### 2026-07-02 — Implemented (status → Accepted)
 
 - **Trigger:** Implementation of the full spec in migration order §4 (branch `worktree-agent-ad9f1f03e41e0e4d2`, commits `[widget-transparency]`).

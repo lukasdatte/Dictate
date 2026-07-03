@@ -894,6 +894,55 @@ class OverlayBackendTest {
     }
 
     @Test
+    fun `overlay button backgrounds stay fully opaque at low widgetOpacity`() {
+        // Widget-transparency contract (2026-07-03): Pref.WidgetOpacity
+        // makes only the CARD fill translucent. Every button's own
+        // container tint must stay fully opaque (alpha 255) so the
+        // translucent card shows through only BETWEEN the buttons — the
+        // user's "die Buttons verlieren auch die Deckkraft" regression.
+        //
+        // Red-provable against the old style: OVERLAY_TRASH/PAUSE/CLOSE
+        // used Widget.Material3.Button.IconButton, whose container
+        // backgroundTint is @android:color/transparent (alpha 0). The
+        // filled-tonal parent (styles_overlay.xml) gives them an opaque
+        // colorSecondaryContainer; the record button is a filled button
+        // (opaque colorPrimary).
+        val backend = newBackend()
+        backend.attach { captured += it }
+
+        backend.render(
+            stateWithPermission().copy(
+                theming = net.devemperor.dictate.state.ThemingState(widgetOpacity = 20),
+            ),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        // Sanity: the card fill IS translucent at 20 %.
+        assertEquals(
+            "card fill must be translucent at widgetOpacity=20",
+            51,
+            android.graphics.Color.alpha(cardBackground().color!!.defaultColor),
+        )
+
+        listOf(
+            LogicalButtonId.OVERLAY_RECORD,
+            LogicalButtonId.OVERLAY_PAUSE,
+            LogicalButtonId.OVERLAY_TRASH,
+            LogicalButtonId.OVERLAY_CLOSE,
+        ).forEach { id ->
+            val btn = findOverlayButton(id) as com.google.android.material.button.MaterialButton
+            val tint = btn.backgroundTintList
+                ?: error("button $id has no backgroundTintList — cannot be opaque")
+            assertEquals(
+                "button $id container tint must be fully opaque (alpha 255) " +
+                    "so the translucent card shows only between the buttons",
+                255,
+                android.graphics.Color.alpha(tint.defaultColor),
+            )
+        }
+    }
+
+    @Test
     fun `opacity is re-applied after reinflate`() {
         // Teardown recreates the drawable with the opaque XML fill —
         // the cache must reset so the next render re-applies (the

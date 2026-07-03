@@ -27,6 +27,7 @@ import androidx.core.view.WindowInsetsCompat;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import net.devemperor.dictate.BuildConfig;
+import net.devemperor.dictate.core.NotificationPermissionPolicy;
 import net.devemperor.dictate.onboarding.OnboardingActivity;
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.preferences.DictatePrefsKt;
@@ -203,6 +204,19 @@ public class DictateSettingsActivity extends AppCompatActivity {
                         .setPositiveButton(R.string.dictate_yes, (dialog, which) -> startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)))
                         .setNegativeButton(R.string.dictate_no, null)
                         .show();
+
+            // F-092 fallback ask: upgrading users (and users who denied
+            // during onboarding) get one more contextual POST_NOTIFICATIONS
+            // prompt so the recording FGS notification is visible on
+            // Android 13+. NotificationPermissionPolicy gates on
+            // shouldShowRequestPermissionRationale so a permanent denial is
+            // never re-nagged. Only reached when RECORD_AUDIO + keyboard are
+            // already set up, i.e. the settled steady state.
+            } else if (NotificationPermissionPolicy.INSTANCE.shouldRequestFromSettings(
+                    android.os.Build.VERSION.SDK_INT,
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
+                    shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS))) {
+                requestPermissions(new String[]{ Manifest.permission.POST_NOTIFICATIONS }, 1338);
             }
         }
     }
@@ -217,6 +231,15 @@ public class DictateSettingsActivity extends AppCompatActivity {
                 Toast.makeText(this, R.string.dictate_microphone_permission_denied, Toast.LENGTH_SHORT).show();
             }
             finish();
+        } else if (requestCode == 1338) {
+            // F-092: reflect the notifications fallback grant/denial. No
+            // finish() — the settings screen stays open; a denial is not
+            // re-asked (the policy honours shouldShowRequestPermissionRationale).
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, R.string.dictate_notifications_permission_granted, Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, R.string.dictate_notifications_permission_denied, Toast.LENGTH_SHORT).show();
+            }
         }
     }
 }

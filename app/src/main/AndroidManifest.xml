@@ -14,9 +14,11 @@
           FOREGROUND_SERVICE_MICROPHONE mandatory on API ≥ 34 because
                                         foregroundServiceType="microphone"
           POST_NOTIFICATIONS           mandatory on API ≥ 33 for the
-                                        persistent FGS notification (runtime
-                                        prompt lives in OnboardingActivity —
-                                        Block 2 §11.5.1)
+                                        persistent FGS notification. Runtime
+                                        prompt: OnboardingAdapter position 1
+                                        (first-run) + DictateSettingsActivity
+                                        fallback, gated by
+                                        NotificationPermissionPolicy (F-092).
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />

@@ -127,6 +127,17 @@
     <string name="dictate_onboarding_permissions_microphone_button">Grant microphone permission</string>
     <string name="dictate_onboarding_permissions_keyboard_request">Dictate must be activated as a keyboard in the settings. Click on the button below to enable this.\n\nYou can also activate the keyboard button on the navigation bar to switch to Dictate more quickly.</string>
     <string name="dictate_onboarding_permissions_keyboard_button">Enable Dictate keyboard</string>
+    <!--
+        F-092: POST_NOTIFICATIONS runtime prompt (API 33+). The recording
+        foreground-service notification carries the Pause/Stop/Send/Cancel
+        controls; without the grant it is silently suppressed. The
+        onboarding permissions page and the settings fallback both use
+        these strings.
+    -->
+    <string name="dictate_onboarding_permissions_notifications_request">Dictate shows recording and processing controls in a notification. Grant notification permission so you can pause, stop and send from the shade.</string>
+    <string name="dictate_onboarding_permissions_notifications_button">Grant notification permission</string>
+    <string name="dictate_notifications_permission_granted">Notification permission granted ✅.</string>
+    <string name="dictate_notifications_permission_denied">Notification permission denied ❌.</string>
     <string name="dictate_keyboard_disabled">Dictate keyboard disabled ❌.</string>
     <string name="dictate_keyboard_enabled">Dictate keyboard enabled ✅.</string>
     <string name="dictate_api_key_hint" translatable="false">sk-proj-kv … / gsk_TsWDxi …</string>

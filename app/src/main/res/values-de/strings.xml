@@ -87,6 +87,10 @@
     <string name="dictate_onboarding_permissions_microphone_button">Mikrofon Berechtigung erteilen</string>
     <string name="dictate_onboarding_permissions_keyboard_request">Dictate muss in den Einstellungen als Tastatur aktiviert werden. Klicke auf die Schaltfläche unten, um dies zu aktivieren.\n\nDu kannst zusätzlich auch die Tastatur-Schaltfläche auf der Navigationsleiste aktivieren, um schneller zu Dictate wechseln zu können.</string>
     <string name="dictate_onboarding_permissions_keyboard_button">Dictate Tastatur aktivieren</string>
+    <string name="dictate_onboarding_permissions_notifications_request">Dictate zeigt Aufnahme- und Verarbeitungssteuerungen in einer Benachrichtigung an. Erteile die Benachrichtigungsberechtigung, damit du direkt aus der Statusleiste pausieren, stoppen und senden kannst.</string>
+    <string name="dictate_onboarding_permissions_notifications_button">Benachrichtigungsberechtigung erteilen</string>
+    <string name="dictate_notifications_permission_granted">Benachrichtigungsberechtigung erteilt ✅.</string>
+    <string name="dictate_notifications_permission_denied">Benachrichtigungsberechtigung abgelehnt ❌.</string>
     <string name="dictate_keyboard_disabled">Dictate Tastatur deaktiviert ❌.</string>
     <string name="dictate_keyboard_enabled">Dictate Tastatur aktiviert ✅.</string>
     <string name="dictate_onboarding_api_key_finish">API-Schlüssel festlegen und Einrichtung beenden</string>

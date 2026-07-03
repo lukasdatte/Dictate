@@ -87,6 +87,10 @@
     <string name="dictate_onboarding_permissions_microphone_button">Conceder permissão do microfone</string>
     <string name="dictate_onboarding_permissions_keyboard_request">O Dictate precisa ser ativado como teclado nas configurações. Toque no botão abaixo para habilitar.\n\nVocê também pode ativar o botão de teclado na barra de navegação para alternar mais rápido para o Dictate.</string>
     <string name="dictate_onboarding_permissions_keyboard_button">Ativar teclado Dictate</string>
+    <string name="dictate_onboarding_permissions_notifications_request">O Dictate mostra os controles de gravação e processamento em uma notificação. Conceda a permissão de notificações para pausar, parar e enviar pela barra de status.</string>
+    <string name="dictate_onboarding_permissions_notifications_button">Conceder permissão de notificações</string>
+    <string name="dictate_notifications_permission_granted">Permissão de notificações concedida ✅.</string>
+    <string name="dictate_notifications_permission_denied">Permissão de notificações negada ❌.</string>
     <string name="dictate_keyboard_disabled">Teclado Dictate desativado ❌.</string>
     <string name="dictate_keyboard_enabled">Teclado Dictate ativado ✅.</string>
     <string name="dictate_onboarding_api_key_finish">Salvar chave de API e finalizar</string>

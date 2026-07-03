@@ -540,8 +540,15 @@ class OverlayBackend(
     /**
      * Mutate the card background's **fill** to `colorSurface` at
      * [opacityPercent] alpha (F-118). The 1 dp `colorOutlineVariant`
-     * stroke and the buttons' own Material backgrounds stay fully
-     * opaque so the card boundary and controls remain legible.
+     * stroke stays opaque so the card boundary remains legible.
+     *
+     * The buttons keep their own **opaque** Material container tints
+     * (`OverlayButton.Primary` = filled `colorPrimary`,
+     * `OverlayButton.Icon` = filled-tonal `colorSecondaryContainer`) so
+     * only the card fill *between* the buttons goes translucent — never
+     * the buttons themselves (`styles_overlay.xml`, 2026-07-03
+     * widget-transparency fix). This method touches the card drawable
+     * only; it must never reach into the button backgrounds.
      *
      * `mutate()` detaches the drawable's constant state so the shared
      * `overlay_background.xml` resource (also used by other inflations)

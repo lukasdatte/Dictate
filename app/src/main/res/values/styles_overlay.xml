@@ -5,9 +5,12 @@
     Two narrow Material 3 button variants used exclusively by
     `overlay_5button_layout.xml`:
 
-      - `OverlayButton.Primary` — the SEND button (text + leading icon).
-      - `OverlayButton.Icon` — Record / Pause / Trash / Close (icon-only,
-        48 dp square).
+      - `OverlayButton.Primary` — the record/send button (text + leading
+        icon). Filled `Widget.Material3.Button` ⇒ opaque `colorPrimary`
+        container.
+      - `OverlayButton.Icon` — Pause / Trash / Close (icon-only, 48 dp
+        square). Filled-tonal icon button ⇒ opaque `colorSecondaryContainer`
+        container.
 
     Both inherit Material 3 defaults — no `cornerRadius` override so the
     buttons match the keyboard-surface buttons (record_btn / trash_btn /
@@ -17,7 +20,32 @@
     ausschauen wie auf der normalen Tastatur, also auch mit den gleichen
     Rundungen".
 
+    # Widget-transparency: buttons stay OPAQUE (2026-07-03)
+
+    `Pref.WidgetOpacity` makes only the CARD fill translucent
+    (`OverlayBackend.applyBackgroundOpacity` mutates the drawable fill).
+    The buttons must NOT lose opacity — the translucent card may show
+    through only BETWEEN the buttons.
+
+    The original `OverlayButton.Icon` inherited
+    `Widget.Material3.Button.IconButton`, a *standard* icon button whose
+    container `backgroundTint` is `@android:color/transparent` (alpha 0).
+    On an opaque card that reads fine (icon over surface), but once the
+    card fill goes translucent the transparent-container buttons let the
+    host content behind the card bleed straight through the whole button
+    box — the user's "die Buttons verlieren auch die Deckkraft" report.
+    The icons themselves stayed opaque; the button *background* was never
+    opaque to begin with.
+
+    Fix (systemic, one place): give the icon buttons a filled-tonal
+    parent so their container is an opaque `colorSecondaryContainer`.
+    Every overlay button now has an alpha-255 container tint, so the
+    translucent card only shows in the gaps between the buttons — exactly
+    the requested behaviour. Asserted in `OverlayBackendTest`
+    ("overlay button backgrounds stay fully opaque at low widgetOpacity").
+
     @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §3.2
+    @see docs/research/2026-07-02 - overlay-widget-transparency.md §3.3
 -->
 <resources>
 
@@ -25,6 +53,9 @@
         <item name="android:textAllCaps">false</item>
     </style>
 
-    <style name="OverlayButton.Icon" parent="Widget.Material3.Button.IconButton" />
+    <!-- Filled-tonal ⇒ opaque colorSecondaryContainer container. Keeps
+         the M3 icon-button sizing/ripple/pill-shape while guaranteeing
+         the button box stays fully opaque over a translucent card. -->
+    <style name="OverlayButton.Icon" parent="Widget.Material3.Button.IconButton.Filled.Tonal" />
 
 </resources>

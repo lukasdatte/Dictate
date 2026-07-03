@@ -133,6 +133,43 @@ Each step compiles and tests independently; steps 3–5 each have a visible devi
 
 ## 7. Change History
 
+### 2026-07-03 — Opacity made backdrop-independent (opaque pre-blend, §3.3 superseded)
+
+- **Trigger:** User report — the effective opacity differs between the
+  widget's display modes with the same `Pref.WidgetOpacity` value ("Die
+  Opacity im Widget-Modus bzw. im anderen Modus ist nicht identisch.
+  Sie soll bitte immer gleich sein.").
+- **Root cause:** Not a divergent code path — `OverlayBackend.
+  applyBackgroundOpacity` writes the identical translucent ARGB in
+  every mode. But a translucent fill composites against whatever is
+  BEHIND the overlay window, and that backdrop differs between the two
+  ViewModes sharing the card: WIDGET floats over the *opaque* keyboard
+  background, HOVER over *arbitrary host-app content*. Same alpha byte,
+  different on-screen pixels — an inherent property of alpha
+  compositing, foreshadowed by §1.3's rejection of
+  `WindowManager.LayoutParams.alpha`.
+- **What changed:** §3.3's alpha-channel mutation is replaced by an
+  **opaque pre-blend**: the fill painted into the card is
+  `blend(keyboardBackground, colorSurface, opacity%)` — computed by the
+  new pure policy `OverlayCardFill` (single source of truth; the
+  keyboard anchor is `dictate_keyboard_background_{light,dark}`
+  selected by the shared `effectiveNight` rule). The result has no
+  alpha channel, so the rendered card is byte-identical in WIDGET and
+  HOVER. Visually it reproduces, in every mode, exactly what the
+  translucent card used to look like over the keyboard.
+- **Trade-off (deliberate):** true see-through of host-app content in
+  HOVER is sacrificed — cross-mode consistency was the user's explicit
+  priority, and a real alpha channel cannot deliver it (the backdrop
+  genuinely differs). §1.1's "content behind stays visible" is thereby
+  narrowed to "the card dims toward the keyboard backdrop".
+- **Test:** new `OverlayBackendTest.card fill is backdrop-independent —
+  opaque pre-blend at every widgetOpacity in both modes` (red-proven on
+  the alpha-channel code: fill alpha was 51 at 20 %, expected 255),
+  plus `OverlayCardFillTest` policy tests (plain surface at 100 %,
+  midpoint blend, forced-opaque output, clamping) and a night-anchor
+  test. Existing fill-alpha assertions updated to the pre-blend
+  contract.
+
 ### 2026-07-03 — Buttons kept opaque over the translucent card (§3.3 follow-up)
 
 - **Trigger:** User report — in transparent-widget mode the *buttons*

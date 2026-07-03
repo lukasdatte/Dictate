@@ -815,9 +815,13 @@ class OverlayBackendTest {
     // ─── F-118 — card-background opacity ──────────────────────────────
 
     @Test
-    fun `background fill alpha follows ThemingState widgetOpacity`() {
-        // Spec §5 — assert the drawable fill alpha for 20 / 55 / 100 %.
-        listOf(20 to 51, 55 to 140, 100 to 255).forEach { (opacity, expectedAlpha) ->
+    fun `card fill follows ThemingState widgetOpacity`() {
+        // Spec §5 (updated 2026-07-03 opacity-consistency fix): the fill
+        // is an opaque pre-blend that must still VARY with the pref —
+        // guards against a degenerate anchor (e.g. blending colorSurface
+        // toward itself) where every opacity value would paint the same
+        // colour and the setting silently stopped working.
+        val fills = listOf(20, 55, 100).associateWith { opacity ->
             window = FakeOverlayWindow()
             val backend = newBackend()
             backend.attach { captured += it }
@@ -828,17 +832,22 @@ class OverlayBackendTest {
                 ),
                 catalog.OVERLAY_5BUTTON,
             )
-
-            assertEquals(
-                "fill alpha for widgetOpacity=$opacity",
-                expectedAlpha,
-                android.graphics.Color.alpha(cardBackground().color!!.defaultColor),
-            )
+            cardBackground().color!!.defaultColor
         }
+
+        org.junit.Assert.assertNotEquals(
+            "widgetOpacity=20 and =100 must produce different fills",
+            fills[20], fills[100],
+        )
+        assertEquals(
+            "widgetOpacity=100 must paint the plain colorSurface",
+            expectedCardFill(100),
+            fills[100],
+        )
     }
 
     @Test
-    fun `card stroke stays opaque while the fill is translucent`() {
+    fun `card stroke stays intact while the fill is dimmed`() {
         val backend = newBackend()
         backend.attach { captured += it }
 
@@ -850,7 +859,7 @@ class OverlayBackendTest {
         )
 
         val bg = cardBackground()
-        assertEquals(51, android.graphics.Color.alpha(bg.color!!.defaultColor))
+        assertEquals(expectedCardFill(20), bg.color!!.defaultColor)
         // The 1 dp colorOutlineVariant stroke must survive the fill
         // mutation untouched — width still set, color fully opaque.
         assertTrue("stroke width must stay > 0", strokeWidthOf(bg) > 0)
@@ -888,8 +897,8 @@ class OverlayBackendTest {
         )
         assertEquals(
             "opacity change must re-mutate the fill",
-            153, // 60 * 255 / 100
-            android.graphics.Color.alpha(cardBackground().color!!.defaultColor),
+            expectedCardFill(60),
+            cardBackground().color!!.defaultColor,
         )
     }
 
@@ -917,11 +926,12 @@ class OverlayBackendTest {
             catalog.OVERLAY_5BUTTON,
         )
 
-        // Sanity: the card fill IS translucent at 20 %.
+        // Sanity: the card fill IS dimmed toward the keyboard backdrop
+        // at 20 % (opaque pre-blend, 2026-07-03 consistency fix).
         assertEquals(
-            "card fill must be translucent at widgetOpacity=20",
-            51,
-            android.graphics.Color.alpha(cardBackground().color!!.defaultColor),
+            "card fill must be the 20 % pre-blend at widgetOpacity=20",
+            expectedCardFill(20),
+            cardBackground().color!!.defaultColor,
         )
 
         listOf(
@@ -943,6 +953,75 @@ class OverlayBackendTest {
     }
 
     @Test
+    fun `card fill is backdrop-independent - opaque pre-blend at every widgetOpacity in both modes`() {
+        // Regression test for "Die Opacity im Widget-Modus bzw. im
+        // anderen Modus ist nicht identisch" (2026-07-03): a translucent
+        // fill composites against whatever is BEHIND the overlay window,
+        // and that backdrop differs between the two modes sharing the
+        // card — WIDGET floats over the opaque keyboard, HOVER over
+        // arbitrary host-app content. Same alpha byte, different
+        // on-screen result. The fix paints an OPAQUE pre-blend of
+        // colorSurface over the effective keyboard background
+        // (OverlayCardFill), so the rendered card is byte-identical in
+        // both modes regardless of backdrop.
+        //
+        // Red on the unfixed code: the fill was colorSurface at
+        // opacity*255/100 alpha (51 at 20 %), i.e. backdrop-dependent.
+        listOf(20, 55, 100).forEach { opacity ->
+            listOf(ViewMode.WIDGET, ViewMode.HOVER).forEach { mode ->
+                window = FakeOverlayWindow()
+                val backend = newBackend()
+                backend.attach { captured += it }
+
+                backend.render(
+                    stateWithPermission(viewMode = mode).copy(
+                        theming = net.devemperor.dictate.state.ThemingState(widgetOpacity = opacity),
+                    ),
+                    catalog.OVERLAY_5BUTTON,
+                )
+
+                val fill = cardBackground().color!!.defaultColor
+                assertEquals(
+                    "card fill must be fully opaque (backdrop-independent) " +
+                        "at widgetOpacity=$opacity in $mode",
+                    255,
+                    android.graphics.Color.alpha(fill),
+                )
+                assertEquals(
+                    "card fill must be the colorSurface-over-keyboard pre-blend " +
+                        "at widgetOpacity=$opacity in $mode",
+                    expectedCardFill(opacity),
+                    fill,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `night-mode pre-blend anchors on the dark keyboard background`() {
+        // The backdrop anchor must follow the effective night mode the
+        // view was inflated with — a dark card blended toward the LIGHT
+        // keyboard colour would wash out instead of dim.
+        val backend = newBackend()
+        backend.attach { captured += it }
+
+        backend.render(
+            stateWithPermission().copy(
+                theming = net.devemperor.dictate.state.ThemingState(
+                    theme = "dark",
+                    widgetOpacity = 40,
+                ),
+            ),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        assertEquals(
+            expectedCardFill(40, night = true),
+            cardBackground().color!!.defaultColor,
+        )
+    }
+
+    @Test
     fun `opacity is re-applied after reinflate`() {
         // Teardown recreates the drawable with the opaque XML fill —
         // the cache must reset so the next render re-applies (the
@@ -959,8 +1038,8 @@ class OverlayBackendTest {
         backend.reinflate()
 
         assertEquals(
-            102, // 40 * 255 / 100
-            android.graphics.Color.alpha(cardBackground().color!!.defaultColor),
+            expectedCardFill(40),
+            cardBackground().color!!.defaultColor,
         )
     }
 
@@ -1014,6 +1093,27 @@ class OverlayBackendTest {
             ?: error("No View attached — render() must run with hasPermission=true first.")
         return view.context.resources.configuration.uiMode and
             android.content.res.Configuration.UI_MODE_NIGHT_MASK
+    }
+
+    /**
+     * The opaque fill [OverlayCardFill] must produce for [opacity] —
+     * `colorSurface` (resolved from the attached view's theme) pre-blended
+     * over the effective keyboard background for [night]. Mirrors the
+     * production inputs in `OverlayBackend.applyBackgroundOpacity` so the
+     * assertion breaks if either side diverges from the policy.
+     */
+    private fun expectedCardFill(opacity: Int, night: Boolean = false): Int {
+        val view = window.lastAttachedView
+            ?: error("No View attached — render() must run with hasPermission=true first.")
+        val surface = com.google.android.material.color.MaterialColors.getColor(
+            view, com.google.android.material.R.attr.colorSurface,
+        )
+        val base = androidx.core.content.ContextCompat.getColor(
+            view.context,
+            if (night) R.color.dictate_keyboard_background_dark
+            else R.color.dictate_keyboard_background_light,
+        )
+        return OverlayCardFill.effectiveFill(surface, base, opacity)
     }
 
     /** The overlay card's background shape (`overlay_background.xml`). */

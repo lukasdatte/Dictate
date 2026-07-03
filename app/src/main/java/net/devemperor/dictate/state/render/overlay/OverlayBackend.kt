@@ -8,7 +8,7 @@ import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
-import androidx.core.graphics.ColorUtils
+import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.color.MaterialColors
 import net.devemperor.dictate.R
@@ -246,7 +246,8 @@ class OverlayBackend(
      * (F-118) — `null` while detached or before the first
      * [applyBackgroundOpacity] pass. Makes the per-render-tick mutation
      * idempotent; nulled in [teardownOverlay] because a re-inflate
-     * recreates the drawable (the fresh XML fill is opaque again).
+     * recreates the drawable (the fresh XML fill is the plain
+     * `colorSurface` again, without the [OverlayCardFill] pre-blend).
      */
     private var lastAppliedOpacityPercent: Int? = null
 
@@ -538,23 +539,32 @@ class OverlayBackend(
     }
 
     /**
-     * Mutate the card background's **fill** to `colorSurface` at
-     * [opacityPercent] alpha (F-118). The 1 dp `colorOutlineVariant`
-     * stroke stays opaque so the card boundary remains legible.
+     * Mutate the card background's **fill** to the [OverlayCardFill]
+     * pre-blend for [opacityPercent] (F-118 + 2026-07-03
+     * opacity-consistency fix). The 1 dp `colorOutlineVariant` stroke
+     * stays untouched so the card boundary remains legible.
+     *
+     * The painted colour is **fully opaque**: `colorSurface` pre-blended
+     * over the effective keyboard background for the night mode this
+     * view was inflated with ([inflatedNightMode]). A translucent fill
+     * would composite against the window backdrop — the opaque keyboard
+     * in WIDGET mode vs. arbitrary host content in HOVER mode — making
+     * the same opacity value *look* different per mode (the user's
+     * "opacity is not identical between modes" report). Pre-composition
+     * makes the on-screen result backdrop-independent; the full
+     * rationale + trade-off lives on [OverlayCardFill].
      *
      * The buttons keep their own **opaque** Material container tints
      * (`OverlayButton.Primary` = filled `colorPrimary`,
-     * `OverlayButton.Icon` = filled-tonal `colorSecondaryContainer`) so
-     * only the card fill *between* the buttons goes translucent — never
-     * the buttons themselves (`styles_overlay.xml`, 2026-07-03
-     * widget-transparency fix). This method touches the card drawable
-     * only; it must never reach into the button backgrounds.
+     * `OverlayButton.Icon` = filled-tonal `colorSecondaryContainer` —
+     * `styles_overlay.xml`, 2026-07-03 widget-transparency fix). This
+     * method touches the card drawable only; it must never reach into
+     * the button backgrounds.
      *
      * `mutate()` detaches the drawable's constant state so the shared
      * `overlay_background.xml` resource (also used by other inflations)
-     * is not affected. The percent is clamped defensively to the
-     * settings floor — the SeekBar enforces 20..100, but the SP value
-     * is user-writable via backup restore / adb.
+     * is not affected. Clamping to the settings range happens inside
+     * [OverlayCardFill.effectiveFill].
      *
      * Idempotent per render tick via [lastAppliedOpacityPercent].
      */
@@ -570,8 +580,15 @@ class OverlayBackend(
         val surface = MaterialColors.getColor(
             view, com.google.android.material.R.attr.colorSurface,
         )
-        val alpha = opacityPercent.coerceIn(MIN_OPACITY_PERCENT, MAX_OPACITY_PERCENT) * 255 / 100
-        background.setColor(ColorUtils.setAlphaComponent(surface, alpha))
+        // inflatedNightMode is always set here: applyBackgroundOpacity
+        // only runs with overlayView != null, and both fields are
+        // assigned together in inflateAndAttach.
+        val base = ContextCompat.getColor(
+            view.context,
+            if (inflatedNightMode == true) R.color.dictate_keyboard_background_dark
+            else R.color.dictate_keyboard_background_light,
+        )
+        background.setColor(OverlayCardFill.effectiveFill(surface, base, opacityPercent))
         lastAppliedOpacityPercent = opacityPercent
     }
 
@@ -885,15 +902,6 @@ class OverlayBackend(
 
     private companion object {
         const val TAG: String = "OverlayBackend"
-
-        /**
-         * Clamp bounds for [applyBackgroundOpacity] — mirror the
-         * settings SeekBar range (`fragment_preferences.xml`,
-         * `Pref.WidgetOpacity`). The 20 % floor keeps the card
-         * discoverable over matching content.
-         */
-        const val MIN_OPACITY_PERCENT: Int = 20
-        const val MAX_OPACITY_PERCENT: Int = 100
     }
 }
 

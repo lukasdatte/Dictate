@@ -4,6 +4,8 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.MenuItem
 import android.view.View
+import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
@@ -143,6 +145,19 @@ class HistoryActivity : AppCompatActivity() {
                         }
                     }
                 }
+                // F-117: a filter/search change flips the empty-state
+                // copy even when itemCount stays 0 (no new load fires),
+                // so re-derive the empty text on every isFiltered change.
+                launch {
+                    viewModel.isFiltered.collect {
+                        updateEmptyState(adapter.itemCount == 0)
+                    }
+                }
+                // F-114: delete outcomes — refusal on an active session,
+                // skip-count after "delete all".
+                launch {
+                    viewModel.deleteEvents.collect { onDeleteEvent(it) }
+                }
             }
         }
     }
@@ -155,10 +170,43 @@ class HistoryActivity : AppCompatActivity() {
         adapter.refresh()
     }
 
+    /**
+     * F-117: an empty list under an active filter/search shows "no
+     * matching sessions"; an empty list with no filter shows the
+     * onboarding "no sessions yet" text. The delete-all button stays
+     * enabled only while there are rows.
+     */
     private fun updateEmptyState(isEmpty: Boolean) {
-        findViewById<View>(R.id.history_no_sessions_tv).visibility =
-            if (isEmpty) View.VISIBLE else View.GONE
+        val emptyTv = findViewById<TextView>(R.id.history_no_sessions_tv)
+        emptyTv.visibility = if (isEmpty) View.VISIBLE else View.GONE
+        if (isEmpty) {
+            emptyTv.setText(
+                if (viewModel.isFiltered.value) R.string.dictate_history_no_results
+                else R.string.dictate_history_no_sessions
+            )
+        }
         findViewById<View>(R.id.history_delete_all_btn).isEnabled = !isEmpty
+    }
+
+    /** F-114 delete outcomes surfaced from [HistoryViewModel]. */
+    private fun onDeleteEvent(event: HistoryViewModel.DeleteEvent) {
+        when (event) {
+            HistoryViewModel.DeleteEvent.BlockedActive ->
+                MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.dictate_history_delete_session_title)
+                    .setMessage(R.string.dictate_history_delete_active_blocked)
+                    .setPositiveButton(R.string.dictate_okay, null)
+                    .show()
+
+            is HistoryViewModel.DeleteEvent.AllDeleted ->
+                if (event.skipped > 0) {
+                    Toast.makeText(
+                        this,
+                        getString(R.string.dictate_history_delete_all_skipped_active, event.skipped),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+        }
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {

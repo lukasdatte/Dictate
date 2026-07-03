@@ -327,6 +327,9 @@
     <string name="dictate_settings_history_summary">View past sessions and results</string>
     <string name="dictate_history">History</string>
     <string name="dictate_history_no_sessions">No sessions yet.\nStart using Dictate to see\nyour history here.</string>
+    <string name="dictate_history_no_results">No matching sessions.</string>
+    <string name="dictate_history_delete_active_blocked">This session is currently being processed and cannot be deleted.</string>
+    <string name="dictate_history_delete_all_skipped_active">%1$d session(s) skipped — still processing</string>
     <string name="dictate_history_filter_all">All</string>
     <string name="dictate_history_filter_recordings">Recordings</string>
     <string name="dictate_history_filter_rewording">Rewording</string>
@@ -338,7 +341,6 @@
     <string name="dictate_history_delete_session_message">Are you sure you want to delete this session?</string>
     <string name="dictate_history_delete_all">Delete all</string>
     <string name="dictate_history_duration">Duration: %1$d min, %2$d s</string>
-    <string name="dictate_history_based_on">Based on %1$s</string>
     <string name="dictate_history_detail">Session detail</string>
     <string name="dictate_history_audio">Audio</string>
     <string name="dictate_history_transcription">Transcription</string>
@@ -357,15 +359,12 @@
     <string name="dictate_history_version_warning">Downstream steps are based on a different version</string>
     <string name="dictate_history_transcription_rerun">Re-run transcription</string>
     <string name="dictate_history_transcription_stale">Downstream steps are based on a different transcription version — use reprocess to re-run them</string>
-    <string name="dictate_history_open_parent">Open parent session</string>
     <string name="dictate_history_error">Error: %1$s</string>
     <string name="dictate_history_play">Play</string>
     <string name="dictate_history_pause">Pause</string>
     <string name="dictate_copied_to_clipboard">Copied to clipboard</string>
     <string name="dictate_history_choose_prompt">Choose prompt</string>
     <string name="dictate_history_freetext_hint">Enter a custom prompt…</string>
-    <string name="dictate_history_regenerating">Regenerating…</string>
-    <string name="dictate_history_regenerate_failed">Regeneration failed: %1$s</string>
     <!-- History UI overhaul (Chunk C): per-step copy, expand/collapse, session error -->
     <string name="dictate_history_copy_step">Copy this step\'s text</string>
     <string name="dictate_history_expand">Show more</string>

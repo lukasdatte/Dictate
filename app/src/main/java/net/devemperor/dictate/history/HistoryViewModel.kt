@@ -15,8 +15,10 @@ import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
@@ -24,7 +26,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.withIndex
 import kotlinx.coroutines.launch
 import net.devemperor.dictate.core.ActiveJobRegistry
@@ -66,6 +70,14 @@ class HistoryViewModel(
     registryState: StateFlow<Map<String, JobState>>,
     /** Row-level running check, sampled at page-load time (see [HistoryRow]). */
     private val isJobActive: (String) -> Boolean,
+    /**
+     * Snapshot of the currently-active session ids (F-114 delete guard,
+     * §3.5). Production passes `ActiveJobRegistry.state.value.keys`;
+     * fakeable so the delete-guard unit tests can drive it directly. Read
+     * lazily on each delete gesture so the guard reflects the registry at
+     * the moment the user taps, not at VM-construction time.
+     */
+    private val activeSessionIds: () -> Set<String> = { emptySet() },
     /** Injectable so tests can run deletes on a test dispatcher. */
     private val ioContext: CoroutineContext = Dispatchers.IO,
 ) : ViewModel() {
@@ -100,6 +112,22 @@ class HistoryViewModel(
         combine(typeFilter, debouncedSearch) { type, search ->
             HistoryFilter(type = type, searchPattern = search?.let(LikeEscape::escape))
         }.distinctUntilChanged()
+
+    /**
+     * "Is a filter active?" (F-117 empty-state split, §3.6) — true when
+     * a type chip other than "all" is selected **or** the search box
+     * holds non-blank text. Drives the empty-state copy choice: an empty
+     * result set under an active filter is "no matching sessions", not
+     * the "no sessions yet" onboarding text.
+     *
+     * Uses the **raw** [searchInput] (not the debounced flow) so the fact
+     * "the user is searching" is available immediately — the empty-state
+     * label must not lag a debounce window behind the query box.
+     */
+    val isFiltered: StateFlow<Boolean> =
+        combine(typeFilter, searchInput) { type, search ->
+            type != null || !search.isNullOrBlank()
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /**
      * Paged history rows. `flatMapLatest` cancels the previous pager as
@@ -143,14 +171,55 @@ class HistoryViewModel(
         searchInput.value = query?.trim()?.takeIf { it.isNotEmpty() }
     }
 
-    /** Deletes one session off the main thread; Room invalidation refreshes the list. */
+    /**
+     * One-shot delete outcomes the Activity reacts to (F-114, §3.5).
+     * A [Channel] (rendezvous, `receiveAsFlow`) — not a `StateFlow` —
+     * because each is a fire-once effect (show a dialog / toast), not a
+     * retained state; replaying it on rotation would double-toast.
+     */
+    private val _deleteEvents = Channel<DeleteEvent>(Channel.BUFFERED)
+    val deleteEvents: Flow<DeleteEvent> = _deleteEvents.receiveAsFlow()
+
+    /**
+     * Single-session delete (long-press). F-114 / D7: refuse when the
+     * session has a running job — **block, never cancel-first**. A
+     * blocked delete emits [DeleteEvent.BlockedActive] and does not
+     * touch the DAO; an allowed delete runs off the main thread and
+     * lets Room's invalidation tracker refresh the list.
+     */
     fun deleteSession(sessionId: String) {
+        if (sessionId in activeSessionIds()) {
+            _deleteEvents.trySend(DeleteEvent.BlockedActive)
+            return
+        }
         viewModelScope.launch(ioContext) { sessionDao.deleteById(sessionId) }
     }
 
-    /** Deletes the entire history off the main thread. */
+    /**
+     * "Delete all" (F-114 / D7): delete every session **except** those
+     * with a running job, then report how many were skipped. With no
+     * active job this collapses to the previous full-wipe behaviour and
+     * emits `skipped == 0`.
+     */
     fun deleteAllSessions() {
-        viewModelScope.launch(ioContext) { sessionDao.deleteAll() }
+        val active = activeSessionIds()
+        viewModelScope.launch(ioContext) {
+            if (active.isEmpty()) {
+                sessionDao.deleteAll()
+            } else {
+                sessionDao.deleteAllExcept(active.toList())
+            }
+            _deleteEvents.trySend(DeleteEvent.AllDeleted(skipped = active.size))
+        }
+    }
+
+    /** One-shot delete outcomes surfaced to [HistoryActivity] (F-114). */
+    sealed interface DeleteEvent {
+        /** A single-session delete was refused — the session is processing. */
+        data object BlockedActive : DeleteEvent
+
+        /** "Delete all" finished; [skipped] active sessions were spared. */
+        data class AllDeleted(val skipped: Int) : DeleteEvent
     }
 
     /**
@@ -180,6 +249,7 @@ class HistoryViewModel(
                     sessionDao = DictateDatabase.getInstance(context).sessionDao(),
                     registryState = ActiveJobRegistry.state,
                     isJobActive = ActiveJobRegistry::isActive,
+                    activeSessionIds = { ActiveJobRegistry.state.value.keys },
                 )
             }
         }

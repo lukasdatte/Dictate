@@ -152,6 +152,7 @@ private class FakeSessionDao : SessionDao {
     override fun pagedHistory(type: String?, searchPattern: String?): PagingSource<Int, SessionEntity> = notUsed()
     override fun deleteById(id: String) = notUsed()
     override fun deleteAll() = notUsed()
+    override fun deleteAllExcept(exemptIds: List<String>) = notUsed()
     override fun findWithMissingDuration(): List<SessionEntity> = notUsed()
     override fun updateStatus(id: String, status: String) = notUsed()
     override fun updateError(id: String, type: String?, message: String?) = notUsed()

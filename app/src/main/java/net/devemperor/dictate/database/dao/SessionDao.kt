@@ -104,6 +104,21 @@ interface SessionDao {
     @Query("DELETE FROM sessions")
     fun deleteAll()
 
+    /**
+     * "Delete all" with an exemption list (F-114 / history-ui-overhaul
+     * §3.5) — deletes every session **except** the given [exemptIds],
+     * which the caller populates with the currently-active
+     * (`ActiveJobRegistry`) session ids so a running pipeline is never
+     * deleted out from under itself (D7: block, don't cancel-first).
+     *
+     * CASCADE removes the matching `transcriptions` + `processing_steps`
+     * child rows, mirroring [deleteAll]. Callers pass an empty list to
+     * fall back to a full wipe (though [deleteAll] is preferred for that
+     * path — an empty `NOT IN ()` is a valid but needless round-trip).
+     */
+    @Query("DELETE FROM sessions WHERE id NOT IN (:exemptIds)")
+    fun deleteAllExcept(exemptIds: List<String>)
+
     // ── NEW (reprocess refactor) ────────────────────────────────────────────
 
     /**

@@ -393,4 +393,43 @@
     <string name="overlay_perm_grant">Erlauben</string>
     <string name="overlay_perm_onboarding_granted">Berechtigung erteilt.</string>
     <string name="overlay_perm_onboarding_pending">Berechtigung weiterhin erforderlich — tippe auf „Erlauben“, um die Systemeinstellungen zu öffnen.</string>
+
+    <!-- history-ui-overhaul (D8) — history/status/reprocess namespace backfill + new list-polish strings -->
+    <string name="dictate_copied_to_clipboard">In die Zwischenablage kopiert</string>
+    <string name="dictate_history_audio">Audio</string>
+    <string name="dictate_history_auto_format">Auto-Formatierung</string>
+    <string name="dictate_history_choose_prompt">Prompt auswählen</string>
+    <string name="dictate_history_copy">Kopieren</string>
+    <string name="dictate_history_delete_active_blocked">Diese Sitzung wird gerade verarbeitet und kann nicht gelöscht werden.</string>
+    <string name="dictate_history_delete_all">Alle löschen</string>
+    <string name="dictate_history_delete_all_message">Möchtest du wirklich alle Sitzungen löschen? Das kann nicht rückgängig gemacht werden.</string>
+    <string name="dictate_history_delete_all_skipped_active">%1$d Sitzung(en) übersprungen — werden noch verarbeitet</string>
+    <string name="dictate_history_delete_all_title">Alle Sitzungen löschen?</string>
+    <string name="dictate_history_delete_session_message">Möchtest du diese Sitzung wirklich löschen?</string>
+    <string name="dictate_history_delete_session_title">Sitzung löschen?</string>
+    <string name="dictate_history_detail">Sitzungsdetails</string>
+    <string name="dictate_history_duration">Dauer: %1$d Min., %2$d Sek.</string>
+    <string name="dictate_history_error">Fehler: %1$s</string>
+    <string name="dictate_history_filter_all">Alle</string>
+    <string name="dictate_history_filter_post_processing">Nachbearbeitung</string>
+    <string name="dictate_history_filter_recordings">Aufnahmen</string>
+    <string name="dictate_history_filter_rewording">Umformulierung</string>
+    <string name="dictate_history_final_output">Endergebnis</string>
+    <string name="dictate_history_freetext_hint">Eigenen Prompt eingeben…</string>
+    <string name="dictate_history_input">Eingabe</string>
+    <string name="dictate_history_no_results">Keine passenden Sitzungen.</string>
+    <string name="dictate_history_no_sessions">Noch keine Sitzungen.\nNutze Dictate, um deinen\nVerlauf hier zu sehen.</string>
+    <string name="dictate_history_other_prompt">Anderer Prompt</string>
+    <string name="dictate_history_pause">Pause</string>
+    <string name="dictate_history_play">Abspielen</string>
+    <string name="dictate_history_post_process">Nachbearbeiten</string>
+    <string name="dictate_history_queued_prompt">Prompt</string>
+    <string name="dictate_history_regenerate">Neu generieren</string>
+    <string name="dictate_history_rewording">Umformulierung</string>
+    <string name="dictate_history_search_hint">Sitzungen durchsuchen…</string>
+    <string name="dictate_history_share">Teilen</string>
+    <string name="dictate_history_source_session">Ursprungssitzung</string>
+    <string name="dictate_history_transcription">Transkription</string>
+    <string name="dictate_history_version">v%1$d</string>
+    <string name="dictate_history_version_warning">Nachfolgende Schritte basieren auf einer anderen Version</string>
 </resources>

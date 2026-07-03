@@ -206,6 +206,7 @@ class RecordingContinuationLookupTest {
         override fun pagedHistory(type: String?, searchPattern: String?): PagingSource<Int, SessionEntity> = unused()
         override fun deleteById(id: String) = unused()
         override fun deleteAll() = unused()
+        override fun deleteAllExcept(exemptIds: List<String>) = unused()
         override fun findLatestByOrigin(origin: String): SessionEntity? = null
         override fun findWithMissingDuration(): List<SessionEntity> = unused()
         override fun updateStatus(id: String, status: String) = unused()

@@ -34,6 +34,7 @@ object EmptySessionDao : SessionDao {
         ListPagingSource(emptyList())
     override fun deleteById(id: String) = Unit
     override fun deleteAll() = Unit
+    override fun deleteAllExcept(exemptIds: List<String>) = Unit
     override fun findLatestByOrigin(origin: String): SessionEntity? = null
     override fun findLatestUnfinishedRecording(createdAtFloor: Long): SessionEntity? = null
     override fun findActiveSessionIds(): List<String> = emptyList()

@@ -160,6 +160,7 @@ class PromptQueueTransportTest {
         override fun resume(sessionId: String, token: CancellationToken) = Unit
         override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
         override fun postProcess(request: JobRequest.PostProcess) = Unit
+        override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = Unit
 
         fun awaitDone() {
             assertTrue(

@@ -17,6 +17,7 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import net.devemperor.dictate.R
 import net.devemperor.dictate.database.entity.ProcessingStepEntity
+import net.devemperor.dictate.database.entity.TranscriptionEntity
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -79,6 +80,18 @@ class PipelineStepAdapter(
         val audioPlaying: Boolean = false,
         val stepEntity: ProcessingStepEntity? = null,
         val versions: List<ProcessingStepEntity>? = null,
+        // R6: transcription version chips live on the TRANSCRIPTION card. A
+        // parallel field (not reusing [versions], which is typed to processing
+        // steps) keeps the two version chains cleanly separated (spec §3.4).
+        val transcriptionVersions: List<TranscriptionEntity>? = null,
+        // R6: re-run button on the TRANSCRIPTION card — visible iff the session
+        // has resolvable audio, enabled iff no job is active (gated by the
+        // Activity, spec §3.5).
+        val showRerun: Boolean = false,
+        // R6/D3: downstream-staleness warning on the TRANSCRIPTION card — set
+        // when a processing chain exists whose first step's input differs from
+        // the current transcription text (see [TranscriptionStaleness]).
+        val transcriptionStale: Boolean = false,
         val chainIndex: Int = 0,
         val showRegenerate: Boolean = false,
         val showOtherPrompt: Boolean = false,
@@ -122,6 +135,9 @@ class PipelineStepAdapter(
             private var audioPlaying: Boolean = false
             private var stepEntity: ProcessingStepEntity? = null
             private var versions: List<ProcessingStepEntity>? = null
+            private var transcriptionVersions: List<TranscriptionEntity>? = null
+            private var showRerun: Boolean = false
+            private var transcriptionStale: Boolean = false
             private var chainIndex: Int = 0
             private var showRegenerate: Boolean = false
             private var showOtherPrompt: Boolean = false
@@ -142,6 +158,9 @@ class PipelineStepAdapter(
             fun audioPlaying(v: Boolean) = apply { audioPlaying = v }
             fun stepEntity(v: ProcessingStepEntity?) = apply { stepEntity = v }
             fun versions(v: List<ProcessingStepEntity>?) = apply { versions = v }
+            fun transcriptionVersions(v: List<TranscriptionEntity>?) = apply { transcriptionVersions = v }
+            fun showRerun(v: Boolean) = apply { showRerun = v }
+            fun transcriptionStale(v: Boolean) = apply { transcriptionStale = v }
             fun chainIndex(v: Int) = apply { chainIndex = v }
             fun showRegenerate(v: Boolean) = apply { showRegenerate = v }
             fun showOtherPrompt(v: Boolean) = apply { showOtherPrompt = v }
@@ -155,7 +174,8 @@ class PipelineStepAdapter(
 
             fun build(): PipelineStep = PipelineStep(
                 type, icon, title, outputText, errorText, metaText, audioFilePath,
-                audioPlaying, stepEntity, versions, chainIndex, showRegenerate,
+                audioPlaying, stepEntity, versions, transcriptionVersions, showRerun,
+                transcriptionStale, chainIndex, showRegenerate,
                 showOtherPrompt, showPostProcess, sessionId, showDirectReprocess,
                 showReprocessWithEdit, showDeleteAudio, sourceSessionId, isSessionError,
             )
@@ -168,6 +188,9 @@ class PipelineStepAdapter(
         fun onOtherPrompt(step: ProcessingStepEntity, chainIndex: Int)
         fun onPostProcess(step: ProcessingStepEntity)
         fun onVersionSelected(chainIndex: Int, selectedVersion: ProcessingStepEntity)
+        // R6: transcription re-run + transcription version switching.
+        fun onRerunTranscription(sessionId: String)
+        fun onTranscriptionVersionSelected(selectedVersion: TranscriptionEntity)
         fun onOpenSourceSession(sessionId: String)
         fun onDirectReprocess(sessionId: String)
         fun onReprocessWithEdit(sessionId: String)
@@ -197,6 +220,7 @@ class PipelineStepAdapter(
         bindReprocessActions(holder, step)
         bindCopy(holder, step, context)
         bindStepButtons(holder, step)
+        bindRerun(holder, step, context)
         bindSourceSession(holder, step)
         bindVersionChips(holder, step, context)
     }
@@ -391,6 +415,21 @@ class PipelineStepAdapter(
         }
     }
 
+    // ── Transcription re-run (R6) ────────────────────────────────────────
+
+    private fun bindRerun(holder: ViewHolder, step: PipelineStep, context: Context) {
+        val sid = step.sessionId
+        if (step.type == PipelineStep.Type.TRANSCRIPTION && step.showRerun && sid != null) {
+            holder.rerunBtn.visibility = View.VISIBLE
+            holder.rerunBtn.contentDescription =
+                context.getString(R.string.dictate_history_transcription_rerun)
+            holder.rerunBtn.setOnClickListener { callback.onRerunTranscription(sid) }
+        } else {
+            holder.rerunBtn.visibility = View.GONE
+            holder.rerunBtn.setOnClickListener(null)
+        }
+    }
+
     // ── Source-session navigation (F-107 symmetric branch) ───────────────
 
     private fun bindSourceSession(holder: ViewHolder, step: PipelineStep) {
@@ -411,6 +450,16 @@ class PipelineStepAdapter(
     private fun bindVersionChips(holder: ViewHolder, step: PipelineStep, context: Context) {
         // Clear before rebuilding to avoid onClick/checkable conflicts.
         holder.versionChipGroup.setOnCheckedStateChangeListener(null)
+
+        // R6: the TRANSCRIPTION card renders transcription version chips + the
+        // D3 staleness warning; every other card renders processing-step
+        // version chips + the "current ≠ latest" warning. The two chains use
+        // the same ChipGroup + warning-view slot but carry different entities.
+        if (step.type == PipelineStep.Type.TRANSCRIPTION) {
+            bindTranscriptionChips(holder, step, context)
+            return
+        }
+
         val versions = step.versions
         if (versions != null && versions.size > 1) {
             holder.versionChipGroup.visibility = View.VISIBLE
@@ -438,9 +487,56 @@ class PipelineStepAdapter(
             }
 
             val currentMatchesLatest = versions.last().isCurrent
+            holder.versionWarningTv.setText(R.string.dictate_history_version_warning)
             holder.versionWarningTv.visibility = if (currentMatchesLatest) View.GONE else View.VISIBLE
         } else {
             holder.versionChipGroup.visibility = View.GONE
+            holder.versionWarningTv.visibility = View.GONE
+        }
+    }
+
+    /**
+     * R6: transcription version chips (shown when the session has >1
+     * transcription version) + the D3 staleness warning (routes the user to
+     * reprocess when downstream steps are based on a different transcription).
+     */
+    private fun bindTranscriptionChips(holder: ViewHolder, step: PipelineStep, context: Context) {
+        val versions = step.transcriptionVersions
+        if (versions != null && versions.size > 1) {
+            holder.versionChipGroup.visibility = View.VISIBLE
+            holder.versionChipGroup.removeAllViews()
+
+            for (version in versions) {
+                val chip = Chip(holder.versionChipGroup.context)
+                chip.id = View.generateViewId()
+                val chipText = context.getString(R.string.dictate_history_version, version.version)
+                val timeStr = timeFormat.format(Date(version.createdAt))
+                chip.text = "$chipText ($timeStr)"
+                chip.isCheckable = true
+                chip.isChecked = version.isCurrent
+                chip.tag = version
+                holder.versionChipGroup.addView(chip)
+            }
+
+            holder.versionChipGroup.setOnCheckedStateChangeListener { group, checkedIds ->
+                if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
+                val selected = group.findViewById<Chip>(checkedIds[0])
+                val selectedVersion = selected?.tag as? TranscriptionEntity
+                if (selectedVersion != null && !selectedVersion.isCurrent) {
+                    callback.onTranscriptionVersionSelected(selectedVersion)
+                }
+            }
+        } else {
+            holder.versionChipGroup.visibility = View.GONE
+        }
+
+        // D3 staleness warning is independent of chip count: even a single
+        // transcription version can be stale if a re-run happened and the
+        // chain still points at the old text.
+        if (step.transcriptionStale) {
+            holder.versionWarningTv.setText(R.string.dictate_history_transcription_stale)
+            holder.versionWarningTv.visibility = View.VISIBLE
+        } else {
             holder.versionWarningTv.visibility = View.GONE
         }
     }
@@ -455,6 +551,7 @@ class PipelineStepAdapter(
         val regenerateBtn: ImageButton = itemView.findViewById(R.id.item_pipeline_regenerate_btn)
         val otherPromptBtn: ImageButton = itemView.findViewById(R.id.item_pipeline_other_prompt_btn)
         val postProcessBtn: ImageButton = itemView.findViewById(R.id.item_pipeline_post_process_btn)
+        val rerunBtn: ImageButton = itemView.findViewById(R.id.item_pipeline_rerun_btn)
         val directReprocessBtn: ImageButton = itemView.findViewById(R.id.item_pipeline_direct_reprocess_btn)
         val reprocessEditBtn: ImageButton = itemView.findViewById(R.id.item_pipeline_reprocess_edit_btn)
         val deleteAudioBtn: ImageButton = itemView.findViewById(R.id.item_pipeline_delete_audio_btn)

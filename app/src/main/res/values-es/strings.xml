@@ -321,6 +321,8 @@
     <string name="dictate_history_collapse">Mostrar menos</string>
     <string name="dictate_history_session_error">La sesión falló</string>
     <string name="dictate_history_partial_recovery">Solo se pudieron recuperar %1$d segmento(s) de la grabación</string>
+    <string name="dictate_history_transcription_rerun">Volver a transcribir</string>
+    <string name="dictate_history_transcription_stale">Los pasos posteriores se basan en una versión de transcripción diferente — usa el reprocesamiento para volver a ejecutarlos</string>
     <string name="dictate_resend_focus_lost">Campo de entrada no disponible — reiniciando el procesamiento</string>
     <string name="dictate_reprocess_language">Idioma</string>
     <string name="dictate_language_manage">⚙ Gestionar idiomas…</string>

@@ -355,6 +355,8 @@
     <string name="dictate_history_share">Share</string>
     <string name="dictate_history_version">v%1$d</string>
     <string name="dictate_history_version_warning">Downstream steps are based on a different version</string>
+    <string name="dictate_history_transcription_rerun">Re-run transcription</string>
+    <string name="dictate_history_transcription_stale">Downstream steps are based on a different transcription version — use reprocess to re-run them</string>
     <string name="dictate_history_open_parent">Open parent session</string>
     <string name="dictate_history_error">Error: %1$s</string>
     <string name="dictate_history_play">Play</string>

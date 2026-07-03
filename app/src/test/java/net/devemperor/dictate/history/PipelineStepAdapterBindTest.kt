@@ -8,6 +8,7 @@ import androidx.appcompat.view.ContextThemeWrapper
 import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.R
 import net.devemperor.dictate.database.entity.ProcessingStepEntity
+import net.devemperor.dictate.database.entity.TranscriptionEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -50,11 +51,17 @@ class PipelineStepAdapterBindTest {
     /** K-1 handwritten recorder — no mocking framework. */
     private class RecordingCallback : PipelineStepAdapter.StepActionCallback {
         val openedSources = mutableListOf<String>()
+        val rerunSessions = mutableListOf<String>()
+        val selectedTranscriptions = mutableListOf<TranscriptionEntity>()
         override fun onPlayAudio(audioFilePath: String) {}
         override fun onRegenerate(step: ProcessingStepEntity, chainIndex: Int) {}
         override fun onOtherPrompt(step: ProcessingStepEntity, chainIndex: Int) {}
         override fun onPostProcess(step: ProcessingStepEntity) {}
         override fun onVersionSelected(chainIndex: Int, selectedVersion: ProcessingStepEntity) {}
+        override fun onRerunTranscription(sessionId: String) { rerunSessions += sessionId }
+        override fun onTranscriptionVersionSelected(selectedVersion: TranscriptionEntity) {
+            selectedTranscriptions += selectedVersion
+        }
         override fun onOpenSourceSession(sessionId: String) { openedSources += sessionId }
         override fun onDirectReprocess(sessionId: String) {}
         override fun onReprocessWithEdit(sessionId: String) {}
@@ -243,4 +250,121 @@ class PipelineStepAdapterBindTest {
             playingHolder.playBtn.contentDescription
         )
     }
+
+    // ── R6 transcription re-run button ───────────────────────────────────
+
+    @Test
+    fun `re-run button shows and dispatches only on a TRANSCRIPTION card with showRerun`() {
+        val adapter = newAdapter()
+
+        // TRANSCRIPTION + showRerun → visible; click dispatches the session id.
+        val holder = newHolder(adapter)
+        adapter.submitBlocking(
+            listOf(
+                PipelineStepAdapter.PipelineStep(
+                    type = PipelineStepAdapter.PipelineStep.Type.TRANSCRIPTION,
+                    title = "Transcription v1",
+                    outputText = "hello",
+                    sessionId = "s-1",
+                    showRerun = true,
+                )
+            )
+        )
+        bindAt(adapter, holder, 0)
+        assertEquals(View.VISIBLE, holder.rerunBtn.visibility)
+        holder.rerunBtn.performClick()
+        assertEquals(listOf("s-1"), callback.rerunSessions)
+
+        // showRerun=false (e.g. no audio or a job is active) → hidden.
+        val gatedHolder = newHolder(adapter)
+        adapter.submitBlocking(
+            listOf(
+                PipelineStepAdapter.PipelineStep(
+                    type = PipelineStepAdapter.PipelineStep.Type.TRANSCRIPTION,
+                    title = "Transcription v1",
+                    outputText = "hello",
+                    sessionId = "s-1",
+                    showRerun = false,
+                )
+            )
+        )
+        bindAt(adapter, gatedHolder, 0)
+        assertEquals(View.GONE, gatedHolder.rerunBtn.visibility)
+    }
+
+    // ── R6 transcription version chips + D3 staleness ────────────────────
+
+    @Test
+    fun `transcription version chips render for multiple versions and select via callback`() {
+        val adapter = newAdapter()
+        val holder = newHolder(adapter)
+
+        val v1 = transcription("t1", version = 1, isCurrent = false)
+        val v2 = transcription("t2", version = 2, isCurrent = true)
+        adapter.submitBlocking(
+            listOf(
+                PipelineStepAdapter.PipelineStep(
+                    type = PipelineStepAdapter.PipelineStep.Type.TRANSCRIPTION,
+                    title = "Transcription v2",
+                    outputText = "hello",
+                    sessionId = "s-1",
+                    transcriptionVersions = listOf(v1, v2),
+                )
+            )
+        )
+        bindAt(adapter, holder, 0)
+
+        assertEquals(View.VISIBLE, holder.versionChipGroup.visibility)
+        assertEquals(2, holder.versionChipGroup.childCount)
+
+        // Selecting the non-current v1 chip routes to the transcription
+        // callback (not the processing-step one).
+        val firstChip = holder.versionChipGroup.getChildAt(0)
+                as com.google.android.material.chip.Chip
+        firstChip.isChecked = true
+        assertEquals(listOf(v1), callback.selectedTranscriptions)
+    }
+
+    @Test
+    fun `single transcription version hides chips but staleness still warns`() {
+        val adapter = newAdapter()
+        val holder = newHolder(adapter)
+
+        adapter.submitBlocking(
+            listOf(
+                PipelineStepAdapter.PipelineStep(
+                    type = PipelineStepAdapter.PipelineStep.Type.TRANSCRIPTION,
+                    title = "Transcription v1",
+                    outputText = "hello",
+                    sessionId = "s-1",
+                    transcriptionVersions = listOf(transcription("t1", 1, true)),
+                    transcriptionStale = true,
+                )
+            )
+        )
+        bindAt(adapter, holder, 0)
+
+        assertEquals(View.GONE, holder.versionChipGroup.visibility)
+        // D3: staleness warning is independent of chip count.
+        assertEquals(View.VISIBLE, holder.versionWarningTv.visibility)
+        assertEquals(
+            ctx.getString(R.string.dictate_history_transcription_stale),
+            holder.versionWarningTv.text.toString()
+        )
+    }
+
+    private fun transcription(id: String, version: Int, isCurrent: Boolean) =
+        TranscriptionEntity(
+            id = id,
+            sessionId = "s-1",
+            version = version,
+            isCurrent = isCurrent,
+            text = "text-$version",
+            modelUsed = "whisper-1",
+            provider = "OPENAI",
+            promptTokens = 0,
+            completionTokens = 0,
+            durationMs = 1000,
+            createdAt = 1_700_000_000_000L,
+        )
 }

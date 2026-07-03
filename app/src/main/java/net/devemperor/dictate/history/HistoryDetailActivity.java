@@ -169,6 +169,16 @@ public class HistoryDetailActivity extends AppCompatActivity
             }
 
             @Override
+            public void onRerunTranscription(String rerunSessionId) {
+                dispatchRerunTranscription();
+            }
+
+            @Override
+            public void onTranscriptionVersionSelected(TranscriptionEntity selectedVersion) {
+                switchTranscriptionVersion(selectedVersion);
+            }
+
+            @Override
             public void onOpenSourceSession(String sourceSessionId) {
                 Intent intent = new Intent(HistoryDetailActivity.this, HistoryDetailActivity.class);
                 intent.putExtra(HistoryActivity.EXTRA_SESSION_ID, sourceSessionId);
@@ -425,11 +435,33 @@ public class HistoryDetailActivity extends AppCompatActivity
                     String.format(Locale.getDefault(), "%.1fs", currentTranscription.getDurationMs() / 1000.0);
             String title = getString(R.string.dictate_history_transcription) +
                     " v" + currentTranscription.getVersion();
+
+            // R6: version chips when the session has >1 transcription version.
+            List<TranscriptionEntity> transcriptionVersions =
+                    transcriptionDao.getAllVersions(sessionId);
+
+            // R6/D3: downstream staleness \u2014 the first processing step's
+            // snapshotted input vs. the current transcription text. Pure
+            // predicate keeps the rule JVM-testable (TranscriptionStaleness).
+            List<ProcessingStepEntity> chain = stepDao.getCurrentChain(sessionId);
+            String firstStepInput = chain.isEmpty() ? null : chain.get(0).getInputText();
+            boolean stale = TranscriptionStaleness.INSTANCE.isStale(
+                    currentTranscription.getText(), firstStepInput);
+
+            // R6: re-run visible iff audio resolvable; the JobExecutor
+            // single-job lock is the hard guard, so we hide it while a job runs
+            // on this session (mirrors the reprocess/regenerate button gating).
+            boolean showRerun = audioAvailable && !jobActive;
+
             steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.TRANSCRIPTION)
                     .icon("\uD83D\uDCDD") // memo
                     .title(title)
                     .outputText(currentTranscription.getText())
                     .metaText(meta)
+                    .sessionId(sessionId)
+                    .transcriptionVersions(transcriptionVersions)
+                    .showRerun(showRerun)
+                    .transcriptionStale(stale)
                     .build());
         }
 
@@ -765,6 +797,52 @@ public class HistoryDetailActivity extends AppCompatActivity
             stepDao.setCurrentById(selectedVersion.getId());
         });
         // Update final output text
+        String finalOutput = sessionManager.getFinalOutput(sessionId);
+        sessionManager.updateFinalOutputText(sessionId, finalOutput);
+        loadSession();
+    }
+
+    /**
+     * R6: dispatches a transcription re-run as a {@link JobRequest.TranscriptionRerun}.
+     * Like regenerate/reprocess, this is a thin JobExecutor dispatch — the job
+     * survives this Activity, registers in {@link ActiveJobRegistry} (mutually
+     * exclusive with reprocess/regenerate) and does the AI + DB work in the job
+     * layer. UI progress + reload arrive via the registry observer.
+     */
+    private void dispatchRerunTranscription() {
+        if (ActiveJobRegistry.INSTANCE.isAnyActive()) {
+            Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // Guard the audio availability read-side through the resolver (ADR-0007)
+        // even though the pipeline re-resolves the audio itself — a missing
+        // file should fail fast with a toast rather than start a doomed job.
+        if (!resolveAudio().getAvailable()) {
+            Toast.makeText(this, R.string.dictate_audio_file_missing, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        JobRequest.TranscriptionRerun request =
+                new JobRequest.TranscriptionRerun(sessionId, /* totalSteps */ 1);
+        if (!JobExecutor.INSTANCE.start(this, request)) {
+            Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        setUiState(UiState.LOADING);
+    }
+
+    /**
+     * R6: switches the current transcription version. Mirrors {@link
+     * #switchVersion}: a transaction promotes the selected version to current
+     * (clear + set), then the denormalized final output is refreshed via the
+     * existing selection ({@link SessionManager#getFinalOutput}). Non-destructive
+     * — the processing chain is untouched (D3); staleness is surfaced by the
+     * card's warning line on the next reload.
+     */
+    private void switchTranscriptionVersion(TranscriptionEntity selectedVersion) {
+        db.runInTransaction(() -> {
+            transcriptionDao.clearCurrent(sessionId);
+            transcriptionDao.setCurrentById(selectedVersion.getId());
+        });
         String finalOutput = sessionManager.getFinalOutput(sessionId);
         sessionManager.updateFinalOutputText(sessionId, finalOutput);
         loadSession();

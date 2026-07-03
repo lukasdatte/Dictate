@@ -78,6 +78,19 @@
                     android:visibility="gone"
                     tools:visibility="visible" />
 
+                <!-- Transcription re-run (R6) — autorenew icon; the
+                     HistoryIconButton style supplies the theme-attr tint
+                     (the drawable itself carries no baked tint, ADR-0010). -->
+                <ImageButton
+                    android:id="@+id/item_pipeline_rerun_btn"
+                    style="@style/Widget.Dictate.HistoryIconButton"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:src="@drawable/ic_baseline_autorenew_24"
+                    android:contentDescription="@string/dictate_history_transcription_rerun"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
                 <!-- Direct reprocess (audio step) -->
                 <ImageButton
                     android:id="@+id/item_pipeline_direct_reprocess_btn"

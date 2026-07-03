@@ -339,6 +339,8 @@
     <string name="dictate_history_collapse">Weniger anzeigen</string>
     <string name="dictate_history_session_error">Sitzung fehlgeschlagen</string>
     <string name="dictate_history_partial_recovery">Nur %1$d Segment(e) der Aufnahme konnten wiederhergestellt werden</string>
+    <string name="dictate_history_transcription_rerun">Transkription erneut ausführen</string>
+    <string name="dictate_history_transcription_stale">Nachgelagerte Schritte basieren auf einer anderen Transkriptionsversion — nutze die Wiederverarbeitung, um sie neu auszuführen</string>
     <string name="dictate_resend_focus_lost">Eingabefeld nicht mehr verfügbar — Pipeline wird neu gestartet</string>
     <string name="dictate_reprocess_language">Sprache</string>
     <string name="dictate_language_manage">⚙ Sprachen verwalten…</string>

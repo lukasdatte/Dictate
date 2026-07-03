@@ -3876,16 +3876,15 @@ public class DictateInputMethodService extends InputMethodService
     private void startRecording() {
         promptQueueManager.prepareAutoApplyQueue();
 
-        // Pre-Dispatch-Allocation (Spec 1 §4.11.4, R.2). The Service-owned
-        // AudioFileFactory is the single source for cache-file paths; it
-        // produces a UUID-suffixed name in cacheDir/audio/ that survives
-        // the multi-job model (R.8) and the boot-time orphan cleanup
-        // (KG-AFF-4 freshness cut-off).
+        // Pre-Dispatch-Allocation (Spec 1 §4.11.4, R.2). The initial
+        // segment file is minted via the AudioFileRepository (F-000 fix),
+        // which names it `sess_{sid}_seg1.m4a` under cacheDir/audio/ —
+        // the same `sess_*` prefix the multi-segment muxer scans for.
         //
         // The legacy fixed `cacheDir/audio.m4a` path is migrated by
         // LegacyAudioFileMigration on the next Service boot.
         //
-        // The factory is only available once the Service binder is up
+        // The repository is only available once the Service binder is up
         // (`onServiceConnected`). The early-tap defensive path below
         // toasts and bails — the user retries once the bind lands.
         if (pipelineBinder == null) {
@@ -3921,14 +3920,33 @@ public class DictateInputMethodService extends InputMethodService
         // payload (Spec 1 §15.2). The IME keeps only this method-local
         // reference (LastFileName mirror + the action arg); the
         // send-tap reads it back from state.recording, not an IME field.
+        //
+        // F-000 (2026-07-03) — the initial file MUST be allocated via
+        // AudioFileRepository.allocateFirst(sessionId), NOT the legacy
+        // AudioFileFactory. The multi-segment muxer (RecordingHardwareAdapter
+        // pre-arms rolling segments via allocateNext → sess_{sid}_seg*) only
+        // sees files under the `sess_{sid}_seg*` prefix; the legacy factory's
+        // `rec_{ts}_{uuid}.m4a` name is invisible to segments(sid). Allocating
+        // through the factory here caused silent, unrecoverable audio loss on
+        // the QWERTZ record button and instant-prompt chip surfaces: long
+        // recordings dropped the first chunk, short recordings uploaded the
+        // pre-armed 0-byte sess_seg1 while the real rec_* audio was deleted.
+        //
+        // The sessionId is minted BEFORE the allocate so the repository can
+        // name the initial file `sess_{sid}_seg1.m4a` — byte-identical to the
+        // catalog start path (ActionResolvers.resolveStartRecordingFromIdle).
+        // Both surfaces now share one allocation contract.
+        String preAllocatedId = java.util.UUID.randomUUID().toString();
         File audioFile;
         try {
-            audioFile = pipelineBinder.getAudioFileFactory().allocate();
+            audioFile = pipelineBinder.getModuleServices()
+                    .getAudioFileRepository()
+                    .allocateFirst(preAllocatedId);
         } catch (java.io.IOException e) {
             // Storage full / FS permission. Surface a user-visible
             // toast and bail out — the reducer never sees the failure
             // (R.2 Pure-Reducer invariant: IO lives in the resolver).
-            Log.w("DictateIME", "AudioFileFactory.allocate failed", e);
+            Log.w("DictateIME", "AudioFileRepository.allocateFirst failed", e);
             android.widget.Toast.makeText(
                     this, R.string.dictate_storage_full,
                     android.widget.Toast.LENGTH_LONG).show();
@@ -3948,7 +3966,6 @@ public class DictateInputMethodService extends InputMethodService
         // off Pref into AudioState by the orchestrator (the StartRecording
         // reducer reads ctx.global.audio.useBluetoothMic — already
         // pref-mirrored), so it is NOT threaded on the action.
-        String preAllocatedId = java.util.UUID.randomUUID().toString();
         pipelineBinder.dispatch(new net.devemperor.dictate.state.Action.RecordingAction.StartRecording(
                 net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
                 audioFile,

@@ -181,7 +181,7 @@ object NoopPipelineRunner : PipelineRunnerSubsystem {
     override fun submitReprocess(
         sessionId: String,
         audioFile: File?,
-        queue: List<Int>,
+        queuedPromptSlots: List<net.devemperor.dictate.core.PromptQueueSlot>?,
         language: String?,
     ) = Unit
 

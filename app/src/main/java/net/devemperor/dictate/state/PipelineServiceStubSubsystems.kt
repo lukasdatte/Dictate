@@ -131,7 +131,12 @@ internal object PipelineServiceStubSubsystems {
         override fun submit(sessionId: String, audioFile: File) {
             Log.w(TAG, "pipelineRunner.submit($sessionId, $audioFile): $MESSAGE")
         }
-        override fun submitReprocess(sessionId: String, audioFile: File?, queue: List<Int>, language: String?) {
+        override fun submitReprocess(
+            sessionId: String,
+            audioFile: File?,
+            queuedPromptSlots: List<net.devemperor.dictate.core.PromptQueueSlot>?,
+            language: String?,
+        ) {
             Log.w(TAG, "pipelineRunner.submitReprocess($sessionId, …): $MESSAGE")
         }
         override fun cancel(sessionId: String) {

@@ -110,10 +110,10 @@ class PipelineRunnerSubsystemAdapter(
     override fun submitReprocess(
         sessionId: String,
         audioFile: File?,
-        queue: List<Int>,
+        queuedPromptSlots: List<PromptQueueSlot>?,
         language: String?,
     ) {
-        val request = configResolver.resolveReprocess(sessionId, audioFile, queue, language)
+        val request = configResolver.resolveReprocess(sessionId, audioFile, queuedPromptSlots, language)
         startWhenFree(sessionId, request)
     }
 
@@ -213,11 +213,20 @@ interface PipelineConfigResolver {
     /** Build the fresh-recording [JobRequest.TranscriptionPipeline]. */
     fun resolveFresh(sessionId: String, audioFile: File): JobRequest.TranscriptionPipeline
 
-    /** Build the reprocess-staging [JobRequest.TranscriptionPipeline]. */
+    /**
+     * Build the reprocess-staging [JobRequest.TranscriptionPipeline].
+     *
+     * **F-001 (2026-07-03).** `queue: List<Int>` was widened to
+     * `queuedPromptSlots: List<PromptQueueSlot>?` — the transport's
+     * content-capable slot type. The value is threaded straight onto the
+     * `JobRequest` (no `fromIdsOrUnset` re-derivation): the caller decides
+     * explicit-vs-unset. `null` = UNSET (live-queue fallback); empty =
+     * EXPLICITLY NONE.
+     */
     fun resolveReprocess(
         sessionId: String,
         audioFile: File?,
-        queue: List<Int>,
+        queuedPromptSlots: List<PromptQueueSlot>?,
         language: String?,
     ): JobRequest.TranscriptionPipeline
 }
@@ -288,14 +297,14 @@ class DefaultPipelineConfigResolver(
     override fun resolveReprocess(
         sessionId: String,
         audioFile: File?,
-        queue: List<Int>,
+        queuedPromptSlots: List<PromptQueueSlot>?,
         language: String?,
-    ): JobRequest.TranscriptionPipeline = buildReprocess(sessionId, audioFile, queue, language)
+    ): JobRequest.TranscriptionPipeline = buildReprocess(sessionId, audioFile, queuedPromptSlots, language)
 
     private fun buildReprocess(
         sessionId: String,
         audioFile: File?,
-        queue: List<Int>,
+        queuedPromptSlots: List<PromptQueueSlot>?,
         language: String?,
     ): JobRequest.TranscriptionPipeline {
         // Reprocess-staging carries its config in the action payload
@@ -306,7 +315,14 @@ class DefaultPipelineConfigResolver(
         // this path; documented as an R-1 reprocess delegation in the
         // block-report (the legacy reprocess path stays authoritative
         // until C5, same as the fresh path).
-        val totalSteps = 1 + queue.size
+        //
+        // F-001 (2026-07-03) — `queuedPromptSlots` is passed straight
+        // through (the caller decides explicit-vs-unset). For the
+        // step-count baseline an UNSET (null) queue counts as zero here
+        // — the real live-queue-fallback count is only knowable at
+        // execution; the display step total self-corrects when the
+        // orchestrator resolves the fallback (resolveQueueSlotsAtStart).
+        val totalSteps = 1 + (queuedPromptSlots?.size ?: 0)
         return JobRequest.TranscriptionPipeline(
             /* sessionId */ sessionId,
             /* totalSteps */ totalSteps,
@@ -314,13 +330,7 @@ class DefaultPipelineConfigResolver(
             /* audioFilePath */ audioFile?.absolutePath,
             /* language */ language,
             /* modelOverride */ null,
-            // ID-only slots — the staging FSM carries entity IDs (see
-            // PromptQueueSlot shape 1; content-carrying slots are the
-            // history queue-editor's transport). fromIdsOrUnset: an empty
-            // staging queue means UNSET (F-001 — Effect.SubmitReprocess
-            // still carries emptyList), keeping the run-time live-queue
-            // fallback that path relies on today.
-            /* queuedPromptSlots */ PromptQueueSlot.fromIdsOrUnset(queue),
+            /* queuedPromptSlots */ queuedPromptSlots,
             /* targetAppPackage */ null,
             /* recordingsDir */ File(filesDirProvider(), "recordings"),
             /* reuseSessionId */ sessionId,
@@ -386,8 +396,9 @@ class DelegatingPipelineConfigResolver(
     override fun resolveReprocess(
         sessionId: String,
         audioFile: File?,
-        queue: List<Int>,
+        queuedPromptSlots: List<PromptQueueSlot>?,
         language: String?,
     ): JobRequest.TranscriptionPipeline =
-        (imeResolverProvider() ?: fallback).resolveReprocess(sessionId, audioFile, queue, language)
+        (imeResolverProvider() ?: fallback)
+            .resolveReprocess(sessionId, audioFile, queuedPromptSlots, language)
 }

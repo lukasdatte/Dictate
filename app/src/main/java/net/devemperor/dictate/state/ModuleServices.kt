@@ -395,11 +395,19 @@ interface PipelineRunnerSubsystem {
      * runner resolves the path from the DB session record (the
      * staging-FSM is pure-state-only and doesn't carry the file). When
      * non-null, the runner uses the supplied file directly.
+     *
+     * **F-001 (2026-07-03) — `queuedPromptSlots` is nullable content.**
+     * The seam was widened from `queue: List<Int>` to the transport's
+     * content-capable [net.devemperor.dictate.core.PromptQueueSlot] type.
+     * `null` = UNSET (run-time live-queue fallback); an **empty** list =
+     * EXPLICITLY NONE (run zero prompts, no fallback). The staging send
+     * always passes an explicit list, so the user's staged edits reach
+     * the runner intact.
      */
     fun submitReprocess(
         sessionId: String,
         audioFile: java.io.File?,
-        queue: List<Int>,
+        queuedPromptSlots: List<net.devemperor.dictate.core.PromptQueueSlot>?,
         language: String?,
     )
 

@@ -253,9 +253,9 @@ class ImeRecordingDriveCutoverTest {
             override fun resolveReprocess(
                 sessionId: String,
                 audioFile: File?,
-                queue: List<Int>,
+                queuedPromptSlots: List<PromptQueueSlot>?,
                 language: String?,
-            ) = real.resolveReprocess(sessionId, audioFile, queue, language)
+            ) = real.resolveReprocess(sessionId, audioFile, queuedPromptSlots, language)
         }
 
         b.dispatch(
@@ -347,9 +347,9 @@ class ImeRecordingDriveCutoverTest {
             override fun resolveReprocess(
                 sessionId: String,
                 audioFile: File?,
-                queue: List<Int>,
+                queuedPromptSlots: List<PromptQueueSlot>?,
                 language: String?,
-            ) = real.resolveReprocess(sessionId, audioFile, queue, language)
+            ) = real.resolveReprocess(sessionId, audioFile, queuedPromptSlots, language)
         }
         b.registerPipelineConfigResolver(instrumented)
 

@@ -1497,6 +1497,27 @@ public class DictateInputMethodService extends InputMethodService
                     if (!inCooldown) {
                         onResendClicked();
                     }
+                } else if ((id == LogicalButtonId.RECORD
+                        || id == LogicalButtonId.OVERLAY_RECORD)
+                        && getPipelinePhase()
+                            instanceof net.devemperor.dictate.state.PipelineUiState.ReprocessStaging) {
+                    // F-001 (2026-07-03) — catalog-path staging send.
+                    // In ReprocessStaging the big record button is a Send
+                    // trigger. The catalog RECORD slot's actionResolver
+                    // (resolveSendStagingAction) used to dispatch a
+                    // queue-less SendStaging here — losing the user's
+                    // staged edits AND the model/targetApp/totalSteps
+                    // reprocess snapshot (the catalog path never ran
+                    // handleReprocessSend, so no snapshotReprocess). Route
+                    // the catalog record button through the SAME single
+                    // submitter as the QWERTZ record button
+                    // (onRecordClicked → handleReprocessSend): it snapshots
+                    // the reprocess config and dispatches SendStaging
+                    // carrying the staged queue as explicit content slots.
+                    // The catalog resolver now returns null (see
+                    // resolveSendStagingAction) so this affordance is the
+                    // sole SendStaging dispatcher — symmetric with RESEND.
+                    handleReprocessSend();
                 } else if (id == LogicalButtonId.RECORD
                         || id == LogicalButtonId.OVERLAY_RECORD) {
                     // Post-cutover hotfix (symmetric to RESEND above; see
@@ -1531,6 +1552,24 @@ public class DictateInputMethodService extends InputMethodService
                     // in Preparing → endless "sendet" with no editor
                     // commit. Treating both IDs identically keeps the
                     // RECORD-Single-SoT (one helper, two click-sites).
+                    //
+                    // F-003 (2026-07-03) — prime the auto-apply queue on
+                    // the catalog record-START path. The catalog Idle→RECORD
+                    // tap dispatches StartRecording directly (via
+                    // ActionResolvers.resolveStartRecordingFromIdle),
+                    // bypassing the IME's startRecording() where
+                    // prepareAutoApplyQueue() lives (that helper is only on
+                    // the QWERTZ record button + instant-prompt chip). So
+                    // catalog-started recordings never front-loaded the
+                    // autoApply prompts and sent verbatim transcripts. The
+                    // affordance hook fires BEFORE the catalog dispatch, so
+                    // priming here lands the autoApply IDs in the queue
+                    // before the recording session starts — and before the
+                    // send-tap's captureFreshConfigSnapshot reads them. The
+                    // helper is a no-op for the send (Active|Paused) case:
+                    // it only primes when recording is Idle (mirrors the
+                    // catalog resolver's Idle-start arm).
+                    prepareCatalogAutoApplyQueueIfIdle();
                     prepareCatalogStopRecordingIfActive();
                 }
                 return kotlin.Unit.INSTANCE;
@@ -4098,6 +4137,36 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
+     * F-003 (2026-07-03) — prime the auto-apply prompt queue for a
+     * catalog-started recording.
+     *
+     * <p>The main-keyboard record button and the overlay widget record
+     * button both start recording via the catalog
+     * ({@code ActionResolvers.resolveStartRecordingFromIdle} →
+     * {@code StartRecording} dispatch), which does NOT route through the
+     * IME's {@link #startRecording()} — the only other caller of
+     * {@link PromptQueueManager#prepareAutoApplyQueue()}. Without this the
+     * catalog path recorded without front-loading the user's
+     * {@code autoApply=true} prompts, so those dictations transcribed
+     * verbatim (F-003).</p>
+     *
+     * <p>Self-gating on recording {@code Idle}: this fires from the
+     * shared RECORD/OVERLAY_RECORD affordance branch, which also handles
+     * the Active|Paused "stop &amp; send" case — priming only makes sense
+     * at record-START. {@code prepareAutoApplyQueue()} is itself
+     * idempotent + a no-op when rewording is disabled, but the Idle guard
+     * keeps the send-tap from needlessly re-ordering the queue.</p>
+     */
+    private void prepareCatalogAutoApplyQueueIfIdle() {
+        if (pipelineBinder == null) return;
+        net.devemperor.dictate.state.RecordingState rs =
+                pipelineBinder.getState().getValue().getRecording();
+        if (rs instanceof net.devemperor.dictate.state.RecordingState.Idle) {
+            promptQueueManager.prepareAutoApplyQueue();
+        }
+    }
+
+    /**
      * C5 (R-1) — compute the 8 IME-runtime-only fresh-recording
      * {@code JobRequest} fields exactly as the legacy pre-C7 inline
      * {@code JobRequest.TranscriptionPipeline} construction did
@@ -5675,22 +5744,32 @@ public class DictateInputMethodService extends InputMethodService
                         targetSessionId,
                         new ImePipelineConfigResolver.ReprocessConfig(
                                 totalSteps, selectedModel, targetAppPackage));
-                // Phase 5.B (Vol 2): dispatch SendStaging so the
-                // orchestrator transitions ReprocessStaging -> Preparing
-                // BEFORE the runner submits. The PipelineModule reducer
-                // arm is the single-submit guard (a second tap arrives
-                // with `pipeline is Preparing` and is a reducer no-op).
+                // F-001 (2026-07-03) — SINGLE SUBMIT for BOTH surfaces.
+                // Pre-fix this path dispatched a queue-less SendStaging
+                // (whose reducer arm emitted Effect.SubmitReprocess with
+                // queue=emptyList → live-queue fallback) AND then called
+                // pipelineRunner.submitReprocess(...) directly with the
+                // real queue — but that second submit was dropped as a
+                // duplicate (ActiveJobRegistry already had the job). The
+                // staged edits were lost both ways.
+                //
+                // Now the staged queue + language ride the SendStaging
+                // action as EXPLICIT content slots (empty list = run zero
+                // prompts, NOT unset). The reducer's Effect.SubmitReprocess
+                // carries them through to the runner via the C5 reprocess
+                // snapshot (model/targetApp above) — one flow, one submit.
+                // The IME no longer calls submitReprocess directly; the
+                // PipelineModule reducer arm (ReprocessStaging → Preparing)
+                // is the single-submit guard.
+                java.util.List<net.devemperor.dictate.core.PromptQueueSlot> stagedSlots =
+                        net.devemperor.dictate.core.PromptQueueSlot.fromIds(editableQueue);
                 pipelineBinder.dispatch(
-                        new net.devemperor.dictate.state.Action.PipelineAction.SendStaging(targetSessionId));
-                pipelineBinder.getModuleServices().getPipelineRunner().submitReprocess(
-                        targetSessionId,
-                        new File(audioPath),
-                        editableQueue,
-                        selectedLanguage);
+                        new net.devemperor.dictate.state.Action.PipelineAction.SendStaging(
+                                targetSessionId, stagedSlots, selectedLanguage));
 
                 // F-6 (B5-VAL): clear the override now that staging is
                 // exiting (-> Preparing). selectedLanguage was already
-                // snapshotted (above) and passed to submitReprocess, so
+                // snapshotted onto the SendStaging action (above), so
                 // clearing here does NOT affect the in-flight reprocess
                 // job's language -- it only resets the per-staging-session
                 // transient so the next staging session starts clean.

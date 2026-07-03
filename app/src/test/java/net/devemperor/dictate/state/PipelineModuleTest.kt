@@ -684,6 +684,47 @@ class PipelineModuleTest {
     }
 
     @Test
+    fun `F-001 SendStaging carries the staged queue and language onto SubmitReprocess`() {
+        // Red-proof (F-001): the pre-fix reducer arm emitted
+        // Effect.SubmitReprocess(queue = emptyList()) regardless of the
+        // user's staged edits (they lived only in IME mirror fields) and
+        // read the language off ctx.global — so the runner fell back to
+        // the LIVE auto-apply queue and every reprocess send ran the
+        // wrong prompts. The staged payload must ride the action into
+        // the effect verbatim.
+        val staged = net.devemperor.dictate.core.PromptQueueSlot.fromIds(listOf(7, 3))
+        val state = PipelineUiState.ReprocessStaging(sid, transcript = "x")
+        val result = module.reduce(
+            state,
+            Action.PipelineAction.SendStaging(sid, queuedPromptSlots = staged, language = "it"),
+            ctx(),
+        )
+        val submit = result!!.sideEffects
+            .filterIsInstance<PipelineModule.Effect.SubmitReprocess>()
+            .single()
+        assertEquals(staged, submit.queuedPromptSlots)
+        assertEquals("it", submit.language)
+    }
+
+    @Test
+    fun `F-001 SendStaging with an explicitly emptied queue submits explicit-none (not unset)`() {
+        // The user removed every staged prompt: the effect must carry an
+        // EMPTY list (run zero prompts), not null/UNSET (which would
+        // re-open the live-queue fallback the fix closes).
+        val state = PipelineUiState.ReprocessStaging(sid, transcript = "x")
+        val result = module.reduce(
+            state,
+            Action.PipelineAction.SendStaging(sid, queuedPromptSlots = emptyList(), language = null),
+            ctx(),
+        )
+        val submit = result!!.sideEffects
+            .filterIsInstance<PipelineModule.Effect.SubmitReprocess>()
+            .single()
+        assertEquals(emptyList<net.devemperor.dictate.core.PromptQueueSlot>(), submit.queuedPromptSlots)
+        assertNull(submit.language)
+    }
+
+    @Test
     fun `CancelReprocessStaging drops to Idle`() {
         val state = PipelineUiState.ReprocessStaging(sid, "x")
         val result = module.reduce(state, Action.PipelineAction.CancelReprocessStaging(sid), ctx())

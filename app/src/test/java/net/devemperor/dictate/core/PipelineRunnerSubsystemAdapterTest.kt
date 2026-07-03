@@ -139,7 +139,7 @@ class PipelineRunnerSubsystemAdapterTest {
         val req = resolver.resolveReprocess(
             sessionId = "session-42",
             audioFile = audio,
-            queue = listOf(7, 9, 11),
+            queuedPromptSlots = PromptQueueSlot.fromIds(listOf(7, 9, 11)),
             language = "de",
         )
 
@@ -172,16 +172,36 @@ class PipelineRunnerSubsystemAdapterTest {
         val req = resolver.resolveReprocess(
             sessionId = "s1",
             audioFile = null,
-            queue = emptyList(),
+            queuedPromptSlots = null,
             language = null,
         )
 
         assertEquals(null, req.audioFilePath)
         assertEquals(null, req.language)
         assertEquals(1, req.totalSteps) // 1 + 0
-        // Empty staging queue = UNSET (F-001: Effect.SubmitReprocess still
-        // carries emptyList) → null slots → run-time live-queue fallback.
+        // F-001: null = UNSET travels through untouched → run-time
+        // live-queue fallback (the caller decides explicit-vs-unset;
+        // the resolver no longer re-derives it from list emptiness).
         assertEquals(null, req.queuedPromptSlots)
+    }
+
+    @Test
+    fun `resolveReprocess keeps an explicitly empty queue empty (F-001 explicit-none contract)`() {
+        // F-001 regression: pre-fix the resolver ran the queue through
+        // fromIdsOrUnset, so an EXPLICITLY EMPTIED staged queue collapsed
+        // into UNSET (null) → live-queue fallback → the pipeline executed
+        // whatever lingered in the keyboard's auto-apply queue instead of
+        // running zero prompts. The explicit empty list must survive.
+        val resolver = DefaultPipelineConfigResolver(filesDirProvider = { tempFilesDir() })
+
+        val req = resolver.resolveReprocess(
+            sessionId = "s-empty",
+            audioFile = null,
+            queuedPromptSlots = emptyList(),
+            language = null,
+        )
+
+        assertEquals(emptyList<PromptQueueSlot>(), req.queuedPromptSlots)
     }
 
     @Test
@@ -209,7 +229,7 @@ class PipelineRunnerSubsystemAdapterTest {
         adapter.submitReprocess(
             sessionId = "sx",
             audioFile = File(filesDir, "a.m4a"),
-            queue = listOf(3),
+            queuedPromptSlots = PromptQueueSlot.fromIds(listOf(3)),
             language = "en",
         )
 

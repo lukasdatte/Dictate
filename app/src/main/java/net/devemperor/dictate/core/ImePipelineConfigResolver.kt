@@ -179,11 +179,13 @@ class ImePipelineConfigResolver(
     override fun resolveReprocess(
         sessionId: String,
         audioFile: File?,
-        queue: List<Int>,
+        queuedPromptSlots: List<PromptQueueSlot>?,
         language: String?,
     ): JobRequest.TranscriptionPipeline {
         val cfg = reprocessSnapshots.remove(sessionId)
-            ?: return reprocessFallback.resolveReprocess(sessionId, audioFile, queue, language)
+            ?: return reprocessFallback.resolveReprocess(
+                sessionId, audioFile, queuedPromptSlots, language,
+            )
         // C3-IMPL-2 closed: thread the modelOverride / targetAppPackage /
         // AutoFormatting +1 the staging-FSM path drops. Mirrors the
         // legacy DictateInputMethodService.java:3038-3051 reprocess
@@ -195,10 +197,12 @@ class ImePipelineConfigResolver(
             /* audioFilePath */ audioFile?.absolutePath,
             /* language */ language,
             /* modelOverride */ cfg.modelOverride,
-            // fromIdsOrUnset: an empty staging queue means UNSET (F-001 —
-            // Effect.SubmitReprocess still carries emptyList), preserving
-            // the run-time live-queue fallback that path relies on today.
-            /* queuedPromptSlots */ PromptQueueSlot.fromIdsOrUnset(queue),
+            // F-001 (2026-07-03) — the staged queue arrives as explicit
+            // content slots from the IME (empty = run zero prompts). Pass
+            // it straight through; the emptyList-as-accidental-unset
+            // conversion (fromIdsOrUnset) is gone — the staged intent is
+            // now authoritative and reaches the runner intact.
+            /* queuedPromptSlots */ queuedPromptSlots,
             /* targetAppPackage */ cfg.targetAppPackage,
             /* recordingsDir */ File(recordingsDirProvider(), "recordings"),
             /* reuseSessionId */ sessionId,

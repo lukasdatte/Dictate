@@ -367,7 +367,7 @@ class OverlayPipelineHangIntegrationTest {
         override fun resolveReprocess(
             sessionId: String,
             audioFile: File?,
-            queue: List<Int>,
+            queuedPromptSlots: List<net.devemperor.dictate.core.PromptQueueSlot>?,
             language: String?,
         ): JobRequest.TranscriptionPipeline {
             error("ThrowingReprocessFallback.resolveReprocess should never be reached.")

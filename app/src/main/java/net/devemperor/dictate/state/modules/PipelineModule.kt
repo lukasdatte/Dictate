@@ -47,8 +47,17 @@ import kotlinx.coroutines.launch
  *   cancel-path audio-file deletion is not yet implemented (Phase-2
  *   cancel-cascade); when it lands, the observer should emit
  *   `MarkLastAudio(exists = false)` on the cancel-path branch
- *   instead. Phase-1 acceptable — the success-path is the only one
- *   that produces a fresh audio file the user might want to resend.
+ *   instead — both halves must land together. Phase-1 acceptable,
+ *   and (F-102 review, 2026-07-03) currently *correct*, not just
+ *   self-consistent: with the audio still on disk a CANCELLED
+ *   session IS resendable per `ResendStatusDispatcher` (Resume, or
+ *   Insert when a partial transcription exists), so `exists = true`
+ *   matches the click-time behaviour. Safety net since F-005: the
+ *   boot-time `PipelineRecovery` Phase 6 re-derives the axis from
+ *   `ResendableSessionPolicy`, so if the deletion half ever lands
+ *   without this branch, a stale `true` self-corrects at the next
+ *   service start (the runtime gap until then remains — hence
+ *   "land together").
  * - `Pipeline → LivePrompt`: cascade [Action.LivePromptAction.ChainNext]
  *   when LivePrompt is enabled + has a pending chain (Spec 1
  *   §15.1 + §15.x LivePromptModule).

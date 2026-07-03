@@ -43,6 +43,11 @@ import java.io.File
  *     shows the "tap-to-paste" affordance once the IME re-binds. The
  *     ResendModule reducer flips
  *     [ResendState.lastResultNeedsManualPaste] = true on receipt.
+ *  8. **F-005 RESEND-button seed** — dispatch
+ *     [Action.ResendAction.MarkLastAudio] with whether the last keyboard
+ *     session is resendable (`resendableSeedProbe`), so the RESEND button
+ *     reappears after a process restart instead of staying hidden until
+ *     the next completed recording.
  *
  * **Threading:** the heavy DAO work runs in `Dispatchers.IO`. The single
  * `store.update` write resumes on whatever dispatcher called [recover]
@@ -129,6 +134,28 @@ class PipelineRecovery(
      * degradation: the recording is still surfaced and continuable.
      */
     private val interruptedRecordingElapsedMsProvider: (sessionId: String) -> Long = { 0L },
+    /**
+     * Cold-boot seed for the RESEND-button visibility axis
+     * ([ResendState.lastAudioExists]) — F-005.
+     *
+     * Returns `true` when the last keyboard session is *resendable*: a
+     * short-press RESEND would insert its text or resume its audio. The
+     * axis defaults to `false` and is otherwise flipped only by
+     * post-pipeline events, so after a process restart the button stays
+     * hidden despite a resendable session existing on disk. Phase 6 of
+     * [recover] emits [Action.ResendAction.MarkLastAudio] with this value
+     * so the button reappears on the first render after the IME re-binds.
+     *
+     * Production wiring (`DictatePipelineService`) resolves the last
+     * KEYBOARD session, reads its authoritative output via
+     * `SessionManager.getFinalOutput` (the 2026-07-02 text-path fix —
+     * commit 9637fc3), and feeds status + output to
+     * [net.devemperor.dictate.core.ResendableSessionPolicy]. The default
+     * `{ false }` keeps the boot path ([recoverDbOnly]) and unit tests
+     * free of the SessionManager dependency — a fresh install with no
+     * prior session correctly seeds `false`.
+     */
+    private val resendableSeedProbe: suspend () -> Boolean = { false },
 ) {
 
     /**
@@ -226,6 +253,25 @@ class PipelineRecovery(
                     ),
                 )
             }
+
+            // ── Phase 6: F-005 — seed the RESEND-button visibility axis ──
+            // `ResendState.lastAudioExists` defaults to false and is
+            // flipped true only by post-pipeline events (PipelineDone
+            // cascade / onShowResend). After a process restart nothing
+            // re-seeds it, so the button stays hidden even though the last
+            // session's audio/text is still resendable. Ask the probe
+            // whether a resendable last-keyboard-session exists (its
+            // resolution mirrors the short-press ResendStatusDispatcher —
+            // see ResendableSessionPolicy) and emit MarkLastAudio so the
+            // button reappears on the first render after the IME re-binds.
+            // Emitted unconditionally (idempotent — the ResendModule arm
+            // no-ops when the value already matches).
+            val resendable = withContext(ioContext) {
+                runCatching { resendableSeedProbe() }
+                    .onFailure { Log.w(TAG, "resendable-seed probe failed during recovery", it) }
+                    .getOrDefault(false)
+            }
+            emitAction(Action.ResendAction.MarkLastAudio(exists = resendable))
         } catch (t: Throwable) {
             Log.e(TAG, "Recovery failed", t)
         }

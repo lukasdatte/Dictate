@@ -3258,13 +3258,17 @@ public class DictateInputMethodService extends InputMethodService
             // imperative resend setVisibility (the onStartInputView
             // Idle-branch V/G mutations §9.6 :1345/:1347) is REMOVED on
             // the bound path — the RESEND-slot `isResendVisible`
-            // predicate owns visibility state-reactively (lastAudioExists
-            // is carried via state.resend; a fresh onStartInputView with
-            // an existing cache file + Pref.ResendButton already evaluates
-            // the predicate true). The imperative call is the UNBOUND
-            // fallback only (no reactive render without a binder). Same
-            // for the record-button label (RECORD textResolver owns it
-            // on the bound path).
+            // predicate owns visibility state-reactively. lastAudioExists
+            // is carried via state.resend: intra-process it is set by the
+            // PipelineDone cascade / onShowResend; across process
+            // restarts it is seeded by PipelineRecovery Phase 6 (F-005 —
+            // resendableSeedProbe → ResendableSessionPolicy), so a fresh
+            // onStartInputView after a service restart with a resendable
+            // last session + Pref.ResendButton evaluates the predicate
+            // true. The imperative call is the UNBOUND fallback only (no
+            // reactive render without a binder). Same for the
+            // record-button label (RECORD textResolver owns it on the
+            // bound path).
             if (pipelineBinder == null) {
                 // Phase 6 of dictate-render-cutover-completion-vol2 — the
                 // resolveResendVisibility predicate now reads the

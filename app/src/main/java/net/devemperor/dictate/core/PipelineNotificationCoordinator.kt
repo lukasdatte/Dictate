@@ -120,6 +120,20 @@ class PipelineNotificationCoordinator(
             dismiss()
             return
         }
+        // F-092 serviceability: make the silent-suppression case
+        // observable. When POST_NOTIFICATIONS is not granted (Android
+        // 13+) the `notify` below is a no-op — the sticky FGS
+        // notification and its Pause/Stop/Send/Cancel controls never
+        // reach the shade. We log rather than throw: the FGS keeps
+        // running, and the onboarding / settings prompts
+        // (NotificationPermissionPolicy) are the recovery path.
+        if (!nm.areNotificationsEnabled()) {
+            Log.w(
+                TAG,
+                "notifications disabled (missing POST_NOTIFICATIONS grant?) — " +
+                    "$status not shown; FGS controls hidden from the shade",
+            )
+        }
         try {
             nm.notify(NOTIF_ID, build(status))
         } catch (t: Throwable) {

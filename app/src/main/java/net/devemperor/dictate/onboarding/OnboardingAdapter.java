@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.text.Editable;
 import android.text.Html;
 import android.text.TextWatcher;
@@ -26,6 +27,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.ai.AIProvider;
+import net.devemperor.dictate.core.NotificationPermissionPolicy;
 import net.devemperor.dictate.preferences.DictatePrefsKt;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
@@ -68,6 +70,30 @@ public class OnboardingAdapter extends RecyclerView.Adapter<OnboardingAdapter.Vi
             }
 
             microphoneBtn.setOnClickListener(v -> activity.requestPermissions(new String[]{ android.Manifest.permission.RECORD_AUDIO }, 1337));
+
+            // F-092: POST_NOTIFICATIONS runtime prompt (API 33+). The
+            // recording foreground-service notification carries the
+            // Pause/Stop/Send/Cancel controls; on Android 13+ it is
+            // silently suppressed until this grant is obtained. On
+            // pre-33 devices the permission is implicit, so the row
+            // shows as already granted and the button is disabled.
+            TextView notificationsStatusTv = holder.itemView.findViewById(R.id.onboarding_permissions_notifications_status_tv);
+            Button notificationsBtn = holder.itemView.findViewById(R.id.onboarding_permissions_notifications_btn);
+
+            boolean notificationsGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                    || activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+            if (notificationsGranted) {
+                notificationsStatusTv.setText(activity.getString(R.string.dictate_notifications_permission_granted));
+                notificationsBtn.setEnabled(false);
+            }
+
+            notificationsBtn.setOnClickListener(v -> {
+                if (NotificationPermissionPolicy.INSTANCE.shouldRequestOnboarding(
+                        Build.VERSION.SDK_INT,
+                        activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)) {
+                    activity.requestPermissions(new String[]{ android.Manifest.permission.POST_NOTIFICATIONS }, 1338);
+                }
+            });
 
             List<InputMethodInfo> inputMethodsList = ((InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE)).getEnabledInputMethodList();
             for (InputMethodInfo inputMethod : inputMethodsList) {

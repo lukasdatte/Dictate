@@ -65,11 +65,13 @@ public class OnboardingActivity extends AppCompatActivity {
         }
     }
 
-    // checks if the user granted the storage permission and updates the status text
+    // refresh the permissions page after a microphone (1337) or
+    // notifications (1338, F-092) grant so the status text + button
+    // enablement reflect the new state
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == 1337) {
+        if (requestCode == 1337 || requestCode == 1338) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 onboardingAdapter.notifyItemChanged(1);
             }

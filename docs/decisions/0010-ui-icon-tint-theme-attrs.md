@@ -1,6 +1,6 @@
 # ADR-0010: UI — Icon Color via Theme Attributes at the Usage Site
 
-**Status:** Proposed
+**Status:** Accepted
 **Scope:** Project-Wide
 **Date:** 2026-07-02
 **Supersedes:** —
@@ -79,3 +79,13 @@ Concretely:
 **After:** Usage-site theme-attr tint convention (style-first), color-neutral new assets, semantic colors via theme attrs, source-scan invariant test as enforcement; history screens are the first enforced subsystem.
 
 **Reasoning:** View-level tint overrides baked literals at draw time — the only fix that is simultaneously systemic (kills the class), safe (zero cross-consumer risk), and mechanically enforceable (JVM source scan).
+
+### 2026-07-03 — Accepted (first enforcement landed)
+
+**Trigger:** History UI overhaul chunks A–E implemented and adversarially reviewed (`[history-ui]` commits `defb3b6..135fae0`); `HistoryThemeInvariantTest` red-proven against the unfixed layouts, then green.
+
+**Before:** Convention proposed; history layouts still carried holo-color literals and tint-less icon views.
+
+**After:** Convention in force for the history subsystem: `Widget.Dictate.HistoryIconButton` style, `dictateColorWarning` theme attr (light+night), invariant test enumerating history layouts by directory predicate. The consumer-audit rule (Decision point 3) fired live during implementation: a tint-strip of `ic_baseline_pause_24` was reverted (commit `b83be9e`) because keyboard consumers use it as an untinted `android:foreground` — the exact failure mode the audit rule guards; view-level tint in history overrides the baked literal instead.
+
+**Reasoning:** Implementation validated both halves of the decision — usage-site tint fixes the class without touching shared assets, and the blind-strip alternative was empirically shown to break non-history consumers.

@@ -4,7 +4,7 @@
 date: 2026-07-02
 author: Lukas + Claude (Fable lead + Opus analysis workers)
 type: Spec
-status: Spec — programmer-ready
+status: Accepted
 context: Visual + structural overhaul of the history list and detail screens — per-step copy, tap-to-expand, systemic color fix, button audit, multi-segment-aware playback, and a new transcription re-run job (R1–R6 + seven adjacent catalog findings).
 related-plan: n/a (plan-free; seeded by user requirements R1–R6 and 2026-07-02 - feature-wiring-code-review.md)
 related-adrs: ADR-0003, ADR-0007, ADR-0009, ADR-0010
@@ -221,12 +221,14 @@ Target per-card action rows (all `HistoryIconButton`-styled, all with contentDes
 
 | Card | Actions (left→right) | Visible when | Enabled when |
 |---|---|---|---|
-| Audio | play/pause · direct reprocess · reprocess-with-edit · delete audio | audio resolvable (resolver §3.2); reprocess pair additionally per existing status rules | `!isAnyActive()` for reprocess/delete; play always |
-| Transcription | copy · re-run (R6) | copy: text non-empty; re-run: audio resolvable | re-run: `!isAnyActive()` |
-| Processing step | copy · regenerate · other-prompt | copy: text non-empty; rest: current rules | `!isAnyActive()` |
-| Last step | + post-process | current rule (last step) | `!isAnyActive()` |
+| Audio | play/pause · direct reprocess · reprocess-with-edit · delete audio | audio resolvable (resolver §3.2); reprocess pair additionally per existing status rules | reprocess/delete: visibility `!isActive(sessionId)`, dispatch `!isAnyActive()`; play always |
+| Transcription | copy · re-run (R6) | copy: text non-empty; re-run: audio resolvable | re-run: visibility `!isActive(sessionId)`, dispatch `!isAnyActive()` |
+| Processing step | copy · regenerate · other-prompt | copy: text non-empty; rest: current rules | visibility `!isActive(sessionId)`, dispatch `!isAnyActive()` |
+| Last step | + post-process | current rule (last step) | visibility `!isActive(sessionId)`, dispatch `!isAnyActive()` |
 | Final output (screen level) | copy · share (unchanged Material buttons) | always | always |
 | Session error card | — (display only) | FAILED + error present | — |
+
+The two-level gate mirrors the screen's pre-existing pattern: per-session *visibility* (`isActive(sessionId)`) keeps buttons of unrelated sessions usable while a job runs elsewhere; the *dispatch* helpers enforce the hard process-global `isAnyActive()` mutual exclusion (ADR-0009) and fail fast with a toast if a race slips through.
 
 List screen: long-press delete + "Delete all" gain the F-114 guard — `ActiveJobRegistry.isActive(id)` → refusal dialog ("session is being processed"); "Delete all" excludes active ids and toasts the skipped count. Guard lives in `HistoryViewModel` (unit-testable), not in the click listener.
 
@@ -261,7 +263,7 @@ app/src/main/
 │   ├── values-{de,es,pt}/strings.xml            [EDIT]  new strings + history-namespace backfill
 │   ├── layout/item_pipeline_step.xml            [EDIT]  styles, copy btn, rerun btn, expand affordance
 │   ├── layout/item_history_session.xml          [EDIT]  status-icon tint
-│   └── drawable/ic_baseline_pause_24.xml        [NEW]   pause icon (baked-tint-free, per ADR-0010)
+│   └── drawable/ic_baseline_pause_24.xml        [KEEP]  pre-existing; keyboard consumers rely on its baked tint — the history button's view-level style tint overrides it (ADR-0010 D1)
 ├── test/java/net/devemperor/dictate/history/
 │   ├── HistoryThemeInvariantTest.kt             [NEW]   R3 lock (source scan)
 │   ├── StepExpansionStateTest.kt                [NEW]
@@ -341,6 +343,13 @@ The session-level final-output copy keeps its paste-from-history tracking; per-s
 ### 2026-07-02 — Initial spec
 - **Trigger:** User requirements R1–R6 (history UI "deutlich schöner und nachhaltiger", easier prompt post-processing) + adjacent catalog findings.
 - **Reasoning:** Two Opus analysis passes (full UI inventory + re-run design surface) established: color defects are drawable-literal class (systemic style fix), transcription versioning already exists DB-side (no migration needed), and expansion state must be keyed outside the rebuilt list. Findings F-049 (verified fixed), F-053, F-107, F-113, F-114, F-115, F-117 included; F-105 (orphaned audio on session delete) partially covered via the delete fix; excluded: keyboard-side F-001/F-003 (different subsystem), app-wide main-thread-queries removal (gap 4).
+
+### 2026-07-03 — Implemented (status → Accepted)
+- **Trigger:** Implementation of §5 chunks A–E on branch `worktree-agent-a8c0400d6df4497b5` (`[history-ui]` commits `defb3b6`, `6e44989`+`b83be9e`, `3c53f74`, `06a564b`, `135fae0`), adversarially reviewed against all 13 acceptance criteria (verdict: PASS, full suite 1821/0/0, `assembleDebug` green).
+- **What changed:**
+  - All five chunks landed per §5 with red-first regression tests where the unfixed path existed (theme scan, delete-orphan, delete-guard) and TDD for new features (re-run job).
+  - **Deviations (all recorded per-commit):** (1) `ic_baseline_pause_24` was *not* new and was NOT tint-stripped — its keyboard consumers (`activity_dictate_keyboard_view.xml`, `QwertzRecordingController`, `IconResolvers`) use it as an untinted `android:foreground` and rely on the baked literal; the history button's view-level style tint overrides it (commit `b83be9e`, the first live application of ADR-0010's consumer-audit rule). §4 corrected to `[KEEP]`. (2) Button gating uses the screen's pre-existing two-level pattern — per-session visibility + process-global dispatch guard — §3.5 table wording aligned. (3) Gap-3 finalize choice: the no-audio re-run path surfaces via the job error callback without touching the session row; FAILED-no-chain success finalizes COMPLETED via `finalizeCompleted` (error fields left as-is, matching reprocess semantics). (4) Chunk E added `SessionDao.deleteAllExcept(exemptIds)` for the delete-all skip (no client-side enumeration). (5) Dead strings `_based_on`, `_open_parent`, `_regenerating`, `_regenerate_failed` deleted after zero-grep; `dictate_history_pause` is now wired.
+  - Locale backfill: 37 keys × 3 locales (de/es/pt) — the full history namespace now translates.
 
 ## 9. References
 

@@ -133,7 +133,47 @@ Each step compiles and tests independently; steps 3–5 each have a visible devi
 
 ## 7. Change History
 
-### 2026-07-03 — Opacity made backdrop-independent (opaque pre-blend, §3.3 superseded)
+### 2026-07-03 — Trade-off reversed: true translucency restored (opaque pre-blend reverted)
+
+- **Trigger:** User feedback on the deployed opaque pre-blend — "Jetzt
+  haben wir gar keine Opacity mehr": the slider had no visible effect,
+  the card looked fully opaque everywhere. The pre-blend's deliberate
+  trade-off (consistency over see-through) is thereby **rejected**; the
+  previous entry's design is reverted.
+- **Re-interpreted requirement:** real translucency stays (the slider
+  must visibly work); "identical in all modes" means the **same
+  translucent ARGB is applied** in WIDGET and HOVER — that different
+  backdrops composite the same alpha to slightly different on-screen
+  pixels is accepted as inherent to transparency.
+- **Divergence re-check (second pass, explicit candidates):** rebuild
+  without re-apply (teardown nulls the cache, render re-applies —
+  covered by the reinflate test); second alpha layer on the card root
+  (none); different base drawables per mode (single
+  `overlay_background.xml`); HOVER/WIDGET skipping the slider (both run
+  the same `applyBackgroundOpacity` per tick). The only real per-mode
+  alpha divergence found is **button-level and intentional**: the
+  `OVERLAY_RECORD` slot's `alphaResolver` dims the record button to
+  0.4 when it is disabled (`Active/Paused && !imeViewVisible`, i.e.
+  HOVER during a recording — the "no send without InputConnection"
+  rule, `LayoutCatalog` OVERLAY_5BUTTON + `resolveOverlayRecordEnabled`).
+  That is the shared disabled-affordance pattern of the keyboard
+  surface, not a card-opacity bug; left unchanged.
+- **What changed:** `OverlayCardFill.effectiveFill` semantics switched
+  back to `colorSurface` at `opacity * 255 / 100` alpha (policy
+  centralisation kept — the object remains the single source of truth
+  and documents the full decision history). The keyboard-background
+  anchor parameter is gone: with a real alpha channel the night
+  correctness comes from `colorSurface` itself, resolved from the
+  F-119 night-themed inflate context. §3.3's original render behaviour
+  is thereby restored, now routed through the policy object.
+- **Test:** regression test `card fill is truly translucent below 100
+  percent and byte-identical in both modes` (red-proven on the opaque
+  pre-blend: alpha was 255 where 51 was required) asserts BOTH halves
+  of the re-interpreted requirement; `OverlayCardFillTest` rewritten
+  (alpha mapping, RGB-preservation, clamping); night test now asserts
+  the dark `colorSurface` at slider alpha.
+
+### 2026-07-03 — Opacity made backdrop-independent (opaque pre-blend, §3.3 superseded — REVERTED, see entry above)
 
 - **Trigger:** User report — the effective opacity differs between the
   widget's display modes with the same `Pref.WidgetOpacity` value ("Die

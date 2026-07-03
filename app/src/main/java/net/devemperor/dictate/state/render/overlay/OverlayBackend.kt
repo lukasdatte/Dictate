@@ -8,7 +8,6 @@ import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
-import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.color.MaterialColors
 import net.devemperor.dictate.R
@@ -246,8 +245,8 @@ class OverlayBackend(
      * (F-118) — `null` while detached or before the first
      * [applyBackgroundOpacity] pass. Makes the per-render-tick mutation
      * idempotent; nulled in [teardownOverlay] because a re-inflate
-     * recreates the drawable (the fresh XML fill is the plain
-     * `colorSurface` again, without the [OverlayCardFill] pre-blend).
+     * recreates the drawable (the fresh XML fill is the plain opaque
+     * `colorSurface` again, without the [OverlayCardFill] alpha).
      */
     private var lastAppliedOpacityPercent: Int? = null
 
@@ -540,19 +539,20 @@ class OverlayBackend(
 
     /**
      * Mutate the card background's **fill** to the [OverlayCardFill]
-     * pre-blend for [opacityPercent] (F-118 + 2026-07-03
-     * opacity-consistency fix). The 1 dp `colorOutlineVariant` stroke
-     * stays untouched so the card boundary remains legible.
+     * colour for [opacityPercent] (F-118, contract revised 2026-07-03).
+     * The 1 dp `colorOutlineVariant` stroke stays untouched so the card
+     * boundary remains legible.
      *
-     * The painted colour is **fully opaque**: `colorSurface` pre-blended
-     * over the effective keyboard background for the night mode this
-     * view was inflated with ([inflatedNightMode]). A translucent fill
-     * would composite against the window backdrop — the opaque keyboard
-     * in WIDGET mode vs. arbitrary host content in HOVER mode — making
-     * the same opacity value *look* different per mode (the user's
-     * "opacity is not identical between modes" report). Pre-composition
-     * makes the on-screen result backdrop-independent; the full
-     * rationale + trade-off lives on [OverlayCardFill].
+     * The painted colour is **genuinely translucent** below 100 %:
+     * `colorSurface` at `opacity * 255 / 100` alpha, resolved from this
+     * view's themed context (night-correct via the F-119
+     * `contextForNightMode` wrap at inflate time). The *same* ARGB is
+     * applied on every render tick regardless of ViewMode — WIDGET and
+     * HOVER never diverge in what is painted; that the backdrop behind
+     * the window composites differently per mode is accepted as
+     * inherent to real transparency (see the decision history on
+     * [OverlayCardFill] — an opaque pre-blend was tried and reverted
+     * because it disabled the slider's visible effect).
      *
      * The buttons keep their own **opaque** Material container tints
      * (`OverlayButton.Primary` = filled `colorPrimary`,
@@ -580,15 +580,7 @@ class OverlayBackend(
         val surface = MaterialColors.getColor(
             view, com.google.android.material.R.attr.colorSurface,
         )
-        // inflatedNightMode is always set here: applyBackgroundOpacity
-        // only runs with overlayView != null, and both fields are
-        // assigned together in inflateAndAttach.
-        val base = ContextCompat.getColor(
-            view.context,
-            if (inflatedNightMode == true) R.color.dictate_keyboard_background_dark
-            else R.color.dictate_keyboard_background_light,
-        )
-        background.setColor(OverlayCardFill.effectiveFill(surface, base, opacityPercent))
+        background.setColor(OverlayCardFill.effectiveFill(surface, opacityPercent))
         lastAppliedOpacityPercent = opacityPercent
     }
 

@@ -162,6 +162,7 @@ object JobExecutor {
                         token
                     )
                     is JobRequest.PostProcess -> orchestrator.postProcess(request)
+                    is JobRequest.TranscriptionRerun -> orchestrator.rerunTranscription(request)
                 }
                 // Orchestrator writes terminal COMPLETED itself (via
                 // sessionManager.finalizeCompleted). Nothing to do here.
@@ -414,6 +415,34 @@ sealed class JobRequest {
             }
         }
     }
+
+    /**
+     * Re-transcribes a session's stored audio as a **new transcription
+     * version** (R6). The re-run reads the session's audio through the same
+     * multi-segment merge the initial pipeline uses, transcribes it with the
+     * session's persisted language, and persists the result via
+     * [SessionManager.addTranscriptionVersion] — so the DB-present-but-UI-dead
+     * transcription version chain (`TranscriptionEntity.version`/`is_current`)
+     * finally gets a consumer (D4: no schema change, a re-run version is
+     * indistinguishable from a reprocess version).
+     *
+     * Deliberately does **NOT** touch the processing chain (D3). Re-running a
+     * transcription version leaves any downstream completion steps' snapshotted
+     * `input_text` untouched; the resulting staleness is surfaced in the UI
+     * (transcription card's warning line), and re-running downstream stays the
+     * reprocess buttons' job. This keeps R6 non-destructive and cheap, mirrors
+     * the step-version semantics, and avoids surprise multi-step re-billing.
+     *
+     * Model / keyterms come from the *current* prefs (not persisted per
+     * session), so a re-run may legitimately differ from v1 for reasons other
+     * than audio — accepted as inherent to re-running (spec Information Gap 2).
+     *
+     * @see docs/research/2026-07-02 - history-ui-overhaul.md §3.4, D3, D4
+     */
+    data class TranscriptionRerun(
+        override val sessionId: String,
+        override val totalSteps: Int = 1
+    ) : JobRequest()
 }
 
 /**
@@ -437,6 +466,11 @@ interface PipelineRunner {
     fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken)
 
     fun postProcess(request: JobRequest.PostProcess)
+
+    // R6: takes the sealed request object (same extension-friendly seam as
+    // regenerate/postProcess) — a re-run needs only the session id today, but
+    // routing the request keeps future fields off every implementation/fake.
+    fun rerunTranscription(request: JobRequest.TranscriptionRerun)
 }
 
 /** Production [PipelineRunner] that delegates to a real [PipelineOrchestrator]. */
@@ -470,4 +504,7 @@ class PipelineOrchestratorRunner(
             requireNotNull(request.promptSlot.text),
             request.promptSlot.entityId
         )
+
+    override fun rerunTranscription(request: JobRequest.TranscriptionRerun) =
+        orchestrator.rerunTranscriptionBlocking(request.sessionId)
 }

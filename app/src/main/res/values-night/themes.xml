@@ -12,6 +12,9 @@
         <!-- Status bar color. -->
         <item name="android:statusBarColor" >?attr/colorPrimaryVariant</item>
 
+        <!-- App-defined warning color (light value in values/themes.xml). -->
+        <item name="dictateColorWarning">@color/dictate_warning</item>
+
         <!-- Customize your theme here. -->
 
     </style>

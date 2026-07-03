@@ -1,10 +1,8 @@
 package net.devemperor.dictate.history;
 
-import android.annotation.SuppressLint;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
-import android.media.MediaPlayer;
 import android.os.Bundle;
 import android.view.MenuItem;
 import android.view.View;
@@ -13,6 +11,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
@@ -73,6 +72,7 @@ public class HistoryDetailActivity extends AppCompatActivity
     private ProcessingStepDao stepDao;
     private TranscriptionDao transcriptionDao;
     private RecordingRepository recordingRepository;
+    private final HistoryAudioResolver audioResolver = new HistoryAudioResolver();
 
     private String sessionId;
     private SessionEntity session;
@@ -86,11 +86,16 @@ public class HistoryDetailActivity extends AppCompatActivity
      */
     private String pendingPostProcessNavigateId;
 
-    private List<PipelineStepAdapter.PipelineStep> pipelineSteps;
     private PipelineStepAdapter pipelineAdapter;
+    // R4/R5: expansion owner — survives registry-tick submitList reloads (keyed
+    // by StepKey) and rotation (saved in onSaveInstanceState). Passed into the
+    // adapter; never rebuilt on reload.
+    private final StepExpansionState expansionState = new StepExpansionState();
     private ProgressBar progressBar;
 
-    private MediaPlayer mediaPlayer;
+    // F-113/F-115: sequential multi-segment play/pause. Replaces the one-shot
+    // MediaPlayer that only ever played segment 1. Released in onPause().
+    private HistoryAudioPlayer audioPlayer;
     // F-055: strictly for quick LOCAL file I/O (delete audio). AI work must
     // never run here — it goes through JobExecutor so it survives the Activity
     // and registers in ActiveJobRegistry.
@@ -128,11 +133,17 @@ public class HistoryDetailActivity extends AppCompatActivity
 
         progressBar = findViewById(R.id.history_detail_progress_bar);
 
-        pipelineSteps = new ArrayList<>();
-        pipelineAdapter = new PipelineStepAdapter(pipelineSteps, new PipelineStepAdapter.StepActionCallback() {
+        // R5: restore expansion set before the first submitList so the initial
+        // bind already reflects the pre-rotation expanded rows.
+        expansionState.restoreFrom(savedInstanceState);
+
+        pipelineAdapter = new PipelineStepAdapter(expansionState, new PipelineStepAdapter.StepActionCallback() {
             @Override
             public void onPlayAudio(String audioFilePath) {
-                playAudio(audioFilePath);
+                // F-113/F-115: the button is now a play/pause toggle over the
+                // full resolved segment list (the path argument is retained for
+                // the adapter's visibility gate only).
+                toggleAudioPlayback();
             }
 
             @Override
@@ -155,6 +166,16 @@ public class HistoryDetailActivity extends AppCompatActivity
             @Override
             public void onVersionSelected(int chainIndex, ProcessingStepEntity selectedVersion) {
                 switchVersion(chainIndex, selectedVersion);
+            }
+
+            @Override
+            public void onRerunTranscription(String rerunSessionId) {
+                dispatchRerunTranscription();
+            }
+
+            @Override
+            public void onTranscriptionVersionSelected(TranscriptionEntity selectedVersion) {
+                switchTranscriptionVersion(selectedVersion);
             }
 
             @Override
@@ -243,7 +264,25 @@ public class HistoryDetailActivity extends AppCompatActivity
         loadSession();
     }
 
-    @SuppressLint("NotifyDataSetChanged")
+    @Override
+    protected void onPause() {
+        // F-113/F-115: playback must never outlive the visible screen.
+        // Releasing here (not only in onDestroy) stops audio when the user
+        // navigates away or the screen is backgrounded.
+        if (audioPlayer != null) {
+            audioPlayer.release();
+            audioPlayer = null;
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        super.onSaveInstanceState(outState);
+        // R5: persist the expanded-row set across rotation / process death.
+        expansionState.saveTo(outState);
+    }
+
     private void loadSession() {
         session = db.sessionDao().getById(sessionId);
         if (session == null) {
@@ -266,47 +305,98 @@ public class HistoryDetailActivity extends AppCompatActivity
         }
         headerTv.setText(typeName + " \u2014 " + dateFormat.format(new Date(session.getCreatedAt())));
 
-        buildPipeline();
-        pipelineAdapter.notifyDataSetChanged();
+        // R5/D2: hand a freshly-built list to the ListAdapter; DiffUtil (keyed
+        // on StepKey) rebinds only the rows that actually changed, so a
+        // registry-tick reload no longer reflows the whole screen and expansion
+        // state (owned by StepExpansionState, keyed by StepKey) is preserved.
+        pipelineAdapter.submitList(buildPipeline());
     }
 
-    private void buildPipeline() {
-        pipelineSteps.clear();
+    private List<PipelineStepAdapter.PipelineStep> buildPipeline() {
+        List<PipelineStepAdapter.PipelineStep> steps = new ArrayList<>();
         SessionType type;
         try {
             type = SessionType.valueOf(session.getType());
         } catch (IllegalArgumentException e) {
-            return;
+            return steps;
         }
 
         switch (type) {
             case RECORDING:
-                buildRecordingPipeline();
+                buildRecordingPipeline(steps);
                 break;
             case REWORDING:
-                buildRewordingPipeline();
+                buildRewordingPipeline(steps);
                 break;
             case POST_PROCESSING:
-                buildPostProcessingPipeline();
+                buildPostProcessingPipeline(steps);
                 break;
         }
 
         // Final output step
         String finalOutput = sessionManager.getFinalOutput(sessionId);
         if (finalOutput != null && !finalOutput.isEmpty()) {
-            pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.FINAL_OUTPUT)
+            steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.FINAL_OUTPUT)
                     .icon("\uD83D\uDCCB") // clipboard
                     .title(getString(R.string.dictate_history_final_output))
                     .outputText(finalOutput)
                     .build());
         }
+
+        // F-053: session-level error surface \u2014 a FAILED session with a
+        // persisted error message renders a display-only error card
+        // (colorError). The bare `partial:N` marker is humanized instead of
+        // shown raw. Appended last so it reads as the terminal outcome.
+        appendSessionError(steps);
+
+        return steps;
     }
 
-    private void buildRecordingPipeline() {
+    /**
+     * F-053: append a display-only session-error card when the session is
+     * FAILED and carries a persisted {@code last_error_message}. The
+     * {@code partial:N} marker (written by the pipeline on partial recovery) is
+     * rendered as a human-readable recovery note via
+     * {@link SessionErrorFormatter}; any other message is shown as
+     * "type \u2014 message" using the persisted error-type enum name.
+     */
+    private void appendSessionError(List<PipelineStepAdapter.PipelineStep> steps) {
+        SessionStatus status;
+        try {
+            status = SessionStatus.valueOf(session.getStatus());
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        if (status != SessionStatus.FAILED) return;
+
+        String message = session.getLastErrorMessage();
+        if (message == null || message.isEmpty()) return;
+
+        Integer partialSegments = SessionErrorFormatter.INSTANCE.partialSegmentCount(message);
+        String errorText;
+        if (partialSegments != null) {
+            errorText = getString(R.string.dictate_history_partial_recovery, partialSegments);
+        } else {
+            String errorType = session.getLastErrorType();
+            errorText = (errorType != null && !errorType.isEmpty())
+                    ? errorType + " \u2014 " + message
+                    : message;
+        }
+
+        steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.SESSION_ERROR)
+                .icon("\u26A0\uFE0F") // warning sign
+                .title(getString(R.string.dictate_history_session_error))
+                .errorText(errorText)
+                .isSessionError(true)
+                .build());
+    }
+
+    private void buildRecordingPipeline(List<PipelineStepAdapter.PipelineStep> steps) {
         // Audio step — with reprocess actions (Phase 10.4)
         long dur = session.getAudioDurationSeconds();
         String durationStr = getString(R.string.dictate_history_duration, dur / 60, dur % 60);
-        boolean audioAvailable = resolveAudioAvailability();
+        HistoryAudioResolver.Resolution audio = resolveAudio();
+        boolean audioAvailable = audio.getAvailable();
         boolean jobActive = ActiveJobRegistry.INSTANCE.isActive(sessionId);
 
         SessionStatus status;
@@ -325,10 +415,13 @@ public class HistoryDetailActivity extends AppCompatActivity
         boolean showEdit = canReprocess;
         boolean showDelete = audioAvailable && !jobActive;
 
-        pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.AUDIO)
+        steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.AUDIO)
                 .icon("\uD83C\uDFA4") // mic
                 .title(getString(R.string.dictate_history_audio) + " (" + durationStr + ")")
-                .audioFilePath(audioAvailable ? session.getAudioFilePath() : null)
+                // F-113: play visibility keys off the multi-segment resolver's
+                // primary path, not the legacy column alone.
+                .audioFilePath(audioAvailable ? audio.getPrimaryPath() : null)
+                .audioPlaying(audioPlayer != null && audioPlayer.isPlaying())
                 .sessionId(sessionId)
                 .showDirectReprocess(showDirect)
                 .showReprocessWithEdit(showEdit)
@@ -342,38 +435,64 @@ public class HistoryDetailActivity extends AppCompatActivity
                     String.format(Locale.getDefault(), "%.1fs", currentTranscription.getDurationMs() / 1000.0);
             String title = getString(R.string.dictate_history_transcription) +
                     " v" + currentTranscription.getVersion();
-            pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.TRANSCRIPTION)
+
+            // R6: version chips when the session has >1 transcription version.
+            List<TranscriptionEntity> transcriptionVersions =
+                    transcriptionDao.getAllVersions(sessionId);
+
+            // R6/D3: downstream staleness \u2014 the first processing step's
+            // snapshotted input vs. the current transcription text. Pure
+            // predicate keeps the rule JVM-testable (TranscriptionStaleness).
+            List<ProcessingStepEntity> chain = stepDao.getCurrentChain(sessionId);
+            String firstStepInput = chain.isEmpty() ? null : chain.get(0).getInputText();
+            boolean stale = TranscriptionStaleness.INSTANCE.isStale(
+                    currentTranscription.getText(), firstStepInput);
+
+            // R6: re-run visible iff audio resolvable; the JobExecutor
+            // single-job lock is the hard guard, so we hide it while a job runs
+            // on this session (mirrors the reprocess/regenerate button gating).
+            boolean showRerun = audioAvailable && !jobActive;
+
+            steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.TRANSCRIPTION)
                     .icon("\uD83D\uDCDD") // memo
                     .title(title)
                     .outputText(currentTranscription.getText())
                     .metaText(meta)
+                    .sessionId(sessionId)
+                    .transcriptionVersions(transcriptionVersions)
+                    .showRerun(showRerun)
+                    .transcriptionStale(stale)
                     .build());
         }
 
         // Processing steps
-        addProcessingSteps();
+        addProcessingSteps(steps);
     }
 
-    private boolean resolveAudioAvailability() {
-        String path = session.getAudioFilePath();
-        if (path == null) return false;
-        return new File(path).exists();
+    /**
+     * F-113: single-source audio resolution for this session — multi-segment
+     * column first, legacy column fallback, file-existence checked
+     * ({@link HistoryAudioResolver}, ADR-0007). Consumed by the audio-step
+     * builder and {@link #startHistoryReprocess}.
+     */
+    private HistoryAudioResolver.Resolution resolveAudio() {
+        return audioResolver.resolve(session.getAudioFilePaths(), session.getAudioFilePath());
     }
 
-    private void buildRewordingPipeline() {
+    private void buildRewordingPipeline(List<PipelineStepAdapter.PipelineStep> steps) {
         // Input step
         String inputText = session.getInputText();
-        pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.INPUT)
+        steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.INPUT)
                 .icon("\uD83D\uDCE5") // inbox tray
                 .title(getString(R.string.dictate_history_input))
                 .outputText(inputText != null ? inputText : "")
                 .build());
 
         // Processing steps
-        addProcessingSteps();
+        addProcessingSteps(steps);
     }
 
-    private void buildPostProcessingPipeline() {
+    private void buildPostProcessingPipeline(List<PipelineStepAdapter.PipelineStep> steps) {
         // Source session link
         if (session.getParentSessionId() != null) {
             SessionEntity parentSession = db.sessionDao().getById(session.getParentSessionId());
@@ -381,7 +500,7 @@ public class HistoryDetailActivity extends AppCompatActivity
             if (parentSession != null) {
                 parentInfo += " (" + dateFormat.format(new Date(parentSession.getCreatedAt())) + ")";
             }
-            pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.SOURCE_SESSION)
+            steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.SOURCE_SESSION)
                     .icon("\uD83D\uDD17") // link
                     .title(parentInfo)
                     .sourceSessionId(session.getParentSessionId())
@@ -389,10 +508,10 @@ public class HistoryDetailActivity extends AppCompatActivity
         }
 
         // Processing steps
-        addProcessingSteps();
+        addProcessingSteps(steps);
     }
 
-    private void addProcessingSteps() {
+    private void addProcessingSteps(List<PipelineStepAdapter.PipelineStep> steps) {
         // F-055 gating fallback: mirror the reprocess buttons — hide the AI
         // actions while a job runs on this session (the JobExecutor single-job
         // lock is the hard guard; this is the UX layer on top).
@@ -440,7 +559,7 @@ public class HistoryDetailActivity extends AppCompatActivity
 
             boolean isLastStep = (i == currentChain.size() - 1);
 
-            pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.PROCESSING)
+            steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.PROCESSING)
                     .icon(icon)
                     .title(title)
                     .outputText(step.getOutputText())
@@ -458,21 +577,23 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     // region Audio playback
 
-    private void playAudio(String audioFilePath) {
-        try {
-            if (mediaPlayer != null) {
-                mediaPlayer.release();
+    /**
+     * F-113/F-115: play/pause toggle for the resolved segment list. The first
+     * toggle builds a {@link HistoryAudioPlayer} over ALL existing segments
+     * (multi-segment aware, sequential — spec D5, no muxing on the UI path);
+     * later toggles pause/resume. Completion resets to the play icon via the
+     * state callback, which reloads so the audio step rebinds.
+     */
+    private void toggleAudioPlayback() {
+        if (audioPlayer == null) {
+            List<String> segments = resolveAudio().getPlayablePaths();
+            if (segments.isEmpty()) {
+                Toast.makeText(this, R.string.dictate_audio_file_missing, Toast.LENGTH_SHORT).show();
+                return;
             }
-            mediaPlayer = new MediaPlayer();
-            mediaPlayer.setDataSource(audioFilePath);
-            mediaPlayer.prepare();
-            mediaPlayer.start();
-            mediaPlayer.setOnCompletionListener(mp -> {
-                // Reset play button state if needed
-            });
-        } catch (Exception e) {
-            Toast.makeText(this, getString(R.string.dictate_history_error, e.getMessage()), Toast.LENGTH_SHORT).show();
+            audioPlayer = new HistoryAudioPlayer(segments, isPlaying -> loadSession());
         }
+        audioPlayer.toggle();
     }
 
     // endregion
@@ -488,8 +609,15 @@ public class HistoryDetailActivity extends AppCompatActivity
         SessionEntity target = db.sessionDao().getById(targetSessionId);
         if (target == null) return;
 
-        String audioPath = target.getAudioFilePath();
-        if (audioPath == null || !new File(audioPath).exists()) {
+        // F-113: gate on the multi-segment resolver, not the legacy column
+        // alone. The pipeline itself re-resolves the audio via
+        // PipelineOrchestrator.resolvePipelineAudio (multi-segment merge), so
+        // the primary path is passed only for the legacy JobRequest parameter
+        // and the recordingsDir derivation — the JobRequest shape is unchanged.
+        HistoryAudioResolver.Resolution targetAudio =
+                audioResolver.resolve(target.getAudioFilePaths(), target.getAudioFilePath());
+        String audioPath = targetAudio.getPrimaryPath();
+        if (audioPath == null) {
             Toast.makeText(this, R.string.dictate_audio_file_missing, Toast.LENGTH_SHORT).show();
             return;
         }
@@ -663,13 +791,58 @@ public class HistoryDetailActivity extends AppCompatActivity
         startHistoryReprocess(targetSessionId, queue);
     }
 
-    @SuppressLint("NotifyDataSetChanged")
     private void switchVersion(int chainIndex, ProcessingStepEntity selectedVersion) {
         db.runInTransaction(() -> {
             stepDao.clearCurrentAtIndex(sessionId, chainIndex);
             stepDao.setCurrentById(selectedVersion.getId());
         });
         // Update final output text
+        String finalOutput = sessionManager.getFinalOutput(sessionId);
+        sessionManager.updateFinalOutputText(sessionId, finalOutput);
+        loadSession();
+    }
+
+    /**
+     * R6: dispatches a transcription re-run as a {@link JobRequest.TranscriptionRerun}.
+     * Like regenerate/reprocess, this is a thin JobExecutor dispatch — the job
+     * survives this Activity, registers in {@link ActiveJobRegistry} (mutually
+     * exclusive with reprocess/regenerate) and does the AI + DB work in the job
+     * layer. UI progress + reload arrive via the registry observer.
+     */
+    private void dispatchRerunTranscription() {
+        if (ActiveJobRegistry.INSTANCE.isAnyActive()) {
+            Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // Guard the audio availability read-side through the resolver (ADR-0007)
+        // even though the pipeline re-resolves the audio itself — a missing
+        // file should fail fast with a toast rather than start a doomed job.
+        if (!resolveAudio().getAvailable()) {
+            Toast.makeText(this, R.string.dictate_audio_file_missing, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        JobRequest.TranscriptionRerun request =
+                new JobRequest.TranscriptionRerun(sessionId, /* totalSteps */ 1);
+        if (!JobExecutor.INSTANCE.start(this, request)) {
+            Toast.makeText(this, R.string.dictate_job_already_active, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        setUiState(UiState.LOADING);
+    }
+
+    /**
+     * R6: switches the current transcription version. Mirrors {@link
+     * #switchVersion}: a transaction promotes the selected version to current
+     * (clear + set), then the denormalized final output is refreshed via the
+     * existing selection ({@link SessionManager#getFinalOutput}). Non-destructive
+     * — the processing chain is untouched (D3); staleness is surfaced by the
+     * card's warning line on the next reload.
+     */
+    private void switchTranscriptionVersion(TranscriptionEntity selectedVersion) {
+        db.runInTransaction(() -> {
+            transcriptionDao.clearCurrent(sessionId);
+            transcriptionDao.setCurrentById(selectedVersion.getId());
+        });
         String finalOutput = sessionManager.getFinalOutput(sessionId);
         sessionManager.updateFinalOutputText(sessionId, finalOutput);
         loadSession();
@@ -726,9 +899,12 @@ public class HistoryDetailActivity extends AppCompatActivity
 
     @Override
     protected void onDestroy() {
-        if (mediaPlayer != null) {
-            mediaPlayer.release();
-            mediaPlayer = null;
+        // Defensive: onPause already releases, but a direct destroy path
+        // (config change without pause is not possible, but be safe) keeps
+        // the invariant that no player outlives the Activity.
+        if (audioPlayer != null) {
+            audioPlayer.release();
+            audioPlayer = null;
         }
         ioExecutor.shutdownNow();
         super.onDestroy();

@@ -14,4 +14,8 @@
 
     <color name="dictate_keyboard_background_dark">#1b1b1d</color>
     <color name="dictate_keyboard_background_light">#f1f1f1</color>
+
+    <!-- Semantic warning (amber). Light value; dark override in values-night.
+         Contrast-checked against colorSurface in both modes. -->
+    <color name="dictate_warning">#B26A00</color>
 </resources>

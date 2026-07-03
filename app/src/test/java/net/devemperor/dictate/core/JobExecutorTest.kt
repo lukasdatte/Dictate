@@ -156,6 +156,8 @@ class JobExecutorTest {
             }
 
             override fun postProcess(request: JobRequest.PostProcess) = Unit
+
+            override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = Unit
         }
 
         JobExecutor.initializeForTest(blockingRunner)
@@ -281,6 +283,10 @@ class JobExecutorTest {
             done.countDown()
         }
 
+        override fun rerunTranscription(request: JobRequest.TranscriptionRerun) {
+            done.countDown()
+        }
+
         fun awaitDone() {
             assertTrue("runner did not finish", done.await(2, TimeUnit.SECONDS))
             // Give JobExecutor's finally{} a moment to unregister.
@@ -312,6 +318,8 @@ class JobExecutorTest {
         ) = block()
 
         override fun postProcess(request: JobRequest.PostProcess) = block()
+
+        override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = block()
 
         private fun block() {
             started.countDown()

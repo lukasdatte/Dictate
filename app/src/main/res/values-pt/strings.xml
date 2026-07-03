@@ -315,6 +315,14 @@
     <string name="dictate_reprocess_audio_available">Áudio %1$s · Enviar</string>
     <string name="dictate_job_already_active">Já existe um processamento em andamento</string>
     <string name="dictate_audio_file_missing">O arquivo de áudio não está mais disponível</string>
+    <!-- History UI overhaul (Chunk C): per-step copy, expand/collapse, session error -->
+    <string name="dictate_history_copy_step">Copiar o texto desta etapa</string>
+    <string name="dictate_history_expand">Mostrar mais</string>
+    <string name="dictate_history_collapse">Mostrar menos</string>
+    <string name="dictate_history_session_error">A sessão falhou</string>
+    <string name="dictate_history_partial_recovery">Apenas %1$d segmento(s) da gravação puderam ser recuperados</string>
+    <string name="dictate_history_transcription_rerun">Executar transcrição novamente</string>
+    <string name="dictate_history_transcription_stale">As etapas seguintes baseiam-se numa versão de transcrição diferente — use o reprocessamento para executá-las novamente</string>
     <string name="dictate_resend_focus_lost">Campo de entrada indisponível — reiniciando o processamento</string>
     <string name="dictate_reprocess_language">Idioma</string>
     <string name="dictate_language_manage">⚙ Gerenciar idiomas…</string>
@@ -353,4 +361,43 @@
     <string name="overlay_perm_grant">Permitir</string>
     <string name="overlay_perm_onboarding_granted">Permissão concedida.</string>
     <string name="overlay_perm_onboarding_pending">A permissão ainda é necessária — toque em «Permitir» para abrir as configurações do sistema.</string>
+
+    <!-- history-ui-overhaul (D8) — history/status/reprocess namespace backfill + new list-polish strings -->
+    <string name="dictate_copied_to_clipboard">Copiado para a área de transferência</string>
+    <string name="dictate_history_audio">Áudio</string>
+    <string name="dictate_history_auto_format">Formatação automática</string>
+    <string name="dictate_history_choose_prompt">Escolher prompt</string>
+    <string name="dictate_history_copy">Copiar</string>
+    <string name="dictate_history_delete_active_blocked">Esta sessão está sendo processada no momento e não pode ser excluída.</string>
+    <string name="dictate_history_delete_all">Excluir tudo</string>
+    <string name="dictate_history_delete_all_message">Tem certeza de que deseja excluir todas as sessões? Isso não pode ser desfeito.</string>
+    <string name="dictate_history_delete_all_skipped_active">%1$d sessão(ões) ignorada(s) — ainda em processamento</string>
+    <string name="dictate_history_delete_all_title">Excluir todas as sessões?</string>
+    <string name="dictate_history_delete_session_message">Tem certeza de que deseja excluir esta sessão?</string>
+    <string name="dictate_history_delete_session_title">Excluir sessão?</string>
+    <string name="dictate_history_detail">Detalhes da sessão</string>
+    <string name="dictate_history_duration">Duração: %1$d min, %2$d s</string>
+    <string name="dictate_history_error">Erro: %1$s</string>
+    <string name="dictate_history_filter_all">Todas</string>
+    <string name="dictate_history_filter_post_processing">Pós-processamento</string>
+    <string name="dictate_history_filter_recordings">Gravações</string>
+    <string name="dictate_history_filter_rewording">Reformulação</string>
+    <string name="dictate_history_final_output">Resultado final</string>
+    <string name="dictate_history_freetext_hint">Digite um prompt personalizado…</string>
+    <string name="dictate_history_input">Entrada</string>
+    <string name="dictate_history_no_results">Nenhuma sessão correspondente.</string>
+    <string name="dictate_history_no_sessions">Ainda não há sessões.\nComece a usar o Dictate para ver\nseu histórico aqui.</string>
+    <string name="dictate_history_other_prompt">Outro prompt</string>
+    <string name="dictate_history_pause">Pausar</string>
+    <string name="dictate_history_play">Reproduzir</string>
+    <string name="dictate_history_post_process">Pós-processar</string>
+    <string name="dictate_history_queued_prompt">Prompt</string>
+    <string name="dictate_history_regenerate">Regenerar</string>
+    <string name="dictate_history_rewording">Reformulação</string>
+    <string name="dictate_history_search_hint">Pesquisar sessões…</string>
+    <string name="dictate_history_share">Compartilhar</string>
+    <string name="dictate_history_source_session">Sessão de origem</string>
+    <string name="dictate_history_transcription">Transcrição</string>
+    <string name="dictate_history_version">v%1$d</string>
+    <string name="dictate_history_version_warning">As etapas posteriores baseiam-se em uma versão diferente</string>
 </resources>

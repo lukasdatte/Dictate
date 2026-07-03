@@ -16,6 +16,7 @@
         android:background="?android:attr/textColorSecondary" />
 
     <com.google.android.material.card.MaterialCardView
+        android:id="@+id/item_pipeline_card"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
@@ -58,20 +59,44 @@
                 <!-- Play button (audio step only) -->
                 <ImageButton
                     android:id="@+id/item_pipeline_play_btn"
+                    style="@style/Widget.Dictate.HistoryIconButton"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
                     android:src="@android:drawable/ic_media_play"
                     android:contentDescription="@string/dictate_history_play"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
+                <!-- Per-step copy (R1) — any card with output text -->
+                <ImageButton
+                    android:id="@+id/item_pipeline_copy_btn"
+                    style="@style/Widget.Dictate.HistoryIconButton"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:src="@drawable/ic_baseline_content_copy_24"
+                    android:contentDescription="@string/dictate_history_copy_step"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
+                <!-- Transcription re-run (R6) — autorenew icon; the
+                     HistoryIconButton style supplies the theme-attr tint
+                     (the drawable itself carries no baked tint, ADR-0010). -->
+                <ImageButton
+                    android:id="@+id/item_pipeline_rerun_btn"
+                    style="@style/Widget.Dictate.HistoryIconButton"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:src="@drawable/ic_baseline_autorenew_24"
+                    android:contentDescription="@string/dictate_history_transcription_rerun"
                     android:visibility="gone"
                     tools:visibility="visible" />
 
                 <!-- Direct reprocess (audio step) -->
                 <ImageButton
                     android:id="@+id/item_pipeline_direct_reprocess_btn"
+                    style="@style/Widget.Dictate.HistoryIconButton"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
                     android:src="@drawable/ic_baseline_play_arrow_24"
                     android:contentDescription="@string/dictate_history_direct_reprocess"
                     android:visibility="gone"
@@ -80,9 +105,9 @@
                 <!-- Reprocess with edit (audio step) -->
                 <ImageButton
                     android:id="@+id/item_pipeline_reprocess_edit_btn"
+                    style="@style/Widget.Dictate.HistoryIconButton"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
                     android:src="@drawable/ic_baseline_edit_note_24"
                     android:contentDescription="@string/dictate_history_reprocess_edit"
                     android:visibility="gone"
@@ -91,9 +116,9 @@
                 <!-- Delete audio (audio step) -->
                 <ImageButton
                     android:id="@+id/item_pipeline_delete_audio_btn"
+                    style="@style/Widget.Dictate.HistoryIconButton"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
                     android:src="@drawable/ic_baseline_delete_24"
                     android:contentDescription="@string/dictate_delete_audio_title"
                     android:visibility="gone"
@@ -102,9 +127,9 @@
                 <!-- Regenerate button -->
                 <ImageButton
                     android:id="@+id/item_pipeline_regenerate_btn"
+                    style="@style/Widget.Dictate.HistoryIconButton"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
                     android:src="@drawable/ic_baseline_autorenew_24"
                     android:contentDescription="@string/dictate_history_regenerate"
                     android:visibility="gone"
@@ -113,9 +138,9 @@
                 <!-- Other prompt button -->
                 <ImageButton
                     android:id="@+id/item_pipeline_other_prompt_btn"
+                    style="@style/Widget.Dictate.HistoryIconButton"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
                     android:src="@drawable/ic_baseline_edit_24"
                     android:contentDescription="@string/dictate_history_other_prompt"
                     android:visibility="gone"
@@ -124,9 +149,9 @@
                 <!-- Post-process button -->
                 <ImageButton
                     android:id="@+id/item_pipeline_post_process_btn"
+                    style="@style/Widget.Dictate.HistoryIconButton"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
                     android:src="@drawable/ic_baseline_redo_24"
                     android:contentDescription="@string/dictate_history_post_process"
                     android:visibility="gone"
@@ -144,13 +169,29 @@
                 android:textSize="13sp"
                 tools:text="This is the output text of this processing step..." />
 
+            <!-- Expand / collapse affordance (R4/R5) — shown only when the
+                 collapsed output is actually ellipsized. Theme-attr color only
+                 (ADR-0010 invariant). -->
+            <TextView
+                android:id="@+id/item_pipeline_expand_tv"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:paddingVertical="4dp"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textColor="?attr/colorPrimary"
+                android:text="@string/dictate_history_expand"
+                android:visibility="gone"
+                tools:visibility="visible" />
+
             <!-- Error text -->
             <TextView
                 android:id="@+id/item_pipeline_error_tv"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:textColor="@android:color/holo_red_dark"
+                android:textColor="?attr/colorError"
                 android:textSize="12sp"
                 android:visibility="gone"
                 tools:text="Error: API request failed"
@@ -185,7 +226,7 @@
                 android:layout_marginTop="4dp"
                 android:text="@string/dictate_history_version_warning"
                 android:textSize="11sp"
-                android:textColor="@android:color/holo_orange_dark"
+                android:textColor="?attr/dictateColorWarning"
                 android:visibility="gone"
                 tools:visibility="visible" />
 

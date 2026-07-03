@@ -678,6 +678,105 @@ class PipelineOrchestrator @JvmOverloads constructor(
     }
 
     /**
+     * Synchronous transcription re-run (R6) — re-transcribes the session's
+     * stored audio as a NEW current transcription version, without touching the
+     * processing chain (spec §3.4, D3/D4). Called directly from [JobExecutor]'s
+     * thread (K1) so the registry lifecycle is correct and the job is mutually
+     * exclusive with reprocess/regenerate (ADR-0009).
+     *
+     * Steps (spec §3.4):
+     *  1. Resolve the audio via [resolvePipelineAudio] — the same multi-segment
+     *     merge / legacy fallback / `partial:N` persistence the initial pipeline
+     *     uses (ADR-0007 semantics preserved).
+     *  2. No audio resolvable → surface the existing `audio_file_missing` error
+     *     to the UI and return **without touching the session row**. A missing
+     *     file must never demote a COMPLETED session to FAILED, so we do NOT
+     *     throw here (throwing would route through [JobExecutor.finalizeFailed]
+     *     and overwrite the session's terminal status). The registry
+     *     unregisters normally in JobExecutor's `finally`.
+     *  3. Transcribe with the session's persisted language (model/keyterms from
+     *     current prefs — accepted, spec gap 2). Usage is billed inside
+     *     [AIOrchestrator.transcribe] — nothing extra here.
+     *  4. Persist as a new current version via
+     *     [SessionManager.addTranscriptionVersion] (no schema change, D4).
+     *  5. Update `final_output_text` via [SessionManager.getFinalOutput] (last
+     *     current step wins; bare transcription wins only when no chain exists).
+     *     When the session is FAILED **and has no processing chain**, finalize
+     *     COMPLETED — a successful re-transcription of a failed bare-audio
+     *     session is a completed transcription (spec gap 3; [finalizeCompleted]
+     *     only sets status, so the persisted error fields are left as-is, which
+     *     matches the reprocess path's non-clearing of stale error context).
+     *
+     * @see docs/research/2026-07-02 - history-ui-overhaul.md §3.4, D3, D4
+     */
+    fun rerunTranscriptionBlocking(sessionId: String) {
+        val session = sessionManager.getSessionById(sessionId)
+            ?: throw IllegalStateException(
+                "rerunTranscriptionBlocking: no session row for $sessionId"
+            )
+
+        cancelled = false
+        running = true
+        totalSteps = 1
+        currentStepIndex = 0
+        currentStepName = null
+
+        // K4 parity: set currentSessionId so cancel() routes to JobExecutor.
+        sessionTracker.currentSessionId = sessionId
+
+        try {
+            // Step 1 + 2: resolve audio; a missing file surfaces cleanly and
+            // leaves the (possibly COMPLETED) session row untouched.
+            val audioFile = resolvePipelineAudio(sessionId)
+            if (audioFile == null || !audioFile.exists()) {
+                Log.w(TAG, "rerunTranscription: no resolvable audio for $sessionId")
+                callback.onPipelineError("audio_file_missing", false, null)
+                return
+            }
+
+            trackAndNotifyStepStarted("Transkription")
+            val startTime = System.nanoTime()
+
+            // Step 3: transcribe with the session's persisted language.
+            val result = aiOrchestrator.transcribe(audioFile, session.language, null)
+            val resultText = result.text.trim()
+            val durationMs = (System.nanoTime() - startTime) / 1_000_000
+            val provider = aiOrchestrator.getProvider(AIFunction.TRANSCRIPTION).name
+
+            // Step 4: persist as a new current transcription version.
+            val tId = sessionManager.addTranscriptionVersion(
+                sessionId, resultText, result.modelName, provider,
+                0, 0, durationMs
+            )
+            sessionTracker.setTranscription(tId)
+            sessionManager.logCompletion(
+                "TRANSCRIPTION", sessionId,
+                null, tId, null, null, true, null
+            )
+
+            // Step 5: refresh the denormalized final output (last current step
+            // wins; bare transcription wins only when no chain exists).
+            sessionManager.updateFinalOutputText(
+                sessionId, sessionManager.getFinalOutput(sessionId)
+            )
+
+            // A successful re-transcription of a FAILED session with no
+            // processing chain is a completed transcription (gap 3).
+            val wasFailed = runCatching { SessionStatus.valueOf(session.status) }
+                .getOrNull() == SessionStatus.FAILED
+            val hasChain = stepDao?.getCurrentChain(sessionId)?.isNotEmpty() ?: false
+            if (wasFailed && !hasChain) {
+                sessionManager.finalizeCompleted(sessionId)
+            }
+
+            callback.onStepCompleted("Transkription", durationMs)
+        } finally {
+            callback.onPipelineFinished()
+            running = false
+        }
+    }
+
+    /**
      * Synchronous post-processing — runs a completion with [promptText] applied
      * to [inputText] and persists it as a QUEUED_PROMPT step. K1 fix: called
      * directly from [JobExecutor]'s thread.

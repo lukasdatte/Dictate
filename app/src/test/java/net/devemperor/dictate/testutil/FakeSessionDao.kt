@@ -26,6 +26,16 @@ class FakeSessionDao : SessionDao {
     private val rows = LinkedHashMap<String, SessionEntity>()
     val markInsertedCalls = mutableListOf<Pair<String, Long>>()
 
+    /** Ids passed to [deleteById] — lets tests assert a blocked delete never hit the DAO. */
+    val deletedIds = mutableListOf<String>()
+
+    /** Records each [deleteAll] invocation — asserts the unguarded wipe path fired. */
+    var deleteAllCalls = 0
+        private set
+
+    /** Exemption lists passed to [deleteAllExcept] — asserts active ids were skipped. */
+    val deleteAllExceptCalls = mutableListOf<List<String>>()
+
     /** Test helper — seed a row without going through INSERT. */
     fun seed(entity: SessionEntity) {
         rows[entity.id] = entity
@@ -88,11 +98,19 @@ class FakeSessionDao : SessionDao {
     }
 
     override fun deleteById(id: String) {
+        deletedIds += id
         rows.remove(id)
     }
 
     override fun deleteAll() {
+        deleteAllCalls++
         rows.clear()
+    }
+
+    override fun deleteAllExcept(exemptIds: List<String>) {
+        deleteAllExceptCalls += exemptIds
+        val exempt = exemptIds.toSet()
+        rows.keys.toList().forEach { if (it !in exempt) rows.remove(it) }
     }
 
     override fun findLatestByOrigin(origin: String): SessionEntity? =

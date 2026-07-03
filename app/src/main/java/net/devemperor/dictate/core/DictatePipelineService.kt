@@ -685,6 +685,26 @@ class DictatePipelineService : Service() {
                     recordingRepositoryImpl.extractDurationSeconds(segment)
                 } * 1000L
             },
+            // F-005 — cold-boot RESEND-button seed. Resolve the last
+            // KEYBOARD session and ask whether it is resendable using the
+            // SAME matrix the short-press RESEND uses at click time
+            // (ResendableSessionPolicy → ResendStatusDispatcher). Output is
+            // read via SessionManager.getFinalOutput (the authoritative
+            // fallback chain — step output → transcription → denormalized
+            // column, the 2026-07-02 text-path fix / commit 9637fc3), NOT
+            // the raw final_output_text column which the transcription-only
+            // pipeline never populates. Runs on the recovery IO context;
+            // a null session (fresh install) seeds false.
+            resendableSeedProbe = {
+                val last = sessionTrackerImpl.getLastKeyboardSession()
+                if (last == null) {
+                    false
+                } else {
+                    val output = sessionManagerImpl.getFinalOutput(last.id)
+                        ?: last.finalOutputText
+                    ResendableSessionPolicy.isResendable(last.statusEnum, output)
+                }
+            },
         )
 
         orchestrator = DictateOrchestrator(

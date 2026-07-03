@@ -4,6 +4,8 @@
 // to the same package.
 package net.devemperor.dictate.state
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.reflect.KClass
 
 /**
@@ -30,12 +32,22 @@ import kotlin.reflect.KClass
  *   from the UI resolver path. ResendModule itself emits no Pipeline
  *   cascades — the click resolver already has the audio-file ref.
  *
- * **No `runEffect` work** beyond persisting the `resendEnabled` pref
- * mirror. The cooldown timer is intentionally driven by an
- * orchestrator-emitted [Action.ResendAction.ResendCooldownExpired]
- * action (the Phase-1 placeholder relies on the UI side scheduling that
- * action via `Handler.postDelayed`; a dedicated cooldown timer
- * subsystem is a Phase-2 nicety). Effect handling is therefore minimal.
+ * **Cooldown timer is module-owned (F-029 fix, 2026-07-03).** Both
+ * arm-actions ([Action.ResendAction.ResendLastAudio] /
+ * [Action.ResendAction.ResendLastAudioLong]) emit
+ * [Effect.ScheduleCooldownExpiry], whose handler launches a
+ * `services.scope`-scoped 500 ms timer that dispatches
+ * [Action.ResendAction.ResendCooldownExpired] back through
+ * [ModuleServices.emitAction]. Previously the *clear* half was
+ * scheduled UI-side (`Handler.postDelayed` inside
+ * `DictateInputMethodService.onResendClicked`) and only on the
+ * short-press path — a long-press armed the cooldown but nothing ever
+ * cleared it, latching the RESEND button disabled until service restart
+ * (the `enabledResolver { !resendCooldown }` disables the view, disabled
+ * views receive no clicks, so the sole UI-side scheduler could never run
+ * again). Owning the timer in the module makes the arm→expiry round-trip
+ * a single reducer→effect invariant that holds for *every* arming path,
+ * present and future — no per-call-site scheduling to forget.
  *
  * **No `reduceFailure` override:** Effects here are idempotent pref
  * writes — if the SP write throws (extremely unlikely on Android), the
@@ -57,12 +69,23 @@ object ResendModule : DictateModule<ResendState, Action.ResendAction, ResendModu
     override fun initialState(): ResendState = ResendState()
 
     /**
-     * No hardware-touching side-effects. The pref mirror lives in
+     * The pref mirror lives in
      * [net.devemperor.dictate.preferences.Pref.ResendButton] and is
-     * synced by `PipelinePrefMirror` (C7); ResendModule reads from
-     * the mirrored state.
+     * synced by `PipelinePrefMirror` (C7); ResendModule reads from the
+     * mirrored state — no pref-write effect needed here.
      */
-    sealed interface Effect : SideEffect
+    sealed interface Effect : SideEffect {
+
+        /**
+         * Schedule the cooldown-clear (F-029). Emitted whenever an arm
+         * action flips `resendCooldown` false → true. The handler waits
+         * [COOLDOWN_MS] on [ModuleServices.scope] and then emits
+         * [Action.ResendAction.ResendCooldownExpired] — the reducer arm
+         * for that action is idempotent (no-op when already cleared), so
+         * a redundant expiry (e.g. from a re-armed cooldown) is harmless.
+         */
+        data object ScheduleCooldownExpiry : Effect
+    }
 
     override fun reduce(
         state: ResendState,
@@ -73,26 +96,29 @@ object ResendModule : DictateModule<ResendState, Action.ResendAction, ResendModu
         // ResendLastAudio click — the actual pipeline trigger is emitted by
         // the UI resolver path (it carries the audio-file reference).
         // Reducer's job is only to arm the cooldown window so the button
-        // doesn't double-fire.
+        // doesn't double-fire, AND schedule the matching clear (F-029) so
+        // the button re-enables after the window.
         Action.ResendAction.ResendLastAudio ->
             if (!state.resendCooldown) {
                 TransitionResult(
                     nextState = state.copy(resendCooldown = true),
-                    sideEffects = emptyList(),
+                    sideEffects = listOf(Effect.ScheduleCooldownExpiry),
                 )
             } else null  // already in cooldown — second click is silent no-op
 
-        // Long-press → ReprocessStaging entry. Same cooldown arming.
+        // Long-press → ReprocessStaging entry. Same cooldown arming + clear
+        // scheduling (F-029 — the long-press path previously armed the
+        // cooldown but never scheduled the clear, latching the button).
         Action.ResendAction.ResendLastAudioLong ->
             if (!state.resendCooldown) {
                 TransitionResult(
                     nextState = state.copy(resendCooldown = true),
-                    sideEffects = emptyList(),
+                    sideEffects = listOf(Effect.ScheduleCooldownExpiry),
                 )
             } else null
 
-        // Cooldown timer expired (dispatched by the UI side via
-        // `Handler.postDelayed` in Phase 1). Clear the cooldown bit.
+        // Cooldown timer expired (dispatched by the module's own
+        // ScheduleCooldownExpiry effect, F-029). Clear the cooldown bit.
         Action.ResendAction.ResendCooldownExpired ->
             if (state.resendCooldown) {
                 TransitionResult(
@@ -148,7 +174,26 @@ object ResendModule : DictateModule<ResendState, Action.ResendAction, ResendModu
             } else null
     }
 
-    override fun runEffect(effect: Effect, services: ModuleServices) {
-        // No effects — see [Effect] KDoc. Empty sealed interface.
+    override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {
+        // F-029 — module-owned cooldown timer. Launch on the FGS-scoped
+        // coroutine context; on service teardown the scope is cancelled
+        // and the pending `delay` is dropped (the cooldown bit is
+        // transient UI state that resets to false on the next store
+        // rebuild anyway). `emitAction` posts the clear back through the
+        // orchestrator's main-thread dispatch (ADR-0001 — effects never
+        // call `dispatch` directly).
+        Effect.ScheduleCooldownExpiry -> {
+            services.scope.launch {
+                delay(COOLDOWN_MS)
+                services.emitAction(Action.ResendAction.ResendCooldownExpired)
+            }
+            Unit
+        }
     }
+
+    /**
+     * Cooldown window length in ms. Matches the legacy UI-side
+     * `Handler.postDelayed(…, 500)` the module timer replaced (F-029).
+     */
+    const val COOLDOWN_MS: Long = 500L
 }

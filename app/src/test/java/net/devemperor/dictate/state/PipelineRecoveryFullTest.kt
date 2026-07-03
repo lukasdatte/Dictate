@@ -42,11 +42,16 @@ class PipelineRecoveryFullTest {
     private val adapter = PipelineSessionRepoAdapter(dao)
     private val dispatchedActions = mutableListOf<Action>()
 
-    private fun recovery() = PipelineRecovery(
+    private fun recovery(
+        // F-005 — cold-boot RESEND-button seed probe. Defaults to the
+        // production default (false = no resendable session).
+        resendableSeedProbe: suspend () -> Boolean = { false },
+    ) = PipelineRecovery(
         sessionDao = dao,
         sessionRepo = adapter,
         emitAction = { dispatchedActions += it },
         ioContext = EmptyCoroutineContext,  // run on caller's dispatcher (test-deterministic)
+        resendableSeedProbe = resendableSeedProbe,
     )
 
     private fun seed(
@@ -86,9 +91,13 @@ class PipelineRecoveryFullTest {
         runBlocking { recovery().recover(store) }
 
         assertTrue(store.snapshot.pendingSessions.isEmpty())
-        assertTrue(
-            "expected no SF-4 dispatch, got $dispatchedActions",
-            dispatchedActions.isEmpty(),
+        // F-005: the Phase-6 RESEND-seed is emitted unconditionally
+        // (false here — no resendable session), so the only expected
+        // dispatch is MarkLastAudio(exists=false). No SF-4, no surfacing.
+        assertEquals(
+            "expected only the F-005 seed dispatch, got $dispatchedActions",
+            listOf<Action>(Action.ResendAction.MarkLastAudio(exists = false)),
+            dispatchedActions,
         )
     }
 
@@ -460,5 +469,55 @@ class PipelineRecoveryFullTest {
                 it is Action.RecordingAction.SurfaceInterruptedRecording
             },
         )
+    }
+
+    // ─── Phase 6: F-005 — cold-boot RESEND-button seed ────────────────
+    //
+    // `ResendState.lastAudioExists` defaults to false and pre-fix was
+    // flipped true ONLY by post-pipeline events, so after a process
+    // restart the RESEND button stayed hidden despite a resendable
+    // session on disk. Phase 6 emits MarkLastAudio(seed) at recovery.
+    // These tests are red on the pre-fix PipelineRecovery (recover()
+    // never emitted MarkLastAudio at all) and green on the fixed one.
+
+    @Test
+    fun `recover Phase 6 seeds MarkLastAudio true when a resendable session exists`() {
+        val store = DictateUiStateStore(DictateUiState.initial())
+
+        runBlocking { recovery(resendableSeedProbe = { true }).recover(store) }
+
+        val seed = dispatchedActions
+            .filterIsInstance<Action.ResendAction.MarkLastAudio>()
+            .single()
+        assertTrue("resendable session → button reappears after restart", seed.exists)
+    }
+
+    @Test
+    fun `recover Phase 6 seeds MarkLastAudio false when no resendable session exists`() {
+        val store = DictateUiStateStore(DictateUiState.initial())
+
+        runBlocking { recovery(resendableSeedProbe = { false }).recover(store) }
+
+        val seed = dispatchedActions
+            .filterIsInstance<Action.ResendAction.MarkLastAudio>()
+            .single()
+        assertFalse("no resendable session → button stays hidden", seed.exists)
+    }
+
+    @Test
+    fun `recover Phase 6 seeds MarkLastAudio false when the probe throws (fail-soft)`() {
+        // The probe reads the DB via SessionManager in production — a DAO
+        // failure must not kill recovery, and the seed degrades to false
+        // (button hidden, same as pre-seed behaviour).
+        val store = DictateUiStateStore(DictateUiState.initial())
+
+        runBlocking {
+            recovery(resendableSeedProbe = { error("dao exploded") }).recover(store)
+        }
+
+        val seed = dispatchedActions
+            .filterIsInstance<Action.ResendAction.MarkLastAudio>()
+            .single()
+        assertFalse("probe failure degrades to hidden button", seed.exists)
     }
 }

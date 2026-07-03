@@ -1,6 +1,5 @@
 package net.devemperor.dictate.history;
 
-import android.annotation.SuppressLint;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
@@ -12,6 +11,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
@@ -86,8 +86,11 @@ public class HistoryDetailActivity extends AppCompatActivity
      */
     private String pendingPostProcessNavigateId;
 
-    private List<PipelineStepAdapter.PipelineStep> pipelineSteps;
     private PipelineStepAdapter pipelineAdapter;
+    // R4/R5: expansion owner — survives registry-tick submitList reloads (keyed
+    // by StepKey) and rotation (saved in onSaveInstanceState). Passed into the
+    // adapter; never rebuilt on reload.
+    private final StepExpansionState expansionState = new StepExpansionState();
     private ProgressBar progressBar;
 
     // F-113/F-115: sequential multi-segment play/pause. Replaces the one-shot
@@ -130,8 +133,11 @@ public class HistoryDetailActivity extends AppCompatActivity
 
         progressBar = findViewById(R.id.history_detail_progress_bar);
 
-        pipelineSteps = new ArrayList<>();
-        pipelineAdapter = new PipelineStepAdapter(pipelineSteps, new PipelineStepAdapter.StepActionCallback() {
+        // R5: restore expansion set before the first submitList so the initial
+        // bind already reflects the pre-rotation expanded rows.
+        expansionState.restoreFrom(savedInstanceState);
+
+        pipelineAdapter = new PipelineStepAdapter(expansionState, new PipelineStepAdapter.StepActionCallback() {
             @Override
             public void onPlayAudio(String audioFilePath) {
                 // F-113/F-115: the button is now a play/pause toggle over the
@@ -260,7 +266,13 @@ public class HistoryDetailActivity extends AppCompatActivity
         super.onPause();
     }
 
-    @SuppressLint("NotifyDataSetChanged")
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        super.onSaveInstanceState(outState);
+        // R5: persist the expanded-row set across rotation / process death.
+        expansionState.saveTo(outState);
+    }
+
     private void loadSession() {
         session = db.sessionDao().getById(sessionId);
         if (session == null) {
@@ -283,43 +295,93 @@ public class HistoryDetailActivity extends AppCompatActivity
         }
         headerTv.setText(typeName + " \u2014 " + dateFormat.format(new Date(session.getCreatedAt())));
 
-        buildPipeline();
-        pipelineAdapter.notifyDataSetChanged();
+        // R5/D2: hand a freshly-built list to the ListAdapter; DiffUtil (keyed
+        // on StepKey) rebinds only the rows that actually changed, so a
+        // registry-tick reload no longer reflows the whole screen and expansion
+        // state (owned by StepExpansionState, keyed by StepKey) is preserved.
+        pipelineAdapter.submitList(buildPipeline());
     }
 
-    private void buildPipeline() {
-        pipelineSteps.clear();
+    private List<PipelineStepAdapter.PipelineStep> buildPipeline() {
+        List<PipelineStepAdapter.PipelineStep> steps = new ArrayList<>();
         SessionType type;
         try {
             type = SessionType.valueOf(session.getType());
         } catch (IllegalArgumentException e) {
-            return;
+            return steps;
         }
 
         switch (type) {
             case RECORDING:
-                buildRecordingPipeline();
+                buildRecordingPipeline(steps);
                 break;
             case REWORDING:
-                buildRewordingPipeline();
+                buildRewordingPipeline(steps);
                 break;
             case POST_PROCESSING:
-                buildPostProcessingPipeline();
+                buildPostProcessingPipeline(steps);
                 break;
         }
 
         // Final output step
         String finalOutput = sessionManager.getFinalOutput(sessionId);
         if (finalOutput != null && !finalOutput.isEmpty()) {
-            pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.FINAL_OUTPUT)
+            steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.FINAL_OUTPUT)
                     .icon("\uD83D\uDCCB") // clipboard
                     .title(getString(R.string.dictate_history_final_output))
                     .outputText(finalOutput)
                     .build());
         }
+
+        // F-053: session-level error surface \u2014 a FAILED session with a
+        // persisted error message renders a display-only error card
+        // (colorError). The bare `partial:N` marker is humanized instead of
+        // shown raw. Appended last so it reads as the terminal outcome.
+        appendSessionError(steps);
+
+        return steps;
     }
 
-    private void buildRecordingPipeline() {
+    /**
+     * F-053: append a display-only session-error card when the session is
+     * FAILED and carries a persisted {@code last_error_message}. The
+     * {@code partial:N} marker (written by the pipeline on partial recovery) is
+     * rendered as a human-readable recovery note via
+     * {@link SessionErrorFormatter}; any other message is shown as
+     * "type \u2014 message" using the persisted error-type enum name.
+     */
+    private void appendSessionError(List<PipelineStepAdapter.PipelineStep> steps) {
+        SessionStatus status;
+        try {
+            status = SessionStatus.valueOf(session.getStatus());
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        if (status != SessionStatus.FAILED) return;
+
+        String message = session.getLastErrorMessage();
+        if (message == null || message.isEmpty()) return;
+
+        Integer partialSegments = SessionErrorFormatter.INSTANCE.partialSegmentCount(message);
+        String errorText;
+        if (partialSegments != null) {
+            errorText = getString(R.string.dictate_history_partial_recovery, partialSegments);
+        } else {
+            String errorType = session.getLastErrorType();
+            errorText = (errorType != null && !errorType.isEmpty())
+                    ? errorType + " \u2014 " + message
+                    : message;
+        }
+
+        steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.SESSION_ERROR)
+                .icon("\u26A0\uFE0F") // warning sign
+                .title(getString(R.string.dictate_history_session_error))
+                .errorText(errorText)
+                .isSessionError(true)
+                .build());
+    }
+
+    private void buildRecordingPipeline(List<PipelineStepAdapter.PipelineStep> steps) {
         // Audio step — with reprocess actions (Phase 10.4)
         long dur = session.getAudioDurationSeconds();
         String durationStr = getString(R.string.dictate_history_duration, dur / 60, dur % 60);
@@ -343,7 +405,7 @@ public class HistoryDetailActivity extends AppCompatActivity
         boolean showEdit = canReprocess;
         boolean showDelete = audioAvailable && !jobActive;
 
-        pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.AUDIO)
+        steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.AUDIO)
                 .icon("\uD83C\uDFA4") // mic
                 .title(getString(R.string.dictate_history_audio) + " (" + durationStr + ")")
                 // F-113: play visibility keys off the multi-segment resolver's
@@ -363,7 +425,7 @@ public class HistoryDetailActivity extends AppCompatActivity
                     String.format(Locale.getDefault(), "%.1fs", currentTranscription.getDurationMs() / 1000.0);
             String title = getString(R.string.dictate_history_transcription) +
                     " v" + currentTranscription.getVersion();
-            pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.TRANSCRIPTION)
+            steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.TRANSCRIPTION)
                     .icon("\uD83D\uDCDD") // memo
                     .title(title)
                     .outputText(currentTranscription.getText())
@@ -372,7 +434,7 @@ public class HistoryDetailActivity extends AppCompatActivity
         }
 
         // Processing steps
-        addProcessingSteps();
+        addProcessingSteps(steps);
     }
 
     /**
@@ -385,20 +447,20 @@ public class HistoryDetailActivity extends AppCompatActivity
         return audioResolver.resolve(session.getAudioFilePaths(), session.getAudioFilePath());
     }
 
-    private void buildRewordingPipeline() {
+    private void buildRewordingPipeline(List<PipelineStepAdapter.PipelineStep> steps) {
         // Input step
         String inputText = session.getInputText();
-        pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.INPUT)
+        steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.INPUT)
                 .icon("\uD83D\uDCE5") // inbox tray
                 .title(getString(R.string.dictate_history_input))
                 .outputText(inputText != null ? inputText : "")
                 .build());
 
         // Processing steps
-        addProcessingSteps();
+        addProcessingSteps(steps);
     }
 
-    private void buildPostProcessingPipeline() {
+    private void buildPostProcessingPipeline(List<PipelineStepAdapter.PipelineStep> steps) {
         // Source session link
         if (session.getParentSessionId() != null) {
             SessionEntity parentSession = db.sessionDao().getById(session.getParentSessionId());
@@ -406,7 +468,7 @@ public class HistoryDetailActivity extends AppCompatActivity
             if (parentSession != null) {
                 parentInfo += " (" + dateFormat.format(new Date(parentSession.getCreatedAt())) + ")";
             }
-            pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.SOURCE_SESSION)
+            steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.SOURCE_SESSION)
                     .icon("\uD83D\uDD17") // link
                     .title(parentInfo)
                     .sourceSessionId(session.getParentSessionId())
@@ -414,10 +476,10 @@ public class HistoryDetailActivity extends AppCompatActivity
         }
 
         // Processing steps
-        addProcessingSteps();
+        addProcessingSteps(steps);
     }
 
-    private void addProcessingSteps() {
+    private void addProcessingSteps(List<PipelineStepAdapter.PipelineStep> steps) {
         // F-055 gating fallback: mirror the reprocess buttons — hide the AI
         // actions while a job runs on this session (the JobExecutor single-job
         // lock is the hard guard; this is the UX layer on top).
@@ -465,7 +527,7 @@ public class HistoryDetailActivity extends AppCompatActivity
 
             boolean isLastStep = (i == currentChain.size() - 1);
 
-            pipelineSteps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.PROCESSING)
+            steps.add(new PipelineStepAdapter.PipelineStep.Builder(PipelineStepAdapter.PipelineStep.Type.PROCESSING)
                     .icon(icon)
                     .title(title)
                     .outputText(step.getOutputText())
@@ -697,7 +759,6 @@ public class HistoryDetailActivity extends AppCompatActivity
         startHistoryReprocess(targetSessionId, queue);
     }
 
-    @SuppressLint("NotifyDataSetChanged")
     private void switchVersion(int chainIndex, ProcessingStepEntity selectedVersion) {
         db.runInTransaction(() -> {
             stepDao.clearCurrentAtIndex(sessionId, chainIndex);

@@ -315,6 +315,12 @@
     <string name="dictate_reprocess_audio_available">Audio %1$s · Enviar</string>
     <string name="dictate_job_already_active">Ya hay un procesamiento en curso</string>
     <string name="dictate_audio_file_missing">El archivo de audio ya no está disponible</string>
+    <!-- History UI overhaul (Chunk C): per-step copy, expand/collapse, session error -->
+    <string name="dictate_history_copy_step">Copiar el texto de este paso</string>
+    <string name="dictate_history_expand">Mostrar más</string>
+    <string name="dictate_history_collapse">Mostrar menos</string>
+    <string name="dictate_history_session_error">La sesión falló</string>
+    <string name="dictate_history_partial_recovery">Solo se pudieron recuperar %1$d segmento(s) de la grabación</string>
     <string name="dictate_resend_focus_lost">Campo de entrada no disponible — reiniciando el procesamiento</string>
     <string name="dictate_reprocess_language">Idioma</string>
     <string name="dictate_language_manage">⚙ Gestionar idiomas…</string>

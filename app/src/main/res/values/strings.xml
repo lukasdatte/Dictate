@@ -364,6 +364,12 @@
     <string name="dictate_history_freetext_hint">Enter a custom prompt…</string>
     <string name="dictate_history_regenerating">Regenerating…</string>
     <string name="dictate_history_regenerate_failed">Regeneration failed: %1$s</string>
+    <!-- History UI overhaul (Chunk C): per-step copy, expand/collapse, session error -->
+    <string name="dictate_history_copy_step">Copy this step\'s text</string>
+    <string name="dictate_history_expand">Show more</string>
+    <string name="dictate_history_collapse">Show less</string>
+    <string name="dictate_history_session_error">Session failed</string>
+    <string name="dictate_history_partial_recovery">Only %1$d segment(s) of the recording could be recovered</string>
 
     <!-- Status badges -->
     <string name="dictate_status_recorded">Not processed</string>

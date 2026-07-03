@@ -538,40 +538,53 @@ class OverlayBackend(
     }
 
     /**
-     * Mutate the card background's **fill** to the [OverlayCardFill]
-     * colour for [opacityPercent] (F-118, contract revised 2026-07-03).
-     * The 1 dp `colorOutlineVariant` stroke stays untouched so the card
-     * boundary remains legible.
+     * Paint every overlay **background fill** — the card AND each button
+     * container — translucent at [opacityPercent] via the single
+     * [OverlayCardFill] policy (F-118, contract revised 2026-07-03).
      *
-     * The painted colour is **genuinely translucent** below 100 %:
-     * `colorSurface` at `opacity * 255 / 100` alpha, resolved from this
-     * view's themed context (night-correct via the F-119
-     * `contextForNightMode` wrap at inflate time). The *same* ARGB is
-     * applied on every render tick regardless of ViewMode — WIDGET and
-     * HOVER never diverge in what is painted; that the backdrop behind
-     * the window composites differently per mode is accepted as
-     * inherent to real transparency (see the decision history on
-     * [OverlayCardFill] — an opaque pre-blend was tried and reverted
-     * because it disabled the slider's visible effect).
+     * Two background layers are mutated, both at the *same* slider alpha
+     * so the whole card dims uniformly (user request 2026-07-03: "alle
+     * Buttons im Widget-Modus … mit Opacity"):
      *
-     * The buttons keep their own **opaque** Material container tints
-     * (`OverlayButton.Primary` = filled `colorPrimary`,
-     * `OverlayButton.Icon` = filled-tonal `colorSecondaryContainer` —
-     * `styles_overlay.xml`, 2026-07-03 widget-transparency fix). This
-     * method touches the card drawable only; it must never reach into
-     * the button backgrounds.
+     *  1. **Card fill** — `colorSurface` at `opacity * 255 / 100`
+     *     ([OverlayCardFill.effectiveFill]). The 1 dp
+     *     `colorOutlineVariant` stroke stays untouched so the card
+     *     boundary remains legible.
+     *  2. **Every button container** — the overlay's *third* background
+     *     colour, `colorSecondaryContainer` (card surface = layer 1,
+     *     record-button `colorPrimary` = layer 2, icon-button
+     *     `colorSecondaryContainer` = layer 3), applied uniformly to all
+     *     four buttons via [MaterialButton.setBackgroundTintList]. A
+     *     `MaterialButton`'s container fill is its `backgroundTintList`
+     *     (a static style cannot carry the dynamic slider alpha — hence
+     *     it is written here in the render path, next to the card fill,
+     *     so mode/theme changes stay consistent). Only the container
+     *     fill is tinted; the icons/text Material draws on top keep full
+     *     opacity — this is a *fill* policy, never a foreground one
+     *     (ADR-0010: no colour literals — the base is a theme attr
+     *     resolved from the night-correct themed view).
      *
-     * `mutate()` detaches the drawable's constant state so the shared
-     * `overlay_background.xml` resource (also used by other inflations)
-     * is not affected. Clamping to the settings range happens inside
-     * [OverlayCardFill.effectiveFill].
+     * The painted colours are **genuinely translucent** below 100 %,
+     * resolved from this view's themed context (night-correct via the
+     * F-119 `contextForNightMode` wrap at inflate time). The *same*
+     * ARGB is applied on every render tick regardless of ViewMode —
+     * WIDGET and HOVER never diverge in what is painted; that the
+     * backdrop behind the window composites differently per mode is
+     * accepted as inherent to real transparency (see the decision
+     * history on [OverlayCardFill] — an opaque pre-blend was tried and
+     * reverted because it disabled the slider's visible effect).
      *
-     * Idempotent per render tick via [lastAppliedOpacityPercent].
+     * `mutate()` detaches the card drawable's constant state so the
+     * shared `overlay_background.xml` resource (also used by other
+     * inflations) is not affected. Clamping to the settings range
+     * happens inside [OverlayCardFill]. Idempotent per render tick via
+     * [lastAppliedOpacityPercent].
      */
     private fun applyBackgroundOpacity(opacityPercent: Int) {
         val view = overlayView ?: return
         if (lastAppliedOpacityPercent == opacityPercent) return
 
+        // Layer 1 — card fill (colorSurface at the slider alpha).
         val background = view.background?.mutate() as? GradientDrawable
         if (background == null) {
             Log.w(TAG, "overlay background is not a GradientDrawable — opacity not applied")
@@ -581,6 +594,18 @@ class OverlayBackend(
             view, com.google.android.material.R.attr.colorSurface,
         )
         background.setColor(OverlayCardFill.effectiveFill(surface, opacityPercent))
+
+        // Layer 3 — every button container (colorSecondaryContainer, the
+        // overlay's third background colour) at the SAME slider alpha.
+        val secondaryContainer = MaterialColors.getColor(
+            view, com.google.android.material.R.attr.colorSecondaryContainer,
+        )
+        val buttonFill = OverlayCardFill.translucent(secondaryContainer, opacityPercent)
+        buttonViews.values.forEach { buttonView ->
+            (buttonView as? MaterialButton)?.backgroundTintList =
+                android.content.res.ColorStateList.valueOf(buttonFill)
+        }
+
         lastAppliedOpacityPercent = opacityPercent
     }
 

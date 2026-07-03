@@ -3,19 +3,33 @@ package net.devemperor.dictate.state.render.overlay
 import androidx.core.graphics.ColorUtils
 
 /**
- * Single source of truth for the floating-overlay card's **fill colour**
- * as a function of the user's `Pref.WidgetOpacity` percentage.
+ * Single source of truth for the floating-overlay's **translucent
+ * background fills** as a function of the user's `Pref.WidgetOpacity`
+ * percentage — for the card surface AND every button container.
  *
- * # Contract (2026-07-03, second iteration)
+ * # Contract (2026-07-03, third iteration)
  *
- * The fill is `colorSurface` carrying a **real alpha channel**
- * (`opacity * 255 / 100`), and the **identical translucent ARGB is
- * applied in every mode** the card renders in (WIDGET and HOVER).
- * Night-awareness needs no extra anchor here: the `surfaceColor` the
+ * A background fill is its opaque base colour carrying a **real alpha
+ * channel** (`opacity * 255 / 100`), and the **identical translucent
+ * ARGB is applied in every mode** the overlay renders in (WIDGET and
+ * HOVER). Two consumers share this one alpha derivation:
+ *
+ *  1. **The card fill** — base `colorSurface` ([effectiveFill]).
+ *  2. **Every button container** — base `colorSecondaryContainer`, the
+ *     overlay's *third* background colour (card surface = layer 1,
+ *     record-button `colorPrimary` = layer 2, icon-button
+ *     `colorSecondaryContainer` = layer 3). Per user request
+ *     (2026-07-03) all overlay buttons now paint that third colour at
+ *     the SAME slider opacity as the card, so the whole card — fill and
+ *     buttons alike — dims uniformly. Only the container FILL is
+ *     translucent; the icons/text keep full opacity (they are drawn by
+ *     Material on top of the tint, untouched by this policy).
+ *
+ * Night-awareness needs no extra anchor here: the base colour the
  * backend passes in is resolved from the view's themed context, which
  * `OverlayBackend.inflateAndAttach` already night-overrides via the
- * shared `effectiveNight` rule (F-119) — a dark theme yields a dark
- * surface, and the alpha applies on top of whichever palette is active.
+ * shared `effectiveNight` rule (F-119) — a dark theme yields dark base
+ * colours, and the alpha applies on top of whichever palette is active.
  *
  * # Decision history — why translucent, not an opaque pre-blend
  *
@@ -56,23 +70,45 @@ object OverlayCardFill {
     const val MAX_OPACITY_PERCENT: Int = 100
 
     /**
-     * The **translucent** colour to paint into the card fill for the
-     * given [opacityPercent]: [surfaceColor] with its alpha channel set
-     * to `clamped * 255 / 100`.
+     * The **translucent** ARGB for an opaque [baseColor] at the given
+     * [opacityPercent]: [baseColor] with its alpha channel set to
+     * `clamped * 255 / 100`. The single "opacity percent → ARGB"
+     * derivation shared by the card fill AND the button containers —
+     * both call through here so there is exactly one alpha-mapping and
+     * one clamping rule in the whole overlay.
      *
-     * @param surfaceColor the theme's `?attr/colorSurface`, resolved
-     *   from the night-correct themed view context — the card colour at
-     *   100 % opacity.
+     * Only the alpha byte is touched; the RGB channels of [baseColor]
+     * pass through unchanged (the icons/text drawn on top stay opaque —
+     * this is a *fill* policy, never a foreground one).
+     *
+     * @param baseColor the opaque source colour (a theme attr resolved
+     *   from the night-correct themed view context) — the fill at 100 %.
      * @param opacityPercent user pref (clamped defensively to
      *   [MIN_OPACITY_PERCENT]..[MAX_OPACITY_PERCENT]; the SeekBar
      *   already enforces the range, but the SP value is writable via
      *   backup restore / adb).
-     * @return [surfaceColor] at the mapped alpha — fully opaque only at
-     *   100 %, genuinely translucent below (the whole point of the
+     * @return [baseColor] at the mapped alpha — fully opaque only at
+     *   100 %, genuinely translucent below.
+     */
+    fun translucent(baseColor: Int, opacityPercent: Int): Int {
+        val clamped = opacityPercent.coerceIn(MIN_OPACITY_PERCENT, MAX_OPACITY_PERCENT)
+        return ColorUtils.setAlphaComponent(baseColor, clamped * 255 / 100)
+    }
+
+    /**
+     * The translucent colour to paint into the **card fill** for the
+     * given [opacityPercent]: `colorSurface` at the shared slider alpha.
+     * Thin alias over [translucent] kept for call-site readability and
+     * backward compatibility; the card is layer 1 of the overlay's
+     * background hierarchy.
+     *
+     * @param surfaceColor the theme's `?attr/colorSurface`, resolved
+     *   from the night-correct themed view context — the card colour at
+     *   100 % opacity.
+     * @param opacityPercent see [translucent].
+     * @return `colorSurface` at the mapped alpha (the whole point of the
      *   feature: host content stays visible through the card).
      */
-    fun effectiveFill(surfaceColor: Int, opacityPercent: Int): Int {
-        val clamped = opacityPercent.coerceIn(MIN_OPACITY_PERCENT, MAX_OPACITY_PERCENT)
-        return ColorUtils.setAlphaComponent(surfaceColor, clamped * 255 / 100)
-    }
+    fun effectiveFill(surfaceColor: Int, opacityPercent: Int): Int =
+        translucent(surfaceColor, opacityPercent)
 }

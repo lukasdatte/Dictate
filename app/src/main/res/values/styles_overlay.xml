@@ -6,11 +6,14 @@
     `overlay_5button_layout.xml`:
 
       - `OverlayButton.Primary` — the record/send button (text + leading
-        icon). Filled `Widget.Material3.Button` ⇒ opaque `colorPrimary`
-        container.
+        icon). Filled `Widget.Material3.Button`; its static base is
+        `colorPrimary`, but the render path overrides the container tint
+        to the translucent third colour (see below), and the recording
+        animation controller owns it while a recording is active.
       - `OverlayButton.Icon` — Pause / Trash / Close (icon-only, 48 dp
-        square). Filled-tonal icon button ⇒ opaque `colorSecondaryContainer`
-        container.
+        square). Filled-tonal icon button ⇒ `colorSecondaryContainer`
+        container (the third background colour, painted translucent by
+        the render path — see below).
 
     Both inherit Material 3 defaults — no `cornerRadius` override so the
     buttons match the keyboard-surface buttons (record_btn / trash_btn /
@@ -20,29 +23,30 @@
     ausschauen wie auf der normalen Tastatur, also auch mit den gleichen
     Rundungen".
 
-    # Widget-transparency: buttons stay OPAQUE (2026-07-03)
+    # Widget-transparency: buttons follow the slider too (2026-07-03, revised)
 
-    `Pref.WidgetOpacity` makes only the CARD fill translucent
-    (`OverlayBackend.applyBackgroundOpacity` mutates the drawable fill).
-    The buttons must NOT lose opacity — the translucent card may show
-    through only BETWEEN the buttons.
+    These styles only supply the STATIC baseline container colour used
+    for tools-preview and the 100 %-opacity case. The *live* container
+    fill is written per render tick by
+    `OverlayBackend.applyBackgroundOpacity`, which paints EVERY overlay
+    button with the overlay's third background colour
+    (`colorSecondaryContainer`) at the current `Pref.WidgetOpacity`
+    alpha — so the buttons dim together with the card (user request
+    2026-07-03: "grundsätzlich alle Buttons im Widget-Modus … mit
+    Opacity").
 
-    The original `OverlayButton.Icon` inherited
-    `Widget.Material3.Button.IconButton`, a *standard* icon button whose
-    container `backgroundTint` is `@android:color/transparent` (alpha 0).
-    On an opaque card that reads fine (icon over surface), but once the
-    card fill goes translucent the transparent-container buttons let the
-    host content behind the card bleed straight through the whole button
-    box — the user's "die Buttons verlieren auch die Deckkraft" report.
-    The icons themselves stayed opaque; the button *background* was never
-    opaque to begin with.
+    Both variants therefore resolve to `colorSecondaryContainer` as the
+    filled tint base: the icon buttons via
+    `Widget.Material3.Button.IconButton.Filled.Tonal`. A static style
+    cannot carry the dynamic slider alpha (a `MaterialButton`'s container
+    fill is its `backgroundTintList`), so the alpha lives in the render
+    path next to the card fill — see the single-source-of-truth policy in
+    `OverlayCardFill` and the KDoc on `applyBackgroundOpacity`. Only the
+    container fill is tinted; icons/text keep full opacity.
 
-    Fix (systemic, one place): give the icon buttons a filled-tonal
-    parent so their container is an opaque `colorSecondaryContainer`.
-    Every overlay button now has an alpha-255 container tint, so the
-    translucent card only shows in the gaps between the buttons — exactly
-    the requested behaviour. Asserted in `OverlayBackendTest`
-    ("overlay button backgrounds stay fully opaque at low widgetOpacity").
+    (History: an earlier 2026-07-03 iteration deliberately kept the
+    buttons opaque — that was reverted per the newer user request above;
+    see `overlay-widget-transparency.md` §7 change history.)
 
     @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/3-floating-overlay/3-floating-overlay.reviewed.md §3.2
     @see docs/research/2026-07-02 - overlay-widget-transparency.md §3.3

@@ -903,19 +903,22 @@ class OverlayBackendTest {
     }
 
     @Test
-    fun `overlay button backgrounds stay fully opaque at low widgetOpacity`() {
-        // Widget-transparency contract (2026-07-03): Pref.WidgetOpacity
-        // makes only the CARD fill translucent. Every button's own
-        // container tint must stay fully opaque (alpha 255) so the
-        // translucent card shows through only BETWEEN the buttons — the
-        // user's "die Buttons verlieren auch die Deckkraft" regression.
+    fun `overlay button containers follow widgetOpacity on the third background colour`() {
+        // Widget-transparency contract REVISED (2026-07-03, user
+        // request "der Button – bzw. grundsätzlich alle Buttons im
+        // Widget-Modus – soll die dritte Hintergrundfarbe des
+        // Widget-Modus verwenden und mit Opacity dargestellt werden").
         //
-        // Red-provable against the old style: OVERLAY_TRASH/PAUSE/CLOSE
-        // used Widget.Material3.Button.IconButton, whose container
-        // backgroundTint is @android:color/transparent (alpha 0). The
-        // filled-tonal parent (styles_overlay.xml) gives them an opaque
-        // colorSecondaryContainer; the record button is a filled button
-        // (opaque colorPrimary).
+        // Every overlay button's container is now painted with the
+        // overlay's THIRD background colour (colorSecondaryContainer —
+        // card surface = layer 1, record-button colorPrimary = layer 2,
+        // icon-button colorSecondaryContainer = layer 3) at the SAME
+        // slider alpha as the card, so fill and buttons dim uniformly.
+        //
+        // Red-provable against the previous "buttons stay opaque"
+        // contract: the button tint alpha was a hard 255 and the record
+        // button used colorPrimary — this asserts the slider alpha
+        // (20 % ⇒ 51) on colorSecondaryContainer for ALL FOUR buttons.
         val backend = newBackend()
         backend.attach { captured += it }
 
@@ -941,14 +944,71 @@ class OverlayBackendTest {
         ).forEach { id ->
             val btn = findOverlayButton(id) as com.google.android.material.button.MaterialButton
             val tint = btn.backgroundTintList
-                ?: error("button $id has no backgroundTintList — cannot be opaque")
+                ?: error("button $id has no backgroundTintList")
             assertEquals(
-                "button $id container tint must be fully opaque (alpha 255) " +
-                    "so the translucent card shows only between the buttons",
-                255,
+                "button $id container tint must be the third background colour " +
+                    "(colorSecondaryContainer) at the slider alpha",
+                expectedButtonFill(20),
+                tint.defaultColor,
+            )
+            assertEquals(
+                "button $id container tint must carry the 20 % slider alpha (51)",
+                51,
                 android.graphics.Color.alpha(tint.defaultColor),
             )
         }
+    }
+
+    @Test
+    fun `overlay button container fill is byte-identical in WIDGET and HOVER`() {
+        // The button container fill is a background fill just like the
+        // card — the SAME translucent ARGB must be applied in both
+        // ViewModes (backdrop-induced compositing differences are
+        // accepted; divergent APPLIED values are not — mirrors the card
+        // contract).
+        listOf(20, 55, 100).forEach { opacity ->
+            val fillPerMode = listOf(ViewMode.WIDGET, ViewMode.HOVER).associateWith { mode ->
+                window = FakeOverlayWindow()
+                val backend = newBackend()
+                backend.attach { captured += it }
+                backend.render(
+                    stateWithPermission(viewMode = mode).copy(
+                        theming = net.devemperor.dictate.state.ThemingState(widgetOpacity = opacity),
+                    ),
+                    catalog.OVERLAY_5BUTTON,
+                )
+                (findOverlayButton(LogicalButtonId.OVERLAY_TRASH)
+                    as com.google.android.material.button.MaterialButton)
+                    .backgroundTintList!!.defaultColor
+            }
+            assertEquals(
+                "button container fill must be byte-identical in WIDGET and HOVER " +
+                    "at widgetOpacity=$opacity",
+                fillPerMode[ViewMode.WIDGET],
+                fillPerMode[ViewMode.HOVER],
+            )
+        }
+    }
+
+    @Test
+    fun `overlay button container is fully opaque at widgetOpacity 100`() {
+        // At 100 % the buttons must be a plain opaque
+        // colorSecondaryContainer — the slider's top end restores full
+        // opacity for the third background colour, just like the card.
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(
+            stateWithPermission().copy(
+                theming = net.devemperor.dictate.state.ThemingState(widgetOpacity = 100),
+            ),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        val tint = (findOverlayButton(LogicalButtonId.OVERLAY_CLOSE)
+            as com.google.android.material.button.MaterialButton)
+            .backgroundTintList!!.defaultColor
+        assertEquals("button fill at 100 % must be the opaque third colour", expectedButtonFill(100), tint)
+        assertEquals("alpha at 100 % must be 255", 255, android.graphics.Color.alpha(tint))
     }
 
     @Test
@@ -1121,6 +1181,22 @@ class OverlayBackendTest {
             view, com.google.android.material.R.attr.colorSurface,
         )
         return OverlayCardFill.effectiveFill(surface, opacity)
+    }
+
+    /**
+     * The translucent fill [OverlayCardFill] must produce for the
+     * overlay's **third background colour** (`colorSecondaryContainer`)
+     * at [opacity] — resolved from the attached view's night-correct
+     * themed context, at `opacity * 255 / 100` alpha. Mirrors the
+     * production inputs in `OverlayBackend.applyBackgroundOpacity`.
+     */
+    private fun expectedButtonFill(opacity: Int): Int {
+        val view = window.lastAttachedView
+            ?: error("No View attached — render() must run with hasPermission=true first.")
+        val secondaryContainer = com.google.android.material.color.MaterialColors.getColor(
+            view, com.google.android.material.R.attr.colorSecondaryContainer,
+        )
+        return OverlayCardFill.translucent(secondaryContainer, opacity)
     }
 
     /** The overlay card's background shape (`overlay_background.xml`). */

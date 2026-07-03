@@ -133,6 +133,57 @@ Each step compiles and tests independently; steps 3–5 each have a visible devi
 
 ## 7. Change History
 
+### 2026-07-03 — Buttons follow the slider too (opaque-buttons entry below reversed)
+
+- **Trigger:** User request — "Der Button – bzw. grundsätzlich alle
+  Buttons im Widget-Modus – soll die dritte Hintergrundfarbe des
+  Widget-Modus verwenden und mit Opacity dargestellt werden." This
+  reverses the *earlier* 2026-07-03 "buttons kept opaque" decision (the
+  entry further down): the buttons must now dim together with the card,
+  not stay opaque.
+- **Interpretation of "die dritte Hintergrundfarbe":** the overlay card
+  has a three-layer background-fill hierarchy — (1) card fill
+  `colorSurface`, (2) record-button container `colorPrimary` (filled),
+  (3) icon-button container `colorSecondaryContainer` (filled-tonal).
+  The "third background colour" is therefore
+  **`?attr/colorSecondaryContainer`**, the icon-button container fill
+  added in the opaque-buttons iteration. All four buttons now use that
+  one colour as their container base. (Rejected candidates:
+  `colorTertiaryContainer` — "tertiary" reads literally but the theme
+  uses *no* tertiary attr anywhere in the app, and it is not an existing
+  overlay background; a brand-new colour resource — violates ADR-0010's
+  theme-attr convention and invents a fourth colour the user did not
+  ask for.)
+- **What changed:** the alpha derivation `opacity % → ARGB` is now the
+  single `OverlayCardFill.translucent(baseColor, opacityPercent)`
+  policy; `effectiveFill` is a thin alias for the card's `colorSurface`
+  case. `OverlayBackend.applyBackgroundOpacity` additionally resolves
+  `colorSecondaryContainer` and writes
+  `translucent(secondaryContainer, opacity)` into every button's
+  `backgroundTintList` (a `MaterialButton`'s container fill — a static
+  style can't carry the dynamic slider alpha, so it lives in the render
+  path next to the card fill, keeping mode/theme changes consistent).
+  Only the container fill is tinted; icons/text keep full opacity
+  (fill-only rule preserved). `styles_overlay.xml` KDoc updated: the
+  filled-tonal parent now supplies only the *static* preview/100 %
+  baseline, the live translucent tint is render-path-owned.
+- **Record-button caveat (documented, unchanged):** while a recording
+  is active the `RecordingAnimationController` /`BorderGlowAnimation`
+  owns the record button's background (its accent colour) — that
+  pre-existing single writer takes over the record button during
+  recording, so the slider tint applies to the record button in its
+  idle state and to the three icon buttons always. This matches the
+  established record-button-animation ownership and was not altered.
+- **Test:** `overlay button containers follow widgetOpacity on the
+  third background colour` (red-proven against the opaque-buttons
+  contract: button tint alpha was a hard 255 on `colorPrimary`/
+  `colorSecondaryContainer`, this asserts `colorSecondaryContainer` at
+  the 20 % slider alpha = 51 for all four buttons). Companions:
+  `overlay button container fill is byte-identical in WIDGET and HOVER`
+  and `overlay button container is fully opaque at widgetOpacity 100`.
+  The old `overlay button backgrounds stay fully opaque …` test was
+  replaced (its contract is the one being reversed).
+
 ### 2026-07-03 — Trade-off reversed: true translucency restored (opaque pre-blend reverted)
 
 - **Trigger:** User feedback on the deployed opaque pre-blend — "Jetzt
@@ -210,7 +261,7 @@ Each step compiles and tests independently; steps 3–5 each have a visible devi
   test. Existing fill-alpha assertions updated to the pre-blend
   contract.
 
-### 2026-07-03 — Buttons kept opaque over the translucent card (§3.3 follow-up)
+### 2026-07-03 — Buttons kept opaque over the translucent card (§3.3 follow-up) — REVERSED, see the "Buttons follow the slider too" entry above
 
 - **Trigger:** User report — in transparent-widget mode the *buttons*
   also lost opacity ("im transparenten Widget-Modus sollen auch die

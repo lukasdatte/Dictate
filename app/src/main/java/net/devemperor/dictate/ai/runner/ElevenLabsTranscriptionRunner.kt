@@ -4,7 +4,6 @@ import android.content.SharedPreferences
 import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.ai.AIProviderException.ErrorType
-import net.devemperor.dictate.ai.ElevenLabsKeytermsParser
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 import okhttp3.MediaType.Companion.toMediaType
@@ -80,31 +79,10 @@ class ElevenLabsTranscriptionRunner(
     override fun transcribe(options: TranscriptionOptions): TranscriptionResult {
         val client = buildClient()
 
-        val fileBody = options.audioFile.asRequestBody("audio/mp4".toMediaType())
-
-        val multipartBuilder = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart("file", options.audioFile.name, fileBody)
-            .addFormDataPart("model_id", options.model)
-
-        options.language?.let {
-            if (it != "detect") multipartBuilder.addFormDataPart("language_code", it)
-        }
-
-        options.temperature?.let {
-            multipartBuilder.addFormDataPart("temperature", it.toString())
-        }
-
-        if (options.model == "scribe_v2") {
-            options.keyterms?.takeIf { it.isNotEmpty() }?.let { terms ->
-                multipartBuilder.addFormDataPart("keyterms", ElevenLabsKeytermsParser.toJson(terms))
-            }
-        }
-
         val request = Request.Builder()
             .url("https://api.elevenlabs.io/v1/speech-to-text")
             .header("xi-api-key", apiKey)
-            .post(multipartBuilder.build())
+            .post(buildMultipartBody(options))
             .build()
 
         return wrapProviderCall(modelName = options.model) {
@@ -128,6 +106,44 @@ class ElevenLabsTranscriptionRunner(
                 )
             }
         }
+    }
+
+    /**
+     * Builds the multipart body for the Scribe speech-to-text request.
+     *
+     * Extracted from [transcribe] so the exact wire format can be unit-tested
+     * without a live API call (the request-body encoding is where provider
+     * contracts break silently).
+     */
+    internal fun buildMultipartBody(options: TranscriptionOptions): MultipartBody {
+        val fileBody = options.audioFile.asRequestBody("audio/mp4".toMediaType())
+
+        val multipartBuilder = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("file", options.audioFile.name, fileBody)
+            .addFormDataPart("model_id", options.model)
+
+        options.language?.let {
+            if (it != "detect") multipartBuilder.addFormDataPart("language_code", it)
+        }
+
+        options.temperature?.let {
+            multipartBuilder.addFormDataPart("temperature", it.toString())
+        }
+
+        if (options.model == "scribe_v2") {
+            // `keyterms` is a List[str] on the ElevenLabs API and must be sent as
+            // one repeated form-data part per term (keyterms=Alpha, keyterms=Beta,
+            // …), the same way the official ElevenLabs SDK serializes it. Encoding
+            // the whole list as a single JSON-array string makes the endpoint treat
+            // it as one keyterm, which then trips the per-term 50-char limit and is
+            // rejected with HTTP 422. See ElevenLabsTranscriptionRunnerTest.
+            options.keyterms?.takeIf { it.isNotEmpty() }?.forEach { term ->
+                multipartBuilder.addFormDataPart("keyterms", term)
+            }
+        }
+
+        return multipartBuilder.build()
     }
 
     private class ElevenLabsApiException(

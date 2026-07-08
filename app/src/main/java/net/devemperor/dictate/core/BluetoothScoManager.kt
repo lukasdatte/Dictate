@@ -74,6 +74,28 @@ open class BluetoothScoManager(
         private set
 
     /**
+     * `true` between our own `stopBluetoothSco()` call and the next
+     * terminal SCO broadcast (widget-cancel-restart fix, 2026-07-09).
+     *
+     * Android tears the SCO link down **asynchronously**:
+     * `AudioManager.isBluetoothScoOn` keeps reporting `true` until the
+     * `SCO_AUDIO_STATE_DISCONNECTED` broadcast lands. A recording
+     * cancelled and immediately restarted (overlay-widget trash →
+     * record) therefore hit [startSco]'s already-connected early-return
+     * against the *dying* link: `onScoConnected` fired synchronously,
+     * the `MediaRecorder` was allocated with `VOICE_COMMUNICATION`, and
+     * the capture route died underneath it — a recording that visually
+     * runs (the state-driven timer keeps ticking) but captures silence.
+     *
+     * While this flag is set, [startSco] skips the early-return and
+     * runs the full handshake instead — the next CONNECTED broadcast
+     * (or the timeout → MIC fallback) resolves it safely either way.
+     * Any terminal broadcast (CONNECTED or DISCONNECTED) proves the
+     * platform flag is fresh again and clears the window.
+     */
+    private var teardownInFlight: Boolean = false
+
+    /**
      * Registers the BroadcastReceiver for SCO state updates.
      * Safe to call multiple times (no-op if already registered).
      */
@@ -91,6 +113,9 @@ open class BluetoothScoManager(
                 when (state) {
                     AudioManager.SCO_AUDIO_STATE_CONNECTED -> {
                         _isScoStarted = true
+                        // Terminal broadcast — the platform flag is
+                        // authoritative again (teardown window closed).
+                        teardownInFlight = false
                         if (isWaitingForSco) {
                             isWaitingForSco = false
                             cancelTimeout()
@@ -99,6 +124,8 @@ open class BluetoothScoManager(
                     }
                     AudioManager.SCO_AUDIO_STATE_DISCONNECTED -> {
                         _isScoStarted = false
+                        // Teardown completed — window closed.
+                        teardownInFlight = false
                         callback.onScoDisconnected()
                     }
                 }
@@ -119,7 +146,10 @@ open class BluetoothScoManager(
      * @return true if SCO was already connected, false if waiting
      */
     override fun startSco(timeoutMs: Long): Boolean {
-        if (audioManager.isBluetoothScoOn) {
+        // The early-return is only safe when the platform flag is
+        // trustworthy — inside the async-teardown window it still
+        // reports the dying link (see [teardownInFlight]).
+        if (audioManager.isBluetoothScoOn && !teardownInFlight) {
             _isScoStarted = true
             callback.onScoConnected()
             return true
@@ -131,7 +161,12 @@ open class BluetoothScoManager(
         timeoutRunnable = Runnable {
             if (isWaitingForSco) {
                 isWaitingForSco = false
-                try { audioManager.stopBluetoothSco() } catch (_: Exception) {}
+                try {
+                    audioManager.stopBluetoothSco()
+                    // Our own stop → async teardown window opens.
+                    teardownInFlight = true
+                } catch (_: Exception) {
+                }
                 callback.onScoFailed()
             }
         }
@@ -148,7 +183,14 @@ open class BluetoothScoManager(
         cancelTimeout()
         isWaitingForSco = false
         if (_isScoStarted) {
-            try { audioManager.stopBluetoothSco() } catch (_: Exception) {}
+            try {
+                audioManager.stopBluetoothSco()
+                // Our own stop → async teardown window opens; the next
+                // terminal broadcast (or a fresh full handshake) closes
+                // it. See [teardownInFlight].
+                teardownInFlight = true
+            } catch (_: Exception) {
+            }
             _isScoStarted = false
         }
     }

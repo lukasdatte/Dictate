@@ -613,6 +613,17 @@ class DictatePipelineService : Service() {
         notificationCoordinatorImpl = PipelineNotificationCoordinator(
             context = this,
             actionRouter = pipelineActionRouterImpl,
+            // Widget-cancel-restart fix (2026-07-09): capture-phase
+            // notifications (Recording/Paused) re-assert the FGS +
+            // microphone-type association via startForeground instead of
+            // plain notify. Without this, startForeground ran exactly
+            // once per process (onStartCommand) while dismiss() —
+            // recording-cancel, pipeline-terminal — tore the anchor down;
+            // a recording restarted from the overlay widget (in-process
+            // dispatch, IME hidden ⇒ app in background) then captured
+            // silence on Android 12+. See the coordinator's
+            // foregroundArmer KDoc for the full mechanism + fallback.
+            foregroundArmer = { notification -> startForegroundCompat(notification) },
         )
 
         // B2 / ADR-0008 §"Auto-Continuation" — ContinuationLookup composite.

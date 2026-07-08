@@ -299,6 +299,102 @@ class PipelineNotificationCoordinatorTest {
     }
 
     // ──────────────────────────────────────────────────────────────────
+    // FGS re-arm hook (widget-cancel-restart fix, 2026-07-09)
+    //
+    // Recording-cancel + pipeline-terminal both run dismiss() →
+    // nm.cancel(NOTIF_ID), tearing down the FGS anchor; startForeground
+    // used to run exactly once per process (onStartCommand). A recording
+    // started afterwards from the overlay widget (in-process dispatch,
+    // no onStartCommand re-entry, app in background because the IME is
+    // hidden) ran without a live microphone-type FGS association —
+    // Android 12+ delivers silence to background mic access. The
+    // coordinator therefore routes capture-phase statuses (Recording /
+    // Paused) through the injected foregroundArmer (production:
+    // DictatePipelineService.startForegroundCompat) so EVERY recording
+    // re-asserts the foreground + mic-type association.
+    // ──────────────────────────────────────────────────────────────────
+
+    @Test
+    fun show_recording_reArmsTheForegroundServiceViaTheArmer() {
+        val armed = mutableListOf<android.app.Notification>()
+        val armingCoordinator = PipelineNotificationCoordinator(
+            app,
+            router,
+            foregroundArmer = { n -> armed += n },
+        )
+
+        armingCoordinator.show(NotificationStatus.Recording(sessionId = "s-arm"))
+
+        assertEquals(
+            "capture-phase show(Recording) must re-arm the FGS via startForeground",
+            1,
+            armed.size,
+        )
+        // The armer path IS the post (startForeground posts the
+        // notification itself) — no duplicate plain notify.
+        assertNull("no duplicate nm.notify next to the armer post", posted())
+        // The armed notification carries the Recording content.
+        assertEquals(3, armed[0].actions.size)
+    }
+
+    @Test
+    fun show_paused_reArmsTheForegroundServiceViaTheArmer() {
+        val armed = mutableListOf<android.app.Notification>()
+        val armingCoordinator = PipelineNotificationCoordinator(
+            app,
+            router,
+            foregroundArmer = { n -> armed += n },
+        )
+
+        armingCoordinator.show(NotificationStatus.Paused(sessionId = "s-arm"))
+
+        assertEquals(
+            "capture-phase show(Paused) must re-arm the FGS (mic access " +
+                "must survive a resume from background)",
+            1,
+            armed.size,
+        )
+        assertNull(posted())
+    }
+
+    @Test
+    fun show_pipeline_doesNotUseTheArmer() {
+        // Pipeline processing needs no microphone — plain notify keeps
+        // the pre-fix behaviour (no startForeground churn per status).
+        val armed = mutableListOf<android.app.Notification>()
+        val armingCoordinator = PipelineNotificationCoordinator(
+            app,
+            router,
+            foregroundArmer = { n -> armed += n },
+        )
+
+        armingCoordinator.show(NotificationStatus.Pipeline(sessionId = "s-pipe", step = "running"))
+
+        assertEquals("non-capture statuses must not touch startForeground", 0, armed.size)
+        assertNotNull("Pipeline status posts via plain notify", posted())
+    }
+
+    @Test
+    fun show_recording_fallsBackToPlainNotifyWhenTheArmerThrows() {
+        // ForegroundServiceStartNotAllowedException class of failures
+        // (API 31+, service demoted while app in background): the show
+        // must degrade to the pre-fix plain notify, never propagate into
+        // the orchestrator's runEffect path (R-2).
+        val armingCoordinator = PipelineNotificationCoordinator(
+            app,
+            router,
+            foregroundArmer = { throw IllegalStateException("bg FGS start denied") },
+        )
+
+        armingCoordinator.show(NotificationStatus.Recording(sessionId = "s-deny"))
+
+        assertNotNull(
+            "armer failure must fall back to plain notify (pre-fix behaviour)",
+            posted(),
+        )
+    }
+
+    // ──────────────────────────────────────────────────────────────────
     // Helpers
     // ──────────────────────────────────────────────────────────────────
 

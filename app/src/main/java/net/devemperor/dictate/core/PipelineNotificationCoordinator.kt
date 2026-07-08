@@ -89,6 +89,38 @@ import net.devemperor.dictate.state.PipelineNotificationCoordinatorSubsystem
 class PipelineNotificationCoordinator(
     private val context: Context,
     private val actionRouter: PipelineActionRouter,
+    /**
+     * FGS re-arm hook (widget-cancel-restart fix, 2026-07-09).
+     *
+     * **The gap this closes.** `startForeground(type=MICROPHONE)` used
+     * to run exactly once per process — in `onStartCommand`, triggered
+     * by the IME's single `startForegroundService` at
+     * `onCreateInputView`. Every later capture-phase notification went
+     * through plain `nm.notify`, while [dismiss] (`nm.cancel(NOTIF_ID)`,
+     * fired on recording-cancel and pipeline-terminal) could remove the
+     * FGS anchor arbitrarily often. A recording started afterwards from
+     * the overlay widget (IME hidden ⇒ app in background, in-process
+     * dispatch ⇒ no `onStartCommand` re-entry) ran without a live
+     * mic-type FGS association — Android 12+ then delivers **silence**
+     * to background mic access: the FSM/timer run, the file stays
+     * empty.
+     *
+     * Production wires `DictatePipelineService.startForegroundCompat`
+     * here; [show] routes capture-phase statuses ([NotificationStatus.Recording],
+     * [NotificationStatus.Paused]) through it so every recording
+     * re-asserts the foreground + microphone-type association.
+     * `startForeground` on an already-foreground service is an
+     * idempotent notification update; if the platform refuses (e.g.
+     * `ForegroundServiceStartNotAllowedException` on API 31+ when the
+     * service was demoted while the app is in background) the throw is
+     * caught and [show] falls back to plain `nm.notify` — same
+     * behaviour as before this hook, plus a WARN log for
+     * serviceability.
+     *
+     * `null` (tests / legacy constructions) keeps plain `nm.notify`
+     * for every status.
+     */
+    private val foregroundArmer: ((Notification) -> Unit)? = null,
 ) : PipelineNotificationCoordinatorSubsystem {
 
     private val nm = NotificationManagerCompat.from(context)
@@ -134,8 +166,21 @@ class PipelineNotificationCoordinator(
                     "$status not shown; FGS controls hidden from the shade",
             )
         }
+        val notification = build(status)
+        // Widget-cancel-restart fix (2026-07-09): capture-phase statuses
+        // re-assert the foreground + microphone-type association via the
+        // injected [foregroundArmer] (which posts the notification itself
+        // through startForeground). See the constructor-param KDoc for
+        // the background-mic-silence class this closes. Non-capture
+        // statuses (Pipeline / OverlayPermissionRequired) keep plain
+        // notify — no startForeground churn where no mic is needed.
+        val capturePhase =
+            status is NotificationStatus.Recording || status is NotificationStatus.Paused
+        if (capturePhase && tryArmForeground(notification)) {
+            return
+        }
         try {
-            nm.notify(NOTIF_ID, build(status))
+            nm.notify(NOTIF_ID, notification)
         } catch (t: Throwable) {
             // R-2: never let a notification-post failure (missing
             // POST_NOTIFICATIONS grant, OEM NotificationManager quirk)
@@ -143,6 +188,31 @@ class PipelineNotificationCoordinator(
             // FGS-sticky notification stays up regardless; this only
             // affects the reactive content refresh.
             Log.w(TAG, "notify($status) failed — notification not refreshed", t)
+        }
+    }
+
+    /**
+     * Route [notification] through [foregroundArmer]. Returns `true`
+     * when the armer accepted the post (startForeground shows the
+     * notification itself); `false` when no armer is wired or the
+     * platform refused (API 31+ background-start denial) — the caller
+     * then falls back to the pre-fix plain `nm.notify` (R-2: a refusal
+     * must never propagate into the orchestrator's runEffect path).
+     */
+    private fun tryArmForeground(notification: Notification): Boolean {
+        val armer = foregroundArmer ?: return false
+        return try {
+            armer(notification)
+            true
+        } catch (t: Throwable) {
+            Log.w(
+                TAG,
+                "FGS re-arm refused — recording may run without a live " +
+                    "microphone-FGS association (background mic access is " +
+                    "silenced on Android 12+); falling back to plain notify",
+                t,
+            )
+            false
         }
     }
 

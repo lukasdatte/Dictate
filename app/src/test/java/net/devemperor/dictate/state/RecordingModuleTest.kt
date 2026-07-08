@@ -846,4 +846,69 @@ class RecordingModuleTest {
         )
         assertNull(result)
     }
+
+    // ─── Widget-trash cancel leaves no session corpse (2026-07-09) ──────
+    //
+    // Regression guard for the widget-mode delete-then-restart bug:
+    // CancelRecording used to emit only StopMediaRecorder +
+    // DeleteAudioFile(state.audioFile) — the SessionEntity row created by
+    // CreateRecordingSession stayed `status = RECORDING` forever, and for
+    // recordings longer than one rolling interval the rolled segments
+    // 2..N (plus the pre-armed tail) survived on disk because
+    // `state.audioFile` is never advanced on SegmentRolled. Consequences:
+    //  1. the stale RECORDING row was promoted to RECORDING_INTERRUPTED by
+    //     the next PipelineRecovery pass, resurfacing (and on the next
+    //     Record-tap CONTINUING) a recording the user explicitly trashed;
+    //  2. the row kept the session in `findActiveSessionIds`, so
+    //     CacheAudioCleanupJob protected the orphan segments forever
+    //     (permanent storage leak).
+    // The fix reuses the §4.5.3 atomic-discard effect: every cancel arm
+    // additionally emits DiscardAudioForSession(sessionId), which deletes
+    // ALL segments and marks the row FAILED("discarded_by_user").
+
+    @Test
+    fun `CancelRecording from Active emits DiscardAudioForSession after StopMediaRecorder`() {
+        val state = RecordingState.Active(useBluetooth = false, audioFile = testFile, sessionId = "sid-cancel-a")
+        val result = module.reduce(state, Action.RecordingAction.CancelRecording, ctx())!!
+        val effects = result.sideEffects
+        assertTrue(
+            "cancel from Active must discard the session (segments + DB row)",
+            effects.contains(RecordingModule.Effect.DiscardAudioForSession("sid-cancel-a")),
+        )
+        // Ordering: the recorder must be stopped/released before the
+        // async discard deletes the files it is writing to.
+        val stopIdx = effects.indexOf(RecordingModule.Effect.StopMediaRecorder)
+        val discardIdx = effects.indexOf(RecordingModule.Effect.DiscardAudioForSession("sid-cancel-a"))
+        assertTrue("StopMediaRecorder must precede DiscardAudioForSession", stopIdx in 0 until discardIdx)
+    }
+
+    @Test
+    fun `CancelRecording from Paused emits DiscardAudioForSession after StopMediaRecorder`() {
+        val state = RecordingState.Paused(useBluetooth = false, audioFile = testFile, sessionId = "sid-cancel-p")
+        val result = module.reduce(state, Action.RecordingAction.CancelRecording, ctx())!!
+        val effects = result.sideEffects
+        assertTrue(
+            "cancel from Paused must discard the session (segments + DB row)",
+            effects.contains(RecordingModule.Effect.DiscardAudioForSession("sid-cancel-p")),
+        )
+        val stopIdx = effects.indexOf(RecordingModule.Effect.StopMediaRecorder)
+        val discardIdx = effects.indexOf(RecordingModule.Effect.DiscardAudioForSession("sid-cancel-p"))
+        assertTrue("StopMediaRecorder must precede DiscardAudioForSession", stopIdx in 0 until discardIdx)
+    }
+
+    @Test
+    fun `CancelRecording from Preparing emits DiscardAudioForSession after ReleaseMediaRecorder`() {
+        // CreateRecordingSession fires on the Idle → Preparing arm, so a
+        // cancel mid-prepare also leaves a RECORDING row without this.
+        val state = RecordingState.Preparing(useBluetooth = false, audioFile = testFile, sessionId = "sid-cancel-prep")
+        val result = module.reduce(state, Action.RecordingAction.CancelRecording, ctx())!!
+        val effects = result.sideEffects
+        assertTrue(
+            "cancel from Preparing must discard the session (segments + DB row)",
+            effects.contains(RecordingModule.Effect.DiscardAudioForSession("sid-cancel-prep")),
+        )
+        val releaseIdx = effects.indexOf(RecordingModule.Effect.ReleaseMediaRecorder)
+        val discardIdx = effects.indexOf(RecordingModule.Effect.DiscardAudioForSession("sid-cancel-prep"))
+        assertTrue("ReleaseMediaRecorder must precede DiscardAudioForSession", releaseIdx in 0 until discardIdx)
+    }
 }

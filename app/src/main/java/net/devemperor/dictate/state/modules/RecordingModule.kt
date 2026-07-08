@@ -360,11 +360,25 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
 
         /**
          * recording-stack-completion §4.5.3 — atomic user-driven
-         * discard of a RECORDING_INTERRUPTED session: delete every
-         * segment + transient merged file from the cache AND promote
-         * the DB row to FAILED with reason `"discarded_by_user"` so
-         * the row leaves the pending-list and the continuation-lookup
-         * skips it.
+         * discard of a session: delete every segment + transient merged
+         * file from the cache AND promote the DB row to FAILED with
+         * reason `"discarded_by_user"` so the row leaves the
+         * pending-list and the continuation-lookup skips it.
+         *
+         * Emitted from two places:
+         *  1. `DiscardInterruptedSession` (Idle / Interrupted arms) —
+         *     the original §4.5.3 discard of a RECORDING_INTERRUPTED
+         *     session.
+         *  2. Every `CancelRecording` arm (Preparing / Active / Paused,
+         *     widget-cancel-restart fix 2026-07-09) — cancelling a LIVE
+         *     recording must also retire the RECORDING row that
+         *     `CreateRecordingSession` inserted at start, and clean the
+         *     rolled segments 2..N that the point-delete
+         *     `DeleteAudioFile(state.audioFile)` misses (the FSM's
+         *     `audioFile` stays the first segment across
+         *     `SegmentRolled`). `markFailed` transitions the row
+         *     RECORDING → FAILED directly — the same fail-soft adapter
+         *     path recovery uses.
          *
          * **Why one effect, not two.** Splitting into separate
          * `DeleteSessionAudio` + `MarkSessionFailed` effects would
@@ -644,6 +658,16 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                 sideEffects = listOf(
                     Effect.ReleaseMediaRecorder,
                     Effect.DeleteAudioFile(state.audioFile),
+                    // Widget-cancel-restart fix (2026-07-09): the
+                    // Idle → Preparing arm already inserted the RECORDING
+                    // row (CreateRecordingSession) — without this discard
+                    // a cancel mid-prepare leaves a session corpse that
+                    // the next PipelineRecovery pass promotes to
+                    // RECORDING_INTERRUPTED (phantom "unfinished
+                    // recording" the user already trashed). Ordered after
+                    // ReleaseMediaRecorder so the async delete never races
+                    // a live recorder handle.
+                    Effect.DiscardAudioForSession(state.sessionId),
                     // Idempotent — Preparing never showed the recording
                     // notification (it appears on Preparing → Active), but
                     // cancelling mid-prepare must leave no orphan FGS
@@ -732,6 +756,20 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StopBorderGlow,
                     Effect.StopAmplitudeStream,
                     Effect.DeleteAudioFile(state.audioFile),
+                    // Widget-cancel-restart fix (2026-07-09): cancel used
+                    // to leave the SessionEntity row at status=RECORDING
+                    // forever and — because `state.audioFile` stays the
+                    // FIRST segment across SegmentRolled — kept every
+                    // rolled segment 2..N on disk. The stale row (a) was
+                    // promoted to RECORDING_INTERRUPTED by the next
+                    // recovery pass, resurfacing/continuing a trashed
+                    // recording, and (b) sat in `findActiveSessionIds`,
+                    // shielding the orphan segments from the cleanup job
+                    // forever. Reuse the §4.5.3 atomic discard: delete ALL
+                    // segments + mark the row FAILED("discarded_by_user").
+                    // Ordered after StopMediaRecorder (synchronous stop +
+                    // release) so the delete never races the recorder.
+                    Effect.DiscardAudioForSession(state.sessionId),
                     // Cancel from Active: discard + remove the notification.
                     Effect.DismissNotification,
                 ),
@@ -826,6 +864,11 @@ object RecordingModule : DictateModule<RecordingState, Action.RecordingAction, R
                     Effect.StopTimer,
                     Effect.StopBorderGlow,
                     Effect.DeleteAudioFile(state.audioFile),
+                    // Widget-cancel-restart fix (2026-07-09) — same
+                    // session-corpse discard as the Active arm (see the
+                    // comment there): delete ALL segments + mark the row
+                    // FAILED("discarded_by_user").
+                    Effect.DiscardAudioForSession(state.sessionId),
                     // Cancel from Paused: discard + remove the notification.
                     Effect.DismissNotification,
                 ),

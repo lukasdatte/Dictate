@@ -398,6 +398,11 @@
     <string name="overlay_perm_onboarding_granted">Berechtigung erteilt.</string>
     <string name="overlay_perm_onboarding_pending">Berechtigung weiterhin erforderlich — tippe auf „Erlauben“, um die Systemeinstellungen zu öffnen.</string>
 
+    <!-- External dictation entry points (2026-07-09) — Launcher-Alias / App-Shortcut / QS-Tile. -->
+    <string name="start_dictation_label">Diktieren</string>
+    <string name="start_dictation_long_label">Diktat starten</string>
+    <string name="start_dictation_mic_permission_missing">Mikrofon-Berechtigung erforderlich — Dictate-Einstellungen werden geöffnet.</string>
+
     <!-- history-ui-overhaul (D8) — history/status/reprocess namespace backfill + new list-polish strings -->
     <string name="dictate_copied_to_clipboard">In die Zwischenablage kopiert</string>
     <string name="dictate_history_audio">Audio</string>

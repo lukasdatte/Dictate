@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    External dictation entry points (2026-07-09) — adaptive icon for the
+    "Dictation" launcher alias (S-Pen Air Command / Edge panel / side-key
+    pickers list it next to the main app icon), the static app shortcut,
+    and the QS tile. Reuses the app's launcher background color so the
+    two icons read as siblings; the mic foreground distinguishes them.
+    minSdk 26 ⇒ mipmap-anydpi-v26 covers every supported device, no
+    legacy PNG fallback required.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_dictation_foreground" />
+    <monochrome android:drawable="@drawable/ic_dictation_foreground" />
+</adaptive-icon>

@@ -1302,7 +1302,22 @@ class DictatePipelineService : Service() {
      * [PipelineActionRouter.dispatch] inside [onStartCommand], i.e. on the
      * main thread with the composition root fully constructed.
      *
-     * Order matters:
+     * **Deferred execution.** The body runs via `serviceScope.launch`
+     * on the NON-immediate main dispatcher, i.e. it is posted behind the
+     * current `onStartCommand` invocation. Two reasons:
+     *
+     *  - `startForegroundCompat` (called later in `onStartCommand`) must
+     *    run inside the FGS 5-second budget; the start policy performs
+     *    file IO (`audioFileRepository.allocateFirst`) that has no place
+     *    before it.
+     *  - The mic-FGS association should be anchored before the
+     *    `StartRecording` cascade allocates the MediaRecorder.
+     *
+     * The scope is cancelled in `onDestroy`, so a post that races
+     * service teardown is dropped instead of dispatching into a
+     * shut-down orchestrator.
+     *
+     * Order inside the body:
      *
      *  1. [OverlayPermissionObserver.refresh] — the `overlay.hasPermission`
      *     axis is normally refreshed only by IME lifecycle hooks
@@ -1316,13 +1331,23 @@ class DictatePipelineService : Service() {
      *     resulting actions are dispatched in list order — each dispatch
      *     re-snapshots, so `StartRecording` sees the post-widget-open
      *     state.
+     *
+     * **Known race (benign, documented):** `PipelineRecovery` runs async
+     * from `DictateOrchestrator.init`. If its Phase-5
+     * `SurfaceInterruptedRecording` lands first, the state is
+     * `Interrupted` and the policy starts nothing — the widget surfaces
+     * the continue/discard controls instead, which is the correct UX
+     * for "trigger hit right after a crash". If the start lands first,
+     * recovery's Phase 5 is a documented no-op on non-Idle state.
      */
     private fun handleExternalDictationStart() {
-        overlayPermissionObserverImpl.refresh()
-        net.devemperor.dictate.state.resolveExternalDictationStart(
-            state = orchestrator.state.value,
-            services = moduleServicesImpl,
-        ).forEach { action -> orchestrator.dispatch(action) }
+        serviceScope.launch(Dispatchers.Main) {
+            overlayPermissionObserverImpl.refresh()
+            net.devemperor.dictate.state.resolveExternalDictationStart(
+                state = orchestrator.state.value,
+                services = moduleServicesImpl,
+            ).forEach { action -> orchestrator.dispatch(action) }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -1335,7 +1360,11 @@ class DictatePipelineService : Service() {
         // carry no `intent.action` and are ignored by the router.
         if (::pipelineActionRouterImpl.isInitialized) {
             try {
-                pipelineActionRouterImpl.dispatch(intent)
+                // `flags` forwarded so the router can suppress a
+                // START_REDELIVER_INTENT re-delivery of
+                // ACTION_START_DICTATION (no spontaneous mic arm after
+                // an OOM-kill — see the router's dispatch KDoc).
+                pipelineActionRouterImpl.dispatch(intent, flags)
             } catch (t: Throwable) {
                 // R-2: an action-decode failure must not abort the FGS
                 // start below (which keeps recording alive). Log + carry

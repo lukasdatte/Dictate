@@ -66,6 +66,35 @@ class PipelineActionRouterTest {
     }
 
     @Test
+    fun `redelivered START_DICTATION is suppressed — no spontaneous mic arm after OOM-kill`() {
+        // The service returns START_REDELIVER_INTENT; after a crash the
+        // system re-delivers the last start intent with
+        // START_FLAG_REDELIVERY set. Re-running the external start would
+        // arm the microphone without a user trigger.
+        val rec = Recorder()
+
+        rec.router().dispatch(
+            Intent(PipelineActionRouter.ACTION_START_DICTATION),
+            android.app.Service.START_FLAG_REDELIVERY,
+        )
+
+        assertEquals(0, rec.externalStartCalls)
+        assertTrue(rec.actions.isEmpty())
+    }
+
+    @Test
+    fun `redelivered notification action stays routed (only the external start is suppressed)`() {
+        val rec = Recorder()
+
+        rec.router().dispatch(
+            Intent(PipelineActionRouter.ACTION_PAUSE),
+            android.app.Service.START_FLAG_REDELIVERY,
+        )
+
+        assertEquals(listOf<Action>(Action.RecordingAction.PauseRecording), rec.actions)
+    }
+
+    @Test
     fun `PAUSE intent still maps to PauseRecording`() {
         val rec = Recorder()
 

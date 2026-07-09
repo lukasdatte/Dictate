@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug-variant override of src/main/res/xml/shortcuts.xml — identical
+    except for android:targetPackage, which must literally match the
+    debug applicationId ("net.devemperor.dictate.debug",
+    applicationIdSuffix in app/build.gradle). @string/ references and
+    manifest placeholders do NOT resolve in shortcuts.xml (parsed by the
+    system_server against system resources), hence the file-level
+    duplication. Keep in sync with the main variant when editing.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="start_dictation"
+        android:enabled="true"
+        android:icon="@mipmap/ic_dictation"
+        android:shortcutShortLabel="@string/start_dictation_label"
+        android:shortcutLongLabel="@string/start_dictation_long_label">
+        <intent
+            android:action="net.devemperor.dictate.START_DICTATION"
+            android:targetPackage="net.devemperor.dictate.debug"
+            android:targetClass="net.devemperor.dictate.core.StartDictationActivity" />
+    </shortcut>
+</shortcuts>

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    External dictation entry points (2026-07-09) — static "Dictation"
+    shortcut (long-press on the launcher icon, pinnable to the home
+    screen). Third sibling of the launcher alias + QS tile; all funnel
+    into StartDictationActivity.
+
+    GOTCHA — android:targetPackage must be a LITERAL applicationId.
+    shortcuts.xml is parsed at install time by the system_server's
+    ShortcutParser against SYSTEM resources, so @string/ references
+    (and manifest placeholders) do NOT resolve here. The debug build
+    variant (applicationIdSuffix ".debug") therefore carries its own
+    override at src/debug/res/xml/shortcuts.xml — keep BOTH files in
+    sync when editing.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="start_dictation"
+        android:enabled="true"
+        android:icon="@mipmap/ic_dictation"
+        android:shortcutShortLabel="@string/start_dictation_label"
+        android:shortcutLongLabel="@string/start_dictation_long_label">
+        <intent
+            android:action="net.devemperor.dictate.START_DICTATION"
+            android:targetPackage="net.devemperor.dictate"
+            android:targetClass="net.devemperor.dictate.core.StartDictationActivity" />
+    </shortcut>
+</shortcuts>

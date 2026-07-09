@@ -69,8 +69,28 @@ class PipelineActionRouter(
      *
      * Unknown / null actions are ignored (the service is also started
      * for non-action reasons — the first FGS start carries no action).
+     *
+     * @param startFlags the `flags` parameter of `onStartCommand`
+     *   (default `0` for callers outside the service lifecycle).
+     *   GOTCHA — the service returns `START_REDELIVER_INTENT`, so after
+     *   an OOM-kill the system re-delivers the last start intent. A
+     *   redelivered [ACTION_START_DICTATION] would spontaneously arm
+     *   the microphone minutes after the user's actual trigger; the
+     *   [android.app.Service.START_FLAG_REDELIVERY] guard suppresses
+     *   exactly that arm (crash recovery of an interrupted recording is
+     *   `PipelineRecovery`'s job, not a re-run of the start intent).
+     *   The notification-button arms stay redeliverable — they act on
+     *   recovered state and were always redelivered.
      */
-    fun dispatch(intent: Intent?) {
+    fun dispatch(intent: Intent?, startFlags: Int = 0) {
+        val redelivered = (startFlags and android.app.Service.START_FLAG_REDELIVERY) != 0
+        if (redelivered && intent?.action == ACTION_START_DICTATION) {
+            android.util.Log.w(
+                "PipelineActionRouter",
+                "redelivered ACTION_START_DICTATION suppressed — no spontaneous mic arm after crash",
+            )
+            return
+        }
         when (intent?.action) {
             ACTION_PAUSE -> dispatchAction(Action.RecordingAction.PauseRecording)
             ACTION_RESUME -> dispatchAction(Action.RecordingAction.ResumeRecording)

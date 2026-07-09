@@ -104,7 +104,86 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!--
+                External dictation entry points (2026-07-09): static
+                "Dictation" app shortcut (long-press on the launcher
+                icon, pinnable). Attached to the main launcher activity;
+                the alias below is itself the dictation trigger, so it
+                carries no shortcut of its own.
+            -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
+
+        <!--
+            External dictation entry points (2026-07-09, see
+            docs/research/2026-07-09 - external-dictation-entry-points.md):
+            invisible trampoline that funnels ALL external triggers
+            (launcher alias / app shortcut / QS tile) into the single
+            canonical service action ACTION_START_DICTATION.
+
+            Theme.NoDisplay ⇒ the activity draws nothing and must
+            finish() in onCreate. noHistory + excludeFromRecents +
+            taskAffinity="" keep the trigger out of recents and prevent
+            it from pulling the main Dictate task to the foreground.
+
+            exported=true: the alias requires it, and it lets automation
+            tools (Tasker, Samsung Routines) fire the trigger directly
+            via the explicit intent-filter action.
+        -->
+        <activity
+            android:name=".core.StartDictationActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:icon="@mipmap/ic_dictation"
+            android:label="@string/start_dictation_label"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="net.devemperor.dictate.START_DICTATION" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Second launcher entry "Dictation" — this is what S-Pen Air
+            Command, the Samsung Edge panel, the side-key double-press
+            picker, and similar app pickers list (they enumerate
+            MAIN+LAUNCHER components). The main app entry above stays
+            untouched. android:enabled defaults to true; never rename
+            this component — launchers drop pinned shortcuts/positions
+            for renamed aliases.
+        -->
+        <activity-alias
+            android:name=".core.StartDictation"
+            android:exported="true"
+            android:icon="@mipmap/ic_dictation"
+            android:label="@string/start_dictation_label"
+            android:targetActivity=".core.StartDictationActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!--
+            Quick-Settings tile "Dictation" (third external trigger; same
+            StartDictationActivity funnel). BIND_QUICK_SETTINGS_TILE is
+            mandatory — without it the system never binds the tile.
+        -->
+        <service
+            android:name=".core.DictationTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_qs_dictation"
+            android:label="@string/start_dictation_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
         <activity
             android:name=".onboarding.OnboardingActivity"
             android:exported="false"

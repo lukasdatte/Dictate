@@ -366,6 +366,11 @@
     <string name="overlay_perm_onboarding_granted">Permissão concedida.</string>
     <string name="overlay_perm_onboarding_pending">A permissão ainda é necessária — toque em «Permitir» para abrir as configurações do sistema.</string>
 
+    <!-- External dictation entry points (2026-07-09) — alias do launcher / atalho / bloco de configurações rápidas. -->
+    <string name="start_dictation_label">Ditado</string>
+    <string name="start_dictation_long_label">Iniciar ditado</string>
+    <string name="start_dictation_mic_permission_missing">Permissão de microfone necessária — abrindo as configurações do Dictate.</string>
+
     <!-- history-ui-overhaul (D8) — history/status/reprocess namespace backfill + new list-polish strings -->
     <string name="dictate_copied_to_clipboard">Copiado para a área de transferência</string>
     <string name="dictate_history_audio">Áudio</string>

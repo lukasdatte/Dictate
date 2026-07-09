@@ -609,6 +609,12 @@ class DictatePipelineService : Service() {
         // (R-2: channel-before-startForeground ordering preserved).
         pipelineActionRouterImpl = PipelineActionRouter(
             dispatchAction = { action -> orchestrator.dispatch(action) },
+            // External dictation trigger (2026-07-09
+            // external-dictation-entry-points): launcher alias / app
+            // shortcut / QS tile → StartDictationActivity →
+            // ACTION_START_DICTATION → this hook. Late-bound lambda for
+            // the same construction-order reason as `dispatchAction`.
+            onExternalDictationStart = { handleExternalDictationStart() },
         )
         notificationCoordinatorImpl = PipelineNotificationCoordinator(
             context = this,
@@ -1287,6 +1293,36 @@ class DictatePipelineService : Service() {
             }
             .build()
         return RealAudioFocusGate(audioManager, request)
+    }
+
+    /**
+     * External dictation trigger — the service half of the
+     * `StartDictationActivity → ACTION_START_DICTATION` chain (2026-07-09
+     * external-dictation-entry-points). Invoked from
+     * [PipelineActionRouter.dispatch] inside [onStartCommand], i.e. on the
+     * main thread with the composition root fully constructed.
+     *
+     * Order matters:
+     *
+     *  1. [OverlayPermissionObserver.refresh] — the `overlay.hasPermission`
+     *     axis is normally refreshed only by IME lifecycle hooks
+     *     (`onStartInputView`). An external trigger can arrive without the
+     *     IME ever having been shown this process, so the axis may be
+     *     stale in either direction; a stale `false` would make the
+     *     `ToggleViewModeWidget` reducer gate silently refuse the widget
+     *     open. `dispatch` is synchronous, so the axis is fresh before
+     *     the policy snapshot below.
+     *  2. [resolveExternalDictationStart] on a state snapshot; the
+     *     resulting actions are dispatched in list order — each dispatch
+     *     re-snapshots, so `StartRecording` sees the post-widget-open
+     *     state.
+     */
+    private fun handleExternalDictationStart() {
+        overlayPermissionObserverImpl.refresh()
+        net.devemperor.dictate.state.resolveExternalDictationStart(
+            state = orchestrator.state.value,
+            services = moduleServicesImpl,
+        ).forEach { action -> orchestrator.dispatch(action) }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

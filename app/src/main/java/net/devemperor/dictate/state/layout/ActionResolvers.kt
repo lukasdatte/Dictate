@@ -146,8 +146,17 @@ fun resolveRecordAction(state: DictateUiState, services: ModuleServices): Action
  * fail (mkdirs/storage); the helper fires a toast on `services.toastSink`
  * and returns `null` (R.3 silent-no-op; the reducer never sees the IO
  * failure — Pure-Reducer invariant).
+ *
+ * **Visibility (2026-07-09, external-dictation-entry-points):** `internal`
+ * rather than `private` because
+ * [net.devemperor.dictate.state.resolveExternalDictationStart] (the
+ * launcher-alias / app-shortcut / QS-tile entry policy) reuses this exact
+ * body — the external trigger must produce a byte-identical start action
+ * to the keyboard/overlay record buttons (same allocation, UUID mint,
+ * continuation lookup, IOException→toast). Keep this the single
+ * fresh-start source; do not duplicate it.
  */
-private fun resolveStartRecordingFromIdle(services: ModuleServices): Action? {
+internal fun resolveStartRecordingFromIdle(services: ModuleServices): Action? {
     val continuation = services.continuationLookup.lookup()
     if (continuation != null) {
         return Action.RecordingAction.StartRecordingContinuation(

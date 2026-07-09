@@ -41,6 +41,16 @@ import net.devemperor.dictate.state.Action
  * @param dispatchAction sink for decoded actions — `orchestrator.dispatch`
  *   in production wiring. Called on the thread the inbound action-Intent
  *   arrives on (the main thread, via `Service.onStartCommand`).
+ * @param onExternalDictationStart hook for [ACTION_START_DICTATION]
+ *   (2026-07-09 external-dictation-entry-points). Unlike the
+ *   notification-button arms this is NOT a 1:1 intent→Action mapping —
+ *   the external start needs a state snapshot + `ModuleServices` (file
+ *   allocation, continuation lookup) to build its action list, so the
+ *   Service wires a lambda that runs
+ *   [net.devemperor.dictate.state.resolveExternalDictationStart] and
+ *   dispatches the result. Keeping it a lambda preserves the router's
+ *   pure-mapper testability. Defaults to a no-op so existing
+ *   notification-only constructions stay source-compatible.
  *
  * @see net.devemperor.dictate.core.PipelineNotificationCoordinator
  * @see net.devemperor.dictate.state.Action
@@ -48,6 +58,7 @@ import net.devemperor.dictate.state.Action
  */
 class PipelineActionRouter(
     private val dispatchAction: (Action) -> Unit,
+    private val onExternalDictationStart: () -> Unit = {},
 ) {
 
     /**
@@ -78,6 +89,11 @@ class PipelineActionRouter(
                 ?.let { dispatchAction(Action.PipelineAction.ConfirmInsertion(it)) }
             ACTION_DISMISS -> intent.getStringExtra(EXTRA_SESSION_ID)
                 ?.let { dispatchAction(Action.PipelineAction.DismissResult(it)) }
+            // External dictation trigger (launcher alias / app shortcut /
+            // QS tile via StartDictationActivity). Routed to the injected
+            // hook — see the constructor-param KDoc for why this arm is
+            // not a plain dispatchAction mapping.
+            ACTION_START_DICTATION -> onExternalDictationStart()
             else -> Unit
         }
     }
@@ -140,6 +156,15 @@ class PipelineActionRouter(
         const val ACTION_CANCEL = "net.devemperor.dictate.CANCEL"
         const val ACTION_INSERT = "net.devemperor.dictate.INSERT"
         const val ACTION_DISMISS = "net.devemperor.dictate.DISMISS"
+
+        /**
+         * Canonical external-entry action (2026-07-09
+         * external-dictation-entry-points): "start a dictation without
+         * opening the keyboard". Fired exclusively by
+         * [StartDictationActivity] (which itself is the funnel for the
+         * launcher alias, the static app shortcut, and the QS tile).
+         */
+        const val ACTION_START_DICTATION = "net.devemperor.dictate.START_DICTATION"
         const val EXTRA_SESSION_ID = "session_id"
     }
 }

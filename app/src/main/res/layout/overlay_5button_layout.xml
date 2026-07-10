@@ -133,4 +133,63 @@
             app:iconPadding="0dp"
             android:contentDescription="@string/overlay_close_cd" />
     </LinearLayout>
+
+    <!-- Row 3 (P4 widget-third-row): direct-editing row — Delete | Space
+         | Enter. Lets the user do small keyboard tasks straight from the
+         widget (dictate → space → dictate more → enter → delete) without
+         unfolding the IME.
+
+         Visible ONLY when an InputConnection is available
+         (`DictateUiState.canCommitToHost` == imeViewVisible). Each button
+         carries that visibility predicate in the catalog, AND the whole
+         container is toggled GONE by `OverlayBackend` in HOVER so the
+         row's top margin does not leave an empty gap when the buttons are
+         hidden (a GONE container contributes no margin to the card).
+
+         Space stretches (weight=1) to the middle; Delete/Enter stay 48 dp
+         square. Delete is structurally open to a later long-press
+         continuous-delete (P5) without any layout change. Enter's icon is
+         overwritten per render by the host-editor-aware `resolveEnterIcon`
+         (the XML icon is only the pre-bind default). -->
+    <LinearLayout
+        android:id="@+id/overlay_third_row"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlay_delete_btn"
+            style="@style/OverlayButton.Icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            app:icon="@drawable/ic_baseline_keyboard_backspace_24"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/overlay_delete_cd" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlay_space_btn"
+            style="@style/OverlayButton.Icon"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:layout_marginEnd="6dp"
+            app:icon="@drawable/ic_baseline_space_bar_24"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/overlay_space_cd" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlay_enter_btn"
+            style="@style/OverlayButton.Icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            app:icon="@drawable/ic_baseline_subdirectory_arrow_left_24"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/overlay_enter_cd" />
+    </LinearLayout>
 </net.devemperor.dictate.state.render.overlay.DraggableOverlayLayout>

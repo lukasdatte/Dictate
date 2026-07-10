@@ -510,6 +510,11 @@
     <string name="overlay_pause_cd">Pause or resume recording</string>
     <string name="overlay_trash_cd">Cancel recording</string>
     <string name="overlay_close_cd">Close overlay</string>
+    <!-- Third-row direct-editing buttons (P4) — shown only when an input
+         field is available. -->
+    <string name="overlay_delete_cd">Delete</string>
+    <string name="overlay_space_cd">Insert space</string>
+    <string name="overlay_enter_cd">Enter</string>
 
     <!--
         Block 5 / Spec 3 §5.2-§5.3 — onboarding strings for the floating

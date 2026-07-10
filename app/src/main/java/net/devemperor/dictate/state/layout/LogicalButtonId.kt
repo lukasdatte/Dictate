@@ -99,4 +99,23 @@ enum class LogicalButtonId {
 
     /** Overlay-5-button: close — differential behaviour per ViewMode (Spec 3 §1.2). */
     OVERLAY_CLOSE,
+
+    // ─── Overlay third-row: direct-editing slots (P4) ────────────────
+    //
+    // A third overlay row (Delete | Space | Enter) that lets the user do
+    // small keyboard tasks straight from the widget — dictate, space,
+    // dictate more, enter, delete — without unfolding the IME. The whole
+    // row is shown only when an InputConnection is available (WIDGET,
+    // `DictateUiState.canCommitToHost` == true) and hidden in HOVER; the
+    // three actions reuse the existing keyboard-input path
+    // (`Action.KeyboardInputAction.Backspace / SpaceKey / EnterKey`).
+
+    /** Overlay third-row: delete (grapheme/selection-aware backspace). */
+    OVERLAY_DELETE,
+
+    /** Overlay third-row: space (wide, centre). */
+    OVERLAY_SPACE,
+
+    /** Overlay third-row: enter — host-editor-aware icon + action (reuses the keyboard ENTER resolvers). */
+    OVERLAY_ENTER,
 }

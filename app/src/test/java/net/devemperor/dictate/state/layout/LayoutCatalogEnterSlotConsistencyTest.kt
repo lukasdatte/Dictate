@@ -119,6 +119,41 @@ class LayoutCatalogEnterSlotConsistencyTest {
         }
     }
 
+    @Test
+    fun `overlay ENTER slot reuses the same icon and action as the keyboard ENTER slots (P4)`() {
+        // P4's third-row Enter button must behave identically to the
+        // keyboard ENTER — same host-editor-aware icon, same EnterKey
+        // dispatch gated on canCommitToHost. It reuses ::resolveEnterIcon
+        // and ::resolveEnterAction, so a single state must map both
+        // surfaces to the same outputs; a future divergence trips here.
+        val overlayEnter = catalog.OVERLAY_5BUTTON.slots
+            .first { it.logicalId == LogicalButtonId.OVERLAY_ENTER }
+        val keyboardEnter = enterSlots().first()
+
+        val state = stateWith(
+            HostEditorState(imeActionId = IME_ACTION_SEND, hasEditorInfo = true),
+        ).copy(imeViewVisible = true)
+
+        assertEquals(
+            "overlay ENTER icon must match the keyboard ENTER icon",
+            keyboardEnter.iconResolver(state),
+            overlayEnter.iconResolver(state),
+        )
+        assertEquals(
+            "overlay ENTER action must match the keyboard ENTER action",
+            keyboardEnter.actionResolver(state, services),
+            overlayEnter.actionResolver(state, services),
+        )
+
+        // And the HOVER gate: no InputConnection → no dispatch.
+        val hover = stateWith(HostEditorState(hasEditorInfo = true)).copy(imeViewVisible = false)
+        assertEquals(
+            "overlay ENTER must not dispatch without an InputConnection",
+            null,
+            overlayEnter.actionResolver(hover, services),
+        )
+    }
+
     private fun stateWith(host: HostEditorState): DictateUiState =
         DictateUiState.initial().copy(
             keyboardInput = KeyboardInputState(hostEditor = host),

@@ -388,24 +388,38 @@ fun resolveCancelStagingAction(
  * one single slot drives all four recording sub-states **and** both
  * live pipeline sub-states:
  *
- * | viewMode | recording   | pipeline             | Action returned                          |
- * |----------|-------------|----------------------|------------------------------------------|
- * | WIDGET   | Idle        | Idle                 | `StartRecording(...)`                    |
- * | WIDGET   | Active      | Idle                 | `StopRecordingAndSend`                   |
- * | WIDGET   | Paused      | Idle                 | `StopRecordingAndSend`                   |
- * | WIDGET   | Preparing   | Idle                 | `null` (recorder warming up)             |
- * | WIDGET   | any         | Preparing / Running  | `ToggleRunningAutoEnter` (auto-enter ↵)  |
- * | HOVER    | any         | any                  | `null` (no InputConnection target)       |
+ * | recording      | pipeline            | imeViewVisible | Action returned                          |
+ * |----------------|---------------------|----------------|------------------------------------------|
+ * | Idle           | Idle                | any            | `StartRecording(...)`                    |
+ * | Active/Paused  | Idle                | true           | `StopRecordingAndSend`                   |
+ * | Active/Paused  | Preparing / Running | true           | `StopRecordingAndSend` (recording wins)  |
+ * | Active/Paused  | any                 | false          | `null` (no InputConnection target)       |
+ * | Preparing      | Idle                | any            | `null` (recorder warming up)             |
+ * | Idle/Preparing | Preparing / Running | any            | `ToggleRunningAutoEnter` (auto-enter ↵)  |
  *
- * **HOVER gate.** User-Requirement §2 verbatim: "Senden darf nicht
- * möglich sein, während gerade kein Tastaturinput verfügbar ist". HOVER
- * is the only ViewMode where the IME-View is hidden and
- * `getCurrentInputConnection()` returns `null`; structurally any
- * SEND-class action would commit text into nothing. The
- * `enabledResolver` already disables the button visually
- * ([resolveOverlayRecordEnabled]); this defensive `null`-return is the
- * second layer per R.3 (a Race-Window click that slips through during a
- * ViewMode transition is also a no-op).
+ * **Recording-wins precedence (2026-07, ADR-0009).** A live recording —
+ * including a *secondary* recording started while a pipeline run
+ * processes — outranks the pipeline auto-enter toggle: the button must
+ * send that recording. This mirrors the keyboard's long-standing rule
+ * ([LayoutCatalog.forKeyboard]: `recordingLive` is matched *before*
+ * `isPipelineLive`, so a secondary recording drops the keyboard back to
+ * its normal Stop&Send layout while the run continues in the FGS
+ * background). Pre-2026-07 this resolver checked pipeline-live **first**,
+ * swallowing any coexisting recording as an auto-enter toggle; that state
+ * was unreachable in the overlay (no secondary-record affordance shipped
+ * yet), so the reorder is behaviour-neutral for every legacy flow — it
+ * only matters once the overlay gains its secondary-record button (P2).
+ *
+ * **IME-hidden gate.** User-Requirement §2 verbatim: "Senden darf nicht
+ * möglich sein, während gerade kein Tastaturinput verfügbar ist". When
+ * the IME-View is hidden (`!imeViewVisible` — always so in HOVER, and in
+ * the sticky-widget-after-IME-teardown case) `getCurrentInputConnection()`
+ * returns `null`, so any SEND-class action would commit text into
+ * nothing ([DictateUiState.canCommitToHost] keys on the same axis). The
+ * Active/Paused arm therefore returns `null` there; the `enabledResolver`
+ * ([resolveOverlayRecordEnabled]) disables the button visually as the
+ * first layer, this `null`-return is the R.3 second layer (a Race-Window
+ * click slipping through a ViewMode transition is also a no-op).
  *
  * **Reuse of the keyboard-surface bodies.** Both branches delegate to
  * the existing keyboard-surface resolvers:
@@ -424,36 +438,29 @@ fun resolveCancelStagingAction(
  * @see docs/plans/2026-05-21 - dictate-widget-integration/dictate-widget-integration.md §8.2 Chunk 2.2
  */
 fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices): Action? {
-    // 2026-05-22 — overlay record-btn spec (post-Widget-Pause refactor):
-    //   • IME visible: Klick = Send (StopRecordingAndSend) — same as the
-    //     keyboard record-btn. The dedicated OVERLAY_PAUSE slot handles
-    //     pause/resume.
-    //   • IME hidden: Klick = disabled (return null). Senden ohne
-    //     InputConnection ist verboten; der Nutzer muss explizit den
-    //     Pause-Btn rechts verwenden. The OVERLAY_PAUSE slot stays
-    //     enabled in this branch so the user can still pause.
-    //   • Idle (no recording): Klick = StartRecording — allowed regardless
-    //     of IME visibility (this is the whole point of the widget —
-    //     starting recording without unfolding the IME).
-    //   • Pipeline preparing/running: auto-enter toggle (unchanged).
-    //
-    // Supersedes the B3.4 "Send-button morphs into Pause-Toggle while
-    // widget is visible" rule — the separate OVERLAY_PAUSE slot now
-    // owns the pause UI, and the record-btn's role is the same on both
-    // surfaces (start when Idle, send when IME-visible-and-Active,
-    // disabled when IME-hidden-and-Active).
-
-    // While the pipeline is live, the button is a per-run auto-enter
-    // toggle (symmetric to the keyboard SEND_MODE record button).
-    if (state.pipeline is PipelineUiState.Preparing ||
-        state.pipeline is PipelineUiState.Running
-    ) {
-        return resolveRecordActionPipeline(state, services)
-    }
+    // 2026-07 — recording-wins precedence (ADR-0009, parity with
+    // LayoutCatalog.forKeyboard). See the KDoc table above for the full
+    // matrix. Ordering rationale:
+    //   1. Active/Paused FIRST — a live recording (incl. a secondary
+    //      recording started during a run) sends via Stop&Send, exactly as
+    //      the keyboard falls back to its normal layout while the run keeps
+    //      processing in the FGS background. IME hidden → null (Senden ohne
+    //      InputConnection ist verboten; the OVERLAY_PAUSE slot is the pause
+    //      surface there).
+    //   2. Pipeline live SECOND — reached only when recording is
+    //      Idle/Preparing/Interrupted; the button is the per-run auto-enter
+    //      toggle (symmetric to the keyboard SEND_MODE record button).
+    //   3. Otherwise → Start (or null while Preparing).
+    // Pre-2026-07 the pipeline-live check came FIRST, swallowing any
+    // coexisting recording as an auto-enter toggle. That state was
+    // unreachable in the overlay (no secondary-record affordance), so this
+    // reorder is behaviour-neutral for recording==Idle and only activates
+    // once the overlay secondary-record button ships (P2).
 
     // Active/Paused: Send only when the IME is visible (transcript needs
     // an InputConnection target). When the IME is hidden, return null —
-    // the OVERLAY_PAUSE slot is the pause surface in that mode.
+    // the OVERLAY_PAUSE slot is the pause surface in that mode. This wins
+    // over the pipeline-live branch below (recording-wins).
     if (state.recording is RecordingState.Active ||
         state.recording is RecordingState.Paused
     ) {
@@ -466,9 +473,19 @@ fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices):
         return resolveRecordAction(state, services)
     }
 
-    // Idle / Preparing: same Start semantics as the keyboard surface —
-    // delegate so IOException handling + UUID minting + the B2
-    // ContinuationLookup branch stay byte-identical (R.3 /
+    // recording Idle/Preparing/Interrupted + pipeline live: the button is a
+    // per-run auto-enter toggle (symmetric to the keyboard SEND_MODE record
+    // button). resolveRecordActionPipeline returns null outside
+    // Preparing/Running, so a Preparing-recorder click stays a no-op.
+    if (state.pipeline is PipelineUiState.Preparing ||
+        state.pipeline is PipelineUiState.Running
+    ) {
+        return resolveRecordActionPipeline(state, services)
+    }
+
+    // Idle / Preparing / Interrupted + pipeline Idle: same Start semantics as
+    // the keyboard surface — delegate so IOException handling + UUID minting +
+    // the B2 ContinuationLookup branch stay byte-identical (R.3 /
     // single-source-of-side-effect).
     return resolveRecordAction(state, services)
 }
@@ -483,13 +500,13 @@ fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices):
  * cannot drift apart — and so HOVER-disabled is **one** branch in
  * **one** function (the user requirement).
  *
- * | viewMode | recording               | pipeline             | enabled |
- * |----------|-------------------------|----------------------|---------|
- * | HOVER    | any                     | any                  | `false` |
- * | KEYBOARD | any                     | any                  | `false` |
- * | WIDGET   | Preparing               | Idle                 | `false` |
- * | WIDGET   | any other recording     | Preparing / Running  | `true`  |
- * | WIDGET   | Idle / Active / Paused  | Idle                 | `true`  |
+ * | recording               | pipeline             | imeViewVisible | enabled |
+ * |-------------------------|----------------------|----------------|---------|
+ * | Active / Paused         | any                  | `true`         | `true`  |
+ * | Active / Paused         | any                  | `false`        | `false` |
+ * | Preparing               | Preparing / Running  | any            | `true`  |
+ * | Preparing               | Idle                 | any            | `false` |
+ * | Idle / Interrupted      | any                  | any            | `true`  |
  *
  * Note that the *visibility* predicate stays simple (`true`) — the
  * button is always present in the overlay layout; the `enabled` /
@@ -497,32 +514,35 @@ fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices):
  * keyboard surface's `record_btn`, which is also always-visible.
  */
 fun resolveOverlayRecordEnabled(state: DictateUiState): Boolean {
-    // 2026-05-22 — overlay record-btn enabled-table (matches
-    // resolveOverlayRecordAction, see its KDoc):
+    // 2026-07 — recording-wins precedence, matches resolveOverlayRecordAction
+    // (see its KDoc). Active/Paused is evaluated FIRST so a live recording
+    // drives the enabled axis regardless of a background pipeline run:
     //
     // | recording               | pipeline             | imeVisible | enabled |
     // |-------------------------|----------------------|------------|---------|
-    // | any                     | Preparing / Running  | any        | true    |
-    // | Active / Paused         | Idle                 | true       | true    |
-    // | Active / Paused         | Idle                 | false      | false   |
-    // | Idle                    | Idle                 | any        | true    |
-    // | Preparing               | any                  | any        | false   |
+    // | Active / Paused         | any                  | true       | true    |
+    // | Active / Paused         | any                  | false      | false   |
+    // | Preparing               | Preparing / Running  | any        | true    |
+    // | Preparing               | Idle                 | any        | false   |
+    // | Idle / Interrupted      | any                  | any        | true    |
     //
-    // The IME-hidden + Active/Paused branch is the new "Senden ohne
-    // InputConnection ist verboten" rule — the dedicated OVERLAY_PAUSE
-    // slot remains enabled there so the user can still pause.
+    // The Active/Paused + IME-hidden branch is the "Senden ohne
+    // InputConnection ist verboten" rule — the dedicated OVERLAY_PAUSE slot
+    // remains enabled there so the user can still pause. Pre-2026-07 the
+    // pipeline-live check came first and returned `true` even for
+    // Active/Paused + IME-hidden; the reorder aligns enabled with the
+    // action's `null` return (behaviour-neutral for recording==Idle).
+    if (state.recording is RecordingState.Active ||
+        state.recording is RecordingState.Paused
+    ) {
+        return state.imeViewVisible
+    }
     if (state.pipeline is PipelineUiState.Preparing ||
         state.pipeline is PipelineUiState.Running
     ) {
         return true
     }
     if (state.recording is RecordingState.Preparing) {
-        return false
-    }
-    if ((state.recording is RecordingState.Active ||
-            state.recording is RecordingState.Paused) &&
-        !state.imeViewVisible
-    ) {
         return false
     }
     return true

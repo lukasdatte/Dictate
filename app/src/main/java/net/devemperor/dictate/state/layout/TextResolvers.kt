@@ -202,12 +202,15 @@ fun resolveRecordButtonTextPipeline(state: DictateUiState, strings: LayoutString
  *
  * Composition of the two keyboard-surface resolvers:
  *
- *  - When the pipeline is `Preparing` or `Running` → defer to
+ *  - When recording is `Active` / `Paused` → defer to
+ *    [resolveRecordButtonText] (the Send label), **even while a pipeline
+ *    run processes** — recording-wins precedence (2026-07, ADR-0009), so
+ *    the caption matches the Stop&Send action a live recording drives.
+ *  - Else when the pipeline is `Preparing` or `Running` → defer to
  *    [resolveRecordButtonTextPipeline] (shows "Sending …", `"N/M ↵ M:SS"`,
  *    same labels as the keyboard `SEND_MODE` layouts).
- *  - Otherwise → defer to [resolveRecordButtonText] (Idle / Active /
- *    Paused / Preparing — same labels as the standard keyboard
- *    `RECORD` slot).
+ *  - Otherwise → defer to [resolveRecordButtonText] (Idle / Preparing —
+ *    same labels as the standard keyboard `RECORD` slot).
  *
  * **Why a separate resolver instead of inlining one of the two?** The
  * keyboard surface branches between `TWO_ROW` (uses
@@ -225,9 +228,21 @@ fun resolveOverlayRecordButtonText(state: DictateUiState, strings: LayoutStrings
     // 2026-05-22 — overlay record-btn text mirrors the keyboard-surface
     // record-btn 1:1. The previous B3.4 "morph to Pause / Resume label
     // while widget is visible" rule is gone: the dedicated OVERLAY_PAUSE
-    // slot now owns the pause UI, so the record-btn keeps its
-    // start/send identity on both surfaces. Pipeline-live states show
-    // the per-run auto-enter-toggle label ("N/M ↵ M:SS").
+    // slot now owns the pause UI, so the record-btn keeps its start/send
+    // identity on both surfaces.
+    //
+    // 2026-07 — recording-wins precedence (matches resolveOverlayRecordAction,
+    // parity with LayoutCatalog.forKeyboard): a live recording — including a
+    // secondary recording started during a run — shows the Send label rather
+    // than the pipeline progress label, so the caption tracks the Stop&Send
+    // action instead of the (now-outranked) auto-enter toggle. Only when
+    // recording is Idle/Preparing does a live pipeline surface its per-run
+    // auto-enter-toggle label ("N/M ↵ M:SS").
+    if (state.recording is RecordingState.Active ||
+        state.recording is RecordingState.Paused
+    ) {
+        return resolveRecordButtonText(state, strings)
+    }
     return when (state.pipeline) {
         is PipelineUiState.Preparing,
         is PipelineUiState.Running -> resolveRecordButtonTextPipeline(state, strings)

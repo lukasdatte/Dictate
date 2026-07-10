@@ -769,15 +769,22 @@ class ActionResolversTest {
     }
 
     @Test
-    fun `B3-4 pipeline Running takes precedence over Pause-Toggle (auto-enter still owns the btn)`() {
-        // When the pipeline is live the button is the per-run auto-enter
-        // toggle, regardless of widget-state. Pause/Resume only kicks
-        // in for non-live-pipeline recording sub-states.
+    fun `recording-wins Active + pipeline Running + IME visible emits StopRecordingAndSend (2026-07 ADR-0009)`() {
+        // Recording-wins precedence (parity with LayoutCatalog.forKeyboard):
+        // a secondary recording started during a run is sent via the overlay
+        // record button, exactly as the keyboard drops back to its normal
+        // Stop&Send layout while the run keeps processing in the FGS
+        // background. This SUPERSEDES the pre-2026-07 pipeline-first rule
+        // (which swallowed the coexisting recording as an auto-enter toggle);
+        // that state was unreachable in the overlay until the secondary-record
+        // button ships (P2), so the change is behaviour-neutral for legacy
+        // flows and only activates once a recording coexists with a live run.
         val s = state.copy(
             viewMode = net.devemperor.dictate.state.ViewMode.WIDGET,
             widget = net.devemperor.dictate.state.WidgetState.Visible(
                 net.devemperor.dictate.state.WidgetOrigin.USER
             ),
+            imeViewVisible = true,
             recording = RecordingState.Active(
                 useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-w"
             ),
@@ -790,9 +797,35 @@ class ActionResolversTest {
             ),
         )
         assertTrue(
-            "Pipeline.Running + widget visible + Active → ToggleRunningAutoEnter (not Pause)",
+            "Active + pipeline Running + IME visible → StopRecordingAndSend (recording wins over auto-enter)",
             resolveOverlayRecordAction(s, fakeModuleServices())
-                is Action.PipelineAction.ToggleRunningAutoEnter,
+                is Action.RecordingAction.StopRecordingAndSend,
+        )
+    }
+
+    @Test
+    fun `recording-wins Active + pipeline Running + IME hidden returns null (Senden verboten)`() {
+        // IME hidden (HOVER, or sticky widget after IME teardown): even with
+        // recording-wins precedence the Active/Paused arm returns null — there
+        // is no InputConnection to commit into (canCommitToHost keys on
+        // imeViewVisible). The recording wins over the pipeline auto-enter
+        // toggle, but the resulting Send is still gated on a live host field.
+        val s = state.copy(
+            imeViewVisible = false,
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-h"
+            ),
+            pipeline = PipelineUiState.Running(
+                sessionId = "sid-pipe",
+                target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+                totalSteps = 1,
+                elapsedMs = 0L,
+                autoEnterActive = false,
+            ),
+        )
+        assertNull(
+            "IME hidden + Active + pipeline live → null (recording wins, but no host to send into)",
+            resolveOverlayRecordAction(s, fakeModuleServices()),
         )
     }
 
@@ -947,6 +980,35 @@ class ActionResolversTest {
         )
         assertEquals(true, resolveOverlayRecordEnabled(preparing))
         assertEquals(true, resolveOverlayRecordEnabled(running))
+    }
+
+    @Test
+    fun `resolveOverlayRecordEnabled recording-wins Active + pipeline live keys on imeViewVisible (2026-07)`() {
+        // Recording-wins: Active/Paused drives the enabled axis even during a
+        // live pipeline (parity with the action resolver). Pre-2026-07 the
+        // pipeline-live check came first and returned true regardless of
+        // imeViewVisible; now enabled tracks the host-field availability, so
+        // the disabled button matches the action's null return.
+        val running = PipelineUiState.Running(
+            sessionId = "sid-pipe", target = InsertionTarget.INPUT_CONNECTION,
+        )
+        val active = RecordingState.Active(
+            useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-w",
+        )
+        assertEquals(
+            "Active + pipeline live + IME visible → enabled (Stop&Send reachable)",
+            true,
+            resolveOverlayRecordEnabled(
+                state.copy(imeViewVisible = true, recording = active, pipeline = running),
+            ),
+        )
+        assertEquals(
+            "Active + pipeline live + IME hidden → disabled (no host to send into)",
+            false,
+            resolveOverlayRecordEnabled(
+                state.copy(imeViewVisible = false, recording = active, pipeline = running),
+            ),
+        )
     }
 }
 

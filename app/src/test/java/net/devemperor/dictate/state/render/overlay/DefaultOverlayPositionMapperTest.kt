@@ -6,6 +6,7 @@ import android.view.View
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -144,6 +145,23 @@ class DefaultOverlayPositionMapperTest {
         val (nx, ny) = mapper.pixelsToNormalized(px, py, full)!!
         assertEquals(1f, nx)
         assertEquals(1f, ny)
+    }
+
+    @Test
+    fun `a taller widget stays fully on-screen at the bottom-edge anchor (P4 third row)`() {
+        // P4 grows the widget by one row when the InputConnection is
+        // available (Delete | Space | Enter). The mapper anchors the
+        // top-left within the FREE area (screen − view), so the bottom
+        // edge (py + viewH) can never exceed the screen height — even at
+        // normY=1.0 (bottom-edge anchor). Proven here for a widget that is
+        // 60 % of the screen height (far taller than the real ~1/3).
+        val tallView = measuredView(w = 200, h = 1200) // screen is 1000×2000
+        val (_, py) = mapper.normalizedToPixels(1.0f, 1.0f, tallView)!!
+        assertEquals("bottom-edge anchor maps to free-area max (screen − view)", 800, py)
+        assertTrue(
+            "the widget's bottom edge must stay on-screen: py($py) + viewH(1200) <= screenH(2000)",
+            py + 1200 <= 2000,
+        )
     }
 
     @Test

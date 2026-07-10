@@ -15,6 +15,7 @@ import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.ModuleServices
 import net.devemperor.dictate.state.OverlayState
+import net.devemperor.dictate.state.canCommitToHost
 import net.devemperor.dictate.state.layout.BackendType
 import net.devemperor.dictate.state.layout.ButtonSlot
 import net.devemperor.dictate.state.layout.LayoutMode
@@ -213,6 +214,20 @@ class OverlayBackend(
      * outside an attached lifecycle.
      */
     private var buttonViews: Map<LogicalButtonId, View> = emptyMap()
+
+    /**
+     * The P4 third-row container (`overlay_third_row`) — the row of
+     * Delete / Space / Enter buttons. `null` while detached.
+     *
+     * The row's per-button slots already carry the `canCommitToHost`
+     * visibility predicate, but the slot renderer only flips the button
+     * Views (never their parent). A row whose children are all GONE would
+     * still contribute its `layout_marginTop` to the card, leaving a
+     * visible empty gap in HOVER. Collapsing the container itself removes
+     * that gap (a GONE view contributes no margin to its parent). See
+     * [applySlots].
+     */
+    private var thirdRowContainer: View? = null
 
     /**
      * State snapshot read by click listeners at click-time. Single
@@ -472,6 +487,17 @@ class OverlayBackend(
                 )
             applySlotToView(slot, view, state, ctx)
         }
+
+        // P4 — collapse the third-row *container* when no InputConnection
+        // is available. The three slots above already flip their button
+        // Views to GONE via the `canCommitToHost` predicate, but the slot
+        // renderer never touches the parent, so the row's top margin would
+        // otherwise linger as an empty gap. The container toggle mirrors
+        // the SAME canonical predicate the slots use, keeping WIDGET vs
+        // HOVER a single decision axis. No-op when the row is absent (a
+        // future overlay mode without the P4 row).
+        thirdRowContainer?.visibility =
+            if (state.canCommitToHost) View.VISIBLE else View.GONE
     }
 
     /**
@@ -516,6 +542,12 @@ class OverlayBackend(
             LogicalButtonId.OVERLAY_PAUSE to view.findViewById<View>(R.id.overlay_pause_btn),
             LogicalButtonId.OVERLAY_TRASH to view.findViewById<View>(R.id.overlay_trash_btn),
             LogicalButtonId.OVERLAY_CLOSE to view.findViewById<View>(R.id.overlay_close_btn),
+            // P4 third-row (Delete | Space | Enter). Every slot in the
+            // active mode MUST have a registered View or applySlots()
+            // raises the silent-skip guard.
+            LogicalButtonId.OVERLAY_DELETE to view.findViewById<View>(R.id.overlay_delete_btn),
+            LogicalButtonId.OVERLAY_SPACE to view.findViewById<View>(R.id.overlay_space_btn),
+            LogicalButtonId.OVERLAY_ENTER to view.findViewById<View>(R.id.overlay_enter_btn),
         )
 
         val params = layoutParamsFactory.create()
@@ -530,6 +562,7 @@ class OverlayBackend(
         overlayView = view
         currentParams = params
         buttonViews = views
+        thirdRowContainer = view.findViewById(R.id.overlay_third_row)
         inflatedNightMode = nightWanted
 
         wireStaticOverlayHandlers()
@@ -898,6 +931,7 @@ class OverlayBackend(
         overlayView = null
         currentParams = null
         buttonViews = emptyMap()
+        thirdRowContainer = null
         stateRef = null
         modeRef = null
         lastAppliedPosition = null

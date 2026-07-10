@@ -53,14 +53,15 @@ class LayoutCatalogTest {
     }
 
     @Test
-    fun `OVERLAY_5BUTTON has all four overlay slots in row order (Variante 2a)`() {
+    fun `OVERLAY_5BUTTON has all overlay slots in row order (Variante 2a + P4 third row)`() {
         // dictate-widget-integration §6.5 Variante 2a:
         //   Row 1: RECORD (merged ex-RECORD + ex-SEND, FillRemaining)
         //   Row 2: TRASH / PAUSE / CLOSE
-        // The previous standalone OVERLAY_SEND was deleted per
-        // §8.2 Chunk 2.4 / §10.2 OQ-1 (user-decision).
+        // P4 (widget-third-row):
+        //   Row 3: DELETE / SPACE / ENTER — direct-editing row, only
+        //   rendered while an InputConnection is available (canCommitToHost).
         val rows = catalog.OVERLAY_5BUTTON.rows
-        assertEquals("OVERLAY_5BUTTON must have exactly two rows.", 2, rows.size)
+        assertEquals("OVERLAY_5BUTTON must have exactly three rows.", 3, rows.size)
         assertEquals(
             "Row 1 must be the single merged RECORD slot (Variante 2a).",
             listOf(LogicalButtonId.OVERLAY_RECORD),
@@ -74,6 +75,79 @@ class LayoutCatalogTest {
                 LogicalButtonId.OVERLAY_CLOSE,
             ),
             rows[1].slots.map { it.logicalId },
+        )
+        assertEquals(
+            "Row 3 must be DELETE / SPACE / ENTER in left-to-right order (P4).",
+            listOf(
+                LogicalButtonId.OVERLAY_DELETE,
+                LogicalButtonId.OVERLAY_SPACE,
+                LogicalButtonId.OVERLAY_ENTER,
+            ),
+            rows[2].slots.map { it.logicalId },
+        )
+    }
+
+    // ─── P4 third-row (Delete | Space | Enter) ─────────────────────────
+
+    @Test
+    fun `overlay third-row slots are visible only when canCommitToHost (InputConnection available)`() {
+        // The whole row is gated on the canonical "input field available"
+        // predicate — `DictateUiState.canCommitToHost` (== imeViewVisible).
+        // WIDGET (imeViewVisible=true) shows the row; HOVER
+        // (imeViewVisible=false) hides every slot so the user cannot type
+        // into a null InputConnection.
+        val thirdRowIds = listOf(
+            LogicalButtonId.OVERLAY_DELETE,
+            LogicalButtonId.OVERLAY_SPACE,
+            LogicalButtonId.OVERLAY_ENTER,
+        )
+        val widgetState = overlayState(imeViewVisible = true)
+        val hoverState = overlayState(imeViewVisible = false)
+        thirdRowIds.forEach { id ->
+            val slot = catalog.OVERLAY_5BUTTON.slots.first { it.logicalId == id }
+            assertTrue(
+                "$id must be VISIBLE when canCommitToHost (WIDGET / imeViewVisible=true)",
+                slot.visibilityPredicate(widgetState),
+            )
+            assertFalse(
+                "$id must be GONE when !canCommitToHost (HOVER / imeViewVisible=false)",
+                slot.visibilityPredicate(hoverState),
+            )
+        }
+    }
+
+    @Test
+    fun `overlay DELETE slot dispatches Backspace`() {
+        val slot = catalog.OVERLAY_5BUTTON.slots.first { it.logicalId == LogicalButtonId.OVERLAY_DELETE }
+        assertEquals(
+            net.devemperor.dictate.state.Action.KeyboardInputAction.Backspace,
+            slot.actionResolver(overlayState(imeViewVisible = true), net.devemperor.dictate.testutil.fakeModuleServices()),
+        )
+    }
+
+    @Test
+    fun `overlay SPACE slot dispatches SpaceKey`() {
+        val slot = catalog.OVERLAY_5BUTTON.slots.first { it.logicalId == LogicalButtonId.OVERLAY_SPACE }
+        assertEquals(
+            net.devemperor.dictate.state.Action.KeyboardInputAction.SpaceKey,
+            slot.actionResolver(overlayState(imeViewVisible = true), net.devemperor.dictate.testutil.fakeModuleServices()),
+        )
+    }
+
+    @Test
+    fun `overlay ENTER slot reuses the keyboard enter resolvers (action + icon)`() {
+        val slot = catalog.OVERLAY_5BUTTON.slots.first { it.logicalId == LogicalButtonId.OVERLAY_ENTER }
+        val visibleState = overlayState(imeViewVisible = true)
+        // Action mirrors resolveEnterAction: EnterKey when canCommitToHost.
+        assertEquals(
+            net.devemperor.dictate.state.Action.KeyboardInputAction.EnterKey,
+            slot.actionResolver(visibleState, net.devemperor.dictate.testutil.fakeModuleServices()),
+        )
+        // Icon mirrors resolveEnterIcon (host-editor-aware; no EditorInfo
+        // on the baseline → the return-arrow drawable).
+        assertEquals(
+            resolveEnterIcon(visibleState),
+            slot.iconResolver(visibleState),
         )
     }
 
@@ -429,6 +503,15 @@ class LayoutCatalogTest {
             pipeline = pipe,
             layout = LayoutState(singleRowMode = singleRow),
         )
+
+    /**
+     * A minimal overlay-surface state. [imeViewVisible] is the sole axis
+     * the P4 third-row visibility keys on (== `DictateUiState.canCommitToHost`):
+     * `true` models WIDGET with an available InputConnection, `false`
+     * models HOVER without one.
+     */
+    private fun overlayState(imeViewVisible: Boolean): DictateUiState =
+        DictateUiState.initial().copy(imeViewVisible = imeViewVisible)
 
     private fun stateRecordingWithPipeline(pipe: PipelineUiState, singleRow: Boolean): DictateUiState =
         DictateUiState.initial().copy(

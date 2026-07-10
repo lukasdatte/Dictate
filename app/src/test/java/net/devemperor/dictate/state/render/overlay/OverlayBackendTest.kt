@@ -601,6 +601,138 @@ class OverlayBackendTest {
         )
     }
 
+    // ─── P4 — third row (Delete | Space | Enter) ──────────────────────
+
+    @Test
+    fun `third-row DELETE click dispatches Backspace in WIDGET`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+        // WIDGET default → imeViewVisible=true → canCommitToHost → row shown.
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+
+        findOverlayButton(LogicalButtonId.OVERLAY_DELETE).performClick()
+
+        assertEquals(listOf(Action.KeyboardInputAction.Backspace), captured)
+    }
+
+    @Test
+    fun `third-row SPACE click dispatches SpaceKey in WIDGET`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+
+        findOverlayButton(LogicalButtonId.OVERLAY_SPACE).performClick()
+
+        assertEquals(listOf(Action.KeyboardInputAction.SpaceKey), captured)
+    }
+
+    @Test
+    fun `third-row ENTER click dispatches EnterKey in WIDGET`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+
+        findOverlayButton(LogicalButtonId.OVERLAY_ENTER).performClick()
+
+        assertEquals(listOf(Action.KeyboardInputAction.EnterKey), captured)
+    }
+
+    @Test
+    fun `third-row is hidden and its container collapses when no InputConnection (HOVER)`() {
+        // HOVER = imeViewVisible=false = !canCommitToHost. Every third-row
+        // button must be GONE AND the row container must be GONE so the
+        // widget shows no empty gap (the row's top margin would otherwise
+        // linger). This is the Row-Container-Collapse fix.
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(
+            stateWithPermission(viewMode = ViewMode.HOVER).copy(imeViewVisible = false),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        listOf(
+            LogicalButtonId.OVERLAY_DELETE,
+            LogicalButtonId.OVERLAY_SPACE,
+            LogicalButtonId.OVERLAY_ENTER,
+        ).forEach { id ->
+            assertEquals(
+                "$id must be GONE without an InputConnection (HOVER)",
+                View.GONE,
+                findOverlayButton(id).visibility,
+            )
+        }
+        assertEquals(
+            "The third-row container must collapse (GONE) so no empty gap remains.",
+            View.GONE,
+            thirdRowContainer().visibility,
+        )
+    }
+
+    @Test
+    fun `third-row container is visible when an InputConnection is available (WIDGET)`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+
+        assertEquals(
+            "The third-row container must be VISIBLE while canCommitToHost.",
+            View.VISIBLE,
+            thirdRowContainer().visibility,
+        )
+    }
+
+    @Test
+    fun `third-row ENTER click is a silent no-op without an InputConnection (HOVER)`() {
+        // Defence-in-depth: even if a race click slips through while the
+        // row is transitioning to GONE, resolveEnterAction returns null
+        // when !canCommitToHost, so no EnterKey reaches the orchestrator.
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(
+            stateWithPermission(viewMode = ViewMode.HOVER).copy(imeViewVisible = false),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        findOverlayButton(LogicalButtonId.OVERLAY_ENTER).performClick()
+
+        assertTrue("ENTER click without an InputConnection must be a no-op: $captured", captured.isEmpty())
+    }
+
+    @Test
+    fun `third-row buttons follow widgetOpacity on the third background colour`() {
+        // The opacity render path (applyBackgroundOpacity) iterates every
+        // registered buttonView. The three new buttons must therefore dim
+        // together with the rest of the widget — same slider alpha on
+        // colorSecondaryContainer as the existing four buttons.
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(
+            stateWithPermission(viewMode = ViewMode.WIDGET).copy(
+                theming = net.devemperor.dictate.state.ThemingState(widgetOpacity = 20),
+            ),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        listOf(
+            LogicalButtonId.OVERLAY_DELETE,
+            LogicalButtonId.OVERLAY_SPACE,
+            LogicalButtonId.OVERLAY_ENTER,
+        ).forEach { id ->
+            val tint = (findOverlayButton(id) as com.google.android.material.button.MaterialButton)
+                .backgroundTintList ?: error("button $id has no backgroundTintList")
+            assertEquals(
+                "button $id container tint must be the third background colour at the slider alpha",
+                expectedButtonFill(20),
+                tint.defaultColor,
+            )
+            assertEquals(
+                "button $id container tint must carry the 20 % slider alpha (51)",
+                51,
+                android.graphics.Color.alpha(tint.defaultColor),
+            )
+        }
+    }
+
     // ─── §8.1 Chunks 1.3-1.4 — side-channel forwarders ────────────────
 
     @Test
@@ -1251,6 +1383,14 @@ class OverlayBackendTest {
             0f to 0f
     }
 
+    /** The P4 third-row container (`overlay_third_row`) in the attached tree. */
+    private fun thirdRowContainer(): View {
+        val rootView = window.lastAttachedView
+            ?: error("No View was attached — make sure render() ran with hasPermission=true.")
+        return rootView.findViewById(R.id.overlay_third_row)
+            ?: error("overlay_third_row container not found in attached overlay layout.")
+    }
+
     private fun findOverlayButton(id: LogicalButtonId): View {
         // Walk the inflated tree to find the button by tag-id. We rely
         // on Robolectric's real inflate having run during the previous
@@ -1262,6 +1402,10 @@ class OverlayBackendTest {
             LogicalButtonId.OVERLAY_PAUSE -> R.id.overlay_pause_btn
             LogicalButtonId.OVERLAY_TRASH -> R.id.overlay_trash_btn
             LogicalButtonId.OVERLAY_CLOSE -> R.id.overlay_close_btn
+            // P4 third-row (Delete | Space | Enter).
+            LogicalButtonId.OVERLAY_DELETE -> R.id.overlay_delete_btn
+            LogicalButtonId.OVERLAY_SPACE -> R.id.overlay_space_btn
+            LogicalButtonId.OVERLAY_ENTER -> R.id.overlay_enter_btn
             else -> error("Not an overlay-button id: $id")
         }
         val rootView = window.lastAttachedView

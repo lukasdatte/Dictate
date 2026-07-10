@@ -6,6 +6,7 @@ import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
 import net.devemperor.dictate.state.WidgetState
+import net.devemperor.dictate.state.canCommitToHost
 import net.devemperor.dictate.state.infobar.InfoBarSelector
 import net.devemperor.dictate.state.isActiveOrPaused
 
@@ -667,6 +668,57 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         widthPolicy = WidthPolicy.WrapContent,
                         visibilityPredicate = { true },
                         actionResolver = ::resolveOverlayCloseAction,
+                    ),
+                )),
+                // Row 3 (P4 widget-third-row): DELETE | SPACE | ENTER —
+                // direct-editing row so the user can do small keyboard
+                // tasks straight from the widget without unfolding the IME.
+                //
+                // The whole row is gated on the canonical "input field
+                // available" predicate — `DictateUiState.canCommitToHost`
+                // (== `imeViewVisible`). WIDGET (an InputConnection is
+                // backed) shows the row; HOVER (no editor) hides every
+                // slot so a keystroke can never land in a null IC. The
+                // OverlayBackend additionally collapses the row *container*
+                // in HOVER so the row's top margin leaves no empty gap.
+                //
+                // DELETE / SPACE dispatch the SAME keyboard-input actions
+                // as the keyboard SPACE / BACKSPACE slots — the shared
+                // `KeyboardInputModule` effect routes them through the
+                // single InsertionService IC-write owner (grapheme- and
+                // selection-aware delete via `ControlOp.DeleteGrapheme`,
+                // space via `InsertionPolicy.KEYSTROKE`). No host-guard is
+                // consulted on that path, and a null-IC write is a no-op,
+                // so a race-window tap while the row is collapsing is
+                // harmless. ENTER reuses the keyboard ENTER resolvers
+                // (`::resolveEnterIcon` / `::resolveEnterAction`) verbatim,
+                // so the host-editor-aware icon (Send / Search / Newline /
+                // Done) and the `canCommitToHost`-gated dispatch stay in
+                // lockstep with the keyboard surface.
+                RowDescriptor(slots = listOf(
+                    ButtonSlot(
+                        logicalId = LogicalButtonId.OVERLAY_DELETE,
+                        widthPolicy = WidthPolicy.WrapContent,
+                        visibilityPredicate = { it.canCommitToHost },
+                        // P5 (later) hangs a long-press continuous-delete
+                        // off this slot's longClickResolver; the plain tap
+                        // stays a single grapheme/selection-aware delete.
+                        actionResolver = { _, _ -> Action.KeyboardInputAction.Backspace },
+                    ),
+                    ButtonSlot(
+                        logicalId = LogicalButtonId.OVERLAY_SPACE,
+                        widthPolicy = WidthPolicy.FillRemaining,
+                        visibilityPredicate = { it.canCommitToHost },
+                        actionResolver = { _, _ -> Action.KeyboardInputAction.SpaceKey },
+                    ),
+                    ButtonSlot(
+                        logicalId = LogicalButtonId.OVERLAY_ENTER,
+                        widthPolicy = WidthPolicy.WrapContent,
+                        visibilityPredicate = { it.canCommitToHost },
+                        // DRY with the keyboard ENTER slot — host-editor
+                        // aware icon + `canCommitToHost`-gated EnterKey.
+                        iconResolver = ::resolveEnterIcon,
+                        actionResolver = ::resolveEnterAction,
                     ),
                 )),
             ),

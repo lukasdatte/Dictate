@@ -118,6 +118,22 @@
             app:iconPadding="0dp"
             android:contentDescription="@string/overlay_pause_cd" />
 
+        <!-- overlay_record_secondary_btn (P2 / ADR-0009) — secondary-record
+             mic button. Shares the row's centre slot with the pause button:
+             the two are never visible at the same time (pause shows while a
+             recording is in flight, this one shows while a pipeline run is
+             live AND recording is Idle). Static mic icon (no iconResolver),
+             visibility driven by the LayoutCatalog slot predicate. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlay_record_secondary_btn"
+            style="@style/OverlayButton.Icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            app:icon="@drawable/ic_baseline_mic_24"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/overlay_record_secondary_cd" />
+
         <Space
             android:layout_width="0dp"
             android:layout_height="0dp"

@@ -664,6 +664,38 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         actionResolver = ::resolvePauseAction,
                     ),
                     ButtonSlot(
+                        logicalId = LogicalButtonId.OVERLAY_RECORD_SECONDARY,
+                        widthPolicy = WidthPolicy.WrapContent,
+                        // P2 / ADR-0009 — the widget twin of the keyboard
+                        // RECORD_SECONDARY mic button. Visible while a
+                        // pipeline run processes AND no recording is in
+                        // flight (single-MediaRecorder gate) AND the IME-View
+                        // is visible. The `imeViewVisible` gate is decided
+                        // policy: HOVER and the sticky-widget-without-IME do
+                        // NOT get the button — a secondary recording could be
+                        // started there but never *sent* (no InputConnection
+                        // target), the ADR-0009 Alt-3 anti-pattern. Once the
+                        // secondary recording is Active, the main OVERLAY_RECORD
+                        // button takes over the send via recording-wins
+                        // precedence (P1) — this slot builds no send action.
+                        //
+                        // Space note: OVERLAY_PAUSE is hidden whenever a
+                        // pipeline run is live and recording is Idle, so the
+                        // pause slot and this one are never both visible.
+                        visibilityPredicate = { state ->
+                            (state.pipeline is PipelineUiState.Preparing ||
+                                state.pipeline is PipelineUiState.Running) &&
+                                state.recording is RecordingState.Idle &&
+                                state.imeViewVisible
+                        },
+                        // DRY: the SAME body as the keyboard RECORD_SECONDARY
+                        // slot — a fresh start-from-Idle action (shared
+                        // resolveStartRecordingFromIdle: single-MediaRecorder
+                        // gate + IOException→toast + UUID mint). No overlay
+                        // copy; the resolver is context-agnostic.
+                        actionResolver = ::resolveSecondaryRecordAction,
+                    ),
+                    ButtonSlot(
                         logicalId = LogicalButtonId.OVERLAY_CLOSE,
                         widthPolicy = WidthPolicy.WrapContent,
                         visibilityPredicate = { true },

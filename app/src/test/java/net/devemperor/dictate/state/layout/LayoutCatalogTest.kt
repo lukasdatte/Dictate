@@ -68,10 +68,11 @@ class LayoutCatalogTest {
             rows[0].slots.map { it.logicalId },
         )
         assertEquals(
-            "Row 2 must be TRASH / PAUSE / CLOSE in left-to-right order.",
+            "Row 2 must be TRASH / PAUSE / RECORD_SECONDARY / CLOSE in left-to-right order.",
             listOf(
                 LogicalButtonId.OVERLAY_TRASH,
                 LogicalButtonId.OVERLAY_PAUSE,
+                LogicalButtonId.OVERLAY_RECORD_SECONDARY,
                 LogicalButtonId.OVERLAY_CLOSE,
             ),
             rows[1].slots.map { it.logicalId },
@@ -148,6 +149,80 @@ class LayoutCatalogTest {
         assertEquals(
             resolveEnterIcon(visibleState),
             slot.iconResolver(visibleState),
+        )
+    }
+
+    // ─── P2 overlay secondary-record mic button ────────────────────────
+
+    @Test
+    fun `overlay RECORD_SECONDARY is visible only while pipeline live + recording Idle + imeViewVisible`() {
+        // P2 / ADR-0009: the widget twin of the keyboard RECORD_SECONDARY
+        // slot. The imeViewVisible gate is decided policy — HOVER and the
+        // sticky-widget-without-IME must NOT get the button (a recording
+        // could be started there but never sent — the ADR-0009 Alt-3
+        // anti-pattern).
+        val slot = catalog.OVERLAY_5BUTTON.slots
+            .first { it.logicalId == LogicalButtonId.OVERLAY_RECORD_SECONDARY }
+        val running = PipelineUiState.Running(
+            sessionId = "s1",
+            target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+        )
+        val activeRecording = RecordingState.Active(
+            useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sec-rec",
+        )
+
+        // Visible: pipeline Preparing/Running + recording Idle + IME visible.
+        assertTrue(
+            "visible while Preparing + recording Idle + imeViewVisible",
+            slot.visibilityPredicate(
+                overlaySecondaryState(PipelineUiState.Preparing("s1"), RecordingState.Idle, imeViewVisible = true),
+            ),
+        )
+        assertTrue(
+            "visible while Running + recording Idle + imeViewVisible",
+            slot.visibilityPredicate(
+                overlaySecondaryState(running, RecordingState.Idle, imeViewVisible = true),
+            ),
+        )
+
+        // Hidden: no live pipeline run.
+        assertFalse(
+            "hidden when no pipeline run is live",
+            slot.visibilityPredicate(
+                overlaySecondaryState(PipelineUiState.Idle, RecordingState.Idle, imeViewVisible = true),
+            ),
+        )
+        // Hidden: a recording is already in flight (single-MediaRecorder gate).
+        assertFalse(
+            "hidden while a recording is Active",
+            slot.visibilityPredicate(
+                overlaySecondaryState(running, activeRecording, imeViewVisible = true),
+            ),
+        )
+        // Hidden: IME-View not visible (HOVER / sticky-widget-without-IME).
+        assertFalse(
+            "hidden when imeViewVisible=false (HOVER — startable but never sendable)",
+            slot.visibilityPredicate(
+                overlaySecondaryState(running, RecordingState.Idle, imeViewVisible = false),
+            ),
+        )
+    }
+
+    @Test
+    fun `overlay RECORD_SECONDARY reuses resolveSecondaryRecordAction (start from Idle)`() {
+        val slot = catalog.OVERLAY_5BUTTON.slots
+            .first { it.logicalId == LogicalButtonId.OVERLAY_RECORD_SECONDARY }
+        val running = PipelineUiState.Running(
+            sessionId = "s1",
+            target = net.devemperor.dictate.state.InsertionTarget.INPUT_CONNECTION,
+        )
+        val action = slot.actionResolver(
+            overlaySecondaryState(running, RecordingState.Idle, imeViewVisible = true),
+            net.devemperor.dictate.testutil.fakeModuleServices(),
+        )
+        assertTrue(
+            "tap must arm a fresh recording (StartRecording), got $action",
+            action is net.devemperor.dictate.state.Action.RecordingAction.StartRecording,
         )
     }
 
@@ -512,6 +587,22 @@ class LayoutCatalogTest {
      */
     private fun overlayState(imeViewVisible: Boolean): DictateUiState =
         DictateUiState.initial().copy(imeViewVisible = imeViewVisible)
+
+    /**
+     * State for the P2 overlay secondary-record visibility matrix: the
+     * three axes its predicate keys on — pipeline sub-state, recording
+     * sub-state, and [imeViewVisible] (the IME-hidden gate).
+     */
+    private fun overlaySecondaryState(
+        pipe: PipelineUiState,
+        recording: RecordingState,
+        imeViewVisible: Boolean,
+    ): DictateUiState =
+        DictateUiState.initial().copy(
+            pipeline = pipe,
+            recording = recording,
+            imeViewVisible = imeViewVisible,
+        )
 
     private fun stateRecordingWithPipeline(pipe: PipelineUiState, singleRow: Boolean): DictateUiState =
         DictateUiState.initial().copy(

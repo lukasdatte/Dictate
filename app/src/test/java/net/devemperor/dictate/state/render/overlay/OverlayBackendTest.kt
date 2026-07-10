@@ -733,6 +733,106 @@ class OverlayBackendTest {
         }
     }
 
+    // ─── P2 — secondary-record mic button ─────────────────────────────
+
+    @Test
+    fun `secondary-record click dispatches StartRecording while a pipeline run is live (WIDGET)`() {
+        // P2 / ADR-0009: while a pipeline run processes and no recording is
+        // in flight, the widget offers a mic button that arms a NEW
+        // recording (queued behind the active run). The click reuses
+        // resolveSecondaryRecordAction → StartRecording with the allocated
+        // file, identical to the keyboard SEND_MODE secondary button.
+        val tmpFile = File.createTempFile("overlay-secondary", ".m4a")
+        tmpFile.deleteOnExit()
+        val services = fakeModuleServices(
+            emitAction = {},
+            audioFileRepository = object : net.devemperor.dictate.audio.AudioFileRepository {
+                override fun allocateFirst(sessionId: String): File = tmpFile
+                override fun allocateNext(sessionId: String): File =
+                    error("not exercised by this test")
+                override fun segments(sessionId: String): List<File> = emptyList()
+                override suspend fun readForPipeline(
+                    sessionId: String,
+                ): net.devemperor.dictate.audio.PipelineAudioResult? = null
+                override fun deleteAll(sessionId: String) = Unit
+                override fun listOrphanSessionIds(knownSessionIds: Set<String>): Set<String> = emptySet()
+                override fun listAllOwnedFiles(): Map<String, List<File>> = emptyMap()
+            },
+        )
+        val backend = OverlayBackend(
+            ctx = ctx,
+            services = services,
+            overlayWindow = window,
+            permissions = NoOverlayPermissionGate,
+            layoutParamsFactory = DefaultOverlayLayoutParamsFactory(ctx),
+        )
+        backend.attach { captured += it }
+        // WIDGET (imeViewVisible=true) + pipeline Running + recording Idle →
+        // the slot predicate is satisfied and the button is visible.
+        backend.render(
+            stateWithPermission(
+                viewMode = ViewMode.WIDGET,
+                pipeline = PipelineUiState.Running(
+                    sessionId = "active-run",
+                    target = InsertionTarget.INPUT_CONNECTION,
+                ),
+            ),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        val secondaryBtn = findOverlayButton(LogicalButtonId.OVERLAY_RECORD_SECONDARY)
+        assertEquals(
+            "secondary-record button must be VISIBLE while pipeline live + recording Idle + IME visible",
+            View.VISIBLE,
+            secondaryBtn.visibility,
+        )
+        secondaryBtn.performClick()
+
+        assertEquals(1, captured.size)
+        val action = captured[0] as? Action.RecordingAction.StartRecording
+        assertNotNull("Expected StartRecording, got: ${captured[0]}", action)
+        assertEquals(InsertionTarget.INPUT_CONNECTION, action!!.target)
+        assertEquals(tmpFile, action.audioFile)
+    }
+
+    @Test
+    fun `secondary-record button is hidden without a live pipeline run (WIDGET, Idle pipeline)`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+
+        assertEquals(
+            "secondary-record button must be GONE while the pipeline is Idle",
+            View.GONE,
+            findOverlayButton(LogicalButtonId.OVERLAY_RECORD_SECONDARY).visibility,
+        )
+    }
+
+    @Test
+    fun `secondary-record button is hidden in HOVER even with a live pipeline run (imeViewVisible=false)`() {
+        // The imeViewVisible gate: a recording could be started in HOVER but
+        // never sent (no InputConnection target — ADR-0009 Alt-3). The
+        // button must therefore be structurally absent there.
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(
+            stateWithPermission(
+                viewMode = ViewMode.HOVER,
+                pipeline = PipelineUiState.Running(
+                    sessionId = "active-run",
+                    target = InsertionTarget.INPUT_CONNECTION,
+                ),
+            ).copy(imeViewVisible = false),
+            catalog.OVERLAY_5BUTTON,
+        )
+
+        assertEquals(
+            "secondary-record button must be GONE in HOVER (startable but never sendable)",
+            View.GONE,
+            findOverlayButton(LogicalButtonId.OVERLAY_RECORD_SECONDARY).visibility,
+        )
+    }
+
     // ─── §8.1 Chunks 1.3-1.4 — side-channel forwarders ────────────────
 
     @Test
@@ -1071,6 +1171,7 @@ class OverlayBackendTest {
         listOf(
             LogicalButtonId.OVERLAY_RECORD,
             LogicalButtonId.OVERLAY_PAUSE,
+            LogicalButtonId.OVERLAY_RECORD_SECONDARY,
             LogicalButtonId.OVERLAY_TRASH,
             LogicalButtonId.OVERLAY_CLOSE,
         ).forEach { id ->
@@ -1402,6 +1503,8 @@ class OverlayBackendTest {
             LogicalButtonId.OVERLAY_PAUSE -> R.id.overlay_pause_btn
             LogicalButtonId.OVERLAY_TRASH -> R.id.overlay_trash_btn
             LogicalButtonId.OVERLAY_CLOSE -> R.id.overlay_close_btn
+            // P2 secondary-record mic button.
+            LogicalButtonId.OVERLAY_RECORD_SECONDARY -> R.id.overlay_record_secondary_btn
             // P4 third-row (Delete | Space | Enter).
             LogicalButtonId.OVERLAY_DELETE -> R.id.overlay_delete_btn
             LogicalButtonId.OVERLAY_SPACE -> R.id.overlay_space_btn

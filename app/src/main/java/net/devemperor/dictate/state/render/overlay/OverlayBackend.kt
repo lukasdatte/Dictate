@@ -536,12 +536,23 @@ class OverlayBackend(
         val inflater = LayoutInflater.from(themedCtx)
         val view = inflater.inflate(R.layout.overlay_5button_layout, null)
         // Variante 2a (dictate-widget-integration §6.5): OVERLAY_SEND was
-        // merged into OVERLAY_RECORD; only four buttons remain.
+        // merged into OVERLAY_RECORD. The map covers RECORD + the Row-2
+        // icon buttons (TRASH / PAUSE / RECORD_SECONDARY / CLOSE) + the P4
+        // third row (DELETE / SPACE / ENTER). Every slot in the active mode
+        // MUST be registered here or applySlots() raises the silent-skip
+        // guard.
         val views = mapOf(
             LogicalButtonId.OVERLAY_RECORD to view.findViewById<View>(R.id.overlay_record_btn),
             LogicalButtonId.OVERLAY_PAUSE to view.findViewById<View>(R.id.overlay_pause_btn),
             LogicalButtonId.OVERLAY_TRASH to view.findViewById<View>(R.id.overlay_trash_btn),
             LogicalButtonId.OVERLAY_CLOSE to view.findViewById<View>(R.id.overlay_close_btn),
+            // P2 secondary-record mic button (ADR-0009). Generic click
+            // wiring + applySlots drive it; the slot predicate gates
+            // visibility. NO imeSideAffordance hook — that is only for the
+            // main OVERLAY_RECORD send click; a secondary tap only ever
+            // starts a recording.
+            LogicalButtonId.OVERLAY_RECORD_SECONDARY to
+                view.findViewById<View>(R.id.overlay_record_secondary_btn),
             // P4 third-row (Delete | Space | Enter). Every slot in the
             // active mode MUST have a registered View or applySlots()
             // raises the silent-skip guard.

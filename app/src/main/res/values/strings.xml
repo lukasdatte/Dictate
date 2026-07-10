@@ -510,6 +510,9 @@
     <string name="overlay_pause_cd">Pause or resume recording</string>
     <string name="overlay_trash_cd">Cancel recording</string>
     <string name="overlay_close_cd">Close overlay</string>
+    <!-- P2 — secondary-record mic button (ADR-0009): start a new recording
+         while a pipeline run is still processing. -->
+    <string name="overlay_record_secondary_cd">New recording while processing</string>
     <!-- Third-row direct-editing buttons (P4) — shown only when an input
          field is available. -->
     <string name="overlay_delete_cd">Delete</string>

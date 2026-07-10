@@ -100,6 +100,23 @@ enum class LogicalButtonId {
     /** Overlay-5-button: close — differential behaviour per ViewMode (Spec 3 §1.2). */
     OVERLAY_CLOSE,
 
+    /**
+     * Overlay secondary-record mic button (P2) — the widget twin of the
+     * keyboard [RECORD_SECONDARY] slot (ADR-0009). Offered in Row 2 while a
+     * pipeline run processes AND no recording is in flight; a tap starts a
+     * NEW recording that queues behind the active run, letting the user
+     * dictate the next thought straight from the widget.
+     *
+     * **Rendered only when the IME-View is visible** (`imeViewVisible`): a
+     * secondary recording can be *started* in HOVER / sticky-widget-without-
+     * IME, but it could never be *sent* there (no InputConnection target —
+     * ADR-0009 Alt-3 anti-pattern). The slot is therefore structurally
+     * absent on those surfaces; once a secondary recording is Active the
+     * main [OVERLAY_RECORD] button takes over the send (recording-wins
+     * precedence, P1). @see docs/decisions/0009-pipeline-run-queue-serialized-concurrency.md
+     */
+    OVERLAY_RECORD_SECONDARY,
+
     // ─── Overlay third-row: direct-editing slots (P4) ────────────────
     //
     // A third overlay row (Delete | Space | Enter) that lets the user do

@@ -248,10 +248,14 @@ class TextResolversTest {
     }
 
     @Test
-    fun `B3-4 pipeline Running label wins over Pause-override (auto-enter owns the btn)`() {
-        // Pipeline-Running takes precedence: the per-run auto-enter label
-        // ("N/M ↵ M:SS") is what the user sees, even when widget is
-        // visible and recording is Active.
+    fun `recording-wins Active + pipeline Running shows Send label not pipeline label (2026-07 ADR-0009)`() {
+        // Recording-wins precedence (parity with resolveOverlayRecordAction /
+        // LayoutCatalog.forKeyboard): a live recording — including a secondary
+        // recording started during a run — shows the Send label so the caption
+        // tracks the Stop&Send action. SUPERSEDES the pre-2026-07 rule where
+        // the pipeline label ("N/M ↵ M:SS") won even while recording was
+        // Active; that state was unreachable in the overlay until the
+        // secondary-record button (P2).
         val running = PipelineUiState.Running(
             sessionId = "sid",
             target = InsertionTarget.INPUT_CONNECTION,
@@ -269,12 +273,10 @@ class TextResolversTest {
             ),
             pipeline = running,
         )
-        // Sanity check: the resolver did NOT return the pauseLabel —
-        // it returned whatever the pipeline-resolver produces.
         val text = resolveOverlayRecordButtonText(s, strings)
         assertEquals(
-            "Pipeline-Running must NOT be overridden by Pause-Toggle text",
-            resolveRecordButtonTextPipeline(s, strings),
+            "Active + pipeline Running → Send label (recording wins over the auto-enter pipeline label)",
+            strings.send,
             text,
         )
     }

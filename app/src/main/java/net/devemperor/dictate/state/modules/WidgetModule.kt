@@ -28,7 +28,7 @@ import kotlin.reflect.KClass
  * | ID | Trigger                                       | Pre               | Result                                    |
  * |----|-----------------------------------------------|-------------------|-------------------------------------------|
  * | W1 | `ToggleWidget`                                | `Hidden`          | `Visible(USER)`                           |
- * | W2 | `CloseWidget`                                 | `Visible`         | `Hidden` + suppressBit=true + (Active→Paused) |
+ * | W2 | `CloseWidget`                                 | `Visible`         | `Hidden` + suppressBit=true + (Active→Paused iff WIDGET_BUTTON & !imeViewVisible) |
  * | W3 | `OnImeViewHidden` + (rec/pipe active)         | `Hidden`          | `Visible(PIPELINE)`                       |
  * | W4 | `OnImeViewShown`                              | `Visible(any)`    | **stays — sticky (both origins)**          |
  * | W5 | `OnImeViewShown`                              | `Visible(USER)`   | stays — sticky (subsumed by W4)            |
@@ -56,9 +56,12 @@ import kotlin.reflect.KClass
  * - **W2** — `CloseWidget` emits [Effect.DispatchCloseWidgetCascade]
  *   which fans into `OverlayAction.SuppressAutoOverlayUntilNextSession`
  *   (suppress-bit on) plus an optional `RecordingAction.PauseRecording`
- *   when the current recording is `Active`. The pipeline is
- *   deliberately NOT cancelled — it keeps running in the FGS and the
- *   result surfaces as a Pending-Insert info-bar (B4).
+ *   when the current recording is `Active` **and** no IME-View is
+ *   visible to take it over (WIDGET_BUTTON close in HOVER — 2026-07-11
+ *   close-handoff). A WIDGET-mode close (IME-View still on screen) keeps
+ *   the recording running so the returning keyboard continues it. The
+ *   pipeline is deliberately NOT cancelled — it keeps running in the
+ *   FGS and the result surfaces as a Pending-Insert info-bar (B4).
  * - **W8** observed via [onCrossModuleStateChange] — emits
  *   [Action.OverlayAction.ResetSuppressBit] on `Paused → Active`.
  *   The complementary `Idle → Preparing` (W7) is emitted by
@@ -174,17 +177,26 @@ object WidgetModule :
 
         // ── W2: widget closed ───────────────────────────────────────────
         // widget = Hidden + suppressBit = true. Pause is gated on the
-        // close source (2026-05-22 user-req):
-        //  - WIDGET_BUTTON (overlay X) → Active recording is paused.
+        // close source (2026-05-22 user-req) AND on whether a keyboard is
+        // there to take the recording over (2026-07-11 close-handoff):
         //  - KEYBOARD_TOGGLE (edit-bar btn) → recording keeps running;
         //    the IME-View stays on screen so the user can keep dictating.
+        //  - WIDGET_BUTTON (overlay X) → pause ONLY when no IME-View is
+        //    visible to take over (HOVER: `imeViewVisible == false`, the
+        //    user is in another app). In WIDGET mode the IME-View is still
+        //    on screen (only its content collapsed to a strip while the
+        //    overlay was open — see `ContentAreaController`), so closing
+        //    the overlay pops the keyboard back and the recording must
+        //    keep running Active so the keyboard shows the live recording
+        //    controls instead of a frozen Paused timer.
         // Pipeline keeps running in the FGS regardless; its result will
         // surface as a Pending-Insert info-bar (B4) once it completes.
         is Action.WidgetAction.CloseWidget ->
             if (state.widget is WidgetState.Visible) {
                 val activeRecording = ctx.global.recording is RecordingState.Active
                 val pause = action.source == WidgetCloseSource.WIDGET_BUTTON &&
-                    activeRecording
+                    activeRecording &&
+                    !state.imeViewVisible
                 TransitionResult(
                     nextState = state.copy(widget = WidgetState.Hidden),
                     sideEffects = listOf(

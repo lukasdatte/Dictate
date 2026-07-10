@@ -683,23 +683,38 @@ enum class WidgetOrigin {
 }
 
 /**
- * Which UI surface closed the widget — the discriminator for the W2
- * `CloseWidget` reducer's pause decision (2026-05-22 user-req).
+ * Which UI surface closed the widget — one of the two discriminators
+ * for the W2 `CloseWidget` reducer's pause decision (2026-05-22
+ * user-req; refined 2026-07-11 close-handoff).
  *
  * The legacy `CloseWidget` paused the in-flight recording unconditionally.
- * The user wants the pause gated on *how* the widget was closed:
+ * The pause is now gated on *how* the widget was closed **and** on
+ * whether a keyboard is on screen to take the recording over
+ * (`DictateUiState.imeViewVisible`):
  *  - Close via the keyboard's edit-bar toggle → IME-View stays on
  *    screen, the user can keep dictating → keep recording running.
- *  - Close via the floating overlay's own X button → the user
- *    explicitly dismissed the Dictate surface → pause the recording.
+ *  - Close via the floating overlay's own X button:
+ *     - in WIDGET mode (`imeViewVisible == true` — the IME-View is still
+ *       up, only its content was collapsed to a strip while the overlay
+ *       was open) the returning keyboard takes the recording over →
+ *       **keep recording running**;
+ *     - in HOVER mode (`imeViewVisible == false` — the user is in another
+ *       app, no keyboard to return to) → **pause the recording**.
+ *
+ * So this enum no longer maps 1:1 to a pause decision on its own; see
+ * the W2 arm in [net.devemperor.dictate.state.WidgetModule].
  *
  * @see Action.WidgetAction.CloseWidget
  */
 enum class WidgetCloseSource {
-    /** Edit-bar Widget-Toggle-Btn (`edit_widget_toggle_btn`). No pause. */
+    /** Edit-bar Widget-Toggle-Btn (`edit_widget_toggle_btn`). Never pauses. */
     KEYBOARD_TOGGLE,
 
-    /** Floating overlay's X button (`overlay_close_btn`). Pauses recording. */
+    /**
+     * Floating overlay's X button (`overlay_close_btn`). Pauses an Active
+     * recording only when no IME-View is visible to take it over (HOVER);
+     * in WIDGET mode the recording keeps running for the returning keyboard.
+     */
     WIDGET_BUTTON,
 }
 

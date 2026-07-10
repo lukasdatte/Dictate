@@ -81,7 +81,11 @@ class WidgetModuleTest {
     // ─── W2: CloseWidget from Visible ─────────────────────────────────
 
     @Test
-    fun `W2 CloseWidget WIDGET_BUTTON + recording Active emits Hidden + cascade with Pause`() {
+    fun `W2 CloseWidget WIDGET_BUTTON + Active + IME-View visible keeps recording running`() {
+        // 2026-07-11 close-handoff — in WIDGET mode the IME-View is still
+        // on screen (imeViewVisible == true), so closing the overlay pops
+        // the keyboard back and the recording must keep running Active for
+        // the returning keyboard to take over. NO PauseRecording.
         val s = WidgetModule.WidgetSubState(
             widget = WidgetState.Visible(WidgetOrigin.USER),
             imeViewVisible = true,
@@ -96,8 +100,34 @@ class WidgetModuleTest {
         assertEquals(WidgetState.Hidden, r!!.nextState.widget)
         assertEquals(1, r.sideEffects.size)
         val cascade = r.sideEffects[0] as WidgetModule.Effect.DispatchCloseWidgetCascade
+        assertEquals(
+            "WIDGET_BUTTON close while the keyboard can take over must NOT pause",
+            false, cascade.shouldPauseRecording,
+        )
+    }
+
+    @Test
+    fun `W2 CloseWidget WIDGET_BUTTON + Active + IME-View hidden pauses recording (HOVER)`() {
+        // 2026-07-11 close-handoff — in HOVER mode the IME-View is gone
+        // (imeViewVisible == false — the user is in another app); there is
+        // no keyboard to take the recording over, so the overlay X pauses
+        // the Active recording as before.
+        val s = WidgetModule.WidgetSubState(
+            widget = WidgetState.Visible(WidgetOrigin.PIPELINE),
+            imeViewVisible = false,
+        )
+        val globalWithActive = DictateUiState.initial().copy(recording = activeRecording())
+        val r = module.reduce(
+            s,
+            Action.WidgetAction.CloseWidget(WidgetCloseSource.WIDGET_BUTTON),
+            ctx(globalWithActive),
+        )
+        assertNotNull(r)
+        assertEquals(WidgetState.Hidden, r!!.nextState.widget)
+        assertEquals(1, r.sideEffects.size)
+        val cascade = r.sideEffects[0] as WidgetModule.Effect.DispatchCloseWidgetCascade
         assertTrue(
-            "WIDGET_BUTTON close + Active recording must trigger PauseRecording",
+            "WIDGET_BUTTON close with no IME-View to take over must trigger PauseRecording",
             cascade.shouldPauseRecording,
         )
     }

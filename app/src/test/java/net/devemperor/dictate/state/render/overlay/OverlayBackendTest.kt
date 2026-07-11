@@ -1389,6 +1389,179 @@ class OverlayBackendTest {
         assertFalse(window.isAttached())
     }
 
+    // ─── P5 — delete long-press continuous repeat ─────────────────────
+
+    /** Obtain a [android.view.MotionEvent] for the delete button. */
+    private fun motionEvent(action: Int, downTime: Long, eventTime: Long): android.view.MotionEvent =
+        android.view.MotionEvent.obtain(downTime, eventTime, action, 10f, 10f, 0)
+
+    private fun mainLooperShadow() =
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
+
+    /**
+     * The P5 repeat touch listener wired onto the delete button.
+     * Driving it directly (instead of `dispatchTouchEvent`) lets the
+     * test assert the *consumed* flag — the contract that decides
+     * whether the framework fires the trailing click. (The framework's
+     * own posted `PerformClick` never runs here anyway: the fake window
+     * leaves the tree detached, so `View.post` lands in the dead
+     * run-queue.)
+     */
+    private fun deleteTouchListener(deleteBtn: View): android.view.View.OnTouchListener =
+        org.robolectric.Shadows.shadowOf(deleteBtn).onTouchListener
+            ?: error("P5: the delete button must carry the repeat OnTouchListener")
+
+    @Test
+    fun `holding DELETE past the long-press timeout repeats Backspace and UP stops it`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+        val deleteBtn = findOverlayButton(LogicalButtonId.OVERLAY_DELETE)
+        val downTime = android.os.SystemClock.uptimeMillis()
+
+        deleteBtn.dispatchTouchEvent(
+            motionEvent(android.view.MotionEvent.ACTION_DOWN, downTime, downTime),
+        )
+        // Long-press timeout (400 ms default) + a few 50 ms ticks.
+        mainLooperShadow().idleFor(700, java.util.concurrent.TimeUnit.MILLISECONDS)
+
+        val deletesWhileHeld = captured.count { it is Action.KeyboardInputAction.Backspace }
+        assertTrue(
+            "Holding DELETE must repeat Backspace (got $deletesWhileHeld dispatches): $captured",
+            deletesWhileHeld > 1,
+        )
+
+        val upConsumed = deleteTouchListener(deleteBtn).onTouch(
+            deleteBtn,
+            motionEvent(
+                android.view.MotionEvent.ACTION_UP,
+                downTime,
+                android.os.SystemClock.uptimeMillis(),
+            ),
+        )
+        mainLooperShadow().idleFor(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+
+        assertTrue(
+            "UP after a repeat must be CONSUMED so the trailing click is suppressed " +
+                "(no extra single delete on release).",
+            upConsumed,
+        )
+        assertEquals(
+            "UP must stop the repeat — no further Backspace after release.",
+            deletesWhileHeld,
+            captured.count { it is Action.KeyboardInputAction.Backspace },
+        )
+    }
+
+    @Test
+    fun `short tap on DELETE below the long-press timeout deletes exactly once`() {
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+        val deleteBtn = findOverlayButton(LogicalButtonId.OVERLAY_DELETE)
+        val listener = deleteTouchListener(deleteBtn)
+        val downTime = android.os.SystemClock.uptimeMillis()
+
+        val downConsumed = listener.onTouch(
+            deleteBtn,
+            motionEvent(android.view.MotionEvent.ACTION_DOWN, downTime, downTime),
+        )
+        // UP well before the 400 ms long-press timeout → normal click.
+        val upConsumed = listener.onTouch(
+            deleteBtn,
+            motionEvent(android.view.MotionEvent.ACTION_UP, downTime, downTime + 50),
+        )
+        // Any (wrongly) surviving repeat would reveal itself here.
+        mainLooperShadow().idleFor(1_000, java.util.concurrent.TimeUnit.MILLISECONDS)
+
+        assertFalse(
+            "DOWN must NOT be consumed — the button needs its pressed state and the " +
+                "parent DraggableOverlayLayout keeps its drag-interception chance.",
+            downConsumed,
+        )
+        assertFalse(
+            "Short-tap UP must NOT be consumed — the framework click fires the single delete.",
+            upConsumed,
+        )
+        assertTrue(
+            "The touch path itself dispatches nothing on a short tap: $captured",
+            captured.isEmpty(),
+        )
+
+        // The unconsumed UP means the framework click runs in production;
+        // performClick() stands in for the (detached-tree) click post.
+        deleteBtn.performClick()
+        assertEquals(
+            "A short tap must dispatch exactly one Backspace via the click path.",
+            listOf<Action>(Action.KeyboardInputAction.Backspace),
+            captured,
+        )
+    }
+
+    @Test
+    fun `ACTION_CANCEL (drag steal) aborts the delete repeat`() {
+        // When the OverlayDragController promotes the gesture to a window
+        // drag, the ViewGroup steals it and the button receives
+        // ACTION_CANCEL — the repeat loop must stop, and no click fires.
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+        val deleteBtn = findOverlayButton(LogicalButtonId.OVERLAY_DELETE)
+        val downTime = android.os.SystemClock.uptimeMillis()
+
+        deleteBtn.dispatchTouchEvent(
+            motionEvent(android.view.MotionEvent.ACTION_DOWN, downTime, downTime),
+        )
+        mainLooperShadow().idleFor(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+        val deletesBeforeCancel = captured.count { it is Action.KeyboardInputAction.Backspace }
+        assertTrue("Precondition: the repeat must be running.", deletesBeforeCancel >= 1)
+
+        deleteBtn.dispatchTouchEvent(
+            motionEvent(
+                android.view.MotionEvent.ACTION_CANCEL,
+                downTime,
+                android.os.SystemClock.uptimeMillis(),
+            ),
+        )
+        mainLooperShadow().idleFor(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+
+        assertEquals(
+            "CANCEL must abort the repeat — no further Backspace.",
+            deletesBeforeCancel,
+            captured.count { it is Action.KeyboardInputAction.Backspace },
+        )
+    }
+
+    @Test
+    fun `detach mid-repeat cancels the loop and leaves no scheduled Handler callback`() {
+        // Lifecycle requirement: teardownOverlay must stop the repeat so
+        // no Handler callback outlives the View tree. Without the cancel,
+        // the tick would keep re-scheduling itself forever (each tick posts
+        // the next) — the looper would never run out of scheduled tasks.
+        val backend = newBackend()
+        backend.attach { captured += it }
+        backend.render(stateWithPermission(viewMode = ViewMode.WIDGET), catalog.OVERLAY_5BUTTON)
+        val deleteBtn = findOverlayButton(LogicalButtonId.OVERLAY_DELETE)
+        val downTime = android.os.SystemClock.uptimeMillis()
+
+        deleteBtn.dispatchTouchEvent(
+            motionEvent(android.view.MotionEvent.ACTION_DOWN, downTime, downTime),
+        )
+        mainLooperShadow().idleFor(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertTrue(
+            "Precondition: the repeat must be running.",
+            captured.any { it is Action.KeyboardInputAction.Backspace },
+        )
+
+        backend.detach()
+
+        assertEquals(
+            "No repeat tick may stay scheduled after teardown (leaked Handler callback).",
+            java.time.Duration.ZERO,
+            mainLooperShadow().nextScheduledTaskTime,
+        )
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────
 
     /** Night bits of the configuration the attached view was inflated with. */

@@ -1,11 +1,13 @@
 package net.devemperor.dictate.state.render.overlay
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import com.google.android.material.button.MaterialButton
@@ -244,6 +246,15 @@ class OverlayBackend(
      * Created in [inflateAndAttach] once the root view exists.
      */
     private var dragController: OverlayDragController? = null
+
+    /**
+     * Press-and-hold continuous-delete controller for the P4 third-row
+     * Delete button (P5). Created in [inflateAndAttach], cancelled + nulled
+     * in [teardownOverlay] so no scheduled tick outlives the View tree.
+     * `null` outside an attached lifecycle, and stays `null` when the
+     * delete button is absent (a future overlay mode without the P4 row).
+     */
+    private var deleteRepeatController: OverlayDeleteRepeatController? = null
 
     /**
      * The effective night mode the current [overlayView] was inflated
@@ -577,6 +588,7 @@ class OverlayBackend(
         inflatedNightMode = nightWanted
 
         wireStaticOverlayHandlers()
+        wireDeleteRepeat()
         wireDragController(view)
         buildRendererBundle(view, views)
     }
@@ -774,8 +786,6 @@ class OverlayBackend(
     private fun wireStaticOverlayHandlers() {
         buttonViews.forEach { (id, view) ->
             view.setOnClickListener {
-                val state = stateRef ?: return@setOnClickListener
-                val slot = currentSlot(id) ?: return@setOnClickListener
                 // R-1 affordance: fire BEFORE the catalog dispatch for
                 // OVERLAY_RECORD so the JobRequest snapshot lands in
                 // `imePipelineConfigResolver` before the orchestrator
@@ -786,10 +796,92 @@ class OverlayBackend(
                 if (id == LogicalButtonId.OVERLAY_RECORD) {
                     imeSideAffordance(id, false)
                 }
-                // R.3 nullable-resolver-idiom — null = silent no-op.
-                slot.actionResolver(state, services)?.let { action ->
-                    onAction?.invoke(action)
+                dispatchSlotAction(id)
+            }
+        }
+    }
+
+    /**
+     * Resolve [id]'s active slot action against the click-time [stateRef]
+     * snapshot and forward it to [onAction]. The single dispatch path
+     * shared by the tap click-listener and the P5 delete-repeat ticks —
+     * so a held delete emits the *same* `Backspace` a tap does (R.3
+     * nullable-resolver idiom: `null` = silent no-op). Returns to a no-op
+     * outside an attached lifecycle (`stateRef` / slot `null`).
+     */
+    private fun dispatchSlotAction(id: LogicalButtonId) {
+        val state = stateRef ?: return
+        val slot = currentSlot(id) ?: return
+        slot.actionResolver(state, services)?.let { action ->
+            onAction?.invoke(action)
+        }
+    }
+
+    /**
+     * Wire the press-and-hold continuous delete on the P4 third-row
+     * Delete button (P5).
+     *
+     * A held Delete deletes continuously with the same accelerating
+     * cadence as the keyboard backspace ([BackspaceDeleteSpeedCurve] via
+     * [OverlayDeleteRepeatController]); a short tap keeps the existing
+     * single-delete click semantics.
+     *
+     * # Coexistence with drag + click (spec §Repeat delete)
+     *
+     * The touch listener is intentionally thin — all timing/phase policy
+     * lives in [OverlayDeleteRepeatController]:
+     *
+     *  - `ACTION_DOWN` arms the long-press timer and returns `false`, so
+     *    the button still gets its pressed state AND the parent
+     *    [DraggableOverlayLayout] keeps its chance to intercept a drag.
+     *  - `ACTION_UP` asks the controller whether a repeat ran. If it did,
+     *    consume the event (`true`) so the trailing click is suppressed
+     *    (the held deletes already happened); otherwise return `false` so
+     *    the framework fires the normal click → one `Backspace`.
+     *  - `ACTION_CANCEL` (a drag steal past the drag threshold, or the
+     *    View being detached) aborts the repeat with no tap semantics.
+     *
+     * A still hold never crosses the drag threshold, so drag and
+     * delete-repeat are mutually exclusive by construction. No-op when the
+     * delete button is absent from the inflated tree.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun wireDeleteRepeat() {
+        val deleteView = buttonViews[LogicalButtonId.OVERLAY_DELETE] ?: return
+        val controller = OverlayDeleteRepeatController.forMainLooper(
+            onDelete = { dispatchSlotAction(LogicalButtonId.OVERLAY_DELETE) },
+        )
+        deleteRepeatController = controller
+        deleteView.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    controller.onPress()
+                    // Do not consume: the button still needs DOWN for its
+                    // pressed state, and the parent must stay free to
+                    // intercept a drag.
+                    false
                 }
+
+                MotionEvent.ACTION_UP -> {
+                    if (controller.onRelease()) {
+                        // A repeat ran — swallow the click so we don't
+                        // delete one extra character on release.
+                        v.isPressed = false
+                        true
+                    } else {
+                        // Short tap — let the framework fire the click,
+                        // which dispatches a single Backspace via the
+                        // shared click-listener path.
+                        false
+                    }
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    controller.cancel()
+                    false
+                }
+
+                else -> false
             }
         }
     }
@@ -917,6 +1009,17 @@ class OverlayBackend(
             Log.w(TAG, "rendererBundle.reset threw", t)
         }
         rendererBundle = null
+
+        // P5: stop the delete-repeat loop BEFORE the View refs go away so
+        // no scheduled tick fires `dispatchSlotAction` against a torn-down
+        // tree. cancel() is idempotent; the dedicated Handler's callbacks
+        // are dropped.
+        try {
+            deleteRepeatController?.cancel()
+        } catch (t: Throwable) {
+            Log.w(TAG, "deleteRepeatController.cancel threw", t)
+        }
+        deleteRepeatController = null
 
         try {
             dragController?.detach()

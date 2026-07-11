@@ -1421,10 +1421,18 @@ class DictatePipelineService : Service() {
             // widget Send/third-row affordances whose completion callbacks
             // would be dropped — the stuck-"sending" incident. Dispatched
             // BEFORE the start policy so it branches on corrected state.
-            net.devemperor.dictate.state.resolveExternalStartImeAxisCorrection(
+            val imeBound = pipelineCallbackBridgeImpl.currentDelegate() != null
+            val corrections = net.devemperor.dictate.state.resolveExternalStartImeAxisCorrection(
                 imeViewVisible = orchestrator.state.value.imeViewVisible,
-                imeBound = pipelineCallbackBridgeImpl.currentDelegate() != null,
-            ).forEach { action -> orchestrator.dispatch(action) }
+                imeBound = imeBound,
+            )
+            Log.i(
+                "DictateTrace",
+                "ExternalDictationStart imeBound=$imeBound " +
+                    "imeViewVisible=${orchestrator.state.value.imeViewVisible} " +
+                    "axisCorrections=${corrections.size}",
+            )
+            corrections.forEach { action -> orchestrator.dispatch(action) }
             net.devemperor.dictate.state.resolveExternalDictationStart(
                 state = orchestrator.state.value,
                 services = moduleServicesImpl,

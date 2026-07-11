@@ -68,10 +68,19 @@
              is state-independent. Derived states (`single_row_state`,
              `two_row_send_mode_state`, `reprocess_staging_state`)
              inherit via `deriveConstraintsFrom`. -->
+        <!-- Two-Row block-indent (2026-07 compact-row fix): the historic
+             72dp `paddingStart` on `main_buttons_cl` is now 16dp container
+             padding + this 56dp margin. Padding cannot vary per
+             ConstraintSet, but margins can — `single_row_state` overrides
+             this away so the compact row gets the full width. The margin
+             lives on `record_pulse_layout` (never GONE in any state) and
+             `trash_btn` start-ALIGNS to it below, so the Row-2 indent
+             survives trash_btn's GONE-collapse without goneMargin games. -->
         <Constraint
             android:id="@+id/record_pulse_layout"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginStart="56dp"
             android:layout_marginEnd="8dp"
             android:layout_marginBottom="16dp"
             motion:layout_constraintTop_toTopOf="parent"
@@ -167,12 +176,18 @@
              position; it does not rescue the siblings' geometry.
              Anchoring the gap on record_pulse_layout (which is never
              GONE in any State) makes the spacing state-independent. -->
+        <!-- Start-aligned to record_pulse_layout (NOT parent): carries the
+             56dp Two-Row block-indent into Row 2 GONE-safely — when the
+             catalog hides trash_btn it collapses AT record_pulse's start
+             edge, exactly where the old padding edge used to be, so
+             space_btn's goneMarginStart=0 chain-follow is byte-identical
+             to the pre-fix geometry (2026-07 compact-row fix). -->
         <Constraint
             android:id="@+id/trash_btn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             motion:layout_constraintTop_toBottomOf="@+id/record_pulse_layout"
-            motion:layout_constraintStart_toStartOf="parent"
+            motion:layout_constraintStart_toStartOf="@+id/record_pulse_layout"
             motion:layout_constraintEnd_toStartOf="@+id/space_btn">
             <PropertySet motion:visibilityMode="ignore" />
         </Constraint>
@@ -243,6 +258,22 @@
          widget_toggle_btn is hidden in this layout (Catalog `{ false }` would
          apply if it weren't already off-screen) — we override its position to
          GONE-friendly to keep the chain unaffected.
+
+         Compact sizing strategy (2026-07 compact-row fix — overlap bug):
+         a phone-width row cannot fit 6-7 buttons at their intrinsic
+         wrap_content widths; an overfull ConstraintLayout chain does NOT
+         shrink wrap_content members — it distributes negative slack and the
+         buttons render on top of each other (the user-visible "Buttons
+         liegen übereinander"). The single-row overrides therefore:
+           - pin every icon button to a fixed 40dp (24dp icon + 8dp padding
+             per side — see the pause/enter/audio_focus layout-XML paddings),
+           - make record_pulse_layout + space_btn the only flexible members
+             (MATCH_CONSTRAINT, weight 2:1, record floor 48dp so the
+             Send/Dictate label never collapses below readability),
+           - halve the inter-button margins to 2dp.
+         Worst case (recording: trash+record+space+pause+backspace+enter+
+         audio_focus) fits a 360dp screen: 5×40dp fixed + 28dp margins +
+         ~66dp record (weight 2) + remainder space. Pinned by SingleRowLayoutGeometryTest.
          ════════════════════════════════════════════════════════════════ -->
     <ConstraintSet
         android:id="@+id/single_row_state"
@@ -250,10 +281,10 @@
 
         <Constraint
             android:id="@+id/trash_btn"
-            android:layout_width="wrap_content"
+            android:layout_width="40dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
             motion:layout_constraintStart_toStartOf="parent"
@@ -269,14 +300,23 @@
              the explicit zero a transition from `two_row_state` would
              temporarily inherit the 16dp margin (briefly visible as a phantom
              gap under Row 1) and an inline boot-state margin (`activity_…xml`)
-             would also leak through until the first transition. -->
+             would also leak through until the first transition. The same
+             per-id-replace intentionally drops the parent's 56dp
+             block-indent marginStart (compact row uses the full width) —
+             the explicit 2dp here is the single-row value.
+
+             MATCH_CONSTRAINT + weight 2 + 48dp floor: the record button is
+             the primary flexible member of the compact chain (see the
+             ConstraintSet header comment). -->
         <Constraint
             android:id="@+id/record_pulse_layout"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
             android:layout_marginBottom="0dp"
+            motion:layout_constraintWidth_min="48dp"
+            motion:layout_constraintHorizontal_weight="2"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
             motion:layout_constraintStart_toEndOf="@+id/trash_btn"
@@ -288,8 +328,9 @@
             android:id="@+id/space_btn"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            motion:layout_constraintHorizontal_weight="1"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
             motion:layout_constraintStart_toEndOf="@+id/record_pulse_layout"
@@ -299,10 +340,10 @@
 
         <Constraint
             android:id="@+id/pause_btn"
-            android:layout_width="wrap_content"
+            android:layout_width="40dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
             motion:layout_constraintStart_toEndOf="@+id/space_btn"
@@ -320,10 +361,10 @@
              (SEND_MODE hides pause). -->
         <Constraint
             android:id="@+id/secondary_record_btn"
-            android:layout_width="wrap_content"
+            android:layout_width="40dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
             motion:layout_goneMarginStart="0dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
@@ -334,10 +375,10 @@
 
         <Constraint
             android:id="@+id/backspace_btn"
-            android:layout_width="wrap_content"
+            android:layout_width="40dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
             motion:layout_goneMarginStart="0dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
@@ -348,10 +389,10 @@
 
         <Constraint
             android:id="@+id/enter_btn"
-            android:layout_width="wrap_content"
+            android:layout_width="40dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
             motion:layout_constraintStart_toEndOf="@+id/backspace_btn"
@@ -361,10 +402,10 @@
 
         <Constraint
             android:id="@+id/resend_btn"
-            android:layout_width="wrap_content"
+            android:layout_width="40dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
             motion:layout_constraintStart_toEndOf="@+id/enter_btn"
@@ -380,10 +421,10 @@
              widget_toggle is GONE. -->
         <Constraint
             android:id="@+id/widget_toggle_btn"
-            android:layout_width="wrap_content"
+            android:layout_width="40dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
             motion:layout_constraintStart_toEndOf="@+id/resend_btn"
@@ -393,10 +434,10 @@
 
         <Constraint
             android:id="@+id/audio_focus_btn"
-            android:layout_width="wrap_content"
+            android:layout_width="40dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
             motion:layout_constraintTop_toTopOf="parent"
             motion:layout_constraintBottom_toBottomOf="parent"
             motion:layout_constraintStart_toEndOf="@+id/widget_toggle_btn"

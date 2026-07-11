@@ -56,11 +56,20 @@
          "starting a recording fixes it" but a cold boot does not.
          Setting `app:currentState` makes `mModel` populate on the FIRST
          measure pass — the layout is correct from frame zero. -->
+    <!-- Compact-row fix (2026-07) — paddingStart is 16dp, NOT the historic
+         72dp. The 72dp block-indent is a Two-Row design element only; the
+         single-row (compact) state needs the full row width or its chain
+         overflows and buttons overlap. Padding cannot be overridden per
+         MotionScene state, so the indent moved into the scene:
+         `two_row_state` carries `layout_marginStart="56dp"` on
+         `record_pulse_layout` (16 + 56 = the old 72) and `trash_btn`
+         start-aligns to it; `single_row_state` overrides both margins away.
+         See SingleRowLayoutGeometryTest for the measured-geometry pin. -->
     <androidx.constraintlayout.motion.widget.MotionLayout
         android:id="@+id/main_buttons_cl"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:paddingStart="72dp"
+        android:paddingStart="16dp"
         android:paddingEnd="16dp"
         android:paddingBottom="16dp"
         android:clipChildren="false"
@@ -87,11 +96,18 @@
              the same 16dp on `record_pulse_layout.marginBottom` in
              `two_row_state` (and derived states inherit) — keeping the
              two values identical is the simplest way to make the boot
-             frame look the same as every subsequent transition frame. -->
+             frame look the same as every subsequent transition frame.
+
+             The inline `layout_marginStart="56dp"` is the same boot-state
+             convention for the Two-Row 72dp block-indent (16dp container
+             padding + 56dp margin — see the main_buttons_cl comment).
+             `two_row_state` carries the identical 56dp; `single_row_state`
+             overrides it away so the compact row spans the full width. -->
         <net.devemperor.dictate.widget.PulseLayout
             android:id="@+id/record_pulse_layout"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginStart="56dp"
             android:layout_marginBottom="16dp"
             app:pulseCount="3"
             app:pulseDuration="2000"
@@ -176,12 +192,24 @@
             android:visibility="gone"
             tools:visibility="visible" />
 
+        <!-- audio_focus_btn — DO NOT add android:foreground here. The
+             volume-on/off flip is owned by the catalog
+             `iconResolver = ::resolveAudioFocusIconForSlot` and written by
+             SlotRenderer.applySlotToView via MaterialButton.icon — the
+             single writer (a static foreground double-draws over it, the
+             same B-B pitfall as pause_btn/enter_btn below; the stale
+             volume_off foreground was removed in the 2026-07 compact-row
+             fix). `iconGravity="textStart"` centers the icon-only
+             glyph; the 8dp paddings + zero iconPadding guarantee the 24dp
+             icon fits the 40dp compact width `single_row_state` assigns. -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/audio_focus_btn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:foreground="@drawable/ic_baseline_volume_off_24"
-            android:foregroundGravity="center"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            app:iconPadding="0dp"
+            app:iconGravity="textStart"
             android:minWidth="56dp"
             android:visibility="gone"
             tools:visibility="gone" />
@@ -209,11 +237,20 @@
              dynamic icon (Android draws foreground over MaterialButton.icon),
              producing the B-B duplication bug
              (see docs/plans/2026-05-21 - dictate-pipeline-render-and-state-unification §4.2). -->
+        <!-- iconGravity="textStart" centers the icon-only glyph; 8dp
+             paddings + zero iconPadding fit the 24dp MaterialButton.icon
+             into the 40dp compact width single_row_state assigns (2026-07
+             compact-row fix); minWidth 56dp keeps the two-row width
+             consistent with enter_btn/backspace_btn. -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/pause_btn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minWidth="0dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            app:iconPadding="0dp"
+            app:iconGravity="textStart"
+            android:minWidth="56dp"
             android:visibility="gone"
             tools:visibility="visible" />
 
@@ -226,10 +263,18 @@
              render on top of the dynamic icon (same B-B duplication
              pitfall as pause_btn — see Spec 2 §4.2 / sibling comment
              on pause_btn above). -->
+        <!-- iconGravity="textStart" centers the icon-only glyph; 8dp
+             paddings + zero iconPadding fit the 24dp MaterialButton.icon
+             into the 40dp compact width single_row_state assigns (2026-07
+             compact-row fix). -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/enter_btn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            app:iconPadding="0dp"
+            app:iconGravity="textStart"
             android:minWidth="56dp" />
 
     </androidx.constraintlayout.motion.widget.MotionLayout>

@@ -186,7 +186,12 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                 ),
                 ButtonSlot(
                     logicalId = LogicalButtonId.RECORD,
-                    widthPolicy = WidthPolicy.WrapContent,
+                    // 2026-07 compact-row fix: FillRemaining (was WrapContent)
+                    // — the single-row MotionScene state flexes the record
+                    // button (MATCH_CONSTRAINT, weight 2, 64dp floor) so the
+                    // overfull-chain overlap can't recur. The hint mirrors
+                    // motion_scene_keyboard.xml single_row_state.
+                    widthPolicy = WidthPolicy.FillRemaining,
                     visibilityPredicate = { true },
                     textResolver = { state -> resolveRecordButtonText(state, strings) },
                     enabledResolver = { state -> state.recording !is RecordingState.Preparing },
@@ -391,7 +396,10 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                 ),
                 ButtonSlot(
                     logicalId = LogicalButtonId.RECORD,
-                    widthPolicy = WidthPolicy.WrapContent,
+                    // 2026-07 compact-row fix: FillRemaining — inherits the
+                    // single_row_state flex sizing via deriveConstraintsFrom
+                    // (see KEYBOARD_SINGLE_ROW RECORD slot).
+                    widthPolicy = WidthPolicy.FillRemaining,
                     visibilityPredicate = { true },
                     textResolver = { state -> resolveRecordButtonTextPipeline(state, strings) },
                     // Post-cutover hotfix #AE-OPTIK2 — `enabledResolver`

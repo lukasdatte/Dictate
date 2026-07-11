@@ -1343,6 +1343,17 @@ class DictatePipelineService : Service() {
     private fun handleExternalDictationStart() {
         serviceScope.launch(Dispatchers.Main) {
             overlayPermissionObserverImpl.refresh()
+            // 2026-07-11 — second axis re-sync (sibling of the permission
+            // refresh above): correct the stale-true `imeViewVisible` boot
+            // default when provably no IME is bound (no callback delegate
+            // on the bridge). Without this, a cold external trigger offers
+            // widget Send/third-row affordances whose completion callbacks
+            // would be dropped — the stuck-"sending" incident. Dispatched
+            // BEFORE the start policy so it branches on corrected state.
+            net.devemperor.dictate.state.resolveExternalStartImeAxisCorrection(
+                imeViewVisible = orchestrator.state.value.imeViewVisible,
+                imeBound = pipelineCallbackBridgeImpl.currentDelegate() != null,
+            ).forEach { action -> orchestrator.dispatch(action) }
             net.devemperor.dictate.state.resolveExternalDictationStart(
                 state = orchestrator.state.value,
                 services = moduleServicesImpl,

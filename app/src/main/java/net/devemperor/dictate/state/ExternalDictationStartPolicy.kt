@@ -89,6 +89,55 @@ import net.devemperor.dictate.state.layout.resolveStartRecordingFromIdle
  * @see net.devemperor.dictate.core.StartDictationActivity
  * @see docs/decisions/0009-pipeline-run-queue-serialized-concurrency.md
  */
+/**
+ * Pre-start axis correction for the **stale-true `imeViewVisible` boot
+ * default** (external-dictation spec §6.3 / widget-parity spec §5.3).
+ *
+ * `DictateUiState.initial()` seeds `imeViewVisible = true`; the axis is
+ * otherwise only written by real IME lifecycle events
+ * (`onStartInputView` / `onFinishInputView`). On a **fresh process**
+ * where the IME has never bound (cold external trigger — the 2026-07-11
+ * Chrome/side-panel incident), the axis is therefore stale-true: the
+ * overlay offers Send / third-row / secondary-record affordances whose
+ * host-commit can never succeed, and a Send tap starts a pipeline whose
+ * completion callback is dropped (`PipelineCallbackBridge` has no IME
+ * delegate) — the widget hangs in "sending" with no in-process recovery.
+ *
+ * The service hook can observe the authoritative signal the pure state
+ * cannot: whether an IME callback delegate is registered on the bridge.
+ * `imeBound == false` proves no IME service instance is connected, hence
+ * no IME view can be on screen — the stale-true axis is factually wrong
+ * and is corrected by replaying exactly the two actions the IME's own
+ * `onFinishInputView` dispatches (`ViewModeAction.OnImeViewHidden` then
+ * `WidgetAction.OnImeViewHidden`, same order as
+ * `DictateInputMethodService`). This makes the fresh-process external
+ * start byte-identical to the established warm-process path (IME bound
+ * earlier, view currently hidden), where the axis is already `false`.
+ *
+ * When the IME *is* bound (`imeBound == true`) the axis is owned by the
+ * live lifecycle events and must not be touched here — returns empty.
+ * Likewise a no-op when the axis is already `false`.
+ *
+ * Dispatched **before** [resolveExternalDictationStart] so the start
+ * policy branches on the corrected state.
+ *
+ * @param imeViewVisible current `state.imeViewVisible` snapshot.
+ * @param imeBound `PipelineCallbackBridge.currentDelegate() != null` —
+ *   whether an IME-side callback delegate is registered right now.
+ */
+fun resolveExternalStartImeAxisCorrection(
+    imeViewVisible: Boolean,
+    imeBound: Boolean,
+): List<Action> =
+    if (imeViewVisible && !imeBound) {
+        listOf(
+            Action.ViewModeAction.OnImeViewHidden,
+            Action.WidgetAction.OnImeViewHidden,
+        )
+    } else {
+        emptyList()
+    }
+
 fun resolveExternalDictationStart(
     state: DictateUiState,
     services: ModuleServices,

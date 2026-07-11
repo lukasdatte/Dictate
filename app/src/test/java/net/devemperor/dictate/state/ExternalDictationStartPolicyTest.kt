@@ -173,4 +173,51 @@ class ExternalDictationStartPolicyTest {
         assertEquals(1, actions.size)
         assertTrue(actions[0] is Action.RecordingAction.StartRecording)
     }
+
+    // ─── 5. Stale-true imeViewVisible axis correction (2026-07-11) ─────
+    //
+    // The boot default `imeViewVisible = true` is factually wrong on a
+    // fresh process where the IME never bound (cold external trigger —
+    // the Chrome/side-panel incident). The correction replays the same
+    // two actions the IME's onFinishInputView dispatches, in the same
+    // order, so the fresh-process external start behaves exactly like
+    // the warm-process one. See resolveExternalStartImeAxisCorrection.
+
+    @Test
+    fun `stale-true axis + IME not bound emits both OnImeViewHidden actions in IME order`() {
+        val actions = resolveExternalStartImeAxisCorrection(
+            imeViewVisible = true,
+            imeBound = false,
+        )
+
+        assertEquals(2, actions.size)
+        assertEquals(Action.ViewModeAction.OnImeViewHidden, actions[0])
+        assertEquals(Action.WidgetAction.OnImeViewHidden, actions[1])
+    }
+
+    @Test
+    fun `IME bound leaves the axis untouched even when visible-true`() {
+        assertTrue(
+            resolveExternalStartImeAxisCorrection(
+                imeViewVisible = true,
+                imeBound = true,
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `axis already false needs no correction regardless of bind state`() {
+        assertTrue(
+            resolveExternalStartImeAxisCorrection(
+                imeViewVisible = false,
+                imeBound = false,
+            ).isEmpty(),
+        )
+        assertTrue(
+            resolveExternalStartImeAxisCorrection(
+                imeViewVisible = false,
+                imeBound = true,
+            ).isEmpty(),
+        )
+    }
 }

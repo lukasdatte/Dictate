@@ -162,6 +162,58 @@ class AutoEnterRendererTest {
         assertNotNull("right drawable should be set (send_24)", drawables[2])
     }
 
+    // ── Recording-wins precedence (ADR-0009, double-arrow fix) ────────
+
+    @Test
+    fun `pipeline=Running + recording=Active keeps the AutoEnter arrow OFF (Send role)`() {
+        // Secondary recording during a live run: layout/text/action all
+        // follow recording-wins (the button is Stop&Send), but pre-fix
+        // this renderer keyed `running` on `pipeline is Running` alone
+        // and kept painting the dynamic ↵ on the right slot — the
+        // "doubled partial symbol behind the record symbol" report.
+        renderer.onState(
+            stateOf(
+                pipeline = PipelineUiState.Running(
+                    sessionId = "s1",
+                    target = InsertionTarget.INPUT_CONNECTION,
+                    autoEnterActive = true,
+                ),
+                recording = activeRec(useBluetooth = false),
+            ),
+        )
+        val drawables = button.compoundDrawablesRelative
+        assertNotNull("left slot carries the Send icon (send_20)", drawables[0])
+        assertNull("right slot must not carry the AutoEnter arrow while a recording is live", drawables[2])
+        assertTrue(
+            "iconRenderer.get must not be consulted while a recording is live",
+            fakeIconRenderer.getCallsActive.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `pipeline=Running + recording=Preparing keeps the AutoEnter arrow OFF (record role)`() {
+        // The secondary-start window (recording Preparing while the run
+        // is live) already renders the recording layout — the stray ↵
+        // was visible exactly at second-recording start.
+        renderer.onState(
+            stateOf(
+                pipeline = PipelineUiState.Running(
+                    sessionId = "s1",
+                    target = InsertionTarget.INPUT_CONNECTION,
+                    autoEnterActive = true,
+                ),
+                recording = RecordingState.Preparing(
+                    useBluetooth = false,
+                    audioFile = File("/tmp/dictate-test-prep.m4a"),
+                    sessionId = "s-prep",
+                ),
+            ),
+        )
+        val drawables = button.compoundDrawablesRelative
+        assertNull("right slot stays empty in the secondary-start window", drawables[2])
+        assertTrue(fakeIconRenderer.getCallsActive.isEmpty())
+    }
+
     // ── Idempotency ────────────────────────────────────────────────────
 
     @Test

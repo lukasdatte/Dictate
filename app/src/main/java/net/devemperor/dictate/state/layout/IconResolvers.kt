@@ -97,15 +97,20 @@ fun resolveAudioFocusIconForSlot(state: DictateUiState): Int =
  * what `PipelineStepRowRenderer.refreshRecordButtonFromState` /
  * `applyRecordButtonForRecording` write today on the left axis.
  *
- * | `pipeline`          | `recording`          | Left icon                    |
+ * Precedence (2026-07-11 double-arrow fix): `ReprocessStaging` >
+ * recording-live (ADR-0009 recording-wins, matching
+ * `LayoutCatalog.forKeyboard`) > pipeline-live > all-idle.
+ *
+ * | Precedence match    | `recording`          | Left icon                    |
  * |---------------------|----------------------|------------------------------|
- * | `Idle`              | `Idle`               | `ic_baseline_mic_20`         |
- * | `Idle`              | `Active(*)`          | `ic_baseline_send_20`        |
- * | `Idle`              | `Paused(*)`          | `ic_baseline_send_20`        |
- * | `Idle`              | `Preparing(*)`       | `null` (Legacy no-op)        |
- * | `Preparing(...)`    | (any)                | `ic_baseline_send_20`        |
- * | `Running(...)`      | (any)                | `null` (left empty — Auto-Enter side-channel uses right slot) |
  * | `ReprocessStaging`  | (any)                | `ic_baseline_play_arrow_24`  |
+ * | recording live      | `Active(*)`          | `ic_baseline_send_20`        |
+ * | recording live      | `Paused(*)`          | `ic_baseline_send_20`        |
+ * | recording live      | `Preparing(*)`       | `null` (Legacy no-op)        |
+ * | recording live      | `Interrupted`        | `ic_baseline_mic_20`         |
+ * | `Preparing(...)`    | `Idle`               | `ic_baseline_send_20`        |
+ * | `Running(...)`      | `Idle`               | `null` (left empty — Auto-Enter side-channel uses right slot) |
+ * | `Idle`              | `Idle`               | `ic_baseline_mic_20`         |
  *
  * **Paused branch:** the legacy renderer makes **no mutation** on
  * `RecordingState.Paused` — the view holds whatever Active wrote last
@@ -122,19 +127,29 @@ fun resolveAudioFocusIconForSlot(state: DictateUiState): Int =
  * onto the slots in the same atomic commit that no-ops the legacy
  * writer.
  */
-fun resolveRecordLeftIcon(state: DictateUiState): Int? = when (state.pipeline) {
-    is PipelineUiState.Preparing -> R.drawable.ic_baseline_send_20
-    is PipelineUiState.Running -> null
-    is PipelineUiState.ReprocessStaging -> R.drawable.ic_baseline_play_arrow_24
-    PipelineUiState.Idle -> when (state.recording) {
-        RecordingState.Idle -> R.drawable.ic_baseline_mic_20
+fun resolveRecordLeftIcon(state: DictateUiState): Int? = when {
+    // Staging outranks everything — parity with LayoutCatalog.forKeyboard,
+    // whose decision tree puts ReprocessStaging first.
+    state.pipeline is PipelineUiState.ReprocessStaging -> R.drawable.ic_baseline_play_arrow_24
+    // 2026-07-11 double-arrow fix — recording-wins precedence (ADR-0009).
+    // A live recording (incl. a secondary recording started during a
+    // pipeline run) drops the keyboard back to the recording layout with
+    // the Send text; the icon axis must follow the same precedence or
+    // the button loses its send icon while AutoEnterRenderer keeps
+    // painting the pipeline's ↵ on the right slot (the user-reported
+    // "doubled partial symbol behind the record symbol").
+    state.recording !is RecordingState.Idle -> when (state.recording) {
         is RecordingState.Active -> R.drawable.ic_baseline_send_20
         is RecordingState.Paused -> R.drawable.ic_baseline_send_20
         is RecordingState.Preparing -> null
         // Interrupted (2026-05-22): a Record-tap continues recording —
         // the mic icon (like Idle) signals "record again", not "send".
         is RecordingState.Interrupted -> R.drawable.ic_baseline_mic_20
+        RecordingState.Idle -> null // unreachable — guarded above
     }
+    state.pipeline is PipelineUiState.Preparing -> R.drawable.ic_baseline_send_20
+    state.pipeline is PipelineUiState.Running -> null
+    else -> R.drawable.ic_baseline_mic_20
 }
 
 /**
@@ -142,17 +157,22 @@ fun resolveRecordLeftIcon(state: DictateUiState): Int? = when (state.pipeline) {
  * what `PipelineStepRowRenderer.refreshRecordButtonFromState` /
  * `applyRecordButtonForRecording` write today on the right axis.
  *
- * | `pipeline`          | `recording`              | Right icon                    |
+ * Precedence (2026-07-11 double-arrow fix): `ReprocessStaging` >
+ * recording-live (ADR-0009 recording-wins) > pipeline-live > all-idle —
+ * identical to [resolveRecordLeftIcon].
+ *
+ * | Precedence match    | `recording`              | Right icon                    |
  * |---------------------|--------------------------|-------------------------------|
- * | `Idle`              | `Idle`                   | `ic_baseline_folder_open_20`  |
- * | `Idle`              | `Active(useBluetooth=t)` | `ic_baseline_bluetooth_20`    |
- * | `Idle`              | `Active(useBluetooth=f)` | `null`                        |
- * | `Idle`              | `Paused(useBluetooth=t)` | `ic_baseline_bluetooth_20`    |
- * | `Idle`              | `Paused(useBluetooth=f)` | `null`                        |
- * | `Idle`              | `Preparing(*)`           | `null` (Legacy no-op)         |
- * | `Preparing(...)`    | (any)                    | `null`                        |
- * | `Running(...)`      | (any)                    | `null` ✱                      |
  * | `ReprocessStaging`  | (any)                    | `ic_baseline_send_24`         |
+ * | recording live      | `Active(useBluetooth=t)` | `ic_baseline_bluetooth_20`    |
+ * | recording live      | `Active(useBluetooth=f)` | `null`                        |
+ * | recording live      | `Paused(useBluetooth=t)` | `ic_baseline_bluetooth_20`    |
+ * | recording live      | `Paused(useBluetooth=f)` | `null`                        |
+ * | recording live      | `Preparing(*)`           | `null` (Legacy no-op)         |
+ * | recording live      | `Interrupted`            | `null`                        |
+ * | `Preparing(...)`    | `Idle`                   | `null`                        |
+ * | `Running(...)`      | `Idle`                   | `null` ✱                      |
+ * | `Idle`              | `Idle`                   | `ic_baseline_folder_open_20`  |
  *
  * **Paused branch:** the legacy renderer makes no mutation on Paused —
  * the view holds the previous Active write (Bluetooth icon if the
@@ -171,16 +191,21 @@ fun resolveRecordLeftIcon(state: DictateUiState): Int? = when (state.pipeline) {
  *
  * @see resolveRecordLeftIcon for the left axis and the rationale.
  */
-fun resolveRecordRightIcon(state: DictateUiState): Int? = when (state.pipeline) {
-    is PipelineUiState.Preparing -> null
-    is PipelineUiState.Running -> null
-    is PipelineUiState.ReprocessStaging -> R.drawable.ic_baseline_send_24
-    PipelineUiState.Idle -> when (val rec = state.recording) {
-        RecordingState.Idle -> R.drawable.ic_baseline_folder_open_20
+fun resolveRecordRightIcon(state: DictateUiState): Int? = when {
+    // Staging outranks everything — forKeyboard parity (see left axis).
+    state.pipeline is PipelineUiState.ReprocessStaging -> R.drawable.ic_baseline_send_24
+    // 2026-07-11 double-arrow fix — recording-wins precedence (ADR-0009),
+    // symmetric to resolveRecordLeftIcon: a live recording carries its
+    // Bluetooth residue even while a pipeline run processes behind it.
+    state.recording !is RecordingState.Idle -> when (val rec = state.recording) {
         is RecordingState.Active -> if (rec.useBluetooth) R.drawable.ic_baseline_bluetooth_20 else null
         is RecordingState.Paused -> if (rec.useBluetooth) R.drawable.ic_baseline_bluetooth_20 else null
         is RecordingState.Preparing -> null
         // Interrupted (2026-05-22): no BT residue, no folder affordance.
         is RecordingState.Interrupted -> null
+        RecordingState.Idle -> null // unreachable — guarded above
     }
+    state.pipeline is PipelineUiState.Preparing -> null
+    state.pipeline is PipelineUiState.Running -> null
+    else -> R.drawable.ic_baseline_folder_open_20
 }

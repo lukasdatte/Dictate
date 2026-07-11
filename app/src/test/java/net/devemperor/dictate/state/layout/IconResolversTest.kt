@@ -88,6 +88,72 @@ class IconResolversTest {
         assertEquals(R.drawable.ic_baseline_play_arrow_24, resolveRecordLeftIcon(state))
     }
 
+    // ─── recording-wins precedence (ADR-0009, double-arrow fix) ────────
+    //
+    // A secondary recording started while a pipeline run processes drops
+    // the keyboard back to the normal recording layout (forKeyboard:
+    // recordingLive outranks isPipelineLive) with the "Send" text — but
+    // the icon resolvers checked `state.pipeline` FIRST, so the button
+    // lost its send icon and AutoEnterRenderer kept painting the dynamic
+    // auto-enter ↵ on the right slot: the user-reported "doubled partial
+    // symbol behind the record symbol". The icon axes must follow the
+    // same precedence as layout/text/action.
+
+    @Test
+    fun `left icon recording-wins - (pipeline=Running, recording=Active) is send_20`() {
+        val state = stateOf(
+            pipeline = PipelineUiState.Running(sessionId = "s1", target = InsertionTarget.INPUT_CONNECTION),
+            recording = activeRecording(useBluetooth = false),
+        )
+        assertEquals(R.drawable.ic_baseline_send_20, resolveRecordLeftIcon(state))
+    }
+
+    @Test
+    fun `left icon recording-wins - (pipeline=Preparing, recording=Paused) is send_20`() {
+        val state = stateOf(
+            pipeline = PipelineUiState.Preparing("s1"),
+            recording = pausedRecording(useBluetooth = false),
+        )
+        assertEquals(R.drawable.ic_baseline_send_20, resolveRecordLeftIcon(state))
+    }
+
+    @Test
+    fun `left icon recording-wins - (pipeline=Running, recording=Preparing) is null (record role, no send yet)`() {
+        val state = stateOf(
+            pipeline = PipelineUiState.Running(sessionId = "s1", target = InsertionTarget.INPUT_CONNECTION),
+            recording = preparingRecording(useBluetooth = false),
+        )
+        assertNull(resolveRecordLeftIcon(state))
+    }
+
+    @Test
+    fun `right icon recording-wins - (pipeline=Running, recording=Active, bluetooth=true) is bluetooth_20`() {
+        val state = stateOf(
+            pipeline = PipelineUiState.Running(sessionId = "s1", target = InsertionTarget.INPUT_CONNECTION),
+            recording = activeRecording(useBluetooth = true),
+        )
+        assertEquals(R.drawable.ic_baseline_bluetooth_20, resolveRecordRightIcon(state))
+    }
+
+    @Test
+    fun `right icon recording-wins - (pipeline=Running, recording=Active, bluetooth=false) is null`() {
+        val state = stateOf(
+            pipeline = PipelineUiState.Running(sessionId = "s1", target = InsertionTarget.INPUT_CONNECTION),
+            recording = activeRecording(useBluetooth = false),
+        )
+        assertNull(resolveRecordRightIcon(state))
+    }
+
+    @Test
+    fun `staging still outranks a live recording on both axes (forKeyboard parity)`() {
+        val state = stateOf(
+            pipeline = PipelineUiState.ReprocessStaging("s1", "transcript"),
+            recording = activeRecording(useBluetooth = false),
+        )
+        assertEquals(R.drawable.ic_baseline_play_arrow_24, resolveRecordLeftIcon(state))
+        assertEquals(R.drawable.ic_baseline_send_24, resolveRecordRightIcon(state))
+    }
+
     // ─── resolveRecordRightIcon ────────────────────────────────────────
 
     @Test

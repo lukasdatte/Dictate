@@ -105,8 +105,20 @@ class AutoEnterRenderer @JvmOverloads constructor(
     fun onState(state: DictateUiState) {
         val leftRes = resolveRecordLeftIcon(state)
         val rightRes = resolveRecordRightIcon(state)
-        val running = state.pipeline is PipelineUiState.Running
-        val autoEnter = (state.pipeline as? PipelineUiState.Running)?.autoEnterActive == true
+        // 2026-07-11 double-arrow fix — recording-wins precedence
+        // (ADR-0009). The dynamic ↵ belongs to the button's PIPELINE role
+        // only. While any recording is in flight (incl. a secondary
+        // recording started during a run, and its Preparing start-window)
+        // the layout/text/action axes all render the RECORDING role
+        // (LayoutCatalog.forKeyboard: recordingLive outranks
+        // isPipelineLive) — keying `running` on `pipeline is Running`
+        // alone painted the ↵ bitmap onto the Send-role button: the
+        // user-reported "doubled partial symbol behind the record symbol"
+        // at secondary-recording start.
+        val running = state.pipeline is PipelineUiState.Running &&
+            state.recording is net.devemperor.dictate.state.RecordingState.Idle
+        val autoEnter = running &&
+            (state.pipeline as? PipelineUiState.Running)?.autoEnterActive == true
         val key = AppliedKey(leftRes, rightRes, running, autoEnter)
         if (lastApplied == key) return
 

@@ -378,21 +378,12 @@ public class DictateInputMethodService extends InputMethodService
     // bit follows the orchestrator state, not the legacy controller.
     private PromptChipsBusyObserver promptChipsBusyObserver;
 
-    // dictate-pipeline-render-and-state-unification §5.2 — per-second
-    // pipeline-timer ticker (B-D-3). Dispatches
-    // `Action.PipelineAction.TickPipelineTimer` every 1000 ms while
-    // `state.pipeline is Running` so the record-button label's `M:SS`
-    // timer advances visibly between step boundaries. Pre-fix
-    // `elapsedMs` only restamped at StepStarted/Completed/Failed
-    // boundaries, so the user saw a frozen timer during long steps
-    // (transcription, reword).
-    private PipelineActivityTickerObserver pipelineTimerTickerObserver;
-
-    // Post-cutover hotfix #3+#4 — drives the recording-animation
-    // side-channel (timer + amplitude polling on Active|Paused) from
-    // state.recording transitions. See RecordingActivityTickerObserver
-    // KDoc for the full pre-/post-cutover diagnosis.
-    private RecordingActivityTickerObserver recordingTickerObserver;
+    // 2026-07-11 — the per-second TickPipelineTimer ticker and the
+    // recording-animation ticker are SERVICE-OWNED (external-start
+    // incident fix; see DictatePipelineService onCreate Step 8b). The
+    // IME registers per-tick sinks via
+    // LocalBinder.registerRecordingTickSinks instead of constructing
+    // observers here.
 
     // Post-cutover hotfix #AMP — normalizes the raw 0..32767 MediaRecorder
     // amplitude into the 0..1 contract that AmplitudeVisualizerDrawable /
@@ -1800,65 +1791,31 @@ public class DictateInputMethodService extends InputMethodService
                 busy -> updatePromptButtonsEnabledState());
         promptChipsBusyObserver.start();
 
-        // dictate-pipeline-render-and-state-unification §5.2 — start the
-        // pipeline-timer ticker. Dispatches `TickPipelineTimer` every
-        // 1 s while `state.pipeline is Running` so the record-button
-        // label's `M:SS` timer advances visibly between step boundaries
-        // (B-D-3 fix).
-        final DictatePipelineService.LocalBinder binderForPipelineTicker = pipelineBinder;
-        if (pipelineTimerTickerObserver != null) {
-            pipelineTimerTickerObserver.stop();
-        }
-        pipelineTimerTickerObserver = new PipelineActivityTickerObserver(
-                pipelineBinder.getState(),
-                () -> {
-                    DictatePipelineService.LocalBinder b = binderForPipelineTicker;
-                    if (b != null) {
-                        // Ignore DispatchOutcome return — the observer's
-                        // contract is `() -> Unit`. The orchestrator's
-                        // outcome is structurally guaranteed to be
-                        // `Reduced` for `TickPipelineTimer` (no module
-                        // owns a Rejected arm for it) and we don't act
-                        // on it here either way.
-                        b.dispatch(
-                                net.devemperor.dictate.state.Action.PipelineAction
-                                        .TickPipelineTimer.INSTANCE);
-                    }
-                    return kotlin.Unit.INSTANCE;
-                });
-        pipelineTimerTickerObserver.start();
+        // dictate-pipeline-render-and-state-unification §5.2 — the
+        // per-second `TickPipelineTimer` ticker is SERVICE-OWNED since
+        // the 2026-07-11 external-start incident fix (it must advance
+        // the widget's pipeline label even when no IME ever bound). See
+        // DictatePipelineService onCreate Step 8b. Nothing to wire here.
 
-        // Post-cutover hotfix #3+#4 — start the recording-animation
-        // side-channel ticker. Drives ImeViewBackend.onTimerTick/onAmplitude
-        // + QwertzRecordingController.onTimerTick/onAmplitude from
-        // state.recording transitions. See RecordingActivityTickerObserver
-        // KDoc for the diagnosis (legacy RecordingManager polling loop
-        // never starts on the new path).
-        final DictatePipelineService.LocalBinder binderForAmplitude = pipelineBinder;
-        if (recordingTickerObserver != null) {
-            recordingTickerObserver.stop();
-        }
-        // dictate-widget-integration §8.1 Chunk 1.3 — fan the timer +
-        // amplitude side-channel ticks into THREE consumers in lock-step:
-        // the IME-View backend, the QWERTZ recording controller, AND
-        // the service-owned OverlayBackend. The overlay's side-channel
-        // renderers are no-ops until `inflateAndAttach` runs (which only
-        // happens in WIDGET / HOVER ViewModes) so forwarding
-        // unconditionally costs nothing in KEYBOARD mode but guarantees
-        // the overlay-record-button shows the same Timer + Amplitude as
-        // the keyboard-record-button while WIDGET is active —
-        // User-Req: "Aufzeichnen-Button mit Timer und allem Drum und Dran".
-        final DictatePipelineService.LocalBinder binderForTicker = pipelineBinder;
-        recordingTickerObserver = new RecordingActivityTickerObserver(
-                pipelineBinder.getState(),
+        // Post-cutover hotfix #3+#4, ownership inverted 2026-07-11 —
+        // the recording-animation ticker is SERVICE-OWNED (the external
+        // entry points record without any IME; the service owns the
+        // recorder + OverlayBackend). The IME registers its per-tick
+        // sinks instead of constructing a ticker: the lambdas read the
+        // IME fields at call time, so a view recreation needs no
+        // re-registration (this method re-runs and re-registers anyway,
+        // idempotently). Amplitude arrives RAW (0..32767) and is
+        // normalised with the IME's own processor — per-surface EMA
+        // state, same math as the service's overlay-side processor.
+        // Single-poller invariant: never construct a second
+        // RecordingActivityTickerObserver here (getMaxAmplitude is a
+        // destructive read — two pollers split the peaks).
+        pipelineBinder.registerRecordingTickSinks(
                 elapsedMs -> {
                     if (imeViewBackend != null) imeViewBackend.onTimerTick(elapsedMs);
                     if (qwertzRecordingController != null) {
                         qwertzRecordingController.onTimerTick(elapsedMs);
                     }
-                    net.devemperor.dictate.state.render.overlay.OverlayBackend overlay =
-                            binderForTicker.getOverlayBackend();
-                    if (overlay != null) overlay.onTimerTick(elapsedMs);
                     return kotlin.Unit.INSTANCE;
                 },
                 amplitude -> {
@@ -1870,17 +1827,12 @@ public class DictateInputMethodService extends InputMethodService
                     if (qwertzRecordingController != null) {
                         qwertzRecordingController.onAmplitude(level);
                     }
-                    net.devemperor.dictate.state.render.overlay.OverlayBackend overlay =
-                            binderForTicker.getOverlayBackend();
-                    if (overlay != null) overlay.onAmplitude(level);
                     return kotlin.Unit.INSTANCE;
-                },
-                () -> binderForAmplitude.pollRecordingMaxAmplitude());
+                });
         // Clean EMA-history before the next ticker cycle so a fresh
         // session starts at silence instead of inheriting the smoothed
         // tail of the previous one.
         recordingTickerAmplitudeProcessor.reset();
-        recordingTickerObserver.start();
     }
 
     /**
@@ -2393,18 +2345,11 @@ public class DictateInputMethodService extends InputMethodService
             promptChipsBusyObserver = null;
         }
 
-        // dictate-pipeline-render-and-state-unification §5.2 — symmetric
-        // tear-down of the per-second pipeline-timer ticker.
-        if (pipelineTimerTickerObserver != null) {
-            pipelineTimerTickerObserver.stop();
-            pipelineTimerTickerObserver = null;
-        }
-
-        // Post-cutover hotfix #3+#4 — cancel the recording-animation
-        // ticker collector scope.
-        if (recordingTickerObserver != null) {
-            recordingTickerObserver.stop();
-            recordingTickerObserver = null;
+        // 2026-07-11 ownership inversion — both tickers are service-owned
+        // now; the IME only clears its registered tick sinks so the
+        // service ticker stops forwarding into dead View references.
+        if (pipelineBinder != null) {
+            pipelineBinder.registerRecordingTickSinks(null, null);
         }
 
         // Clean up long-lived objects

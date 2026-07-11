@@ -263,6 +263,31 @@ class DictatePipelineService : Service() {
     // IME-lifecycle hooks can call `refresh()` after a user returns
     // from System Settings.
     private var overlayBackendImpl: OverlayBackend? = null
+
+    /**
+     * Service-owned recording-animation ticker (2026-07-11 external-start
+     * incident fix). Single tick producer for BOTH surfaces: fans
+     * elapsed-ms + amplitude into the service's [OverlayBackend] directly
+     * and into the IME-registered sinks
+     * ([LocalBinder.delegateRecordingTimerSink] /
+     * [LocalBinder.delegateRecordingAmplitudeSink]) when an IME is bound.
+     * See [LocalBinder.registerRecordingTickSinks] for the ownership
+     * inversion rationale and the single-poller invariant.
+     */
+    private var recordingTickerObserverImpl: RecordingActivityTickerObserver? = null
+
+    /** Overlay-surface amplitude normaliser for [recordingTickerObserverImpl]. */
+    private val overlayTickerAmplitudeProcessor = AmplitudeProcessor()
+
+    /**
+     * Service-owned pipeline-label timer (2026-07-11, same ownership
+     * inversion as [recordingTickerObserverImpl]): dispatches
+     * `TickPipelineTimer` every second while `state.pipeline is Running`
+     * so the `M:SS` in the record-button / overlay label advances even
+     * when no IME ever bound (external start). Previously IME-owned,
+     * which froze the widget's pipeline timer in the headless case.
+     */
+    private var pipelineTimerTickerObserverImpl: PipelineActivityTickerObserver? = null
     private lateinit var overlayPermissionGateImpl: OverlayPermissionGate
     private lateinit var overlayPermissionObserverImpl: OverlayPermissionObserver
 
@@ -956,6 +981,52 @@ class DictatePipelineService : Service() {
         // outcome rather than a cascade.
         overlayPermissionObserverImpl.init()
 
+        // ──────────────────────────────────────────────────────────────
+        // Step 8b — service-owned recording + pipeline tickers
+        //           (2026-07-11 external-start incident fix).
+        //
+        // Ownership inversion: pre-fix BOTH tickers were constructed by
+        // the IME, which fanned recording ticks INTO the service's
+        // OverlayBackend. On a fresh process where the external entry
+        // point started a recording without the IME ever binding, no
+        // tick producer existed — the overlay recorded with no amplitude
+        // bars, no border glow, and a frozen timer (both the recording
+        // timer and the pipeline "M:SS" label). The service owns the
+        // recorder, the state flow, and the overlay backend, so it now
+        // runs the single ticker of each kind and forwards to the
+        // IME-registered sinks when present (see
+        // LocalBinder.registerRecordingTickSinks — single-poller
+        // invariant: MediaRecorder.getMaxAmplitude is a destructive
+        // read, never add a second poller).
+        // ──────────────────────────────────────────────────────────────
+        recordingTickerObserverImpl = RecordingActivityTickerObserver(
+            orchestrator.state,
+            { elapsedMs ->
+                overlayBackendImpl?.onTimerTick(elapsedMs)
+                binder.delegateRecordingTimerSink?.invoke(elapsedMs)
+            },
+            { rawAmplitude ->
+                // Normalise per-surface: the overlay gets the service's
+                // processor output; the IME sink receives the RAW sample
+                // and normalises with its own processor (same math,
+                // independent EMA state per surface).
+                overlayBackendImpl?.onAmplitude(
+                    overlayTickerAmplitudeProcessor.process(rawAmplitude),
+                )
+                binder.delegateRecordingAmplitudeSink?.invoke(rawAmplitude)
+            },
+            { recordingHardwareAdapterImpl.maxAmplitudeOrNull() },
+        ).also { it.start() }
+
+        pipelineTimerTickerObserverImpl = PipelineActivityTickerObserver(
+            orchestrator.state,
+            {
+                // Outcome deliberately ignored — TickPipelineTimer has no
+                // Rejected arm (see the reducer's KDoc).
+                orchestrator.dispatch(Action.PipelineAction.TickPipelineTimer)
+            },
+        ).also { it.start() }
+
         // F-120 — seed the config facets [onConfigurationChanged]
         // compares against; without the seed, the first config-change
         // callback after boot would always look like a delta.
@@ -1459,6 +1530,14 @@ class DictatePipelineService : Service() {
             }
         }
 
+        // 2026-07-11 — stop the service-owned tickers before the
+        // orchestrator winds down (idempotent; leaves no scheduled
+        // Handler callback behind).
+        recordingTickerObserverImpl?.stop()
+        recordingTickerObserverImpl = null
+        pipelineTimerTickerObserverImpl?.stop()
+        pipelineTimerTickerObserverImpl = null
+
         // F-036 / F-013 (2026-07-02) — tear down the interruption
         // producers + the SCO receiver FIRST so no late system callback
         // dispatches into an orchestrator that is about to shut down.
@@ -1886,6 +1965,52 @@ class DictatePipelineService : Service() {
             provider: (() -> net.devemperor.dictate.state.insertion.InsertionService?)?,
         ) {
             delegateInsertionService = provider
+        }
+
+        /**
+         * IME-side sinks for the **service-owned** recording-animation
+         * ticker (2026-07-11 external-start incident fix).
+         *
+         * Pre-fix the [RecordingActivityTickerObserver] was constructed
+         * by the IME and fanned ticks INTO the service's [OverlayBackend]
+         * — so a recording started via the external entry points on a
+         * fresh process (IME never bound) had no amplitude / timer
+         * producer at all: the overlay widget recorded with no bars, no
+         * border glow, and a frozen timer. Ownership is now inverted:
+         * the service (which owns the recorder, the state flow, and the
+         * overlay backend) runs the single ticker and forwards each tick
+         * to these IME-registered sinks when present.
+         *
+         * **Single-poller invariant:** `MediaRecorder.getMaxAmplitude()`
+         * is a destructive read (peak since the LAST call) — two
+         * concurrent pollers would split the peaks and degrade the bars
+         * on both surfaces. Never construct a second
+         * [RecordingActivityTickerObserver]; register sinks here instead.
+         *
+         * @property delegateRecordingTimerSink elapsed-ms per tick (also
+         *   the freeze-value emissions on Pause/Interrupted).
+         * @property delegateRecordingAmplitudeSink RAW MediaRecorder
+         *   amplitude (0..32767) per tick — the IME normalises with its
+         *   own [AmplitudeProcessor], symmetric to the service's
+         *   overlay-side processor (same math, per-surface EMA state).
+         */
+        @Volatile
+        internal var delegateRecordingTimerSink: ((Long) -> Unit)? = null
+
+        @Volatile
+        internal var delegateRecordingAmplitudeSink: ((Int) -> Unit)? = null
+
+        /**
+         * Register (or clear with `null`s) the IME's recording-tick
+         * sinks. Called from `onServiceConnected` / the IME-view wiring
+         * pass; pass `null, null` on unbind. Idempotent.
+         */
+        fun registerRecordingTickSinks(
+            timerSink: ((Long) -> Unit)?,
+            amplitudeSink: ((Int) -> Unit)?,
+        ) {
+            delegateRecordingTimerSink = timerSink
+            delegateRecordingAmplitudeSink = amplitudeSink
         }
 
         /**

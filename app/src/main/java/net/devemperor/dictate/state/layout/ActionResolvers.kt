@@ -284,7 +284,8 @@ fun resolveRecordActionPipeline(
  * | `pipeline is ReprocessStaging`                            | `CancelReprocessStaging(sessionId)`                          |
  * | `Idle + Idle + interrupted-session in pendingSessions`     | `DiscardInterruptedSession(sessionId)` (§4.5.3)             |
  * | `recording is Idle && pipeline is Idle`                   | `null` (visibility predicate hides it)                       |
- * | otherwise (recording active/paused, or pipeline Preparing)| `CancelRecording`                                            |
+ * | `recording is Idle && pipeline Preparing/Running`          | `CancelPipeline(sessionId)` (overlay-only, 2026-07-11)      |
+ * | otherwise (recording active/paused/preparing)              | `CancelRecording` (recording-wins)                           |
  *
  * The `DiscardInterruptedSession` branch picks the **first**
  * RECORDING_INTERRUPTED entry from `pendingSessions` (recording-stack-
@@ -321,6 +322,30 @@ fun resolveTrashAction(
                 Action.RecordingAction.DiscardInterruptedSession(it.sessionId)
             }
         }
+        // 2026-07-11 external-start incident — recording Idle + pipeline
+        // live: only the OVERLAY surface renders a trash button here
+        // (LayoutCatalog.OVERLAY_5BUTTON's visibility predicate includes
+        // `pipeline !is Idle`; the keyboard's `isTrashVisible` and the
+        // SEND_MODE hardcoded `{ false }` never do). The previous
+        // fall-through to `CancelRecording` was a guaranteed no-op —
+        // RecordingModule rejects CancelRecording from Idle — leaving the
+        // user a visible but dead cancel affordance while a run processes
+        // (or hangs, see external-dictation spec §6.1 headless-completion
+        // gap). Cancel the RUN instead; the explicit sessionId guards
+        // against a stale tap racing a chain-start (ADR-0009 D5: queued
+        // runs survive and chain-start).
+        rec is RecordingState.Idle &&
+            (pipe is PipelineUiState.Preparing || pipe is PipelineUiState.Running) ->
+            Action.PipelineAction.CancelPipeline(
+                sessionId = when (pipe) {
+                    is PipelineUiState.Preparing -> pipe.sessionId
+                    is PipelineUiState.Running -> pipe.sessionId
+                    else -> null // unreachable — guarded above
+                },
+            )
+        // Recording Active/Paused/Preparing (with or without a coexisting
+        // pipeline run): cancel the recording — recording-wins, parity
+        // with the record button's precedence (ADR-0009).
         else -> Action.RecordingAction.CancelRecording
     }
 }

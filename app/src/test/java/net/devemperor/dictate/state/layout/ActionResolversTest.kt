@@ -412,6 +412,57 @@ class ActionResolversTest {
         assertNull(resolveTrashAction(s, fakeModuleServices()))
     }
 
+    // 2026-07-11 external-start incident — the overlay TRASH slot is
+    // visible while a pipeline run is live even when no recording is in
+    // flight (LayoutCatalog.OVERLAY_5BUTTON: "visible whenever there's
+    // something to cancel: an active recording OR a live pipeline").
+    // Pre-fix the resolver fell into the `else -> CancelRecording` arm
+    // there, which RecordingModule rejects from Idle — a visible but
+    // dead button. Regression guard: the tap must cancel the PIPELINE.
+    @Test
+    fun `resolveTrashAction cancels the pipeline at recording-Idle while pipeline Running`() {
+        val s = state.copy(
+            recording = RecordingState.Idle,
+            pipeline = PipelineUiState.Running(
+                sessionId = "run-1",
+                target = InsertionTarget.INPUT_CONNECTION,
+            ),
+        )
+        val result = resolveTrashAction(s, fakeModuleServices())
+            as? Action.PipelineAction.CancelPipeline
+            ?: error("Expected CancelPipeline, got ${resolveTrashAction(s, fakeModuleServices())}")
+        assertEquals("run-1", result.sessionId)
+    }
+
+    @Test
+    fun `resolveTrashAction cancels the pipeline at recording-Idle while pipeline Preparing`() {
+        val s = state.copy(
+            recording = RecordingState.Idle,
+            pipeline = PipelineUiState.Preparing(sessionId = "run-2"),
+        )
+        val result = resolveTrashAction(s, fakeModuleServices())
+            as? Action.PipelineAction.CancelPipeline
+            ?: error("Expected CancelPipeline, got ${resolveTrashAction(s, fakeModuleServices())}")
+        assertEquals("run-2", result.sessionId)
+    }
+
+    // Recording-wins guard: a live (or preparing) recording coexisting
+    // with a pipeline run still cancels the RECORDING, not the run.
+    @Test
+    fun `resolveTrashAction cancels the recording when recording Active while pipeline Running`() {
+        val s = state.copy(
+            recording = RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-test"),
+            pipeline = PipelineUiState.Running(
+                sessionId = "run-1",
+                target = InsertionTarget.INPUT_CONNECTION,
+            ),
+        )
+        assertEquals(
+            Action.RecordingAction.CancelRecording,
+            resolveTrashAction(s, fakeModuleServices()),
+        )
+    }
+
     // ─── resolvePauseAction ───────────────────────────────────────────
 
     @Test

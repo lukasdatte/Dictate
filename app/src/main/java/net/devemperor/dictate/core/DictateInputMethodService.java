@@ -4854,10 +4854,30 @@ public class DictateInputMethodService extends InputMethodService
         // the verdict: still ambiguous → refresh the panel; otherwise commit the
         // refined output and close.
         mainHandler.post(() -> {
+            if (!canShowReviewPanel()) {
+                // K4: the IME view is gone (the user left the app during the
+                // refinement) — the panel is torn down and the InputConnection is
+                // null, so a commit here would be a silent no-op and the user's
+                // refinement would be lost. The teardown cascade already surfaced
+                // the PRE-refinement output as a pending part; replace it with the
+                // REFINED output for the same session so the refinement survives
+                // (AddOrReplaceOne upserts; the DB already holds the refined
+                // final_output_text for cold-boot recovery).
+                dispatchPipelineActionToOrchestrator(
+                        new net.devemperor.dictate.state.Action.PendingSessionsAction.AddOrReplaceOne(
+                                new net.devemperor.dictate.state.PendingSession(
+                                        sessionId,
+                                        net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+                                        output,
+                                        System.currentTimeMillis(),
+                                        null)),
+                        "PendingSessions.AddOrReplaceOne");
+                return;
+            }
             net.devemperor.dictate.ai.conversation.Verdict v =
                     net.devemperor.dictate.ai.conversation.ReviewDecision.INSTANCE.decide(
                             currentAmbiguityMode(), needsClarification, message);
-            if (v == net.devemperor.dictate.ai.conversation.Verdict.REVIEW && canShowReviewPanel()) {
+            if (v == net.devemperor.dictate.ai.conversation.Verdict.REVIEW) {
                 dispatchPipelineActionToOrchestrator(
                         new net.devemperor.dictate.state.Action.ReviewPanelAction.Update(output, message),
                         "ReviewPanel.Update");

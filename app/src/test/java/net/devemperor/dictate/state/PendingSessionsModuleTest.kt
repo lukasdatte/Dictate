@@ -61,6 +61,38 @@ class PendingSessionsModuleTest {
         assertNull(module.reduce(state, Action.PendingSessionsAction.Dismiss("missing"), ctx()))
     }
 
+    // ─── K4: refinement result replaces the stale pre-refinement pending part ─
+
+    @Test
+    fun `AddOrReplaceOne replaces an existing entry's text keeping its createdAt (K4)`() {
+        val stale = PendingSession(
+            sessionId = "s", status = SessionStatus.COMPLETED,
+            transcribedText = "PRE-REFINEMENT", createdAt = 42L,
+        )
+        val state = persistentListOf(session("other"), stale)
+        val refined = PendingSession(
+            sessionId = "s", status = SessionStatus.COMPLETED,
+            transcribedText = "REFINED", createdAt = 999L,
+        )
+        val result = module.reduce(state, Action.PendingSessionsAction.AddOrReplaceOne(refined), ctx())!!
+        val updated = result.nextState.single { it.sessionId == "s" }
+        assertEquals("REFINED", updated.transcribedText)
+        assertEquals("createdAt/ordering preserved", 42L, updated.createdAt)
+        assertEquals("no entry added or dropped", 2, result.nextState.size)
+    }
+
+    @Test
+    fun `AddOrReplaceOne appends when the session is absent (K4)`() {
+        val state = persistentListOf(session("other"))
+        val refined = PendingSession(
+            sessionId = "s", status = SessionStatus.COMPLETED,
+            transcribedText = "REFINED", createdAt = 7L,
+        )
+        val result = module.reduce(state, Action.PendingSessionsAction.AddOrReplaceOne(refined), ctx())!!
+        assertEquals(2, result.nextState.size)
+        assertEquals("REFINED", result.nextState.single { it.sessionId == "s" }.transcribedText)
+    }
+
     // ─── R4 aggregate arms (ADR-0009 / spec §3.5) ───────────────────────
 
     private fun completed(id: String) = PendingSession(

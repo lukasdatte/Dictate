@@ -1149,6 +1149,20 @@ sealed class Action {
         data class AddOne(val session: PendingSession) : PendingSessionsAction()
 
         /**
+         * Upsert a single [PendingSession] by `sessionId`: replace the
+         * `transcribedText` of an existing entry (keeping its `createdAt` /
+         * ordering) or append it when absent.
+         *
+         * K4 — a dictated review refinement that completes while the IME view is
+         * gone can no longer be committed (the InputConnection is null). The
+         * teardown cascade has already surfaced the PRE-refinement output as a
+         * pending part; this replaces it with the REFINED output for the same
+         * session so the user's refinement is not silently lost. Unlike [AddOne]
+         * (idempotent no-op on a duplicate), this deliberately updates the text.
+         */
+        data class AddOrReplaceOne(val session: PendingSession) : PendingSessionsAction()
+
+        /**
          * User confirmed a Pending-Insert item — equivalent to [Dismiss]
          * on the state side (the session leaves `pendingSessions`, the
          * DB's `inserted_at` is stamped), with one additional imperative

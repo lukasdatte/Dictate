@@ -98,6 +98,27 @@ object PendingSessionsModule : DictateModule<PersistentList<PendingSession>, Act
             }
         }
 
+        is Action.PendingSessionsAction.AddOrReplaceOne -> {
+            // K4 upsert: replace an existing entry's text (keeping createdAt /
+            // ordering) or append when absent. Used when a review refinement
+            // finishes with the IME gone — the teardown cascade saved the
+            // pre-refinement output, this swaps in the refined one.
+            if (state.any { it.sessionId == action.session.sessionId }) {
+                TransitionResult(
+                    nextState = state.map {
+                        if (it.sessionId == action.session.sessionId) {
+                            it.copy(transcribedText = action.session.transcribedText)
+                        } else {
+                            it
+                        }
+                    }.toPersistentList(),
+                    sideEffects = emptyList(),
+                )
+            } else {
+                TransitionResult(nextState = state.add(action.session), sideEffects = emptyList())
+            }
+        }
+
         is Action.PendingSessionsAction.Dismiss -> dismiss(state, action.sessionId)
 
         is Action.PendingSessionsAction.AcceptAndInsert -> {

@@ -295,6 +295,13 @@ class PipelineOrchestratorRegenerationTest {
                         modelName = "test-model"
                     )
                 }
+
+                // conv-3 placeholder; conv-6 wires converse() for the
+                // CONVERSATION_TURN regenerate path.
+                override fun converse(
+                    request: net.devemperor.dictate.ai.runner.ConversationRequest
+                ): net.devemperor.dictate.ai.runner.ConversationResult =
+                    throw UnsupportedOperationException("converse not used in this test")
             }
 
         override fun getProvider(function: AIFunction): AIProvider = AIProvider.OPENAI

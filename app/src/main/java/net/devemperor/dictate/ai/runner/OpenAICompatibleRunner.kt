@@ -9,6 +9,7 @@ import com.openai.errors.InternalServerException
 import com.openai.errors.NotFoundException
 import com.openai.errors.RateLimitException
 import com.openai.errors.UnauthorizedException
+import com.openai.models.ResponseFormatJsonSchema
 import com.openai.models.audio.AudioResponseFormat
 import com.openai.models.audio.transcriptions.TranscriptionCreateParams
 import com.openai.models.chat.completions.ChatCompletionCreateParams
@@ -16,6 +17,9 @@ import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.ai.AIProviderException.ErrorType
+import net.devemperor.dictate.ai.conversation.StructuredResponseCodec
+import net.devemperor.dictate.database.entity.MessageRole
+import net.devemperor.dictate.database.entity.ResponseFormatKind
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 import java.io.IOException
@@ -108,18 +112,8 @@ class OpenAICompatibleRunner(
             .addUserMessage(options.prompt)
             .model(options.model)
 
-        // Forward dynamic parameters from ParameterRegistry
         options.systemPrompt?.let { if (it.isNotEmpty()) builder.addSystemMessage(it) }
-        options.parameters.forEach { (key, value) ->
-            when (key) {
-                "temperature" -> builder.temperature((value as Number).toDouble())
-                "max_completion_tokens" -> builder.maxCompletionTokens((value as Number).toLong())
-                "top_p" -> builder.topP((value as Number).toDouble())
-                "frequency_penalty" -> builder.frequencyPenalty((value as Number).toDouble())
-                "presence_penalty" -> builder.presencePenalty((value as Number).toDouble())
-                "reasoning_effort" -> builder.putAdditionalBodyProperty("reasoning_effort", JsonValue.from(value))
-            }
-        }
+        applyParameters(builder, options.parameters)
 
         return wrapProviderCall(modelName = options.model) {
             val chatCompletion = client.chat().completions().create(builder.build())
@@ -135,5 +129,118 @@ class OpenAICompatibleRunner(
                 modelName = options.model
             )
         }
+    }
+
+    override fun converse(request: ConversationRequest): ConversationResult {
+        val client = buildClient()
+
+        // First attempt: native structured output via response_format=json_schema.
+        try {
+            val params = buildChatParams(request, withSchema = true, appendFallbackHint = false)
+            return wrapProviderCall(modelName = request.model) {
+                val chat = client.chat().completions().create(params)
+                toConversationResult(chat, request.model, ResponseFormatKind.JSON_SCHEMA)
+            }
+        } catch (e: AIProviderException) {
+            // Only heterogeneous endpoints (CUSTOM / OpenRouter) may reject
+            // response_format; for first-party providers a 400 is a real error.
+            if (e.errorType != ErrorType.BAD_REQUEST || !provider.allowsStructuredOutputTextFallback) {
+                throw e
+            }
+        }
+
+        // Fallback: plain text + schema instruction, lenient-parsed.
+        val fallbackParams = buildChatParams(request, withSchema = false, appendFallbackHint = true)
+        return wrapProviderCall(modelName = request.model) {
+            val chat = client.chat().completions().create(fallbackParams)
+            toConversationResult(chat, request.model, ResponseFormatKind.TEXT_FALLBACK)
+        }
+    }
+
+    private fun buildChatParams(
+        request: ConversationRequest,
+        withSchema: Boolean,
+        appendFallbackHint: Boolean
+    ): ChatCompletionCreateParams {
+        val builder = ChatCompletionCreateParams.builder().model(request.model)
+
+        var system = request.systemPrompt?.takeIf { it.isNotEmpty() }
+        if (appendFallbackHint) {
+            val hint = StructuredResponseCodec.fallbackInstruction()
+            system = if (system == null) hint else "$system\n\n$hint"
+        }
+        system?.let { builder.addSystemMessage(it) }
+
+        for (message in request.messages) {
+            when (message.role) {
+                MessageRole.USER -> builder.addUserMessage(message.content)
+                MessageRole.ASSISTANT -> builder.addAssistantMessage(message.content)
+                MessageRole.SYSTEM -> builder.addSystemMessage(message.content)
+            }
+        }
+
+        applyParameters(builder, request.parameters)
+        if (withSchema) builder.responseFormat(structuredResponseFormat())
+        return builder.build()
+    }
+
+    private fun toConversationResult(
+        chat: com.openai.models.chat.completions.ChatCompletion,
+        model: String,
+        format: ResponseFormatKind
+    ): ConversationResult {
+        val usage = chat.usage().orElse(null)
+        val content = chat.choices()[0].message().content().orElse("")
+        val parsed = StructuredResponseCodec.parseLenient(content)
+        return ConversationResult(
+            message = parsed.message,
+            output = parsed.output,
+            promptTokens = usage?.promptTokens() ?: 0L,
+            completionTokens = usage?.completionTokens() ?: 0L,
+            modelName = model,
+            responseFormat = format
+        )
+    }
+
+    /** Shared parameter mapping — used by both [complete] and [converse]. */
+    private fun applyParameters(
+        builder: ChatCompletionCreateParams.Builder,
+        parameters: Map<String, Any>
+    ) {
+        parameters.forEach { (key, value) ->
+            when (key) {
+                "temperature" -> builder.temperature((value as Number).toDouble())
+                "max_completion_tokens" -> builder.maxCompletionTokens((value as Number).toLong())
+                "top_p" -> builder.topP((value as Number).toDouble())
+                "frequency_penalty" -> builder.frequencyPenalty((value as Number).toDouble())
+                "presence_penalty" -> builder.presencePenalty((value as Number).toDouble())
+                "reasoning_effort" -> builder.putAdditionalBodyProperty("reasoning_effort", JsonValue.from(value))
+            }
+        }
+    }
+
+    /** The fixed `{message, output}` json_schema response format (ADR-0012). */
+    private fun structuredResponseFormat(): ResponseFormatJsonSchema {
+        val (messageField, outputField) = StructuredResponseCodec.fieldNames
+        val schema = ResponseFormatJsonSchema.JsonSchema.Schema.builder()
+            .putAdditionalProperty("type", JsonValue.from("object"))
+            .putAdditionalProperty(
+                "properties",
+                JsonValue.from(
+                    mapOf(
+                        messageField to mapOf("type" to "string"),
+                        outputField to mapOf("type" to "string")
+                    )
+                )
+            )
+            .putAdditionalProperty("required", JsonValue.from(listOf(messageField, outputField)))
+            .putAdditionalProperty("additionalProperties", JsonValue.from(false))
+            .build()
+        val jsonSchema = ResponseFormatJsonSchema.JsonSchema.builder()
+            .name("post_processing_result")
+            .strict(true)
+            .schema(schema)
+            .build()
+        return ResponseFormatJsonSchema.builder().jsonSchema(jsonSchema).build()
     }
 }

@@ -17,6 +17,18 @@ object StructuredResponseCodec {
     val fieldNames: Pair<String, String> = "message" to "output"
 
     /**
+     * Instruction appended to the prompt when a provider rejects native
+     * structured output (CUSTOM / OpenRouter text fallback). Keeps the wire
+     * shape identical to [encode] so [parseLenient] can read it back.
+     */
+    fun fallbackInstruction(): String {
+        val (message, output) = fieldNames
+        return "Respond with ONLY a single JSON object of the form " +
+            "{\"$message\": string, \"$output\": string} and nothing else. " +
+            "'$message' is a short explanation (may be empty); '$output' is the resulting text."
+    }
+
+    /**
      * Canonical serialization of a structured response, used when replaying a
      * prior assistant turn back to the model (full `{message, output}`, ADR-0012
      * decision 3).

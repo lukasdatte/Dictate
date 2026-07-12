@@ -6,7 +6,14 @@ enum class AIProvider(
     val billingUrl: String?,
     val supportsTranscription: Boolean,
     val supportsCompletion: Boolean,
-    val isOpenAICompatible: Boolean  // Uses OpenAI API format (just different base URL)
+    val isOpenAICompatible: Boolean,  // Uses OpenAI API format (just different base URL)
+    /**
+     * Whether a structured-output request that the provider rejects with a 400
+     * should fall back to plain text + lenient parsing (ADR-0012). True only for
+     * providers with heterogeneous model support behind one endpoint; for
+     * first-party providers a 400 is a real error, not a capability gap.
+     */
+    val allowsStructuredOutputTextFallback: Boolean = false
 ) {
     OPENAI(
         displayName = "OpenAI",
@@ -46,7 +53,8 @@ enum class AIProvider(
         billingUrl = "https://openrouter.ai/credits",
         supportsTranscription = false,  // OpenRouter has no /audio/transcriptions endpoint
         supportsCompletion = true,
-        isOpenAICompatible = true
+        isOpenAICompatible = true,
+        allowsStructuredOutputTextFallback = true
     ),
     CUSTOM(
         displayName = "Custom",
@@ -54,7 +62,8 @@ enum class AIProvider(
         billingUrl = null,
         supportsTranscription = true,
         supportsCompletion = true,
-        isOpenAICompatible = true
+        isOpenAICompatible = true,
+        allowsStructuredOutputTextFallback = true
     );
 
     companion object {

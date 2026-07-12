@@ -354,6 +354,14 @@ class PipelineOrchestratorQueueExecutionTest {
                         modelName = "test-model"
                     )
                 }
+
+                // conv-3: this legacy queue test still exercises the single-shot
+                // complete() path; converse() is unused here (the pipeline
+                // migrates to it in conv-6).
+                override fun converse(
+                    request: net.devemperor.dictate.ai.runner.ConversationRequest
+                ): net.devemperor.dictate.ai.runner.ConversationResult =
+                    throw UnsupportedOperationException("converse not used in this test")
             }
 
         override fun getProvider(function: AIFunction): AIProvider = AIProvider.OPENAI

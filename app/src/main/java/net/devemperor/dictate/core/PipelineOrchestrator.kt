@@ -774,13 +774,15 @@ class PipelineOrchestrator @JvmOverloads constructor(
         currentStepIndex = 0
         currentStepName = null
         sessionTracker.currentSessionId = sessionId
+        // K8: built before the try so the error path can persist the dictated
+        // refinement as an audit trail even if converse throws.
+        val followUpMsg = ConversationTurnBuilder.buildFollowUpUserMessage(followUpText)
+        val startTime = System.nanoTime()
         try {
             cancellationToken.throwIfCancelled()
             trackAndNotifyStepStarted(CONVERSATION_STEP_NAME)
-            val startTime = System.nanoTime()
 
             val snapshot = sessionManager.loadConversation(sessionId)
-            val followUpMsg = ConversationTurnBuilder.buildFollowUpUserMessage(followUpText)
             val messages = ConversationReconstructor.toApiMessages(snapshot.turns, followUpMsg)
             val result = aiOrchestrator.converse(messages, snapshot.systemContent)
             cancellationToken.throwIfCancelled()
@@ -824,6 +826,23 @@ class PipelineOrchestrator @JvmOverloads constructor(
                 ).apply { initCause(e) }
             }
             callback.onStepFailed(CONVERSATION_STEP_NAME)
+            // K8: persist the dictated follow-up as an ERROR turn (+ USER row) so
+            // the refinement the user spoke is auditable and not silently lost —
+            // mirroring executeConversationTurn's handleConversationTurnError.
+            // loadConversation skips ERROR turns, so this never pollutes a later
+            // replay; getFinalOutput keeps returning the prior successful output.
+            val durationMs = (System.nanoTime() - startTime) / 1_000_000
+            sessionManager.appendConversationTurnError(
+                sessionId = sessionId,
+                userMessageContent = followUpMsg,
+                inputText = followUpText,
+                model = aiOrchestrator.getModelName(AIFunction.COMPLETION),
+                provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name,
+                previousTranscriptionId = null,
+                errorMessage = e.message ?: e.javaClass.simpleName,
+                durationMs = durationMs,
+                systemPromptForFirstTurn = null
+            )
             if (e is AIProviderException) {
                 callback.onPipelineError(e.toInfoKey(), true, e.provider?.name)
             } else {

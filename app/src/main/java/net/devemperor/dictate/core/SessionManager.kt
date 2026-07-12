@@ -704,12 +704,13 @@ class SessionManager(private val db: DictateDatabase) {
      * The denormalized field is only populated if callers explicitly call [updateFinalOutputText].
      */
     fun getFinalOutput(sessionId: String): String? {
-        val chain = stepDao.getCurrentChain(sessionId)
-        if (chain.isNotEmpty()) {
-            val lastStep = chain.last()
-            if (lastStep.status == StepStatus.SUCCESS.name && lastStep.outputText != null) {
-                return lastStep.outputText
-            }
+        // Prefer the LAST SUCCESSFUL step, not merely the last step: a trailing
+        // ERROR turn (e.g. a failed review refinement, K8) must not shadow the
+        // prior good output into the transcription fallback.
+        val lastSuccess = stepDao.getCurrentChain(sessionId)
+            .lastOrNull { it.status == StepStatus.SUCCESS.name && it.outputText != null }
+        if (lastSuccess != null) {
+            return lastSuccess.outputText
         }
         val transcription = transcriptionDao.getCurrent(sessionId)
         if (transcription != null) {
@@ -722,16 +723,16 @@ class SessionManager(private val db: DictateDatabase) {
      * Returns the final output with source information for traceability.
      */
     fun getFinalOutputSource(sessionId: String): FinalOutputInfo? {
-        val chain = stepDao.getCurrentChain(sessionId)
-        if (chain.isNotEmpty()) {
-            val lastStep = chain.last()
-            if (lastStep.status == StepStatus.SUCCESS.name && lastStep.outputText != null) {
-                return FinalOutputInfo(
-                    text = lastStep.outputText,
-                    stepId = lastStep.id,
-                    transcriptionId = null
-                )
-            }
+        // Parity with getFinalOutput: the last SUCCESSFUL step is the source, so
+        // a trailing ERROR turn does not push resolution onto the transcription.
+        val lastSuccess = stepDao.getCurrentChain(sessionId)
+            .lastOrNull { it.status == StepStatus.SUCCESS.name && it.outputText != null }
+        if (lastSuccess != null) {
+            return FinalOutputInfo(
+                text = lastSuccess.outputText!!, // filtered non-null above
+                stepId = lastSuccess.id,
+                transcriptionId = null
+            )
         }
         val transcription = transcriptionDao.getCurrent(sessionId)
         if (transcription != null) {

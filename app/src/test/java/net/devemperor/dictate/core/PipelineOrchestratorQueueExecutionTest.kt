@@ -334,6 +334,37 @@ class PipelineOrchestratorQueueExecutionTest {
     }
 
     @Test
+    fun `continueConversation failure persists the follow-up as an auditable ERROR turn (K8)`() {
+        val sid = createRecordingSession()
+        db.promptDao().insert(
+            PromptEntity(id = 7, pos = 0, name = "F", prompt = "Make it formal", requiresSelection = true, autoApply = false)
+        )
+        reprocess(sid, listOf(PromptQueueSlot.ofSavedPrompt(7)))   // converse #1 (turn 0) succeeds
+        factory.failAtConverseCall = 2                             // the continuation fails (non-cancel)
+
+        // Non-cancel failure does NOT rethrow (best-effort), it surfaces via
+        // onPipelineError — so no assertThrows here.
+        orchestrator.continueConversationBlocking(sid, "make it shorter")
+
+        // The dictated refinement is persisted as an ERROR turn at chain 1 with
+        // its USER row, instead of vanishing silently.
+        val chain = db.processingStepDao().getCurrentChain(sid)
+        assertEquals(2, chain.size)
+        val errorTurn = chain[1]
+        assertEquals(StepType.CONVERSATION_TURN.name, errorTurn.stepType)
+        assertEquals(1, errorTurn.chainIndex)
+        assertEquals("ERROR", errorTurn.status)
+
+        val userRows = db.conversationMessageDao().getUserMessages(sid)
+        assertEquals(2, userRows.size) // turn-0 user + the failed follow-up user
+        assertTrue(userRows.last().content.contains("make it shorter"))
+
+        // Prior successful output is unchanged; the failed turn is not replayed.
+        assertEquals(factory.output(1), sessionManager.getFinalOutput(sid))
+        assertEquals(1, sessionManager.loadConversation(sid).turns.size)
+    }
+
+    @Test
     fun `resume of an errored turn replays the persisted user message, not a rebuilt one (K3)`() {
         // A turn failed and was persisted as ERROR with its user message row.
         // On resume, executeConversationTurn regenerates the turn WITHOUT
@@ -417,6 +448,7 @@ class PipelineOrchestratorQueueExecutionTest {
         val transcriptText = "raw transcript"
         val converseCalls = mutableListOf<ConversationRequest>()
         var cancelAtConverseCall: Int? = null
+        var failAtConverseCall: Int? = null
 
         fun output(n: Int) = "generated-output-$n"
 
@@ -441,6 +473,12 @@ class PipelineOrchestratorQueueExecutionTest {
                         throw AIProviderException(
                             AIProviderException.ErrorType.CANCELLED,
                             "cancelled mid-turn"
+                        )
+                    }
+                    if (converseCalls.size == failAtConverseCall) {
+                        throw AIProviderException(
+                            AIProviderException.ErrorType.SERVER_ERROR,
+                            "server error mid-turn"
                         )
                     }
                     return ConversationResult(

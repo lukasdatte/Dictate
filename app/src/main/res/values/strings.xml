@@ -169,6 +169,7 @@
     <string name="dictate_review_redictate">Re-dictate</string>
     <string name="dictate_review_discard">Discard</string>
     <string name="dictate_review_refining">Refining…</string>
+    <string name="dictate_review_recording">Recording…</string>
     <!-- In-keyboard history panel (ADR-0014) -->
     <string name="dictate_history_panel_title">History</string>
     <string name="dictate_history_panel_close">Close history</string>

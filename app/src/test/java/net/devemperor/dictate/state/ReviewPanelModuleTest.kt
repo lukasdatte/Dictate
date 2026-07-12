@@ -59,6 +59,43 @@ class ReviewPanelModuleTest {
     }
 
     @Test
+    fun `MarkRefinementRecording locks the panel while S2 records (K1)`() {
+        val r = module.reduce(openState(), Action.ReviewPanelAction.MarkRefinementRecording, ctx())!!
+        assertTrue(r.nextState.refinementRecording)
+        assertFalse(r.nextState.refining)
+    }
+
+    @Test
+    fun `MarkRefining supersedes the recording lock (K1)`() {
+        val recording = openState().copy(refinementRecording = true)
+        val r = module.reduce(recording, Action.ReviewPanelAction.MarkRefining, ctx())!!
+        assertTrue(r.nextState.refining)
+        assertFalse(r.nextState.refinementRecording)
+    }
+
+    @Test
+    fun `CancelRefinement clears the recording lock so the panel is never stuck (K1)`() {
+        val recording = openState().copy(refinementRecording = true)
+        val r = module.reduce(recording, Action.ReviewPanelAction.CancelRefinement, ctx())!!
+        assertFalse(r.nextState.refinementRecording)
+        assertFalse(r.nextState.refining)
+        assertEquals("out", r.nextState.output)
+    }
+
+    @Test
+    fun `Update clears the recording lock as well as refining`() {
+        val recording = openState().copy(refinementRecording = true)
+        val r = module.reduce(recording, Action.ReviewPanelAction.Update("out2", "why2"), ctx())!!
+        assertFalse(r.nextState.refinementRecording)
+        assertFalse(r.nextState.refining)
+    }
+
+    @Test
+    fun `MarkRefinementRecording on a closed panel is a no-op`() {
+        assertNull(module.reduce(ReviewPanelState(), Action.ReviewPanelAction.MarkRefinementRecording, ctx()))
+    }
+
+    @Test
     fun `Insert clears the axis and emits MarkAcknowledged`() {
         val r = module.reduce(openState(), Action.ReviewPanelAction.Insert, ctx())!!
         assertFalse(r.nextState.open)

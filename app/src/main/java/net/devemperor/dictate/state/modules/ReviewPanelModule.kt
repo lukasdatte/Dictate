@@ -77,20 +77,36 @@ class ReviewPanelModule(
         is Action.ReviewPanelAction.Update ->
             if (state.open) {
                 TransitionResult(
-                    state.copy(output = action.output, message = action.message, refining = false),
+                    state.copy(
+                        output = action.output,
+                        message = action.message,
+                        refining = false,
+                        refinementRecording = false,
+                    ),
                     emptyList(),
                 )
             } else null
 
+        Action.ReviewPanelAction.MarkRefinementRecording ->
+            // The S2 recording started; lock the panel until it either becomes a
+            // follow-up turn (MarkRefining) or is resolved. Only meaningful while
+            // the panel is open and not already busy.
+            if (state.open && !state.refining && !state.refinementRecording) {
+                TransitionResult(state.copy(refinementRecording = true), emptyList())
+            } else null
+
         Action.ReviewPanelAction.MarkRefining ->
+            // The follow-up turn started running — supersedes the recording lock.
             if (state.open && !state.refining) {
-                TransitionResult(state.copy(refining = true), emptyList())
+                TransitionResult(state.copy(refining = true, refinementRecording = false), emptyList())
             } else null
 
         Action.ReviewPanelAction.CancelRefinement ->
-            if (state.open && state.refining) {
+            // Clears both the follow-up-turn lock and the recording lock, so the
+            // panel is never left stuck busy (e.g. an S2 recording error).
+            if (state.open && (state.refining || state.refinementRecording)) {
                 // Return to the prior output (Update never fired on cancel).
-                TransitionResult(state.copy(refining = false), emptyList())
+                TransitionResult(state.copy(refining = false, refinementRecording = false), emptyList())
             } else null
 
         Action.ReviewPanelAction.Insert ->

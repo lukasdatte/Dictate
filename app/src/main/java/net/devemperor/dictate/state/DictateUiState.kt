@@ -909,6 +909,12 @@ data class LivePromptState(
  * @property message the model's explanation (may be blank/null → output-only).
  * @property refining true while a dictated follow-up turn is running; the
  *   Insert/Discard/Re-dictate buttons are disabled but a cancel stays available.
+ * @property refinementRecording true while the "Re-dictate" recording (S2) and
+ *   its transcription are in flight, BEFORE the follow-up turn starts (which
+ *   flips [refining]). During this window Insert/Discard must be locked — a
+ *   discard here would otherwise not be terminal (the recording keeps running
+ *   and its result still gets inserted) and an insert would double-commit (K1).
+ *   Re-dictate stays enabled because it doubles as the stop control.
  */
 data class ReviewPanelState(
     val open: Boolean = false,
@@ -916,6 +922,7 @@ data class ReviewPanelState(
     val output: String = "",
     val message: String? = null,
     val refining: Boolean = false,
+    val refinementRecording: Boolean = false,
 )
 
 /**

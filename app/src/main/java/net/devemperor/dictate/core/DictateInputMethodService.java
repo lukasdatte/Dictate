@@ -4915,8 +4915,13 @@ public class DictateInputMethodService extends InputMethodService
     private void onReviewRedictateClicked() {
         net.devemperor.dictate.state.ReviewPanelState panel = currentReviewPanel();
         if (panel == null || !panel.getOpen() || panel.getRefining() || panel.getSessionId() == null) return;
-        reviewRefinementTargetSessionId = panel.getSessionId();
         if (isEffectiveRecordingIdle()) {
+            reviewRefinementTargetSessionId = panel.getSessionId();
+            // K1: mark the panel busy for the whole S2 recording window so Insert/
+            // Discard lock immediately (not only once the follow-up turn starts).
+            dispatchPipelineActionToOrchestrator(
+                    net.devemperor.dictate.state.Action.ReviewPanelAction.MarkRefinementRecording.INSTANCE,
+                    "ReviewPanel.MarkRefinementRecording");
             startRecording();
         } else if (isEffectiveRecordingActiveOrPaused()) {
             stopRecording();
@@ -4926,7 +4931,11 @@ public class DictateInputMethodService extends InputMethodService
     /** "Insert" — commit the reviewed output into the host, then clear + ack. */
     private void onReviewInsertClicked() {
         net.devemperor.dictate.state.ReviewPanelState panel = currentReviewPanel();
-        if (panel == null || !panel.getOpen() || panel.getRefining()) return;
+        // K1: also bail while an S2 refinement recording is in flight — the button
+        // is disabled by the renderer, this is the belt-and-braces guard so a
+        // stale event can never double-commit an about-to-be-refined output.
+        if (panel == null || !panel.getOpen() || panel.getRefining()
+                || panel.getRefinementRecording() || reviewRefinementTargetSessionId != null) return;
         insertionService().insert(new InsertionRequest(
                 panel.getOutput(), InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE, null, panel.getSessionId()));
         dispatchPipelineActionToOrchestrator(
@@ -4938,6 +4947,10 @@ public class DictateInputMethodService extends InputMethodService
     private void onReviewDiscardClicked() {
         net.devemperor.dictate.state.ReviewPanelState panel = currentReviewPanel();
         if (panel == null || !panel.getOpen()) return;
+        // K1: while an S2 refinement recording is in flight, Discard must NOT
+        // silently close (the recording would keep running and still insert). The
+        // renderer disables the button; this guard makes a stray event a no-op.
+        if (panel.getRefinementRecording() || (reviewRefinementTargetSessionId != null && !panel.getRefining())) return;
         if (panel.getRefining()) {
             if (panel.getSessionId() != null) {
                 net.devemperor.dictate.core.JobExecutor.INSTANCE.cancel(panel.getSessionId());
@@ -4955,6 +4968,16 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onPipelineError(@androidx.annotation.NonNull String errorInfoKey, boolean vibrate, @androidx.annotation.Nullable String providerName) {
         mainHandler.post(() -> {
+            // K1: if an S2 refinement recording/transcription failed, clear the
+            // refinement target and release the panel's recording lock so it does
+            // not stay stuck with Insert/Discard disabled. CancelRefinement clears
+            // both refining and refinementRecording (no-op when neither is set).
+            if (reviewRefinementTargetSessionId != null) {
+                reviewRefinementTargetSessionId = null;
+                dispatchPipelineActionToOrchestrator(
+                        net.devemperor.dictate.state.Action.ReviewPanelAction.CancelRefinement.INSTANCE,
+                        "ReviewPanel.CancelRefinement");
+            }
             // Orchestrator-sync (D4 hotfix) — PipelineFailed moves
             // state.pipeline → Idle + Effect.MarkSessionFailed.
             String sid = currentPipelineSessionId();

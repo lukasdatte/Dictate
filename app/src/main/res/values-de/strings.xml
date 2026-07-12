@@ -121,6 +121,7 @@
     <string name="dictate_review_redictate">Neu diktieren</string>
     <string name="dictate_review_discard">Verwerfen</string>
     <string name="dictate_review_refining">Wird überarbeitet…</string>
+    <string name="dictate_review_recording">Aufnahme läuft…</string>
     <!-- In-keyboard history panel (ADR-0014) -->
     <string name="dictate_history_panel_title">Verlauf</string>
     <string name="dictate_history_panel_close">Verlauf schließen</string>

@@ -119,6 +119,7 @@
     <string name="dictate_review_redictate">Volver a dictar</string>
     <string name="dictate_review_discard">Descartar</string>
     <string name="dictate_review_refining">Refinando…</string>
+    <string name="dictate_review_recording">Grabando…</string>
     <!-- In-keyboard history panel (ADR-0014) -->
     <string name="dictate_history_panel_title">Historial</string>
     <string name="dictate_history_panel_close">Cerrar historial</string>

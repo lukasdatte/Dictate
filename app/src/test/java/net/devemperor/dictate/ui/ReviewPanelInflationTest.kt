@@ -106,4 +106,25 @@ class ReviewPanelInflationTest {
         // Discard stays enabled — it is the cancel affordance during refining.
         assertTrue(discard.isEnabled)
     }
+
+    @Test
+    fun `refinement recording locks insert and discard, keeps re-dictate as the stop control (K1)`() {
+        render(ReviewPanelState(open = true, sessionId = "s1", output = "x", message = "m", refinementRecording = true))
+        // Insert + Discard must be disabled: a discard here would not be terminal
+        // and an insert would double-commit the yet-to-be-refined output.
+        assertTrue("insert must be locked while S2 records", !insert.isEnabled)
+        assertTrue("discard must be locked while S2 records", !discard.isEnabled)
+        // Re-dictate stays enabled — it is the stop control for the recording.
+        assertTrue("re-dictate stays enabled as the stop control", redictate.isEnabled)
+    }
+
+    @Test
+    fun `refinement recording shows a distinct recording hint (K12)`() {
+        render(ReviewPanelState(open = true, sessionId = "s1", output = "x", message = "m", refinementRecording = true))
+        assertEquals(View.VISIBLE, refining.visibility)
+        assertEquals(
+            ctx.getString(R.string.dictate_review_recording),
+            (refining as TextView).text.toString(),
+        )
+    }
 }

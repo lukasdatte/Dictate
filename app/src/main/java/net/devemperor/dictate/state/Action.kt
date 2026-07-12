@@ -864,6 +864,13 @@ sealed class Action {
         /** A dictated follow-up turn succeeded — refresh the panel. */
         data class Update(val output: String, val message: String?) : ReviewPanelAction()
 
+        /**
+         * The "Re-dictate" recording (S2) started — the panel is now busy
+         * capturing/transcribing the refinement, before the follow-up turn runs.
+         * Locks Insert/Discard so a discard stays terminal (K1).
+         */
+        data object MarkRefinementRecording : ReviewPanelAction()
+
         /** A dictated follow-up turn started running. */
         data object MarkRefining : ReviewPanelAction()
 

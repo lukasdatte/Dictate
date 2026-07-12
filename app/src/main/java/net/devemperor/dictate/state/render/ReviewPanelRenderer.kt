@@ -2,6 +2,7 @@ package net.devemperor.dictate.state.render
 
 import android.view.View
 import android.widget.TextView
+import net.devemperor.dictate.R
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.layout.BackendType
@@ -65,14 +66,32 @@ class ReviewPanelRenderer(
                 mv.text = panel.message
             }
         }
-        views.refiningView?.visibility = if (panel.refining) View.VISIBLE else View.GONE
+        // The hint row is shown for both busy phases: the S2 re-dictate recording
+        // (K12 — otherwise the panel gives no sign a recording is running) and the
+        // follow-up turn. Its text distinguishes the two.
+        val busyRecording = panel.refinementRecording
+        val busyRefining = panel.refining
+        views.refiningView?.let { hint ->
+            if (busyRecording || busyRefining) {
+                hint.visibility = View.VISIBLE
+                (hint as? TextView)?.setText(
+                    if (busyRecording) R.string.dictate_review_recording
+                    else R.string.dictate_review_refining
+                )
+            } else {
+                hint.visibility = View.GONE
+            }
+        }
 
-        // Insert/Re-dictate are disabled while a follow-up turn runs; the Discard
-        // button stays enabled and doubles as the cancel affordance during
-        // refining (its click handler branches on `refining`, ADR-0013 (d)).
-        val actionable = !panel.refining
-        views.insertButton?.isEnabled = actionable
-        views.redictateButton?.isEnabled = actionable
-        views.discardButton?.isEnabled = true
+        // Insert/Discard must be locked during BOTH busy phases (K1): during the
+        // S2 recording a discard would not be terminal (the recording keeps
+        // running and still inserts) and an insert would double-commit; during the
+        // follow-up turn the same disable applies, except Discard doubles as the
+        // cancel affordance (its handler branches on `refining`, ADR-0013 (d)) and
+        // stays enabled. Re-dictate stays enabled while recording — it is the stop
+        // control — but is disabled once the follow-up turn runs.
+        views.insertButton?.isEnabled = !busyRefining && !busyRecording
+        views.redictateButton?.isEnabled = !busyRefining
+        views.discardButton?.isEnabled = !busyRecording
     }
 }

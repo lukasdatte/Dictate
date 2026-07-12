@@ -268,4 +268,15 @@
         <item>light</item>
         <item>dark</item>
     </string-array>
+
+    <string-array name="dictate_ambiguity_mode_entries">
+        <item>@string/dictate_ambiguity_always_insert</item>
+        <item>@string/dictate_ambiguity_auto</item>
+        <item>@string/dictate_ambiguity_always_review</item>
+    </string-array>
+    <string-array name="dictate_ambiguity_mode_values">
+        <item>ALWAYS_INSERT</item>
+        <item>AUTO</item>
+        <item>ALWAYS_REVIEW</item>
+    </string-array>
 </resources>

@@ -113,6 +113,10 @@
     <string name="dictate_settings_rewording_enabled_title">Überarbeiten mit KI ✍️</string>
     <string name="dictate_settings_rewording_enabled_summary">Aktiviere das Überarbeiten von erkanntem Text mit den GPT-Modellen von OpenAI</string>
     <string name="dictate_settings_auto_formatting_title">Auto-Formatierung gesprochener Anweisungen ✨\n(experimentell)</string>
+    <string name="dictate_settings_ambiguity_mode">Unklare Ergebnisse klären 💬</string>
+    <string name="dictate_ambiguity_always_insert">Immer einfügen (keine Prüfung)</string>
+    <string name="dictate_ambiguity_auto">Nur bei Unklarheit nachfragen</string>
+    <string name="dictate_ambiguity_always_review">Immer vor dem Einfügen prüfen</string>
     <string name="dictate_settings_auto_formatting_summary">Nutze KI, um gesprochene Formatierungsbefehle (Absätze, buchstabierte Korrekturen, etc.) anzuwenden</string>
     <string name="dictate_settings_edit_custom_rewording_prompts">Überarbeitungsanweisungen bearbeiten</string>
     <string name="dictate_prompts_overview_info">Hier kannst du deine Anweisungen für das Überarbeiten mit den GPT-Modellen von OpenAI erstellen und bearbeiten.</string>

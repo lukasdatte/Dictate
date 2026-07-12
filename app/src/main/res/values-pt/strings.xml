@@ -111,6 +111,10 @@
     <string name="dictate_settings_rewording_enabled_title">Reescrever com IA ✍️</string>
     <string name="dictate_settings_rewording_enabled_summary">Ativar a reescrita do texto reconhecido com os modelos GPT da OpenAI</string>
     <string name="dictate_settings_auto_formatting_title">Formatação automática de comandos falados ✨\n(experimental)</string>
+    <string name="dictate_settings_ambiguity_mode">Esclarecer resultados ambíguos 💬</string>
+    <string name="dictate_ambiguity_always_insert">Inserir sempre (sem revisão)</string>
+    <string name="dictate_ambiguity_auto">Perguntar apenas quando não estiver claro</string>
+    <string name="dictate_ambiguity_always_review">Revisar sempre antes de inserir</string>
     <string name="dictate_settings_auto_formatting_summary">Usar IA para aplicar instruções de formatação ditadas (quebras de parágrafo, correções soletradas etc.)</string>
     <string name="dictate_settings_edit_custom_rewording_prompts">Editar prompts de reescrita</string>
     <string name="dictate_prompts_overview_info">Aqui você pode criar e editar seus prompts de reescrita usando os modelos GPT da OpenAI.</string>

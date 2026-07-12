@@ -21,6 +21,14 @@ sealed class Pref<T>(val key: String, val default: T) {
     // ── Feature Toggles ──
     object RewordingEnabled : Pref<Boolean>("net.devemperor.dictate.rewording_enabled", true)
     object AutoFormattingEnabled : Pref<Boolean>("net.devemperor.dictate.auto_formatting_enabled", false)
+
+    /**
+     * Post-processing ambiguity mode (ADR-0013). Stores the
+     * [net.devemperor.dictate.preferences.AmbiguityMode] persistKey; read via
+     * `AmbiguityMode.fromPersistKey(sp.get(Pref.AmbiguityMode))`. Default
+     * `ALWAYS_INSERT` preserves the Paket-1 behaviour with no extra AI call.
+     */
+    object AmbiguityMode : Pref<String>("net.devemperor.dictate.ambiguity_mode", "ALWAYS_INSERT")
     object InstantOutput : Pref<Boolean>("net.devemperor.dictate.instant_output", true)
     object AutoEnter : Pref<Boolean>("net.devemperor.dictate.auto_enter", false)
     object AutoEnterDelay : Pref<Int>("net.devemperor.dictate.auto_enter_delay", 50)

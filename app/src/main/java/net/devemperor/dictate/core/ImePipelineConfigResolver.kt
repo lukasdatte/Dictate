@@ -107,6 +107,15 @@ class ImePipelineConfigResolver(
             net.devemperor.dictate.preferences.AmbiguityMode.ALWAYS_INSERT,
         /** ADR-0013: review-refinement recording (S2) — transcription-only, no turn. */
         val transcriptionOnly: Boolean = false,
+        /**
+         * Origin to persist for this recording (ADR-0014). Explicit rather than
+         * derived from [transcriptionOnly]: origin and "transcription-only" are
+         * distinct axes that only coincide today (the S2 review-refinement
+         * carrier). Defaults to KEYBOARD for a normal recording; the IME sets
+         * REVIEW_REFINEMENT for the S2 refinement recording so the history panel
+         * can hide it.
+         */
+        val origin: SessionOrigin = SessionOrigin.KEYBOARD,
     )
 
     /**
@@ -174,7 +183,7 @@ class ImePipelineConfigResolver(
             /* recordingsDir */ File(recordingsDirProvider(), "recordings"),
             /* reuseSessionId */ null,
             /* stylePrompt */ cfg.stylePrompt,
-            /* origin */ SessionOrigin.KEYBOARD,
+            /* origin */ cfg.origin,
             /* livePrompt */ cfg.livePrompt,
             /* autoSwitchKeyboard */ cfg.autoSwitchKeyboard,
             /* showResendButton */ cfg.showResendButton,

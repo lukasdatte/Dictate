@@ -32,6 +32,7 @@ import net.devemperor.dictate.database.migration.MIGRATION_4_5
 import net.devemperor.dictate.database.migration.MIGRATION_5_6
 import net.devemperor.dictate.database.migration.MIGRATION_6_7
 import net.devemperor.dictate.database.migration.MIGRATION_7_8
+import net.devemperor.dictate.database.migration.MIGRATION_8_9
 
 @Database(
     entities = [
@@ -44,7 +45,7 @@ import net.devemperor.dictate.database.migration.MIGRATION_7_8
         TextInsertionEntity::class,
         ConversationMessageEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -127,7 +128,7 @@ abstract class DictateDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
-                    MIGRATION_7_8,
+                    MIGRATION_7_8, MIGRATION_8_9,
                 )
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {

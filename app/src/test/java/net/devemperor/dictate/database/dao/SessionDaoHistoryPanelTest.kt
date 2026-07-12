@@ -54,6 +54,7 @@ class SessionDaoHistoryPanelTest {
         status: SessionStatus = SessionStatus.COMPLETED,
         finalOutput: String? = "out",
         insertedAt: Long? = null,
+        origin: String = "KEYBOARD",
     ) = dao.insert(
         SessionEntity(
             id = id,
@@ -63,6 +64,7 @@ class SessionDaoHistoryPanelTest {
             language = null,
             audioFilePath = null,
             status = status.name,
+            origin = origin,
             finalOutputText = finalOutput,
             inputText = null,
             insertedAt = insertedAt,
@@ -100,6 +102,17 @@ class SessionDaoHistoryPanelTest {
         insert("pending", createdAt = 10, insertedAt = null, finalOutput = "x")
 
         assertEquals(listOf("pending", "no-text", "failed"), loadAll())
+    }
+
+    @Test
+    fun `review-refinement carrier sessions are excluded`() {
+        // The transcription-only S2 recordings are noise in the panel; the
+        // full-screen activity still shows them (ADR-0014). In-memory Room
+        // has no CHECK, so the value is insertable here.
+        insert("normal", createdAt = 20)
+        insert("refinement", createdAt = 10, origin = "REVIEW_REFINEMENT")
+
+        assertEquals(listOf("normal"), loadAll())
     }
 
     @Test

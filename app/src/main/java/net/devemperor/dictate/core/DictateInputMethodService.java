@@ -4217,6 +4217,11 @@ public class DictateInputMethodService extends InputMethodService
         net.devemperor.dictate.preferences.AmbiguityMode ambiguityMode = transcriptionOnly
                 ? net.devemperor.dictate.preferences.AmbiguityMode.ALWAYS_INSERT
                 : currentAmbiguityMode();
+        // ADR-0014: tag the S2 review-refinement carrier so the in-keyboard
+        // history panel can hide it (the full-screen activity still shows it).
+        net.devemperor.dictate.database.entity.SessionOrigin origin = transcriptionOnly
+                ? net.devemperor.dictate.database.entity.SessionOrigin.REVIEW_REFINEMENT
+                : net.devemperor.dictate.database.entity.SessionOrigin.KEYBOARD;
         imePipelineConfigResolver.snapshotFresh(
                 sessionId,
                 new ImePipelineConfigResolver.FreshConfig(
@@ -4230,7 +4235,8 @@ public class DictateInputMethodService extends InputMethodService
                         autoSwitchKeyboard,
                         showResend,
                         ambiguityMode,
-                        transcriptionOnly));
+                        transcriptionOnly,
+                        origin));
 
         // Mirror the legacy post-build flag handling
         // (DictateInputMethodService.java:2232-2234 pre-C5): the

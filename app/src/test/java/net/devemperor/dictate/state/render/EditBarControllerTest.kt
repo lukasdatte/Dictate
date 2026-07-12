@@ -58,6 +58,7 @@ class EditBarControllerTest {
         override fun onSingleRowModeToggled() { events += "singleRow" }
         override fun onSettingsClicked() { events += "settings" }
         override fun onHistoryClicked() { events += "history" }
+        override fun onHistoryLongClicked() { events += "historyLong" }
         override fun onPipelineCancelClicked() { events += "pipelineCancel" }
         override fun onAudioFocusToggled() { events += "audioFocus" }
         override fun onKeyboardToggleClicked() { events += "kbToggle" }
@@ -237,6 +238,22 @@ class EditBarControllerTest {
         views.editAudioFocusButton.performClick()
 
         assertEquals(listOf("vibrate", "audioFocus"), rec.events)
+    }
+
+    @Test
+    fun editHistory_longpress_forwards_history_long_and_consumes_event() {
+        // pkg3-1 (Paket 3): the history button gains a long-press that opens
+        // the full-screen HistoryActivity, while the short press (later, pkg3-6)
+        // opens the in-keyboard history panel. Long-press vibrates + consumes
+        // the event, mirroring editNumbersLong/editKeyboardLong.
+        val c = newController()
+        c.installDormant()
+        c.attachToViews()
+
+        val consumed = views.editHistoryButton.performLongClick()
+
+        assertTrue("history long-press must return true (suppress the click)", consumed)
+        assertEquals(listOf("vibrate", "historyLong"), rec.events)
     }
 
     @Test

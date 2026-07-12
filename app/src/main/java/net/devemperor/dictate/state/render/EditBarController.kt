@@ -101,6 +101,16 @@ class EditBarController(
         fun onSingleRowModeToggled()
         fun onSettingsClicked()
         fun onHistoryClicked()
+
+        /**
+         * History button **long-press** (Paket 3). Opens the full-screen
+         * [net.devemperor.dictate.history.HistoryActivity] (search / audio /
+         * detail). The short press ([onHistoryClicked]) opens the in-keyboard
+         * history panel instead — the two affordances are split so the fast,
+         * in-context list lives on the primary tap and the heavyweight screen
+         * on the deliberate long-press.
+         */
+        fun onHistoryLongClicked()
         fun onPipelineCancelClicked()
         fun onAudioFocusToggled()
         fun onKeyboardToggleClicked()
@@ -178,6 +188,13 @@ class EditBarController(
             },
             editSettingsClick = View.OnClickListener { callback.onSettingsClicked() },
             editHistoryClick = View.OnClickListener { callback.onHistoryClicked() },
+            // Long-press opens the full-screen HistoryActivity; vibrate +
+            // return `true` to consume (parity with editNumbersLong/editKeyboardLong).
+            editHistoryLong = View.OnLongClickListener {
+                callback.onVibrate()
+                callback.onHistoryLongClicked()
+                true
+            },
             pipelineCancelClick = View.OnClickListener { callback.onPipelineCancelClicked() },
             editAudioFocusClick = audioFocusClickListener,
             editKeyboardClick = View.OnClickListener {
@@ -221,6 +238,7 @@ class EditBarController(
         views.editNumbersButton.setOnLongClickListener(c.editNumbersLong)
         views.editSettingsButton.setOnClickListener(c.editSettingsClick)
         views.editHistoryButton.setOnClickListener(c.editHistoryClick)
+        views.editHistoryButton.setOnLongClickListener(c.editHistoryLong)
         views.pipelineCancelButton.setOnClickListener(c.pipelineCancelClick)
         views.editAudioFocusButton.setOnClickListener(c.editAudioFocusClick)
         views.editKeyboardButton.setOnClickListener(c.editKeyboardClick)
@@ -365,6 +383,7 @@ class EditBarController(
         val editNumbersLong: View.OnLongClickListener,
         val editSettingsClick: View.OnClickListener,
         val editHistoryClick: View.OnClickListener,
+        val editHistoryLong: View.OnLongClickListener,
         val pipelineCancelClick: View.OnClickListener,
         val editAudioFocusClick: View.OnClickListener,
         val editKeyboardClick: View.OnClickListener,

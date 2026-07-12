@@ -6024,6 +6024,20 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onHistoryClicked() {
+        // Paket 3: the short press will open the in-keyboard history panel
+        // (wired in pkg3-6). Until that lands it keeps opening the full-screen
+        // activity so behaviour does not regress mid-series.
+        openHistoryActivity();
+    }
+
+    @Override
+    public void onHistoryLongClicked() {
+        // Long-press always opens the full-screen HistoryActivity (search /
+        // audio / detail), independent of the in-keyboard panel.
+        openHistoryActivity();
+    }
+
+    private void openHistoryActivity() {
         Intent intent = new Intent(this, HistoryActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(intent);

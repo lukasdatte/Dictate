@@ -82,8 +82,18 @@ class HistoryAdapter(
                 context.getString(R.string.dictate_history_filter_post_processing)
             null -> ""
         }
-        holder.subtitleTv.text = subtitle
-        holder.subtitleTv.visibility = if (subtitle.isEmpty()) View.GONE else View.VISIBLE
+        // ADR-0014: dictated review-refinement carriers (S2) get a discreet tag
+        // in the full-screen history (they are hidden from the in-keyboard
+        // panel). Appended to the subtitle so it reads e.g. "Recording · Refinement".
+        val subtitleWithTag =
+            if (session.originEnum == net.devemperor.dictate.database.entity.SessionOrigin.REVIEW_REFINEMENT) {
+                val tag = context.getString(R.string.dictate_history_review_refinement_tag)
+                if (subtitle.isEmpty()) tag else "$subtitle · $tag"
+            } else {
+                subtitle
+            }
+        holder.subtitleTv.text = subtitleWithTag
+        holder.subtitleTv.visibility = if (subtitleWithTag.isEmpty()) View.GONE else View.VISIBLE
 
         val preview = session.finalOutputText?.takeIf { it.isNotEmpty() } ?: session.inputText
         holder.previewTv.text = preview.orEmpty()

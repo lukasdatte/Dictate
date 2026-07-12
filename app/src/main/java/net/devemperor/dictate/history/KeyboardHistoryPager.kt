@@ -23,9 +23,9 @@ import net.devemperor.dictate.database.entity.SessionEntity
  * `sessions` write, so a pipeline completing while the panel is open refreshes
  * the list (and surfaces the new pending part on top) for free.
  */
-class KeyboardHistoryPager(private val dao: SessionDao) {
+open class KeyboardHistoryPager(private val dao: SessionDao) {
 
-    fun flow(scope: CoroutineScope): Flow<PagingData<SessionEntity>> =
+    open fun flow(scope: CoroutineScope): Flow<PagingData<SessionEntity>> =
         Pager(
             config = PagingConfig(pageSize = PAGE_SIZE, enablePlaceholders = false),
             pagingSourceFactory = { dao.pagedHistoryPanel() },

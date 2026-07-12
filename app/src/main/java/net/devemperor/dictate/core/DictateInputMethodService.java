@@ -174,6 +174,11 @@ public class DictateInputMethodService extends InputMethodService
     // holds the S1 conversation session the resulting transcript continues.
     private volatile String reviewRefinementTargetSessionId = null;
     private net.devemperor.dictate.state.render.ReviewPanelRenderer reviewPanelRenderer;
+
+    // ADR-0014 — in-keyboard history panel (renderer + IME-owned Paging lifecycle).
+    private net.devemperor.dictate.state.render.HistoryPanelRenderer historyPanelRenderer;
+    private net.devemperor.dictate.history.KeyboardHistoryController historyController;
+    private net.devemperor.dictate.history.KeyboardHistoryAdapter historyAdapter;
     private boolean vibrationEnabled = true;
     // Block 3b: the audio-focus flag is no longer cached as a service field.
     // The single persistent source of truth is Pref.AudioFocus; the per-session
@@ -1923,11 +1928,52 @@ public class DictateInputMethodService extends InputMethodService
         if (reviewRedictateBtn != null) reviewRedictateBtn.setOnClickListener(v -> onReviewRedictateClicked());
         if (reviewDiscardBtn != null) reviewDiscardBtn.setOnClickListener(v -> onReviewDiscardClicked());
 
+        // ADR-0014 — the in-keyboard history panel: a RecyclerView fed by an
+        // IME-owned Paging stream (KeyboardHistoryController), a close button,
+        // and a renderer that toggles the container + drives the collector.
+        androidx.recyclerview.widget.RecyclerView historyRv =
+            dictateKeyboardView.findViewById(R.id.history_panel_rv);
+        View historyPanelCl = dictateKeyboardView.findViewById(R.id.history_panel_cl);
+        View historyCloseBtn = dictateKeyboardView.findViewById(R.id.history_panel_close_btn);
+        if (historyRv != null && dictateDb != null) {
+            historyRv.setLayoutManager(
+                new androidx.recyclerview.widget.LinearLayoutManager(this));
+            historyAdapter = new net.devemperor.dictate.history.KeyboardHistoryAdapter(
+                new net.devemperor.dictate.history.KeyboardHistoryAdapter.Callback() {
+                    @Override
+                    public void onInsert(net.devemperor.dictate.database.entity.SessionEntity session,
+                                         boolean pending) {
+                        onKeyboardHistoryInsertClicked(session, pending);
+                    }
+                });
+            historyRv.setAdapter(historyAdapter);
+            // "Distinctly taller": ~50% of the display height, clamped to
+            // [min, max] so the panel scales across device sizes.
+            applyHistoryPanelHeight(historyRv);
+            historyController = new net.devemperor.dictate.history.KeyboardHistoryController(
+                new net.devemperor.dictate.history.KeyboardHistoryPager(dictateDb.sessionDao()),
+                historyAdapter);
+            historyController.onViewCreated();
+        }
+        historyPanelRenderer = new net.devemperor.dictate.state.render.HistoryPanelRenderer(
+            new net.devemperor.dictate.state.render.HistoryPanelViews(historyPanelCl),
+            open -> {
+                if (historyController == null) return kotlin.Unit.INSTANCE;
+                if (open) historyController.onPanelOpen(); else historyController.onPanelClosed();
+                return kotlin.Unit.INSTANCE;
+            });
+        if (historyCloseBtn != null) {
+            historyCloseBtn.setOnClickListener(v -> dispatchPipelineActionToOrchestrator(
+                net.devemperor.dictate.state.Action.HistoryPanelAction.Close.INSTANCE,
+                "HistoryPanel.Close"));
+        }
+
         try {
             keyboardLayoutManager.attachBackend(contentAreaController);
             keyboardLayoutManager.attachBackend(promptVisibilityController);
             keyboardLayoutManager.attachBackend(overlayResetHandler);
             keyboardLayoutManager.attachBackend(reviewPanelRenderer);
+            keyboardLayoutManager.attachBackend(historyPanelRenderer);
             // Arm the three gates so the controllers are the SOLE LIVE
             // writers of the ContentArea / Promptbar / overlay-reset
             // axes. Post-CR-DEL there is no legacy `KeyboardStateManager`
@@ -1987,14 +2033,25 @@ public class DictateInputMethodService extends InputMethodService
                 if (reviewPanelRenderer != null) {
                     keyboardLayoutManager.detachBackend(reviewPanelRenderer);
                 }
+                if (historyPanelRenderer != null) {
+                    keyboardLayoutManager.detachBackend(historyPanelRenderer);
+                }
             } catch (Throwable t) {
                 Log.w("DictateIME", "Dormant visibility-controller detach failed", t);
             }
         }
+        // ADR-0014: cancel the history-panel Paging scope (no leak / no query
+        // after the input view is gone).
+        if (historyController != null) {
+            historyController.onViewDestroyed();
+            historyController = null;
+        }
+        historyAdapter = null;
         contentAreaController = null;
         promptVisibilityController = null;
         overlayResetHandler = null;
         reviewPanelRenderer = null;
+        historyPanelRenderer = null;
         contentAreaGate = null;
         promptVisibilityGate = null;
         overlayResetGate = null;
@@ -2178,6 +2235,11 @@ public class DictateInputMethodService extends InputMethodService
 
         // Hide QWERTZ keyboard when the input view is finishing (app switch, background, etc.)
         hideQwertzKeyboard();
+
+        // ADR-0014: stop the history-panel Paging collector while the keyboard
+        // is hidden (belt-and-braces to the OnImeViewHidden cascade that closes
+        // the panel). Idempotent; the scope stays alive for the next open.
+        if (historyController != null) historyController.onPanelClosed();
 
         // B5 F-1: the three legacy states (recording-pause /
         // pipeline-continue / idle-cleanup) used to early-`return`.
@@ -6030,10 +6092,25 @@ public class DictateInputMethodService extends InputMethodService
 
     @Override
     public void onHistoryClicked() {
-        // Paket 3: the short press will open the in-keyboard history panel
-        // (wired in pkg3-6). Until that lands it keeps opening the full-screen
-        // activity so behaviour does not regress mid-series.
-        openHistoryActivity();
+        // ADR-0014: short press toggles the in-keyboard history panel. Opening
+        // is gated on a visible IME and no active review (the review panel holds
+        // an uninserted turn awaiting a decision and outranks history).
+        if (pipelineBinder == null) { openHistoryActivity(); return; }
+        net.devemperor.dictate.state.DictateUiState s = pipelineBinder.getState().getValue();
+        if (s.getHistoryPanel().getOpen()) {
+            dispatchPipelineActionToOrchestrator(
+                net.devemperor.dictate.state.Action.HistoryPanelAction.Close.INSTANCE,
+                "HistoryPanel.Close");
+        } else if (canOpenHistoryPanel(s)) {
+            dispatchPipelineActionToOrchestrator(
+                net.devemperor.dictate.state.Action.HistoryPanelAction.Open.INSTANCE,
+                "HistoryPanel.Open");
+        }
+    }
+
+    /** History panel opens only over a visible IME and never atop the review panel. */
+    private boolean canOpenHistoryPanel(net.devemperor.dictate.state.DictateUiState s) {
+        return s.getImeViewVisible() && !s.getReviewPanel().getOpen();
     }
 
     @Override
@@ -6047,6 +6124,62 @@ public class DictateInputMethodService extends InputMethodService
         Intent intent = new Intent(this, HistoryActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(intent);
+    }
+
+    /**
+     * "Insert" tapped on a history-panel row (ADR-0014). Commits the session's
+     * final output into the host (side-channel — the reducer cannot reach the
+     * InputConnection), then acknowledges a pending row so recovery does not
+     * re-surface it: a row tracked in the pendingSessions axis goes through
+     * AcceptAndInsert (removes the part + acknowledges); an older uninserted row
+     * goes through HistoryPanelAction.AcknowledgeInsert (acknowledge only). An
+     * already-inserted row is a pure re-commit (no state change).
+     */
+    private void onKeyboardHistoryInsertClicked(
+            net.devemperor.dictate.database.entity.SessionEntity session, boolean pending) {
+        if (session == null || sessionManager == null) return;
+        String sid = session.getId();
+        String text = sessionManager.getFinalOutput(sid);
+        if (text == null || text.isEmpty()) return;
+        insertionService().insert(new net.devemperor.dictate.state.insertion.InsertionRequest(
+            text,
+            pending
+                ? net.devemperor.dictate.database.entity.InsertionSource.PENDING_PART
+                : net.devemperor.dictate.database.entity.InsertionSource.TRANSCRIPTION,
+            net.devemperor.dictate.state.insertion.InsertionPolicy.PIPELINE,
+            null, sid));
+        if (!pending) return;
+        boolean inAxis = false;
+        if (pipelineBinder != null) {
+            for (net.devemperor.dictate.state.PendingSession ps
+                    : pipelineBinder.getState().getValue().getPendingSessions()) {
+                if (ps.getSessionId().equals(sid)) { inAxis = true; break; }
+            }
+        }
+        dispatchPipelineActionToOrchestrator(
+            inAxis
+                ? new net.devemperor.dictate.state.Action.PendingSessionsAction.AcceptAndInsert(sid)
+                : new net.devemperor.dictate.state.Action.HistoryPanelAction.AcknowledgeInsert(sid),
+            "HistoryPanel.Insert");
+    }
+
+    /**
+     * Sets the history-panel list height to ~50% of the display height, clamped
+     * to [min, max] (ADR-0014) so the panel is "distinctly taller" than the grid
+     * across device sizes. The XML default is the pre-measurement fallback.
+     */
+    private void applyHistoryPanelHeight(android.view.View list) {
+        try {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            int minPx = getResources().getDimensionPixelSize(R.dimen.dictate_history_panel_list_min);
+            int maxPx = getResources().getDimensionPixelSize(R.dimen.dictate_history_panel_list_max);
+            int target = Math.max(minPx, Math.min(maxPx, dm.heightPixels / 2));
+            android.view.ViewGroup.LayoutParams lp = list.getLayoutParams();
+            lp.height = target;
+            list.setLayoutParams(lp);
+        } catch (Throwable t) {
+            Log.w("DictateIME", "history panel height sizing failed; using XML default", t);
+        }
     }
 
     @Override

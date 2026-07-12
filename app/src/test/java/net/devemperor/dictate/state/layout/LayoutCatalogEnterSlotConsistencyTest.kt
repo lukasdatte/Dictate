@@ -29,6 +29,9 @@ class LayoutCatalogEnterSlotConsistencyTest {
     private val services = net.devemperor.dictate.testutil.fakeModuleServices()
 
     private fun enterSlots(): List<ButtonSlot> = catalog.allModes()
+        // ADR-0013: KEYBOARD_REVIEW_PANEL hides the whole grid (every slot is a
+        // no-op hidden slot), so its ENTER carries no host-editor contract.
+        .filter { it.id != net.devemperor.dictate.state.layout.LayoutModeId.KEYBOARD_REVIEW_PANEL }
         .mapNotNull { mode ->
             mode.slots.firstOrNull { it.logicalId == LogicalButtonId.ENTER }
         }

@@ -363,6 +363,113 @@
             app:layout_constraintTop_toTopOf="parent" />
     </androidx.constraintlayout.widget.ConstraintLayout>
 
+    <!-- ════════════════════════════════════════════════════════════
+         REVIEW PANEL (ADR-0013) — covers the main button grid while an
+         ambiguous post-processing turn is under review. Opaque surface +
+         elevation so it hides (and blocks touches to) the buttons behind
+         it; driven entirely by ReviewPanelRenderer (visibility + text +
+         button-enable). GONE by default.
+         ════════════════════════════════════════════════════════════ -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/review_panel_cl"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="?attr/colorSurface"
+        android:elevation="8dp"
+        android:padding="12dp"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="@id/main_buttons_cl"
+        app:layout_constraintBottom_toBottomOf="@id/main_buttons_cl"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        tools:visibility="visible">
+
+        <TextView
+            android:id="@+id/review_message_tv"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:textColor="@color/dictate_blue"
+            android:textSize="14sp"
+            android:textStyle="italic"
+            android:maxLines="3"
+            android:ellipsize="end"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            tools:text="Did you mean the first or second option?" />
+
+        <ScrollView
+            android:id="@+id/review_output_scroll"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_marginTop="8dp"
+            android:fillViewport="true"
+            app:layout_constraintTop_toBottomOf="@id/review_message_tv"
+            app:layout_constraintBottom_toTopOf="@id/review_buttons_row"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <TextView
+                android:id="@+id/review_output_tv"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="?attr/colorOnSurface"
+                android:textSize="16sp"
+                android:textIsSelectable="false"
+                tools:text="This is the resulting text that would be inserted." />
+        </ScrollView>
+
+        <TextView
+            android:id="@+id/review_refining_tv"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:text="@string/dictate_review_refining"
+            android:textColor="?attr/colorOnSurface"
+            android:textStyle="italic"
+            android:visibility="gone"
+            app:layout_constraintBottom_toTopOf="@id/review_buttons_row"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            tools:visibility="visible" />
+
+        <LinearLayout
+            android:id="@+id/review_buttons_row"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/review_discard_btn"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/dictate_review_discard" />
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/review_redictate_btn"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:text="@string/dictate_review_redictate" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/review_insert_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/dictate_review_insert" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/edit_buttons_keyboard_ll"
         android:layout_width="0dp"

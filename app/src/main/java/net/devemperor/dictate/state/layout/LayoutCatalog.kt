@@ -564,6 +564,31 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         )
 
     // ════════════════════════════════════════════════════════════════
+    // KEYBOARD_REVIEW_PANEL (ADR-0013) — the main button grid is hidden;
+    // the `review_panel_cl` container (ReviewPanelRenderer) owns the UI.
+    // Same "empty ConstraintSet derived from two_row_state" shape as
+    // REPROCESS_STAGING; the catalog just forces every grid button GONE.
+    // ════════════════════════════════════════════════════════════════
+    val KEYBOARD_REVIEW_PANEL: LayoutMode = LayoutMode(
+        id = LayoutModeId.KEYBOARD_REVIEW_PANEL,
+        backend = BackendType.IME_VIEW,
+        sceneStateId = R.id.review_panel_state,
+        rows = listOf(
+            RowDescriptor(slots = LogicalButtonId.entries
+                .filter { !it.name.startsWith("OVERLAY_") }
+                .map { hiddenSlot(it) }),
+        ),
+    )
+
+    /** A structurally-hidden slot — the review panel replaces the button grid. */
+    private fun hiddenSlot(id: LogicalButtonId): ButtonSlot = ButtonSlot(
+        logicalId = id,
+        widthPolicy = WidthPolicy.WrapContent,
+        visibilityPredicate = { false },
+        actionResolver = { _, _ -> null },
+    )
+
+    // ════════════════════════════════════════════════════════════════
     // OVERLAY_5BUTTON — Variante 2a (dictate-widget-integration §6.5)
     // ════════════════════════════════════════════════════════════════
     //
@@ -833,6 +858,10 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         // B4-VAL F-24: every case explicit; `else -> error(...)` guards
         // against future state-shape changes that break exhaustiveness.
         return when {
+            // ADR-0013: the review panel outranks everything — it opens only
+            // after the pipeline FSM is already Idle (heldForReview), and it
+            // owns the whole keyboard surface until the user acts.
+            state.reviewPanel.open -> KEYBOARD_REVIEW_PANEL
             isStaging -> KEYBOARD_REPROCESS_STAGING
             recordingLive && singleRow -> KEYBOARD_SINGLE_ROW
             recordingLive && !singleRow -> KEYBOARD_TWO_ROW
@@ -856,6 +885,7 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         KEYBOARD_TWO_ROW_SEND_MODE,
         KEYBOARD_SINGLE_ROW_SEND_MODE,
         KEYBOARD_REPROCESS_STAGING,
+        KEYBOARD_REVIEW_PANEL,
         OVERLAY_5BUTTON,
     )
 }

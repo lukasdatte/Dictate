@@ -117,6 +117,10 @@
     <string name="dictate_ambiguity_always_insert">Immer einfügen (keine Prüfung)</string>
     <string name="dictate_ambiguity_auto">Nur bei Unklarheit nachfragen</string>
     <string name="dictate_ambiguity_always_review">Immer vor dem Einfügen prüfen</string>
+    <string name="dictate_review_insert">Einfügen</string>
+    <string name="dictate_review_redictate">Neu diktieren</string>
+    <string name="dictate_review_discard">Verwerfen</string>
+    <string name="dictate_review_refining">Wird überarbeitet…</string>
     <string name="dictate_settings_auto_formatting_summary">Nutze KI, um gesprochene Formatierungsbefehle (Absätze, buchstabierte Korrekturen, etc.) anzuwenden</string>
     <string name="dictate_settings_edit_custom_rewording_prompts">Überarbeitungsanweisungen bearbeiten</string>
     <string name="dictate_prompts_overview_info">Hier kannst du deine Anweisungen für das Überarbeiten mit den GPT-Modellen von OpenAI erstellen und bearbeiten.</string>

@@ -38,6 +38,14 @@ enum class LayoutModeId {
     KEYBOARD_REPROCESS_STAGING,
 
     /**
+     * In-keyboard review panel for an ambiguous post-processing turn (ADR-0013).
+     * Hides the main button grid; a dedicated `review_panel_cl` container
+     * (driven by `ReviewPanelRenderer`) covers it with the output + explanation
+     * and its own Insert / Re-dictate / Discard buttons.
+     */
+    KEYBOARD_REVIEW_PANEL,
+
+    /**
      * 5-button overlay layout shared by WIDGET and HOVER ViewModes.
      * Concrete `LayoutMode` body is contributed by Spec 3 §3.1 in B5/C16;
      * the id is registered here so cross-spec references stay stable.

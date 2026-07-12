@@ -165,6 +165,10 @@
     <string name="dictate_ambiguity_always_insert">Always insert (no review)</string>
     <string name="dictate_ambiguity_auto">Ask only when unclear</string>
     <string name="dictate_ambiguity_always_review">Always review before inserting</string>
+    <string name="dictate_review_insert">Insert</string>
+    <string name="dictate_review_redictate">Re-dictate</string>
+    <string name="dictate_review_discard">Discard</string>
+    <string name="dictate_review_refining">Refining…</string>
     <string name="dictate_settings_auto_formatting_summary">Use AI to apply spoken formatting instructions (paragraph breaks, spelled-out corrections, etc.)</string>
     <string name="dictate_settings_edit_custom_rewording_prompts">Edit rewording prompts</string>
     <string name="dictate_prompts_overview_info">Below you can create and edit your prompts for rewording using OpenAI\'s GPT models.</string>

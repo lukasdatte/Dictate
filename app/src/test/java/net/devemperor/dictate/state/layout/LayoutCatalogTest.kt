@@ -497,6 +497,35 @@ class LayoutCatalogTest {
     }
 
     @Test
+    fun `forKeyboard returns REVIEW_PANEL when the review panel is open (ADR-0013)`() {
+        // The review panel outranks every other mode (it opens only after the
+        // pipeline FSM is Idle) and ignores the single-row setting, like staging.
+        val open = net.devemperor.dictate.state.ReviewPanelState(
+            open = true, sessionId = "s1", output = "out", message = "why",
+        )
+        val singleRow = DictateUiState.initial().copy(
+            reviewPanel = open,
+            layout = net.devemperor.dictate.state.LayoutState(singleRowMode = true),
+        )
+        val twoRow = DictateUiState.initial().copy(reviewPanel = open)
+        assertSame(catalog.KEYBOARD_REVIEW_PANEL, catalog.forKeyboard(singleRow))
+        assertSame(catalog.KEYBOARD_REVIEW_PANEL, catalog.forKeyboard(twoRow))
+    }
+
+    @Test
+    fun `REVIEW_PANEL hides every grid button`() {
+        val state = DictateUiState.initial().copy(
+            reviewPanel = net.devemperor.dictate.state.ReviewPanelState(open = true, sessionId = "s1"),
+        )
+        catalog.KEYBOARD_REVIEW_PANEL.slots.forEach { slot ->
+            assertEquals(
+                "REVIEW_PANEL must hide ${slot.logicalId}",
+                false, slot.visibilityPredicate(state),
+            )
+        }
+    }
+
+    @Test
     fun `RED-PROOF forKeyboard — live recording wins over SEND_MODE (two-row)`() {
         // ADR-0009 secondary-recording precedence: while a recording is
         // live the user needs the recording controls (timer / pause /

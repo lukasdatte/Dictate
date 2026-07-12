@@ -478,6 +478,18 @@
         motion:deriveConstraintsFrom="@+id/two_row_state" />
 
     <!-- ════════════════════════════════════════════════════════════════
+         REVIEW_PANEL STATE (ADR-0013).
+
+         Same "position mirrors Two-Row, catalog owns visibility" shape as
+         reprocess_staging_state — here the catalog forces every grid button
+         GONE and the `review_panel_cl` container (ReviewPanelRenderer) covers
+         the area with the output + explanation + Insert/Re-dictate/Discard.
+         ════════════════════════════════════════════════════════════════ -->
+    <ConstraintSet
+        android:id="@+id/review_panel_state"
+        motion:deriveConstraintsFrom="@+id/two_row_state" />
+
+    <!-- ════════════════════════════════════════════════════════════════
          TRANSITIONS.
 
          Only sibling-pairs that the user actually toggles between are wired
@@ -510,6 +522,18 @@
     <Transition
         motion:constraintSetStart="@+id/single_row_state"
         motion:constraintSetEnd="@+id/reprocess_staging_state"
+        motion:duration="200" />
+
+    <!-- ADR-0013 review-panel edges (base → review-panel). Same 200 ms
+         no-reshape shape as the reprocess-staging edges. -->
+    <Transition
+        motion:constraintSetStart="@+id/two_row_state"
+        motion:constraintSetEnd="@+id/review_panel_state"
+        motion:duration="200" />
+
+    <Transition
+        motion:constraintSetStart="@+id/single_row_state"
+        motion:constraintSetEnd="@+id/review_panel_state"
         motion:duration="200" />
 
     <!-- ADR-0009 recording-wins reverse edges (SEND_MODE → base).

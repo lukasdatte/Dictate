@@ -115,6 +115,10 @@
     <string name="dictate_ambiguity_always_insert">Inserir sempre (sem revisão)</string>
     <string name="dictate_ambiguity_auto">Perguntar apenas quando não estiver claro</string>
     <string name="dictate_ambiguity_always_review">Revisar sempre antes de inserir</string>
+    <string name="dictate_review_insert">Inserir</string>
+    <string name="dictate_review_redictate">Ditar novamente</string>
+    <string name="dictate_review_discard">Descartar</string>
+    <string name="dictate_review_refining">Refinando…</string>
     <string name="dictate_settings_auto_formatting_summary">Usar IA para aplicar instruções de formatação ditadas (quebras de parágrafo, correções soletradas etc.)</string>
     <string name="dictate_settings_edit_custom_rewording_prompts">Editar prompts de reescrita</string>
     <string name="dictate_prompts_overview_info">Aqui você pode criar e editar seus prompts de reescrita usando os modelos GPT da OpenAI.</string>

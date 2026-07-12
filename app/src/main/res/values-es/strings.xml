@@ -119,6 +119,11 @@
     <string name="dictate_review_redictate">Volver a dictar</string>
     <string name="dictate_review_discard">Descartar</string>
     <string name="dictate_review_refining">Refinando…</string>
+    <!-- In-keyboard history panel (ADR-0014) -->
+    <string name="dictate_history_panel_title">Historial</string>
+    <string name="dictate_history_panel_close">Cerrar historial</string>
+    <string name="dictate_history_panel_insert">Insertar</string>
+    <string name="dictate_history_panel_empty">Aún no hay historial</string>
     <string name="dictate_settings_auto_formatting_summary">Utilizar IA para aplicar instrucciones de formato habladas (saltos de párrafo, correcciones deletreadas, etc.)</string>
     <string name="dictate_settings_edit_custom_rewording_prompts">Editar prompts de reescritura</string>
     <string name="dictate_prompts_overview_info">Aquí puedes crear y editar tus prompts para reescribir utilizando los modelos GPT de OpenAI.</string>

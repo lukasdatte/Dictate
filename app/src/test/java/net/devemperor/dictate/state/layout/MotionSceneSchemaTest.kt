@@ -36,7 +36,8 @@ class MotionSceneSchemaTest {
      * The ConstraintSet ids the scene MUST declare — one per KEYBOARD-side
      * [LayoutModeId] with a `sceneStateId`. The mapping is what
      * `ImeViewBackend.toSceneStateId()` (Spec 2 §6) relies on, so any
-     * drift here breaks the C14 binding. ADR-0013 added `review_panel_state`.
+     * drift here breaks the C14 binding. ADR-0013 added `review_panel_state`;
+     * ADR-0014 added `history_panel_state`.
      */
     private val requiredConstraintSetIds = setOf(
         "two_row_state",
@@ -45,6 +46,7 @@ class MotionSceneSchemaTest {
         "single_row_send_mode_state",
         "reprocess_staging_state",
         "review_panel_state",
+        "history_panel_state",
     )
 
     /**
@@ -361,9 +363,9 @@ class MotionSceneSchemaTest {
         val sets = parseConstraintSetElements()
         assertNotNull("Failed to parse MotionScene XML", sets)
         assertEquals(
-            "MotionScene must declare exactly six ConstraintSets (one per KEYBOARD LayoutModeId, " +
-                "incl. ADR-0013 review_panel_state)",
-            6,
+            "MotionScene must declare exactly seven ConstraintSets (one per KEYBOARD LayoutModeId, " +
+                "incl. ADR-0013 review_panel_state + ADR-0014 history_panel_state)",
+            7,
             sets.size,
         )
     }

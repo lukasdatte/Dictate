@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- In-keyboard history-panel row (ADR-0014). A pending marker + date + preview
+     on the left, and an action-button column on the right. The column is laid
+     out to hold a second button ("Send to Windows") in a later package — the
+     reserved `item_kbd_history_send_btn` is GONE for now. -->
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingVertical="10dp"
+    android:paddingHorizontal="10dp">
+
+    <!-- Pending marker: a filled dot, shown only for uninserted completed rows. -->
+    <TextView
+        android:id="@+id/item_kbd_history_pending_dot"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="●"
+        android:textColor="@color/dictate_blue"
+        android:textSize="12sp"
+        android:visibility="gone"
+        android:importantForAccessibility="no"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="@+id/item_kbd_history_date_tv"
+        tools:visibility="visible" />
+
+    <TextView
+        android:id="@+id/item_kbd_history_date_tv"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:textStyle="bold"
+        android:textSize="13sp"
+        tools:text="10.03.2026, 14:23"
+        app:layout_constraintStart_toEndOf="@+id/item_kbd_history_pending_dot"
+        app:layout_constraintEnd_toStartOf="@+id/item_kbd_history_actions"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/item_kbd_history_preview_tv"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:layout_marginTop="2dp"
+        android:maxLines="2"
+        android:ellipsize="end"
+        android:textSize="13sp"
+        android:textColor="?android:attr/textColorSecondary"
+        tools:text="This is a preview of the final output text that would be inserted…"
+        app:layout_constraintStart_toEndOf="@+id/item_kbd_history_pending_dot"
+        app:layout_constraintEnd_toStartOf="@+id/item_kbd_history_actions"
+        app:layout_constraintTop_toBottomOf="@+id/item_kbd_history_date_tv" />
+
+    <!-- Action column (extensible — a second "Send to Windows" button docks
+         here in a later package; the reserved slot below is GONE for now). -->
+    <LinearLayout
+        android:id="@+id/item_kbd_history_actions"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <!-- RESERVED for the Windows-dispatch package (ADR-0014 follow-up). GONE. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/item_kbd_history_send_btn"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:minWidth="0dp"
+            android:visibility="gone"
+            tools:visibility="gone" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/item_kbd_history_insert_btn"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:text="@string/dictate_history_panel_insert" />
+
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

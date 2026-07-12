@@ -169,6 +169,11 @@
     <string name="dictate_review_redictate">Re-dictate</string>
     <string name="dictate_review_discard">Discard</string>
     <string name="dictate_review_refining">Refining…</string>
+    <!-- In-keyboard history panel (ADR-0014) -->
+    <string name="dictate_history_panel_title">History</string>
+    <string name="dictate_history_panel_close">Close history</string>
+    <string name="dictate_history_panel_insert">Insert</string>
+    <string name="dictate_history_panel_empty">No history yet</string>
     <string name="dictate_settings_auto_formatting_summary">Use AI to apply spoken formatting instructions (paragraph breaks, spelled-out corrections, etc.)</string>
     <string name="dictate_settings_edit_custom_rewording_prompts">Edit rewording prompts</string>
     <string name="dictate_prompts_overview_info">Below you can create and edit your prompts for rewording using OpenAI\'s GPT models.</string>

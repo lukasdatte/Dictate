@@ -490,6 +490,18 @@
         motion:deriveConstraintsFrom="@+id/two_row_state" />
 
     <!-- ════════════════════════════════════════════════════════════════
+         history_panel_state (ADR-0014) — same empty-derived-ConstraintSet
+         shape as review_panel_state: the catalog forces every grid button
+         GONE and the (distinctly taller) `history_panel_cl` container
+         (HistoryPanelRenderer + an IME-owned Paging list) covers the area.
+         The extra height comes from that sibling container's own height, not
+         from this ConstraintSet (the scene only governs main_buttons_cl).
+         ════════════════════════════════════════════════════════════════ -->
+    <ConstraintSet
+        android:id="@+id/history_panel_state"
+        motion:deriveConstraintsFrom="@+id/two_row_state" />
+
+    <!-- ════════════════════════════════════════════════════════════════
          TRANSITIONS.
 
          Only sibling-pairs that the user actually toggles between are wired
@@ -534,6 +546,18 @@
     <Transition
         motion:constraintSetStart="@+id/single_row_state"
         motion:constraintSetEnd="@+id/review_panel_state"
+        motion:duration="200" />
+
+    <!-- ADR-0014 history-panel edges (base → history-panel). Same 200 ms
+         no-reshape shape as the review-panel edges. -->
+    <Transition
+        motion:constraintSetStart="@+id/two_row_state"
+        motion:constraintSetEnd="@+id/history_panel_state"
+        motion:duration="200" />
+
+    <Transition
+        motion:constraintSetStart="@+id/single_row_state"
+        motion:constraintSetEnd="@+id/history_panel_state"
         motion:duration="200" />
 
     <!-- ADR-0009 recording-wins reverse edges (SEND_MODE → base).

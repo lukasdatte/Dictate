@@ -46,6 +46,14 @@ enum class LayoutModeId {
     KEYBOARD_REVIEW_PANEL,
 
     /**
+     * In-keyboard history panel (ADR-0014). Hides the main button grid; a
+     * dedicated, distinctly taller `history_panel_cl` container (driven by
+     * `HistoryPanelRenderer` + an IME-owned Paging list) covers it with the
+     * full history and per-row insert actions.
+     */
+    KEYBOARD_HISTORY_PANEL,
+
+    /**
      * 5-button overlay layout shared by WIDGET and HOVER ViewModes.
      * Concrete `LayoutMode` body is contributed by Spec 3 §3.1 in B5/C16;
      * the id is registered here so cross-spec references stay stable.

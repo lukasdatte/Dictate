@@ -526,6 +526,42 @@ class LayoutCatalogTest {
     }
 
     @Test
+    fun `forKeyboard returns HISTORY_PANEL when the history panel is open (ADR-0014)`() {
+        val open = net.devemperor.dictate.state.HistoryPanelState(open = true)
+        val singleRow = DictateUiState.initial().copy(
+            historyPanel = open,
+            layout = net.devemperor.dictate.state.LayoutState(singleRowMode = true),
+        )
+        val twoRow = DictateUiState.initial().copy(historyPanel = open)
+        assertSame(catalog.KEYBOARD_HISTORY_PANEL, catalog.forKeyboard(singleRow))
+        assertSame(catalog.KEYBOARD_HISTORY_PANEL, catalog.forKeyboard(twoRow))
+    }
+
+    @Test
+    fun `review panel outranks history panel when both are open (ADR-0014 precedence)`() {
+        // Both should never be open (the IME gates history-open on
+        // !reviewPanel.open), but if they are, the held-turn review wins.
+        val state = DictateUiState.initial().copy(
+            reviewPanel = net.devemperor.dictate.state.ReviewPanelState(open = true, sessionId = "s1"),
+            historyPanel = net.devemperor.dictate.state.HistoryPanelState(open = true),
+        )
+        assertSame(catalog.KEYBOARD_REVIEW_PANEL, catalog.forKeyboard(state))
+    }
+
+    @Test
+    fun `HISTORY_PANEL hides every grid button`() {
+        val state = DictateUiState.initial().copy(
+            historyPanel = net.devemperor.dictate.state.HistoryPanelState(open = true),
+        )
+        catalog.KEYBOARD_HISTORY_PANEL.slots.forEach { slot ->
+            assertEquals(
+                "HISTORY_PANEL must hide ${slot.logicalId}",
+                false, slot.visibilityPredicate(state),
+            )
+        }
+    }
+
+    @Test
     fun `RED-PROOF forKeyboard — live recording wins over SEND_MODE (two-row)`() {
         // ADR-0009 secondary-recording precedence: while a recording is
         // live the user needs the recording controls (timer / pause /

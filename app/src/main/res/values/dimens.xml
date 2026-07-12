@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      In-keyboard history panel (ADR-0014) — default list height. Overridden at
+      runtime by the IME to ~50% of the display height, clamped to
+      [dictate_history_panel_list_min, dictate_history_panel_list_max], so the
+      panel is "distinctly taller" than the button grid across device sizes.
+      This static value is the pre-measurement fallback.
+    -->
+    <dimen name="dictate_history_panel_list_height">320dp</dimen>
+    <dimen name="dictate_history_panel_list_min">280dp</dimen>
+    <dimen name="dictate_history_panel_list_max">400dp</dimen>
+</resources>

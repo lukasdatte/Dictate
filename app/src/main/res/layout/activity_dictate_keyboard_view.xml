@@ -470,6 +470,67 @@
         </LinearLayout>
     </androidx.constraintlayout.widget.ConstraintLayout>
 
+    <!-- ════════════════════════════════════════════════════════════════
+         HISTORY PANEL (ADR-0014) — a distinctly taller, opaque, elevated
+         surface that temporarily replaces the content area / prompt bar and
+         covers the button grid. Unlike the review panel (which overlays only
+         main_buttons_cl), this anchors below the edit bar and carries its own
+         (screen-fraction) list height, so the root wrap_content grows and the
+         IME window becomes taller when the panel opens. Driven by
+         HistoryPanelRenderer (container visibility) + an IME-owned Paging list.
+         GONE by default. ════════════════════════════════════════════════ -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/history_panel_cl"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:background="?attr/colorSurface"
+        android:elevation="8dp"
+        android:paddingHorizontal="8dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="4dp"
+        android:visibility="gone"
+        app:layout_constraintTop_toBottomOf="@id/edit_buttons_keyboard_ll"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        tools:visibility="visible">
+
+        <TextView
+            android:id="@+id/history_panel_title_tv"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:text="@string/dictate_history_panel_title"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/history_panel_close_btn"
+            app:layout_constraintBottom_toBottomOf="@+id/history_panel_close_btn" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/history_panel_close_btn"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/dictate_history_panel_close"
+            app:icon="@drawable/ic_baseline_close_24"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/history_panel_rv"
+            android:layout_width="0dp"
+            android:layout_height="@dimen/dictate_history_panel_list_height"
+            android:layout_marginTop="4dp"
+            android:scrollbars="vertical"
+            app:layout_constraintTop_toBottomOf="@id/history_panel_title_tv"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            tools:listitem="@layout/item_keyboard_history" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/edit_buttons_keyboard_ll"
         android:layout_width="0dp"

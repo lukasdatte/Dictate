@@ -580,12 +580,29 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         ),
     )
 
-    /** A structurally-hidden slot — the review panel replaces the button grid. */
+    /** A structurally-hidden slot — a panel replaces the button grid. */
     private fun hiddenSlot(id: LogicalButtonId): ButtonSlot = ButtonSlot(
         logicalId = id,
         widthPolicy = WidthPolicy.WrapContent,
         visibilityPredicate = { false },
         actionResolver = { _, _ -> null },
+    )
+
+    // ════════════════════════════════════════════════════════════════
+    // KEYBOARD_HISTORY_PANEL (ADR-0014) — the main button grid is hidden;
+    // the `history_panel_cl` container (HistoryPanelRenderer + an IME-owned
+    // Paging list) owns the UI. Same "empty ConstraintSet derived from
+    // two_row_state" shape as REVIEW_PANEL / REPROCESS_STAGING.
+    // ════════════════════════════════════════════════════════════════
+    val KEYBOARD_HISTORY_PANEL: LayoutMode = LayoutMode(
+        id = LayoutModeId.KEYBOARD_HISTORY_PANEL,
+        backend = BackendType.IME_VIEW,
+        sceneStateId = R.id.history_panel_state,
+        rows = listOf(
+            RowDescriptor(slots = LogicalButtonId.entries
+                .filter { !it.name.startsWith("OVERLAY_") }
+                .map { hiddenSlot(it) }),
+        ),
     )
 
     // ════════════════════════════════════════════════════════════════
@@ -862,6 +879,10 @@ class LayoutCatalog(private val strings: LayoutStrings) {
             // after the pipeline FSM is already Idle (heldForReview), and it
             // owns the whole keyboard surface until the user acts.
             state.reviewPanel.open -> KEYBOARD_REVIEW_PANEL
+            // ADR-0014: the history panel outranks the grid but yields to the
+            // review panel (a held, uninserted turn awaiting a decision). The
+            // IME gates opening on !reviewPanel.open, so both are never open.
+            state.historyPanel.open -> KEYBOARD_HISTORY_PANEL
             isStaging -> KEYBOARD_REPROCESS_STAGING
             recordingLive && singleRow -> KEYBOARD_SINGLE_ROW
             recordingLive && !singleRow -> KEYBOARD_TWO_ROW
@@ -886,6 +907,7 @@ class LayoutCatalog(private val strings: LayoutStrings) {
         KEYBOARD_SINGLE_ROW_SEND_MODE,
         KEYBOARD_REPROCESS_STAGING,
         KEYBOARD_REVIEW_PANEL,
+        KEYBOARD_HISTORY_PANEL,
         OVERLAY_5BUTTON,
     )
 }

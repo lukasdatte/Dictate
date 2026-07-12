@@ -333,6 +333,48 @@ class PipelineOrchestratorQueueExecutionTest {
         assertEquals(SessionStatus.CANCELLED.name, db.sessionDao().getById(sid)!!.status)
     }
 
+    @Test
+    fun `resume of an errored turn replays the persisted user message, not a rebuilt one (K3)`() {
+        // A turn failed and was persisted as ERROR with its user message row.
+        // On resume, executeConversationTurn regenerates the turn WITHOUT
+        // touching the USER row — so it must converse with the persisted message,
+        // otherwise the persisted history (USER=old) and the new output diverge.
+        db.promptDao().insert(
+            PromptEntity(
+                id = 7, pos = 0, name = "Formalize", prompt = "Make it formal",
+                requiresSelection = true, autoApply = false
+            )
+        )
+        val sid = createRecordingSession(queuedPromptIds = "7")
+        sessionManager.addTranscriptionVersion(
+            sid, factory.transcriptText, "test-transcribe", "OPENAI", durationMs = 10
+        )
+        // Seed a failed turn whose USER row carries a distinctive sentinel that a
+        // rebuild-from-inputs would never reproduce.
+        val sentinel = "SENTINEL-PERSISTED-USER-MESSAGE"
+        sessionManager.appendConversationTurnError(
+            sessionId = sid, userMessageContent = sentinel, inputText = factory.transcriptText,
+            model = "test-model", provider = "OPENAI", previousTranscriptionId = null,
+            errorMessage = "boom", durationMs = 1,
+            systemPromptForFirstTurn = "SYS"
+        )
+
+        orchestrator.resumePipelineBlocking(sid)   // converse #1 (resume) -> output(1)
+
+        // The resume conversed with the PERSISTED user message, verbatim.
+        assertEquals(1, factory.converseCalls.size)
+        assertEquals(sentinel, factory.converseCalls.single().messages.single().content)
+
+        // The regenerated turn kept the persisted USER row unchanged, so the
+        // conversation replays [USER=sentinel, ASSISTANT=output] faithfully.
+        assertEquals(sentinel, sessionManager.getTurnUserMessage(sid, 0))
+        val versions = db.processingStepDao().getVersionsAtIndex(sid, 0)
+        val current = versions.first { it.isCurrent }
+        assertEquals(StepType.CONVERSATION_TURN.name, current.stepType)
+        assertEquals(factory.output(1), current.outputText)
+        assertEquals("SUCCESS", current.status)
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private fun createRecordingSession(queuedPromptIds: String? = null): String {

@@ -282,13 +282,21 @@ class SessionManager(private val db: DictateDatabase) {
         val id = UUID.randomUUID().toString()
         db.runInTransaction {
             val chainIndex = stepDao.getMaxChainIndex(sessionId) + 1
+            // K6: compute the version at the target chain index rather than
+            // hardcoding 1. getMaxChainIndex counts only current rows, so after
+            // an upstream regenerate invalidated downstream turns it can point at
+            // an index that still holds an invalidated version=1 row. A fixed
+            // version=1 would then collide with the UNIQUE(session_id,
+            // chain_index, version) index. For a fresh index getMaxVersion is 0,
+            // so this stays 1 — no behaviour change on the linear path.
+            val version = stepDao.getMaxVersion(sessionId, chainIndex) + 1
             stepDao.insert(
                 ProcessingStepEntity(
                     id = id,
                     sessionId = sessionId,
                     stepType = stepType.name,
                     chainIndex = chainIndex,
-                    version = 1,
+                    version = version,
                     isCurrent = true,
                     inputText = inputText,
                     outputText = outputText,
@@ -555,6 +563,16 @@ class SessionManager(private val db: DictateDatabase) {
             }
             ?.assistantMessage
     }
+
+    /**
+     * The user message persisted for the turn at [chainIndex], or null when the
+     * turn has no USER row. The error-resume path in
+     * [PipelineOrchestrator.executeConversationTurn] replays this verbatim so the
+     * regenerated assistant output matches the persisted conversation instead of
+     * a freshly rebuilt (possibly divergent) message (K3).
+     */
+    fun getTurnUserMessage(sessionId: String, chainIndex: Int): String? =
+        conversationDao.getUserMessageAt(sessionId, chainIndex)
 
     /** Inserts the per-turn USER row (+ the SYSTEM row on the first turn). */
     private fun insertTurnUserMessage(

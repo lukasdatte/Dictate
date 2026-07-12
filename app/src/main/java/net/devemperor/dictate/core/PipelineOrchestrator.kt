@@ -1595,7 +1595,23 @@ class PipelineOrchestrator @JvmOverloads constructor(
         val inputs = buildPostProcessingInputs(text, languageHint, slots, forceTurn)
         if (!ConversationTurnBuilder.hasWork(inputs)) return TurnOutcome(text, null)
 
-        val userMessage = ConversationTurnBuilder.buildFirstUserMessage(inputs)
+        // K3: detect a resumable error turn BEFORE conversing so the resume path
+        // replays the exact user message persisted at failure time. Otherwise a
+        // freshly rebuilt message (e.g. after the auto-format pref or the queue
+        // changed between failure and resend) would produce an output that no
+        // longer matches the persisted USER row — regenerateConversationTurn
+        // deliberately does NOT touch that row, so the persisted conversation
+        // would diverge from what actually generated the output.
+        val existingErrorTurn = stepDao?.getCurrentChain(sid)
+            ?.lastOrNull { it.stepType == StepType.CONVERSATION_TURN.name }
+            ?.takeIf { it.status == StepStatus.ERROR.name }
+
+        val userMessage = if (existingErrorTurn != null) {
+            sessionManager.getTurnUserMessage(sid, existingErrorTurn.chainIndex)
+                ?: ConversationTurnBuilder.buildFirstUserMessage(inputs)
+        } else {
+            ConversationTurnBuilder.buildFirstUserMessage(inputs)
+        }
         trackAndNotifyStepStarted(CONVERSATION_STEP_NAME)
         val startTime = System.nanoTime()
         try {
@@ -1607,13 +1623,9 @@ class PipelineOrchestrator @JvmOverloads constructor(
             val durationMs = (System.nanoTime() - startTime) / 1_000_000
             val provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name
 
-            val existingErrorTurn = stepDao?.getCurrentChain(sid)
-                ?.lastOrNull { it.stepType == StepType.CONVERSATION_TURN.name }
-                ?.takeIf { it.status == StepStatus.ERROR.name }
-
             val stepId = if (existingErrorTurn != null) {
                 // Resume of a failed turn: bump the version at the same index and
-                // reuse the already-persisted user message row.
+                // reuse the already-persisted user message row (replayed above).
                 sessionManager.regenerateConversationTurn(
                     sid, existingErrorTurn.chainIndex, result, provider, durationMs
                 )

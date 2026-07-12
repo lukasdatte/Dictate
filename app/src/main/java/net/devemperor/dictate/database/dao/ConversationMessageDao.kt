@@ -19,6 +19,14 @@ interface ConversationMessageDao {
     @Query("SELECT * FROM conversation_messages WHERE session_id = :sessionId AND role = 'USER' ORDER BY turn_index")
     fun getUserMessages(sessionId: String): List<ConversationMessageEntity>
 
+    /**
+     * The USER content persisted for the turn at [turnIndex], or null when
+     * absent. The error-resume path replays this exact message so the
+     * regenerated output stays consistent with the persisted conversation (K3).
+     */
+    @Query("SELECT content FROM conversation_messages WHERE session_id = :sessionId AND role = 'USER' AND turn_index = :turnIndex LIMIT 1")
+    fun getUserMessageAt(sessionId: String, turnIndex: Int): String?
+
     /** The persisted SYSTEM row content (turn 0's system prompt), or null. */
     @Query("SELECT content FROM conversation_messages WHERE session_id = :sessionId AND role = 'SYSTEM' ORDER BY seq LIMIT 1")
     fun getSystemContent(sessionId: String): String?

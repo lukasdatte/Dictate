@@ -192,4 +192,43 @@ class SessionManagerConversationTest {
         assertEquals(0, sm.loadConversation(s).turns.size)
         assertNull(sm.getAssistantMessage(s))
     }
+
+    @Test
+    fun `append over an invalidated chain index bumps version instead of colliding (K6)`() {
+        val s = newSession()
+        // Three linear turns at chain 0, 1, 2 (all version 1).
+        sm.appendConversationTurn(s, "U0", "raw", result("O0"), "OPENAI", null, 1, "SYS")
+        sm.appendConversationTurn(s, "U1", "O0", result("O1"), "OPENAI", null, 1, "SYS")
+        sm.appendConversationTurn(s, "U2", "O1", result("O2"), "OPENAI", null, 1, "SYS")
+
+        // Regenerate the middle turn → invalidateDownstream marks chain 2 v1
+        // is_current = 0, so getMaxChainIndex (which counts only current rows)
+        // drops back to 1.
+        sm.regenerateConversationTurn(s, chainIndex = 1, result = result("O1-v2"), provider = "OPENAI", durationMs = 1)
+
+        // A fresh append now lands at chain_index 2, where an invalidated
+        // version=1 row already exists. Before the fix, appendProcessingStep
+        // hardcoded version=1 → UNIQUE(session_id, chain_index, version)
+        // collision → SQLiteConstraintException. It must bump to version 2.
+        val stepId = sm.appendConversationTurn(s, "U2b", "O1-v2", result("O2b"), "OPENAI", null, 1, "SYS")
+        assertTrue(stepId.isNotEmpty())
+
+        val versions = db.processingStepDao().getVersionsAtIndex(s, 2)
+        assertEquals(2, versions.size) // invalidated v1 + fresh v2
+        val current = versions.first { it.isCurrent }
+        assertEquals(2, current.version)
+        assertEquals("O2b", current.outputText)
+        assertEquals("O2b", sm.getFinalOutput(s))
+    }
+
+    @Test
+    fun `getTurnUserMessage returns the persisted user content at a chain index`() {
+        val s = newSession()
+        sm.appendConversationTurn(s, "U0", "raw", result("O0"), "OPENAI", null, 1, "SYS")
+        sm.appendConversationTurn(s, "U1", "O0", result("O1"), "OPENAI", null, 1, "SYS")
+
+        assertEquals("U0", sm.getTurnUserMessage(s, 0))
+        assertEquals("U1", sm.getTurnUserMessage(s, 1))
+        assertNull(sm.getTurnUserMessage(s, 2))
+    }
 }

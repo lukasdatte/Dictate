@@ -36,7 +36,7 @@ class PipelineCallbackBridgeHeadlessTest {
         override fun onStepStarted(stepName: String) = Unit
         override fun onStepCompleted(stepName: String, durationMs: Long) = Unit
         override fun onStepFailed(stepName: String) = Unit
-        override fun onPipelineCompleted(text: String, source: InsertionSource) {
+        override fun onPipelineCompleted(text: String, source: InsertionSource, review: net.devemperor.dictate.ai.conversation.PostProcessingReview?) {
             completed += text to source
         }
         override fun onPipelineError(errorInfoKey: String, vibrate: Boolean, providerName: String?) {
@@ -76,7 +76,7 @@ class PipelineCallbackBridgeHeadlessTest {
         val sink = SinkRecorder()
         val bridge = bridgeWith(guard, sink, sessionId = "sess-1")
 
-        bridge.onPipelineCompleted("hello world", InsertionSource.TRANSCRIPTION)
+        bridge.onPipelineCompleted("hello world", InsertionSource.TRANSCRIPTION, null)
 
         assertEquals(listOf("sess-1" to "hello world"), sink.completions)
         assertTrue(sink.failures.isEmpty())
@@ -94,7 +94,7 @@ class PipelineCallbackBridgeHeadlessTest {
         val delegate = RecordingDelegate()
         bridge.setDelegate(delegate)
 
-        bridge.onPipelineCompleted("delivered", InsertionSource.TRANSCRIPTION)
+        bridge.onPipelineCompleted("delivered", InsertionSource.TRANSCRIPTION, null)
 
         assertEquals(1, delegate.completed.size)
         assertEquals("delivered" to InsertionSource.TRANSCRIPTION, delegate.completed[0])
@@ -115,7 +115,7 @@ class PipelineCallbackBridgeHeadlessTest {
         // Someone (e.g. bind-reconciliation) already terminally dispatched.
         assertTrue(guard.tryConsume("sess-3"))
 
-        bridge.onPipelineCompleted("should-not-double-commit", InsertionSource.TRANSCRIPTION)
+        bridge.onPipelineCompleted("should-not-double-commit", InsertionSource.TRANSCRIPTION, null)
 
         assertTrue("A consumed session must not re-deliver to the IME", delegate.completed.isEmpty())
         assertTrue(sink.completions.isEmpty())
@@ -161,7 +161,7 @@ class PipelineCallbackBridgeHeadlessTest {
         val delegate = RecordingDelegate()
         bridge.setDelegate(delegate)
 
-        bridge.onPipelineCompleted("dropped", InsertionSource.TRANSCRIPTION)
+        bridge.onPipelineCompleted("dropped", InsertionSource.TRANSCRIPTION, null)
         bridge.onPipelineError("dropped", true, null)
 
         assertTrue("Unresolvable session → no delegate delivery", delegate.completed.isEmpty())
@@ -180,7 +180,7 @@ class PipelineCallbackBridgeHeadlessTest {
         val sink = SinkRecorder()
         val bridge = bridgeWith(guard, sink, sessionId = "sess-x")
 
-        bridge.onPipelineCompleted("done", InsertionSource.TRANSCRIPTION)
+        bridge.onPipelineCompleted("done", InsertionSource.TRANSCRIPTION, null)
         bridge.onPipelineError("late_error", true, null)
 
         assertEquals(1, sink.completions.size)
@@ -195,7 +195,7 @@ class PipelineCallbackBridgeHeadlessTest {
         val delegate = RecordingDelegate()
         bridge.setDelegate(delegate)
 
-        bridge.onPipelineCompleted("legacy", InsertionSource.TRANSCRIPTION)
+        bridge.onPipelineCompleted("legacy", InsertionSource.TRANSCRIPTION, null)
 
         assertEquals(1, delegate.completed.size)
     }
@@ -204,7 +204,7 @@ class PipelineCallbackBridgeHeadlessTest {
     fun `without headless sink wiring and no delegate the terminal callback drops`() {
         val bridge = PipelineCallbackBridge()
         // No delegate, no sink → must not throw (legacy drop).
-        bridge.onPipelineCompleted("legacy", InsertionSource.TRANSCRIPTION)
+        bridge.onPipelineCompleted("legacy", InsertionSource.TRANSCRIPTION, null)
         assertNull(bridge.currentDelegate())
     }
 }

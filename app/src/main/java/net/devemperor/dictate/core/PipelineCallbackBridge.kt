@@ -1,6 +1,7 @@
 package net.devemperor.dictate.core
 
 import android.util.Log
+import net.devemperor.dictate.ai.conversation.PostProcessingReview
 import net.devemperor.dictate.database.entity.InsertionSource
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
@@ -167,12 +168,23 @@ class PipelineCallbackBridge(
     override fun onStepFailed(stepName: String) =
         dispatch("onStepFailed") { it.onStepFailed(stepName) }
 
-    override fun onPipelineCompleted(text: String, source: InsertionSource) {
+    // Non-terminal (ADR-0013): forward to the delegate, drop when unbound —
+    // a review continuation only makes sense with a visible, bound IME.
+    override fun onReviewTurnCompleted(
+        sessionId: String,
+        output: String,
+        message: String?,
+        needsClarification: Boolean
+    ) = dispatch("onReviewTurnCompleted") {
+        it.onReviewTurnCompleted(sessionId, output, message, needsClarification)
+    }
+
+    override fun onPipelineCompleted(text: String, source: InsertionSource, review: PostProcessingReview?) {
         val provider = currentSessionIdProvider
         if (provider == null) {
             // Headless fallback not wired yet (early boot / legacy tests):
             // preserve the original delegate-or-drop behaviour verbatim.
-            dispatch("onPipelineCompleted") { it.onPipelineCompleted(text, source) }
+            dispatch("onPipelineCompleted") { it.onPipelineCompleted(text, source, review) }
             return
         }
         val sid = provider.invoke()
@@ -190,7 +202,7 @@ class PipelineCallbackBridge(
             // fallback or reconciliation) — delivering again would
             // double-commit the transcript, so skip.
             if (terminalGuard.tryConsume(sid)) {
-                invokeSafely("onPipelineCompleted", cb) { it.onPipelineCompleted(text, source) }
+                invokeSafely("onPipelineCompleted", cb) { it.onPipelineCompleted(text, source, review) }
             } else {
                 Log.w(TAG, "onPipelineCompleted skipped — session $sid already terminally dispatched")
             }

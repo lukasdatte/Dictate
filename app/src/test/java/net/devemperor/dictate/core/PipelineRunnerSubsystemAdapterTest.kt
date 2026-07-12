@@ -72,6 +72,8 @@ class PipelineRunnerSubsystemAdapterTest {
         override fun resume(sessionId: String, token: CancellationToken) = Unit
         override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
         override fun postProcess(request: JobRequest.PostProcess) = Unit
+        override fun continueConversation(request: JobRequest.ConversationContinuation, token: CancellationToken) = Unit
+
         override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = Unit
 
         fun awaitStarted() {
@@ -261,6 +263,8 @@ class PipelineRunnerSubsystemAdapterTest {
             override fun resume(sessionId: String, token: CancellationToken) = Unit
             override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
             override fun postProcess(request: JobRequest.PostProcess) = Unit
+        override fun continueConversation(request: JobRequest.ConversationContinuation, token: CancellationToken) = Unit
+
         override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = Unit
         }
         JobExecutor.initializeForTest(blocking)
@@ -312,6 +316,8 @@ class PipelineRunnerSubsystemAdapterTest {
             override fun resume(sessionId: String, token: CancellationToken) = Unit
             override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
             override fun postProcess(request: JobRequest.PostProcess) = Unit
+        override fun continueConversation(request: JobRequest.ConversationContinuation, token: CancellationToken) = Unit
+
         override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = Unit
         }
         JobExecutor.initializeForTest(cancellableRunner)

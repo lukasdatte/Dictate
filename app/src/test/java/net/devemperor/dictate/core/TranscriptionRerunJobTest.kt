@@ -308,7 +308,8 @@ class TranscriptionRerunJobTest {
         override fun onStepFailed(stepName: String) = Unit
         override fun onPipelineCompleted(
             text: String,
-            source: net.devemperor.dictate.database.entity.InsertionSource
+            source: net.devemperor.dictate.database.entity.InsertionSource,
+            review: net.devemperor.dictate.ai.conversation.PostProcessingReview?
         ) = Unit
         override fun onPipelineError(errorInfoKey: String, vibrate: Boolean, providerName: String?) {
             errorKeys += errorInfoKey

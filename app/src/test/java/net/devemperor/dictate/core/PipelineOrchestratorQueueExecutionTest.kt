@@ -59,6 +59,7 @@ class PipelineOrchestratorQueueExecutionTest {
     private lateinit var sessionManager: SessionManager
     private lateinit var promptQueueManager: PromptQueueManager
     private lateinit var orchestrator: PipelineOrchestrator
+    private lateinit var callback: RecordingCallback
 
     @Before
     fun setUp() {
@@ -82,7 +83,7 @@ class PipelineOrchestratorQueueExecutionTest {
             sessionManager,
             SessionTracker(db.sessionDao()),
             db.promptDao(),
-            NoopCallback(),
+            RecordingCallback().also { callback = it },
             /* recordingRepository */ null,
             db.transcriptionDao(),
             db.processingStepDao(),
@@ -252,6 +253,44 @@ class PipelineOrchestratorQueueExecutionTest {
     }
 
     @Test
+    fun `continueConversation appends a turn, replays history, surfaces via onReviewTurnCompleted`() {
+        val sid = createRecordingSession()
+        db.promptDao().insert(
+            PromptEntity(
+                id = 7, pos = 0, name = "Formalize", prompt = "Make it formal",
+                requiresSelection = true, autoApply = false
+            )
+        )
+        reprocess(sid, listOf(PromptQueueSlot.ofSavedPrompt(7)))   // converse #1 -> output(1), turn 0
+
+        orchestrator.continueConversationBlocking(sid, "make it shorter")  // converse #2 -> output(2), turn 1
+
+        // A new turn was appended at chain_index 1 (not a new version at 0).
+        val chain = db.processingStepDao().getCurrentChain(sid)
+        assertEquals(2, chain.size)
+        assertEquals(StepType.CONVERSATION_TURN.name, chain[1].stepType)
+        assertEquals(1, chain[1].chainIndex)
+        assertEquals(factory.output(2), chain[1].outputText)
+        assertEquals(factory.output(2), sessionManager.getFinalOutput(sid))
+
+        // The follow-up replay carried the full prior turn plus the <user-reply>.
+        val replay = factory.converseCalls[1]
+        assertEquals(3, replay.messages.size) // [USER turn0, ASSISTANT turn0, USER follow-up]
+        assertTrue(replay.messages.last().content.contains("make it shorter"))
+        assertTrue(replay.messages.last().content.contains("<user-reply>"))
+
+        // Result surfaced via the NON-terminal callback.
+        assertEquals(1, callback.reviewTurns.size)
+        assertEquals(factory.output(2), callback.reviewTurns.single().output)
+        assertEquals(sid, callback.reviewTurns.single().sessionId)
+
+        // A follow-up USER row was appended (no second SYSTEM row).
+        val roles = db.conversationMessageDao().getBySession(sid).map { it.role }
+        assertEquals(1, roles.count { it == "SYSTEM" })
+        assertEquals(2, roles.count { it == "USER" })
+    }
+
+    @Test
     fun `resume - provider-level cancel finalises CANCELLED`() {
         db.promptDao().insert(
             PromptEntity(
@@ -356,11 +395,17 @@ class PipelineOrchestratorQueueExecutionTest {
         override fun getModelName(function: AIFunction): String = "test-model"
     }
 
-    private class NoopCallback : PipelineOrchestrator.PipelineCallback {
+    data class ReviewTurnCall(val sessionId: String, val output: String, val message: String?, val needsClarification: Boolean)
+
+    private class RecordingCallback : PipelineOrchestrator.PipelineCallback {
+        val reviewTurns = mutableListOf<ReviewTurnCall>()
         override fun onStepStarted(stepName: String) = Unit
         override fun onStepCompleted(stepName: String, durationMs: Long) = Unit
         override fun onStepFailed(stepName: String) = Unit
-        override fun onPipelineCompleted(text: String, source: InsertionSource) = Unit
+        override fun onPipelineCompleted(text: String, source: InsertionSource, review: net.devemperor.dictate.ai.conversation.PostProcessingReview?) = Unit
+        override fun onReviewTurnCompleted(sessionId: String, output: String, message: String?, needsClarification: Boolean) {
+            reviewTurns += ReviewTurnCall(sessionId, output, message, needsClarification)
+        }
         override fun onPipelineError(errorInfoKey: String, vibrate: Boolean, providerName: String?) = Unit
         override fun onPipelineFinished() = Unit
         override fun onShowResend() = Unit

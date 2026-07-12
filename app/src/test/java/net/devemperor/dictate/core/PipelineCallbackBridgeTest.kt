@@ -44,7 +44,7 @@ class PipelineCallbackBridgeTest {
             calls += Call("onStepFailed", listOf(stepName))
         }
 
-        override fun onPipelineCompleted(text: String, source: InsertionSource) {
+        override fun onPipelineCompleted(text: String, source: InsertionSource, review: net.devemperor.dictate.ai.conversation.PostProcessingReview?) {
             calls += Call("onPipelineCompleted", listOf(text, source))
         }
 
@@ -76,7 +76,7 @@ class PipelineCallbackBridgeTest {
 
         override fun onStepCompleted(stepName: String, durationMs: Long) = Unit
         override fun onStepFailed(stepName: String) = Unit
-        override fun onPipelineCompleted(text: String, source: InsertionSource) = Unit
+        override fun onPipelineCompleted(text: String, source: InsertionSource, review: net.devemperor.dictate.ai.conversation.PostProcessingReview?) = Unit
         override fun onPipelineError(errorInfoKey: String, vibrate: Boolean, providerName: String?) = Unit
         override fun onPipelineFinished() = Unit
         override fun onShowResend() = Unit
@@ -140,7 +140,7 @@ class PipelineCallbackBridgeTest {
         val delegate = RecordingDelegate()
         bridge.setDelegate(delegate)
 
-        bridge.onPipelineCompleted("hello world", InsertionSource.TRANSCRIPTION)
+        bridge.onPipelineCompleted("hello world", InsertionSource.TRANSCRIPTION, null)
 
         assertEquals(
             listOf<Any?>("hello world", InsertionSource.TRANSCRIPTION),
@@ -208,7 +208,7 @@ class PipelineCallbackBridgeTest {
         bridge.onStepStarted("x")
         bridge.onStepCompleted("x", 1)
         bridge.onStepFailed("x")
-        bridge.onPipelineCompleted("x", InsertionSource.TRANSCRIPTION)
+        bridge.onPipelineCompleted("x", InsertionSource.TRANSCRIPTION, null)
         bridge.onPipelineError("k", false, null)
         bridge.onPipelineFinished()
         bridge.onShowResend()

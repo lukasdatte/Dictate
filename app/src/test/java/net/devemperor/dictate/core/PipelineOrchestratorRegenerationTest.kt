@@ -313,7 +313,7 @@ class PipelineOrchestratorRegenerationTest {
         override fun onStepStarted(stepName: String) = Unit
         override fun onStepCompleted(stepName: String, durationMs: Long) = Unit
         override fun onStepFailed(stepName: String) = Unit
-        override fun onPipelineCompleted(text: String, source: InsertionSource) = Unit
+        override fun onPipelineCompleted(text: String, source: InsertionSource, review: net.devemperor.dictate.ai.conversation.PostProcessingReview?) = Unit
         override fun onPipelineError(errorInfoKey: String, vibrate: Boolean, providerName: String?) = Unit
         override fun onPipelineFinished() {
             finished.countDown()

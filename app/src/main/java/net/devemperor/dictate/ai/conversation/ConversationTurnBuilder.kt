@@ -47,4 +47,15 @@ object ConversationTurnBuilder {
             .transcript(inputs.transcript)
             .build()
     }
+
+    /**
+     * Builds the follow-up user message for a dictated review refinement
+     * (ADR-0013). Unlike [buildFirstUserMessage], the spoken reply IS an
+     * instruction/answer to the model's prior message — NOT transcript data — so
+     * it carries no `<transcript>` guardrail, just a light `<user-reply>` wrap.
+     */
+    fun buildFollowUpUserMessage(spokenReply: String): String =
+        PromptBuilder.create()
+            .section("user-reply", spokenReply)
+            .build()
 }

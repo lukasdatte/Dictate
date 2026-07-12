@@ -157,6 +157,8 @@ class JobExecutorTest {
 
             override fun postProcess(request: JobRequest.PostProcess) = Unit
 
+            override fun continueConversation(request: JobRequest.ConversationContinuation, token: CancellationToken) = Unit
+
             override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = Unit
         }
 
@@ -283,6 +285,8 @@ class JobExecutorTest {
             done.countDown()
         }
 
+        override fun continueConversation(request: JobRequest.ConversationContinuation, token: CancellationToken) = Unit
+
         override fun rerunTranscription(request: JobRequest.TranscriptionRerun) {
             done.countDown()
         }
@@ -318,6 +322,8 @@ class JobExecutorTest {
         ) = block()
 
         override fun postProcess(request: JobRequest.PostProcess) = block()
+
+        override fun continueConversation(request: JobRequest.ConversationContinuation, token: CancellationToken) = Unit
 
         override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = block()
 

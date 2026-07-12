@@ -4606,7 +4606,11 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     @Override
-    public void onPipelineCompleted(@androidx.annotation.NonNull String text, @androidx.annotation.NonNull InsertionSource source) {
+    public void onPipelineCompleted(@androidx.annotation.NonNull String text, @androidx.annotation.NonNull InsertionSource source,
+                                    @androidx.annotation.Nullable net.devemperor.dictate.ai.conversation.PostProcessingReview review) {
+        // pkg2-3: `review` carries the ADR-0013 verdict; the insert-vs-review
+        // branch that consumes it is wired in pkg2-6. For now behaviour is
+        // unchanged (the transcript is inserted / deferred exactly as before).
         mainHandler.post(() -> {
             // Capture `sid` before any dispatch — `currentPipelineSessionId()`
             // reads from `state.pipeline`, which the PipelineDone dispatch
@@ -4685,6 +4689,15 @@ public class DictateInputMethodService extends InputMethodService
                 }
             }
         });
+    }
+
+    @Override
+    public void onReviewTurnCompleted(@androidx.annotation.NonNull String sessionId,
+                                      @androidx.annotation.NonNull String output,
+                                      @androidx.annotation.Nullable String message,
+                                      boolean needsClarification) {
+        // pkg2-3: non-terminal review-refinement result. The review-panel
+        // update path is wired in pkg2-6; no-op for now.
     }
 
     @Override

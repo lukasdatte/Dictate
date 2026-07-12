@@ -426,6 +426,13 @@ class SessionManager(private val db: DictateDatabase) {
                 assistantMessage = result.message,
                 responseFormat = result.responseFormat.name
             )
+            // ADR-0013: persist the denormalized final_output_text (parity with
+            // regenerateConversationTurn). This is what makes a review-held turn
+            // — and any uninserted completed turn — crash-recoverable as a
+            // pending part via SessionDao.findPendingInsertion (needs
+            // final_output_text IS NOT NULL). The appended step is always the
+            // last chain index, so its output is the final output.
+            updateFinalOutputText(sessionId, result.output)
         }
         return stepId
     }

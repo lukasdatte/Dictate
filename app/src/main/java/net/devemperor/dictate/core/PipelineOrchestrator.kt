@@ -9,7 +9,9 @@ import net.devemperor.dictate.ai.conversation.ConversationMessage
 import net.devemperor.dictate.ai.conversation.ConversationReconstructor
 import net.devemperor.dictate.ai.conversation.ConversationTurnBuilder
 import net.devemperor.dictate.ai.conversation.PostProcessingInputs
+import net.devemperor.dictate.ai.conversation.PostProcessingReview
 import net.devemperor.dictate.ai.conversation.TurnInstruction
+import net.devemperor.dictate.preferences.AmbiguityMode
 import net.devemperor.dictate.ai.prompt.PromptService
 import net.devemperor.dictate.ai.prompt.PromptTemplates
 import net.devemperor.dictate.audio.AudioFileRepository
@@ -133,7 +135,30 @@ class PipelineOrchestrator @JvmOverloads constructor(
         fun onStepStarted(stepName: String)
         fun onStepCompleted(stepName: String, durationMs: Long)
         fun onStepFailed(stepName: String)
-        fun onPipelineCompleted(text: String, source: InsertionSource)
+
+        /**
+         * Terminal completion of a pipeline run. [review] carries the
+         * post-processing verdict (ADR-0013) when a conversation turn ran and
+         * produced one; `null` otherwise (plain transcription, standalone,
+         * headless/reconciliation). Guarded once-per-session (ADR-0011).
+         */
+        fun onPipelineCompleted(text: String, source: InsertionSource, review: PostProcessingReview?)
+
+        /**
+         * Non-terminal completion of a review-refinement follow-up turn
+         * (ADR-0013). Deliberately separate from [onPipelineCompleted] so it
+         * does NOT go through the once-per-session terminal guard (a
+         * conversation can legitimately produce many turns for one session —
+         * same reason regenerate does not fire the terminal callback). Default
+         * no-op so implementers that don't drive a review panel need not react.
+         */
+        fun onReviewTurnCompleted(
+            sessionId: String,
+            output: String,
+            message: String?,
+            needsClarification: Boolean
+        ) {}
+
         fun onPipelineError(errorInfoKey: String, vibrate: Boolean, providerName: String?)
         fun onPipelineFinished()
         fun onShowResend()
@@ -194,7 +219,21 @@ class PipelineOrchestrator @JvmOverloads constructor(
          *
          * Ignored when [reuseSessionId] is non-null (reprocess/resume paths).
          */
-        val preAllocatedSessionId: String? = null
+        val preAllocatedSessionId: String? = null,
+        /**
+         * Ambiguity mode (ADR-0013). `AUTO`/`ALWAYS_REVIEW` force a conversation
+         * turn even on a bare transcription (so a verdict exists to review).
+         * `ALWAYS_INSERT` (default) keeps the Paket-1 behaviour.
+         */
+        val ambiguityMode: AmbiguityMode = AmbiguityMode.ALWAYS_INSERT,
+        /**
+         * Transcription-only run (ADR-0013): the review-refinement recording
+         * (session S2) must never itself run a post-processing turn or trigger a
+         * review/pending. Forces `hasWork=false` regardless of [ambiguityMode]
+         * and is snapshotted with an empty queue so it does not consume the
+         * live prompt queue.
+         */
+        val transcriptionOnly: Boolean = false
     )
 
     data class StandaloneConfig(
@@ -490,12 +529,18 @@ class PipelineOrchestrator @JvmOverloads constructor(
 
         try {
             cancellationToken.throwIfCancelled()
-            val finalText = if (alreadyDone) {
-                sessionManager.getFinalOutput(sessionId) ?: transcription.text
+            val outcome = if (alreadyDone) {
+                TurnOutcome(sessionManager.getFinalOutput(sessionId) ?: transcription.text, null)
             } else {
+                // Resume completes an interrupted run with its persisted queue.
+                // The ambiguity mode is a live-keyboard concern and is not
+                // persisted per session, so a resumed bare transcription is not
+                // force-turned (real queued/auto-format work still runs via
+                // hasWork). ADR-0013.
                 executeConversationTurn(
                     transcription.text, session.language, sessionId,
-                    queuedSlotsAtStart, cancellationToken
+                    queuedSlotsAtStart, cancellationToken,
+                    forceTurn = false
                 )
             }
             val source = if (queuedSlotsAtStart.isNotEmpty()) {
@@ -503,7 +548,7 @@ class PipelineOrchestrator @JvmOverloads constructor(
             } else {
                 InsertionSource.TRANSCRIPTION
             }
-            callback.onPipelineCompleted(finalText, source)
+            callback.onPipelineCompleted(outcome.text, source, outcome.review)
             sessionManager.finalizeCompleted(sessionId)
         } catch (cancelEx: java.util.concurrent.CancellationException) {
             sessionManager.finalizeCancelled(sessionId)
@@ -707,6 +752,90 @@ class PipelineOrchestrator @JvmOverloads constructor(
     }
 
     /**
+     * Appends a dictated review-refinement follow-up turn (ADR-0013). Mirrors
+     * [regenerateConversationTurnBlocking] but APPENDS a new turn (new
+     * `chain_index`) instead of versioning an existing one, and surfaces its
+     * result via the NON-terminal [PipelineCallback.onReviewTurnCompleted] — so
+     * it never trips the once-per-session terminal guard (ADR-0011). Runs off
+     * the main pipeline FSM (no `Running` state), on the serialized run-queue.
+     *
+     * [followUpText] is the transcript of the refinement recording; it is
+     * wrapped as a `<user-reply>` (an answer, not transcript data) and replayed
+     * after the full prior conversation.
+     */
+    fun continueConversationBlocking(
+        sessionId: String,
+        followUpText: String,
+        cancellationToken: CancellationToken = CancellationToken()
+    ) {
+        cancelled = false
+        running = true
+        totalSteps = 1
+        currentStepIndex = 0
+        currentStepName = null
+        sessionTracker.currentSessionId = sessionId
+        try {
+            cancellationToken.throwIfCancelled()
+            trackAndNotifyStepStarted(CONVERSATION_STEP_NAME)
+            val startTime = System.nanoTime()
+
+            val snapshot = sessionManager.loadConversation(sessionId)
+            val followUpMsg = ConversationTurnBuilder.buildFollowUpUserMessage(followUpText)
+            val messages = ConversationReconstructor.toApiMessages(snapshot.turns, followUpMsg)
+            val result = aiOrchestrator.converse(messages, snapshot.systemContent)
+            cancellationToken.throwIfCancelled()
+            val durationMs = (System.nanoTime() - startTime) / 1_000_000
+            val provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name
+
+            // Continue the SAME conversation: a new turn at max chain index + 1.
+            // inputText = the prior output the reply refines (audit/getFinalOutput).
+            val priorOutput = snapshot.turns.lastOrNull()?.assistantOutput ?: followUpText
+            val stepId = sessionManager.appendConversationTurn(
+                sessionId = sessionId,
+                userMessageContent = followUpMsg,
+                inputText = priorOutput,
+                result = result,
+                provider = provider,
+                previousTranscriptionId = null,
+                durationMs = durationMs,
+                // System prompt already persisted on turn 0; passing null keeps
+                // insertTurnUserMessage from writing a second SYSTEM row.
+                systemPromptForFirstTurn = null
+            )
+            sessionManager.logCompletion(
+                StepType.CONVERSATION_TURN.name, sessionId,
+                stepId, null,
+                snapshot.systemContent, followUpMsg,
+                true, null
+            )
+            callback.onStepCompleted(CONVERSATION_STEP_NAME, durationMs)
+            callback.onReviewTurnCompleted(
+                sessionId, result.output, result.message, result.needsClarification
+            )
+        } catch (cancelEx: java.util.concurrent.CancellationException) {
+            throw cancelEx
+        } catch (ie: InterruptedException) {
+            throw ie
+        } catch (e: Exception) {
+            if (isCancellation(e)) {
+                callback.onStepFailed(CONVERSATION_STEP_NAME)
+                throw java.util.concurrent.CancellationException(
+                    "Provider reported cancellation"
+                ).apply { initCause(e) }
+            }
+            callback.onStepFailed(CONVERSATION_STEP_NAME)
+            if (e is AIProviderException) {
+                callback.onPipelineError(e.toInfoKey(), true, e.provider?.name)
+            } else {
+                callback.onPipelineError("internet_error", true, null)
+            }
+        } finally {
+            callback.onPipelineFinished()
+            running = false
+        }
+    }
+
+    /**
      * Synchronous transcription re-run (R6) — re-transcribes the session's
      * stored audio as a NEW current transcription version, without touching the
      * processing chain (spec §3.4, D3/D4). Called directly from [JobExecutor]'s
@@ -895,7 +1024,7 @@ class PipelineOrchestrator @JvmOverloads constructor(
         // Static response [text] - no API call needed
         if (promptService.isStaticResponse(prompt)) {
             val text = promptService.extractStaticResponse(prompt!!)
-            callback.onPipelineCompleted(text, InsertionSource.STATIC_PROMPT)
+            callback.onPipelineCompleted(text, InsertionSource.STATIC_PROMPT, null)
             callback.onPipelineFinished()
             return
         }
@@ -958,7 +1087,7 @@ class PipelineOrchestrator @JvmOverloads constructor(
                 val durationMs = (System.nanoTime() - startTime) / 1_000_000
                 callback.onStepCompleted(displayName, durationMs)
 
-                callback.onPipelineCompleted(result, InsertionSource.REWORDING)
+                callback.onPipelineCompleted(result, InsertionSource.REWORDING, null)
             } catch (e: Exception) {
                 val durationMs = (System.nanoTime() - startTime) / 1_000_000
                 if (ctx != null && pp != null) {
@@ -1237,7 +1366,11 @@ class PipelineOrchestrator @JvmOverloads constructor(
         // mode still runs auto-formatting but no queued instructions.
         token.throwIfCancelled()
         val slotsForTurn = if (config.livePrompt) emptyList() else queuedSlotsAtStart
-        text = executeConversationTurn(text, config.language, sid, slotsForTurn, token)
+        // ADR-0013: AUTO/ALWAYS_REVIEW force a turn on a bare transcription; the
+        // transcription-only refinement recording (S2) never forces a turn.
+        val forceTurn = config.ambiguityMode.forcesTurn && !config.transcriptionOnly
+        val outcome = executeConversationTurn(text, config.language, sid, slotsForTurn, token, forceTurn)
+        text = outcome.text
         token.throwIfCancelled()
         if (cancelled) throw java.util.concurrent.CancellationException("cancelled flag set")
 
@@ -1247,7 +1380,7 @@ class PipelineOrchestrator @JvmOverloads constructor(
         val hadQueued = queuedSlotsAtStart.isNotEmpty()
         val source = if (hadQueued && !config.livePrompt)
             InsertionSource.QUEUED_PROMPT else InsertionSource.TRANSCRIPTION
-        callback.onPipelineCompleted(text, source)
+        callback.onPipelineCompleted(text, source, outcome.review)
 
         // Step 5: Resend + AutoSwitch
         if (config.showResendButton) callback.onShowResend()
@@ -1456,10 +1589,11 @@ class PipelineOrchestrator @JvmOverloads constructor(
         languageHint: String?,
         sid: String,
         slots: List<PromptQueueSlot>,
-        token: CancellationToken
-    ): String {
-        val inputs = buildPostProcessingInputs(text, languageHint, slots)
-        if (!ConversationTurnBuilder.hasWork(inputs)) return text
+        token: CancellationToken,
+        forceTurn: Boolean
+    ): TurnOutcome {
+        val inputs = buildPostProcessingInputs(text, languageHint, slots, forceTurn)
+        if (!ConversationTurnBuilder.hasWork(inputs)) return TurnOutcome(text, null)
 
         val userMessage = ConversationTurnBuilder.buildFirstUserMessage(inputs)
         trackAndNotifyStepStarted(CONVERSATION_STEP_NAME)
@@ -1504,7 +1638,10 @@ class PipelineOrchestrator @JvmOverloads constructor(
             )
             sessionTracker.setStep(stepId)
             callback.onStepCompleted(CONVERSATION_STEP_NAME, durationMs)
-            return result.output
+            return TurnOutcome(
+                result.output,
+                PostProcessingReview(result.message, result.needsClarification)
+            )
         } catch (cancelEx: java.util.concurrent.CancellationException) {
             throw cancelEx
         } catch (ie: InterruptedException) {
@@ -1519,18 +1656,24 @@ class PipelineOrchestrator @JvmOverloads constructor(
             val durationMs = (System.nanoTime() - startTime) / 1_000_000
             handleConversationTurnError(e, userMessage, text, sid, durationMs)
             // Deliver the transcript as best-effort text; error already surfaced.
-            return text
+            return TurnOutcome(text, null)
         }
     }
 
+    /** The output text of a post-processing turn plus its review verdict (ADR-0013). */
+    private data class TurnOutcome(val text: String, val review: PostProcessingReview?)
+
     /**
      * Resolves the platform state (auto-format enable, queue slots, language)
-     * into the Android-free [PostProcessingInputs] for the builder.
+     * into the Android-free [PostProcessingInputs] for the builder. [forceTurn]
+     * comes from the ambiguity mode (ADR-0013): `AUTO`/`ALWAYS_REVIEW` force a
+     * turn on a bare transcription so a verdict exists to review.
      */
     private fun buildPostProcessingInputs(
         text: String,
         languageHint: String?,
-        slots: List<PromptQueueSlot>
+        slots: List<PromptQueueSlot>,
+        forceTurn: Boolean
     ): PostProcessingInputs {
         val instructions = slots.mapNotNull { slot ->
             val resolved = resolveQueueSlot(slot) ?: return@mapNotNull null
@@ -1541,7 +1684,8 @@ class PipelineOrchestrator @JvmOverloads constructor(
             transcript = text,
             languageHint = languageHint,
             autoFormatEnabled = autoFormattingService.isEnabled(),
-            instructions = instructions
+            instructions = instructions,
+            forceTurn = forceTurn
         )
     }
 

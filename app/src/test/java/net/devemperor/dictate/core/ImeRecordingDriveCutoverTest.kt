@@ -65,6 +65,8 @@ class ImeRecordingDriveCutoverTest {
         override fun resume(sessionId: String, token: CancellationToken) = Unit
         override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
         override fun postProcess(request: JobRequest.PostProcess) = Unit
+        override fun continueConversation(request: JobRequest.ConversationContinuation, token: CancellationToken) = Unit
+
         override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = Unit
 
         fun awaitStarted() = check(done.await(2, TimeUnit.SECONDS)) { "runner did not start" }
@@ -232,6 +234,8 @@ class ImeRecordingDriveCutoverTest {
             override fun resume(sessionId: String, token: CancellationToken) = Unit
             override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
             override fun postProcess(request: JobRequest.PostProcess) = Unit
+        override fun continueConversation(request: JobRequest.ConversationContinuation, token: CancellationToken) = Unit
+
         override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = Unit
         })
         val b = boot()
@@ -328,6 +332,8 @@ class ImeRecordingDriveCutoverTest {
             override fun resume(sessionId: String, token: CancellationToken) = Unit
             override fun regenerate(request: JobRequest.StepRegenerate, token: CancellationToken) = Unit
             override fun postProcess(request: JobRequest.PostProcess) = Unit
+        override fun continueConversation(request: JobRequest.ConversationContinuation, token: CancellationToken) = Unit
+
         override fun rerunTranscription(request: JobRequest.TranscriptionRerun) = Unit
         })
         val b = boot()

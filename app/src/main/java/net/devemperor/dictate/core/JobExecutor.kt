@@ -163,6 +163,8 @@ object JobExecutor {
                     )
                     is JobRequest.PostProcess -> orchestrator.postProcess(request)
                     is JobRequest.TranscriptionRerun -> orchestrator.rerunTranscription(request)
+                    is JobRequest.ConversationContinuation ->
+                        orchestrator.continueConversation(request, token)
                 }
                 // Orchestrator writes terminal COMPLETED itself (via
                 // sessionManager.finalizeCompleted). Nothing to do here.
@@ -443,6 +445,19 @@ sealed class JobRequest {
         override val sessionId: String,
         override val totalSteps: Int = 1
     ) : JobRequest()
+
+    /**
+     * Appends a dictated review-refinement follow-up turn to an existing
+     * conversation (ADR-0013). Runs on the serialized run-queue (ADR-0009) like
+     * a regenerate — off the main pipeline FSM — and surfaces its result via the
+     * non-terminal `onReviewTurnCompleted` callback (never the guarded terminal
+     * one). [followUpText] is the transcript of the refinement recording (S2).
+     */
+    data class ConversationContinuation(
+        override val sessionId: String,
+        val followUpText: String,
+        override val totalSteps: Int = 1
+    ) : JobRequest()
 }
 
 /**
@@ -471,6 +486,10 @@ interface PipelineRunner {
     // regenerate/postProcess) — a re-run needs only the session id today, but
     // routing the request keeps future fields off every implementation/fake.
     fun rerunTranscription(request: JobRequest.TranscriptionRerun)
+
+    // ADR-0013: dictated review-refinement follow-up turn. Same
+    // request-object seam as regenerate/postProcess.
+    fun continueConversation(request: JobRequest.ConversationContinuation, token: CancellationToken)
 }
 
 /** Production [PipelineRunner] that delegates to a real [PipelineOrchestrator]. */
@@ -507,4 +526,9 @@ class PipelineOrchestratorRunner(
 
     override fun rerunTranscription(request: JobRequest.TranscriptionRerun) =
         orchestrator.rerunTranscriptionBlocking(request.sessionId)
+
+    override fun continueConversation(
+        request: JobRequest.ConversationContinuation,
+        token: CancellationToken
+    ) = orchestrator.continueConversationBlocking(request.sessionId, request.followUpText, token)
 }

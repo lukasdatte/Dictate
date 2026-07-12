@@ -6,25 +6,30 @@ import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.AIProvider
+import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.ai.factory.RunnerFactory
 import net.devemperor.dictate.ai.prompt.PromptService
 import net.devemperor.dictate.ai.runner.CompletionOptions
 import net.devemperor.dictate.ai.runner.CompletionResult
 import net.devemperor.dictate.ai.runner.CompletionRunner
+import net.devemperor.dictate.ai.runner.ConversationRequest
+import net.devemperor.dictate.ai.runner.ConversationResult
 import net.devemperor.dictate.ai.runner.TranscriptionOptions
 import net.devemperor.dictate.ai.runner.TranscriptionResult
 import net.devemperor.dictate.ai.runner.TranscriptionRunner
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.database.entity.PromptEntity
+import net.devemperor.dictate.database.entity.ResponseFormatKind
 import net.devemperor.dictate.database.entity.SessionOrigin
 import net.devemperor.dictate.database.entity.SessionStatus
 import net.devemperor.dictate.database.entity.SessionType
+import net.devemperor.dictate.database.entity.StepType
 import net.devemperor.dictate.testutil.FakeSharedPreferences
 import org.junit.After
-import net.devemperor.dictate.ai.AIProviderException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,20 +38,13 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 /**
- * Queue-slot execution tests for the reprocess transport model (research
- * doc "reprocess-queue-editor" §2 + Gap-2 fallback): a history reprocess
- * with an *edited* slot queue must execute the slots **in order as a
- * sequential chain with each step persisted** — mirroring the fresh
- * pipeline's queued-prompt semantics.
+ * Consolidated-turn execution tests (ADR-0012). A reprocess with an edited slot
+ * queue now runs ONE `converse` call whose single user message lists all
+ * resolved instructions in order, persisted as ONE `CONVERSATION_TURN` step —
+ * replacing the pre-ADR-0012 per-prompt chain.
  *
- * Load-bearing regression: a **free-text slot** (no entity id) executes via
- * the exact `PromptService.buildQueuedPrompt` construction — pre-slot, the
- * `queuedPromptIds` transport could not represent it at all (F-110: the V1
- * fallback rejected free-text after entry).
- *
- * Harness: REAL `PipelineOrchestrator` + `PromptService` + Room, capturing
- * fake AI runners via the `open RunnerFactory` seam (K-1, same pattern as
- * [PipelineOrchestratorRegenerationTest]).
+ * Harness: REAL `PipelineOrchestrator` + `PromptService` + Room, capturing fake
+ * AI runners via the `open RunnerFactory` seam (K-1).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -98,8 +96,26 @@ class PipelineOrchestratorQueueExecutionTest {
         DictateDatabase.resetForTest(app)
     }
 
+    /** The single merged user message of the (only) converse call. */
+    private fun mergedUserMessage(): String {
+        assertEquals("expected exactly one conversation turn", 1, factory.converseCalls.size)
+        val messages = factory.converseCalls.single().messages
+        assertEquals(1, messages.size)
+        return messages.single().content
+    }
+
+    private fun assertInOrder(haystack: String, vararg needles: String) {
+        var prev = -1
+        for (n in needles) {
+            val idx = haystack.indexOf(n)
+            assertTrue("missing instruction: $n", idx >= 0)
+            assertTrue("out of order: $n", idx > prev)
+            prev = idx
+        }
+    }
+
     @Test
-    fun `edited slot queue executes sequentially - saved, free-text and deleted-saved slots all run in order`() {
+    fun `edited slot queue merges all resolved instructions into one ordered turn`() {
         val sid = createRecordingSession()
         db.promptDao().insert(
             PromptEntity(
@@ -111,45 +127,33 @@ class PipelineOrchestratorQueueExecutionTest {
         reprocess(
             sid,
             listOf(
-                // shape 1: ID-only saved prompt (live) — resolved from the DB
                 PromptQueueSlot.ofSavedPrompt(7),
-                // shape 3: free-text (the F-110 dead-end case)
                 PromptQueueSlot.ofFreeText("Translate to English"),
-                // shape 2: editor content whose saved prompt was deleted since
                 PromptQueueSlot.ofContent("Summarize in one line", 999),
-                // shape 1 with a deleted prompt — legacy skip semantics
+                // dead ID-only slot — skipped
                 PromptQueueSlot.ofSavedPrompt(888)
             )
         )
 
-        // 3 completions (the dead ID-only slot is skipped), chained in order.
-        assertEquals(3, factory.completionCalls.size)
-        val transcript = factory.transcriptText
-        val out = { i: Int -> "generated-output-$i" }
+        val merged = mergedUserMessage()
+        assertInOrder(merged, "Make it formal", "Translate to English", "Summarize in one line")
+        assertTrue("transcript is a data tag", merged.contains(factory.transcriptText))
 
-        assertPromptCall(0, promptService.buildQueuedPrompt("Make it formal", transcript))
-        assertPromptCall(1, promptService.buildQueuedPrompt("Translate to English", out(1)))
-        assertPromptCall(2, promptService.buildQueuedPrompt("Summarize in one line", out(2)))
-
-        // Gap-2: each step persisted, sequential chain (input = previous output).
+        // ONE merged step, not a per-prompt chain.
         val chain = db.processingStepDao().getCurrentChain(sid)
-        assertEquals(3, chain.size)
-        assertEquals(listOf(0, 1, 2), chain.map { it.chainIndex })
-        assertEquals(listOf(transcript, out(1), out(2)), chain.map { it.inputText })
-        assertEquals(listOf("Make it formal", "Translate to English", "Summarize in one line"),
-            chain.map { it.promptUsed })
-        // Entity linkage: live id kept, free-text null, deleted id kept as
-        // historical metadata (plain column, no FK).
-        assertEquals(listOf(7, null, 999), chain.map { it.promptEntityId })
+        assertEquals(1, chain.size)
+        assertEquals(StepType.CONVERSATION_TURN.name, chain[0].stepType)
+        assertEquals(0, chain[0].chainIndex)
+        assertEquals(ResponseFormatKind.JSON_SCHEMA.name, chain[0].responseFormat)
+        assertEquals("done", chain[0].assistantMessage)
 
         val session = db.sessionDao().getById(sid)!!
         assertEquals(SessionStatus.COMPLETED.name, session.status)
-        // The free-text/deleted-slot outputs survive as the session result.
-        assertEquals(out(3), sessionManager.getFinalOutput(sid))
+        assertEquals(factory.output(1), sessionManager.getFinalOutput(sid))
     }
 
     @Test
-    fun `saved prompt without requiresSelection still runs standalone (no pipeline text attached)`() {
+    fun `non-requiresSelection prompt still runs as a merged instruction`() {
         val sid = createRecordingSession()
         db.promptDao().insert(
             PromptEntity(
@@ -160,9 +164,8 @@ class PipelineOrchestratorQueueExecutionTest {
 
         reprocess(sid, listOf(PromptQueueSlot.ofSavedPrompt(5)))
 
-        // textForPrompt = null for non-selection prompts — legacy semantics.
-        assertPromptCall(0, promptService.buildQueuedPrompt("Write a short poem", null))
-        assertEquals(5, db.processingStepDao().getCurrentChain(sid).single().promptEntityId)
+        assertTrue(mergedUserMessage().contains("Write a short poem"))
+        assertEquals(StepType.CONVERSATION_TURN.name, db.processingStepDao().getCurrentChain(sid).single().stepType)
     }
 
     @Test
@@ -177,23 +180,14 @@ class PipelineOrchestratorQueueExecutionTest {
 
         reprocess(sid, listOf(PromptQueueSlot.ofContent("Edited in the queue editor", 7)))
 
-        assertPromptCall(
-            0,
-            promptService.buildQueuedPrompt("Edited in the queue editor", factory.transcriptText)
-        )
-        val step = db.processingStepDao().getCurrentChain(sid).single()
-        assertEquals("Edited in the queue editor", step.promptUsed)
-        assertEquals(7, step.promptEntityId)
+        val merged = mergedUserMessage()
+        assertTrue(merged.contains("Edited in the queue editor"))
+        assertTrue("stale db text must not leak", !merged.contains("CURRENT db text"))
     }
 
-    // ── Empty-vs-unset queue semantics (verification defect 1) ────────────
-
     @Test
-    fun `explicitly empty edited queue runs zero prompts even when the live keyboard queue is non-empty`() {
+    fun `explicitly empty edited queue runs zero turns even when the live keyboard queue is non-empty`() {
         val sid = createRecordingSession()
-        // The IME's live auto-apply queue lingers with a real saved prompt
-        // (F-003 documents exactly this state) — it must NOT leak into a
-        // history reprocess whose editor queue was explicitly emptied.
         db.promptDao().insert(
             PromptEntity(
                 id = 11, pos = 0, name = "Lingering", prompt = "Lingering keyboard prompt",
@@ -204,10 +198,8 @@ class PipelineOrchestratorQueueExecutionTest {
 
         reprocess(sid, emptyList())
 
-        assertEquals(
-            "explicitly empty queue must run transcription only",
-            0, factory.completionCalls.size
-        )
+        assertEquals("explicitly empty queue: no conversation turn", 0, factory.converseCalls.size)
+        assertEquals(0, db.processingStepDao().getCurrentChain(sid).size)
         assertEquals(SessionStatus.COMPLETED.name, db.sessionDao().getById(sid)!!.status)
         assertEquals(factory.transcriptText, sessionManager.getFinalOutput(sid))
     }
@@ -225,53 +217,63 @@ class PipelineOrchestratorQueueExecutionTest {
 
         reprocess(sid, /* slots (null = unset) */ null)
 
-        assertEquals(1, factory.completionCalls.size)
-        assertPromptCall(0, promptService.buildQueuedPrompt("Live keyboard prompt", factory.transcriptText))
+        assertTrue(mergedUserMessage().contains("Live keyboard prompt"))
     }
 
-    // ── Resume loop: provider-cancel mid-chain (N4 parity) ───────────────
+    @Test
+    fun `regenerate of a conversation turn writes a new version and replays the turn`() {
+        val sid = createRecordingSession()
+        db.promptDao().insert(
+            PromptEntity(
+                id = 7, pos = 0, name = "Formalize", prompt = "Make it formal",
+                requiresSelection = true, autoApply = false
+            )
+        )
+        reprocess(sid, listOf(PromptQueueSlot.ofSavedPrompt(7)))   // converse #1 -> output(1)
+        val userMsgBefore = db.conversationMessageDao().getBySession(sid)
+
+        orchestrator.regenerateStepBlocking(sid, 0)                // converse #2 -> output(2)
+
+        // new version at the same chain index
+        val versions = db.processingStepDao().getVersionsAtIndex(sid, 0)
+        assertEquals(2, versions.size)
+        val current = versions.first { it.isCurrent }
+        assertEquals(2, current.version)
+        assertEquals(factory.output(2), current.outputText)
+        assertEquals(factory.output(2), sessionManager.getFinalOutput(sid))
+
+        // conversation history (user + system rows) is unchanged by a regenerate
+        assertEquals(userMsgBefore.size, db.conversationMessageDao().getBySession(sid).size)
+
+        // the regenerate replayed turn 0's user message (no prior turns)
+        val replay = factory.converseCalls[1]
+        assertEquals(1, replay.messages.size)
+        assertTrue(replay.messages.single().content.contains("Make it formal"))
+    }
 
     @Test
-    fun `resume - provider-level cancel mid-chain finalises CANCELLED and stops the loop`() {
+    fun `resume - provider-level cancel finalises CANCELLED`() {
         db.promptDao().insert(
             PromptEntity(
                 id = 7, pos = 0, name = "First", prompt = "First instruction",
                 requiresSelection = true, autoApply = false
             )
         )
-        db.promptDao().insert(
-            PromptEntity(
-                id = 5, pos = 1, name = "Second", prompt = "Second instruction",
-                requiresSelection = true, autoApply = false
-            )
-        )
-        val sid = createRecordingSession(queuedPromptIds = "7,5")
+        val sid = createRecordingSession(queuedPromptIds = "7")
         sessionManager.addTranscriptionVersion(
             sid, factory.transcriptText, "test-transcribe", "OPENAI", durationMs = 10
         )
-        factory.cancelAtCompletionCall = 1
+        factory.cancelAtConverseCall = 1
 
-        // The N4 arm rethrows as CancellationException so the caller's
-        // cancel-handling (finalizeCancelled + JobExecutor's cancel path)
-        // engages — identical to the fresh-run loop.
         assertThrows(java.util.concurrent.CancellationException::class.java) {
             orchestrator.resumePipelineBlocking(sid)
         }
 
-        assertEquals(
-            "the loop must stop at the cancelled step, not march on to prompt 5",
-            1, factory.completionCalls.size
-        )
+        assertEquals(1, factory.converseCalls.size)
         assertEquals(SessionStatus.CANCELLED.name, db.sessionDao().getById(sid)!!.status)
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
-
-    private fun assertPromptCall(index: Int, expected: PromptService.PromptPair) {
-        val call = factory.completionCalls[index]
-        assertEquals(expected.userPrompt, call.prompt)
-        assertEquals(expected.systemPrompt, call.systemPrompt)
-    }
 
     private fun createRecordingSession(queuedPromptIds: String? = null): String {
         val id = "reproc-" + System.nanoTime()
@@ -280,8 +282,6 @@ class PipelineOrchestratorQueueExecutionTest {
             type = SessionType.RECORDING,
             targetApp = "com.example.app",
             language = "de",
-            // The fake transcription runner never opens the file — only the
-            // path must resolve (legacy audioFilePath bridge, repo == null).
             audioFilePath = File(app.cacheDir, "$id.m4a").absolutePath,
             audioDurationSeconds = 3L,
             parentId = null,
@@ -292,11 +292,6 @@ class PipelineOrchestratorQueueExecutionTest {
         return id
     }
 
-    /**
-     * History-reprocess run: reuse the session, slot queue from the editor.
-     * `slots = null` = unset (no explicit queue → live-queue fallback);
-     * an empty list = explicitly none.
-     */
     private fun reprocess(sid: String, slots: List<PromptQueueSlot>?) {
         orchestrator.runTranscriptionPipelineBlocking(
             PipelineOrchestrator.PipelineConfig(
@@ -313,19 +308,15 @@ class PipelineOrchestratorQueueExecutionTest {
     }
 
     /**
-     * Capturing AI layer (K-1): fake transcription + completion runners;
-     * completions numbered `generated-output-N` so chaining is assertable.
+     * Capturing AI layer (K-1): fake transcription + structured converse; outputs
+     * numbered `generated-output-N`. complete() is unused on the pipeline path.
      */
     private class CapturingRunnerFactory(sp: SharedPreferences) : RunnerFactory(sp) {
         val transcriptText = "raw transcript"
-        val completionCalls = mutableListOf<CompletionOptions>()
+        val converseCalls = mutableListOf<ConversationRequest>()
+        var cancelAtConverseCall: Int? = null
 
-        /**
-         * When set, the Nth completion call (1-based) throws a provider-level
-         * CANCELLED — emulates `JobExecutor.cancel()`'s interrupt landing in
-         * the HTTP layer mid-step (the N4 scenario).
-         */
-        var cancelAtCompletionCall: Int? = null
+        fun output(n: Int) = "generated-output-$n"
 
         override fun createTranscriptionRunner(): TranscriptionRunner =
             object : TranscriptionRunner {
@@ -339,29 +330,26 @@ class PipelineOrchestratorQueueExecutionTest {
 
         override fun createCompletionRunner(): CompletionRunner =
             object : CompletionRunner {
-                override fun complete(options: CompletionOptions): CompletionResult {
-                    completionCalls += options
-                    if (completionCalls.size == cancelAtCompletionCall) {
+                override fun complete(options: CompletionOptions): CompletionResult =
+                    throw UnsupportedOperationException("complete() is not used on the pipeline path")
+
+                override fun converse(request: ConversationRequest): ConversationResult {
+                    converseCalls += request
+                    if (converseCalls.size == cancelAtConverseCall) {
                         throw AIProviderException(
                             AIProviderException.ErrorType.CANCELLED,
-                            "cancelled mid-step"
+                            "cancelled mid-turn"
                         )
                     }
-                    return CompletionResult(
-                        text = "generated-output-${completionCalls.size}",
+                    return ConversationResult(
+                        message = "done",
+                        output = output(converseCalls.size),
                         promptTokens = 1,
                         completionTokens = 1,
-                        modelName = "test-model"
+                        modelName = "test-model",
+                        responseFormat = ResponseFormatKind.JSON_SCHEMA
                     )
                 }
-
-                // conv-3: this legacy queue test still exercises the single-shot
-                // complete() path; converse() is unused here (the pipeline
-                // migrates to it in conv-6).
-                override fun converse(
-                    request: net.devemperor.dictate.ai.runner.ConversationRequest
-                ): net.devemperor.dictate.ai.runner.ConversationResult =
-                    throw UnsupportedOperationException("converse not used in this test")
             }
 
         override fun getProvider(function: AIFunction): AIProvider = AIProvider.OPENAI

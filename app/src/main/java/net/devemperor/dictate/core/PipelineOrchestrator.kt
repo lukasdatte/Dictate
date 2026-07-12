@@ -5,7 +5,13 @@ import kotlinx.coroutines.runBlocking
 import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.AIProviderException
+import net.devemperor.dictate.ai.conversation.ConversationMessage
+import net.devemperor.dictate.ai.conversation.ConversationReconstructor
+import net.devemperor.dictate.ai.conversation.ConversationTurnBuilder
+import net.devemperor.dictate.ai.conversation.PostProcessingInputs
+import net.devemperor.dictate.ai.conversation.TurnInstruction
 import net.devemperor.dictate.ai.prompt.PromptService
+import net.devemperor.dictate.ai.prompt.PromptTemplates
 import net.devemperor.dictate.audio.AudioFileRepository
 import net.devemperor.dictate.audio.PipelineAudioResult
 import net.devemperor.dictate.database.DictateDatabase
@@ -13,6 +19,7 @@ import net.devemperor.dictate.database.dao.ProcessingStepDao
 import net.devemperor.dictate.database.dao.PromptDao
 import net.devemperor.dictate.database.dao.TranscriptionDao
 import net.devemperor.dictate.database.entity.InsertionSource
+import net.devemperor.dictate.database.entity.MessageRole
 import net.devemperor.dictate.database.entity.ProcessingStepEntity
 import net.devemperor.dictate.database.entity.PromptEntity
 import net.devemperor.dictate.database.entity.SessionOrigin
@@ -462,58 +469,41 @@ class PipelineOrchestrator @JvmOverloads constructor(
         // onPipelineCancelClicked routes to JobExecutor.cancel.
         sessionTracker.currentSessionId = sessionId
 
-        val existingSteps = sDao.getCurrentChain(sessionId)
+        // ADR-0012: post-processing is now ONE conversation turn, not a
+        // per-prompt chain. Resume is therefore all-or-nothing at the turn
+        // level: if the turn already succeeded there is nothing to do; otherwise
+        // (no turn yet, or an errored turn) run it. `executeConversationTurn`
+        // handles the errored-turn case by regenerating a new version.
+        sessionTracker.setTranscription(transcription.id)
 
-        // K1 Fix: The chain-index space and the queuedIds-index space are
-        // NOT the same. Auto-format (if enabled) occupies chainIndex 0; the
-        // queued prompts then start at chainIndex 1. When auto-format is
-        // disabled, queued prompts start at chainIndex 0.
-        //
-        // `lastSuccessIndex` below is in CHAIN-INDEX space (from
-        // processing_steps.chain_index). We need to translate it into
-        // QUEUED-IDS-INDEX space before handing it to `executeStepsFrom`,
-        // which iterates `queuedIds` by its list index.
-        val promptIndexOffset = computePromptIndexOffset(existingSteps)
+        val existingTurn = sDao.getCurrentChain(sessionId)
+            .lastOrNull { it.stepType == StepType.CONVERSATION_TURN.name }
+        val alreadyDone = existingTurn != null &&
+            StepStatus.valueOf(existingTurn.status) == StepStatus.SUCCESS
 
-        val lastSuccessChainIndex = existingSteps
-            .filter { StepStatus.valueOf(it.status) == StepStatus.SUCCESS }
-            .maxOfOrNull { it.chainIndex } ?: -1
-
-        // Translate chain-index to queuedIds-index. If the only successful
-        // step is auto-format (chainIndex 0, offset=1), queued prompts start
-        // at queuedIds[0] → resumeFromPromptIndex = 0.
-        val resumeFromPromptIndex =
-            (lastSuccessChainIndex - promptIndexOffset + 1).coerceAtLeast(0)
-
-        val inputText = if (lastSuccessChainIndex == -1) {
-            transcription.text
-        } else {
-            existingSteps.first { it.chainIndex == lastSuccessChainIndex }.outputText
-                ?: transcription.text
-        }
-
-        // W5 Fix: Invalidate any ERROR / non-current steps AT or AFTER the
-        // first failing chain-index, so the next `appendProcessingStep` call
-        // computes a correct `chain_index` (getMaxChainIndex filters by
-        // is_current=1, but an uncleared ERROR row at chainIndex N would
-        // stop the resume from re-trying that slot cleanly). We do this by
-        // demoting everything downstream of the last successful step.
-        sDao.invalidateDownstream(sessionId, lastSuccessChainIndex)
-
-        // Calculate total steps for UI restore — just the queued prompts still
-        // to run. The session row stores entity IDs only, so a resumed run
-        // executes ID-only slots (an edited slot queue lives solely in its
-        // original JobRequest — pre-existing resume semantics).
         val queuedSlotsAtStart = PromptQueueSlot.fromIds(
             sessionManager.getHistoricalQueuedPromptIds(sessionId)
         )
-        totalSteps = (queuedSlotsAtStart.size - resumeFromPromptIndex).coerceAtLeast(0)
+        totalSteps = if (alreadyDone) 0 else 1
         currentStepIndex = 0
         currentStepName = null
 
         try {
             cancellationToken.throwIfCancelled()
-            executeStepsFrom(sessionId, resumeFromPromptIndex, inputText, queuedSlotsAtStart, cancellationToken)
+            val finalText = if (alreadyDone) {
+                sessionManager.getFinalOutput(sessionId) ?: transcription.text
+            } else {
+                executeConversationTurn(
+                    transcription.text, session.language, sessionId,
+                    queuedSlotsAtStart, cancellationToken
+                )
+            }
+            val source = if (queuedSlotsAtStart.isNotEmpty()) {
+                InsertionSource.QUEUED_PROMPT
+            } else {
+                InsertionSource.TRANSCRIPTION
+            }
+            callback.onPipelineCompleted(finalText, source)
             sessionManager.finalizeCompleted(sessionId)
         } catch (cancelEx: java.util.concurrent.CancellationException) {
             sessionManager.finalizeCancelled(sessionId)
@@ -560,13 +550,6 @@ class PipelineOrchestrator @JvmOverloads constructor(
      * Robust against missing rows: we check presence, not success, so a
      * failed auto-format still shifts the queued-prompt range correctly.
      */
-    private fun computePromptIndexOffset(existingSteps: List<ProcessingStepEntity>): Int {
-        val hasAutoFormat = existingSteps.any {
-            it.chainIndex == 0 && it.stepType == StepType.AUTO_FORMAT.name
-        }
-        return if (hasAutoFormat) 1 else 0
-    }
-
     /**
      * Synchronous regenerate — regenerates a single processing step. Loads the
      * step's original input + prompt, re-runs the completion, and writes a new
@@ -624,6 +607,18 @@ class PipelineOrchestrator @JvmOverloads constructor(
             val displayName = stepType.name
             trackAndNotifyStepStarted(displayName)
 
+            // ADR-0012: a merged conversation turn regenerates by replaying the
+            // conversation up to (and including) this turn's user message, then
+            // writing a new version at the same index. `promptOverride`
+            // ("Other prompt") does not apply to a conversation turn in the
+            // foundation — that is a Paket 2 concern — so it is ignored here.
+            if (stepType == StepType.CONVERSATION_TURN) {
+                regenerateConversationTurnBlocking(
+                    sessionId, stepChainIndex, target, displayName, cancellationToken
+                )
+                return
+            }
+
             // "Other prompt" replaces the persisted prompt for the new version;
             // a plain regenerate re-uses the step's own prompt. The entity id
             // follows the effective prompt (a free-text override must NOT keep
@@ -675,6 +670,40 @@ class PipelineOrchestrator @JvmOverloads constructor(
             callback.onPipelineFinished()
             running = false
         }
+    }
+
+    /**
+     * Regenerate of a merged conversation turn (ADR-0012): replays the persisted
+     * conversation up to and including this turn's user message and writes a new
+     * version at the same `chain_index`. The conversation history (user rows) is
+     * unchanged. Called from [regenerateStepBlocking]; the caller's `finally`
+     * still fires `onPipelineFinished`.
+     */
+    private fun regenerateConversationTurnBlocking(
+        sessionId: String,
+        stepChainIndex: Int,
+        target: ProcessingStepEntity,
+        displayName: String,
+        cancellationToken: CancellationToken
+    ) {
+        val startTime = System.nanoTime()
+        val snapshot = sessionManager.loadConversation(sessionId)
+        // Conversation turns are contiguous by index, so turns[i] ↔ chainIndex i.
+        val priorTurns = snapshot.turns.take(stepChainIndex)
+        val trailingUser = snapshot.turns.getOrNull(stepChainIndex)?.userContent
+            ?: target.inputText
+        val messages = ConversationReconstructor.toApiMessages(priorTurns, trailingUser)
+
+        val result = aiOrchestrator.converse(messages, snapshot.systemContent)
+        cancellationToken.throwIfCancelled()
+        val durationMs = (System.nanoTime() - startTime) / 1_000_000
+        val provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name
+
+        sessionManager.regenerateConversationTurn(
+            sessionId, stepChainIndex, result, provider, durationMs
+        )
+        callback.onStepCompleted(displayName, durationMs)
+        sessionManager.finalizeCompleted(sessionId)
     }
 
     /**
@@ -1202,16 +1231,15 @@ class PipelineOrchestrator @JvmOverloads constructor(
         token.throwIfCancelled()
         if (cancelled) throw java.util.concurrent.CancellationException("cancelled flag set")
 
-        // Step 2: Auto-formatting (optional)
+        // Step 2+3: Consolidated post-processing conversation turn (ADR-0012).
+        // Auto-formatting rules + all queued instructions + the ambiguity task
+        // are merged into ONE model turn, persisted as ONE step. Live-prompt
+        // mode still runs auto-formatting but no queued instructions.
         token.throwIfCancelled()
-        text = executeAutoFormat(text, config.language, sid)
+        val slotsForTurn = if (config.livePrompt) emptyList() else queuedSlotsAtStart
+        text = executeConversationTurn(text, config.language, sid, slotsForTurn, token)
         token.throwIfCancelled()
         if (cancelled) throw java.util.concurrent.CancellationException("cancelled flag set")
-
-        // Step 3: Queued prompts (unless live-prompt mode)
-        if (!config.livePrompt && queuedSlotsAtStart.isNotEmpty()) {
-            text = executeQueuedPrompts(text, queuedSlotsAtStart, sid, token)
-        }
 
         // Step 4: Deliver result. The insertion source follows the queue
         // that actually ran — an explicitly-empty queue is a TRANSCRIPTION
@@ -1224,71 +1252,6 @@ class PipelineOrchestrator @JvmOverloads constructor(
         // Step 5: Resend + AutoSwitch
         if (config.showResendButton) callback.onShowResend()
         if (config.autoSwitchKeyboard) callback.onAutoSwitch()
-    }
-
-    /**
-     * Executes queued prompts starting at `fromIndex`. Used by [resumePipeline].
-     *
-     * Errors do NOT abort the chain — inputText stays at the last successful
-     * value. Cancellation is checked before and after each step.
-     */
-    private fun executeStepsFrom(
-        sessionId: String,
-        fromIndex: Int,
-        initialText: String,
-        slots: List<PromptQueueSlot>,
-        token: CancellationToken
-    ): String {
-        var currentText = initialText
-        if (fromIndex >= slots.size) {
-            callback.onPipelineCompleted(currentText, InsertionSource.QUEUED_PROMPT)
-            return currentText
-        }
-
-        for (i in fromIndex until slots.size) {
-            token.throwIfCancelled()
-            if (cancelled) throw java.util.concurrent.CancellationException("cancelled flag set")
-
-            val resolved = resolveQueueSlot(slots[i]) ?: continue
-            if (resolved.skipWhenTextEmpty && currentText.isEmpty()) continue
-
-            val textForPrompt = if (resolved.appliesToPipelineText) currentText else null
-            val pp = promptService.buildQueuedPrompt(resolved.instruction, textForPrompt)
-            val ctx = ProcessingContext(
-                StepType.QUEUED_PROMPT, resolved.instruction, resolved.promptEntityId
-            )
-            val displayName = resolved.displayName
-
-            trackAndNotifyStepStarted(displayName)
-            val startTime = System.nanoTime()
-            try {
-                currentText = executeCompletion(pp, displayName, ctx, sessionId, textForPrompt)
-                token.throwIfCancelled()
-                val durationMs = (System.nanoTime() - startTime) / 1_000_000
-                callback.onStepCompleted(displayName, durationMs)
-            } catch (cancelEx: java.util.concurrent.CancellationException) {
-                throw cancelEx
-            } catch (ie: InterruptedException) {
-                throw ie
-            } catch (e: Exception) {
-                // N4 parity with executeQueuedPrompts: a provider-level
-                // CANCELLED must abort the loop and finalise the session as
-                // CANCELLED (resumePipelineBlocking's CancellationException
-                // arm) — pre-fix it was swallowed as a step error and the
-                // loop marched on to the next prompt, ending in COMPLETED.
-                if (isCancellation(e)) {
-                    callback.onStepFailed(displayName)
-                    throw java.util.concurrent.CancellationException(
-                        "Provider reported cancellation"
-                    ).apply { initCause(e) }
-                }
-                val durationMs = (System.nanoTime() - startTime) / 1_000_000
-                handleCompletionError(e, ctx, pp, sessionId, displayName, durationMs, textForPrompt)
-                // Pipeline continues on error (same as the full-run path).
-            }
-        }
-        callback.onPipelineCompleted(currentText, InsertionSource.QUEUED_PROMPT)
-        return currentText
     }
 
     /**
@@ -1476,63 +1439,149 @@ class PipelineOrchestrator @JvmOverloads constructor(
     }
 
     /**
-     * Executes auto-formatting if enabled. Returns the (possibly formatted) text.
-     * Shows pipeline steps only when auto-formatting is actually enabled.
+     * The consolidated post-processing turn (ADR-0012). Merges auto-formatting
+     * rules, all resolved queued instructions and the ambiguity task into ONE
+     * `converse` call and persists the result as ONE `CONVERSATION_TURN` step.
+     *
+     * Returns the turn's `output`, or the unchanged [text] when there is no work
+     * (plain transcription) or on error (the transcript is still delivered while
+     * `onPipelineError`/`onShowResend` fire — same "best-effort text + error"
+     * behaviour the per-prompt chain had).
+     *
+     * On resume, an existing errored turn is re-run as a new version (regenerate)
+     * instead of appended, so the unique (chain_index, version) index holds.
      */
-    private fun executeAutoFormat(text: String, languageHint: String?, sid: String): String {
-        val showStep = autoFormattingService.isEnabled()
-        if (showStep) {
-            trackAndNotifyStepStarted("Formatierung")
-        }
+    private fun executeConversationTurn(
+        text: String,
+        languageHint: String?,
+        sid: String,
+        slots: List<PromptQueueSlot>,
+        token: CancellationToken
+    ): String {
+        val inputs = buildPostProcessingInputs(text, languageHint, slots)
+        if (!ConversationTurnBuilder.hasWork(inputs)) return text
 
+        val userMessage = ConversationTurnBuilder.buildFirstUserMessage(inputs)
+        trackAndNotifyStepStarted(CONVERSATION_STEP_NAME)
         val startTime = System.nanoTime()
-        val fr = autoFormattingService.formatIfEnabled(text, languageHint)
-        val durationMs = (System.nanoTime() - startTime) / 1_000_000
-
-        if (fr.completionResult != null) {
-            // SUCCESS: auto-format worked
+        try {
+            val result = aiOrchestrator.converse(
+                listOf(ConversationMessage(MessageRole.USER, userMessage)),
+                PromptTemplates.SYSTEM_PROMPT_CONVERSATION
+            )
+            token.throwIfCancelled()
+            val durationMs = (System.nanoTime() - startTime) / 1_000_000
             val provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name
-            val stepId = sessionManager.appendProcessingStep(
-                sid, StepType.AUTO_FORMAT, text, fr.text,
-                fr.completionResult.modelName, provider,
-                null, null,
-                null, sessionTracker.currentTranscriptionId,
-                null, fr.completionResult.promptTokens,
-                fr.completionResult.completionTokens,
-                durationMs, StepStatus.SUCCESS, null
+
+            val existingErrorTurn = stepDao?.getCurrentChain(sid)
+                ?.lastOrNull { it.stepType == StepType.CONVERSATION_TURN.name }
+                ?.takeIf { it.status == StepStatus.ERROR.name }
+
+            val stepId = if (existingErrorTurn != null) {
+                // Resume of a failed turn: bump the version at the same index and
+                // reuse the already-persisted user message row.
+                sessionManager.regenerateConversationTurn(
+                    sid, existingErrorTurn.chainIndex, result, provider, durationMs
+                )
+            } else {
+                sessionManager.appendConversationTurn(
+                    sessionId = sid,
+                    userMessageContent = userMessage,
+                    inputText = text,
+                    result = result,
+                    provider = provider,
+                    previousTranscriptionId = sessionTracker.currentTranscriptionId,
+                    durationMs = durationMs,
+                    systemPromptForFirstTurn = PromptTemplates.SYSTEM_PROMPT_CONVERSATION
+                )
+            }
+
+            sessionManager.logCompletion(
+                StepType.CONVERSATION_TURN.name, sid,
+                stepId, null,
+                PromptTemplates.SYSTEM_PROMPT_CONVERSATION, userMessage,
+                true, null
             )
             sessionTracker.setStep(stepId)
-
-            sessionManager.logCompletion(
-                "AUTO_FORMAT", sid,
-                stepId, null, null, null, true, null
-            )
-
-            if (showStep) callback.onStepCompleted("Formatierung", durationMs)
-
-        } else if (fr.error != null) {
-            // ERROR: auto-format failed - persist error step for audit trail
-            val provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name
-            val model = aiOrchestrator.getModelName(AIFunction.COMPLETION)
-            sessionManager.appendProcessingStep(
-                sid, StepType.AUTO_FORMAT, text, null,
-                model, provider, null, null,
-                null, sessionTracker.currentTranscriptionId,
-                null, 0, 0, durationMs,
-                StepStatus.ERROR, fr.error.message
-            )
-            // No setStep() - output stays at the transcription
-
-            sessionManager.logCompletion(
-                "AUTO_FORMAT", sid,
-                null, null, null, null, false, fr.error.message
-            )
-
-            if (showStep) callback.onStepFailed("Formatierung")
+            callback.onStepCompleted(CONVERSATION_STEP_NAME, durationMs)
+            return result.output
+        } catch (cancelEx: java.util.concurrent.CancellationException) {
+            throw cancelEx
+        } catch (ie: InterruptedException) {
+            throw ie
+        } catch (e: Exception) {
+            if (isCancellation(e)) {
+                callback.onStepFailed(CONVERSATION_STEP_NAME)
+                throw java.util.concurrent.CancellationException(
+                    "Provider reported cancellation"
+                ).apply { initCause(e) }
+            }
+            val durationMs = (System.nanoTime() - startTime) / 1_000_000
+            handleConversationTurnError(e, userMessage, text, sid, durationMs)
+            // Deliver the transcript as best-effort text; error already surfaced.
+            return text
         }
-        // else: disabled - no step, no log
+    }
 
-        return fr.text
+    /**
+     * Resolves the platform state (auto-format enable, queue slots, language)
+     * into the Android-free [PostProcessingInputs] for the builder.
+     */
+    private fun buildPostProcessingInputs(
+        text: String,
+        languageHint: String?,
+        slots: List<PromptQueueSlot>
+    ): PostProcessingInputs {
+        val instructions = slots.mapNotNull { slot ->
+            val resolved = resolveQueueSlot(slot) ?: return@mapNotNull null
+            if (resolved.skipWhenTextEmpty && text.isEmpty()) return@mapNotNull null
+            TurnInstruction(resolved.instruction, resolved.appliesToPipelineText)
+        }
+        return PostProcessingInputs(
+            transcript = text,
+            languageHint = languageHint,
+            autoFormatEnabled = autoFormattingService.isEnabled(),
+            instructions = instructions
+        )
+    }
+
+    /**
+     * Persists a failed conversation turn (ERROR step + user row) and surfaces
+     * the error + resend, mirroring the per-prompt [handleCompletionError].
+     */
+    private fun handleConversationTurnError(
+        e: Exception,
+        userMessage: String,
+        inputText: String,
+        sid: String,
+        durationMs: Long
+    ) {
+        callback.onStepFailed(CONVERSATION_STEP_NAME)
+        val provider = aiOrchestrator.getProvider(AIFunction.COMPLETION).name
+        val model = aiOrchestrator.getModelName(AIFunction.COMPLETION)
+        sessionManager.appendConversationTurnError(
+            sessionId = sid,
+            userMessageContent = userMessage,
+            inputText = inputText,
+            model = model,
+            provider = provider,
+            previousTranscriptionId = sessionTracker.currentTranscriptionId,
+            errorMessage = e.message,
+            durationMs = durationMs,
+            systemPromptForFirstTurn = PromptTemplates.SYSTEM_PROMPT_CONVERSATION
+        )
+        sessionManager.logCompletion(
+            StepType.CONVERSATION_TURN.name, sid,
+            null, null,
+            PromptTemplates.SYSTEM_PROMPT_CONVERSATION, userMessage,
+            false, e.message
+        )
+        if (e is AIProviderException) {
+            callback.onPipelineError(e.toInfoKey(), true, e.provider?.name)
+        } else {
+            callback.onPipelineError("internet_error", true, null)
+        }
+        callback.onShowResend()
     }
 
     /**
@@ -1602,65 +1651,6 @@ class PipelineOrchestrator @JvmOverloads constructor(
             )
             else -> null
         }
-    }
-
-    /**
-     * Executes queued prompt slots ITERATIVELY (no recursion).
-     * Each prompt builds on the previous result. Errors do NOT abort the chain -
-     * currentText stays at the last successful value. The cancellation token is
-     * checked before each prompt and after each API call returns.
-     */
-    private fun executeQueuedPrompts(
-        text: String,
-        slots: List<PromptQueueSlot>,
-        sid: String,
-        token: CancellationToken
-    ): String {
-        var currentText = text
-        for (slot in slots) {
-            token.throwIfCancelled()
-            if (cancelled) break
-
-            val resolved = resolveQueueSlot(slot) ?: continue
-
-            // Skip prompts that require selection when text is empty
-            if (resolved.skipWhenTextEmpty && currentText.isEmpty()) continue
-
-            val textForPrompt = if (resolved.appliesToPipelineText) currentText else null
-            val pp = promptService.buildQueuedPrompt(resolved.instruction, textForPrompt)
-            val ctx = ProcessingContext(
-                StepType.QUEUED_PROMPT, resolved.instruction, resolved.promptEntityId
-            )
-            val displayName = resolved.displayName
-
-            trackAndNotifyStepStarted(displayName)
-            val startTime = System.nanoTime()
-            try {
-                currentText = executeCompletion(pp, displayName, ctx, sid, textForPrompt)
-                token.throwIfCancelled()
-                val durationMs = (System.nanoTime() - startTime) / 1_000_000
-                callback.onStepCompleted(displayName, durationMs)
-            } catch (cancelEx: java.util.concurrent.CancellationException) {
-                throw cancelEx
-            } catch (ie: InterruptedException) {
-                throw ie
-            } catch (e: Exception) {
-                // N4 Fix: If the provider layer reported CANCELLED, rethrow
-                // as CancellationException so the outer catch-block in
-                // runTranscriptionPipeline finalises as CANCELLED (not
-                // FAILED) and the loop does not continue.
-                if (isCancellation(e)) {
-                    callback.onStepFailed(displayName)
-                    throw java.util.concurrent.CancellationException(
-                        "Provider reported cancellation"
-                    ).apply { initCause(e) }
-                }
-                val durationMs = (System.nanoTime() - startTime) / 1_000_000
-                handleCompletionError(e, ctx, pp, sid, displayName, durationMs, textForPrompt)
-                // Pipeline does NOT abort - next prompt gets currentText
-            }
-        }
-        return currentText
     }
 
     /**
@@ -1857,6 +1847,9 @@ class PipelineOrchestrator @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "PipelineOrchestrator"
+
+        /** UI step label for the consolidated post-processing turn (ADR-0012). */
+        private const val CONVERSATION_STEP_NAME = "Verarbeitung"
 
         /**
          * K2 + N4: Unified cancellation predicate. Any throwable that represents

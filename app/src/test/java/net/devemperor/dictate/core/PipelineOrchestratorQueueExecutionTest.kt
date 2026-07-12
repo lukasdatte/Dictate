@@ -28,6 +28,7 @@ import net.devemperor.dictate.database.entity.StepType
 import net.devemperor.dictate.testutil.FakeSharedPreferences
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -331,6 +332,24 @@ class PipelineOrchestratorQueueExecutionTest {
 
         assertEquals(1, factory.converseCalls.size)
         assertEquals(SessionStatus.CANCELLED.name, db.sessionDao().getById(sid)!!.status)
+    }
+
+    @Test
+    fun `reprocess (ALWAYS_INSERT, forceTurn false) omits the ambiguity task from the merged turn (K9)`() {
+        val sid = createRecordingSession()
+        db.promptDao().insert(
+            PromptEntity(id = 7, pos = 0, name = "F", prompt = "Make it formal", requiresSelection = true, autoApply = false)
+        )
+        // A history reprocess never forces a turn (ambiguity is a live-keyboard
+        // concern); the verdict would be ignored, so the task must not be sent.
+        reprocess(sid, listOf(PromptQueueSlot.ofSavedPrompt(7)))
+
+        val merged = mergedUserMessage()
+        assertTrue("real instruction still present", merged.contains("Make it formal"))
+        assertFalse(
+            "ambiguity task must be omitted when the verdict is ignored",
+            merged.contains(net.devemperor.dictate.ai.prompt.PromptTemplates.AMBIGUITY_TASK),
+        )
     }
 
     @Test

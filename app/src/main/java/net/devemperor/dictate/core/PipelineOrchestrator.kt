@@ -1716,7 +1716,13 @@ class PipelineOrchestrator @JvmOverloads constructor(
             languageHint = languageHint,
             autoFormatEnabled = autoFormattingService.isEnabled(),
             instructions = instructions,
-            forceTurn = forceTurn
+            forceTurn = forceTurn,
+            // K9: only ask for the ambiguity verdict when the mode actually acts
+            // on it. `forceTurn` is exactly "AUTO/ALWAYS_REVIEW and not a
+            // transcription-only refinement carrier"; ALWAYS_INSERT (forceTurn
+            // false) inserts regardless, so the task + needsClarification field
+            // would just burn tokens on a verdict that is ignored (ADR-0013).
+            includeAmbiguityTask = forceTurn
         )
     }
 

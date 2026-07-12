@@ -120,6 +120,14 @@ data class DictateUiState(
      * `open`, `LayoutCatalog.forKeyboard` selects `KEYBOARD_REVIEW_PANEL`.
      */
     val reviewPanel: ReviewPanelState = ReviewPanelState(),
+
+    /**
+     * History-panel sub-state (ADR-0014). Owned by `HistoryPanelModule`. When
+     * `open`, `LayoutCatalog.forKeyboard` selects `KEYBOARD_HISTORY_PANEL`. Only
+     * the open flag lives here — the paged list belongs to the IME (like the
+     * `InputConnection`), not the immutable snapshot.
+     */
+    val historyPanel: HistoryPanelState = HistoryPanelState(),
 ) {
     companion object {
         /**
@@ -145,6 +153,7 @@ data class DictateUiState(
             keyboardInput = KeyboardInputState(),
             infoHints = InfoHintState(),
             reviewPanel = ReviewPanelState(),
+            historyPanel = HistoryPanelState(),
         )
     }
 }
@@ -907,6 +916,21 @@ data class ReviewPanelState(
     val output: String = "",
     val message: String? = null,
     val refining: Boolean = false,
+)
+
+/**
+ * In-keyboard history-panel sub-state (ADR-0014). Owned by `HistoryPanelModule`.
+ *
+ * Deliberately minimal: only whether the panel is open. The list data is a
+ * Paging stream owned by the IME (started/stopped with the input view), not part
+ * of the immutable state snapshot — but `open` must live here so
+ * `LayoutCatalog.forKeyboard` can swap the button grid for the panel. The empty
+ * constructor is the closed sentinel.
+ *
+ * @property open whether the history panel is showing.
+ */
+data class HistoryPanelState(
+    val open: Boolean = false,
 )
 
 /**

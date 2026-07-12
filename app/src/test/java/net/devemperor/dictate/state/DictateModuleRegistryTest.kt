@@ -60,6 +60,7 @@ class DictateModuleRegistryTest {
             ModuleId.InfoHint,
             ModuleId.Interruption,
             ModuleId.ReviewPanel,
+            ModuleId.HistoryPanel,
         )
         assertEquals(expectedIds, DictateModuleRegistry.Default.all.map { it.id })
     }

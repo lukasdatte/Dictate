@@ -51,4 +51,7 @@ sealed interface ModuleId {
 
     /** ADR-0013 — in-keyboard review panel for ambiguous post-processing. */
     data object ReviewPanel : ModuleId
+
+    /** ADR-0014 — in-keyboard history panel (open/close axis). */
+    data object HistoryPanel : ModuleId
 }

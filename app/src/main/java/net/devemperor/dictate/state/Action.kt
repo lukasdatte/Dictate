@@ -889,6 +889,27 @@ sealed class Action {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // History-panel-axis actions (HistoryPanelModule, ADR-0014)
+    // ════════════════════════════════════════════════════════════════
+    sealed class HistoryPanelAction : Action() {
+        /** Open the in-keyboard history panel. */
+        data object Open : HistoryPanelAction()
+
+        /** Close the panel (toggle, back-affordance, recording-start, teardown). */
+        data object Close : HistoryPanelAction()
+
+        /**
+         * A pending row was inserted from the panel and is NOT tracked in the
+         * `pendingSessions` axis (an older uninserted session). Marks it
+         * acknowledged via the shared `markInserted` channel so recovery does
+         * not re-surface it. Rows that ARE in the axis go through
+         * `PendingSessionsAction.AcceptAndInsert` instead (removes the part +
+         * acknowledges). The host commit itself is an IME side-channel.
+         */
+        data class AcknowledgeInsert(val sessionId: String) : HistoryPanelAction()
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // Language-axis actions (LanguageModule)
     // ════════════════════════════════════════════════════════════════
 

@@ -159,6 +159,10 @@ open class DictateModuleRegistry(
             // post-processing (after PendingSessions: its teardown cascade
             // emits a PendingSessionsAction).
             ReviewPanelModule(),
+            // ADR-0014 — in-keyboard history panel (after Recording/Widget:
+            // its auto-close cascade observes the recording + imeViewVisible
+            // edges).
+            HistoryPanelModule,
         ),
     )
 }

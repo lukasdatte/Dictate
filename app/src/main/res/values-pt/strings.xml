@@ -416,6 +416,7 @@
     <string name="dictate_history_play">Reproduzir</string>
     <string name="dictate_history_post_process">Pós-processar</string>
     <string name="dictate_history_queued_prompt">Prompt</string>
+    <string name="dictate_history_conversation">Processamento</string>
     <string name="dictate_history_regenerate">Regenerar</string>
     <string name="dictate_history_rewording">Reformulação</string>
     <string name="dictate_history_search_hint">Pesquisar sessões…</string>

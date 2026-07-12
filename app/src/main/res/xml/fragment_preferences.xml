@@ -29,7 +29,6 @@
             android:defaultValue="ALWAYS_INSERT"
             app:entries="@array/dictate_ambiguity_mode_entries"
             app:entryValues="@array/dictate_ambiguity_mode_values"
-            app:dependency="net.devemperor.dictate.rewording_enabled"
             app:iconSpaceReserved="false"/>
 
         <androidx.preference.Preference

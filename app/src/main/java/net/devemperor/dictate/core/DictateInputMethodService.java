@@ -4775,6 +4775,20 @@ public class DictateInputMethodService extends InputMethodService
                             "ReviewPanel.Show");
                 }
             } else {
+                // RESERVED SEAM — Auto-send-to-Windows dispatch (M1/M4, later
+                // Windows package) docks HERE, at the terminal delivery point of
+                // a completed pipeline. When the "auto-send to Windows" mode is
+                // active this branch routes the final text to the Windows sink
+                // instead of (or before) the host commit below; on an
+                // unreachable PC it reuses the existing DeferredToPending →
+                // committed=false → pending-part fallback (see the
+                // `insertionService().insert(...)` result handling further down),
+                // which already satisfies the M4 "fallback auf Pending-Part"
+                // contract. The complementary per-row "send to Windows" seam is
+                // the GONE `item_kbd_history_send_btn` + `onSendToWindows` hook
+                // (ADR-0014). Kept as a documented anchor so the later package
+                // does not have to rediscover the dispatch point.
+                //
                 // Post-cutover hotfix #AE-DEEP — commit text BEFORE the
                 // PipelineDone dispatch. `commitTextToInputConnection`
                 // calls `isAutoEnterActive()`, which (post-#AE) reads from

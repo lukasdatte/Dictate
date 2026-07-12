@@ -240,6 +240,9 @@ conversation (ADR-0012) and is unchanged.
     axis and its teardown cascade follow these)
   - ADR-0004 — LayoutCatalog + MotionLayout (the `KEYBOARD_REVIEW_PANEL` mode
     follows the reprocess-staging precedent)
+  - ADR-0014 — In-Keyboard History Panel (extends this: follows the panel-axis +
+    LayoutMode precedent, finally tags the `REVIEW_REFINEMENT` refinement carrier
+    this ADR introduced, and yields to the review panel in `forKeyboard`)
 - **Plan:** `tmp/plan-paket2-review-modi.md` (Paket 2 — implementation plan)
 - Implementation:
   - `preferences/AmbiguityMode.kt` — the tri-state pref
@@ -291,3 +294,21 @@ through a non-terminal callback respects the once-per-session terminal guard.
 Persisting `final_output_text` at the SessionManager (the denormalized-cache
 owner) is the smallest change that makes crash-resilience real, and it closes a
 latent ADR-0011 gap for free.
+
+### 2026-07-12 — Extended by ADR-0014 (reciprocal cross-reference)
+
+**Trigger:** ADR-0014 (In-Keyboard History Panel) built on this ADR's panel-axis +
+LayoutMode precedent and closed a gap it left.
+
+**Before:** The `## References` block did not point forward to the ADR that reuses
+the panel-axis pattern, and this ADR's `REVIEW_REFINEMENT` refinement carrier
+(named in Decision §6) was never actually persisted — `resolveFresh` hard-coded
+`SessionOrigin.KEYBOARD`, so the S2 carriers were indistinguishable in history.
+
+**After:** Added an ADR-0014 cross-reference (bidirectional). No decision in this
+ADR changed — ADR-0014 supplies the missing `SessionOrigin.REVIEW_REFINEMENT`
+value + the `FreshConfig.origin` threading that makes the tagging this ADR assumed
+real, and hides the carriers from its new history panel.
+
+**Reasoning:** The bidirectional ADR-link rule, plus honest acknowledgement that
+the carrier tagging described here was completed only in ADR-0014.

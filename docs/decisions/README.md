@@ -79,6 +79,7 @@ editing rules".
 | [0011](0011-pipeline-headless-completion-fallback.md) | Pipeline — Service-Side Headless Completion Fallback | service, state | Accepted | 2026-07-12 |
 | [0012](0012-pipeline-post-processing-conversation.md) | Pipeline — Post-Processing as a Persisted Multi-Turn Conversation | service, state, ai · *Project-Wide* | Accepted | 2026-07-12 |
 | [0013](0013-review-panel-and-ambiguity-modes.md) | Ambiguity Modes and the In-Keyboard Review Panel | state, ai, ui-rendering, service · *Project-Wide* | Accepted | 2026-07-12 |
+| [0014](0014-in-keyboard-history-panel.md) | In-Keyboard History Panel — a Paged List Surface in the IME | state, ui-rendering, service · *Project-Wide* | Accepted | 2026-07-12 |
 
 ## Relationship graph
 

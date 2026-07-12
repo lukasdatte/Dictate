@@ -233,6 +233,9 @@ be unified onto `converse` later if a need arises.
     deferred insertion + `nextAfterTerminal` drain; unchanged by this ADR)
   - ADR-0011 — Service-Side Headless Completion Fallback (`getFinalOutput` text
     contract + pending path; unchanged by this ADR)
+  - ADR-0013 — Ambiguity Modes and the In-Keyboard Review Panel (extends this
+    foundation: the `message` field + persisted conversation this ADR exposed
+    become the review verdict + dictated-refinement dialog)
 - **Database pattern:** `docs/DATABASE-PATTERNS.md` §"Double-Enum Pattern"
   (`role`, `response_format`, retrofitted `step_type`)
 - Implementation:
@@ -276,3 +279,17 @@ Design B (reconstruct assistant turns from steps, no duplicated cache) is chosen
 over a full message log for serviceability; the full-`{message, output}` replay
 gives the dialog its referent; the table recreate is chosen over `ADD COLUMN` to
 also discharge the `step_type` debt, proven safe by git history.
+
+### 2026-07-12 — Extended by ADR-0013 (reciprocal cross-reference)
+
+**Trigger:** ADR-0013 (Ambiguity Modes + Review Panel) built on this foundation.
+
+**Before:** The `## References` block did not point forward to the ADR that
+consumes the `message` field + persisted conversation.
+
+**After:** Added an ADR-0013 cross-reference (bidirectional). No decision in this
+ADR changed — the foundation's contracts (merged step, `{message, output}` wire
+format, `getFinalOutput`) are untouched by ADR-0013.
+
+**Reasoning:** The bidirectional ADR-link rule — a reader of either ADR should be
+able to navigate to the other.

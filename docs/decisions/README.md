@@ -78,6 +78,7 @@ editing rules".
 | [0010](0010-ui-icon-tint-theme-attrs.md) | UI — Icon Color via Theme Attributes at the Usage Site | ui-rendering · *Project-Wide* | Accepted | 2026-07-02 |
 | [0011](0011-pipeline-headless-completion-fallback.md) | Pipeline — Service-Side Headless Completion Fallback | service, state | Accepted | 2026-07-12 |
 | [0012](0012-pipeline-post-processing-conversation.md) | Pipeline — Post-Processing as a Persisted Multi-Turn Conversation | service, state, ai · *Project-Wide* | Accepted | 2026-07-12 |
+| [0013](0013-review-panel-and-ambiguity-modes.md) | Ambiguity Modes and the In-Keyboard Review Panel | state, ai, ui-rendering, service · *Project-Wide* | Accepted | 2026-07-12 |
 
 ## Relationship graph
 

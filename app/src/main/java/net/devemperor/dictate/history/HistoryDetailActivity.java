@@ -538,6 +538,11 @@ public class HistoryDetailActivity extends AppCompatActivity
                         icon = "\uD83D\uDD04"; // arrows
                         typeName = getString(R.string.dictate_history_queued_prompt);
                         break;
+                    case CONVERSATION_TURN:
+                        // ADR-0012: the merged auto-format + queued-prompts turn.
+                        icon = "\uD83D\uDCAC"; // speech balloon
+                        typeName = getString(R.string.dictate_history_conversation);
+                        break;
                     default:
                         icon = "\u2753";
                         typeName = step.getStepType();

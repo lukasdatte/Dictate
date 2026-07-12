@@ -434,6 +434,7 @@
     <string name="dictate_history_play">Abspielen</string>
     <string name="dictate_history_post_process">Nachbearbeiten</string>
     <string name="dictate_history_queued_prompt">Prompt</string>
+    <string name="dictate_history_conversation">Verarbeitung</string>
     <string name="dictate_history_regenerate">Neu generieren</string>
     <string name="dictate_history_rewording">Umformulierung</string>
     <string name="dictate_history_search_hint">Sitzungen durchsuchen…</string>

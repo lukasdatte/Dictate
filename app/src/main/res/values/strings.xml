@@ -358,6 +358,7 @@
     <string name="dictate_history_auto_format">Auto-format</string>
     <string name="dictate_history_rewording">Rewording</string>
     <string name="dictate_history_queued_prompt">Prompt</string>
+    <string name="dictate_history_conversation">Processing</string>
     <string name="dictate_history_input">Input</string>
     <string name="dictate_history_final_output">Final output</string>
     <string name="dictate_history_source_session">Source session</string>

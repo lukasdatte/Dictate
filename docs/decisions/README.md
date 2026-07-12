@@ -77,6 +77,7 @@ editing rules".
 | [0009](0009-pipeline-run-queue-serialized-concurrency.md) | Pipeline — Ordered Run-Queue with Serialized Execution | state, service | Accepted | 2026-07-02 |
 | [0010](0010-ui-icon-tint-theme-attrs.md) | UI — Icon Color via Theme Attributes at the Usage Site | ui-rendering · *Project-Wide* | Accepted | 2026-07-02 |
 | [0011](0011-pipeline-headless-completion-fallback.md) | Pipeline — Service-Side Headless Completion Fallback | service, state | Accepted | 2026-07-12 |
+| [0012](0012-pipeline-post-processing-conversation.md) | Pipeline — Post-Processing as a Persisted Multi-Turn Conversation | service, state, ai · *Project-Wide* | Accepted | 2026-07-12 |
 
 ## Relationship graph
 

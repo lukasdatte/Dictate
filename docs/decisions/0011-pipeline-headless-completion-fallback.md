@@ -240,6 +240,8 @@ or a headless dispatch.
   - ADR-0003 — Service Foreground Pipeline Architecture (FGS host; pipeline is IME-independent)
   - ADR-0009 — Ordered Run-Queue with Serialized Execution (`committed=false`
     deferred insertion + `nextAfterTerminal` queue drain)
+  - ADR-0012 — Post-Processing Conversation (relies on this ADR's `getFinalOutput`
+    text contract + `committed=false` pending path, both left unchanged)
 - Implementation:
   - `core/PipelineTerminalDispatchGuard.kt` — the once-guard
   - `core/PipelineCallbackBridge.kt` — headless terminal sink + guarded delivery

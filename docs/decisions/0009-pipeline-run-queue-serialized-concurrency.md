@@ -204,7 +204,7 @@ chain, as today during a single run).
 ## References
 
 - **Related Spec:** [`docs/research/2026-07-02 - concurrent-recording-deferred-insertion.md`](../research/2026-07-02%20-%20concurrent-recording-deferred-insertion.md) — the feature spec this ADR anchors (bidirectional).
-- **Related ADRs:** ADR-0001 (module/orchestrator pattern — PipelineModule host), ADR-0002 (cascade semantics at the chain-end boundary), ADR-0003 (FGS lifecycle; recovery philosophy the failure modes lean on), ADR-0006 (info-bar surfacing of pending parts + cancellations), ADR-0008 (widget axes; W3 auto-open keyed on `pipeline !is Idle`).
+- **Related ADRs:** ADR-0001 (module/orchestrator pattern — PipelineModule host), ADR-0002 (cascade semantics at the chain-end boundary), ADR-0003 (FGS lifecycle; recovery philosophy the failure modes lean on), ADR-0006 (info-bar surfacing of pending parts + cancellations), ADR-0008 (widget axes; W3 auto-open keyed on `pipeline !is Idle`), ADR-0012 (post-processing conversation — runs through this queue's `committed=false` + `nextAfterTerminal` machinery unchanged).
 - **Implementation pointers:** `state/modules/PipelineModule.kt` (FSM), `core/JobExecutor.kt` + `core/ActiveJobRegistry.kt` (execution layer), `core/ImePipelineConfigResolver.kt` (sessionId-keyed config snapshots).
 
 ## Decision History

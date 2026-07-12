@@ -280,3 +280,41 @@ reconciliation would double-dispatch. The persistence-order guarantee
 (callback fires after the step/transcription rows are persisted, before
 `finalizeCompleted` on the same thread) means `getFinalOutput` already returns
 the correct text at callback time, so no terminal-status wait is needed.
+
+### 2026-07-12 — Decision 2 landed (bind-reconciliation)
+
+**Trigger:** Implementation of Decision §4 (the covering safety net named in
+the initial proposal). The headless fallback closes only the "no delegate
+bound when the terminal callback fires" window; the durable net for every
+*residual* terminal-drop window (e.g. delegate delivered but the IME
+main-handler runnable lost without process death) was still owed.
+
+**Before:** Only two terminal producers existed (delegate-delivery + headless
+fallback). A terminal callback that was delivered to the delegate but then lost
+before it drove the FSM left `state.pipeline` stuck non-Idle for the rest of
+the process; the guard was already consumed, so neither existing producer could
+re-fire, and the only recovery was the next-process `PipelineRecovery` DB
+replay.
+
+**After:** New `state/PipelineBindReconciliation.kt`. On every IME bind
+(`registerPipelineCallback(callback != null)` → `serviceScope.launch { reconcile() }`)
+it reads the in-flight sessionId off `store.snapshot.pipeline`
+(`Preparing`/`Running` only — `ReprocessStaging` is the expected resting state
+of a completed session being re-edited and is skipped; `Idle` no-ops), loads
+the session row on the IO context, and replays a terminal DB status into the
+matching action through the SAME `PipelineTerminalDispatchGuard`:
+`COMPLETED → PipelineDone(committed=false)` (text via `getFinalOutput`),
+`FAILED → PipelineFailed(reason)`, `CANCELLED → CancelPipeline`. A non-terminal
+row is a strict no-op — reconciliation never preempts a live run.
+
+**Reasoning:** Reusing the shared guard makes bind-reconciliation the third
+mutually-exclusive terminal producer, so it can never double-fire against
+delegate-delivery or the headless sink. It heals the in-memory FSM per-bind and
+is complementary to `PipelineRecovery` (once-per-process DB healing +
+pendingSessions merge): both are idempotent — `PendingSessionsAction.AddOne`
+dedups by sessionId and the guard dedups terminal dispatch — so they are safe in
+any interleaving, including a reconcile that races a not-yet-finished recovery.
+The `CancelPipeline` arm's `Effect.CancelPipelineJob` is a safe no-op on an
+already-finished job (`JobExecutor.cancel` only flips a null-safe cancellation
+token / thread interrupt), and its `Effect.NotifyCancellationHint` is acceptable
+late-bind UX.

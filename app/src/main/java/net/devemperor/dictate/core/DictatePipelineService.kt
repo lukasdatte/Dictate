@@ -46,6 +46,7 @@ import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.state.PipelineOrphanCleaner
 import net.devemperor.dictate.state.PipelinePrefMirror
+import net.devemperor.dictate.state.PipelineBindReconciliation
 import net.devemperor.dictate.state.PipelineRecovery
 import net.devemperor.dictate.state.PipelineServiceStubSubsystems
 import net.devemperor.dictate.state.PipelineUiState
@@ -160,6 +161,11 @@ class DictatePipelineService : Service() {
     // bridge's delegate-delivery + headless fallback and (Decision 2) the
     // upcoming bind-reconciliation. One instance per service process.
     private val pipelineTerminalGuardImpl = PipelineTerminalDispatchGuard()
+    // ADR-0011 Decision 2 — per-bind FSM-healing safety net. Shares the
+    // terminal guard above so it can never double-dispatch against the
+    // bridge's delegate-delivery or headless fallback. Wired after the
+    // orchestrator exists (it emits actions); fired on every IME bind.
+    private lateinit var pipelineBindReconciliationImpl: PipelineBindReconciliation
     private lateinit var recordingRepositoryImpl: RecordingRepository
 
     // ── C8 — Subsystem adapters (production-quality) ───────────────────
@@ -826,6 +832,26 @@ class DictatePipelineService : Service() {
                     Action.PipelineAction.PipelineFailed(sessionId, reason),
                 )
             },
+        )
+
+        // ──────────────────────────────────────────────────────────────
+        // ADR-0011 Decision 2 — bind-reconciliation safety net.
+        //
+        // Covers every residual terminal-drop window the headless fallback
+        // above cannot (e.g. delegate delivered but the IME main-handler
+        // runnable lost without process death). On each IME bind it checks
+        // the in-flight session against the DB and, if the row already
+        // reached a terminal status, replays the terminal action into the
+        // FSM — through the SAME `pipelineTerminalGuardImpl`, so it can
+        // never double-fire against delegate-delivery or the headless sink.
+        // Reuses the same collaborators as the headless wiring.
+        // ──────────────────────────────────────────────────────────────
+        pipelineBindReconciliationImpl = PipelineBindReconciliation(
+            loadSession = { sessionId -> database.sessionDao().getById(sessionId) },
+            getFinalOutput = { sessionId -> sessionManagerImpl.getFinalOutput(sessionId) },
+            guard = pipelineTerminalGuardImpl,
+            emitAction = { action -> orchestrator.emitAction(action) },
+            snapshotProvider = { store.snapshot },
         )
 
         // ──────────────────────────────────────────────────────────────
@@ -2005,6 +2031,13 @@ class DictatePipelineService : Service() {
          */
         fun registerPipelineCallback(callback: PipelineOrchestrator.PipelineCallback?) {
             pipelineCallbackBridgeImpl.setDelegate(callback)
+            // ADR-0011 Decision 2 — on IME bind (callback != null), heal the
+            // in-memory pipeline FSM if a terminal dispatch was dropped while
+            // no delegate was bound. Idempotent (the shared terminal guard
+            // dedups) and non-preemptive (no-op on a still-running row).
+            if (callback != null) {
+                serviceScope.launch { pipelineBindReconciliationImpl.reconcile() }
+            }
         }
 
         /**

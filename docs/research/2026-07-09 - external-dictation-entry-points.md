@@ -4,7 +4,10 @@ author: Lukas + Claude (implementation session)
 status: Accepted
 context: External entry points (launcher alias for S-Pen/Edge/side-key pickers, static app shortcut, QS tile) that start a dictation without opening the keyboard, funnelled through one canonical service action.
 related-plan: n/a (point feature, no plan folder)
-related-adrs: ADR-0003, ADR-0005, ADR-0008, ADR-0009
+related-adrs: ADR-0003, ADR-0005, ADR-0008, ADR-0009, ADR-0011
+changelog:
+  - 2026-07-09 — initial spec (external entry points)
+  - 2026-07-12 — §6.1 headless-completion limitation RESOLVED (ADR-0011); D3 follow-up appended
 ---
 
 # External Dictation Entry Points
@@ -191,17 +194,22 @@ Key properties:
 
 ## 6. Known Limitations / Information Gaps
 
-1. **Headless pipeline completion.** Pipeline UI-completion callbacks
-   (`PipelineCallbackBridge`) are delegated to the IME and *dropped* while no
-   IME has bound in the current process (fresh boot → external trigger →
-   keyboard never opened). The transcription still persists (Persistence-First
-   → DB `COMPLETED`), and the next keyboard open replays it via
-   `PipelineRecovery` ("tap to paste"), but until then `state.pipeline` stays
-   in-flight and the widget/notification show a stale "sending" state. In the
-   natural flow the user focuses a text field to receive the transcript, which
-   binds the IME mid-run and completion proceeds normally. **Owner:** follow-up
-   architecture decision (service-side completion fallback in
-   `PipelineCallbackBridge`); **fallback:** documented recovery replay.
+1. **Headless pipeline completion.** ✅ **RESOLVED 2026-07-12 — see ADR-0011.**
+   Pipeline UI-completion callbacks (`PipelineCallbackBridge`) used to be
+   delegated to the IME and *dropped* while no IME had bound in the current
+   process (fresh boot → external trigger → keyboard never opened), leaving
+   `state.pipeline` stuck in `Running` while the DB row was already
+   `COMPLETED`. ADR-0011 adds a service-side headless fallback: the two
+   *terminal* callbacks (`onPipelineCompleted` / `onPipelineError`) now
+   dispatch `PipelineDone(committed=false)` / `PipelineFailed` themselves when
+   no delegate is bound, guarded by a process-wide
+   `PipelineTerminalDispatchGuard` so exactly one terminal dispatch fires per
+   session (across delegate-delivery, headless fallback, and the
+   bind-reconciliation safety net). `committed=false` keeps text commit
+   IME-exclusive — the transcript surfaces as a "Tap to paste" pending part.
+   New classes: `core/PipelineTerminalDispatchGuard.kt`,
+   `PipelineCallbackBridge.setHeadlessTerminalSink(...)`, wired in
+   `DictatePipelineService.onCreate`.
 2. **Samsung picker dedup.** Some Samsung picker builds may deduplicate
    launcher entries per package (alias hidden). **Owner:** on-device
    verification by the user; **fallback:** the QS tile + shortcut still work,
@@ -240,12 +248,24 @@ duplicate risks drift, and DB-persistence + recovery replay already cover
 the data. **Alternatives:** fallback delegate dispatching state actions
 service-side — deferred to a dedicated follow-up.
 
+**Follow-up (2026-07-12) — implemented, see ADR-0011.** The deferred
+service-side fallback was built. The D3 drift fear is sidestepped: the
+fallback does NOT recreate the IME completion handler (no headless text
+commit) — it dispatches `PipelineDone(committed=false)`, reusing the existing
+deferred-insertion path so the transcript surfaces as a "Tap to paste" pending
+part. A process-wide `PipelineTerminalDispatchGuard` keeps the headless
+fallback, the IME delegate-delivery, and the bind-reconciliation mutually
+exclusive per session (exactly one terminal dispatch). This note does not
+rewrite D3's original "deferred" decision — it records that the follow-up it
+named has since landed.
+
 ## References
 
 - `docs/decisions/0003-service-foreground-pipeline-architecture.md` — FGS pipeline host
 - `docs/decisions/0005-ui-triangle-fsm-keyboard-widget-hover.md` — viewMode FSM, T1/T2 cascades
 - `docs/decisions/0008-ui-surface-axes-widget-state-and-ime-view.md` — widget axis (attach source of truth)
 - `docs/decisions/0009-pipeline-run-queue-serialized-concurrency.md` — run queue + deferred insertion
+- `docs/decisions/0011-pipeline-headless-completion-fallback.md` — resolves the §6.1 headless-completion limitation (D3 follow-up)
 - `docs/research/2026-07-02 - concurrent-recording-deferred-insertion.md` — secondary-recording spec
 - Code: `state/ExternalDictationStartPolicy.kt`, `core/StartDictationActivity.kt`,
   `core/StartDictationLaunchPolicy.kt`, `core/DictationTileService.kt`,

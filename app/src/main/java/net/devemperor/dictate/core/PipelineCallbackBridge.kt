@@ -26,13 +26,33 @@ import java.util.concurrent.atomic.AtomicReference
  *  - The **IME** registers its real callback implementation via
  *    [setDelegate] when it binds (`onServiceConnected`) and clears it via
  *    `setDelegate(null)` on unbind.
- *  - **Calls during gaps** (no delegate set, e.g. process boot before the user
- *    opens the keyboard, or after the IME unbinds) are logged at WARN and
- *    discarded — the pipeline still runs to DB-completion (per Spec 1 §11.6
- *    OOM-Death-Recovery model) but the UI feedback drops on the floor. This is
- *    the documented Phase-1 behaviour; the post-extraction recovery wiring (SF-4
- *    in B3 issue index) will make the missing-callback case observable in the
- *    UI on next bind via DB-replay.
+ *  - **Non-terminal calls during gaps** (`onStepStarted`, `onStepCompleted`,
+ *    `onStepFailed`, `onPipelineFinished`, `onShowResend`, `onAutoSwitch`,
+ *    `onAudioPersisted`) with no delegate set are logged at WARN and
+ *    discarded — pure UI-progress feedback the pipeline can lose safely.
+ *
+ * **Terminal callbacks are the exception (ADR-0011).** `onPipelineCompleted`
+ * and `onPipelineError` are the two *terminal* callbacks. Dropping them left
+ * the in-memory `state.pipeline` FSM stuck in `Running` forever while the DB
+ * row was already `COMPLETED` (fresh boot → external trigger → keyboard never
+ * opened). To close that gap, once the service wires the late-bound
+ * [setHeadlessTerminalSink]:
+ *
+ *  - **Delegate present** → the terminal call is delivered to the delegate,
+ *    guarded by [PipelineTerminalDispatchGuard] so exactly one terminal
+ *    dispatch happens per session (the delegate then commits text +
+ *    dispatches `PipelineDone`).
+ *  - **No delegate** → the bridge invokes the **headless sink**, which
+ *    dispatches `PipelineDone(committed=false)` / `PipelineFailed` into the
+ *    state orchestrator itself. `committed=false` keeps text-commit
+ *    IME-exclusive: the transcript surfaces as a "Tap to paste" pending part
+ *    rather than being inserted headlessly.
+ *
+ * The guard makes the three terminal producers (delegate-delivery, headless
+ * fallback, and the ADR-0011 Decision-2 bind-reconciliation) mutually
+ * exclusive per session. When the sink is NOT yet wired (early boot, or unit
+ * tests that don't need it), terminal callbacks fall back to plain legacy
+ * delegate delivery / drop — no behavioural change.
  *
  * **Threading:** [PipelineOrchestrator] invokes callbacks from its executor
  * thread. The delegate-AtomicReference makes the visibility safe (the IME sets
@@ -42,11 +62,62 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * @see net.devemperor.dictate.core.PipelineOrchestrator.PipelineCallback
  * @see net.devemperor.dictate.core.DictatePipelineService
+ * @see net.devemperor.dictate.core.PipelineTerminalDispatchGuard
+ * @see docs/decisions/0011-pipeline-headless-completion-fallback.md
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/1-pipeline-service/1-pipeline-service.reviewed.md §11.2.2 §7.3
+ *
+ * @param terminalGuard the process-wide once-guard. Injected so the service
+ *   can share the SAME instance with the ADR-0011 Decision-2
+ *   bind-reconciliation, keeping all three terminal producers mutually
+ *   exclusive per session.
  */
-class PipelineCallbackBridge : PipelineOrchestrator.PipelineCallback {
+class PipelineCallbackBridge(
+    private val terminalGuard: PipelineTerminalDispatchGuard = PipelineTerminalDispatchGuard(),
+) : PipelineOrchestrator.PipelineCallback {
 
     private val delegate = AtomicReference<PipelineOrchestrator.PipelineCallback?>(null)
+
+    // ── Late-bound headless terminal fallback (ADR-0011) ─────────────
+    // Wired by the service AFTER the state orchestrator is constructed
+    // (the sinks call `orchestrator.emitAction`, which does not exist at
+    // bridge-construction time in onCreate). `@Volatile` so the pipeline
+    // executor thread sees the fields the moment the main thread wires
+    // them; a single wiring call installs all three atomically enough for
+    // this use (the provider is only meaningful together with the sinks).
+    @Volatile
+    private var currentSessionIdProvider: (() -> String?)? = null
+
+    @Volatile
+    private var headlessCompletionSink: ((sessionId: String, text: String) -> Unit)? = null
+
+    @Volatile
+    private var headlessFailureSink: ((sessionId: String, reason: String) -> Unit)? = null
+
+    /**
+     * Install the headless terminal fallback. Called once by the service
+     * after the state orchestrator exists.
+     *
+     * @param currentSessionIdProvider resolves the sessionId of the
+     *   in-flight pipeline from `store.snapshot.pipeline` (Running /
+     *   Preparing / ReprocessStaging carry it; Idle → `null`). Returning
+     *   `null` means the session is unresolvable → terminal callback is
+     *   dropped and the guard is left untouched.
+     * @param onCompleted headless completion sink — dispatches
+     *   `PipelineDone(sessionId, text, committed=false)`. Invoked on the
+     *   pipeline executor thread; the service resolves the authoritative
+     *   text (never the raw `final_output_text` column) inside it.
+     * @param onFailed headless failure sink — dispatches
+     *   `PipelineFailed(sessionId, reason)`.
+     */
+    fun setHeadlessTerminalSink(
+        currentSessionIdProvider: () -> String?,
+        onCompleted: (sessionId: String, text: String) -> Unit,
+        onFailed: (sessionId: String, reason: String) -> Unit,
+    ) {
+        this.currentSessionIdProvider = currentSessionIdProvider
+        this.headlessCompletionSink = onCompleted
+        this.headlessFailureSink = onFailed
+    }
 
     /**
      * Atomically set or clear the IME-side delegate. `null` means "no IME
@@ -68,6 +139,14 @@ class PipelineCallbackBridge : PipelineOrchestrator.PipelineCallback {
             Log.w(TAG, "$method dropped — no IME callback delegate registered")
             return
         }
+        invokeSafely(method, cb, block)
+    }
+
+    private inline fun invokeSafely(
+        method: String,
+        cb: PipelineOrchestrator.PipelineCallback,
+        block: (PipelineOrchestrator.PipelineCallback) -> Unit,
+    ) {
         try {
             block(cb)
         } catch (e: Exception) {
@@ -88,11 +167,76 @@ class PipelineCallbackBridge : PipelineOrchestrator.PipelineCallback {
     override fun onStepFailed(stepName: String) =
         dispatch("onStepFailed") { it.onStepFailed(stepName) }
 
-    override fun onPipelineCompleted(text: String, source: InsertionSource) =
-        dispatch("onPipelineCompleted") { it.onPipelineCompleted(text, source) }
+    override fun onPipelineCompleted(text: String, source: InsertionSource) {
+        val provider = currentSessionIdProvider
+        if (provider == null) {
+            // Headless fallback not wired yet (early boot / legacy tests):
+            // preserve the original delegate-or-drop behaviour verbatim.
+            dispatch("onPipelineCompleted") { it.onPipelineCompleted(text, source) }
+            return
+        }
+        val sid = provider.invoke()
+        if (sid == null) {
+            // No in-flight session to key the guard on — dropping is the
+            // only safe choice (an unguarded delivery could double-commit
+            // if a reconciliation also runs). Guard left untouched.
+            Log.w(TAG, "onPipelineCompleted dropped — no resolvable sessionId")
+            return
+        }
+        val cb = delegate.get()
+        if (cb != null) {
+            // Delegate present: deliver ONCE. `tryConsume` failing means a
+            // terminal dispatch already happened for this session (headless
+            // fallback or reconciliation) — delivering again would
+            // double-commit the transcript, so skip.
+            if (terminalGuard.tryConsume(sid)) {
+                invokeSafely("onPipelineCompleted", cb) { it.onPipelineCompleted(text, source) }
+            } else {
+                Log.w(TAG, "onPipelineCompleted skipped — session $sid already terminally dispatched")
+            }
+        } else {
+            // No delegate: dispatch the headless completion (committed=false).
+            if (terminalGuard.tryConsume(sid)) {
+                headlessCompletionSink?.invoke(sid, text)
+                    ?: Log.w(TAG, "onPipelineCompleted dropped — headless sink not installed")
+            } else {
+                Log.w(TAG, "onPipelineCompleted headless dropped — session $sid already terminally dispatched")
+            }
+        }
+    }
 
-    override fun onPipelineError(errorInfoKey: String, vibrate: Boolean, providerName: String?) =
-        dispatch("onPipelineError") { it.onPipelineError(errorInfoKey, vibrate, providerName) }
+    override fun onPipelineError(errorInfoKey: String, vibrate: Boolean, providerName: String?) {
+        val provider = currentSessionIdProvider
+        if (provider == null) {
+            dispatch("onPipelineError") { it.onPipelineError(errorInfoKey, vibrate, providerName) }
+            return
+        }
+        val sid = provider.invoke()
+        if (sid == null) {
+            Log.w(TAG, "onPipelineError dropped — no resolvable sessionId")
+            return
+        }
+        val cb = delegate.get()
+        if (cb != null) {
+            if (terminalGuard.tryConsume(sid)) {
+                invokeSafely("onPipelineError", cb) {
+                    it.onPipelineError(errorInfoKey, vibrate, providerName)
+                }
+            } else {
+                Log.w(TAG, "onPipelineError skipped — session $sid already terminally dispatched")
+            }
+        } else {
+            // Headless failure — errorInfoKey is the failure reason carried
+            // into PipelineFailed(sid, reason). A session either completes
+            // or fails; the shared guard enforces exactly one of the two.
+            if (terminalGuard.tryConsume(sid)) {
+                headlessFailureSink?.invoke(sid, errorInfoKey)
+                    ?: Log.w(TAG, "onPipelineError dropped — headless sink not installed")
+            } else {
+                Log.w(TAG, "onPipelineError headless dropped — session $sid already terminally dispatched")
+            }
+        }
+    }
 
     override fun onPipelineFinished() =
         dispatch("onPipelineFinished") { it.onPipelineFinished() }

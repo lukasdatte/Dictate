@@ -48,6 +48,7 @@ import net.devemperor.dictate.state.PipelineOrphanCleaner
 import net.devemperor.dictate.state.PipelinePrefMirror
 import net.devemperor.dictate.state.PipelineRecovery
 import net.devemperor.dictate.state.PipelineServiceStubSubsystems
+import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.PipelineSessionRepoAdapter
 import net.devemperor.dictate.state.SharedPrefsPersistenceService
 import net.devemperor.dictate.state.layout.KeyboardLayoutManager
@@ -155,6 +156,10 @@ class DictatePipelineService : Service() {
     private lateinit var promptServiceImpl: PromptService
     private lateinit var pipelineOrchestratorImpl: PipelineOrchestrator
     private lateinit var pipelineCallbackBridgeImpl: PipelineCallbackBridge
+    // ADR-0011 — process-wide terminal once-guard, shared between the
+    // bridge's delegate-delivery + headless fallback and (Decision 2) the
+    // upcoming bind-reconciliation. One instance per service process.
+    private val pipelineTerminalGuardImpl = PipelineTerminalDispatchGuard()
     private lateinit var recordingRepositoryImpl: RecordingRepository
 
     // ── C8 — Subsystem adapters (production-quality) ───────────────────
@@ -373,8 +378,11 @@ class DictatePipelineService : Service() {
             },
         )
 
-        // PipelineCallbackBridge — null delegate until the IME binds.
-        pipelineCallbackBridgeImpl = PipelineCallbackBridge()
+        // PipelineCallbackBridge — null delegate until the IME binds. The
+        // headless terminal fallback (ADR-0011) is wired later, once the
+        // state orchestrator exists (the sinks call `emitAction`). The
+        // shared terminal guard is injected now.
+        pipelineCallbackBridgeImpl = PipelineCallbackBridge(pipelineTerminalGuardImpl)
 
         // Block A2 (recording-stack-completion) — instantiate the audio
         // repository EARLY so the PipelineOrchestrator below can consume
@@ -764,6 +772,61 @@ class DictatePipelineService : Service() {
             Log.e(TAG, "Registry coverage assertion failed — module(s) missing", t)
             throw t
         }
+
+        // ──────────────────────────────────────────────────────────────
+        // ADR-0011 — Headless terminal fallback wiring.
+        //
+        // The bridge drops UI-progress callbacks when no IME delegate is
+        // bound, but the two TERMINAL callbacks (completed / error) must
+        // still drive the FSM out of Running — otherwise a fresh-boot
+        // external dictation (keyboard never opened) leaves `state.pipeline`
+        // stuck in Running forever while the DB row is already COMPLETED.
+        //
+        // Wired here (not in onCreate's Step-2 bridge construction) because
+        // the sinks call `orchestrator.emitAction`, which does not exist
+        // until the DictateOrchestrator above is built. The provider reads
+        // the in-flight sessionId straight off the store snapshot.
+        //
+        // `emitAction` (NOT `dispatch`): these callbacks fire on the
+        // pipeline executor thread, but the orchestrator is main-confined
+        // (Dispatchers.Main.immediate) — emitAction hops the action onto
+        // the main looper. getFinalOutput does DB IO on the pipeline thread
+        // (which already performs the pipeline's DB writes), never on main.
+        // ──────────────────────────────────────────────────────────────
+        pipelineCallbackBridgeImpl.setHeadlessTerminalSink(
+            currentSessionIdProvider = {
+                when (val pipeline = store.snapshot.pipeline) {
+                    is PipelineUiState.Preparing -> pipeline.sessionId
+                    is PipelineUiState.Running -> pipeline.sessionId
+                    is PipelineUiState.ReprocessStaging -> pipeline.sessionId
+                    is PipelineUiState.Idle -> null
+                }
+            },
+            onCompleted = { sessionId, callbackText ->
+                // getFinalOutput is the mandated reliable text source
+                // (current-step-chain output → transcription → denormalized
+                // column, in that fallback order). NEVER read the raw
+                // `final_output_text` column directly (historically empty
+                // for dictations — resend bug, commit 9637fc3). The
+                // callback text is the same-provenance fallback if the row
+                // read misses. committed=false: the transcript surfaces as
+                // a "Tap to paste" pending part — text commit stays
+                // IME-exclusive (ADR-0011).
+                val text = sessionManagerImpl.getFinalOutput(sessionId) ?: callbackText
+                orchestrator.emitAction(
+                    Action.PipelineAction.PipelineDone(
+                        sessionId = sessionId,
+                        finalText = text,
+                        committed = false,
+                    ),
+                )
+            },
+            onFailed = { sessionId, reason ->
+                orchestrator.emitAction(
+                    Action.PipelineAction.PipelineFailed(sessionId, reason),
+                )
+            },
+        )
 
         // ──────────────────────────────────────────────────────────────
         // Step 5 — Legacy audio-file migration moved to BEFORE

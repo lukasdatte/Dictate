@@ -20,6 +20,22 @@ class PromptBuilder {
     fun rules(content: String) = section("rules", content)
     fun examples(content: String) = section("examples", content)
 
+    /**
+     * Numbered `<instruction index="N">` children wrapped in one
+     * `<instructions>` section. Used by the consolidated conversation turn
+     * (ADR-0012), where auto-formatting rules, all queued prompts and the
+     * ambiguity task are merged into a single, ordered instruction list.
+     * Empty/blank items are dropped; renumbering keeps the visible indices
+     * contiguous starting at 1.
+     */
+    fun instructions(items: List<String>): PromptBuilder {
+        val inner = items
+            .filter { it.isNotBlank() }
+            .mapIndexed { i, content -> "<instruction index=\"${i + 1}\">\n$content\n</instruction>" }
+            .joinToString("\n")
+        return section("instructions", inner)
+    }
+
     fun build(): String {
         return sections.joinToString("\n\n") { (tag, content) ->
             "<$tag>\n$content\n</$tag>"

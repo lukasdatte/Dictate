@@ -215,6 +215,7 @@ class PipelineStepAdapter(
 
         bindOutput(holder, step)
         bindError(holder, step)
+        bindAssistantMessage(holder, step)
         bindMeta(holder, step)
         bindPlay(holder, step, context)
         bindReprocessActions(holder, step)
@@ -303,6 +304,22 @@ class PipelineStepAdapter(
             holder.errorTv.text = error
         } else {
             holder.errorTv.visibility = View.GONE
+        }
+    }
+
+    /**
+     * ADR-0013: shows the conversation turn's `message` (the model's
+     * explanation / ambiguity note) below its output. Read straight from the
+     * persisted step entity's `assistant_message`; hidden when absent (legacy
+     * steps, non-conversation turns).
+     */
+    private fun bindAssistantMessage(holder: ViewHolder, step: PipelineStep) {
+        val message = step.stepEntity?.assistantMessage
+        if (!message.isNullOrBlank()) {
+            holder.assistantMessageTv.visibility = View.VISIBLE
+            holder.assistantMessageTv.text = message
+        } else {
+            holder.assistantMessageTv.visibility = View.GONE
         }
     }
 
@@ -558,6 +575,7 @@ class PipelineStepAdapter(
         val outputTv: TextView = itemView.findViewById(R.id.item_pipeline_output_tv)
         val expandTv: TextView = itemView.findViewById(R.id.item_pipeline_expand_tv)
         val errorTv: TextView = itemView.findViewById(R.id.item_pipeline_error_tv)
+        val assistantMessageTv: TextView = itemView.findViewById(R.id.item_pipeline_assistant_message_tv)
         val metaTv: TextView = itemView.findViewById(R.id.item_pipeline_meta_tv)
         val versionChipGroup: ChipGroup = itemView.findViewById(R.id.item_pipeline_version_chip_group)
         val versionWarningTv: TextView = itemView.findViewById(R.id.item_pipeline_version_warning_tv)

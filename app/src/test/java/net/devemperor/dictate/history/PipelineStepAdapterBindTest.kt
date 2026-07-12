@@ -144,6 +144,44 @@ class PipelineStepAdapterBindTest {
         assertTrue(callback.openedSources.isEmpty())
     }
 
+    // ── ADR-0013 assistant-message row ───────────────────────────────────
+
+    private fun conversationStep(message: String?): ProcessingStepEntity = ProcessingStepEntity(
+        id = "step-1", sessionId = "s1", stepType = "CONVERSATION_TURN",
+        chainIndex = 0, version = 1, isCurrent = true,
+        inputText = "raw", outputText = "result", modelUsed = "gpt-test", provider = "OPENAI",
+        promptUsed = null, promptEntityId = null, previousStepId = null,
+        previousTranscriptionId = null, sourceSessionId = null,
+        durationMs = 10, status = "SUCCESS", errorMessage = null, createdAt = 0L,
+        assistantMessage = message,
+    )
+
+    private fun processingStep(entity: ProcessingStepEntity) = PipelineStepAdapter.PipelineStep(
+        type = PipelineStepAdapter.PipelineStep.Type.PROCESSING,
+        title = "Conversation v1",
+        outputText = entity.outputText,
+        stepEntity = entity,
+    )
+
+    @Test
+    fun `assistant message row is shown for a conversation turn with a message`() {
+        val adapter = newAdapter()
+        val holder = newHolder(adapter)
+        adapter.submitBlocking(listOf(processingStep(conversationStep("I assumed the first option."))))
+        bindAt(adapter, holder, 0)
+        assertEquals(View.VISIBLE, holder.assistantMessageTv.visibility)
+        assertEquals("I assumed the first option.", holder.assistantMessageTv.text.toString())
+    }
+
+    @Test
+    fun `assistant message row is hidden when the step has no message`() {
+        val adapter = newAdapter()
+        val holder = newHolder(adapter)
+        adapter.submitBlocking(listOf(processingStep(conversationStep(null))))
+        bindAt(adapter, holder, 0)
+        assertEquals(View.GONE, holder.assistantMessageTv.visibility)
+    }
+
     // ── R1 per-step copy ─────────────────────────────────────────────────
 
     @Test

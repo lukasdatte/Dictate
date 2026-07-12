@@ -197,6 +197,20 @@
                 tools:text="Error: API request failed"
                 tools:visibility="visible" />
 
+            <!-- Assistant explanation (ADR-0013: the conversation turn's
+                 `message` field — what the model did / what was unclear). -->
+            <TextView
+                android:id="@+id/item_pipeline_assistant_message_tv"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textSize="12sp"
+                android:textStyle="italic"
+                android:textColor="@color/dictate_blue"
+                android:visibility="gone"
+                tools:text="I assumed you meant the first option."
+                tools:visibility="visible" />
+
             <!-- Meta info (model, duration) -->
             <TextView
                 android:id="@+id/item_pipeline_meta_tv"

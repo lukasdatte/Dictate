@@ -83,6 +83,16 @@ object InfoBarSelector {
      * info-bar surface is hidden.
      */
     fun select(state: DictateUiState): List<InfoBarItem> = buildList<InfoBarItem> {
+        // ── Panel ownership of the keyboard surface (K5) ────────────────
+        // While the review panel or the in-keyboard history panel owns the
+        // surface, the info-bar must stay hidden. Otherwise the SAME pending
+        // session shows up twice — once as a panel row (with its own Insert
+        // button + pending dot) and once as the "Tap to paste" info-bar — and
+        // a stray tap on that bar could commit into the host while a review is
+        // held open. All items here are state-derived, so they reappear
+        // untouched the moment the panel closes; nothing is lost.
+        if (state.reviewPanel.open || state.historyPanel.open) return@buildList
+
         // ── Overlay-Permission-Onboarding (ADR-0005 §5.4 + ADR-0006) ──
         // The user toggled the widget without SYSTEM_ALERT_WINDOW
         // permission; the explainer surfaces with two actions:

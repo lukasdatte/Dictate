@@ -763,4 +763,53 @@ class InfoBarSelectorTest {
             InfoBarSelector.select(state).map { it.id },
         )
     }
+
+    // ── K5: panel ownership suppresses the whole info-bar surface ───────
+
+    /**
+     * A COMPLETED pending session normally produces a pending-parts item;
+     * while a panel owns the keyboard surface it must not — otherwise the
+     * same session double-surfaces (panel row + "Tap to paste" bar) and a
+     * stray tap could commit into the host mid-review (K5).
+     */
+    private fun stateWithPendingPart(): DictateUiState {
+        val part = net.devemperor.dictate.state.PendingSession(
+            sessionId = "completed-sid",
+            status = net.devemperor.dictate.database.entity.SessionStatus.COMPLETED,
+            transcribedText = "hello",
+            createdAt = 10_000L,
+            lastErrorMessage = "partial:7",
+        )
+        return defaultState().copy(
+            pendingSessions = kotlinx.collections.immutable.persistentListOf(part),
+        )
+    }
+
+    @Test
+    fun `K5 open review panel suppresses all info-bar items`() {
+        val base = stateWithPendingPart()
+        // Sanity: without a panel the pending part DOES surface.
+        assertTrue(InfoBarSelector.select(base).isNotEmpty())
+
+        val withReviewPanel = base.copy(
+            reviewPanel = net.devemperor.dictate.state.ReviewPanelState(
+                open = true, sessionId = "sid", output = "out",
+            ),
+        )
+        assertTrue(
+            "review panel open must hide the info-bar",
+            InfoBarSelector.select(withReviewPanel).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `K5 open history panel suppresses all info-bar items`() {
+        val withHistoryPanel = stateWithPendingPart().copy(
+            historyPanel = net.devemperor.dictate.state.HistoryPanelState(open = true),
+        )
+        assertTrue(
+            "history panel open must hide the info-bar",
+            InfoBarSelector.select(withHistoryPanel).isEmpty(),
+        )
+    }
 }

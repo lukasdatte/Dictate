@@ -1,8 +1,12 @@
 package net.devemperor.dictate.core
 
+import net.devemperor.dictate.ai.conversation.ReconstructedTurn
+import net.devemperor.dictate.ai.runner.ConversationResult
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.database.entity.CompletionLogEntity
+import net.devemperor.dictate.database.entity.ConversationMessageEntity
 import net.devemperor.dictate.database.entity.InsertionMethod
+import net.devemperor.dictate.database.entity.MessageRole
 import net.devemperor.dictate.database.entity.ProcessingStepEntity
 import net.devemperor.dictate.database.entity.SessionEntity
 import net.devemperor.dictate.database.entity.SessionOrigin
@@ -25,6 +29,7 @@ class SessionManager(private val db: DictateDatabase) {
     private val stepDao = db.processingStepDao()
     private val completionLogDao = db.completionLogDao()
     private val textInsertionDao = db.textInsertionDao()
+    private val conversationDao = db.conversationMessageDao()
 
     // region Session lifecycle
 
@@ -270,7 +275,9 @@ class SessionManager(private val db: DictateDatabase) {
         completionTokens: Long = 0,
         durationMs: Long,
         status: StepStatus,
-        errorMessage: String? = null
+        errorMessage: String? = null,
+        assistantMessage: String? = null,
+        responseFormat: String? = null
     ): String {
         val id = UUID.randomUUID().toString()
         db.runInTransaction {
@@ -297,7 +304,9 @@ class SessionManager(private val db: DictateDatabase) {
                     durationMs = durationMs,
                     status = status.name,
                     errorMessage = errorMessage,
-                    createdAt = System.currentTimeMillis()
+                    createdAt = System.currentTimeMillis(),
+                    assistantMessage = assistantMessage,
+                    responseFormat = responseFormat
                 )
             )
         }
@@ -326,7 +335,9 @@ class SessionManager(private val db: DictateDatabase) {
         completionTokens: Long = 0,
         durationMs: Long,
         status: StepStatus,
-        errorMessage: String? = null
+        errorMessage: String? = null,
+        assistantMessage: String? = null,
+        responseFormat: String? = null
     ): String {
         val id = UUID.randomUUID().toString()
         db.runInTransaction {
@@ -355,11 +366,225 @@ class SessionManager(private val db: DictateDatabase) {
                     durationMs = durationMs,
                     status = status.name,
                     errorMessage = errorMessage,
-                    createdAt = System.currentTimeMillis()
+                    createdAt = System.currentTimeMillis(),
+                    assistantMessage = assistantMessage,
+                    responseFormat = responseFormat
                 )
             )
         }
         return id
+    }
+
+    // endregion
+
+    // region Conversation turns (ADR-0012)
+
+    /**
+     * Appends one conversational turn: the consolidated user message plus the
+     * merged assistant step (`CONVERSATION_TURN`), written atomically. On the
+     * first turn a `SYSTEM` row is persisted so a later continuation replays the
+     * exact system prompt in effect at turn 0 (survives template changes).
+     *
+     * Assistant turns are NOT stored as message rows — they are reconstructed
+     * from the current step chain (design decision D-B); no duplicated cache.
+     *
+     * @param inputText raw text the turn applied to (transcript for turn 0),
+     *   persisted on the step for `getFinalOutput` / audit.
+     * @return the new step's id.
+     */
+    fun appendConversationTurn(
+        sessionId: String,
+        userMessageContent: String,
+        inputText: String,
+        result: ConversationResult,
+        provider: String,
+        previousTranscriptionId: String?,
+        durationMs: Long,
+        systemPromptForFirstTurn: String?
+    ): String {
+        var stepId = ""
+        db.runInTransaction {
+            val chainIndex = stepDao.getMaxChainIndex(sessionId) + 1
+            insertTurnUserMessage(sessionId, chainIndex, userMessageContent, systemPromptForFirstTurn)
+            stepId = appendProcessingStep(
+                sessionId = sessionId,
+                stepType = StepType.CONVERSATION_TURN,
+                inputText = inputText,
+                outputText = result.output,
+                modelUsed = result.modelName,
+                provider = provider,
+                promptUsed = null,
+                promptEntityId = null,
+                previousStepId = null,
+                previousTranscriptionId = previousTranscriptionId,
+                sourceSessionId = null,
+                promptTokens = result.promptTokens,
+                completionTokens = result.completionTokens,
+                durationMs = durationMs,
+                status = StepStatus.SUCCESS,
+                errorMessage = null,
+                assistantMessage = result.message,
+                responseFormat = result.responseFormat.name
+            )
+        }
+        return stepId
+    }
+
+    /**
+     * Persists a failed conversational turn: the user message plus an ERROR
+     * merged step (output stays at the prior text via `getFinalOutput`), so the
+     * attempt is auditable and the conversation carries the user turn.
+     */
+    fun appendConversationTurnError(
+        sessionId: String,
+        userMessageContent: String,
+        inputText: String,
+        model: String,
+        provider: String,
+        previousTranscriptionId: String?,
+        errorMessage: String?,
+        durationMs: Long,
+        systemPromptForFirstTurn: String?
+    ): String {
+        var stepId = ""
+        db.runInTransaction {
+            val chainIndex = stepDao.getMaxChainIndex(sessionId) + 1
+            insertTurnUserMessage(sessionId, chainIndex, userMessageContent, systemPromptForFirstTurn)
+            stepId = appendProcessingStep(
+                sessionId = sessionId,
+                stepType = StepType.CONVERSATION_TURN,
+                inputText = inputText,
+                outputText = null,
+                modelUsed = model,
+                provider = provider,
+                promptUsed = null,
+                promptEntityId = null,
+                previousStepId = null,
+                previousTranscriptionId = previousTranscriptionId,
+                sourceSessionId = null,
+                promptTokens = 0,
+                completionTokens = 0,
+                durationMs = durationMs,
+                status = StepStatus.ERROR,
+                errorMessage = errorMessage,
+                assistantMessage = null,
+                responseFormat = null
+            )
+        }
+        return stepId
+    }
+
+    /**
+     * Re-runs a conversational turn at [chainIndex] (F-108 regenerate): a new
+     * step version at the same index, replaying the same conversation state.
+     * The conversation `USER` rows are NOT touched — the history is unchanged.
+     */
+    fun regenerateConversationTurn(
+        sessionId: String,
+        chainIndex: Int,
+        result: ConversationResult,
+        provider: String,
+        durationMs: Long
+    ): String {
+        val target = stepDao.getCurrentChain(sessionId).firstOrNull { it.chainIndex == chainIndex }
+            ?: throw IllegalStateException(
+                "No current step at chain_index=$chainIndex for session=$sessionId"
+            )
+        val stepId = regenerateProcessingStep(
+            sessionId = sessionId,
+            chainIndex = chainIndex,
+            stepType = StepType.CONVERSATION_TURN,
+            inputText = target.inputText,
+            outputText = result.output,
+            modelUsed = result.modelName,
+            provider = provider,
+            promptUsed = target.promptUsed,
+            promptEntityId = target.promptEntityId,
+            previousStepId = target.previousStepId,
+            previousTranscriptionId = target.previousTranscriptionId,
+            sourceSessionId = target.sourceSessionId,
+            promptTokens = result.promptTokens,
+            completionTokens = result.completionTokens,
+            durationMs = durationMs,
+            status = StepStatus.SUCCESS,
+            errorMessage = null,
+            assistantMessage = result.message,
+            responseFormat = result.responseFormat.name
+        )
+        updateFinalOutputText(sessionId, getFinalOutput(sessionId))
+        return stepId
+    }
+
+    /**
+     * Loads the persisted conversation for replay: the system prompt (from the
+     * SYSTEM row) plus one [ReconstructedTurn] per successful turn (USER content
+     * from `conversation_messages` ⋈ current step output/message by turn index).
+     * Failed turns are skipped so the replay carries only real answers.
+     */
+    fun loadConversation(sessionId: String): ConversationSnapshot {
+        val system = conversationDao.getSystemContent(sessionId)
+        val userMessages = conversationDao.getUserMessages(sessionId)
+        val stepByIndex = stepDao.getCurrentChain(sessionId)
+            .filter { it.stepType == StepType.CONVERSATION_TURN.name }
+            .associateBy { it.chainIndex }
+        val turns = userMessages.mapNotNull { user ->
+            val step = stepByIndex[user.turnIndex] ?: return@mapNotNull null
+            if (step.status != StepStatus.SUCCESS.name || step.outputText == null) return@mapNotNull null
+            ReconstructedTurn(user.content, step.outputText, step.assistantMessage)
+        }
+        return ConversationSnapshot(system, turns)
+    }
+
+    /**
+     * The `message` field of the last successful conversational turn — the
+     * "durchgereicht" hook Paket 2's review modes read. Null when the session
+     * has no successful conversation turn.
+     */
+    fun getAssistantMessage(sessionId: String): String? {
+        return stepDao.getCurrentChain(sessionId)
+            .lastOrNull {
+                it.stepType == StepType.CONVERSATION_TURN.name &&
+                    it.status == StepStatus.SUCCESS.name
+            }
+            ?.assistantMessage
+    }
+
+    /** Inserts the per-turn USER row (+ the SYSTEM row on the first turn). */
+    private fun insertTurnUserMessage(
+        sessionId: String,
+        chainIndex: Int,
+        userMessageContent: String,
+        systemPromptForFirstTurn: String?
+    ) {
+        var seq = conversationDao.getMaxSeq(sessionId)
+        if (seq < 0 && !systemPromptForFirstTurn.isNullOrEmpty()) {
+            seq += 1
+            conversationDao.insert(
+                ConversationMessageEntity(
+                    id = UUID.randomUUID().toString(),
+                    sessionId = sessionId,
+                    turnIndex = -1,
+                    seq = seq,
+                    role = MessageRole.SYSTEM.name,
+                    content = systemPromptForFirstTurn,
+                    stepId = null,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+        }
+        seq += 1
+        conversationDao.insert(
+            ConversationMessageEntity(
+                id = UUID.randomUUID().toString(),
+                sessionId = sessionId,
+                turnIndex = chainIndex,
+                seq = seq,
+                role = MessageRole.USER.name,
+                content = userMessageContent,
+                stepId = null,
+                createdAt = System.currentTimeMillis()
+            )
+        )
     }
 
     // endregion
@@ -539,5 +764,15 @@ class SessionManager(private val db: DictateDatabase) {
         val text: String,
         val stepId: String?,
         val transcriptionId: String?
+    )
+
+    /**
+     * The persisted conversation, ready for replay (ADR-0012): the system prompt
+     * (or null) plus the successful turns in order. Feed [turns] to
+     * [net.devemperor.dictate.ai.conversation.ConversationReconstructor].
+     */
+    data class ConversationSnapshot(
+        val systemContent: String?,
+        val turns: List<ReconstructedTurn>
     )
 }

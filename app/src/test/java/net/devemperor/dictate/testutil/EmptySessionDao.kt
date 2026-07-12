@@ -32,6 +32,7 @@ object EmptySessionDao : SessionDao {
     override fun updateAudioDuration(sessionId: String, durationSeconds: Long) = Unit
     override fun pagedHistory(type: String?, searchPattern: String?) =
         ListPagingSource(emptyList())
+    override fun pagedHistoryPanel() = ListPagingSource(emptyList<SessionEntity>())
     override fun deleteById(id: String) = Unit
     override fun deleteAll() = Unit
     override fun deleteAllExcept(exemptIds: List<String>) = Unit

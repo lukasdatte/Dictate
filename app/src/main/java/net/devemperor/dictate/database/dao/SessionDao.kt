@@ -98,6 +98,35 @@ interface SessionDao {
     )
     fun pagedHistory(type: String?, searchPattern: String?): PagingSource<Int, SessionEntity>
 
+    /**
+     * Paging source for the **in-keyboard history panel** (Paket 3 / ADR-0014).
+     *
+     * Differs from [pagedHistory] in two deliberate ways:
+     *  - **Pending-first order.** Uninserted completed sessions (the same
+     *    predicate as [findPendingInsertion], minus the freshness floor — the
+     *    panel surfaces *every* uninserted result, not just fresh ones) sort to
+     *    the top; the rest follow newest-first. The computed-boolean ORDER-BY
+     *    key MUST stay byte-identical to
+     *    `SessionEntity.isPendingInsertion()` — a parity test pins the two.
+     *  - **Review-refinement carriers excluded.** The transcription-only S2
+     *    recordings that back a dictated review refinement (origin
+     *    `REVIEW_REFINEMENT`, ADR-0013/0014) are noise in the panel; they stay
+     *    visible in the full-screen HistoryActivity.
+     *
+     * No filter/search parameters: the panel shows the full history; search
+     * stays on the full-screen activity (long-press).
+     */
+    @Query(
+        """
+        SELECT * FROM sessions
+        WHERE origin != 'REVIEW_REFINEMENT'
+        ORDER BY (status = 'COMPLETED' AND inserted_at IS NULL
+                                       AND final_output_text IS NOT NULL) DESC,
+                 created_at DESC
+        """
+    )
+    fun pagedHistoryPanel(): PagingSource<Int, SessionEntity>
+
     @Query("DELETE FROM sessions WHERE id = :id")
     fun deleteById(id: String)
 

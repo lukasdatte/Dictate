@@ -5,6 +5,7 @@ import androidx.paging.PagingState
 import net.devemperor.dictate.database.dao.OrphanedAudioRow
 import net.devemperor.dictate.database.dao.SessionDao
 import net.devemperor.dictate.database.entity.SessionEntity
+import net.devemperor.dictate.history.isPendingInsertion
 
 /**
  * In-memory [SessionDao] for JVM unit tests (Spec 1 §11.7.3) — backs
@@ -80,6 +81,23 @@ class FakeSessionDao : SessionDao {
                     (it.inputText?.contains(needle) == true)
             }
             .sortedByDescending { it.createdAt }
+        return ListPagingSource(snapshot)
+    }
+
+    /**
+     * In-memory analogue of the in-keyboard history-panel query
+     * (Paket 3 / ADR-0014): excludes review-refinement carriers, sorts
+     * pending insertions first (reusing the production predicate), then
+     * newest-first. Uses the `"REVIEW_REFINEMENT"` string literal to match the
+     * SQL's literal comparison.
+     */
+    override fun pagedHistoryPanel(): PagingSource<Int, SessionEntity> {
+        val snapshot = rows.values
+            .filter { it.origin != "REVIEW_REFINEMENT" }
+            .sortedWith(
+                compareByDescending<SessionEntity> { it.isPendingInsertion() }
+                    .thenByDescending { it.createdAt }
+            )
         return ListPagingSource(snapshot)
     }
 

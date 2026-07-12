@@ -110,6 +110,70 @@ class DictatePipelineServiceOverlayTransitionTest {
     private fun idle() = ShadowLooper.idleMainLooper()
 
     /**
+     * Minimal fresh-config resolver so `Effect.SubmitPipeline` does not
+     * throw the R-1 tripwire in this IME-less Robolectric wiring.
+     * Reprocess is unused by these tests.
+     */
+    private val stubConfigResolver = object : PipelineConfigResolver {
+        override fun resolveFresh(sessionId: String, audioFile: java.io.File) =
+            JobRequest.TranscriptionPipeline(
+                sessionId = sessionId,
+                totalSteps = 1,
+                kind = JobRequest.TranscriptionKind.RECORDING,
+                audioFilePath = audioFile.absolutePath,
+                recordingsDir = java.io.File("/tmp"),
+            )
+
+        override fun resolveReprocess(
+            sessionId: String,
+            audioFile: java.io.File?,
+            queuedPromptSlots: List<PromptQueueSlot>?,
+            language: String?,
+        ): JobRequest.TranscriptionPipeline =
+            throw UnsupportedOperationException("not used by these tests")
+    }
+
+    /**
+     * Arrange a deterministically ACTIVE pipeline FSM (`Preparing`) for
+     * the HOVER gate.
+     *
+     * 2026-07-12 (pending-mechanics): these tests used to dispatch
+     * `TriggerPipeline` raw. Its `Effect.SubmitPipeline` then threw the
+     * R-1 fresh-resolve tripwire (no IME config resolver in this
+     * wiring), and because `PipelineModule` had no `reduceFailure` the
+     * FSM silently STAYED in `Preparing` — the tests were green only by
+     * grace of that production hang. With the hang-fix (a failed submit
+     * rolls back to `Idle`), the active pipeline must be arranged
+     * legitimately:
+     *
+     *  1. register [stubConfigResolver] so `resolveFresh` succeeds, and
+     *  2. pre-occupy [ActiveJobRegistry] so the adapter's
+     *     `startWhenFree` defers the real `JobExecutor.start` — no
+     *     background job thread races the test's assertions.
+     *
+     * tearDown's `ActiveJobRegistry.resetForTest()` clears the occupier.
+     */
+    private fun DictatePipelineService.LocalBinder.arrangeActivePipeline(sessionId: String) {
+        registerPipelineConfigResolver(stubConfigResolver)
+        ActiveJobRegistry.register(
+            "registry-occupier",
+            JobState.Running(
+                sessionId = "registry-occupier",
+                currentStepIndex = 0,
+                totalSteps = 1,
+                currentStepName = "",
+                startedAt = 0L,
+            ),
+        )
+        dispatch(
+            Action.PipelineAction.TriggerPipeline(
+                sessionId = sessionId,
+                audioFile = java.io.File("/tmp/a.m4a"),
+            ),
+        )
+    }
+
+    /**
      * Count of backends registered with the manager *minus* the
      * baseline (any backends the IME would attach). The Service alone
      * attaches no backends at boot, so the count is purely the overlay
@@ -175,12 +239,7 @@ class DictatePipelineServiceOverlayTransitionTest {
         val b = binder()
         idle()
         // Pipeline must be active for HOVER auto-trigger.
-        b.dispatch(
-            Action.PipelineAction.TriggerPipeline(
-                sessionId = "s1",
-                audioFile = java.io.File("/tmp/a.m4a"),
-            ),
-        )
+        b.arrangeActivePipeline("s1")
         idle()
         // 2026-05-23 sticky-widget refactor: production IME service
         // dispatches BOTH ImeView-axis actions per Spec 3 §6 (see
@@ -210,12 +269,7 @@ class DictatePipelineServiceOverlayTransitionTest {
         idle()
         assertTrue(b.keyboardLayoutManager.overlayAttached())
 
-        b.dispatch(
-            Action.PipelineAction.TriggerPipeline(
-                sessionId = "s1",
-                audioFile = java.io.File("/tmp/a.m4a"),
-            ),
-        )
+        b.arrangeActivePipeline("s1")
         idle()
         b.dispatch(Action.ViewModeAction.OnImeViewHidden)
         idle()
@@ -239,12 +293,7 @@ class DictatePipelineServiceOverlayTransitionTest {
         // re-show — that's the whole point of the sticky semantic.
         val b = binder()
         idle()
-        b.dispatch(
-            Action.PipelineAction.TriggerPipeline(
-                sessionId = "s1",
-                audioFile = java.io.File("/tmp/a.m4a"),
-            ),
-        )
+        b.arrangeActivePipeline("s1")
         idle()
         b.dispatch(Action.ViewModeAction.OnImeViewHidden) // → HOVER
         b.dispatch(Action.WidgetAction.OnImeViewHidden)   // → widget Visible(PIPELINE)
@@ -273,12 +322,7 @@ class DictatePipelineServiceOverlayTransitionTest {
         // structural protection.
         val b = binder()
         idle()
-        b.dispatch(
-            Action.PipelineAction.TriggerPipeline(
-                sessionId = "s1",
-                audioFile = java.io.File("/tmp/a.m4a"),
-            ),
-        )
+        b.arrangeActivePipeline("s1")
         idle()
         b.dispatch(Action.ViewModeAction.OnImeViewHidden) // → HOVER
         b.dispatch(Action.WidgetAction.OnImeViewHidden)   // widget axis: Visible(PIPELINE)
@@ -395,12 +439,7 @@ class DictatePipelineServiceOverlayTransitionTest {
         b.dispatch(Action.RecordingAction.MediaRecorderReady(java.io.File("/tmp/a.m4a")))
         idle()
         // Pipeline also in flight (both-in-flight precondition).
-        b.dispatch(
-            Action.PipelineAction.TriggerPipeline(
-                sessionId = "s1",
-                audioFile = java.io.File("/tmp/a.m4a"),
-            ),
-        )
+        b.arrangeActivePipeline("s1")
         idle()
         // IME hidden → HOVER.
         b.dispatch(Action.ViewModeAction.OnImeViewHidden)

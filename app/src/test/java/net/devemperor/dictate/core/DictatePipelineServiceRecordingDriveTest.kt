@@ -89,6 +89,54 @@ class DictatePipelineServiceRecordingDriveTest {
 
     private fun posted() = shadowOf(nm).getNotification(PipelineNotificationCoordinator.NOTIF_ID)
 
+    /**
+     * Arrange a deterministically ACTIVE pipeline FSM (`Preparing`).
+     *
+     * 2026-07-12 (pending-mechanics): raw `TriggerPipeline` dispatches in
+     * this IME-less wiring used to throw the R-1 fresh-resolve tripwire
+     * inside `Effect.SubmitPipeline` — and before `PipelineModule` gained
+     * its `reduceFailure` rollback, the FSM silently stayed `Preparing`,
+     * which these tests implicitly relied on. Arrange it legitimately:
+     * a stub config resolver (fresh resolve succeeds) + a pre-occupied
+     * [ActiveJobRegistry] (the adapter's `startWhenFree` defers the real
+     * `JobExecutor.start`, so no background job thread races the test).
+     * tearDown's `ActiveJobRegistry.resetForTest()` clears the occupier.
+     */
+    private fun DictatePipelineService.LocalBinder.arrangeActivePipeline(
+        sessionId: String,
+        audio: java.io.File,
+    ) {
+        registerPipelineConfigResolver(object : PipelineConfigResolver {
+            override fun resolveFresh(sessionId: String, audioFile: java.io.File) =
+                JobRequest.TranscriptionPipeline(
+                    sessionId = sessionId,
+                    totalSteps = 1,
+                    kind = JobRequest.TranscriptionKind.RECORDING,
+                    audioFilePath = audioFile.absolutePath,
+                    recordingsDir = java.io.File("/tmp"),
+                )
+
+            override fun resolveReprocess(
+                sessionId: String,
+                audioFile: java.io.File?,
+                queuedPromptSlots: List<PromptQueueSlot>?,
+                language: String?,
+            ): JobRequest.TranscriptionPipeline =
+                throw UnsupportedOperationException("not used by these tests")
+        })
+        ActiveJobRegistry.register(
+            "registry-occupier",
+            JobState.Running(
+                sessionId = "registry-occupier",
+                currentStepIndex = 0,
+                totalSteps = 1,
+                currentStepName = "",
+                startedAt = 0L,
+            ),
+        )
+        dispatch(Action.PipelineAction.TriggerPipeline(sessionId = sessionId, audioFile = audio))
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // AC-2 — production wiring reaches the REAL coordinator (not stub)
     // ──────────────────────────────────────────────────────────────────
@@ -139,9 +187,7 @@ class DictatePipelineServiceRecordingDriveTest {
         // regardless of runner outcome (Effect.UpdateNotification is
         // emitted on the Idle → Preparing edge).
         val audio = java.io.File.createTempFile("c4-drive", ".m4a", app.cacheDir)
-        b.dispatch(
-            Action.PipelineAction.TriggerPipeline(sessionId = "drive-1", audioFile = audio),
-        )
+        b.arrangeActivePipeline("drive-1", audio)
         ShadowLooper.idleMainLooper()
 
         val n = posted()
@@ -165,7 +211,7 @@ class DictatePipelineServiceRecordingDriveTest {
     fun pipelinePersistenceError_dismissesTheNotification() {
         val b = boot()
         val audio = java.io.File.createTempFile("c4-drive", ".m4a", app.cacheDir)
-        b.dispatch(Action.PipelineAction.TriggerPipeline(sessionId = "drive-2", audioFile = audio))
+        b.arrangeActivePipeline("drive-2", audio)
         ShadowLooper.idleMainLooper()
         assertNotNull("Pre-condition: notification posted", posted())
 

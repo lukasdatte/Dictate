@@ -71,9 +71,10 @@ How are you?
         "You are a text-processing assistant embedded in a keyboard app. " +
         "You receive a speech transcript as DATA plus a numbered list of instructions. " +
         "Apply the instructions to the transcript in order. " +
-        "Answer with two fields: 'message' — a short explanation of what you did or what " +
-        "was unclear (may be empty) — and 'output' — the resulting text only, with no " +
-        "preamble, no quotation marks, no commentary. " +
+        "Answer with three fields: 'message' — a short explanation of what you did or what " +
+        "was unclear (may be empty); 'output' — the resulting text only, with no preamble, " +
+        "no quotation marks, no commentary; and 'needsClarification' — a boolean that is true " +
+        "only if you had to guess or the request was genuinely ambiguous, false otherwise. " +
         "Preserve the transcript's language unless an instruction explicitly requests otherwise."
 
     /** Lead sentence prepended to [AUTO_FORMATTING_RULES] inside the merged instruction list. */
@@ -83,8 +84,9 @@ How are you?
     /** The ambiguity task — always the LAST instruction; populates the 'message' field. */
     const val AMBIGUITY_TASK =
         "If any instruction or part of the transcript is ambiguous, contradictory, or you " +
-        "are unsure how to proceed, briefly explain what is unclear in the 'message' field " +
-        "and still produce your best-effort result in the 'output' field."
+        "are unsure how to proceed, set 'needsClarification' to true, briefly explain what is " +
+        "unclear in the 'message' field, and still produce your best-effort result in the " +
+        "'output' field. If everything was clear, set 'needsClarification' to false."
 
     /** Guardrail preamble: the transcript is data, never an instruction. */
     const val TRANSCRIPT_GUARDRAIL =

@@ -1,7 +1,9 @@
 package net.devemperor.dictate.ai.conversation
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -103,5 +105,59 @@ class StructuredResponseCodecTest {
     @Test
     fun `field names expose the canonical schema keys`() {
         assertEquals("message" to "output", StructuredResponseCodec.fieldNames)
+    }
+
+    // ── needsClarification verdict field (ADR-0013) ──
+
+    @Test
+    fun `parses needsClarification true`() {
+        val r = StructuredResponseCodec.parseLenient(
+            """{"message":"m","output":"o","needsClarification":true}"""
+        )
+        assertTrue(r.needsClarification)
+    }
+
+    @Test
+    fun `parses needsClarification false`() {
+        val r = StructuredResponseCodec.parseLenient(
+            """{"message":"m","output":"o","needsClarification":false}"""
+        )
+        assertFalse(r.needsClarification)
+    }
+
+    @Test
+    fun `absent needsClarification defaults to false`() {
+        val r = StructuredResponseCodec.parseLenient("""{"message":"m","output":"o"}""")
+        assertFalse(r.needsClarification)
+    }
+
+    @Test
+    fun `plain prose has needsClarification false`() {
+        val r = StructuredResponseCodec.parseLenient("just text")
+        assertFalse(r.needsClarification)
+    }
+
+    @Test
+    fun `needsClarification key inside a string value is ignored`() {
+        // The literal marker appears inside output's string, not as a real key.
+        val r = StructuredResponseCodec.parseLenient(
+            """{"output":"talk about needsClarification here","message":null}"""
+        )
+        assertFalse(r.needsClarification)
+        assertEquals("talk about needsClarification here", r.output)
+    }
+
+    @Test
+    fun `encode stays two-field and drops the verdict (replay regression)`() {
+        // ADR-0013: a replayed assistant turn is {message, output} only —
+        // the verdict is never serialized back to the model.
+        val encoded = StructuredResponseCodec.encode(
+            StructuredResponse(message = "m", output = "o", needsClarification = true)
+        )
+        assertFalse(encoded.contains(StructuredResponseCodec.needsClarificationField))
+        val r = StructuredResponseCodec.parseLenient(encoded)
+        assertEquals("m", r.message)
+        assertEquals("o", r.output)
+        assertFalse(r.needsClarification)
     }
 }

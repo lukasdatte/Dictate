@@ -13,5 +13,11 @@ data class ConversationResult(
     val promptTokens: Long,
     val completionTokens: Long,
     val modelName: String,
-    val responseFormat: ResponseFormatKind
+    val responseFormat: ResponseFormatKind,
+    /**
+     * The model's ambiguity verdict (ADR-0013) — `true` when it had to guess.
+     * Transient (never persisted); the IME's [ReviewDecision] consumes it at
+     * completion time. `false` for fallback providers that omit the field.
+     */
+    val needsClarification: Boolean = false
 )

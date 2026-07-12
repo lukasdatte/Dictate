@@ -13,19 +13,29 @@ package net.devemperor.dictate.ai.conversation
  */
 object StructuredResponseCodec {
 
-    /** Field names of the schema — single source for building the provider schemas. */
+    /** Field names of the `message`/`output` pair — single source for the provider schemas. */
     val fieldNames: Pair<String, String> = "message" to "output"
+
+    /**
+     * The verdict field (ADR-0013). Part of the request schema (all three
+     * providers), but NOT part of [encode]: a prior assistant turn is replayed
+     * as `{message, output}` only — the verdict is a per-response routing signal,
+     * not replayable history.
+     */
+    const val needsClarificationField: String = "needsClarification"
 
     /**
      * Instruction appended to the prompt when a provider rejects native
      * structured output (CUSTOM / OpenRouter text fallback). Keeps the wire
-     * shape identical to [encode] so [parseLenient] can read it back.
+     * shape identical to the request schema so [parseLenient] can read it back.
      */
     fun fallbackInstruction(): String {
         val (message, output) = fieldNames
         return "Respond with ONLY a single JSON object of the form " +
-            "{\"$message\": string, \"$output\": string} and nothing else. " +
-            "'$message' is a short explanation (may be empty); '$output' is the resulting text."
+            "{\"$message\": string, \"$output\": string, \"$needsClarificationField\": boolean} " +
+            "and nothing else. '$message' is a short explanation (may be empty); " +
+            "'$output' is the resulting text; '$needsClarificationField' is true only if you " +
+            "had to guess or the request was ambiguous."
     }
 
     /**
@@ -59,11 +69,12 @@ object StructuredResponseCodec {
             if (output != null) {
                 return StructuredResponse(
                     message = extractStringField(obj, "message"),
-                    output = output
+                    output = output,
+                    needsClarification = extractBooleanField(obj, needsClarificationField)
                 )
             }
         }
-        return StructuredResponse(message = null, output = stripped)
+        return StructuredResponse(message = null, output = stripped, needsClarification = false)
     }
 
     // ── internals ──────────────────────────────────────────────────────────
@@ -133,6 +144,25 @@ object StructuredResponseCodec {
                 obj.startsWith("null", i) -> null
                 else -> null // non-string value — defensively treat as absent
             }
+        }
+    }
+
+    /**
+     * Extracts the JSON boolean value of `"<key>"`. Returns `false` when the key
+     * is absent, its value is not the literal `true`, or it is malformed — the
+     * defensive default so a fallback/omitting model degrades to "no ambiguity".
+     */
+    private fun extractBooleanField(obj: String, key: String): Boolean {
+        val marker = "\"$key\""
+        var searchFrom = 0
+        while (true) {
+            val keyPos = findKeyOutsideString(obj, marker, searchFrom) ?: return false
+            var i = keyPos + marker.length
+            while (i < obj.length && obj[i].isWhitespace()) i++
+            if (i >= obj.length || obj[i] != ':') { searchFrom = keyPos + marker.length; continue }
+            i++
+            while (i < obj.length && obj[i].isWhitespace()) i++
+            return obj.startsWith("true", i)
         }
     }
 

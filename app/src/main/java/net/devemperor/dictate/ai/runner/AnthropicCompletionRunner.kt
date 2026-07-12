@@ -142,9 +142,12 @@ class AnthropicCompletionRunner(
             val parsed = if (toolUse != null) {
                 val input = toolUse._input().convert(Map::class.java) as? Map<*, *>
                 val (messageField, outputField) = StructuredResponseCodec.fieldNames
+                val clarifyField = StructuredResponseCodec.needsClarificationField
                 net.devemperor.dictate.ai.conversation.StructuredResponse(
                     message = input?.get(messageField)?.toString(),
-                    output = input?.get(outputField)?.toString().orEmpty()
+                    output = input?.get(outputField)?.toString().orEmpty(),
+                    needsClarification = input?.get(clarifyField) == true ||
+                        input?.get(clarifyField)?.toString() == "true"
                 )
             } else {
                 // Defensive: no tool block returned — parse concatenated text.
@@ -160,7 +163,8 @@ class AnthropicCompletionRunner(
                 promptTokens = message.usage().inputTokens(),
                 completionTokens = message.usage().outputTokens(),
                 modelName = request.model,
-                responseFormat = if (toolUse != null) ResponseFormatKind.TOOL_USE else ResponseFormatKind.TEXT_FALLBACK
+                responseFormat = if (toolUse != null) ResponseFormatKind.TOOL_USE else ResponseFormatKind.TEXT_FALLBACK,
+                needsClarification = parsed.needsClarification
             )
         }
     }
@@ -186,17 +190,19 @@ class AnthropicCompletionRunner(
         }
     }
 
-    /** The forced `{message, output}` tool (ADR-0012). */
+    /** The forced `{message, output, needsClarification}` tool (ADR-0012/0013). */
     private fun structuredTool(): Tool {
         val (messageField, outputField) = StructuredResponseCodec.fieldNames
+        val clarifyField = StructuredResponseCodec.needsClarificationField
         val properties = Tool.InputSchema.Properties.builder()
             .putAdditionalProperty(messageField, JsonValue.from(mapOf("type" to "string")))
             .putAdditionalProperty(outputField, JsonValue.from(mapOf("type" to "string")))
+            .putAdditionalProperty(clarifyField, JsonValue.from(mapOf("type" to "boolean")))
             .build()
         val schema = Tool.InputSchema.builder()
             .type(JsonValue.from("object"))
             .properties(properties)
-            .required(listOf(messageField, outputField))
+            .required(listOf(messageField, outputField, clarifyField))
             .build()
         return Tool.builder()
             .name(TOOL_NAME)

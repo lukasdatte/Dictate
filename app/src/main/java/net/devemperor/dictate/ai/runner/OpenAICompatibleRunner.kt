@@ -198,7 +198,8 @@ class OpenAICompatibleRunner(
             promptTokens = usage?.promptTokens() ?: 0L,
             completionTokens = usage?.completionTokens() ?: 0L,
             modelName = model,
-            responseFormat = format
+            responseFormat = format,
+            needsClarification = parsed.needsClarification
         )
     }
 
@@ -219,9 +220,10 @@ class OpenAICompatibleRunner(
         }
     }
 
-    /** The fixed `{message, output}` json_schema response format (ADR-0012). */
+    /** The fixed `{message, output, needsClarification}` json_schema response format (ADR-0012/0013). */
     private fun structuredResponseFormat(): ResponseFormatJsonSchema {
         val (messageField, outputField) = StructuredResponseCodec.fieldNames
+        val clarifyField = StructuredResponseCodec.needsClarificationField
         val schema = ResponseFormatJsonSchema.JsonSchema.Schema.builder()
             .putAdditionalProperty("type", JsonValue.from("object"))
             .putAdditionalProperty(
@@ -229,11 +231,12 @@ class OpenAICompatibleRunner(
                 JsonValue.from(
                     mapOf(
                         messageField to mapOf("type" to "string"),
-                        outputField to mapOf("type" to "string")
+                        outputField to mapOf("type" to "string"),
+                        clarifyField to mapOf("type" to "boolean")
                     )
                 )
             )
-            .putAdditionalProperty("required", JsonValue.from(listOf(messageField, outputField)))
+            .putAdditionalProperty("required", JsonValue.from(listOf(messageField, outputField, clarifyField)))
             .putAdditionalProperty("additionalProperties", JsonValue.from(false))
             .build()
         val jsonSchema = ResponseFormatJsonSchema.JsonSchema.builder()

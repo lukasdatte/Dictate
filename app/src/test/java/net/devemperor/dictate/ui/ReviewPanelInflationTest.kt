@@ -99,9 +99,11 @@ class ReviewPanelInflationTest {
     }
 
     @Test
-    fun `refining shows the hint and disables the action buttons`() {
+    fun `refining shows the hint, disables insert-redictate, keeps discard as cancel`() {
         render(ReviewPanelState(open = true, sessionId = "s1", output = "x", message = "m", refining = true))
         assertEquals(View.VISIBLE, refining.visibility)
-        assertTrue(!insert.isEnabled && !redictate.isEnabled && !discard.isEnabled)
+        assertTrue(!insert.isEnabled && !redictate.isEnabled)
+        // Discard stays enabled — it is the cancel affordance during refining.
+        assertTrue(discard.isEnabled)
     }
 }

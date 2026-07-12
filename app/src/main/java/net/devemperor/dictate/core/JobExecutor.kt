@@ -309,7 +309,12 @@ sealed class JobRequest {
         /** W3: Propagates `PipelineConfig.autoSwitchKeyboard`. */
         val autoSwitchKeyboard: Boolean = false,
         /** W3: Propagates `PipelineConfig.showResendButton`. */
-        val showResendButton: Boolean = false
+        val showResendButton: Boolean = false,
+        /** ADR-0013: ambiguity mode (drives forceTurn). Default preserves Paket-1. */
+        val ambiguityMode: net.devemperor.dictate.preferences.AmbiguityMode =
+            net.devemperor.dictate.preferences.AmbiguityMode.ALWAYS_INSERT,
+        /** ADR-0013: the review-refinement recording (S2) — never runs a turn. */
+        val transcriptionOnly: Boolean = false
     ) : JobRequest() {
         /**
          * W6: `toPipelineConfig()` is only defined on [TranscriptionPipeline] —
@@ -341,6 +346,8 @@ sealed class JobRequest {
             // TODO(Chunk 3): wire `modelOverride` through AIOrchestrator.
             modelOverride = modelOverride,
             queuedPromptSlots = queuedPromptSlots,
+            ambiguityMode = ambiguityMode,
+            transcriptionOnly = transcriptionOnly,
             // W3: for a brand-new session (reuseSessionId == null) the
             // orchestrator must persist under THIS sessionId, because
             // JobExecutor has already registered this ID in ActiveJobRegistry

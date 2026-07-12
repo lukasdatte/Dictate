@@ -102,6 +102,11 @@ class ImePipelineConfigResolver(
         val livePrompt: Boolean,
         val autoSwitchKeyboard: Boolean,
         val showResendButton: Boolean,
+        /** ADR-0013: ambiguity mode (drives forceTurn on the initial pipeline). */
+        val ambiguityMode: net.devemperor.dictate.preferences.AmbiguityMode =
+            net.devemperor.dictate.preferences.AmbiguityMode.ALWAYS_INSERT,
+        /** ADR-0013: review-refinement recording (S2) — transcription-only, no turn. */
+        val transcriptionOnly: Boolean = false,
     )
 
     /**
@@ -173,6 +178,8 @@ class ImePipelineConfigResolver(
             /* livePrompt */ cfg.livePrompt,
             /* autoSwitchKeyboard */ cfg.autoSwitchKeyboard,
             /* showResendButton */ cfg.showResendButton,
+            /* ambiguityMode */ cfg.ambiguityMode,
+            /* transcriptionOnly */ cfg.transcriptionOnly,
         )
     }
 

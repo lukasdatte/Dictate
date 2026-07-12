@@ -170,6 +170,10 @@ public class DictateInputMethodService extends InputMethodService
     private int currentDeleteDelay = BackspaceDeleteSpeedCurve.INITIAL_DELAY_MS;
     private boolean livePrompt = false;
     private volatile boolean pendingLivePromptChain = false; // true when transcription result should be chained into live prompt
+    // ADR-0013: non-null while a review-refinement recording (S2) is in flight;
+    // holds the S1 conversation session the resulting transcript continues.
+    private volatile String reviewRefinementTargetSessionId = null;
+    private net.devemperor.dictate.state.render.ReviewPanelRenderer reviewPanelRenderer;
     private boolean vibrationEnabled = true;
     // Block 3b: the audio-focus flag is no longer cached as a service field.
     // The single persistent source of truth is Pref.AudioFocus; the per-session
@@ -1901,10 +1905,29 @@ public class DictateInputMethodService extends InputMethodService
             new OverlayResetViews(overlayCharactersLl),
             overlayResetGate);
 
+        // ADR-0013 — the review panel container + its own buttons (outside the
+        // slot grid, InfoBar precedent). The renderer owns visibility/text/
+        // enable; the click handlers own the imperative side (host commit,
+        // recording start, job cancel) the reducer cannot reach.
+        View reviewInsertBtn = dictateKeyboardView.findViewById(R.id.review_insert_btn);
+        View reviewRedictateBtn = dictateKeyboardView.findViewById(R.id.review_redictate_btn);
+        View reviewDiscardBtn = dictateKeyboardView.findViewById(R.id.review_discard_btn);
+        reviewPanelRenderer = new net.devemperor.dictate.state.render.ReviewPanelRenderer(
+            new net.devemperor.dictate.state.render.ReviewPanelViews(
+                dictateKeyboardView.findViewById(R.id.review_panel_cl),
+                dictateKeyboardView.findViewById(R.id.review_message_tv),
+                dictateKeyboardView.findViewById(R.id.review_output_tv),
+                dictateKeyboardView.findViewById(R.id.review_refining_tv),
+                reviewInsertBtn, reviewRedictateBtn, reviewDiscardBtn));
+        if (reviewInsertBtn != null) reviewInsertBtn.setOnClickListener(v -> onReviewInsertClicked());
+        if (reviewRedictateBtn != null) reviewRedictateBtn.setOnClickListener(v -> onReviewRedictateClicked());
+        if (reviewDiscardBtn != null) reviewDiscardBtn.setOnClickListener(v -> onReviewDiscardClicked());
+
         try {
             keyboardLayoutManager.attachBackend(contentAreaController);
             keyboardLayoutManager.attachBackend(promptVisibilityController);
             keyboardLayoutManager.attachBackend(overlayResetHandler);
+            keyboardLayoutManager.attachBackend(reviewPanelRenderer);
             // Arm the three gates so the controllers are the SOLE LIVE
             // writers of the ContentArea / Promptbar / overlay-reset
             // axes. Post-CR-DEL there is no legacy `KeyboardStateManager`
@@ -1961,6 +1984,9 @@ public class DictateInputMethodService extends InputMethodService
                 if (overlayResetHandler != null) {
                     keyboardLayoutManager.detachBackend(overlayResetHandler);
                 }
+                if (reviewPanelRenderer != null) {
+                    keyboardLayoutManager.detachBackend(reviewPanelRenderer);
+                }
             } catch (Throwable t) {
                 Log.w("DictateIME", "Dormant visibility-controller detach failed", t);
             }
@@ -1968,6 +1994,7 @@ public class DictateInputMethodService extends InputMethodService
         contentAreaController = null;
         promptVisibilityController = null;
         overlayResetHandler = null;
+        reviewPanelRenderer = null;
         contentAreaGate = null;
         promptVisibilityGate = null;
         overlayResetGate = null;
@@ -4183,6 +4210,13 @@ public class DictateInputMethodService extends InputMethodService
         boolean showResend = new File(getCacheDir(), DictatePrefsKt.get(sp, Pref.LastFileName.INSTANCE)).exists()
                 && DictatePrefsKt.get(sp, Pref.ResendButton.INSTANCE);
 
+        // ADR-0013: a review-refinement recording (S2) is transcription-only —
+        // it must never run a turn or trigger a review/pending, so it forces
+        // ALWAYS_INSERT. A normal recording carries the user's ambiguity mode.
+        boolean transcriptionOnly = reviewRefinementTargetSessionId != null;
+        net.devemperor.dictate.preferences.AmbiguityMode ambiguityMode = transcriptionOnly
+                ? net.devemperor.dictate.preferences.AmbiguityMode.ALWAYS_INSERT
+                : currentAmbiguityMode();
         imePipelineConfigResolver.snapshotFresh(
                 sessionId,
                 new ImePipelineConfigResolver.FreshConfig(
@@ -4194,7 +4228,9 @@ public class DictateInputMethodService extends InputMethodService
                         stylePrompt,
                         livePrompt,
                         autoSwitchKeyboard,
-                        showResend));
+                        showResend,
+                        ambiguityMode,
+                        transcriptionOnly));
 
         // Mirror the legacy post-build flag handling
         // (DictateInputMethodService.java:2232-2234 pre-C5): the
@@ -4608,14 +4644,17 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onPipelineCompleted(@androidx.annotation.NonNull String text, @androidx.annotation.NonNull InsertionSource source,
                                     @androidx.annotation.Nullable net.devemperor.dictate.ai.conversation.PostProcessingReview review) {
-        // pkg2-3: `review` carries the ADR-0013 verdict; the insert-vs-review
-        // branch that consumes it is wired in pkg2-6. For now behaviour is
-        // unchanged (the transcript is inserted / deferred exactly as before).
+        // ADR-0013: `review` carries the post-processing verdict. Three
+        // outcomes decided here (never blocking on the pipeline thread):
+        // (A) live-prompt chain, (B) review-refinement carrier S2 → continue
+        // S1, (C) verdict says review AND the IME is visible → hold in the
+        // panel; otherwise the legacy insert/defer path.
         mainHandler.post(() -> {
             // Capture `sid` before any dispatch — `currentPipelineSessionId()`
             // reads from `state.pipeline`, which the PipelineDone dispatch
             // below resets to Idle.
             String sid = currentPipelineSessionId();
+            String refineTarget = reviewRefinementTargetSessionId;
             if (pendingLivePromptChain) {
                 // Live prompt: transcription result becomes the prompt for a completion call.
                 // Dispatch PipelineDone first so the chained completion's
@@ -4634,6 +4673,39 @@ public class DictateInputMethodService extends InputMethodService
                 if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
                 PromptEntity liveEntity = new PromptEntity(-1, Integer.MIN_VALUE, "", text, true, false);
                 runStandalonePromptViaOrchestrator(liveEntity);
+            } else if (refineTarget != null) {
+                // (B) This recording (S2) is a review refinement: its transcript
+                // becomes the next user turn on the S1 conversation. Do NOT
+                // insert. Close S2's FSM (committed=true, no host commit — like
+                // the live-prompt branch), mark the panel refining, and enqueue
+                // the continuation on the run-queue (ADR-0009).
+                reviewRefinementTargetSessionId = null;
+                if (sid != null) {
+                    dispatchPipelineActionToOrchestrator(
+                            new net.devemperor.dictate.state.Action.PipelineAction.PipelineDone(sid, text, true),
+                            "PipelineDone");
+                }
+                dispatchPipelineActionToOrchestrator(
+                        net.devemperor.dictate.state.Action.ReviewPanelAction.MarkRefining.INSTANCE,
+                        "ReviewPanel.MarkRefining");
+                startReviewContinuationJob(refineTarget, text);
+            } else if (review != null
+                    && canShowReviewPanel()
+                    && net.devemperor.dictate.ai.conversation.ReviewDecision.INSTANCE.decide(
+                            currentAmbiguityMode(), review.getNeedsClarification(), review.getMessage())
+                        == net.devemperor.dictate.ai.conversation.Verdict.REVIEW) {
+                // (C) Ambiguous + IME visible → hold the output in the review
+                // panel instead of inserting. PipelineDone(heldForReview) moves
+                // the FSM Idle WITHOUT inserting or creating a pending part; the
+                // reviewPanel axis owns the surface.
+                if (sid != null) {
+                    dispatchPipelineActionToOrchestrator(
+                            new net.devemperor.dictate.state.Action.PipelineAction.PipelineDone(sid, text, false, true),
+                            "PipelineDone(heldForReview)");
+                    dispatchPipelineActionToOrchestrator(
+                            new net.devemperor.dictate.state.Action.ReviewPanelAction.Show(sid, text, review.getMessage()),
+                            "ReviewPanel.Show");
+                }
             } else {
                 // Post-cutover hotfix #AE-DEEP — commit text BEFORE the
                 // PipelineDone dispatch. `commitTextToInputConnection`
@@ -4696,8 +4768,106 @@ public class DictateInputMethodService extends InputMethodService
                                       @androidx.annotation.NonNull String output,
                                       @androidx.annotation.Nullable String message,
                                       boolean needsClarification) {
-        // pkg2-3: non-terminal review-refinement result. The review-panel
-        // update path is wired in pkg2-6; no-op for now.
+        // ADR-0013: a dictated follow-up turn finished (non-terminal). Re-run
+        // the verdict: still ambiguous → refresh the panel; otherwise commit the
+        // refined output and close.
+        mainHandler.post(() -> {
+            net.devemperor.dictate.ai.conversation.Verdict v =
+                    net.devemperor.dictate.ai.conversation.ReviewDecision.INSTANCE.decide(
+                            currentAmbiguityMode(), needsClarification, message);
+            if (v == net.devemperor.dictate.ai.conversation.Verdict.REVIEW && canShowReviewPanel()) {
+                dispatchPipelineActionToOrchestrator(
+                        new net.devemperor.dictate.state.Action.ReviewPanelAction.Update(output, message),
+                        "ReviewPanel.Update");
+            } else {
+                insertionService().insert(new InsertionRequest(
+                        output, InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE, null, sessionId));
+                dispatchPipelineActionToOrchestrator(
+                        net.devemperor.dictate.state.Action.ReviewPanelAction.Insert.INSTANCE,
+                        "ReviewPanel.Insert");
+            }
+        });
+    }
+
+    // ── ADR-0013 review-panel helpers + button handlers ──────────────────
+
+    /**
+     * ADR-0013 review-continuation carve-out — the ONLY IME
+     * {@code JobExecutor.start} besides the RESUME carve-out
+     * ({@code startResumeJob}). A dictated review refinement runs as a
+     * follow-up turn on the run-queue (ADR-0009), off the main pipeline FSM
+     * (like a regenerate), and surfaces via the non-terminal
+     * {@code onReviewTurnCompleted}. Kept in a named method so the
+     * architecture-invariant test can whitelist exactly this call-site.
+     */
+    private void startReviewContinuationJob(@androidx.annotation.NonNull String sessionId,
+                                            @androidx.annotation.NonNull String followUpText) {
+        net.devemperor.dictate.core.JobExecutor.INSTANCE.start(
+                this,
+                new net.devemperor.dictate.core.JobRequest.ConversationContinuation(sessionId, followUpText, 1));
+    }
+
+    private net.devemperor.dictate.preferences.AmbiguityMode currentAmbiguityMode() {
+        return net.devemperor.dictate.preferences.AmbiguityMode.fromPersistKey(
+                DictatePrefsKt.get(sp, Pref.AmbiguityMode.INSTANCE));
+    }
+
+    /** The review panel opens only when the IME view is visible (ADR-0013 §7). */
+    private boolean canShowReviewPanel() {
+        return pipelineBinder != null && pipelineBinder.getState().getValue().getImeViewVisible();
+    }
+
+    @androidx.annotation.Nullable
+    private net.devemperor.dictate.state.ReviewPanelState currentReviewPanel() {
+        if (pipelineBinder == null) return null;
+        return pipelineBinder.getState().getValue().getReviewPanel();
+    }
+
+    private boolean isReviewActive() {
+        net.devemperor.dictate.state.ReviewPanelState p = currentReviewPanel();
+        return reviewRefinementTargetSessionId != null || (p != null && p.getOpen());
+    }
+
+    /** "Re-dictate" — start a transcription-only recording whose transcript
+     *  continues the reviewed conversation (S1). Mirrors the live-prompt chip. */
+    private void onReviewRedictateClicked() {
+        net.devemperor.dictate.state.ReviewPanelState panel = currentReviewPanel();
+        if (panel == null || !panel.getOpen() || panel.getRefining() || panel.getSessionId() == null) return;
+        reviewRefinementTargetSessionId = panel.getSessionId();
+        if (isEffectiveRecordingIdle()) {
+            startRecording();
+        } else if (isEffectiveRecordingActiveOrPaused()) {
+            stopRecording();
+        }
+    }
+
+    /** "Insert" — commit the reviewed output into the host, then clear + ack. */
+    private void onReviewInsertClicked() {
+        net.devemperor.dictate.state.ReviewPanelState panel = currentReviewPanel();
+        if (panel == null || !panel.getOpen() || panel.getRefining()) return;
+        insertionService().insert(new InsertionRequest(
+                panel.getOutput(), InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE, null, panel.getSessionId()));
+        dispatchPipelineActionToOrchestrator(
+                net.devemperor.dictate.state.Action.ReviewPanelAction.Insert.INSTANCE, "ReviewPanel.Insert");
+    }
+
+    /** "Discard" — while refining it cancels the continuation job; otherwise it
+     *  clears + acknowledges the session (no host commit). */
+    private void onReviewDiscardClicked() {
+        net.devemperor.dictate.state.ReviewPanelState panel = currentReviewPanel();
+        if (panel == null || !panel.getOpen()) return;
+        if (panel.getRefining()) {
+            if (panel.getSessionId() != null) {
+                net.devemperor.dictate.core.JobExecutor.INSTANCE.cancel(panel.getSessionId());
+            }
+            dispatchPipelineActionToOrchestrator(
+                    net.devemperor.dictate.state.Action.ReviewPanelAction.CancelRefinement.INSTANCE,
+                    "ReviewPanel.CancelRefinement");
+        } else {
+            dispatchPipelineActionToOrchestrator(
+                    net.devemperor.dictate.state.Action.ReviewPanelAction.Discard.INSTANCE,
+                    "ReviewPanel.Discard");
+        }
     }
 
     @Override
@@ -4799,6 +4969,10 @@ public class DictateInputMethodService extends InputMethodService
         // If a live prompt chain is pending, skip the UI/session reset —
         // runStandalonePromptViaOrchestrator will start a new pipeline that calls onPipelineFinished when done.
         if (pendingLivePromptChain) return;
+        // ADR-0013: while a review is active (panel open or a refinement
+        // recording/continuation in flight), keep the session tracking the
+        // panel depends on — do not clear it here.
+        if (isReviewActive()) return;
 
         // Clear the transient current-session tracking (DB is source of truth
         // for "last keyboard session" — see SessionTracker.getLastKeyboardSession).

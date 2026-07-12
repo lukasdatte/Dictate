@@ -156,7 +156,7 @@ class CutoverArchitectureInvariantTest {
             .filter { it.isFile && (it.extension == "kt" || it.extension == "java") }
             .toList()
 
-    // ---- (a) exactly one JobExecutor.start in the IME, the RESUME carve-out
+    // ---- (a) every JobExecutor.start in the IME lives in a named carve-out
 
     @Test
     fun exactlyOneJobExecutorStartInIme_andItIsTheResumeCarveOut() {
@@ -164,37 +164,31 @@ class CutoverArchitectureInvariantTest {
 
         val startRegex = Regex("""JobExecutor\s*\.\s*INSTANCE\s*\.\s*start\s*\(""")
         val matches = startRegex.findAll(code).toList()
+        // Two documented carve-outs: the RESUME helper (startResumeJob) and the
+        // ADR-0013 review-continuation helper (startReviewContinuationJob). Any
+        // OTHER start-site reintroduces the parent-plan INT-1 double-dispatch
+        // failure class and must fail this test.
         assertEquals(
-            "AC-10 invariant: the IME must contain exactly ONE functional " +
-                "JobExecutor.INSTANCE.start( call-site (the documented RESUME " +
-                "carve-out). A second one reintroduces the parent-plan INT-1 " +
+            "AC-10 invariant: the IME must contain exactly TWO functional " +
+                "JobExecutor.INSTANCE.start( call-sites — the RESUME carve-out " +
+                "(startResumeJob) and the ADR-0013 review-continuation carve-out " +
+                "(startReviewContinuationJob). A third reintroduces the INT-1 " +
                 "double-dispatch failure class.",
-            1,
+            2,
             matches.size,
         )
 
-        // Assert the single call-site is inside the RESUME carve-out
-        // method (`startResumeJob`). We slice the functional code around
-        // the match and require the enclosing declaration to be the
-        // resume helper — single-dispatch, orthogonal to the recording
-        // drive (AC-10 holds).
-        val idx = matches.first().range.first
-        val before = code.substring(0, idx)
-        val enclosingMethod = Regex("""(?s)(\w[\w<>\[\]\s,]*\s+)(\w+)\s*\([^)]*\)\s*\{(?:(?!\bvoid\s|\bprivate\s|\bpublic\s|\bprotected\s).)*$""")
-        // Simpler + robust: the nearest preceding `startResumeJob(` signature.
-        val resumeSigIdx = before.lastIndexOf("startResumeJob")
+        val allowedCarveOuts = setOf("startResumeJob", "startReviewContinuationJob")
         val anyMethodSigRegex = Regex("""\b(private|public|protected)\b[^;{}]*\b(\w+)\s*\(""")
-        val lastSig = anyMethodSigRegex.findAll(before).lastOrNull()
-        assertTrue(
-            "The single JobExecutor.start must live in the documented RESUME " +
-                "carve-out (startResumeJob). Enclosing method was: " +
-                "${lastSig?.groupValues?.get(2)}",
-            resumeSigIdx >= 0 &&
-                lastSig != null &&
-                lastSig.groupValues[2] == "startResumeJob",
-        )
-        // Silence unused-helper warning while keeping the regex documented.
-        assertNotEquals("", enclosingMethod.pattern)
+        matches.forEach { m ->
+            val before = code.substring(0, m.range.first)
+            val enclosing = anyMethodSigRegex.findAll(before).lastOrNull()?.groupValues?.get(2)
+            assertTrue(
+                "Every JobExecutor.start must live in a documented carve-out " +
+                    "($allowedCarveOuts). Enclosing method was: $enclosing",
+                enclosing in allowedCarveOuts,
+            )
+        }
     }
 
     @Test

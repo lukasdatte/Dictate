@@ -67,11 +67,12 @@ class ReviewPanelRenderer(
         }
         views.refiningView?.visibility = if (panel.refining) View.VISIBLE else View.GONE
 
-        // Insert/Discard/Re-dictate are disabled while a follow-up turn runs;
-        // a cancel affordance stays reachable via the trash button path.
+        // Insert/Re-dictate are disabled while a follow-up turn runs; the Discard
+        // button stays enabled and doubles as the cancel affordance during
+        // refining (its click handler branches on `refining`, ADR-0013 (d)).
         val actionable = !panel.refining
         views.insertButton?.isEnabled = actionable
         views.redictateButton?.isEnabled = actionable
-        views.discardButton?.isEnabled = actionable
+        views.discardButton?.isEnabled = true
     }
 }

@@ -291,6 +291,27 @@ class PipelineOrchestratorQueueExecutionTest {
     }
 
     @Test
+    fun `continueConversation - provider-level cancel throws and appends no turn`() {
+        // ADR-0013 (d): a review-panel cancel routes to JobExecutor.cancel,
+        // which triggers the token; the continuation must abort cleanly without
+        // appending a turn or surfacing a review result.
+        val sid = createRecordingSession()
+        db.promptDao().insert(
+            PromptEntity(id = 7, pos = 0, name = "F", prompt = "Make it formal", requiresSelection = true, autoApply = false)
+        )
+        reprocess(sid, listOf(PromptQueueSlot.ofSavedPrompt(7)))   // converse #1 (turn 0)
+        factory.cancelAtConverseCall = 2                            // cancel the continuation
+
+        assertThrows(java.util.concurrent.CancellationException::class.java) {
+            orchestrator.continueConversationBlocking(sid, "make it shorter")
+        }
+
+        // No new turn appended; no non-terminal review surfaced.
+        assertEquals(1, db.processingStepDao().getCurrentChain(sid).size)
+        assertEquals(0, callback.reviewTurns.size)
+    }
+
+    @Test
     fun `resume - provider-level cancel finalises CANCELLED`() {
         db.promptDao().insert(
             PromptEntity(

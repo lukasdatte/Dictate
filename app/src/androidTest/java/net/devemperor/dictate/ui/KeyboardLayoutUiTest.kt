@@ -514,4 +514,7 @@ internal fun uiTestLayoutStrings(): LayoutStrings = LayoutStrings(
             "$done/$total$mark  ${elapsedMs}ms"
         }
     },
+    formatPreparingLabel = { autoEnter ->
+        if (autoEnter) "Sending … ↵" else "Sending …"
+    },
 )

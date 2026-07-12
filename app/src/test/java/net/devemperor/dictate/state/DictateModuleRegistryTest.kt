@@ -32,35 +32,36 @@ class DictateModuleRegistryTest {
     }
 
     @Test
-    fun `production singleton contains the 16 active modules (C5 + C6 + B3)`() {
+    fun `production singleton contains the 17 active modules (C5 + C6 + B3 + ADR-0013)`() {
         // Order is a binding contract (cascade order, ADR-0002) — the
         // list literal in `DictateModuleRegistry.Default` is the single
         // source of truth. B3.1 / ADR-0008 added `WidgetModule` next to
         // the legacy `ViewModeModule`; both co-exist until B3.5 retires
         // the ViewMode axis. 2026-07-02 (ADR-0006 completion) added
         // `InfoHintModule`; the same day activated `InterruptionModule`
-        // (F-036, formerly the Phase-2 stub). Inventory: 6 core
-        // (C5 + B3 widget) + 10 aux (C6 + InfoHint + Interruption) = 16
-        // entries.
-        val expected: List<DictateModule<*, *, *>> = listOf(
-            RecordingModule,
-            PipelineModule,
-            AudioModule,
-            ViewModeModule,
-            WidgetModule,
-            OverlayModule,
-            ResendModule,
-            LivePromptModule,
-            LanguageModule,
-            LayoutModule,
-            FeatureToggleModule,
-            ThemingModule,
-            PendingSessionsModule,
-            KeyboardInputModule,
-            InfoHintModule,
-            InterruptionModule,
+        // (F-036, formerly the Phase-2 stub). ADR-0013 added
+        // `ReviewPanelModule` (a class instance, not an object — compared
+        // by id here). Inventory: 6 core + 11 aux = 17 entries.
+        val expectedIds: List<ModuleId> = listOf(
+            ModuleId.Recording,
+            ModuleId.Pipeline,
+            ModuleId.Audio,
+            ModuleId.ViewMode,
+            ModuleId.Widget,
+            ModuleId.Overlay,
+            ModuleId.Resend,
+            ModuleId.LivePrompt,
+            ModuleId.Language,
+            ModuleId.Layout,
+            ModuleId.FeatureToggle,
+            ModuleId.Theming,
+            ModuleId.PendingSessions,
+            ModuleId.KeyboardInput,
+            ModuleId.InfoHint,
+            ModuleId.Interruption,
+            ModuleId.ReviewPanel,
         )
-        assertEquals(expected, DictateModuleRegistry.Default.all)
+        assertEquals(expectedIds, DictateModuleRegistry.Default.all.map { it.id })
     }
 
     @Test

@@ -417,10 +417,12 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                     // surfaces in the InfoBar's pending-insert producer;
                     // refresh pendingSessions live so the UI updates
                     // without waiting for the next Recovery pass.
-                    val followUp = if (action.committed) {
-                        Effect.MarkSessionInserted(action.sessionId, ctx.now)
-                    } else {
-                        Effect.AddPendingInsertSession(
+                    // ADR-0013: heldForReview leaves inserted_at NULL and adds
+                    // NO pending part — the reviewPanel axis owns the surface.
+                    val followUp = when {
+                        action.heldForReview -> null
+                        action.committed -> Effect.MarkSessionInserted(action.sessionId, ctx.now)
+                        else -> Effect.AddPendingInsertSession(
                             sessionId = action.sessionId,
                             text = action.finalText,
                             createdAt = ctx.now,
@@ -431,7 +433,7 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                     val (nextState, terminalEffects) = nextAfterTerminal(queuedOf(state))
                     TransitionResult(
                         nextState = nextState,
-                        sideEffects = listOf(followUp) + terminalEffects,
+                        sideEffects = listOfNotNull(followUp) + terminalEffects,
                     )
                 } else null
             else -> null

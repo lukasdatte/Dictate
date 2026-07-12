@@ -155,6 +155,10 @@ open class DictateModuleRegistry(
             // F-036 (2026-07-02) — audio-focus / headset interruption
             // axis (registered as a stub since C6, active now).
             InterruptionModule,
+            // ADR-0013 — in-keyboard review panel for ambiguous
+            // post-processing (after PendingSessions: its teardown cascade
+            // emits a PendingSessionsAction).
+            ReviewPanelModule(),
         ),
     )
 }

@@ -443,10 +443,19 @@ sealed class Action {
          * Default `true` preserves backwards-compat for legacy call-sites
          * that don't know about the commit-blocked path.
          */
-        data class PipelineDone(
+        data class PipelineDone @JvmOverloads constructor(
             val sessionId: String,
             val finalText: String,
             val committed: Boolean = true,
+            /**
+             * ADR-0013: the turn's output is held in the review panel (a
+             * separate axis owns the surface). Moves the FSM Idle + drains the
+             * queue but emits NEITHER MarkSessionInserted NOR
+             * AddPendingInsertSession — the session stays COMPLETED with
+             * `inserted_at` NULL (crash-recoverable as a pending part via
+             * `findPendingInsertion`). Overrides [committed] when true.
+             */
+            val heldForReview: Boolean = false,
         ) : PipelineAction()
 
         data class PipelineFailed(val sessionId: String, val reason: String) : PipelineAction()
@@ -843,6 +852,40 @@ sealed class Action {
         data object EnableLivePrompt : LivePromptAction()
         data object DisableLivePrompt : LivePromptAction()
         data class ChainNext(val text: String) : LivePromptAction()
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // Review-panel-axis actions (ReviewPanelModule, ADR-0013)
+    // ════════════════════════════════════════════════════════════════
+    sealed class ReviewPanelAction : Action() {
+        /** Open the panel with a turn's output + explanation. */
+        data class Show(val sessionId: String, val output: String, val message: String?) : ReviewPanelAction()
+
+        /** A dictated follow-up turn succeeded — refresh the panel. */
+        data class Update(val output: String, val message: String?) : ReviewPanelAction()
+
+        /** A dictated follow-up turn started running. */
+        data object MarkRefining : ReviewPanelAction()
+
+        /** The follow-up turn was cancelled/failed — return to the prior output. */
+        data object CancelRefinement : ReviewPanelAction()
+
+        /**
+         * "Insert" — the IME commits `output` imperatively (side-channel, like
+         * `PendingSessionsAction.AcceptAndInsert`); the reducer clears the axis
+         * and marks the session acknowledged.
+         */
+        data object Insert : ReviewPanelAction()
+
+        /** "Discard" — clear the axis + mark acknowledged (no host commit). */
+        data object Discard : ReviewPanelAction()
+
+        /**
+         * The IME view went away while the panel was open — convert the held
+         * text to a pending part (no data loss) and close. Emitted by the
+         * teardown cascade, never by a button.
+         */
+        data object ConvertToPendingAndClose : ReviewPanelAction()
     }
 
     // ════════════════════════════════════════════════════════════════

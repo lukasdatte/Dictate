@@ -29,12 +29,12 @@ class ActionHierarchyTest {
     fun `Action sealedSubclasses include all 16 module sealed actions plus EffectFailure`() {
         val direct = Action::class.sealedSubclasses.map { it.simpleName }.toSet()
 
-        // 16 module action classes + 1 top-level EffectFailure = 17 direct subclasses.
+        // 17 module action classes + 1 top-level EffectFailure = 18 direct subclasses.
         // B3.1 / ADR-0008 added `WidgetAction` alongside the legacy
         // `ViewModeAction`; both stay registered until B3.5 retires the
         // ViewMode axis. 2026-07-02 (ADR-0006 completion) added
-        // `InfoHintAction`. The remaining names match the §15.1 module
-        // inventory (+ 1 Phase-2 stub).
+        // `InfoHintAction`. ADR-0013 added `ReviewPanelAction`. The remaining
+        // names match the §15.1 module inventory (+ 1 Phase-2 stub).
         val expected = setOf(
             "EffectFailure",
             "RecordingAction",
@@ -53,6 +53,7 @@ class ActionHierarchyTest {
             "KeyboardInputAction",
             "InfoHintAction",
             "InterruptionAction",
+            "ReviewPanelAction",
         )
         assertEquals(expected, direct)
     }

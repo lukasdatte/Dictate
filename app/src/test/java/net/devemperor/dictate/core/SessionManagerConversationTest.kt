@@ -92,6 +92,25 @@ class SessionManagerConversationTest {
     }
 
     @Test
+    fun `a completed uninserted turn is crash-recoverable via findPendingInsertion (ADR-0013)`() {
+        // The review-held invariant: appendConversationTurn persists
+        // final_output_text, and heldForReview leaves inserted_at NULL, so after
+        // process death the session re-surfaces as a pending part. Without the
+        // final_output_text persistence this query would miss it.
+        val s = newSession()
+        sm.appendConversationTurn(s, "U0", "raw", result("held output"), "OPENAI", null, 1, "SYS")
+        sm.finalizeCompleted(s)
+
+        val pending = db.sessionDao().findPendingInsertion(0L)
+        assertEquals(listOf(s), pending.map { it.id })
+        assertEquals("held output", pending.single().finalOutputText)
+
+        // Once acknowledged (Insert/Discard mark inserted), it no longer surfaces.
+        sm.markInserted(s, 999L)
+        assertTrue(db.sessionDao().findPendingInsertion(0L).isEmpty())
+    }
+
+    @Test
     fun `loadConversation reconstructs system and one turn`() {
         val s = newSession()
         sm.appendConversationTurn(s, "U0", "raw", result("O0", "M0"), "OPENAI", null, 1, "SYS")

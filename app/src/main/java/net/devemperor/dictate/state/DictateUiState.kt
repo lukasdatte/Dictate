@@ -114,6 +114,12 @@ data class DictateUiState(
      * `2026-07-02 - infobar-consolidation.md`).
      */
     val infoHints: InfoHintState = InfoHintState(),
+
+    /**
+     * Review-panel sub-state (ADR-0013). Owned by `ReviewPanelModule`. When
+     * `open`, `LayoutCatalog.forKeyboard` selects `KEYBOARD_REVIEW_PANEL`.
+     */
+    val reviewPanel: ReviewPanelState = ReviewPanelState(),
 ) {
     companion object {
         /**
@@ -138,6 +144,7 @@ data class DictateUiState(
             interruption = InterruptionState(),
             keyboardInput = KeyboardInputState(),
             infoHints = InfoHintState(),
+            reviewPanel = ReviewPanelState(),
         )
     }
 }
@@ -879,6 +886,27 @@ data class ResendState(
 data class LivePromptState(
     val enabled: Boolean = false,
     val pendingChain: Boolean = false,
+)
+
+/**
+ * In-keyboard review panel (ADR-0013). Owned by `ReviewPanelModule`. Shown when
+ * an ambiguous post-processing turn holds its output for review instead of
+ * inserting (the pipeline FSM has already gone Idle via
+ * `PipelineDone(heldForReview=true)` — this axis owns the surface).
+ *
+ * @property open whether the panel is showing.
+ * @property sessionId the conversation being reviewed.
+ * @property output the model's current output (what "Insert" would commit).
+ * @property message the model's explanation (may be blank/null → output-only).
+ * @property refining true while a dictated follow-up turn is running; the
+ *   Insert/Discard/Re-dictate buttons are disabled but a cancel stays available.
+ */
+data class ReviewPanelState(
+    val open: Boolean = false,
+    val sessionId: String? = null,
+    val output: String = "",
+    val message: String? = null,
+    val refining: Boolean = false,
 )
 
 /**

@@ -230,6 +230,22 @@ class PipelineModuleTest {
     }
 
     @Test
+    fun `PipelineDone(heldForReview) drops to Idle with NO insert and NO pending part`() {
+        // ADR-0013: a review-held turn moves the FSM Idle + drains the queue but
+        // emits neither MarkSessionInserted nor AddPendingInsertSession — the
+        // reviewPanel axis owns the surface.
+        val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION)
+        val result = module.reduce(
+            state,
+            Action.PipelineAction.PipelineDone(sid, "held text", committed = false, heldForReview = true),
+            ctx(),
+        )!!
+        assertTrue(result.nextState is PipelineUiState.Idle)
+        assertFalse(result.sideEffects.any { it is PipelineModule.Effect.MarkSessionInserted })
+        assertFalse(result.sideEffects.any { it is PipelineModule.Effect.AddPendingInsertSession })
+    }
+
+    @Test
     fun `PipelineFailed with a non-empty queue chain-starts the next run`() {
         val queued = persistentListOf(QueuedRun("sess-2", File("/tmp/b.m4a"), 1_000L))
         val state = PipelineUiState.Running(sid, InsertionTarget.INPUT_CONNECTION, queued = queued)

@@ -48,4 +48,7 @@ sealed interface ModuleId {
 
     /** F-036 (2026-07-02) — audio-focus / headset interruption axis. */
     data object Interruption : ModuleId
+
+    /** ADR-0013 — in-keyboard review panel for ambiguous post-processing. */
+    data object ReviewPanel : ModuleId
 }

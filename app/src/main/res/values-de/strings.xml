@@ -389,6 +389,7 @@
     <string name="overlay_pause_cd">Aufnahme pausieren oder fortsetzen</string>
     <string name="overlay_trash_cd">Aufnahme abbrechen</string>
     <string name="overlay_close_cd">Overlay schließen</string>
+    <string name="overlay_notice_pending_insert">Text wird beim nächsten Öffnen der Tastatur eingefügt.</string>
 
     <!-- Block 5 / Spec 3 §5.2-§5.3 — Onboarding-Texte für die Overlay-Berechtigung. -->
     <string name="overlay_perm_onboarding_title">Berechtigung für schwebendes Overlay</string>

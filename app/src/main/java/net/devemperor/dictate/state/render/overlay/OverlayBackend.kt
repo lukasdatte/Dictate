@@ -10,6 +10,7 @@ import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.color.MaterialColors
 import net.devemperor.dictate.R
@@ -17,6 +18,7 @@ import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.ModuleServices
 import net.devemperor.dictate.state.OverlayState
+import net.devemperor.dictate.state.TransientNotice
 import net.devemperor.dictate.state.canCommitToHost
 import net.devemperor.dictate.state.layout.BackendType
 import net.devemperor.dictate.state.layout.ButtonSlot
@@ -232,6 +234,14 @@ class OverlayBackend(
     private var thirdRowContainer: View? = null
 
     /**
+     * The transient-notice text element (OverlayTransientNotice primitive).
+     * Resolved once per [inflateAndAttach]; driven from
+     * `state.overlay.transientNotice` in [applyTransientNotice]. `null` while
+     * detached.
+     */
+    private var noticeView: TextView? = null
+
+    /**
      * State snapshot read by click listeners at click-time. Single
      * source of truth so the lambda lives for the whole backend
      * lifetime — L8 forbidden-pattern (l) avoidance.
@@ -411,6 +421,13 @@ class OverlayBackend(
         //     Short-circuits during an active drag so the user's finger
         //     position wins over the (stale) normalised state axis.
         applyPosition(state.overlay)
+
+        // 7 — Transient notice (OverlayTransientNotice primitive, Decision 3).
+        //     State-driven small text under the buttons; the first live use
+        //     is the hover-send → pending-part notice. Driven purely from
+        //     `state.overlay.transientNotice`, after the button/opacity/
+        //     position passes so it never interferes with them.
+        applyTransientNotice(state.overlay.transientNotice)
     }
 
     // ─── Public side-channel forwarders (Spec 2 §11.5 pattern) ─────────
@@ -585,6 +602,7 @@ class OverlayBackend(
         currentParams = params
         buttonViews = views
         thirdRowContainer = view.findViewById(R.id.overlay_third_row)
+        noticeView = view.findViewById(R.id.overlay_notice_tv)
         inflatedNightMode = nightWanted
 
         wireStaticOverlayHandlers()
@@ -663,6 +681,27 @@ class OverlayBackend(
         }
 
         lastAppliedOpacityPercent = opacityPercent
+    }
+
+    /**
+     * Show or hide the transient-notice text element (OverlayTransientNotice
+     * primitive, Decision 3) from the current [notice] state.
+     *
+     * `null` → GONE (the card shrinks back). Non-null → set the label from
+     * its `@StringRes` and make it VISIBLE. The `textRes` is resolved via the
+     * notice view's own themed (night-correct) context, so it honours the
+     * overlay's day/night palette like every other overlay string. Pure
+     * View-state mutation — no drag/click/opacity interaction (the element is
+     * a non-clickable `TextView`, absent from `buttonViews`).
+     */
+    private fun applyTransientNotice(notice: TransientNotice?) {
+        val tv = noticeView ?: return
+        if (notice == null) {
+            tv.visibility = View.GONE
+        } else {
+            tv.setText(notice.textRes)
+            tv.visibility = View.VISIBLE
+        }
     }
 
     /**
@@ -1046,6 +1085,7 @@ class OverlayBackend(
         currentParams = null
         buttonViews = emptyMap()
         thirdRowContainer = null
+        noticeView = null
         stateRef = null
         modeRef = null
         lastAppliedPosition = null

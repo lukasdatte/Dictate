@@ -4,6 +4,9 @@
 // to the same package.
 package net.devemperor.dictate.state
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import net.devemperor.dictate.R
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.put
 import java.io.File
@@ -102,6 +105,26 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
          * [ModuleServices.notificationCoordinator].
          */
         data object NotifyOverlayPermissionRequired : Effect
+
+        /**
+         * Delayed auto-expiry for the transient-notice primitive
+         * (OverlayTransientNotice). Scheduled by the `ShowTransientNotice`
+         * reducer arm; `runEffect` launches a [ModuleServices.scope]
+         * coroutine that `delay`s [durationMs] then emits
+         * [Action.OverlayAction.ExpireTransientNotice] carrying [token].
+         * Mirrors the `ResendModule.Effect.ScheduleCooldownExpiry`
+         * delayed-effect precedent (F-029). On service teardown the scope is
+         * cancelled and the pending `delay` is dropped — the notice is
+         * transient UI state that resets on the next store rebuild anyway.
+         *
+         * @property token the notice token this expiry belongs to; the
+         *   reducer ignores a stale token so overlap is safe.
+         * @property durationMs how long to wait before emitting the expiry.
+         */
+        data class ScheduleNoticeExpiry(
+            val token: Long,
+            val durationMs: Long,
+        ) : Effect
     }
 
     override fun reduce(
@@ -199,6 +222,34 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             nextState = state,
             sideEffects = listOf(Effect.NotifyOverlayPermissionRequired),
         )
+
+        // ─── Transient-notice primitive (Decision 3) ────────────────────
+        is Action.OverlayAction.ShowTransientNotice -> {
+            // Mint a strictly-greater token than any live notice so a second
+            // Show before expiry wins and the prior notice's pending expiry
+            // becomes stale (see TransientNotice.token KDoc). Reaching `null`
+            // only ever happens via a matching-token expiry, so restarting
+            // the count from 0 there cannot collide with an in-flight expiry.
+            val nextToken = (state.transientNotice?.token ?: 0L) + 1
+            TransitionResult(
+                nextState = state.copy(
+                    transientNotice = TransientNotice(action.textRes, nextToken),
+                ),
+                sideEffects = listOf(
+                    Effect.ScheduleNoticeExpiry(nextToken, action.durationMs),
+                ),
+            )
+        }
+
+        is Action.OverlayAction.ExpireTransientNotice ->
+            // Clear only when the tokens match — an older expiry never clears
+            // a newer notice. A mismatch (or no live notice) is not-relevant
+            // → null (Rejected("reducer-null"), the correct semantic outcome).
+            if (state.transientNotice?.token == action.token) {
+                TransitionResult(nextState = state.copy(transientNotice = null))
+            } else {
+                null
+            }
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
@@ -266,6 +317,21 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             services.notificationCoordinator.show(
                 NotificationStatus.OverlayPermissionRequired,
             )
+        }
+        is Effect.ScheduleNoticeExpiry -> {
+            // Delayed auto-expiry (OverlayTransientNotice). Same shape as
+            // ResendModule's cooldown timer (F-029): launch on the
+            // FGS-scoped coroutine context; `emitAction` posts the expiry
+            // back through the orchestrator's main-thread dispatch (effects
+            // never call `dispatch` directly, ADR-0001). A stale token is
+            // ignored by the reducer, so overlapping notices are safe.
+            services.scope.launch {
+                delay(effect.durationMs)
+                services.emitAction(
+                    Action.OverlayAction.ExpireTransientNotice(effect.token),
+                )
+            }
+            Unit
         }
     }
 
@@ -401,6 +467,39 @@ object OverlayModule : DictateModule<OverlayState, Action.OverlayAction, Overlay
             cascade += Action.OverlayAction.RequestOverlayPermissionNotification
         }
 
+        // ─── Hover-send → pending-part notice (Decision 3, 2026-07-12) ──
+        // A send committed to the pipeline while the IME-View is hidden
+        // (HOVER, or the sticky-widget-after-IME-teardown case) cannot commit
+        // its transcript into a host field — it defers to a pending part
+        // offered on the next keyboard open (ADR-0009 deferred-insertion +
+        // ADR-0011 headless-completion). Surface a transient notice so the
+        // user knows the text is not lost.
+        //
+        // Observable proxy: pipeline `Idle → Preparing` (the fresh-send edge,
+        // PipelineModule's `TriggerPipeline` Idle arm) while `!imeViewVisible`.
+        // A send with the keyboard visible commits immediately, so it keeps
+        // `imeViewVisible == true` and does NOT fire this notice — matching
+        // `DictateUiState.canCommitToHost` (the same axis the IME insert path
+        // keys on). A queued second send (pipeline already non-Idle) does not
+        // hit this edge and is intentionally out of scope for the notice.
+        if (prev.pipeline is PipelineUiState.Idle &&
+            next.pipeline is PipelineUiState.Preparing &&
+            !next.imeViewVisible
+        ) {
+            cascade += Action.OverlayAction.ShowTransientNotice(
+                textRes = R.string.overlay_notice_pending_insert,
+                durationMs = TRANSIENT_NOTICE_DURATION_MS,
+            )
+        }
+
         return cascade
     }
+
+    /**
+     * How long the hover-send pending-part notice stays before auto-expiry
+     * (~3.5 s — long enough to read one sentence, short enough not to
+     * linger). Other producers of [Action.OverlayAction.ShowTransientNotice]
+     * pass their own duration.
+     */
+    const val TRANSIENT_NOTICE_DURATION_MS: Long = 3500L
 }

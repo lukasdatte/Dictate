@@ -706,42 +706,48 @@ class ActionResolversTest {
 
     // ─── resolveOverlayRecordAction (Variante 2a, dictate-widget-integration §8.2 Chunk 2.2) ──
     //
-    // 2026-05-22 — overlay record-btn spec (post-Widget-Pause refactor):
+    // 2026-07-12 — HOVER-send enablement (ADR-0009 deferred-insertion +
+    // ADR-0011 headless-completion). The May-2026 "Senden verboten ohne
+    // InputConnection" rule is lifted by user decision: sending in HOVER is
+    // now allowed. The pipeline runs; the transcript becomes a pending part
+    // offered on the next keyboard open (IME-side insert returns
+    // DeferredToPending → PipelineDone(committed=false) → AddPendingInsert-
+    // Session → "Tap to paste" InfoBar). So:
     //   • IME visible: Klick = Send (StopRecordingAndSend), Start (Idle), or
     //     auto-enter toggle (pipeline live) — same as the keyboard surface.
-    //   • IME hidden + Active/Paused: Klick = disabled (return null). The
-    //     dedicated OVERLAY_PAUSE slot owns the pause UI in that mode.
+    //   • IME hidden + Active/Paused: Klick = Send (StopRecordingAndSend);
+    //     the result defers to a pending part.
     //   • IME hidden + Idle: Klick = StartRecording (allowed — the whole
     //     point of the widget is starting without unfolding the IME).
-    //   • IME hidden + pipeline live: Klick = auto-enter toggle (no-op
-    //     against a missing InputConnection, but the toggle itself is
-    //     valid state-machine signal).
+    //   • IME hidden + pipeline live: Klick = auto-enter toggle.
 
     @Test
-    fun `resolveOverlayRecordAction IME-hidden + Active returns null (Senden verboten)`() {
+    fun `resolveOverlayRecordAction IME-hidden + Active emits StopRecordingAndSend (HOVER-send, ADR-0009+0011)`() {
         val s = state.copy(
             imeViewVisible = false,
             recording = RecordingState.Active(
                 useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-h"
             ),
         )
-        assertNull(
-            "IME hidden + Active must yield null (User-Req: Senden verboten ohne InputConnection)",
-            resolveOverlayRecordAction(s, fakeModuleServices()),
+        assertTrue(
+            "IME hidden + Active must Send (deferred to a pending part, ADR-0009/0011)",
+            resolveOverlayRecordAction(s, fakeModuleServices())
+                is Action.RecordingAction.StopRecordingAndSend,
         )
     }
 
     @Test
-    fun `resolveOverlayRecordAction IME-hidden + Paused returns null (Senden verboten)`() {
+    fun `resolveOverlayRecordAction IME-hidden + Paused emits StopRecordingAndSend (HOVER-send, ADR-0009+0011)`() {
         val s = state.copy(
             imeViewVisible = false,
             recording = RecordingState.Paused(
                 useBluetooth = false, audioFile = stubAudioFile(), sessionId = "sid-h"
             ),
         )
-        assertNull(
-            "IME hidden + Paused must yield null (User-Req: Senden verboten ohne InputConnection)",
-            resolveOverlayRecordAction(s, fakeModuleServices()),
+        assertTrue(
+            "IME hidden + Paused must Send (deferred to a pending part, ADR-0009/0011)",
+            resolveOverlayRecordAction(s, fakeModuleServices())
+                is Action.RecordingAction.StopRecordingAndSend,
         )
     }
 
@@ -855,12 +861,14 @@ class ActionResolversTest {
     }
 
     @Test
-    fun `recording-wins Active + pipeline Running + IME hidden returns null (Senden verboten)`() {
-        // IME hidden (HOVER, or sticky widget after IME teardown): even with
-        // recording-wins precedence the Active/Paused arm returns null — there
-        // is no InputConnection to commit into (canCommitToHost keys on
-        // imeViewVisible). The recording wins over the pipeline auto-enter
-        // toggle, but the resulting Send is still gated on a live host field.
+    fun `recording-wins Active + pipeline Running + IME hidden emits StopRecordingAndSend (HOVER-send)`() {
+        // IME hidden (HOVER, or sticky widget after IME teardown): recording-
+        // wins precedence still routes the Active/Paused arm to Stop&Send.
+        // 2026-07-12 — with HOVER-send enabled the send is no longer gated on
+        // a live host field: the transcript defers to a pending part offered
+        // on the next keyboard open (ADR-0009 deferred-insertion + ADR-0011
+        // headless-completion). The recording wins over the pipeline
+        // auto-enter toggle AND the send now fires.
         val s = state.copy(
             imeViewVisible = false,
             recording = RecordingState.Active(
@@ -874,9 +882,10 @@ class ActionResolversTest {
                 autoEnterActive = false,
             ),
         )
-        assertNull(
-            "IME hidden + Active + pipeline live → null (recording wins, but no host to send into)",
-            resolveOverlayRecordAction(s, fakeModuleServices()),
+        assertTrue(
+            "IME hidden + Active + pipeline live → StopRecordingAndSend (recording wins, deferred insert)",
+            resolveOverlayRecordAction(s, fakeModuleServices())
+                is Action.RecordingAction.StopRecordingAndSend,
         )
     }
 
@@ -963,15 +972,17 @@ class ActionResolversTest {
     // ─── resolveOverlayRecordEnabled (Variante 2a, §8.2 Chunk 2.3) ────
 
     @Test
-    fun `resolveOverlayRecordEnabled IME-hidden is false only for Active+Paused (post-Widget-Pause-refactor)`() {
-        // 2026-05-22 — new spec: IME-hidden disables the record-btn ONLY
-        // for Active/Paused (the "Senden ohne InputConnection ist verboten"
-        // gate). Idle stays enabled (Start is allowed without IME). The
-        // <100ms Preparing window is always disabled (recorder warming up).
+    fun `resolveOverlayRecordEnabled IME-hidden enables Active+Paused (HOVER-send, ADR-0009+0011)`() {
+        // 2026-07-12 — HOVER-send enablement: IME-hidden no longer disables
+        // the record-btn for Active/Paused — sending in HOVER is allowed and
+        // the transcript defers to a pending part (ADR-0009 deferred-insertion
+        // + ADR-0011 headless-completion). Idle stays enabled (Start without
+        // IME). The <100ms Preparing window is always disabled (recorder
+        // warming up).
         val cases = listOf(
             "Idle" to (RecordingState.Idle to true),
-            "Active" to (RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x") to false),
-            "Paused" to (RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x") to false),
+            "Active" to (RecordingState.Active(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x") to true),
+            "Paused" to (RecordingState.Paused(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x") to true),
             "Preparing" to (RecordingState.Preparing(useBluetooth = false, audioFile = stubAudioFile(), sessionId = "x") to false),
         )
         cases.forEach { (name, pair) ->
@@ -1034,12 +1045,12 @@ class ActionResolversTest {
     }
 
     @Test
-    fun `resolveOverlayRecordEnabled recording-wins Active + pipeline live keys on imeViewVisible (2026-07)`() {
+    fun `resolveOverlayRecordEnabled recording-wins Active + pipeline live is enabled on both axes (2026-07-12 HOVER-send)`() {
         // Recording-wins: Active/Paused drives the enabled axis even during a
-        // live pipeline (parity with the action resolver). Pre-2026-07 the
-        // pipeline-live check came first and returned true regardless of
-        // imeViewVisible; now enabled tracks the host-field availability, so
-        // the disabled button matches the action's null return.
+        // live pipeline (parity with the action resolver). 2026-07-12 —
+        // HOVER-send: enabled is `true` on BOTH surface axes; the IME-hidden
+        // send is allowed and defers to a pending part (ADR-0009 + ADR-0011),
+        // matching the action resolver's now-non-null Send return.
         val running = PipelineUiState.Running(
             sessionId = "sid-pipe", target = InsertionTarget.INPUT_CONNECTION,
         )
@@ -1054,8 +1065,8 @@ class ActionResolversTest {
             ),
         )
         assertEquals(
-            "Active + pipeline live + IME hidden → disabled (no host to send into)",
-            false,
+            "Active + pipeline live + IME hidden → enabled (HOVER-send, deferred insert)",
+            true,
             resolveOverlayRecordEnabled(
                 state.copy(imeViewVisible = false, recording = active, pipeline = running),
             ),

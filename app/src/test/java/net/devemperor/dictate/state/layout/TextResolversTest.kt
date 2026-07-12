@@ -60,6 +60,23 @@ class TextResolversTest {
     }
 
     @Test
+    fun `overlay text Active + IME hidden still reads the send label (HOVER-send)`() {
+        // 2026-07-12 HOVER-send: the label resolver has no imeViewVisible
+        // branch, so a HOVER Active recording shows the "Send" caption just
+        // like the WIDGET case — matching the record button's now-active Send
+        // action in HOVER (ADR-0009 deferred-insertion + ADR-0011). This locks
+        // that the caption tracks the send affordance on both surface axes.
+        val s = baseState.copy(
+            imeViewVisible = false,
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = audioFile(), sessionId = "x",
+            ),
+            pipeline = PipelineUiState.Idle,
+        )
+        assertEquals(strings.send, resolveOverlayRecordButtonText(s, strings))
+    }
+
+    @Test
     fun `overlay text Preparing-pipeline reflects formatPreparingLabel`() {
         // Pipeline Preparing — should defer to the keyboard SEND_MODE
         // resolver (resolveRecordButtonTextPipeline).

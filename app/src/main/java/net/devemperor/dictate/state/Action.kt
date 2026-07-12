@@ -973,6 +973,36 @@ sealed class Action {
          * in-IME info-bar can render.
          */
         data object RequestOverlayPermissionNotification : OverlayAction()
+
+        // ─── Transient-notice primitive (OverlayTransientNotice, Decision 3) ───
+
+        /**
+         * Show a reusable transient notice in the overlay card for
+         * [durationMs] (auto-expiring). State-driven — no
+         * `android.widget.Toast`. Any module may dispatch this with a
+         * different [textRes] to surface its own short overlay message.
+         *
+         * The reducer mints a fresh monotonically-increasing token, stores
+         * [net.devemperor.dictate.state.TransientNotice], and schedules an
+         * [ExpireTransientNotice] carrying that token via the module's
+         * effect mechanism. See
+         * [net.devemperor.dictate.state.OverlayModule].
+         *
+         * @property textRes `@StringRes` label to render.
+         * @property durationMs how long the notice stays before auto-expiry.
+         */
+        data class ShowTransientNotice(
+            @androidx.annotation.StringRes val textRes: Int,
+            val durationMs: Long,
+        ) : OverlayAction()
+
+        /**
+         * Auto-expiry of a transient notice. Emitted by the delayed effect
+         * scheduled from [ShowTransientNotice]. Clears the notice **only**
+         * when [token] matches the live notice's token — a stale expiry (an
+         * older token) is a no-op, so a second Show before expiry wins.
+         */
+        data class ExpireTransientNotice(val token: Long) : OverlayAction()
     }
 
     // ════════════════════════════════════════════════════════════════

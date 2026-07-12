@@ -416,9 +416,8 @@ fun resolveCancelStagingAction(
  * | recording      | pipeline            | imeViewVisible | Action returned                          |
  * |----------------|---------------------|----------------|------------------------------------------|
  * | Idle           | Idle                | any            | `StartRecording(...)`                    |
- * | Active/Paused  | Idle                | true           | `StopRecordingAndSend`                   |
- * | Active/Paused  | Preparing / Running | true           | `StopRecordingAndSend` (recording wins)  |
- * | Active/Paused  | any                 | false          | `null` (no InputConnection target)       |
+ * | Active/Paused  | Idle                | any            | `StopRecordingAndSend`                   |
+ * | Active/Paused  | Preparing / Running | any            | `StopRecordingAndSend` (recording wins)  |
  * | Preparing      | Idle                | any            | `null` (recorder warming up)             |
  * | Idle/Preparing | Preparing / Running | any            | `ToggleRunningAutoEnter` (auto-enter ↵)  |
  *
@@ -435,16 +434,26 @@ fun resolveCancelStagingAction(
  * yet), so the reorder is behaviour-neutral for every legacy flow — it
  * only matters once the overlay gains its secondary-record button (P2).
  *
- * **IME-hidden gate.** User-Requirement §2 verbatim: "Senden darf nicht
- * möglich sein, während gerade kein Tastaturinput verfügbar ist". When
- * the IME-View is hidden (`!imeViewVisible` — always so in HOVER, and in
- * the sticky-widget-after-IME-teardown case) `getCurrentInputConnection()`
- * returns `null`, so any SEND-class action would commit text into
- * nothing ([DictateUiState.canCommitToHost] keys on the same axis). The
- * Active/Paused arm therefore returns `null` there; the `enabledResolver`
- * ([resolveOverlayRecordEnabled]) disables the button visually as the
- * first layer, this `null`-return is the R.3 second layer (a Race-Window
- * click slipping through a ViewMode transition is also a no-op).
+ * **HOVER-send / deferred-insertion (2026-07-12).** The Active/Paused arm
+ * sends **regardless of `imeViewVisible`.** The May-2026 rule "Senden
+ * verboten ohne InputConnection" is lifted by user decision: a send while
+ * the IME-View is hidden (always so in HOVER, and in the
+ * sticky-widget-after-IME-teardown case) is now legitimate. The pipeline
+ * runs headless in the FGS; when it finishes with no host to commit into,
+ * the IME-side insert returns `DeferredToPending` →
+ * `PipelineDone(committed=false)` → `Effect.AddPendingInsertSession` → a
+ * "Tap to paste" InfoBar surfaced on the next keyboard open. So the
+ * transcript is never lost — it becomes a **pending part**. The
+ * `enabledResolver` ([resolveOverlayRecordEnabled]) is symmetric: the
+ * button is enabled for Active/Paused on both surface axes. The overlay
+ * additionally shows a transient "text will be inserted next time" notice
+ * on a HOVER-send (see `OverlayTransientNotice` in `OverlayModule`). A
+ * parallel change (ADR-0011 headless-completion, `docs/decisions/0011-…`)
+ * makes the *completion* stage also land as a pending part when the IME
+ * never bound.
+ *
+ * @see docs/decisions/0009-pipeline-run-queue-serialized-concurrency.md
+ * @see docs/decisions/0011-... (headless-completion fallback — HOVER-send)
  *
  * **Reuse of the keyboard-surface bodies.** Both branches delegate to
  * the existing keyboard-surface resolvers:
@@ -469,9 +478,10 @@ fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices):
     //   1. Active/Paused FIRST — a live recording (incl. a secondary
     //      recording started during a run) sends via Stop&Send, exactly as
     //      the keyboard falls back to its normal layout while the run keeps
-    //      processing in the FGS background. IME hidden → null (Senden ohne
-    //      InputConnection ist verboten; the OVERLAY_PAUSE slot is the pause
-    //      surface there).
+    //      processing in the FGS background. This fires on BOTH surface axes
+    //      (2026-07-12 HOVER-send): a send with the IME-View hidden defers
+    //      its result to a pending part (ADR-0009 deferred-insertion +
+    //      ADR-0011 headless-completion).
     //   2. Pipeline live SECOND — reached only when recording is
     //      Idle/Preparing/Interrupted; the button is the per-run auto-enter
     //      toggle (symmetric to the keyboard SEND_MODE record button).
@@ -482,19 +492,14 @@ fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices):
     // reorder is behaviour-neutral for recording==Idle and only activates
     // once the overlay secondary-record button ships (P2).
 
-    // Active/Paused: Send only when the IME is visible (transcript needs
-    // an InputConnection target). When the IME is hidden, return null —
-    // the OVERLAY_PAUSE slot is the pause surface in that mode. This wins
-    // over the pipeline-live branch below (recording-wins).
+    // Active/Paused: Send via the SAME Stop & Send semantics as the keyboard
+    // surface, regardless of `imeViewVisible` (2026-07-12 HOVER-send). When
+    // the IME-View is hidden the transcript is not lost — it defers to a
+    // pending part offered on the next keyboard open. This wins over the
+    // pipeline-live branch below (recording-wins).
     if (state.recording is RecordingState.Active ||
         state.recording is RecordingState.Paused
     ) {
-        if (!state.imeViewVisible) {
-            return null
-        }
-        // IME visible → same Stop & Send semantics as the keyboard
-        // surface (resolveRecordAction handles the Active|Paused →
-        // StopRecordingAndSend dispatch).
         return resolveRecordAction(state, services)
     }
 
@@ -527,11 +532,16 @@ fun resolveOverlayRecordAction(state: DictateUiState, services: ModuleServices):
  *
  * | recording               | pipeline             | imeViewVisible | enabled |
  * |-------------------------|----------------------|----------------|---------|
- * | Active / Paused         | any                  | `true`         | `true`  |
- * | Active / Paused         | any                  | `false`        | `false` |
+ * | Active / Paused         | any                  | any            | `true`  |
  * | Preparing               | Preparing / Running  | any            | `true`  |
  * | Preparing               | Idle                 | any            | `false` |
  * | Idle / Interrupted      | any                  | any            | `true`  |
+ *
+ * **HOVER-send (2026-07-12).** Active/Paused is enabled on BOTH surface
+ * axes — the old `imeViewVisible == false ⇒ false` gate is removed. A send
+ * with the IME-View hidden is now allowed; its result defers to a pending
+ * part (ADR-0009 + ADR-0011). Symmetric to [resolveOverlayRecordAction],
+ * whose Active/Paused arm now returns a non-null Send action there.
  *
  * Note that the *visibility* predicate stays simple (`true`) — the
  * button is always present in the overlay layout; the `enabled` /
@@ -545,22 +555,21 @@ fun resolveOverlayRecordEnabled(state: DictateUiState): Boolean {
     //
     // | recording               | pipeline             | imeVisible | enabled |
     // |-------------------------|----------------------|------------|---------|
-    // | Active / Paused         | any                  | true       | true    |
-    // | Active / Paused         | any                  | false      | false   |
+    // | Active / Paused         | any                  | any        | true    |
     // | Preparing               | Preparing / Running  | any        | true    |
     // | Preparing               | Idle                 | any        | false   |
     // | Idle / Interrupted      | any                  | any        | true    |
     //
-    // The Active/Paused + IME-hidden branch is the "Senden ohne
-    // InputConnection ist verboten" rule — the dedicated OVERLAY_PAUSE slot
-    // remains enabled there so the user can still pause. Pre-2026-07 the
-    // pipeline-live check came first and returned `true` even for
-    // Active/Paused + IME-hidden; the reorder aligns enabled with the
-    // action's `null` return (behaviour-neutral for recording==Idle).
+    // 2026-07-12 HOVER-send: Active/Paused is enabled on BOTH surface axes.
+    // The old `!imeViewVisible ⇒ false` gate (the May-2026 "Senden ohne
+    // InputConnection ist verboten" rule) is removed by user decision — a
+    // send in HOVER is allowed and its transcript defers to a pending part
+    // (ADR-0009 + ADR-0011). This aligns the enabled axis with the action's
+    // now-non-null Send return in the IME-hidden case.
     if (state.recording is RecordingState.Active ||
         state.recording is RecordingState.Paused
     ) {
-        return state.imeViewVisible
+        return true
     }
     if (state.pipeline is PipelineUiState.Preparing ||
         state.pipeline is PipelineUiState.Running

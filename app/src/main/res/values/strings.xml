@@ -513,6 +513,10 @@
     <!-- P2 — secondary-record mic button (ADR-0009): start a new recording
          while a pipeline run is still processing. -->
     <string name="overlay_record_secondary_cd">New recording while processing</string>
+    <!-- Transient notice (OverlayTransientNotice, Decision 3): shown in the
+         overlay after a hover-send, when the transcript defers to a pending
+         part offered on the next keyboard open. -->
+    <string name="overlay_notice_pending_insert">Text will be inserted when the keyboard is next opened.</string>
     <!-- Third-row direct-editing buttons (P4) — shown only when an input
          field is available. -->
     <string name="overlay_delete_cd">Delete</string>

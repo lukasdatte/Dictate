@@ -635,6 +635,51 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
     }
 
     /**
+     * Failure-reducer — recovers the FSM from a [Effect.SubmitPipeline]
+     * throw (R-1 cold-process tripwire).
+     *
+     * **Why this exists (2026-07-12).** `PipelineRunnerSubsystemAdapter.submit`
+     * calls `PipelineConfigResolver.resolveFresh` **synchronously**, so its
+     * R-1 guard throw (`UnsupportedOperationException` when no fresh-config
+     * snapshot exists — the cold-process case where the IME never bound and
+     * therefore never ran the send-tap `snapshotFresh`) surfaces via
+     * `runEffect` and is wrapped by the orchestrator into an
+     * [Action.EffectFailure] routed here. Before this arm existed
+     * `PipelineModule` had no `reduceFailure` override, so the default
+     * returned `null` and the FSM — already moved `Idle → Preparing` when it
+     * emitted `SubmitPipeline` — stayed **stuck in Preparing forever**
+     * ("Sending …" with no step rows and no recovery). See
+     * `OverlayBackend.wireStaticOverlayHandlers` KDoc §"R-1 snapshot" for the
+     * full failure narrative.
+     *
+     * The recovery is deliberately minimal: roll `Preparing → Idle` and
+     * [Effect.DismissNotification] to clear the stuck FGS notification. The
+     * failure stays **loud** (the run is lost and the throw is logged) but is
+     * now **recoverable** — the user can simply record again. Building a
+     * service-side fresh-config resolver so the cold-process send actually
+     * completes is out of scope here (tracked against ADR-0011
+     * headless-completion). Effect string is a `data class` toString, so we
+     * match with `startsWith("SubmitPipeline(")` (see [SideEffect] KDoc).
+     *
+     * We only recover from `Preparing` for `SubmitPipeline`: a `Running`
+     * state means the submit already succeeded and a later throw is a
+     * different concern; any other effect has no PipelineModule failure
+     * semantics and falls through to `null`.
+     */
+    override fun reduceFailure(
+        state: PipelineUiState,
+        failure: Action.EffectFailure,
+        ctx: ReducerContext,
+    ): TransitionResult<PipelineUiState, Effect>? = when {
+        failure.effect.startsWith("SubmitPipeline(") && state is PipelineUiState.Preparing ->
+            TransitionResult(
+                nextState = PipelineUiState.Idle,
+                sideEffects = listOf(Effect.DismissNotification),
+            )
+        else -> null
+    }
+
+    /**
      * Elapsed-ms since the [PipelineUiState.Running.startedAtMs] baseline,
      * floored at zero.
      *

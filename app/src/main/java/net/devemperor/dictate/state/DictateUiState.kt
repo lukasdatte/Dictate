@@ -746,6 +746,12 @@ data class LayoutState(
  *   `Action.OverlayAction.ResetSuppressBit` on `Idle → Preparing` boundary.
  * @property hasPermission Issue 3.1.3 — permission status mirrored from
  *   `OverlayPermissionObserver`; reducers don't poll the system.
+ * @property transientNotice the live [TransientNotice] rendered as a small
+ *   text element in the overlay card, or `null` when none is showing.
+ *   Owned by `OverlayModule` (the reusable "OverlayTransientNotice"
+ *   primitive). Set by [Action.OverlayAction.ShowTransientNotice], cleared
+ *   by a matching-token [Action.OverlayAction.ExpireTransientNotice]. The
+ *   first live use is the hover-send → pending-part notice (Decision 3).
  */
 data class OverlayState(
     val positionPortraitX: Float = 1.0f,
@@ -756,6 +762,37 @@ data class OverlayState(
     val onboardingPending: Boolean = false,
     val suppressAutoOverlayUntilNextSession: Boolean = false,
     val hasPermission: Boolean = false,
+    val transientNotice: TransientNotice? = null,
+)
+
+/**
+ * A reusable, state-driven transient notice shown in the overlay card —
+ * the "OverlayTransientNotice" primitive (Decision 3). Deliberately NOT an
+ * `android.widget.Toast`: it lives in [OverlayState] so it renders inside
+ * the floating widget, respects its theming/opacity, and is testable as
+ * pure state.
+ *
+ * **Reusable:** any module may dispatch
+ * [Action.OverlayAction.ShowTransientNotice] with a different
+ * [textRes] to surface its own short message in the overlay. The first
+ * live producer is the hover-send trigger in
+ * [net.devemperor.dictate.state.OverlayModule.onCrossModuleStateChange].
+ *
+ * @property textRes the `@StringRes` label to render. Resolved against the
+ *   overlay's themed (night-correct) context by `OverlayBackend`; the
+ *   module never touches a `Context`.
+ * @property token a monotonically-increasing id minted by the
+ *   `ShowTransientNotice` reducer arm. Its sole purpose is to make expiry
+ *   idempotent under overlap: the auto-expiry effect carries the token it
+ *   was scheduled for, and the `ExpireTransientNotice` arm clears the
+ *   notice **only** when the tokens match. So an older expiry can never
+ *   clear a newer notice, and a second Show before the first expiry wins
+ *   (it mints a strictly-greater token, making the first's pending expiry
+ *   stale).
+ */
+data class TransientNotice(
+    @androidx.annotation.StringRes val textRes: Int,
+    val token: Long,
 )
 
 /**

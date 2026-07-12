@@ -218,7 +218,13 @@ Key properties:
    any IME lifecycle event the axis is stale-true, so the overlay record
    button acts as "send" while Active even though no keyboard is up; the send
    then follows the deferred-insertion path. Pre-existing axis semantics, not
-   changed by this feature.
+   changed by this feature. **Update 2026-07-12 (HOVER-send, Decision 3):** the
+   overlay record-button send arm is now axis-independent — it sends for
+   Active/Paused whether `imeViewVisible` is `true` or `false`, deferring to a
+   pending part when there is no host. So the boot-default staleness no longer
+   changes the *record button's* send behaviour (it sends either way); the axis
+   still gates the third-row / secondary-record *visibility*, where a brief
+   stale-true window can still mis-gate until the first IME event.
 
 ## Decision Log
 

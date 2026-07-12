@@ -357,6 +357,7 @@
     <string name="overlay_pause_cd">Pausar o reanudar la grabación</string>
     <string name="overlay_trash_cd">Cancelar grabación</string>
     <string name="overlay_close_cd">Cerrar overlay</string>
+    <string name="overlay_notice_pending_insert">El texto se insertará la próxima vez que se abra el teclado.</string>
 
     <!-- Block 5 / Spec 3 §5.2-§5.3 — textos de incorporación para el permiso del overlay. -->
     <string name="overlay_perm_onboarding_title">Permiso de overlay flotante</string>

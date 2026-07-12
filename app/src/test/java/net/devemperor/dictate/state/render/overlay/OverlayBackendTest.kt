@@ -293,11 +293,13 @@ class OverlayBackendTest {
     }
 
     @Test
-    fun `record click with IME hidden + Active is a silent no-op (Senden verboten)`() {
-        // 2026-05-22 — post-Widget-Pause-refactor spec: with the IME
-        // hidden and a recording in flight, the record-btn is disabled
-        // (no InputConnection target → Senden verboten). The user must
-        // explicitly use the dedicated OVERLAY_PAUSE slot to pause.
+    fun `record click with IME hidden + Active emits StopRecordingAndSend (HOVER-send)`() {
+        // 2026-07-12 — HOVER-send enablement: with the IME hidden and a
+        // recording in flight, the record-btn now SENDS (StopRecordingAndSend).
+        // The old "Senden verboten ohne InputConnection" no-op is lifted by
+        // user decision; the transcript defers to a pending part offered on
+        // the next keyboard open (ADR-0009 deferred-insertion + ADR-0011
+        // headless-completion).
         val backend = newBackend()
         backend.attach { captured += it }
         backend.render(
@@ -316,8 +318,8 @@ class OverlayBackendTest {
         recordBtn.performClick()
 
         assertTrue(
-            "IME hidden + Active record-click must be a silent no-op: $captured",
-            captured.isEmpty(),
+            "IME hidden + Active record-click must emit StopRecordingAndSend: $captured",
+            captured.any { it is net.devemperor.dictate.state.Action.RecordingAction.StopRecordingAndSend },
         )
     }
 
@@ -809,10 +811,12 @@ class OverlayBackendTest {
     }
 
     @Test
-    fun `secondary-record button is hidden in HOVER even with a live pipeline run (imeViewVisible=false)`() {
-        // The imeViewVisible gate: a recording could be started in HOVER but
-        // never sent (no InputConnection target — ADR-0009 Alt-3). The
-        // button must therefore be structurally absent there.
+    fun `secondary-record button is visible in HOVER with a live pipeline run (2026-07-12 HOVER-send)`() {
+        // 2026-07-12 — HOVER-send: the old imeViewVisible gate is removed. A
+        // secondary recording started in HOVER CAN be sent (its result defers
+        // to a pending part — ADR-0009 + ADR-0011), so the "startbar-aber-
+        // nicht-sendbar" anti-pattern rationale is void and the button now
+        // appears in HOVER too.
         val backend = newBackend()
         backend.attach { captured += it }
         backend.render(
@@ -827,8 +831,8 @@ class OverlayBackendTest {
         )
 
         assertEquals(
-            "secondary-record button must be GONE in HOVER (startable but never sendable)",
-            View.GONE,
+            "secondary-record button must be VISIBLE in HOVER (startable and now sendable)",
+            View.VISIBLE,
             findOverlayButton(LogicalButtonId.OVERLAY_RECORD_SECONDARY).visibility,
         )
     }

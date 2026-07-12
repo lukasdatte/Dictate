@@ -51,6 +51,39 @@ class PipelineModuleTest {
         assertTrue(result.sideEffects.any { it is PipelineModule.Effect.UpdateNotification })
     }
 
+    // ─── EffectFailure recovery (R-1 cold-process tripwire) ─────────────
+
+    @Test
+    fun `SubmitPipeline failure recovers Preparing to Idle (loud but recoverable)`() {
+        // R-1 cold-process tripwire (2026-07-12): when the IME never bound,
+        // the fresh-config snapshot is missing and
+        // PipelineRunnerSubsystemAdapter.submit → resolveFresh throws
+        // UnsupportedOperationException synchronously. The orchestrator wraps
+        // it into EffectFailure and routes it to this module's reduceFailure.
+        // Without a matching arm the FSM stays stuck in Preparing forever
+        // ("Sending …"). The recovery arm returns it to Idle + dismisses the
+        // FGS notification so the failure is loud but recoverable.
+        val failure = Action.EffectFailure(
+            originModuleId = PipelineModule.id,
+            effect = "SubmitPipeline(sessionId=$sid, audioFile=$audioFile)",
+            reason = "UnsupportedOperationException: no fresh-recording snapshot",
+        )
+        val result = module.reduceFailure(
+            state = PipelineUiState.Preparing(sessionId = sid),
+            failure = failure,
+            ctx = ctx(),
+        )
+        assertEquals(
+            "SubmitPipeline failure must recover Preparing → Idle",
+            PipelineUiState.Idle,
+            result!!.nextState,
+        )
+        assertTrue(
+            "recovery must dismiss the stuck 'Sending …' notification",
+            result.sideEffects.contains(PipelineModule.Effect.DismissNotification),
+        )
+    }
+
     // ─── ADR-0009: serialized run-queue (enqueue + chain-start) ─────────
 
     @Test

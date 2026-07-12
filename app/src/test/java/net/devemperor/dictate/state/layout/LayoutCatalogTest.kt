@@ -155,12 +155,14 @@ class LayoutCatalogTest {
     // ─── P2 overlay secondary-record mic button ────────────────────────
 
     @Test
-    fun `overlay RECORD_SECONDARY is visible only while pipeline live + recording Idle + imeViewVisible`() {
+    fun `overlay RECORD_SECONDARY is visible while pipeline live + recording Idle, in HOVER too`() {
         // P2 / ADR-0009: the widget twin of the keyboard RECORD_SECONDARY
-        // slot. The imeViewVisible gate is decided policy — HOVER and the
-        // sticky-widget-without-IME must NOT get the button (a recording
-        // could be started there but never sent — the ADR-0009 Alt-3
-        // anti-pattern).
+        // slot. 2026-07-12 — the imeViewVisible gate is REMOVED: with
+        // HOVER-send enabled (ADR-0009 deferred-insertion + ADR-0011
+        // headless-completion) a secondary recording started in HOVER CAN be
+        // sent (its result defers to a pending part), so the old "startbar-
+        // aber-nicht-sendbar" anti-pattern rationale is void. Visibility now
+        // gates on pipeline-live AND recording Idle only.
         val slot = catalog.OVERLAY_5BUTTON.slots
             .first { it.logicalId == LogicalButtonId.OVERLAY_RECORD_SECONDARY }
         val running = PipelineUiState.Running(
@@ -199,9 +201,11 @@ class LayoutCatalogTest {
                 overlaySecondaryState(running, activeRecording, imeViewVisible = true),
             ),
         )
-        // Hidden: IME-View not visible (HOVER / sticky-widget-without-IME).
-        assertFalse(
-            "hidden when imeViewVisible=false (HOVER — startable but never sendable)",
+        // VISIBLE in HOVER too (2026-07-12): the button now appears while the
+        // IME-View is hidden — the secondary recording is both startable AND
+        // sendable (deferred to a pending part).
+        assertTrue(
+            "visible when imeViewVisible=false (HOVER — startable and now sendable)",
             slot.visibilityPredicate(
                 overlaySecondaryState(running, RecordingState.Idle, imeViewVisible = false),
             ),

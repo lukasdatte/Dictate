@@ -46,11 +46,17 @@ per-button patchwork.
 
 ### 1.3 Discarded Alternatives
 
-- **Secondary-record button in HOVER too:** rejected — a recording started
+- **Secondary-record button in HOVER too:** ~~rejected — a recording started
   with no `InputConnection` target could never be *sent*, only deferred. That
   is the "startable but never sendable" anti-pattern already rejected as
   ADR-0009 Alt-3 for the keyboard; the overlay follows the same rule via the
-  `imeViewVisible` gate.
+  `imeViewVisible` gate.~~ **Superseded 2026-07-12 (Decision 3 — HOVER-send).**
+  The premise is void: sending in HOVER is now enabled by user decision, and a
+  HOVER send is *not* lost — it defers to a pending part offered on the next
+  keyboard open (ADR-0009 deferred-insertion + ADR-0011 headless-completion).
+  "Startable but never sendable" no longer applies, so the secondary-record
+  button appears in HOVER too and the `imeViewVisible` gate is removed. See the
+  Change-History entry below.
 - **`ButtonSlot.longClickResolver` for continuous delete (P5):** rejected — a
   long-click resolver fires *one* action per long-press; continuous delete
   needs a self-re-scheduling repeat loop with an acceleration curve, which is
@@ -81,9 +87,10 @@ per-button patchwork.
    "recording wins over SEND_MODE"). A recording coexisting with a live run
    is sendable from the overlay record button when `canCommitToHost`.
 2. **P2 — secondary record:** `OVERLAY_RECORD_SECONDARY` is visible iff
-   pipeline is live (Preparing|Running) AND recording is Idle AND
-   `imeViewVisible`; it shares Row 2's centre slot with Pause (never both
-   visible); the tap reuses `resolveSecondaryRecordAction` verbatim and no
+   pipeline is live (Preparing|Running) AND recording is Idle — on **both**
+   surface axes (the former `imeViewVisible` gate was removed 2026-07-12,
+   Decision 3 / HOVER-send). It shares Row 2's centre slot with Pause (never
+   both visible); the tap reuses `resolveSecondaryRecordAction` verbatim and no
    `imeSideAffordance` hook fires.
 3. **P3 — close handoff:** the widget X button pauses an Active recording
    only when `!imeViewVisible` (HOVER). In WIDGET the recording stays Active
@@ -113,9 +120,9 @@ HOVER floats over another app with no input target.
 | Affordance | WIDGET (`canCommitToHost`) | HOVER (no host editor) | Why |
 |---|---|---|---|
 | Record button, recording Idle | Start recording | Start recording | Deferred insertion covers HOVER sends later (ADR-0009) |
-| Record button, recording Active/Paused | **Send** (Stop&Send) — evaluated *before* pipeline-live (P1) | Disabled (`null` resolver) — "Senden verboten" without a target | Send needs an IC; precedence parity with keyboard |
+| Record button, recording Active/Paused | **Send** (Stop&Send) — evaluated *before* pipeline-live (P1) | **Send** (Stop&Send) — defers to a pending part (2026-07-12 HOVER-send) | Deferred insertion; precedence parity with keyboard (ADR-0009 + ADR-0011) |
 | Record button, pipeline live + recording Idle | Auto-enter toggle (fall-through after P1 reorder) | Auto-enter toggle | Unchanged pre-series behaviour |
-| Secondary record (Row 2 centre, P2) | Visible iff pipeline live AND recording Idle | **Never** | Startable-but-not-sendable anti-pattern (ADR-0009 Alt-3) |
+| Secondary record (Row 2 centre, P2) | Visible iff pipeline live AND recording Idle | **Visible** iff pipeline live AND recording Idle (2026-07-12 HOVER-send) | A HOVER secondary recording is now sendable (deferred to a pending part) — anti-pattern void |
 | Pause button | Visible while recording in flight | Visible while recording in flight | Shares the centre slot with secondary record — states are disjoint |
 | Close (X) during Active recording (P3) | Recording **keeps running**; keyboard takes over | Recording **pauses** | Pause only when nobody can take over (`!imeViewVisible` gate) |
 | Third row Delete/Space/Enter (P4) | Visible (buttons + container) | GONE (buttons + container collapse) | Keystrokes into a null IC are no-ops; don't show dead buttons |
@@ -224,6 +231,23 @@ Key properties:
    gating can be briefly wrong until the first IME event. Pre-existing axis
    semantics (documented in the external-dictation spec §6.3), unchanged by
    this series.
+4. **Cold-process HOVER send does not complete (residual, 2026-07-12
+   HOVER-send).** When the IME process never bound at all, the send-tap
+   `imeSideAffordance` snapshot lambda is the default no-op, so no fresh-config
+   snapshot exists and `PipelineRunnerSubsystemAdapter.submit → resolveFresh`
+   throws the R-1 tripwire `UnsupportedOperationException`. This is now
+   **recoverable, not a hang**: `PipelineModule.reduceFailure` catches the
+   `SubmitPipeline` failure and rolls `Preparing → Idle` + dismisses the FGS
+   notification (previously the FSM stuck in "Sending …" forever, since
+   `PipelineModule` had no failure arm). The send itself is still *lost* in
+   that cold-process case — building a service-side fresh-config resolver so it
+   actually completes is out of scope here and tracked against ADR-0011
+   (headless-completion). In the normal HOVER case the IME service is alive
+   (Dictate is the selected keyboard) and the snapshot runs, so the send
+   completes and defers to a pending part. Note `captureFreshConfigSnapshot`
+   reads `getCurrentInputEditorInfo()` live and may see a null/stale editor in
+   HOVER, so `targetAppPackage` can be `null` — accepted (it only affects
+   telemetry/target-app metadata, not the transcript).
 
 ## Decision Log
 
@@ -255,6 +279,52 @@ the IME's `onBackspaceLongClicked` (View-bound) — both rejected, §1.3.
 close side-effect; in WIDGET the keyboard resumes live controls seamlessly.
 **Alternatives:** always pause (old behaviour, misread as stop) / never pause
 (HOVER would leave a hot mic with no visible controls) — both rejected.
+
+## Change History
+
+### 2026-07-12 — HOVER-send enablement + reusable transient-notice primitive (Decision 3)
+
+**Trigger:** user decision to lift the May-2026 "no send without an
+`InputConnection`" rule. Sending in HOVER must work; the pipeline runs and the
+result becomes a pending part offered on the next keyboard open.
+
+**Changes:**
+
+- **HOVER-send enabled (P1 arm).** `resolveOverlayRecordAction` now sends
+  (Stop&Send) for Active/Paused on **both** surface axes — the
+  `!imeViewVisible ⇒ null` gate is removed. `resolveOverlayRecordEnabled`
+  returns `true` for Active/Paused regardless of `imeViewVisible`. The label
+  resolver already read "Send" independent of the axis (no change needed). A
+  HOVER send's transcript defers to a pending part (ADR-0009
+  deferred-insertion → `AddPendingInsertSession` → "Tap to paste" InfoBar;
+  ADR-0011 headless-completion covers the completion stage).
+- **Secondary-record button in HOVER (P2).** The `OVERLAY_RECORD_SECONDARY`
+  slot's `imeViewVisible` visibility gate is removed — it now appears in HOVER
+  too (visible iff pipeline live AND recording Idle). The "startbar-aber-nicht-
+  sendbar" (ADR-0009 Alt-3) rationale is void because a HOVER send now defers
+  to a pending part. Supersedes §1.3 Discarded-Alternative bullet 1, AC #2, and
+  the §3.1 matrix rows above.
+- **Reusable transient-notice primitive ("OverlayTransientNotice").**
+  State-driven (no `android.widget.Toast`), owned by `OverlayModule`:
+  `TransientNotice(textRes, token)` on `OverlayState`; actions
+  `ShowTransientNotice(textRes, durationMs)` / `ExpireTransientNotice(token)`;
+  auto-expiry via `Effect.ScheduleNoticeExpiry` (a `scope.launch { delay(); emit }`
+  mirroring `ResendModule`'s cooldown). The monotonic token makes overlap safe
+  (an older expiry never clears a newer notice; a second Show before expiry
+  wins). Rendered as a small `TextView` (`overlay_notice_tv`) under the buttons,
+  coloured via `?attr/colorOnSurfaceVariant` (theme attr, ADR-0010). Any module
+  may dispatch `ShowTransientNotice` with another string. The first live use:
+  `OverlayModule.onCrossModuleStateChange` fires it (~3.5 s,
+  `overlay_notice_pending_insert`) on a hover-send — observed as pipeline
+  `Idle → Preparing` while `!imeViewVisible`; a keyboard-visible send does not
+  trigger it.
+- **Cold-process hang fix (R-1 tripwire).** `PipelineModule.reduceFailure` now
+  recovers `Preparing → Idle` + `DismissNotification` when `SubmitPipeline`
+  throws (previously no failure arm → the FSM hung in "Sending …" forever). See
+  Information Gap §5.4 for the residual cold-process limitation.
+
+**Not touched:** D3 (pause-on-close) and the close-handoff semantics are
+unchanged — only the *send* and *secondary-record visibility* gates moved.
 
 ## References
 

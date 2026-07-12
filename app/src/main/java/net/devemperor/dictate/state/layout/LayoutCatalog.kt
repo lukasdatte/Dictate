@@ -677,15 +677,21 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         // P2 / ADR-0009 — the widget twin of the keyboard
                         // RECORD_SECONDARY mic button. Visible while a
                         // pipeline run processes AND no recording is in
-                        // flight (single-MediaRecorder gate) AND the IME-View
-                        // is visible. The `imeViewVisible` gate is decided
-                        // policy: HOVER and the sticky-widget-without-IME do
-                        // NOT get the button — a secondary recording could be
-                        // started there but never *sent* (no InputConnection
-                        // target), the ADR-0009 Alt-3 anti-pattern. Once the
-                        // secondary recording is Active, the main OVERLAY_RECORD
-                        // button takes over the send via recording-wins
-                        // precedence (P1) — this slot builds no send action.
+                        // flight (single-MediaRecorder gate).
+                        //
+                        // 2026-07-12 HOVER-send: the former `imeViewVisible`
+                        // gate is REMOVED. Its rationale was the ADR-0009
+                        // Alt-3 "startbar-aber-nicht-sendbar" anti-pattern — a
+                        // secondary recording started in HOVER could be
+                        // started but never sent. That premise is void now
+                        // that sending works everywhere: a HOVER send defers
+                        // its result to a pending part (ADR-0009
+                        // deferred-insertion + ADR-0011 headless-completion,
+                        // `docs/decisions/0011-…`). So the button appears in
+                        // HOVER too. Once the secondary recording is Active,
+                        // the main OVERLAY_RECORD button takes over the send
+                        // via recording-wins precedence (P1) — this slot
+                        // builds no send action.
                         //
                         // Space note: OVERLAY_PAUSE is hidden whenever a
                         // pipeline run is live and recording is Idle, so the
@@ -693,8 +699,7 @@ class LayoutCatalog(private val strings: LayoutStrings) {
                         visibilityPredicate = { state ->
                             (state.pipeline is PipelineUiState.Preparing ||
                                 state.pipeline is PipelineUiState.Running) &&
-                                state.recording is RecordingState.Idle &&
-                                state.imeViewVisible
+                                state.recording is RecordingState.Idle
                         },
                         // DRY: the SAME body as the keyboard RECORD_SECONDARY
                         // slot — a fresh start-from-Idle action (shared

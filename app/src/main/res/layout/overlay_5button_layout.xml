@@ -208,4 +208,24 @@
             app:iconPadding="0dp"
             android:contentDescription="@string/overlay_enter_cd" />
     </LinearLayout>
+
+    <!-- Transient notice (OverlayTransientNotice primitive, Decision 3).
+         State-driven small text under the buttons; GONE by default and
+         shown/hidden by OverlayBackend from `state.overlay.transientNotice`.
+         The first live use is the hover-send → pending-part notice ("text
+         will be inserted when the keyboard is next opened"). Colour is a
+         theme attr (?attr/colorOnSurfaceVariant) resolved against the
+         overlay's night-correct themed context at inflate — no colour
+         literal (ADR-0010). Not a MaterialButton, so the opacity-slider
+         button-fill loop and applySlots never touch it, and it is not
+         clickable so it does not disturb drag/click handling. -->
+    <TextView
+        android:id="@+id/overlay_notice_tv"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:paddingHorizontal="2dp"
+        android:visibility="gone"
+        android:textSize="12sp"
+        android:textColor="?attr/colorOnSurfaceVariant" />
 </net.devemperor.dictate.state.render.overlay.DraggableOverlayLayout>

@@ -42,5 +42,16 @@ data class ProcessingStepEntity(
     @ColumnInfo(name = "duration_ms") val durationMs: Long,
     @ColumnInfo(name = "status") val status: String,
     @ColumnInfo(name = "error_message") val errorMessage: String?,
-    @ColumnInfo(name = "created_at") val createdAt: Long
-)
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    // ── Conversation foundation (ADR-0012, schema v8) ──
+    // Non-null only for CONVERSATION_TURN steps. Nullable + defaulted so legacy
+    // rows and existing construction sites are unaffected.
+    /** The structured `message` field (explanation); `output_text` holds `output`. */
+    @ColumnInfo(name = "assistant_message") val assistantMessage: String? = null,
+    /** How the structured answer was parsed — [ResponseFormatKind] name, SQL-CHECKed. */
+    @ColumnInfo(name = "response_format") val responseFormat: String? = null
+) {
+    /** Boundary accessor; null for non-conversational or unknown values. */
+    val responseFormatEnum: ResponseFormatKind?
+        get() = responseFormat?.let { runCatching { ResponseFormatKind.valueOf(it) }.getOrNull() }
+}

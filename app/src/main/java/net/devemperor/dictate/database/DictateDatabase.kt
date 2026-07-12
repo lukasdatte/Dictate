@@ -10,6 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import net.devemperor.dictate.R
 import net.devemperor.dictate.database.converter.Converters
 import net.devemperor.dictate.database.dao.CompletionLogDao
+import net.devemperor.dictate.database.dao.ConversationMessageDao
 import net.devemperor.dictate.database.dao.ProcessingStepDao
 import net.devemperor.dictate.database.dao.PromptDao
 import net.devemperor.dictate.database.dao.SessionDao
@@ -17,6 +18,7 @@ import net.devemperor.dictate.database.dao.TextInsertionDao
 import net.devemperor.dictate.database.dao.TranscriptionDao
 import net.devemperor.dictate.database.dao.UsageDao
 import net.devemperor.dictate.database.entity.CompletionLogEntity
+import net.devemperor.dictate.database.entity.ConversationMessageEntity
 import net.devemperor.dictate.database.entity.ProcessingStepEntity
 import net.devemperor.dictate.database.entity.PromptEntity
 import net.devemperor.dictate.database.entity.SessionEntity
@@ -29,6 +31,7 @@ import net.devemperor.dictate.database.migration.MIGRATION_3_4
 import net.devemperor.dictate.database.migration.MIGRATION_4_5
 import net.devemperor.dictate.database.migration.MIGRATION_5_6
 import net.devemperor.dictate.database.migration.MIGRATION_6_7
+import net.devemperor.dictate.database.migration.MIGRATION_7_8
 
 @Database(
     entities = [
@@ -38,9 +41,10 @@ import net.devemperor.dictate.database.migration.MIGRATION_6_7
         TranscriptionEntity::class,
         ProcessingStepEntity::class,
         CompletionLogEntity::class,
-        TextInsertionEntity::class
+        TextInsertionEntity::class,
+        ConversationMessageEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -53,6 +57,7 @@ abstract class DictateDatabase : RoomDatabase() {
     abstract fun processingStepDao(): ProcessingStepDao
     abstract fun completionLogDao(): CompletionLogDao
     abstract fun textInsertionDao(): TextInsertionDao
+    abstract fun conversationMessageDao(): ConversationMessageDao
 
     companion object {
         private const val DATABASE_NAME = "dictate.db"
@@ -122,6 +127,7 @@ abstract class DictateDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+                    MIGRATION_7_8,
                 )
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {

@@ -1,10 +1,13 @@
 package net.devemperor.dictate.ai
 
 import android.content.SharedPreferences
+import net.devemperor.dictate.ai.conversation.ConversationMessage
 import net.devemperor.dictate.ai.factory.RunnerFactory
 import net.devemperor.dictate.ai.model.ParameterRegistry
 import net.devemperor.dictate.ai.runner.CompletionOptions
 import net.devemperor.dictate.ai.runner.CompletionResult
+import net.devemperor.dictate.ai.runner.ConversationRequest
+import net.devemperor.dictate.ai.runner.ConversationResult
 import net.devemperor.dictate.ai.runner.TranscriptionOptions
 import net.devemperor.dictate.ai.runner.TranscriptionResult
 import net.devemperor.dictate.database.dao.UsageDao
@@ -100,6 +103,47 @@ class AIOrchestrator @JvmOverloads constructor(
             )
 
             // Usage tracking
+            usageDao.addUsage(
+                result.modelName,
+                0,
+                result.promptTokens,
+                result.completionTokens,
+                provider.name
+            )
+
+            return result
+        } catch (e: AIProviderException) {
+            throw AIProviderException(e.errorType, e.message ?: "", e.cause, e.modelName, provider)
+        }
+    }
+
+    /**
+     * Executes a structured, multi-turn conversation turn (ADR-0012). Same
+     * model / provider / parameter resolution and usage tracking as [complete],
+     * but returns the parsed `{message, output}` structured answer.
+     *
+     * @param messages ordered conversation; the last entry is the new user turn
+     * @param systemPrompt system prompt for the turn (sourced from the persisted
+     *   SYSTEM row so it survives prompt-template changes across app versions)
+     * @throws AIProviderException on API errors
+     */
+    fun converse(messages: List<ConversationMessage>, systemPrompt: String?): ConversationResult {
+        val model = factory.getModelName(AIFunction.COMPLETION)
+        val runner = factory.createCompletionRunner()
+        val provider = factory.getProvider(AIFunction.COMPLETION)
+
+        val resolvedParams = resolveParameters(provider, model)
+
+        try {
+            val result = runner.converse(
+                ConversationRequest(
+                    messages = messages,
+                    model = model,
+                    systemPrompt = systemPrompt,
+                    parameters = resolvedParams
+                )
+            )
+
             usageDao.addUsage(
                 result.modelName,
                 0,

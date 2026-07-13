@@ -14,9 +14,9 @@ import net.devemperor.dictate.companion.domain.port.DeviceRepository
 import net.devemperor.dictate.companion.domain.port.HistoryRepository
 import net.devemperor.dictate.companion.domain.port.TextInserter
 import net.devemperor.dictate.companion.platform.AppPaths
+import net.devemperor.dictate.companion.platform.PlatformModule
 import net.devemperor.dictate.companion.platform.SystemClock
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
-import net.devemperor.dictate.companion.platform.fallback.NoopTextInserter
 import java.net.InetAddress
 import java.security.SecureRandom
 
@@ -50,22 +50,21 @@ class CompanionContainer(
         const val APP_VERSION = "1.0.0"
 
         /**
-         * The production graph, on the real SQLite file under [AppPaths].
+         * The production graph, on the real SQLite file under [AppPaths], with the ports
+         * [PlatformModule] picked for this operating system.
          *
-         * On Linux/macOS the inserter is [NoopTextInserter] and the autostart a no-op — the app
-         * runs, serves and stores its history, it just cannot type (ADR-0018). The Windows
-         * implementations arrive with `wd-7`/`wd-9` behind `PlatformModule.detect()`.
+         * On Linux/macOS that means a no-op inserter and no autostart — the app runs, serves and
+         * stores its history, it just cannot type, and it says so (`canInsert = false`, ADR-0018).
          */
         fun production(
-            inserter: TextInserter = NoopTextInserter,
-            autostart: AutostartManager = NoopAutostart,
+            platform: PlatformModule.Bindings = PlatformModule.detect(),
         ): CompanionContainer {
             val database = CompanionDatabase.open(AppPaths.databaseFile())
             return CompanionContainer(
                 devices = SqlDelightDeviceRepository(database),
                 history = SqlDelightHistoryRepository(database),
-                inserter = inserter,
-                autostart = autostart,
+                inserter = platform.inserter,
+                autostart = platform.autostart,
                 clock = SystemClock,
                 serverName = defaultServerName(),
                 appVersion = APP_VERSION,

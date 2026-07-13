@@ -562,5 +562,37 @@
     <string name="start_dictation_long_label">Start dictation</string>
     <string name="start_dictation_mic_permission_missing">Microphone permission required — opening Dictate settings.</string>
 
+    <!-- Windows Dispatch (ADR-0019) -->
+    <string name="dictate_settings_windows_category">Windows dispatch</string>
+    <string name="dictate_settings_windows_pairing_title">Pair with PC</string>
+    <string name="dictate_settings_windows_not_paired">Not paired</string>
+    <string name="dictate_settings_windows_auto_send_title">Auto-send to PC</string>
+    <string name="dictate_settings_windows_auto_send_summary">Send finished dictations to the paired PC instead of the current text field.</string>
+    <string name="dictate_settings_windows_auto_send_summary_not_paired">Pair with a PC first to enable auto-send.</string>
+    <string name="dictate_pairing_scan_qr">Scan QR code</string>
+    <string name="dictate_pairing_scan_prompt">Point the camera at the QR code shown on your PC</string>
+    <string name="dictate_pairing_or_manual">… or enter manually:</string>
+    <string name="dictate_pairing_url_hint">Address (e.g. http://my-pc:8756)</string>
+    <string name="dictate_pairing_code_hint">Pairing code</string>
+    <string name="dictate_pairing_pair">Pair</string>
+    <string name="dictate_pairing_test_connection">Test connection</string>
+    <string name="dictate_pairing_unpair">Unpair</string>
+    <string name="dictate_pairing_fill_fields">Enter both the address and the code.</string>
+    <string name="dictate_pairing_success">Paired.</string>
+    <string name="dictate_pairing_status_paired">Paired with \"%1$s\"</string>
+    <string name="dictate_pairing_failed_title">Pairing failed</string>
+    <string name="dictate_pairing_camera_denied">No problem — you can type the address and code instead.</string>
+    <string name="dictate_pairing_invalid_qr_title">Not a pairing code</string>
+    <string name="dictate_pairing_invalid_qr_message">That QR code is not a Dictate pairing code.</string>
+    <string name="dictate_pairing_error_token_expired">The code has expired — show a fresh one on your PC.</string>
+    <string name="dictate_pairing_error_token_invalid">This code is not valid for that PC.</string>
+    <string name="dictate_pairing_error_token_consumed">This code was already used — show a fresh one on your PC.</string>
+    <string name="dictate_pairing_error_protocol">The companion app is a different version — update it.</string>
+    <string name="dictate_pairing_error_generic">Pairing failed. Check the address and try again.</string>
+    <string name="dictate_pairing_test_ok_title">Connected</string>
+    <string name="dictate_pairing_test_ok">Connected to \"%1$s\".</string>
+    <string name="dictate_pairing_test_no_insert">Connected to \"%1$s\", but it cannot type text automatically — dictations arrive in the clipboard and must be pasted with Ctrl+V.</string>
+    <string name="dictate_windows_unreachable_msg">PC not reachable.</string>
+
     <string name="dictate_changelog_30">v3.2.0\n\nThis update brings some major improvements and new features! 🚀\n\n- Separate API keys: You can now save separate API keys for each provider (OpenAI, Groq, Custom), making switching between them seamless. 🔑\n\n- Improved Bluetooth support: Connecting to Bluetooth headsets is now faster and more reliable. 🎧\n\n- Auto Enter: Added an option to automatically press Enter/Send after transcription. ⚡\n\n- New Models: Added support for OpenAI o1, o4-mini, and GPT-5.2, including updated pricing info. 🤖\n\n- Various bug fixes and improvements. ✨\n\nI wish you a blessed New Year 2026! 🎆\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
 </resources>

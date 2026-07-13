@@ -41,6 +41,27 @@ sealed class Pref<T>(val key: String, val default: T) {
     object SmallMode : Pref<Boolean>("net.devemperor.dictate.small_mode", false)
     object SingleRowMode : Pref<Boolean>("net.devemperor.dictate.single_row_mode", false)
 
+    // ── Windows Dispatch ──
+    /**
+     * Auto-send mode (ADR-0019). When on, a completed pipeline's final text is sent to the
+     * paired PC instead of being committed into the Android host field. A failed send falls
+     * back to the existing pending-part path (ADR-0011). Gated on [WindowsDeviceSecret] being
+     * non-empty — the toggle is disabled in the settings until the phone is paired.
+     */
+    object WindowsAutoSendEnabled : Pref<Boolean>("net.devemperor.dictate.windows_auto_send_enabled", false)
+
+    /** Base URL of the companion, e.g. "http://vm-win.tailnet.ts.net:8756". Set by pairing. */
+    object WindowsTargetUrl : Pref<String>("net.devemperor.dictate.windows_target_url", "")
+
+    /** The long-lived device secret from the pairing handshake (ADR-0017). Empty = not paired. */
+    object WindowsDeviceSecret : Pref<String>("net.devemperor.dictate.windows_device_secret", "")
+
+    /** Stable per-install id (UUIDv4), generated once at the first pairing attempt. */
+    object WindowsDeviceId : Pref<String>("net.devemperor.dictate.windows_device_id", "")
+
+    /** Display name of the paired PC, for the settings summary. */
+    object WindowsServerName : Pref<String>("net.devemperor.dictate.windows_server_name", "")
+
     // ── UI/Theme ──
     object Theme : Pref<String>("net.devemperor.dictate.theme", "system")
     object AccentColor : Pref<Int>("net.devemperor.dictate.accent_color", -14700810)

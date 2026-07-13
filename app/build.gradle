@@ -87,12 +87,19 @@ ksp {
 
 dependencies {
 
+    // :shared — the pure kotlin("jvm") protocol/client module (ADR-0015). First
+    // consumed here (wd-10): the pairing screen uses PairingUri + DispatchClient.
+    implementation project(':shared')
+
     implementation libs.appcompat
     implementation libs.material
     implementation libs.activity
     implementation libs.constraintlayout
     implementation libs.preference
     implementation libs.emoji2.emojipicker
+    // ZXing Android bindings for the pairing QR scanner (wd-10). CAMERA is an
+    // optional, runtime-requested permission; manual URL+code entry is equivalent.
+    implementation libs.zxing.android.embedded
     testImplementation libs.junit
     // Quality-Gate W-2: real JSONObject/JSONArray/JSONTokener in the JVM
     // unit-test classpath instead of stubs (cf. ElevenLabsKeytermsParserTest

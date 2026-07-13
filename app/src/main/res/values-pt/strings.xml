@@ -306,6 +306,38 @@
         <item quantity="other">%d comentários ignorados</item>
     </plurals>
 
+    <!-- Windows Dispatch (ADR-0019) -->
+    <string name="dictate_settings_windows_category">Envio para Windows</string>
+    <string name="dictate_settings_windows_pairing_title">Emparelhar com o PC</string>
+    <string name="dictate_settings_windows_not_paired">Não emparelhado</string>
+    <string name="dictate_settings_windows_auto_send_title">Enviar automaticamente para o PC</string>
+    <string name="dictate_settings_windows_auto_send_summary">Envia os ditados concluídos para o PC emparelhado em vez do campo de texto atual.</string>
+    <string name="dictate_settings_windows_auto_send_summary_not_paired">Emparelhe primeiro com um PC para ativar o envio automático.</string>
+    <string name="dictate_pairing_scan_qr">Ler código QR</string>
+    <string name="dictate_pairing_scan_prompt">Aponte a câmara para o código QR mostrado no seu PC</string>
+    <string name="dictate_pairing_or_manual">… ou introduza manualmente:</string>
+    <string name="dictate_pairing_url_hint">Endereço (p. ex. http://meu-pc:8756)</string>
+    <string name="dictate_pairing_code_hint">Código de emparelhamento</string>
+    <string name="dictate_pairing_pair">Emparelhar</string>
+    <string name="dictate_pairing_test_connection">Testar ligação</string>
+    <string name="dictate_pairing_unpair">Desemparelhar</string>
+    <string name="dictate_pairing_fill_fields">Introduza o endereço e o código.</string>
+    <string name="dictate_pairing_success">Emparelhado.</string>
+    <string name="dictate_pairing_status_paired">Emparelhado com \"%1$s\"</string>
+    <string name="dictate_pairing_failed_title">Falha no emparelhamento</string>
+    <string name="dictate_pairing_camera_denied">Sem problema — também pode escrever o endereço e o código.</string>
+    <string name="dictate_pairing_invalid_qr_title">Não é um código de emparelhamento</string>
+    <string name="dictate_pairing_invalid_qr_message">Esse código QR não é um código de emparelhamento do Dictate.</string>
+    <string name="dictate_pairing_error_token_expired">O código expirou — mostre um novo no seu PC.</string>
+    <string name="dictate_pairing_error_token_invalid">Este código não é válido para esse PC.</string>
+    <string name="dictate_pairing_error_token_consumed">Este código já foi usado — mostre um novo no seu PC.</string>
+    <string name="dictate_pairing_error_protocol">A aplicação complementar tem uma versão diferente — atualize-a.</string>
+    <string name="dictate_pairing_error_generic">Falha no emparelhamento. Verifique o endereço e tente novamente.</string>
+    <string name="dictate_pairing_test_ok_title">Ligado</string>
+    <string name="dictate_pairing_test_ok">Ligado a \"%1$s\".</string>
+    <string name="dictate_pairing_test_no_insert">Ligado a \"%1$s\", mas não consegue escrever texto automaticamente — os ditados chegam à área de transferência e têm de ser colados com Ctrl+V.</string>
+    <string name="dictate_windows_unreachable_msg">PC não acessível.</string>
+
     <string name="dictate_changelog_30">v3.2.0\n\nEsta atualização traz melhorias importantes e novas funcionalidades! 🚀\n\n- Chaves API separadas: Agora você pode salvar chaves API separadas para cada provedor (OpenAI, Groq, Custom), facilitando a troca. 🔑\n\n- Bluetooth melhorado: A conexão com fones Bluetooth está mais rápida e confiável. 🎧\n\n- Auto Enter: Nova opção para pressionar automaticamente Enter/Enviar após a transcrição. ⚡\n\n- Novos modelos: Suporte adicionado para OpenAI o1, o4-mini e GPT-5.2, com preços atualizados. 🤖\n\n- Correções de bugs e melhorias. ✨\n\nDesejo a vocês um abençoado ano novo de 2026! 🎆\n\nComo sempre, sinta-se à vontade para entrar em contato com dúvidas e ideias via GitHub ou pelo botão de e-mail abaixo. ☺️\n\n\n</string>
 
     <!-- Status badges -->

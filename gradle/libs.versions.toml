@@ -65,6 +65,9 @@ sqldelight = "2.1.0"
 sqliteJdbc = "3.45.3.0"
 jna = "5.19.1"
 zxing = "3.5.4"
+# ZXing Android bindings for the pairing QR scanner (:app only). mavenCentral, Java-8,
+# minSdk-compatible. Deferred from Block 1 to the chunk that actually consumes it (wd-10).
+zxingAndroidEmbedded = "4.3.0"
 
 [libraries]
 colorpicker = { module = "com.github.QuadFlask:colorpicker", version.ref = "colorpicker" }
@@ -141,6 +144,7 @@ jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
 # :companion — pairing QR. `javase` renders the BitMatrix into a BufferedImage.
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 zxing-javase = { module = "com.google.zxing:javase", version.ref = "zxing" }
+zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingAndroidEmbedded" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

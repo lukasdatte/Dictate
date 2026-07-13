@@ -31,6 +31,7 @@ import net.devemperor.dictate.core.DictatePipelineService;
 import net.devemperor.dictate.preferences.DictatePrefsKt;
 import net.devemperor.dictate.preferences.LanguageResolver;
 import net.devemperor.dictate.preferences.Pref;
+import net.devemperor.dictate.preferences.WindowsTarget;
 import net.devemperor.dictate.history.HistoryActivity;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
 import net.devemperor.dictate.database.DictateDatabase;
@@ -77,6 +78,11 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
     };
 
     private boolean pipelineBound = false;
+
+    @androidx.annotation.Nullable
+    private Preference windowsPairingPreference;
+    @androidx.annotation.Nullable
+    private SwitchPreference windowsAutoSendPreference;
 
     @Override
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
@@ -291,6 +297,17 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
             });
         }
 
+        // ── Windows Dispatch (ADR-0019) ──
+        windowsPairingPreference = findPreference("net.devemperor.dictate.windows_pairing");
+        windowsAutoSendPreference = findPreference("net.devemperor.dictate.windows_auto_send_enabled");
+        if (windowsPairingPreference != null) {
+            windowsPairingPreference.setOnPreferenceClickListener(preference -> {
+                startActivity(new Intent(requireContext(), WindowsPairingActivity.class));
+                return true;
+            });
+        }
+        refreshWindowsDispatchState();
+
         Preference howToPreference = findPreference("net.devemperor.dictate.how_to");
         if (howToPreference != null) {
             howToPreference.setOnPreferenceClickListener(preference -> {
@@ -487,6 +504,34 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
         // because we just drained the directory above.
         // noinspection ResultOfMethodCallIgnored
         entry.delete();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        // The pairing summary and the toggle's enabled-state must reflect a pairing
+        // that just happened in WindowsPairingActivity (or an unpair) — refresh on return.
+        refreshWindowsDispatchState();
+    }
+
+    /**
+     * Mirrors the current pairing state into the Windows-Dispatch category: the pairing row's
+     * summary names the paired PC (or "not paired"), and the auto-send toggle is only enabled
+     * while a PC is coupled — the device secret is the single "paired?" gate (ADR-0017/0019).
+     */
+    private void refreshWindowsDispatchState() {
+        boolean paired = WindowsTarget.from(sp) != null;
+        if (windowsPairingPreference != null) {
+            windowsPairingPreference.setSummary(paired
+                    ? DictatePrefsKt.get(sp, Pref.WindowsServerName.INSTANCE)
+                    : getString(R.string.dictate_settings_windows_not_paired));
+        }
+        if (windowsAutoSendPreference != null) {
+            windowsAutoSendPreference.setEnabled(paired);
+            windowsAutoSendPreference.setSummary(paired
+                    ? getString(R.string.dictate_settings_windows_auto_send_summary)
+                    : getString(R.string.dictate_settings_windows_auto_send_summary_not_paired));
+        }
     }
 
     @Override

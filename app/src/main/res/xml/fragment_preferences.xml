@@ -224,6 +224,27 @@
     </androidx.preference.PreferenceCategory>
 
     <androidx.preference.PreferenceCategory
+        android:title="@string/dictate_settings_windows_category"
+        app:iconSpaceReserved="false">
+
+        <!-- Sub-screen: pairing. The summary shows the paired PC or "not paired". -->
+        <androidx.preference.Preference
+            android:key="net.devemperor.dictate.windows_pairing"
+            android:title="@string/dictate_settings_windows_pairing_title"
+            app:iconSpaceReserved="false"/>
+
+        <!-- The feature toggle. Enabled/disabled PROGRAMMATICALLY while unpaired
+             (app:dependency can only point at a Boolean pref, "paired" is not one). -->
+        <androidx.preference.SwitchPreference
+            android:key="net.devemperor.dictate.windows_auto_send_enabled"
+            android:title="@string/dictate_settings_windows_auto_send_title"
+            android:summary="@string/dictate_settings_windows_auto_send_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
+
+    </androidx.preference.PreferenceCategory>
+
+    <androidx.preference.PreferenceCategory
         android:title="@string/dictate_settings_about_title"
         app:iconSpaceReserved="false">
 

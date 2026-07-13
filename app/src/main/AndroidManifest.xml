@@ -8,6 +8,13 @@
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
+    <!-- Windows-Dispatch pairing (ADR-0017): the QR scanner is a COMFORT path, not a
+         requirement — manual URL + code entry is fully equivalent. required=false keeps the
+         app installable on camera-less devices; the permission is requested at runtime, and
+         only when the user taps "Scan QR". -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
     <!--
         Block 2 (DictatePipelineService — see Spec 1 §11.1.1):
           FOREGROUND_SERVICE           mandatory for any FGS on API ≥ 28
@@ -232,6 +239,14 @@
             android:name=".settings.APISettingsActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustPan">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".settings.DictateSettingsActivity" />
+        </activity>
+        <activity
+            android:name=".settings.WindowsPairingActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value=".settings.DictateSettingsActivity" />

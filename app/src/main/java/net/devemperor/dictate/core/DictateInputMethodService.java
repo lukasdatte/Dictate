@@ -3852,7 +3852,28 @@ public class DictateInputMethodService extends InputMethodService
      * FGS notification) and discard the R-1 config snapshot. Legacy:
      * {@code recordingStateController.cancelRecording()} as pre-C5.
      */
+    /**
+     * Clears a pending S2 review-refinement target and releases the panel's
+     * recording lock. G2-1/G2-5: {@code reviewRefinementTargetSessionId} used to
+     * be nulled only by the two pipeline-completion paths (branch B and
+     * onPipelineError). If the S2 recording is abandoned instead (cancel gesture)
+     * the field stayed set, so the NEXT recording read {@code transcriptionOnly =
+     * true} and its transcript was continued into the OLD conversation rather
+     * than inserted — a normal dictation silently swallowed. Every recording
+     * teardown that does not run through a completion path must call this.
+     */
+    private void clearReviewRefinementTarget() {
+        if (reviewRefinementTargetSessionId == null) return;
+        reviewRefinementTargetSessionId = null;
+        dispatchPipelineActionToOrchestrator(
+                net.devemperor.dictate.state.Action.ReviewPanelAction.CancelRefinement.INSTANCE,
+                "ReviewPanel.CancelRefinement");
+    }
+
     private void cancelEffectiveRecording() {
+        // A cancel during an S2 review-refinement recording must not leave the
+        // target dangling for the next recording (G2-5).
+        clearReviewRefinementTarget();
         if (pipelineBinder != null) {
             // 2026-05-22 — discard the R-1 config snapshot keyed by the
             // current session id (read off state.recording, the single

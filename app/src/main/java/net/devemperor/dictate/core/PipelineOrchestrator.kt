@@ -733,9 +733,15 @@ class PipelineOrchestrator @JvmOverloads constructor(
     ) {
         val startTime = System.nanoTime()
         val snapshot = sessionManager.loadConversation(sessionId)
-        // Conversation turns are contiguous by index, so turns[i] ↔ chainIndex i.
-        val priorTurns = snapshot.turns.take(stepChainIndex)
-        val trailingUser = snapshot.turns.getOrNull(stepChainIndex)?.userContent
+        // G2-1: select by REAL chain index, not list position. A skipped (ERROR)
+        // turn makes snapshot.turns shorter than the chain, so the old positional
+        // take(stepChainIndex)/getOrNull(stepChainIndex) could include the target
+        // turn itself as "prior" and drop the real trailing user message. The
+        // trailing user message is read straight from the persisted USER row at
+        // this index (K3-style, seq-safe) so it stays byte-faithful even when the
+        // regenerated turn was itself an ERROR (absent from snapshot.turns).
+        val priorTurns = snapshot.turns.filter { it.chainIndex < stepChainIndex }
+        val trailingUser = sessionManager.getTurnUserMessage(sessionId, stepChainIndex)
             ?: target.inputText
         val messages = ConversationReconstructor.toApiMessages(priorTurns, trailingUser)
 

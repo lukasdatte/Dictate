@@ -231,4 +231,56 @@ class SessionManagerConversationTest {
         assertEquals("U1", sm.getTurnUserMessage(s, 1))
         assertNull(sm.getTurnUserMessage(s, 2))
     }
+
+    @Test
+    fun `loadConversation after regenerate-middle + append yields one clean turn per index (G2-1)`() {
+        val s = newSession()
+        // Three linear turns at chain 0, 1, 2.
+        sm.appendConversationTurn(s, "U0", "raw", result("O0"), "OPENAI", null, 1, "SYS")
+        sm.appendConversationTurn(s, "U1", "O0", result("O1"), "OPENAI", null, 1, "SYS")
+        sm.appendConversationTurn(s, "U2", "O1", result("O2"), "OPENAI", null, 1, "SYS")
+
+        // Regenerate the MIDDLE turn → invalidateDownstream marks chain 2 v1
+        // is_current = 0. The USER row at turn_index 2 ("U2") is intentionally
+        // left in place (regenerate does not touch conversation rows).
+        sm.regenerateConversationTurn(s, chainIndex = 1, result = result("O1-v2"), provider = "OPENAI", durationMs = 1)
+
+        // A fresh append lands at chain_index 2 and writes a SECOND USER row at
+        // turn_index 2 ("U2b"). Before G2-1, loadConversation joined ALL USER
+        // rows by turn_index without seq disambiguation, so both the orphaned
+        // "U2" and the new "U2b" mapped onto the single current step at index 2
+        // → a 4-entry snapshot with a phantom turn (U2 paired with O2b) plus a
+        // duplicate. The replay then fed the model a corrupted history.
+        sm.appendConversationTurn(s, "U2b", "O1-v2", result("O2b"), "OPENAI", null, 1, "SYS")
+
+        val turns = sm.loadConversation(s).turns
+        assertEquals(3, turns.size)
+        assertEquals(listOf("U0", "U1", "U2b"), turns.map { it.userContent })
+        assertEquals(listOf("O0", "O1-v2", "O2b"), turns.map { it.assistantOutput })
+        // The turns carry their real chain index (contiguous here).
+        assertEquals(listOf(0, 1, 2), turns.map { it.chainIndex })
+    }
+
+    @Test
+    fun `loadConversation skips a sandwiched ERROR turn but keeps real chain indices (G2-1)`() {
+        val s = newSession()
+        sm.addTranscriptionVersion(s, "the transcript", "whisper", "OPENAI", durationMs = 1)
+        // Turn 0 SUCCESS, turn 1 ERROR (its own USER row), turn 2 SUCCESS.
+        sm.appendConversationTurn(s, "U0", "raw", result("O0"), "OPENAI", null, 1, "SYS")
+        sm.appendConversationTurnError(
+            sessionId = s, userMessageContent = "U1err", inputText = "O0",
+            model = "gpt-test", provider = "OPENAI", previousTranscriptionId = null,
+            errorMessage = "boom", durationMs = 1, systemPromptForFirstTurn = null
+        )
+        sm.appendConversationTurn(s, "U2", "O0", result("O2"), "OPENAI", null, 1, "SYS")
+
+        val turns = sm.loadConversation(s).turns
+        // The ERROR turn is skipped, so the list is shorter than the chain — the
+        // surviving turns must still report their real chain index (0 and 2, NOT
+        // positional 0 and 1). regenerateConversationTurnBlocking relies on this
+        // to build a correct replay instead of the pre-G2-1 positional take().
+        assertEquals(2, turns.size)
+        assertEquals(listOf("U0", "U2"), turns.map { it.userContent })
+        assertEquals(listOf(0, 2), turns.map { it.chainIndex })
+    }
 }

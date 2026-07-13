@@ -15,8 +15,22 @@ interface ConversationMessageDao {
     @Query("SELECT * FROM conversation_messages WHERE session_id = :sessionId ORDER BY seq")
     fun getBySession(sessionId: String): List<ConversationMessageEntity>
 
-    /** USER rows only, ordered by turn — the per-turn user message content. */
-    @Query("SELECT * FROM conversation_messages WHERE session_id = :sessionId AND role = 'USER' ORDER BY turn_index")
+    /**
+     * USER rows only, one per turn — the latest (MAX seq) row at each
+     * `turn_index`, ordered by turn.
+     *
+     * G2-1: after an upstream regenerate invalidates a downstream step, its
+     * orphaned USER row stays; a later append then writes a SECOND USER row at
+     * the same `turn_index`. Selecting only the max-seq row per turn keeps the
+     * turn↔step join 1:1, so [SessionManager.loadConversation] can never emit a
+     * phantom/duplicate turn from a stale sibling row.
+     */
+    @Query(
+        "SELECT * FROM conversation_messages WHERE session_id = :sessionId AND role = 'USER' " +
+            "AND seq IN (SELECT MAX(seq) FROM conversation_messages " +
+            "WHERE session_id = :sessionId AND role = 'USER' GROUP BY turn_index) " +
+            "ORDER BY turn_index"
+    )
     fun getUserMessages(sessionId: String): List<ConversationMessageEntity>
 
     /**
@@ -24,7 +38,10 @@ interface ConversationMessageDao {
      * absent. The error-resume path replays this exact message so the
      * regenerated output stays consistent with the persisted conversation (K3).
      */
-    @Query("SELECT content FROM conversation_messages WHERE session_id = :sessionId AND role = 'USER' AND turn_index = :turnIndex LIMIT 1")
+    @Query(
+        "SELECT content FROM conversation_messages WHERE session_id = :sessionId AND role = 'USER' " +
+            "AND turn_index = :turnIndex ORDER BY seq DESC LIMIT 1"
+    )
     fun getUserMessageAt(sessionId: String, turnIndex: Int): String?
 
     /** The persisted SYSTEM row content (turn 0's system prompt), or null. */

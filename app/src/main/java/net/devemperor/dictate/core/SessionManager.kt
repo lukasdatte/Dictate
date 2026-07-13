@@ -545,7 +545,7 @@ class SessionManager(private val db: DictateDatabase) {
         val turns = userMessages.mapNotNull { user ->
             val step = stepByIndex[user.turnIndex] ?: return@mapNotNull null
             if (step.status != StepStatus.SUCCESS.name || step.outputText == null) return@mapNotNull null
-            ReconstructedTurn(user.content, step.outputText, step.assistantMessage)
+            ReconstructedTurn(user.content, step.outputText, step.assistantMessage, step.chainIndex)
         }
         return ConversationSnapshot(system, turns)
     }

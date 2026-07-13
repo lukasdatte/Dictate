@@ -15,7 +15,16 @@ import net.devemperor.dictate.database.entity.MessageRole
 data class ReconstructedTurn(
     val userContent: String,
     val assistantOutput: String,
-    val assistantMessage: String?
+    val assistantMessage: String?,
+    /**
+     * The turn's real `chain_index` in the persisted step chain. Load-bearing
+     * for callers that select turns by index (regenerate: "all turns BEFORE
+     * index K"): a failed turn is skipped during reconstruction, so the turn
+     * list can be shorter than the chain and positional indexing would misalign
+     * (G2-1). The pure reconstructor itself never reads this — hence the default
+     * for index-agnostic construction in tests.
+     */
+    val chainIndex: Int = 0
 )
 
 /**

@@ -292,6 +292,42 @@ class PipelineOrchestratorQueueExecutionTest {
     }
 
     @Test
+    fun `regenerate of the last turn after a sandwiched ERROR turn replays a correct history (G2-1)`() {
+        val sid = createRecordingSession()
+        db.promptDao().insert(
+            PromptEntity(id = 7, pos = 0, name = "F", prompt = "Make it formal", requiresSelection = true, autoApply = false)
+        )
+        reprocess(sid, listOf(PromptQueueSlot.ofSavedPrompt(7)))   // converse #1 -> output(1), turn 0 SUCCESS
+
+        // A dictated refinement that FAILS → K8 persists an ERROR turn at chain 1
+        // (a provider error is handled gracefully, not rethrown).
+        factory.failAtConverseCall = 2
+        orchestrator.continueConversationBlocking(sid, "first attempt")       // converse #2 fails
+        factory.failAtConverseCall = null
+
+        // A second refinement SUCCEEDS at chain 2 (sandwiching the ERROR turn).
+        orchestrator.continueConversationBlocking(sid, "second attempt")      // converse #3 -> output(3), turn 2
+
+        val chain = db.processingStepDao().getCurrentChain(sid)
+        assertEquals(3, chain.size) // turn0 SUCCESS, turn1 ERROR, turn2 SUCCESS
+        assertEquals("ERROR", chain[1].status)
+
+        // Regenerate the LAST turn (chain index 2). Before G2-1 the positional
+        // take(stepChainIndex) treated the skipped ERROR turn as a missing slot,
+        // so turns[1] (chain index 2 — the target itself) was replayed as prior
+        // history and the model saw its own answer twice.
+        orchestrator.regenerateStepBlocking(sid, 2)                           // converse #4 -> replay
+
+        val replay = factory.converseCalls[3] // converse #4
+        // Only turn 0 is prior history: [USER t0, ASSISTANT t0, USER trailing] = 3.
+        assertEquals(3, replay.messages.size)
+        // The target turn's own output MUST NOT appear as replayed history.
+        assertTrue(replay.messages.none { it.content.contains(factory.output(3)) })
+        // The prior assistant turn is turn 0's output.
+        assertTrue(replay.messages.any { it.content.contains(factory.output(1)) })
+    }
+
+    @Test
     fun `continueConversation - provider-level cancel throws and appends no turn`() {
         // ADR-0013 (d): a review-panel cancel routes to JobExecutor.cancel,
         // which triggers the token; the continuation must abort cleanly without

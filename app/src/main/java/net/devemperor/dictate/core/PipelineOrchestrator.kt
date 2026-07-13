@@ -849,11 +849,7 @@ class PipelineOrchestrator @JvmOverloads constructor(
                 durationMs = durationMs,
                 systemPromptForFirstTurn = null
             )
-            if (e is AIProviderException) {
-                callback.onPipelineError(e.toInfoKey(), true, e.provider?.name)
-            } else {
-                callback.onPipelineError("internet_error", true, null)
-            }
+            notifyProviderError(e)
         } finally {
             callback.onPipelineFinished()
             running = false
@@ -1737,6 +1733,21 @@ class PipelineOrchestrator @JvmOverloads constructor(
     }
 
     /**
+     * G2-9: single classification of a caught exception into the
+     * [PipelineCallback.onPipelineError] call, shared by every turn/completion
+     * error path so a change to the mapping (new error key, provider tagging)
+     * cannot drift between the conversation-turn, refinement and per-prompt
+     * paths. Cancellation is filtered by the callers before this point.
+     */
+    private fun notifyProviderError(e: Throwable, vibrate: Boolean = true) {
+        if (e is AIProviderException) {
+            callback.onPipelineError(e.toInfoKey(), vibrate, e.provider?.name)
+        } else {
+            callback.onPipelineError("internet_error", vibrate, null)
+        }
+    }
+
+    /**
      * Persists a failed conversation turn (ERROR step + user row) and surfaces
      * the error + resend, mirroring the per-prompt [handleCompletionError].
      */
@@ -1767,11 +1778,7 @@ class PipelineOrchestrator @JvmOverloads constructor(
             PromptTemplates.SYSTEM_PROMPT_CONVERSATION, userMessage,
             false, e.message
         )
-        if (e is AIProviderException) {
-            callback.onPipelineError(e.toInfoKey(), true, e.provider?.name)
-        } else {
-            callback.onPipelineError("internet_error", true, null)
-        }
+        notifyProviderError(e)
         callback.onShowResend()
     }
 
@@ -1929,14 +1936,9 @@ class PipelineOrchestrator @JvmOverloads constructor(
                 // User cancelled - no audit trail, no resend
                 return
             }
-            e is AIProviderException -> {
-                persistErrorStep(sid, ctx, pp, durationMs, e.message, rawInputText)
-                callback.onPipelineError(e.toInfoKey(), true, e.provider?.name)
-                callback.onShowResend()
-            }
             else -> {
                 persistErrorStep(sid, ctx, pp, durationMs, e.message, rawInputText)
-                callback.onPipelineError("internet_error", true, null)
+                notifyProviderError(e)
                 callback.onShowResend()
             }
         }
@@ -1952,14 +1954,9 @@ class PipelineOrchestrator @JvmOverloads constructor(
             isCancellation(e) -> {
                 // User cancelled - silent
             }
-            e is AIProviderException -> {
-                Log.w(TAG, "Pipeline error", e)
-                callback.onPipelineError(e.toInfoKey(), true, e.provider?.name)
-                callback.onShowResend()
-            }
             else -> {
                 Log.w(TAG, "Pipeline error", e)
-                callback.onPipelineError("internet_error", true, null)
+                notifyProviderError(e)
                 callback.onShowResend()
             }
         }

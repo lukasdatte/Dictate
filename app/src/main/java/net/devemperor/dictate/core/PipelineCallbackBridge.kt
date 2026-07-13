@@ -170,6 +170,13 @@ class PipelineCallbackBridge(
 
     // Non-terminal (ADR-0013): forward to the delegate, drop when unbound —
     // a review continuation only makes sense with a visible, bound IME.
+    // N5: dropping when unbound is NOT data loss. appendConversationTurn wrote
+    // final_output_text for the refined turn in-transaction, so the next process
+    // start reconstructs it via SessionManager.findPendingInsertion — cold-boot
+    // recovery is the source of truth for a continuation whose delegate detached
+    // (service death) before delivery. This asymmetry to the K4 view-hidden path
+    // (which upserts the pending part live) is deliberate: without a bound IME
+    // there is no live pending axis to update.
     override fun onReviewTurnCompleted(
         sessionId: String,
         output: String,

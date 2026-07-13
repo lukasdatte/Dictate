@@ -4899,6 +4899,18 @@ public class DictateInputMethodService extends InputMethodService
                         "PendingSessions.AddOrReplaceOne");
                 return;
             }
+            // N4: guard the cancel-race. Discard-while-refining cancels the job
+            // and clears the panel's refining flag, but the continuation may
+            // already be past its cancellation check and land here. If the panel
+            // is no longer refining THIS session (discarded, or replaced by a
+            // newer review), do not commit or re-surface a result the user has
+            // discarded — the turn stays persisted for audit/recovery only.
+            net.devemperor.dictate.state.ReviewPanelState refinePanel = currentReviewPanel();
+            if (refinePanel == null || !refinePanel.getOpen()
+                    || !sessionId.equals(refinePanel.getSessionId())
+                    || !(refinePanel.getRefining() || refinePanel.getRefinementRecording())) {
+                return;
+            }
             net.devemperor.dictate.ai.conversation.Verdict v =
                     net.devemperor.dictate.ai.conversation.ReviewDecision.INSTANCE.decide(
                             currentAmbiguityMode(), needsClarification, message);

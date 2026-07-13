@@ -456,7 +456,22 @@ sealed class Action {
              * `findPendingInsertion`). Overrides [committed] when true.
              */
             val heldForReview: Boolean = false,
-        ) : PipelineAction()
+            /**
+             * ADR-0019: the text is on its way to the Windows companion. Like [heldForReview]:
+             * the queue drains normally, but NEITHER MarkSessionInserted NOR AddPendingInsertSession
+             * fires — `WindowsDispatchAction.Succeeded`/`Failed` resolves it. Takes precedence over
+             * [committed] in the reducer arm. Mutually exclusive with [heldForReview] (review comes
+             * BEFORE the send).
+             */
+            val awaitingDispatch: Boolean = false,
+        ) : PipelineAction() {
+            init {
+                require(!(heldForReview && awaitingDispatch)) {
+                    "PipelineDone cannot be both heldForReview and awaitingDispatch — " +
+                        "review happens before the send (ADR-0019)"
+                }
+            }
+        }
 
         data class PipelineFailed(val sessionId: String, val reason: String) : PipelineAction()
 
@@ -1210,6 +1225,52 @@ sealed class Action {
          * deferred-insertion surface.
          */
         data object DismissAll : PendingSessionsAction()
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // WindowsDispatch-axis actions (WindowsDispatchModule — ADR-0019)
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Windows-dispatch result flow. Owned by `WindowsDispatchModule`.
+     *
+     * NON-TERMINAL and guard-free — none of these touch the
+     * `PipelineTerminalDispatchGuard` (ADR-0011). They are emitted by the shared
+     * `WindowsDispatchCoordinator` from BOTH terminal producers (the IME seam and the
+     * headless sink); the reducer cannot tell — and must not care — which one it was.
+     */
+    sealed class WindowsDispatchAction : Action() {
+        /** A dispatch has been started (Started → HTTP → Succeeded | Failed). */
+        data class Started(
+            val sessionId: String,
+            val text: String,
+            val createdAt: Long,
+            val acknowledgeOnSuccess: Boolean,
+            val surfacedAsPending: Boolean,
+        ) : WindowsDispatchAction()
+
+        /** HTTP 200 + delivered=true — the ONLY success path. [outcome] drives the notice. */
+        data class Succeeded(
+            val sessionId: String,
+            val outcome: net.devemperor.dictate.shared.protocol.InsertionOutcomeWire,
+        ) : WindowsDispatchAction()
+
+        /** Anything else — including an ambiguous timeout. Falls back to the pending part. */
+        data class Failed(
+            val sessionId: String,
+            val errorKind: PipelineErrorKind,
+        ) : WindowsDispatchAction()
+
+        /**
+         * The teardown cascade has surfaced this in-flight text as a pending part. Records the fact
+         * in THIS axis so a later [Succeeded] knows it must remove the part again instead of merely
+         * acknowledging it (which would leave a "Tap to paste" ghost — `pendingFlow()` is
+         * `emptyFlow()`, there is no DB-driven refresh of the pendingSessions axis).
+         */
+        data class MarkSurfaced(val sessionId: String) : WindowsDispatchAction()
+
+        /** The user dismissed the notice bar. */
+        data object DismissNotice : WindowsDispatchAction()
     }
 
     // ════════════════════════════════════════════════════════════════

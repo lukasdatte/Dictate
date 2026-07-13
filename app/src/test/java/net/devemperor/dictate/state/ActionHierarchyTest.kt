@@ -26,10 +26,10 @@ class ActionHierarchyTest {
     // ────────────────────────────────────────────────────────────────
 
     @Test
-    fun `Action sealedSubclasses include all 18 module sealed actions plus EffectFailure`() {
+    fun `Action sealedSubclasses include all 19 module sealed actions plus EffectFailure`() {
         val direct = Action::class.sealedSubclasses.map { it.simpleName }.toSet()
 
-        // 18 module action classes + 1 top-level EffectFailure = 19 direct subclasses.
+        // 19 module action classes + 1 top-level EffectFailure = 20 direct subclasses.
         // B3.1 / ADR-0008 added `WidgetAction` alongside the legacy
         // `ViewModeAction`; both stay registered until B3.5 retires the
         // ViewMode axis. 2026-07-02 (ADR-0006 completion) added
@@ -56,6 +56,8 @@ class ActionHierarchyTest {
             "InterruptionAction",
             "ReviewPanelAction",
             "HistoryPanelAction",
+            // ADR-0019 — in-flight Windows-dispatch result flow.
+            "WindowsDispatchAction",
         )
         assertEquals(expected, direct)
     }

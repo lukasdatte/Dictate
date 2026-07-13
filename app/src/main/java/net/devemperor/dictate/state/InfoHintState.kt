@@ -119,7 +119,13 @@ enum class PipelineErrorKind {
     BAD_REQUEST,
 
     /** Connectivity / 5xx / unclassified failures. Dismiss-only. */
-    INTERNET_ERROR;
+    INTERNET_ERROR,
+
+    /** ADR-0019 — the paired PC is unreachable / timed out / 5xx. Dismiss-only; the text is a pending part. */
+    WINDOWS_UNREACHABLE,
+
+    /** ADR-0019 — 401, the pairing is invalid. Confirm opens the pairing screen (wired at the seam, Block 3b). */
+    WINDOWS_UNAUTHORIZED;
 
     companion object {
         /**

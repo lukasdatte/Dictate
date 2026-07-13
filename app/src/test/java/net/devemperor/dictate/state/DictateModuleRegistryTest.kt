@@ -32,7 +32,7 @@ class DictateModuleRegistryTest {
     }
 
     @Test
-    fun `production singleton contains the 17 active modules (C5 + C6 + B3 + ADR-0013)`() {
+    fun `production singleton contains the 18 active modules (C5 + C6 + B3 + ADR-0013 + ADR-0019)`() {
         // Order is a binding contract (cascade order, ADR-0002) — the
         // list literal in `DictateModuleRegistry.Default` is the single
         // source of truth. B3.1 / ADR-0008 added `WidgetModule` next to
@@ -41,7 +41,8 @@ class DictateModuleRegistryTest {
         // `InfoHintModule`; the same day activated `InterruptionModule`
         // (F-036, formerly the Phase-2 stub). ADR-0013 added
         // `ReviewPanelModule` (a class instance, not an object — compared
-        // by id here). Inventory: 6 core + 11 aux = 17 entries.
+        // by id here). ADR-0019 added `WindowsDispatchModule` (in-flight
+        // Windows-dispatch axis). Inventory: 6 core + 12 aux = 18 entries.
         val expectedIds: List<ModuleId> = listOf(
             ModuleId.Recording,
             ModuleId.Pipeline,
@@ -61,6 +62,7 @@ class DictateModuleRegistryTest {
             ModuleId.Interruption,
             ModuleId.ReviewPanel,
             ModuleId.HistoryPanel,
+            ModuleId.WindowsDispatch,
         )
         assertEquals(expectedIds, DictateModuleRegistry.Default.all.map { it.id })
     }

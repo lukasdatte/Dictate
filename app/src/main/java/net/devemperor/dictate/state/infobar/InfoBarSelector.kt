@@ -390,6 +390,18 @@ object InfoBarSelector {
                 message = InfoBarMessage(R.string.dictate_internet_error_msg, style = InfoBarStyle.ERROR)
                 confirmAction = null
             }
+            // ADR-0019 — these kinds are surfaced through the state-derived
+            // `windowsDispatch.notice` path (wired at the seams, Block 3b), NOT through the
+            // InfoHint pipeline-error hint: `PipelineErrorKind.fromInfoKey` never produces them,
+            // so these branches are only here to keep this enum `when` exhaustive.
+            PipelineErrorKind.WINDOWS_UNREACHABLE -> {
+                message = InfoBarMessage(R.string.dictate_windows_unreachable_msg, style = InfoBarStyle.ERROR)
+                confirmAction = null
+            }
+            PipelineErrorKind.WINDOWS_UNAUTHORIZED -> {
+                message = InfoBarMessage(R.string.dictate_windows_unauthorized_msg, style = InfoBarStyle.ERROR)
+                confirmAction = null
+            }
         }
         return InfoBarItem(
             id = "pipeline-error:${hint.kind.name.lowercase()}",

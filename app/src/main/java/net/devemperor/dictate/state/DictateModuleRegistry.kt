@@ -163,6 +163,10 @@ open class DictateModuleRegistry(
             // its auto-close cascade observes the recording + imeViewVisible
             // edges).
             HistoryPanelModule,
+            // ADR-0019 — in-flight Windows-dispatch axis (auto-send to the paired PC).
+            // Unconsumed until the seams land (Block 3b): nothing emits a WindowsDispatchAction
+            // yet, so the axis stays empty and its teardown cascade never fires.
+            WindowsDispatchModule,
         ),
     )
 }

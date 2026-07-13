@@ -128,6 +128,13 @@ data class DictateUiState(
      * `InputConnection`), not the immutable snapshot.
      */
     val historyPanel: HistoryPanelState = HistoryPanelState(),
+
+    /**
+     * In-flight Windows-dispatch sub-state (ADR-0019). Owned by `WindowsDispatchModule`. Holds
+     * sessions terminal in the pipeline FSM but not yet acknowledged, awaiting their HTTP result.
+     * Empty until a dispatch is triggered (Block 3b) — no seam consumes it yet.
+     */
+    val windowsDispatch: WindowsDispatchState = WindowsDispatchState(),
 ) {
     companion object {
         /**
@@ -154,6 +161,7 @@ data class DictateUiState(
             infoHints = InfoHintState(),
             reviewPanel = ReviewPanelState(),
             historyPanel = HistoryPanelState(),
+            windowsDispatch = WindowsDispatchState(),
         )
     }
 }

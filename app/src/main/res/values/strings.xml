@@ -593,6 +593,7 @@
     <string name="dictate_pairing_test_ok">Connected to \"%1$s\".</string>
     <string name="dictate_pairing_test_no_insert">Connected to \"%1$s\", but it cannot type text automatically — dictations arrive in the clipboard and must be pasted with Ctrl+V.</string>
     <string name="dictate_windows_unreachable_msg">PC not reachable.</string>
+    <string name="dictate_windows_unauthorized_msg">PC pairing invalid — pair again.</string>
 
     <string name="dictate_changelog_30">v3.2.0\n\nThis update brings some major improvements and new features! 🚀\n\n- Separate API keys: You can now save separate API keys for each provider (OpenAI, Groq, Custom), making switching between them seamless. 🔑\n\n- Improved Bluetooth support: Connecting to Bluetooth headsets is now faster and more reliable. 🎧\n\n- Auto Enter: Added an option to automatically press Enter/Send after transcription. ⚡\n\n- New Models: Added support for OpenAI o1, o4-mini, and GPT-5.2, including updated pricing info. 🤖\n\n- Various bug fixes and improvements. ✨\n\nI wish you a blessed New Year 2026! 🎆\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
 </resources>

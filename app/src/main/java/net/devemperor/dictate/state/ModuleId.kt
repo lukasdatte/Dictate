@@ -54,4 +54,7 @@ sealed interface ModuleId {
 
     /** ADR-0014 — in-keyboard history panel (open/close axis). */
     data object HistoryPanel : ModuleId
+
+    /** ADR-0019 — in-flight Windows-dispatch axis (auto-send to the paired PC). */
+    data object WindowsDispatch : ModuleId
 }

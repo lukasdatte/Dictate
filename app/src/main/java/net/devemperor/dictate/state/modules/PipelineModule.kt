@@ -421,6 +421,10 @@ object PipelineModule : DictateModule<PipelineUiState, Action.PipelineAction, Pi
                     // NO pending part — the reviewPanel axis owns the surface.
                     val followUp = when {
                         action.heldForReview -> null
+                        // ADR-0019: the text is on its way to the PC. Like heldForReview, the
+                        // WindowsDispatchModule owns the acknowledge — emit NEITHER effect here.
+                        // The queue still drains via nextAfterTerminal below (V4 / ADR-0009).
+                        action.awaitingDispatch -> null
                         action.committed -> Effect.MarkSessionInserted(action.sessionId, ctx.now)
                         else -> Effect.AddPendingInsertSession(
                             sessionId = action.sessionId,

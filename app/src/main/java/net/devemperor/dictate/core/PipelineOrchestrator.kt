@@ -1399,7 +1399,11 @@ class PipelineOrchestrator @JvmOverloads constructor(
         val hadQueued = queuedSlotsAtStart.isNotEmpty()
         val source = if (hadQueued && !config.livePrompt)
             InsertionSource.QUEUED_PROMPT else InsertionSource.TRANSCRIPTION
-        callback.onPipelineCompleted(text, source, outcome.review)
+        // K11: stamp the send-tap snapshot mode onto the verdict so the IME
+        // decides insert-vs-review with the SAME mode that decided forceTurn.
+        callback.onPipelineCompleted(
+            text, source, outcome.review?.copy(ambiguityMode = config.ambiguityMode)
+        )
 
         // Step 5: Resend + AutoSwitch
         if (config.showResendButton) callback.onShowResend()

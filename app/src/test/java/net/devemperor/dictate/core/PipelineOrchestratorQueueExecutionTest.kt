@@ -384,6 +384,33 @@ class PipelineOrchestratorQueueExecutionTest {
     }
 
     @Test
+    fun `pipeline stamps the snapshotted ambiguity mode onto the delivered review (K11)`() {
+        val sid = createRecordingSession()
+        // AUTO forces a turn even on a bare transcription, so a verdict is
+        // produced; the delivered review must carry the snapshotted mode so the
+        // IME decides insert-vs-review with the same mode, not a fresh pref read.
+        orchestrator.runTranscriptionPipelineBlocking(
+            PipelineOrchestrator.PipelineConfig(
+                audioFile = null,
+                language = "de",
+                stylePrompt = null,
+                recordingsDir = app.cacheDir,
+                targetAppPackage = null,
+                origin = SessionOrigin.HISTORY_REPROCESS,
+                queuedPromptSlots = emptyList(),
+                ambiguityMode = net.devemperor.dictate.preferences.AmbiguityMode.AUTO,
+            ),
+            reuseSessionId = sid,
+        )
+
+        val review = callback.completedReviews.single()
+        assertEquals(
+            net.devemperor.dictate.preferences.AmbiguityMode.AUTO,
+            review!!.ambiguityMode,
+        )
+    }
+
+    @Test
     fun `resume of an errored turn replays the persisted user message, not a rebuilt one (K3)`() {
         // A turn failed and was persisted as ERROR with its user message row.
         // On resume, executeConversationTurn regenerates the turn WITHOUT
@@ -519,10 +546,13 @@ class PipelineOrchestratorQueueExecutionTest {
 
     private class RecordingCallback : PipelineOrchestrator.PipelineCallback {
         val reviewTurns = mutableListOf<ReviewTurnCall>()
+        val completedReviews = mutableListOf<net.devemperor.dictate.ai.conversation.PostProcessingReview?>()
         override fun onStepStarted(stepName: String) = Unit
         override fun onStepCompleted(stepName: String, durationMs: Long) = Unit
         override fun onStepFailed(stepName: String) = Unit
-        override fun onPipelineCompleted(text: String, source: InsertionSource, review: net.devemperor.dictate.ai.conversation.PostProcessingReview?) = Unit
+        override fun onPipelineCompleted(text: String, source: InsertionSource, review: net.devemperor.dictate.ai.conversation.PostProcessingReview?) {
+            completedReviews += review
+        }
         override fun onReviewTurnCompleted(sessionId: String, output: String, message: String?, needsClarification: Boolean) {
             reviewTurns += ReviewTurnCall(sessionId, output, message, needsClarification)
         }

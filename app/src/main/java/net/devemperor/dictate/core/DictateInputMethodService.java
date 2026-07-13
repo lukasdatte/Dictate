@@ -4760,7 +4760,11 @@ public class DictateInputMethodService extends InputMethodService
             } else if (review != null
                     && canShowReviewPanel()
                     && net.devemperor.dictate.ai.conversation.ReviewDecision.INSTANCE.decide(
-                            currentAmbiguityMode(), review.getNeedsClarification(), review.getMessage())
+                            // K11: prefer the mode snapshotted at send-tap (the one
+                            // that decided forceTurn) over a fresh pref read, so a
+                            // toggle mid-run can't make the two disagree.
+                            review.getAmbiguityMode() != null ? review.getAmbiguityMode() : currentAmbiguityMode(),
+                            review.getNeedsClarification(), review.getMessage())
                         == net.devemperor.dictate.ai.conversation.Verdict.REVIEW) {
                 // (C) Ambiguous + IME visible → hold the output in the review
                 // panel instead of inserting. PipelineDone(heldForReview) moves

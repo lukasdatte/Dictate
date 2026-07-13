@@ -62,7 +62,18 @@ class ReviewPanelModule(
         ctx: ReducerContext,
     ): TransitionResult<ReviewPanelState, Effect>? = when (action) {
 
-        is Action.ReviewPanelAction.Show ->
+        is Action.ReviewPanelAction.Show -> {
+            // G2-4: if the panel already holds a DIFFERENT session (e.g. a second
+            // ambiguous completion from an overlay recording arrives while a
+            // review is held), preserve the outgoing one as a pending part before
+            // it is overwritten — otherwise a finished result vanished from the
+            // live UI, recoverable only via a cold-boot findPendingInsertion.
+            val preserveOutgoing =
+                if (state.open && state.sessionId != null && state.sessionId != action.sessionId) {
+                    listOf(Effect.SurfacePendingPart(state.sessionId, state.output))
+                } else {
+                    emptyList()
+                }
             TransitionResult(
                 nextState = ReviewPanelState(
                     open = true,
@@ -71,8 +82,9 @@ class ReviewPanelModule(
                     message = action.message,
                     refining = false,
                 ),
-                sideEffects = emptyList(),
+                sideEffects = preserveOutgoing,
             )
+        }
 
         is Action.ReviewPanelAction.Update ->
             if (state.open) {

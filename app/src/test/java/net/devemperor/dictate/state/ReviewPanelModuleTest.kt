@@ -33,6 +33,33 @@ class ReviewPanelModuleTest {
     }
 
     @Test
+    fun `Show over a different held session preserves the outgoing one as a pending part (G2-4)`() {
+        val r = module.reduce(
+            openState(), // holds "s1"
+            Action.ReviewPanelAction.Show("s2", "second", "unclear2"),
+            ctx(),
+        )!!
+        // The panel now shows the new session…
+        assertEquals("s2", r.nextState.sessionId)
+        assertEquals("second", r.nextState.output)
+        // …and the outgoing "s1" is surfaced as a pending part, not lost.
+        val eff = r.sideEffects.single() as ReviewPanelModule.Effect.SurfacePendingPart
+        assertEquals("s1", eff.sessionId)
+        assertEquals("out", eff.output)
+    }
+
+    @Test
+    fun `Show for the same held session does not surface a pending part (G2-4)`() {
+        val r = module.reduce(
+            openState(), // holds "s1"
+            Action.ReviewPanelAction.Show("s1", "refreshed", "why"),
+            ctx(),
+        )!!
+        assertEquals("s1", r.nextState.sessionId)
+        assertTrue(r.sideEffects.isEmpty())
+    }
+
+    @Test
     fun `Update refreshes output and clears refining`() {
         val r = module.reduce(
             openState().copy(refining = true),

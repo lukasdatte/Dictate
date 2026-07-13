@@ -190,6 +190,14 @@ class OpenAICompatibleRunner(
         format: ResponseFormatKind
     ): ConversationResult {
         val usage = chat.usage().orElse(null)
+        // G2-2: reject a response the model cut off at max_tokens before parsing
+        // — the lenient parser would otherwise return the raw, half-written JSON
+        // as the output and insert it verbatim.
+        StructuredOutputGuards.requireNotTruncated(
+            chat.choices().firstOrNull()?.finishReason() ==
+                com.openai.models.chat.completions.ChatCompletion.Choice.FinishReason.LENGTH,
+            provider
+        )
         val content = chat.choices()[0].message().content().orElse("")
         val parsed = StructuredResponseCodec.parseLenient(content)
         return ConversationResult(

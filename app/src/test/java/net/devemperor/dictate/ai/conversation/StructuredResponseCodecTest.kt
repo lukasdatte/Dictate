@@ -160,4 +160,42 @@ class StructuredResponseCodecTest {
         assertEquals("o", r.output)
         assertFalse(r.needsClarification)
     }
+
+    // ── fromToolInput (Anthropic tool path, G2-2) ──────────────────────────
+
+    @Test
+    fun `fromToolInput reads a well-formed tool map`() {
+        val r = StructuredResponseCodec.fromToolInput(
+            mapOf("message" to "explained", "output" to "the text", "needsClarification" to true)
+        )
+        assertEquals("explained", r?.message)
+        assertEquals("the text", r?.output)
+        assertTrue(r!!.needsClarification)
+    }
+
+    @Test
+    fun `fromToolInput returns null for a null input so the caller falls back to text`() {
+        // A truncated / degenerate tool_use block converts to a null map. The
+        // old code set output = "" here and inserted a blank result (G2-2).
+        assertNull(StructuredResponseCodec.fromToolInput(null))
+    }
+
+    @Test
+    fun `fromToolInput returns null when the output key is absent`() {
+        assertNull(StructuredResponseCodec.fromToolInput(mapOf("message" to "only an explanation")))
+    }
+
+    @Test
+    fun `fromToolInput keeps a present-but-empty output and normalizes blank message to null`() {
+        val r = StructuredResponseCodec.fromToolInput(mapOf("message" to "  ", "output" to ""))
+        assertNull(r?.message)
+        assertEquals("", r?.output)
+        assertFalse(r!!.needsClarification)
+    }
+
+    @Test
+    fun `fromToolInput accepts a string-typed needsClarification`() {
+        val r = StructuredResponseCodec.fromToolInput(mapOf("output" to "x", "needsClarification" to "true"))
+        assertTrue(r!!.needsClarification)
+    }
 }

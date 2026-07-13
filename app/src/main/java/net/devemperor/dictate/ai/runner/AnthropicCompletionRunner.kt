@@ -138,24 +138,28 @@ class AnthropicCompletionRunner(
         return wrapProviderCall(modelName = request.model) {
             val message = client.messages().create(paramsBuilder.build())
 
+            // G2-2: reject a response the model cut off at its token limit — a
+            // truncated tool_use block deserializes to an empty/garbled result
+            // that would otherwise be inserted as a blank answer.
+            StructuredOutputGuards.requireNotTruncated(
+                message.stopReason().orElse(null) == com.anthropic.models.messages.StopReason.MAX_TOKENS,
+                net.devemperor.dictate.ai.AIProvider.ANTHROPIC
+            )
+
             val toolUse = message.content().firstOrNull { it.isToolUse() }?.asToolUse()
-            val parsed = if (toolUse != null) {
-                val input = toolUse._input().convert(Map::class.java) as? Map<*, *>
-                val (messageField, outputField) = StructuredResponseCodec.fieldNames
-                val clarifyField = StructuredResponseCodec.needsClarificationField
-                net.devemperor.dictate.ai.conversation.StructuredResponse(
-                    message = input?.get(messageField)?.toString(),
-                    output = input?.get(outputField)?.toString().orEmpty(),
-                    needsClarification = input?.get(clarifyField) == true ||
-                        input?.get(clarifyField)?.toString() == "true"
-                )
-            } else {
-                // Defensive: no tool block returned — parse concatenated text.
-                val text = message.content()
+            // G2-2: only treat the tool block as the answer when it actually
+            // carries a usable structured result. A degenerate/unconvertible
+            // tool input falls back to lenient text parsing instead of silently
+            // yielding an empty output that still reports TOOL_USE.
+            val toolInput = toolUse?.let {
+                runCatching { it._input().convert(Map::class.java) as? Map<*, *> }.getOrNull()
+            }
+            val toolResult = StructuredResponseCodec.fromToolInput(toolInput)
+            val parsed = toolResult ?: StructuredResponseCodec.parseLenient(
+                message.content()
                     .filter { it.isText() }
                     .joinToString("") { it.asText().text() }
-                StructuredResponseCodec.parseLenient(text)
-            }
+            )
 
             ConversationResult(
                 message = parsed.message,
@@ -163,7 +167,7 @@ class AnthropicCompletionRunner(
                 promptTokens = message.usage().inputTokens(),
                 completionTokens = message.usage().outputTokens(),
                 modelName = request.model,
-                responseFormat = if (toolUse != null) ResponseFormatKind.TOOL_USE else ResponseFormatKind.TEXT_FALLBACK,
+                responseFormat = if (toolResult != null) ResponseFormatKind.TOOL_USE else ResponseFormatKind.TEXT_FALLBACK,
                 needsClarification = parsed.needsClarification
             )
         }

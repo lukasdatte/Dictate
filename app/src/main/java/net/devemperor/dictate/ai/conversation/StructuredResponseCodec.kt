@@ -51,6 +51,35 @@ object StructuredResponseCodec {
     fun encode(response: StructuredResponse): String = encode(response.message, response.output)
 
     /**
+     * Interprets an Anthropic tool-use `input` map into a structured response,
+     * or `null` when the tool block is unusable so the caller can fall back to
+     * lenient text parsing.
+     *
+     * G2-2: a truncated or degenerate `tool_use` block can deserialize to a map
+     * that is `null` (conversion failed) or missing the `output` key. The old
+     * code set `output = ""` unconditionally whenever a tool block was present,
+     * so a blank result was inserted while still being reported as `TOOL_USE`.
+     * A `null` return here means "no usable structured result — parse the text
+     * instead". A map that carries the `output` key (even with an empty string)
+     * is treated as a genuine — if unusual — answer and kept.
+     */
+    fun fromToolInput(input: Map<*, *>?): StructuredResponse? {
+        if (input == null) return null
+        val (messageField, outputField) = fieldNames
+        if (!input.containsKey(outputField)) return null
+        val rawMessage = input[messageField]?.toString()
+        val clarify = input[needsClarificationField]
+        return StructuredResponse(
+            // Normalize a blank/absent explanation to null so downstream
+            // `message == null ⇒ no ambiguity` holds identically to the codec
+            // path (the Anthropic tool path previously surfaced "").
+            message = rawMessage?.takeIf { it.isNotBlank() },
+            output = input[outputField]?.toString().orEmpty(),
+            needsClarification = clarify == true || clarify?.toString() == "true"
+        )
+    }
+
+    /**
      * Lenient parse. Handles a clean schema object, a code-fenced object, and
      * plain prose:
      *

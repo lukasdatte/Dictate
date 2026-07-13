@@ -58,6 +58,10 @@ dependencies {
 
     testImplementation libs.junit
     testImplementation libs.ktor.server.test.host
+    // OkHttp is on the runtime classpath through :shared (implementation), but the E2E suite needs
+    // it at COMPILE time: it builds an impatient OkHttpClient to provoke a read timeout against the
+    // real server. Without that, "a timeout is Unreachable, never Delivered" is untested.
+    testImplementation libs.okhttp
 }
 
 compose.desktop {

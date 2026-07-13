@@ -40,6 +40,9 @@ dependencies {
 
     implementation compose.desktop.currentOs
     implementation compose.material3
+    // The Material icon set. Compose Multiplatform ships no icons with material3 itself, and the
+    // navigation rail, the search field and the banner all want one.
+    implementation compose.materialIconsExtended
 
     implementation libs.ktor.server.core
     implementation libs.ktor.server.cio

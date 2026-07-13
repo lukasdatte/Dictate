@@ -1,22 +1,28 @@
 package net.devemperor.dictate.companion
 
 import net.devemperor.dictate.companion.data.CompanionDatabase
+import net.devemperor.dictate.companion.data.memory.InMemorySettings
 import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
 import net.devemperor.dictate.companion.data.SqlDelightHistoryRepository
+import net.devemperor.dictate.companion.data.SqlDelightSettingsRepository
 import net.devemperor.dictate.companion.domain.AuthService
+import net.devemperor.dictate.companion.domain.CompanionSettings
 import net.devemperor.dictate.companion.domain.DispatchService
 import net.devemperor.dictate.companion.domain.HealthService
 import net.devemperor.dictate.companion.domain.PairingService
 import net.devemperor.dictate.companion.domain.SyncService
 import net.devemperor.dictate.companion.domain.port.AutostartManager
+import net.devemperor.dictate.companion.domain.port.ClipboardPort
 import net.devemperor.dictate.companion.domain.port.ClockPort
 import net.devemperor.dictate.companion.domain.port.DeviceRepository
 import net.devemperor.dictate.companion.domain.port.HistoryRepository
+import net.devemperor.dictate.companion.domain.port.SettingsRepository
 import net.devemperor.dictate.companion.domain.port.TextInserter
 import net.devemperor.dictate.companion.platform.AppPaths
 import net.devemperor.dictate.companion.platform.PlatformModule
 import net.devemperor.dictate.companion.platform.SystemClock
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
+import net.devemperor.dictate.companion.platform.fallback.NoopClipboard
 import java.net.InetAddress
 import java.security.SecureRandom
 
@@ -31,13 +37,17 @@ import java.security.SecureRandom
 class CompanionContainer(
     val devices: DeviceRepository,
     val history: HistoryRepository,
+    settingsRepository: SettingsRepository,
     val inserter: TextInserter,
+    val clipboard: ClipboardPort,
     val autostart: AutostartManager,
     val clock: ClockPort,
     val serverName: String,
     val appVersion: String,
     random: SecureRandom = SecureRandom(),
 ) {
+
+    val settings = CompanionSettings(settingsRepository)
 
     val pairingService = PairingService(devices, clock, serverName, random)
     val authService = AuthService(devices)
@@ -63,7 +73,9 @@ class CompanionContainer(
             return CompanionContainer(
                 devices = SqlDelightDeviceRepository(database),
                 history = SqlDelightHistoryRepository(database),
+                settingsRepository = SqlDelightSettingsRepository(database),
                 inserter = platform.inserter,
+                clipboard = platform.clipboard,
                 autostart = platform.autostart,
                 clock = SystemClock,
                 serverName = defaultServerName(),
@@ -82,13 +94,17 @@ class CompanionContainer(
             clock: ClockPort,
             devices: DeviceRepository,
             history: HistoryRepository,
+            settingsRepository: SettingsRepository = InMemorySettings(),
+            clipboard: ClipboardPort = NoopClipboard,
             autostart: AutostartManager = NoopAutostart,
             serverName: String = "test-pc",
             random: SecureRandom = SecureRandom(),
         ): CompanionContainer = CompanionContainer(
             devices = devices,
             history = history,
+            settingsRepository = settingsRepository,
             inserter = inserter,
+            clipboard = clipboard,
             autostart = autostart,
             clock = clock,
             serverName = serverName,

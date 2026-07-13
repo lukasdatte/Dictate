@@ -8,6 +8,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.runBlocking
 import net.devemperor.dictate.companion.CompanionContainer
+import net.devemperor.dictate.companion.domain.CompanionSettings
 import net.devemperor.dictate.companion.server.plugins.authenticated
 import net.devemperor.dictate.companion.server.plugins.installCallLogging
 import net.devemperor.dictate.companion.server.plugins.installSerialization
@@ -29,8 +30,8 @@ import net.devemperor.dictate.companion.server.routes.syncRoutes
  */
 class CompanionServer(
     private val container: CompanionContainer,
-    private val host: String = DEFAULT_HOST,
-    private val port: Int = DEFAULT_PORT,
+    private val host: String = CompanionSettings.DEFAULT_BIND_ADDRESS,
+    private val port: Int = CompanionSettings.DEFAULT_PORT,
 ) {
 
     private var engine: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
@@ -60,10 +61,6 @@ class CompanionServer(
     }
 
     companion object {
-        /** 0.0.0.0: the phone reaches the PC over the tailnet interface, not over loopback. */
-        const val DEFAULT_HOST = "0.0.0.0"
-        const val DEFAULT_PORT = 8756
-
         private const val GRACE_MILLIS = 1_000L
         private const val TIMEOUT_MILLIS = 2_000L
     }

@@ -1,5 +1,6 @@
 package net.devemperor.dictate.companion.platform.windows
 
+import net.devemperor.dictate.companion.domain.CompanionSettings
 import net.devemperor.dictate.companion.domain.model.InsertionOutcome
 import net.devemperor.dictate.companion.domain.port.ClipboardPort
 import net.devemperor.dictate.companion.domain.port.TextInserter
@@ -39,7 +40,7 @@ import java.util.concurrent.TimeUnit
 class Win32TextInserter(
     private val clipboard: ClipboardPort,
     private val keyboard: Win32Keyboard = JnaWin32Keyboard,
-    private val restoreDelayMillis: Long = DEFAULT_RESTORE_DELAY_MILLIS,
+    private val restoreDelayMillis: Long = CompanionSettings.DEFAULT_RESTORE_DELAY_MILLIS,
     /** Injected so the restore is deterministic in a test instead of a 800 ms sleep. */
     private val scheduler: (Long, () -> Unit) -> Unit = ::scheduleOnDaemonThread,
 ) : TextInserter {
@@ -71,13 +72,6 @@ class Win32TextInserter(
     }
 
     companion object {
-
-        /**
-         * Long enough for the target application to have read the clipboard after the Ctrl+V, short
-         * enough that the user does not notice their own clipboard was borrowed. There is no event
-         * to wait for instead — a paste is not acknowledged to the source.
-         */
-        const val DEFAULT_RESTORE_DELAY_MILLIS = 800L
 
         private val restoreExecutor: ScheduledExecutorService by lazy {
             Executors.newSingleThreadScheduledExecutor { runnable ->

@@ -19,3 +19,9 @@ object NoopTextInserter : TextInserter {
 
     override fun insert(text: String): InsertionOutcome = InsertionOutcome.FAILED
 }
+
+/** A clipboard that goes nowhere — for tests that must not touch the developer's real one. */
+object NoopClipboard : net.devemperor.dictate.companion.domain.port.ClipboardPort {
+    override fun readText(): String? = null
+    override fun writeText(text: String): Boolean = true
+}

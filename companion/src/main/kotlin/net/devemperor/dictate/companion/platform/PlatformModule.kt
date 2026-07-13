@@ -2,6 +2,7 @@ package net.devemperor.dictate.companion.platform
 
 import com.sun.jna.Platform
 import net.devemperor.dictate.companion.domain.port.AutostartManager
+import net.devemperor.dictate.companion.domain.port.ClipboardPort
 import net.devemperor.dictate.companion.domain.port.TextInserter
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
 import net.devemperor.dictate.companion.platform.fallback.NoopTextInserter
@@ -23,19 +24,30 @@ object PlatformModule {
 
     data class Bindings(
         val inserter: TextInserter,
+        val clipboard: ClipboardPort,
         val autostart: AutostartManager,
     )
 
     fun detect(): Bindings = if (Platform.isWindows()) windows() else fallback()
 
-    private fun windows() = Bindings(
-        inserter = Win32TextInserter(AwtClipboard()),
-        // The HKCU Run-key implementation lands with wd-9.
-        autostart = NoopAutostart,
-    )
+    private fun windows(): Bindings {
+        val clipboard = AwtClipboard()
+        return Bindings(
+            inserter = Win32TextInserter(clipboard),
+            clipboard = clipboard,
+            // The HKCU Run-key implementation lands with wd-9.
+            autostart = NoopAutostart,
+        )
+    }
 
+    /**
+     * Linux/macOS. The clipboard is still the real AWT one — copying a received text to the
+     * clipboard works perfectly well here; it is only the *keystroke injection* that is Windows-only.
+     * Handing out a no-op clipboard would take away a feature that costs nothing to keep.
+     */
     private fun fallback() = Bindings(
         inserter = NoopTextInserter,
+        clipboard = AwtClipboard(),
         autostart = NoopAutostart,
     )
 }

@@ -56,6 +56,8 @@ object ConversationTurnBuilder {
      */
     fun buildFollowUpUserMessage(spokenReply: String): String =
         PromptBuilder.create()
-            .section("user-reply", spokenReply)
+            // N6: the reply is dictated, untrusted text — escape it so it cannot
+            // forge tags even though it is framed as an answer, not data.
+            .dataSection("user-reply", spokenReply)
             .build()
 }

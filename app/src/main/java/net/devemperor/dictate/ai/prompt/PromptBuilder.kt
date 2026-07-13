@@ -11,12 +11,22 @@ class PromptBuilder {
         return this
     }
 
+    /**
+     * Data section for UNTRUSTED, user-supplied content (a transcript, a
+     * dictated reply, a selection). Escapes `& < >` so the payload cannot close
+     * its own tag and forge sibling instructions — the containment the
+     * `TRANSCRIPT_GUARDRAIL` assumes (N6). Structural tags built from trusted
+     * template text (instructions, rules, guardrail) keep using [section].
+     */
+    fun dataSection(tag: String, content: String): PromptBuilder =
+        section(tag, escapeXml(content))
+
     // Convenience-Methoden fuer haeufige Tags
     fun instruction(content: String) = section("instruction", content)
-    fun selectedText(content: String) = section("selected-text", content)
-    fun userRequest(content: String) = section("user-request", content)
+    fun selectedText(content: String) = dataSection("selected-text", content)
+    fun userRequest(content: String) = dataSection("user-request", content)
     fun languageHint(language: String?) = section("language-hint", language ?: "")
-    fun transcript(content: String) = section("transcript", content)
+    fun transcript(content: String) = dataSection("transcript", content)
     fun rules(content: String) = section("rules", content)
     fun examples(content: String) = section("examples", content)
 
@@ -45,5 +55,13 @@ class PromptBuilder {
     companion object {
         @JvmStatic
         fun create() = PromptBuilder()
+
+        /** Escapes the three XML metacharacters (`&` first) so untrusted data
+         *  cannot break out of its enclosing tag (N6). */
+        internal fun escapeXml(content: String): String =
+            content
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
     }
 }

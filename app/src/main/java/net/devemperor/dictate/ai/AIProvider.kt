@@ -29,7 +29,8 @@ enum class AIProvider(
         billingUrl = "https://console.groq.com/settings/billing",
         supportsTranscription = true,
         supportsCompletion = true,
-        isOpenAICompatible = true
+        isOpenAICompatible = true,
+        allowsStructuredOutputTextFallback = true
     ),
     ANTHROPIC(
         displayName = "Anthropic",

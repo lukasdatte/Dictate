@@ -19,11 +19,15 @@ import org.junit.Test
 class StructuredOutputSupportTest {
 
     @Test
-    fun `only custom and openrouter allow text fallback`() {
+    fun `heterogeneous OpenAI-compatible endpoints allow text fallback`() {
+        // CUSTOM / OpenRouter / Groq front many models, not all of which
+        // support response_format=json_schema; a 400 there is a capability gap,
+        // not a real error, so the runner degrades to text (G2-7).
         assertTrue(AIProvider.CUSTOM.allowsStructuredOutputTextFallback)
         assertTrue(AIProvider.OPENROUTER.allowsStructuredOutputTextFallback)
+        assertTrue(AIProvider.GROQ.allowsStructuredOutputTextFallback)
+        // First-party single-catalog providers treat a 400 as a real error.
         assertFalse(AIProvider.OPENAI.allowsStructuredOutputTextFallback)
-        assertFalse(AIProvider.GROQ.allowsStructuredOutputTextFallback)
         assertFalse(AIProvider.ANTHROPIC.allowsStructuredOutputTextFallback)
         assertFalse(AIProvider.ELEVENLABS.allowsStructuredOutputTextFallback)
     }

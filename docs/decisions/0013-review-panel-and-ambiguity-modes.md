@@ -312,3 +312,97 @@ real, and hides the carriers from its new history panel.
 
 **Reasoning:** The bidirectional ADR-link rule, plus honest acknowledgement that
 the carrier tagging described here was completed only in ADR-0014.
+
+### 2026-07-13 — refinementRecording sub-axis locks the whole S2 window (Gate-1 K1/K12)
+
+**Trigger:** K1 (Critical) — during the S2 refinement recording/transcription
+window the review panel's Insert/Discard buttons were fully active, so a tap
+committed the about-to-be-refined output twice or prematurely. K12 — the open
+panel masked the recording layout, hiding that a recording was in flight.
+
+**Before:** The panel modelled one busy flag, `refining`, set only when the
+follow-up *turn* started running — the multi-second S2 recording before it was
+unguarded.
+
+**After:** A second sub-axis `ReviewPanelState.refinementRecording` covers the S2
+recording window (set by `MarkRefinementRecording`, superseded by `MarkRefining`,
+cleared by `CancelRefinement`). Insert/Discard are disabled by the renderer and
+belt-and-braces IME guards for the whole refinement duration; Re-dictate remains
+as the stop control; a recording hint is shown. The `reviewPanel` axis described
+as atomic in §6 now carries this explicit sub-state.
+
+**Reasoning:** The lock must span the entire refinement (record → transcribe →
+turn), not just turn execution. Modelling it as state (not an ad-hoc handler
+guard) makes it reducer-testable and lets the renderer reflect it.
+
+### 2026-07-13 — Verdict computed from a single send-tap snapshot; ambiguity task gated on forceTurn (Gate-1 K9/K11)
+
+**Trigger:** K11 — the IME re-read the ambiguity mode live for
+`ReviewDecision.decide` while the orchestrator derived `forceTurn` from the
+send-tap snapshot, so a settings toggle mid-run could make the two disagree
+(e.g. a turn ran under AUTO but a fresh read said ALWAYS_INSERT → an ambiguous
+output auto-inserted). K9 — the ambiguity task + `needsClarification` field were
+always sent, even under ALWAYS_INSERT which ignores the verdict.
+
+**Before:** §2 defined `ReviewDecision.decide(mode, …)` without fixing the source
+of `mode`; the ambiguity task defaulted on regardless of mode.
+
+**After:** `AmbiguityMode` is snapshotted onto `PostProcessingReview` at send tap
+and the IME prefers it over a live pref read (live read only as the resume
+fallback). `includeAmbiguityTask = forceTurn`, so ALWAYS_INSERT and history
+reprocess (`forceTurn = false`) omit the task and the field. A follow-up
+(continuation) turn still reads the mode live — a documented residual (report
+follow-up), harmless because a toggle between send and refinement is rare.
+
+**Reasoning:** One consistent mode snapshot per run, from `forceTurn` through the
+verdict, removes the divergence class; skipping the task when the verdict is
+ignored saves tokens without changing behaviour.
+
+### 2026-07-13 — Non-terminal refinement completion: upsert, cancel-race guard, unbound recovery (Gate-1 K4, Gate-2 N4/N5)
+
+**Trigger:** K4 — a refinement finishing while the IME view was gone committed
+into a null InputConnection (lost); the teardown cascade had only surfaced the
+*pre*-refinement output as a pending part. N4 — a discard-while-refining could
+race a continuation already past its cancellation check. N5 — a continuation
+whose delegate detached (service death) dropped its callback.
+
+**Before:** `onReviewTurnCompleted` assumed a bound, visible IME and an
+in-flight refinement; the pending axis had no way to replace a session's text.
+
+**After:**
+- `PendingSessionsAction.AddOrReplaceOne` upserts the refined output over the
+  pre-refinement pending part for the same session when the IME view is gone (K4).
+- `onReviewTurnCompleted` ignores a result whose panel is no longer refining
+  THIS session (discarded / replaced) — it stays persisted for audit/recovery but
+  is never committed or re-surfaced (N4).
+- Dropping the callback when the delegate is unbound is documented as
+  recovery-backed, not data loss: `final_output_text` is written in-transaction so
+  cold-boot `findPendingInsertion` reconstructs it (N5).
+
+**Reasoning:** The non-terminal path has three distinct "no live surface" cases
+(view-hidden, discarded, unbound); each needs an explicit, lossless answer rather
+than a best-effort commit into a surface that may not exist or may have moved on.
+
+### 2026-07-13 — Panel surface ownership: review⇄history mutex + Show preserves the outgoing review (Gate-2 G2-3/G2-4)
+
+**Trigger:** G2-3 — `canShowReviewPanel()` did not gate on the history panel being
+closed and the two renderers set visibility independently, so both grids could
+render at once with the history row exposing an Insert for the held session.
+G2-4 — `ReviewPanelAction.Show` unconditionally replaced panel state, so a second
+ambiguous completion (e.g. an overlay recording) overwrote a held review and the
+first result vanished from the live UI.
+
+**Before:** §4/§5 described the review and history panels as grid-covering but did
+not state their mutual exclusion, and `Show` had no defence for an already-held
+different session.
+
+**After:** `HistoryPanelModule.onCrossModuleStateChange` closes the history panel
+when the review panel opens (mutex enforced as a state invariant, not call-site
+discipline). `ReviewPanelAction.Show` surfaces the outgoing session as a pending
+part (reusing the `SurfacePendingPart` teardown channel) when it holds a
+*different* session; a same-session re-Show emits no effect.
+
+**Reasoning:** Only one panel may own the keyboard surface, and a held review is a
+finished-but-uninserted result that must degrade to a pending part rather than
+vanish. Both are expressed in the reducers/cascades so no IME call-site ordering
+can violate them. The complementary info-bar suppression lives in ADR-0006.

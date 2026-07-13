@@ -293,3 +293,80 @@ format, `getFinalOutput`) are untouched by ADR-0013.
 
 **Reasoning:** The bidirectional ADR-link rule — a reader of either ADR should be
 able to navigate to the other.
+
+### 2026-07-13 — Replay hardened against invalidated / skipped turns (Gate-1 K3/K6, Gate-2 G2-1)
+
+**Trigger:** Quality-gate findings K3/K6 and G2-1 exercised the failure mode this
+ADR flagged: "a future non-linear shape (branching, gaps from mid-chain failures
+that still leave later turns) would need the mapping made explicit."
+
+**Before:** `appendProcessingStep` hard-coded `version = 1`; a resume rebuilt the
+user message from current state rather than replaying the persisted USER row;
+`getUserMessages` joined every USER row by `turn_index` with no seq
+disambiguation; and `regenerateConversationTurnBlocking` mapped turns to chain
+indices by list *position*. After an invalidating regenerate or a skipped
+(ERROR) turn these produced a UNIQUE collision (K6), a divergent replay (K3), or
+a phantom/duplicated turn and a self-referential regenerate history (G2-1).
+
+**After:**
+- `appendProcessingStep` computes `version = getMaxVersion(sessionId, chainIndex)
+  + 1` (K6) — no collision when appending over an invalidated index.
+- Resume replays the persisted USER row verbatim via `getTurnUserMessage` (K3),
+  keeping regenerate byte-faithful.
+- `getUserMessages` selects only the max-seq USER row per `turn_index`, so the
+  turn↔step join stays 1:1 even with an orphaned sibling row (G2-1).
+- `ReconstructedTurn` carries its real `chain_index`; regenerate selects prior
+  turns by `chainIndex < K` and reads the trailing user message from the
+  persisted row, not by list position (G2-1).
+
+The Research note "this chain keeps returning the right text with no change" is
+now conditional on the ADR-0011 last-*successful*-step fix (see ADR-0011
+2026-07-13); the merged-step reconstruction contract itself is unchanged.
+
+**Reasoning:** These close the flagged non-linear failure mode without a schema
+change: the persisted rows already carry seq and chain_index; the fixes make the
+read side honour them instead of assuming positional contiguity. Auditability is
+preserved (old versions and ERROR turns stay in the DB, merely no longer
+mis-joined).
+
+### 2026-07-13 — A truncated structured response fails the turn (Gate-2 G2-2)
+
+**Trigger:** Neither runner checked the completion's stop reason; a
+`{message, output}` JSON cut off at `max_tokens` was parsed leniently into raw
+half-written JSON (OpenAI) or an empty tool result (Anthropic) and inserted.
+
+**Before:** `parseLenient` returned the whole (unclosed) text as `output` on a
+truncated response; the Anthropic tool path set `output = ""` yet still reported
+`TOOL_USE`.
+
+**After:** `StructuredOutputGuards.requireNotTruncated` throws
+`AIProviderException(SERVER_ERROR)` on `finish_reason = length` /
+`stop_reason = max_tokens`, so the pipeline falls back to the plain transcript
+instead of inserting garbage. `StructuredResponseCodec.fromToolInput` returns
+null for an unusable tool block so the Anthropic path falls back to text parsing
+and only reports `TOOL_USE` when it truly parsed a result.
+
+**Reasoning:** A truncated rework is not a usable answer; failing the turn reuses
+the existing transcript-fallback contract rather than inventing a partial-insert
+path. The wire `{message, output}` shape is unchanged — only the completeness
+precondition is now enforced.
+
+### 2026-07-13 — Groq joins the text-fallback set (Gate-2 G2-7)
+
+**Trigger:** Groq fronts many open models, not all of which support
+`response_format = json_schema`; choosing such a model turned the pipeline into a
+hard 400 with no output.
+
+**Before:** Only CUSTOM / OpenRouter carried `allowsStructuredOutputTextFallback`;
+the "a 400 is a real error for first-party providers" stance treated Groq as
+first-party.
+
+**After:** GROQ is `allowsStructuredOutputTextFallback = true`. The "400 is a real
+error" clause now applies only to *single-catalog* first-party providers
+(OpenAI, Anthropic); heterogeneous OpenAI-compatible endpoints (Custom,
+OpenRouter, Groq) degrade to lenient text on a rejected structured request.
+
+**Reasoning:** Groq is heterogeneous behind one endpoint like OpenRouter, so an
+unsupported-`response_format` 400 there is a capability gap, not a real error.
+Reclassifying by endpoint shape (single-catalog vs heterogeneous) rather than by
+"first-party" keeps the rule principled and avoids per-model string parsing.

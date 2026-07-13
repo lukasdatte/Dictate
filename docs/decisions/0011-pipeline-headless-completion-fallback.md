@@ -320,3 +320,48 @@ The `CancelPipeline` arm's `Effect.CancelPipelineJob` is a safe no-op on an
 already-finished job (`JobExecutor.cancel` only flips a null-safe cancellation
 token / thread interrupt), and its `Effect.NotifyCancellationHint` is acceptable
 late-bind UX.
+
+### 2026-07-13 — getFinalOutput returns the last SUCCESSFUL step (Gate-1 K8); "left unchanged" cross-ref corrected
+
+**Trigger:** Quality-gate finding K8 — a failed review-refinement continuation is
+now persisted as a trailing ERROR `CONVERSATION_TURN` (auditable). That trailing
+ERROR step shadowed the prior good output, pushing `getFinalOutput` onto the
+transcription fallback.
+
+**Before:** `getFinalOutput` / `getFinalOutputSource` returned the *last* step in
+the current chain when it was SUCCESS, else fell through the chain. A trailing
+ERROR turn therefore masked a good earlier output.
+
+**After:** Both resolve the last *successful* step
+(`lastOrNull { status == SUCCESS && outputText != null }`); the empty-string
+fallback is unchanged. This is a semantic refinement of the text contract that
+the References block described as "left unchanged" — that phrase (ADR-0011
+References → ADR-0012) is now **inaccurate**: the fallback chain still exists and
+the `committed=false` pending path is untouched, but the "which step" selection
+changed from *last* to *last successful*. Read the References line with this entry.
+
+**Reasoning:** A persisted ERROR turn is an audit record, not the session's
+answer; it must never shadow the last real output. The change is strictly more
+correct for every existing linear pipeline too (a mid-chain failure that still
+left a good earlier step now resolves to that step).
+
+### 2026-07-13 — AddOrReplaceOne is a mutating pending primitive off the idempotent recovery paths (Gate-1 K4)
+
+**Trigger:** K4 added `PendingSessionsAction.AddOrReplaceOne` (upsert the
+transcribed text for an existing sessionId) so a refinement finishing while the
+IME view is gone can replace the pre-refinement pending part with the refined
+output.
+
+**Before:** The pending axis was purely additive-idempotent; the 2026-07-12
+bind-reconciliation entry rests the recovery↔reconciliation interleaving safety
+on "`AddOne` dedups by sessionId".
+
+**After:** A mutating sibling primitive exists, but it is dispatched ONLY from the
+non-terminal `onReviewTurnCompleted` (IME-gone) path, never from
+`PipelineRecovery` or bind-reconciliation. The idempotency argument for those two
+producers therefore still holds verbatim.
+
+**Reasoning:** Documented so a later reader does not read the "AddOne is
+idempotent" failure-mode argument as the whole story once a mutating upsert
+exists on the same axis. The recovery/reconciliation guarantees are unaffected
+because they do not use the mutating primitive.

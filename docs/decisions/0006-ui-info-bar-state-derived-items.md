@@ -583,3 +583,26 @@ legacy `"timeout"` case was dropped; F-076's loaded trap
 `dictate_timeout_msg` strings), tests (`InfoHintModuleTest`,
 `InfoBarSelectorTest`, `LayoutCatalogTest` force-expand,
 `PromptVisibilityControllerTest` mutex regressions).
+
+### 2026-07-13 — Info-bar items suppressed while a keyboard panel owns the surface (Gate-1 K5 / Gate-2 G2-3)
+
+**Trigger:** Quality-gate finding K5 — with a review or history panel open, the
+info-bar rendered the same pending session a second time (its own "Tap to paste"
+item), and an older pending-insert item could commit into the host while a review
+was being held.
+
+**Before:** `InfoBarSelector.select` derived items purely from the pending/error/
+hint producers; it did not read the `reviewPanel` / `historyPanel` axes, so the
+info-bar container stayed visible under an open panel.
+
+**After:** `InfoBarSelector` returns empty early when `reviewPanel.open ||
+historyPanel.open`. The suppression is state-derived (the items reappear
+unchanged when the panel closes) and adds a documented cross-module read of the
+two panel axes — consistent with the ADR-0006 "state-derived, cross-module
+producers" model, now also a cross-module *consumer* gate.
+
+**Reasoning:** A panel owning the keyboard surface is the authoritative view of
+its session; a parallel info-bar item is a duplicate surface and a mis-commit
+hazard. Gating in the selector (not the renderer) keeps the rule in the one place
+that already owns item derivation. The complementary panel↔panel mutex lives in
+ADR-0013 (G2-3).

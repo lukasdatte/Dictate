@@ -39,6 +39,22 @@ class SqlDelightHistoryRepository(private val database: DictateCompanionDb) : Hi
             duplicate
         }
 
+    override fun upsertAll(deviceId: String, items: List<SessionUpsert>, receivedAt: Long): Int =
+        database.transactionWithResult {
+            items.forEach { item ->
+                queries.upsertReceivedText(
+                    session_id = item.sessionId,
+                    device_id = deviceId,
+                    text = item.text,
+                    created_at = item.createdAt,
+                    received_at = receivedAt,
+                    origin = item.origin,
+                    dispatched = item.dispatched,
+                )
+            }
+            items.size
+        }
+
     override fun recordDispatch(sessionId: String, at: Long, outcome: InsertionOutcome) {
         queries.recordDispatch(at = at, outcome = outcome, sessionId = sessionId)
     }

@@ -15,6 +15,7 @@ import net.devemperor.dictate.companion.server.plugins.installStatusPages
 import net.devemperor.dictate.companion.server.routes.dispatchRoutes
 import net.devemperor.dictate.companion.server.routes.healthRoutes
 import net.devemperor.dictate.companion.server.routes.pairRoutes
+import net.devemperor.dictate.companion.server.routes.syncRoutes
 
 /**
  * The embedded HTTP server — the companion is the *only* server in the system (ADR-0017).
@@ -82,6 +83,7 @@ fun Application.companionModule(container: CompanionContainer) {
 
         authenticated(container.authService) {
             dispatchRoutes(container.dispatchService)
+            syncRoutes(container.syncService)
             healthRoutes(container.healthService)
         }
     }

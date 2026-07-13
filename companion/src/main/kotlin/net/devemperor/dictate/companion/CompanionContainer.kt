@@ -7,6 +7,7 @@ import net.devemperor.dictate.companion.domain.AuthService
 import net.devemperor.dictate.companion.domain.DispatchService
 import net.devemperor.dictate.companion.domain.HealthService
 import net.devemperor.dictate.companion.domain.PairingService
+import net.devemperor.dictate.companion.domain.SyncService
 import net.devemperor.dictate.companion.domain.port.AutostartManager
 import net.devemperor.dictate.companion.domain.port.ClockPort
 import net.devemperor.dictate.companion.domain.port.DeviceRepository
@@ -41,6 +42,7 @@ class CompanionContainer(
     val pairingService = PairingService(devices, clock, serverName, random)
     val authService = AuthService(devices)
     val dispatchService = DispatchService(inserter, history, devices, clock)
+    val syncService = SyncService(history, clock)
     val healthService = HealthService(serverName, appVersion, inserter)
 
     companion object {

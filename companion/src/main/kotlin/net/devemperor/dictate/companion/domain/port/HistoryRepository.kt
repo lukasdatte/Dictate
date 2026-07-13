@@ -21,6 +21,16 @@ interface HistoryRepository {
     /** @return true if [SessionUpsert.sessionId] was already known — i.e. this was a duplicate. */
     fun upsert(deviceId: String, item: SessionUpsert, receivedAt: Long): Boolean
 
+    /**
+     * One sync page, atomically. @return how many rows were written.
+     *
+     * All-or-nothing, because the phone pages on from the cursor this page leaves behind: a page
+     * half-applied would advance the watermark past rows that were never stored, and those rows
+     * would never be offered again. (The protocol would survive it — an upsert is idempotent — but
+     * only after a full resend, which is precisely what the cursor exists to avoid.)
+     */
+    fun upsertAll(deviceId: String, items: List<SessionUpsert>, receivedAt: Long): Int
+
     fun recordDispatch(sessionId: String, at: Long, outcome: InsertionOutcome)
 
     /**

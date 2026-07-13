@@ -33,6 +33,8 @@ object EmptySessionDao : SessionDao {
     override fun pagedHistory(type: String?, searchPattern: String?) =
         ListPagingSource(emptyList())
     override fun pagedHistoryPanel() = ListPagingSource(emptyList<SessionEntity>())
+    override fun sessionsAfterCursor(afterCreatedAt: Long, afterSessionId: String, limit: Int): List<SessionEntity> = emptyList()
+    override fun sessionsFromStart(limit: Int): List<SessionEntity> = emptyList()
     override fun deleteById(id: String) = Unit
     override fun deleteAll() = Unit
     override fun deleteAllExcept(exemptIds: List<String>) = Unit

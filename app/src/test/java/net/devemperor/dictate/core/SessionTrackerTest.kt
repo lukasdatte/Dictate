@@ -151,6 +151,8 @@ private class FakeSessionDao : SessionDao {
     override fun updateAudioDuration(sessionId: String, durationSeconds: Long) = notUsed()
     override fun pagedHistory(type: String?, searchPattern: String?): PagingSource<Int, SessionEntity> = notUsed()
     override fun pagedHistoryPanel(): PagingSource<Int, SessionEntity> = notUsed()
+    override fun sessionsAfterCursor(afterCreatedAt: Long, afterSessionId: String, limit: Int): List<SessionEntity> = notUsed()
+    override fun sessionsFromStart(limit: Int): List<SessionEntity> = notUsed()
     override fun deleteById(id: String) = notUsed()
     override fun deleteAll() = notUsed()
     override fun deleteAllExcept(exemptIds: List<String>) = notUsed()

@@ -205,6 +205,8 @@ class RecordingContinuationLookupTest {
         override fun updateAudioDuration(sessionId: String, durationSeconds: Long) = unused()
         override fun pagedHistory(type: String?, searchPattern: String?): PagingSource<Int, SessionEntity> = unused()
         override fun pagedHistoryPanel(): PagingSource<Int, SessionEntity> = unused()
+        override fun sessionsAfterCursor(afterCreatedAt: Long, afterSessionId: String, limit: Int): List<SessionEntity> = unused()
+        override fun sessionsFromStart(limit: Int): List<SessionEntity> = unused()
         override fun deleteById(id: String) = unused()
         override fun deleteAll() = unused()
         override fun deleteAllExcept(exemptIds: List<String>) = unused()

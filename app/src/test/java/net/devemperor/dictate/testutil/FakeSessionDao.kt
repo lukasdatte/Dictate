@@ -115,6 +115,35 @@ class FakeSessionDao : SessionDao {
         }
     }
 
+    /**
+     * In-memory analogue of the lazy-sync cursor query (ADR-0020): COMPLETED sessions with text,
+     * excluding REVIEW_REFINEMENT carriers, strictly after `(afterCreatedAt, afterSessionId)`,
+     * totally ordered by `(created_at, id)` ascending, capped at [limit].
+     */
+    override fun sessionsAfterCursor(
+        afterCreatedAt: Long,
+        afterSessionId: String,
+        limit: Int,
+    ): List<SessionEntity> =
+        syncEligible()
+            .filter {
+                it.createdAt > afterCreatedAt ||
+                    (it.createdAt == afterCreatedAt && it.id > afterSessionId)
+            }
+            .take(limit)
+
+    override fun sessionsFromStart(limit: Int): List<SessionEntity> =
+        syncEligible().take(limit)
+
+    private fun syncEligible(): List<SessionEntity> =
+        rows.values
+            .filter {
+                it.status == "COMPLETED" &&
+                    it.finalOutputText != null &&
+                    it.origin != "REVIEW_REFINEMENT"
+            }
+            .sortedWith(compareBy<SessionEntity> { it.createdAt }.thenBy { it.id })
+
     override fun deleteById(id: String) {
         deletedIds += id
         rows.remove(id)

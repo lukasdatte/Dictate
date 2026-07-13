@@ -127,6 +127,43 @@ interface SessionDao {
     )
     fun pagedHistoryPanel(): PagingSource<Int, SessionEntity>
 
+    /**
+     * The lazy-sync cursor axis (ADR-0020): the sessions strictly after the watermark
+     * `(afterCreatedAt, afterSessionId)`, oldest first, at most [limit] of them.
+     *
+     * Totally ordered over `(created_at, id)` — `created_at` alone is not unique (two sessions
+     * in the same millisecond), so a page boundary would otherwise skip or repeat rows. Same
+     * filter as [pagedHistoryPanel]'s exclusion: only COMPLETED sessions with text, and
+     * `REVIEW_REFINEMENT` carriers excluded (an internal S2 helper session is not a dictation
+     * result — ADR-0014 §4).
+     */
+    @Query(
+        """
+        SELECT * FROM sessions
+        WHERE status = 'COMPLETED'
+          AND final_output_text IS NOT NULL
+          AND origin != 'REVIEW_REFINEMENT'
+          AND (created_at > :afterCreatedAt
+               OR (created_at = :afterCreatedAt AND id > :afterSessionId))
+        ORDER BY created_at ASC, id ASC
+        LIMIT :limit
+        """
+    )
+    fun sessionsAfterCursor(afterCreatedAt: Long, afterSessionId: String, limit: Int): List<SessionEntity>
+
+    /** First sync run — the server knows nothing yet; same filter, no cursor. */
+    @Query(
+        """
+        SELECT * FROM sessions
+        WHERE status = 'COMPLETED'
+          AND final_output_text IS NOT NULL
+          AND origin != 'REVIEW_REFINEMENT'
+        ORDER BY created_at ASC, id ASC
+        LIMIT :limit
+        """
+    )
+    fun sessionsFromStart(limit: Int): List<SessionEntity>
+
     @Query("DELETE FROM sessions WHERE id = :id")
     fun deleteById(id: String)
 

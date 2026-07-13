@@ -1,0 +1,135 @@
+-- Schema v1 of the companion's local history.
+--
+-- The phone is the authority; everything here is a derived copy (ADR-0020). The file is expendable
+-- by design: a wiped database makes `cursor()` return null, and the phone resends its history from
+-- the beginning. That is what "self-healing" means in practice, and it is why nothing here is
+-- backed up or replicated.
+--
+-- The Kotlin-typed columns (`AS SessionOriginWire`, `AS InsertionOutcome`, `AS Boolean`) are half of
+-- the Double-Enum rule from docs/DATABASE-PATTERNS.md; the CHECK constraints below are the other
+-- half. The rule is a Room convention, but it is a *SQLite* rule really, and it earns its keep here
+-- for the same reason: without the CHECK, a typo in a mapper writes 'KEYBORD' into the column and
+-- nothing complains until a reader crashes months later. With it, the write fails at the boundary
+-- where the bug is. `OriginCheckConstraintParityTest` pins the two halves against each other.
+
+CREATE TABLE devices (
+    device_id    TEXT NOT NULL PRIMARY KEY,
+    name         TEXT NOT NULL,
+    -- SHA-256 of the device secret, lowercase hex. The secret itself is never stored (ADR-0017).
+    secret_hash  TEXT NOT NULL,
+    paired_at    INTEGER NOT NULL,
+    last_seen_at INTEGER
+);
+
+CREATE TABLE received_texts (
+    -- The phone's Room session id — and therefore the idempotency key of a dispatch.
+    session_id   TEXT NOT NULL PRIMARY KEY,
+    device_id    TEXT NOT NULL,
+    text         TEXT NOT NULL,
+    -- Phone time. Together with session_id it is the total order the sync cursor pages along.
+    created_at   INTEGER NOT NULL,
+    -- PC time: when this row was last written here.
+    received_at  INTEGER NOT NULL,
+    origin       TEXT AS net.devemperor.dictate.shared.protocol.SessionOriginWire NOT NULL
+                 CHECK (origin IN ('KEYBOARD','HISTORY_REPROCESS','POST_PROCESSING','REVIEW_REFINEMENT','UNKNOWN')),
+    -- 1 = arrived through /v1/dispatch, 0 = only mirrored by the sync. Never walks back (see upsert).
+    dispatched   INTEGER AS kotlin.Boolean NOT NULL DEFAULT 0,
+    last_outcome TEXT AS net.devemperor.dictate.companion.domain.model.InsertionOutcome
+                 CHECK (last_outcome IS NULL OR last_outcome IN ('TYPED_CTRL_V','CLIPBOARD_ONLY','FAILED')),
+    FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
+);
+
+-- The cursor axis. EXACTLY the ordering `cursor()` and the phone's `sessionsAfterCursor` use —
+-- parity between the two sides is the contract that keeps paging from skipping rows (ADR-0020).
+CREATE INDEX received_texts_cursor ON received_texts(created_at, session_id);
+
+CREATE TABLE settings (
+    key   TEXT NOT NULL PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- ── devices ───────────────────────────────────────────────────────────────────────────────
+
+deviceById:
+SELECT * FROM devices WHERE device_id = ?;
+
+allDevices:
+SELECT * FROM devices ORDER BY paired_at ASC;
+
+saveDevice:
+INSERT OR REPLACE INTO devices(device_id, name, secret_hash, paired_at, last_seen_at)
+VALUES (?, ?, ?, ?, ?);
+
+touchLastSeen:
+UPDATE devices SET last_seen_at = :at WHERE device_id = :deviceId;
+
+deleteDevice:
+DELETE FROM devices WHERE device_id = ?;
+
+-- ── received_texts ────────────────────────────────────────────────────────────────────────
+
+receivedTextById:
+SELECT * FROM received_texts WHERE session_id = ?;
+
+/**
+ * The idempotent write, and the one place the "never downgrade a dispatch" invariant is enforced.
+ *
+ * `MAX(received_texts.dispatched, excluded.dispatched)` is the whole trick: the lazy sync mirrors
+ * the phone's view of a row, and the phone may well still believe a row was never dispatched (it
+ * sends its history, not its knowledge of our history). A plain `SET dispatched = excluded.dispatched`
+ * would let a sync erase the fact that the text was typed into this PC's foreground window.
+ *
+ * `last_outcome` is deliberately absent from the DO UPDATE list — it belongs to the *insertion*, and
+ * a sync never inserts anything. Only `recordDispatch` writes it.
+ */
+upsertReceivedText:
+INSERT INTO received_texts(session_id, device_id, text, created_at, received_at, origin, dispatched, last_outcome)
+VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+ON CONFLICT(session_id) DO UPDATE SET
+    device_id   = excluded.device_id,
+    text        = excluded.text,
+    created_at  = excluded.created_at,
+    received_at = excluded.received_at,
+    origin      = excluded.origin,
+    dispatched  = MAX(received_texts.dispatched, excluded.dispatched);
+
+recordDispatch:
+UPDATE received_texts
+SET received_at = :at, dispatched = 1, last_outcome = :outcome
+WHERE session_id = :sessionId;
+
+/** The receive watermark. NULL row set = "I know nothing" → the phone resends from the beginning. */
+selectCursor:
+SELECT created_at, session_id
+FROM received_texts
+ORDER BY created_at DESC, session_id DESC
+LIMIT 1;
+
+-- The history page.
+--
+-- instr() rather than LIKE: what a user types into a search box is a literal substring, and LIKE
+-- would quietly read their wildcard characters as wildcards. An empty term matches every row —
+-- instr(x, '') is 1 — which is exactly what an empty search box should do, and it keeps the
+-- "no filter" case out of the SQL where it would otherwise become a NULL-comparison trap.
+--
+-- lower() folds ASCII case only, so "GRUSS" will not find "Grüße": a known and accepted limit of a
+-- local substring search (SQLite has no Unicode case folding without an ICU build).
+pageHistory:
+SELECT *
+FROM received_texts
+WHERE instr(lower(text), lower(:term)) > 0
+ORDER BY created_at DESC, session_id DESC
+LIMIT :limit OFFSET :offset;
+
+countHistory:
+SELECT COUNT(*)
+FROM received_texts
+WHERE instr(lower(text), lower(:term)) > 0;
+
+-- ── settings ──────────────────────────────────────────────────────────────────────────────
+
+settingByKey:
+SELECT value FROM settings WHERE key = ?;
+
+putSetting:
+INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?);

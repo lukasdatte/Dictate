@@ -1,8 +1,9 @@
 package net.devemperor.dictate.companion.server
 
 import net.devemperor.dictate.companion.CompanionContainer
-import net.devemperor.dictate.companion.data.memory.InMemoryDeviceRepository
-import net.devemperor.dictate.companion.data.memory.InMemoryHistoryRepository
+import net.devemperor.dictate.companion.data.CompanionDatabase
+import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
+import net.devemperor.dictate.companion.data.SqlDelightHistoryRepository
 import net.devemperor.dictate.companion.domain.model.InsertionOutcome
 import net.devemperor.dictate.companion.fakes.FakeTextInserter
 import net.devemperor.dictate.companion.fakes.MutableClock
@@ -49,8 +50,9 @@ class CompanionE2ETest {
 
     private val inserter = FakeTextInserter()
     private val clock = MutableClock()
-    private val devices = InMemoryDeviceRepository()
-    private val history = InMemoryHistoryRepository()
+    private val database = CompanionDatabase.inMemory()
+    private val devices = SqlDelightDeviceRepository(database)
+    private val history = SqlDelightHistoryRepository(database)
 
     private lateinit var container: CompanionContainer
     private lateinit var server: CompanionServer

@@ -1,6 +1,7 @@
 package net.devemperor.dictate.companion.domain
 
-import net.devemperor.dictate.companion.data.memory.InMemoryDeviceRepository
+import net.devemperor.dictate.companion.data.CompanionDatabase
+import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
 import net.devemperor.dictate.companion.fakes.MutableClock
 import net.devemperor.dictate.shared.auth.Secrets
 import net.devemperor.dictate.shared.protocol.Endpoints
@@ -12,7 +13,7 @@ import org.junit.Test
 
 class PairingServiceTest {
 
-    private val devices = InMemoryDeviceRepository()
+    private val devices = SqlDelightDeviceRepository(CompanionDatabase.inMemory())
     private val clock = MutableClock()
     private val pairing = PairingService(devices, clock, serverName = "test-pc")
 

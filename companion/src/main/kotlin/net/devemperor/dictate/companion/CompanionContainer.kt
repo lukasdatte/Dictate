@@ -1,7 +1,8 @@
 package net.devemperor.dictate.companion
 
-import net.devemperor.dictate.companion.data.memory.InMemoryDeviceRepository
-import net.devemperor.dictate.companion.data.memory.InMemoryHistoryRepository
+import net.devemperor.dictate.companion.data.CompanionDatabase
+import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
+import net.devemperor.dictate.companion.data.SqlDelightHistoryRepository
 import net.devemperor.dictate.companion.domain.AuthService
 import net.devemperor.dictate.companion.domain.DispatchService
 import net.devemperor.dictate.companion.domain.HealthService
@@ -11,6 +12,7 @@ import net.devemperor.dictate.companion.domain.port.ClockPort
 import net.devemperor.dictate.companion.domain.port.DeviceRepository
 import net.devemperor.dictate.companion.domain.port.HistoryRepository
 import net.devemperor.dictate.companion.domain.port.TextInserter
+import net.devemperor.dictate.companion.platform.AppPaths
 import net.devemperor.dictate.companion.platform.SystemClock
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
 import net.devemperor.dictate.companion.platform.fallback.NoopTextInserter
@@ -46,32 +48,39 @@ class CompanionContainer(
         const val APP_VERSION = "1.0.0"
 
         /**
-         * The production graph.
+         * The production graph, on the real SQLite file under [AppPaths].
          *
          * On Linux/macOS the inserter is [NoopTextInserter] and the autostart a no-op — the app
-         * runs, serves and shows its history, it just cannot type (ADR-0018). The Windows
+         * runs, serves and stores its history, it just cannot type (ADR-0018). The Windows
          * implementations arrive with `wd-7`/`wd-9` behind `PlatformModule.detect()`.
          */
         fun production(
-            devices: DeviceRepository = InMemoryDeviceRepository(),
-            history: HistoryRepository = InMemoryHistoryRepository(),
             inserter: TextInserter = NoopTextInserter,
             autostart: AutostartManager = NoopAutostart,
-        ): CompanionContainer = CompanionContainer(
-            devices = devices,
-            history = history,
-            inserter = inserter,
-            autostart = autostart,
-            clock = SystemClock,
-            serverName = defaultServerName(),
-            appVersion = APP_VERSION,
-        )
+        ): CompanionContainer {
+            val database = CompanionDatabase.open(AppPaths.databaseFile())
+            return CompanionContainer(
+                devices = SqlDelightDeviceRepository(database),
+                history = SqlDelightHistoryRepository(database),
+                inserter = inserter,
+                autostart = autostart,
+                clock = SystemClock,
+                serverName = defaultServerName(),
+                appVersion = APP_VERSION,
+            )
+        }
 
+        /**
+         * The test graph. The repositories the caller passes in are the **real** SQLDelight ones on
+         * an in-memory SQLite (`CompanionDatabase.inMemory()`) — because the invariants worth testing
+         * (idempotency, the never-downgrade-a-dispatch rule, the cursor order) live in the SQL, and a
+         * hand-written fake repository would only ever test the fake.
+         */
         fun forTest(
             inserter: TextInserter,
             clock: ClockPort,
-            devices: DeviceRepository = InMemoryDeviceRepository(),
-            history: HistoryRepository = InMemoryHistoryRepository(),
+            devices: DeviceRepository,
+            history: HistoryRepository,
             autostart: AutostartManager = NoopAutostart,
             serverName: String = "test-pc",
             random: SecureRandom = SecureRandom(),

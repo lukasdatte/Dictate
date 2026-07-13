@@ -1,7 +1,8 @@
 package net.devemperor.dictate.companion.domain
 
-import net.devemperor.dictate.companion.data.memory.InMemoryDeviceRepository
-import net.devemperor.dictate.companion.data.memory.InMemoryHistoryRepository
+import net.devemperor.dictate.companion.data.CompanionDatabase
+import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
+import net.devemperor.dictate.companion.data.SqlDelightHistoryRepository
 import net.devemperor.dictate.companion.domain.model.Device
 import net.devemperor.dictate.companion.domain.model.InsertionOutcome
 import net.devemperor.dictate.companion.fakes.FakeTextInserter
@@ -20,8 +21,12 @@ import org.junit.Test
 class DispatchServiceTest {
 
     private val inserter = FakeTextInserter()
-    private val history = InMemoryHistoryRepository()
-    private val devices = InMemoryDeviceRepository()
+
+    // The same database for both repositories — the foreign key from received_texts to devices is
+    // real, and a history row for an unknown device must fail here just as it would in production.
+    private val database = CompanionDatabase.inMemory()
+    private val devices = SqlDelightDeviceRepository(database)
+    private val history = SqlDelightHistoryRepository(database)
     private val clock = MutableClock()
     private val dispatch = DispatchService(inserter, history, devices, clock)
 

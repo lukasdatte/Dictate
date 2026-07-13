@@ -128,6 +128,11 @@ ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx
 ktor-server-test-host = { module = "io.ktor:ktor-server-test-host-jvm", version.ref = "ktor" }
 # :companion — local SQLite history.
 sqldelight-sqlite-driver = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }
+# The SQL dialect the .sq files are compiled against. SQLDelight defaults to SQLite 3.18, which
+# predates UPSERT (`ON CONFLICT ... DO UPDATE`, SQLite 3.24) — and the idempotent history write is
+# built on exactly that. 3.38 is comfortably below what sqlite-jdbc 3.45 ships, so the dialect the
+# compiler checks against and the engine that runs the statement agree.
+sqldelight-sqlite-dialect = { module = "app.cash.sqldelight:sqlite-3-38-dialect", version.ref = "sqldelight" }
 sqldelight-primitive-adapters = { module = "app.cash.sqldelight:primitive-adapters", version.ref = "sqldelight" }
 sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqliteJdbc" }
 # :companion — Win32 text insertion (User32.SendInput) + HKCU autostart registry key.

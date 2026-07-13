@@ -10,10 +10,12 @@ sqldelight {
     databases {
         DictateCompanionDb {
             packageName = "net.devemperor.dictate.companion.db"
-            // The schema + the versioned migration runner land with wd-5; that chunk also
-            // flips `verifyMigrations` on, once there is a checked-in schema snapshot to
-            // verify the .sqm files against (verification fails without one).
-            verifyMigrations = false
+            dialect libs.sqldelight.sqlite.dialect
+            // Armed (wd-5). `verifySqlDelightMigration` replays every .sqm against the checked-in
+            // schema snapshot in `databases/` and compares the result with the current .sq — so a
+            // schema change that forgets its migration cannot merge. The SQLDelight equivalent of
+            // Room's exportSchema + MigrationTestHelper.
+            verifyMigrations = true
             schemaOutputDirectory = file("src/main/sqldelight/databases")
         }
     }

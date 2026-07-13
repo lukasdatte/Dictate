@@ -1,6 +1,7 @@
 package net.devemperor.dictate.companion.domain
 
-import net.devemperor.dictate.companion.data.memory.InMemoryDeviceRepository
+import net.devemperor.dictate.companion.data.CompanionDatabase
+import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
 import net.devemperor.dictate.companion.domain.model.Device
 import net.devemperor.dictate.shared.auth.Secrets
 import org.junit.Assert.assertEquals
@@ -10,7 +11,7 @@ import org.junit.Test
 
 class AuthServiceTest {
 
-    private val devices = InMemoryDeviceRepository()
+    private val devices = SqlDelightDeviceRepository(CompanionDatabase.inMemory())
     private val auth = AuthService(devices)
 
     @Before

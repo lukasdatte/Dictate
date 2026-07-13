@@ -13,7 +13,7 @@ class CompanionBuildProbeTest {
     fun describe_touchesEveryPinnedDependency() {
         val description = CompanionBuildProbe.describe()
 
-        assertTrue(description, description.contains("""shared={"name":"companion"}"""))
+        assertTrue(description, description.contains(""""serverName":"companion""""))
         assertTrue(description, description.contains("ktor=Application"))
         assertTrue(description, description.contains("sqldelight=jdbc:sqlite:"))
         assertTrue(description, description.contains("zxing=QR_CODE"))

@@ -6,7 +6,9 @@ import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.google.zxing.BarcodeFormat
 import com.sun.jna.Platform
 import io.ktor.server.application.Application
-import net.devemperor.dictate.shared.SharedBuildProbe
+import net.devemperor.dictate.shared.protocol.HealthResponse
+import net.devemperor.dictate.shared.protocol.ProtocolCodec
+import net.devemperor.dictate.shared.protocol.Validations
 
 /**
  * Entry point of the desktop companion — a placeholder until the Ktor server (`wd-4`),
@@ -26,12 +28,19 @@ object CompanionBuildProbe {
 
     /** Touches one type per pinned dependency so the compiler has to read its metadata. */
     fun describe(): String = buildString {
-        append("shared=").append(SharedBuildProbe.encodeAndValidate("companion")).append(' ')
+        append("shared=").append(healthJson()).append(' ')
         append("ktor=").append(Application::class.java.simpleName).append(' ')
         append("sqldelight=").append(JdbcSqliteDriver.IN_MEMORY).append(' ')
         append("jna=").append(Platform.isWindows()).append(' ')
         append("zxing=").append(BarcodeFormat.QR_CODE.name)
     }
+
+    /** The companion will answer `/v1/health` with exactly this, once it has a server (`wd-4`). */
+    private fun healthJson(): String = ProtocolCodec.encode(
+        HealthResponse(serverName = "companion", appVersion = "0.0.0", canInsert = Platform.isWindows()),
+        HealthResponse.serializer(),
+        Validations.healthResponse,
+    )
 }
 
 /** Proves the Compose compiler plugin is applied and Compose Desktop's Material 3 resolves. */

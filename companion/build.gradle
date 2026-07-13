@@ -73,9 +73,11 @@ compose.desktop {
     application {
         mainClass = "net.devemperor.dictate.companion.MainKt"
         nativeDistributions {
-            // Msi = the Windows target (only buildable ON Windows, see the release runbook);
-            // Deb keeps `packageDistributionForCurrentOS` meaningful on the Linux dev VM so
-            // the packaging path stays testable. Icons + upgradeUuid land with wd-9.
+            // jpackage CANNOT cross-compile — it builds for the HOST OS only (JEP 392). No
+            // configuration makes an .msi appear on this Linux VM, and `packageMsi` fails here by
+            // design. Deb is configured so that the packaging path itself stays exercisable on the
+            // dev VM: `createDistributable` + `packageDeb` are the Linux proof that the bundle is
+            // well-formed, and Windows then only adds WiX. See docs/runbooks/companion-windows-release.md.
             targetFormats(
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb
@@ -84,6 +86,24 @@ compose.desktop {
             packageVersion = "1.0.0"
             description = "Dictate Companion — receives dictated text from the phone"
             vendor = "devemperor"
+
+            linux {
+                iconFile.set(project.file("src/main/resources/icon.png"))
+            }
+
+            windows {
+                // FROZEN. Generated once, on 2026-07-13, and it must NEVER change: Windows Installer
+                // identifies a product by this GUID. A new one makes the next MSI install *alongside*
+                // the old companion instead of upgrading it — two apps fighting over port 8756, and
+                // the user with no idea why.
+                upgradeUuid = "B9083816-3022-4502-B5F3-7CDA7BA722D8"
+                menuGroup = "Dictate"
+                // The installer offers both; neither is forced on the user.
+                menu = true
+                shortcut = true
+                // No .ico is shipped yet, so jpackage uses its default icon. Cosmetic, and it is
+                // listed in the release runbook next to the other known state of an unsigned build.
+            }
         }
     }
 }

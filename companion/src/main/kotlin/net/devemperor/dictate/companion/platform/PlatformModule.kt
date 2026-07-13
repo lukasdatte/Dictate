@@ -8,6 +8,7 @@ import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
 import net.devemperor.dictate.companion.platform.fallback.NoopTextInserter
 import net.devemperor.dictate.companion.platform.windows.AwtClipboard
 import net.devemperor.dictate.companion.platform.windows.Win32TextInserter
+import net.devemperor.dictate.companion.platform.windows.WinRegistryAutostart
 
 /**
  * The one place the app asks what operating system it is on (ADR-0018).
@@ -32,11 +33,17 @@ object PlatformModule {
 
     private fun windows(): Bindings {
         val clipboard = AwtClipboard()
+        val executable = WinRegistryAutostart.currentExecutable()
+
         return Bindings(
             inserter = Win32TextInserter(clipboard),
             clipboard = clipboard,
-            // The HKCU Run-key implementation lands with wd-9.
-            autostart = NoopAutostart,
+            // No resolvable executable path (an exotic launcher, a JVM started by hand) means there
+            // is nothing honest to put in the Run key — so the toggle reports "not supported" rather
+            // than writing a command line that would fail silently at the next login.
+            autostart = executable
+                ?.let { WinRegistryAutostart(WinRegistryAutostart.commandLineFor(it)) }
+                ?: NoopAutostart,
         )
     }
 

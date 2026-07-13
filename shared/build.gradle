@@ -1,0 +1,34 @@
+plugins {
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.serialization)
+}
+
+// jvmTarget 1.8 — DO NOT raise without raising :app with it. `:app` compiles with
+// jvmTarget 1.8, and Kotlin refuses to inline 11-bytecode into 8-bytecode. That is
+// also why this module carries NO Ktor (the server needs JDK 11+) and NO coroutines
+// (:app pins kotlinx-coroutines 1.7.3). The HTTP client here is blocking OkHttp,
+// called on a background executor — the house pattern of ElevenLabsTranscriptionRunner.
+// See ADR-0015. `SharedPurityTest` pins the Android/Ktor/coroutine freedom.
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8
+    }
+}
+
+// No `repositories { }` block here — settings.gradle sets FAIL_ON_PROJECT_REPOS.
+
+dependencies {
+    // `api`, not `implementation`: the DTOs (kotlinx-serialization) and their
+    // Validation<T>s (Konform) are part of this module's public surface — both
+    // consumers (:app, :companion) speak them.
+    api libs.kotlinx.serialization.json
+    api libs.konform
+    implementation libs.okhttp
+
+    testImplementation libs.junit
+    testImplementation libs.okhttp.mockwebserver
+}

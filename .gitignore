@@ -10,6 +10,8 @@
 /.idea/gradle.xml
 .DS_Store
 /build
+# Per-module build outputs (:shared, :companion — :app has its own .gitignore).
+build/
 /captures
 .externalNativeBuild
 .cxx

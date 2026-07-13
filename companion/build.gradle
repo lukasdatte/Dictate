@@ -1,0 +1,80 @@
+plugins {
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.compose)
+    alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.sqldelight)
+}
+
+sqldelight {
+    databases {
+        DictateCompanionDb {
+            packageName = "net.devemperor.dictate.companion.db"
+            // The schema + the versioned migration runner land with wd-5; that chunk also
+            // flips `verifyMigrations` on, once there is a checked-in schema snapshot to
+            // verify the .sqm files against (verification fails without one).
+            verifyMigrations = false
+            schemaOutputDirectory = file("src/main/sqldelight/databases")
+        }
+    }
+}
+
+// JVM 17 — the companion is a desktop app and shares nothing with Android's
+// jvmTarget-1.8 constraint. Ktor's server needs JDK 11+; Compose Desktop wants 17.
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+// No `repositories { }` block here — settings.gradle sets FAIL_ON_PROJECT_REPOS.
+
+dependencies {
+    implementation project(':shared')
+
+    implementation compose.desktop.currentOs
+    implementation compose.material3
+
+    implementation libs.ktor.server.core
+    implementation libs.ktor.server.cio
+    implementation libs.ktor.server.content.negotiation
+    implementation libs.ktor.server.status.pages
+    implementation libs.ktor.server.call.logging
+    implementation libs.ktor.serialization.kotlinx.json
+
+    implementation libs.sqldelight.sqlite.driver
+    implementation libs.sqldelight.primitive.adapters
+    implementation libs.sqlite.jdbc
+
+    implementation libs.jna
+    implementation libs.jna.platform
+
+    implementation libs.zxing.core
+    implementation libs.zxing.javase
+
+    testImplementation libs.junit
+    testImplementation libs.ktor.server.test.host
+}
+
+compose.desktop {
+    application {
+        mainClass = "net.devemperor.dictate.companion.MainKt"
+        nativeDistributions {
+            // Msi = the Windows target (only buildable ON Windows, see the release runbook);
+            // Deb keeps `packageDistributionForCurrentOS` meaningful on the Linux dev VM so
+            // the packaging path stays testable. Icons + upgradeUuid land with wd-9.
+            targetFormats(
+                org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
+                org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb
+            )
+            packageName = "DictateCompanion"
+            packageVersion = "1.0.0"
+            description = "Dictate Companion — receives dictated text from the phone"
+            vendor = "devemperor"
+        }
+    }
+}

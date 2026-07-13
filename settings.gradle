@@ -22,3 +22,8 @@ dependencyResolutionManagement {
 
 rootProject.name = "Dictate"
 include ':app'
+// :shared  — pure kotlin("jvm") module (jvmTarget 1.8), consumed by BOTH :app and
+//            :companion. Android-free, Ktor-free, coroutine-free by design (ADR-0015).
+// :companion — Compose Desktop app (JVM 17), the ONLY server in the system (ADR-0017).
+include ':shared'
+include ':companion'

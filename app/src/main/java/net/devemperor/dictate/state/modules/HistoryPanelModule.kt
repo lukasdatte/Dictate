@@ -83,7 +83,14 @@ object HistoryPanelModule
         if (!next.historyPanel.open) return emptyList()
         val imeTornDown = prev.imeViewVisible && !next.imeViewVisible
         val recordingStarted = prev.recording is RecordingState.Idle && next.recording !is RecordingState.Idle
-        return if (imeTornDown || recordingStarted) {
+        // G2-3: the review panel opening (a held ambiguous turn) must close the
+        // history panel, or both grids render at once — the history row shows the
+        // same held session with its own Insert button, which would commit to the
+        // host while the review is still open. canShowReviewPanel() does NOT gate
+        // on history being closed, so enforce the mutex here as a state invariant
+        // rather than relying on call-site discipline.
+        val reviewOpened = !prev.reviewPanel.open && next.reviewPanel.open
+        return if (imeTornDown || recordingStarted || reviewOpened) {
             listOf(Action.HistoryPanelAction.Close)
         } else {
             emptyList()

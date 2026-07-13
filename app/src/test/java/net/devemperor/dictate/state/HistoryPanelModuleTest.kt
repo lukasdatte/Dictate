@@ -72,6 +72,15 @@ class HistoryPanelModuleTest {
     }
 
     @Test
+    fun `review panel opening while history is open cascades Close (G2-3)`() {
+        val prev = DictateUiState.initial().copy(
+            reviewPanel = ReviewPanelState(), historyPanel = HistoryPanelState(open = true),
+        )
+        val next = prev.copy(reviewPanel = ReviewPanelState(open = true, sessionId = "s1", output = "o"))
+        assertEquals(listOf(Action.HistoryPanelAction.Close), module.onCrossModuleStateChange(prev, next))
+    }
+
+    @Test
     fun `no cascade when panel is closed`() {
         val prev = DictateUiState.initial().copy(imeViewVisible = true, recording = RecordingState.Idle)
         val next = prev.copy(imeViewVisible = false, recording = recording())

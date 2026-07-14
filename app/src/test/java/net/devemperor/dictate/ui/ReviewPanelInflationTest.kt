@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import android.widget.TextView
 import androidx.appcompat.view.ContextThemeWrapper
+import androidx.constraintlayout.widget.ConstraintLayout
 import net.devemperor.dictate.R
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.ReviewPanelState
@@ -125,6 +126,33 @@ class ReviewPanelInflationTest {
         assertEquals(
             ctx.getString(R.string.dictate_review_recording),
             (refining as TextView).text.toString(),
+        )
+    }
+
+    // ── Block D: height-collapse regression (ADR-0013) ──────────────────────
+    //
+    // KEYBOARD_REVIEW_PANEL forces EVERY main_buttons_cl slot GONE (LayoutCatalog
+    // hiddenSlot + SlotRenderer -> View.GONE). If review_panel_cl borrows its
+    // height from that emptied, wrap_content grid (0dp top+bottom to
+    // main_buttons_cl), it collapses to the grid's padding and the panel renders
+    // VISIBLE but invisibly flat. The panel must own its height (history-panel
+    // pattern) instead. Genesis: 0eae6a2.
+    //
+    // NOTE: a measure()/layout() assertion was tried and REJECTED — Robolectric's
+    // MotionLayout does not reproduce the wrap_content collapse of the emptied
+    // grid, so such a test passes even on the broken layout (false green). The
+    // structural constraint below is the deterministic guard; the actual pixel
+    // rendering stays on the manual device checklist (D.C3).
+
+    @Test
+    fun `review panel owns its height, not coupled to the mode-emptied button grid`() {
+        val lp = container.layoutParams as ConstraintLayout.LayoutParams
+        val grid = R.id.main_buttons_cl
+        val coupledToGrid = lp.bottomToBottom == grid || lp.topToTop == grid
+        assertTrue(
+            "review_panel_cl must own its height, not couple 0dp to the emptied main_buttons_cl " +
+                "(height=${lp.height}, topToTop=${lp.topToTop}, bottomToBottom=${lp.bottomToBottom})",
+            lp.height == ConstraintLayout.LayoutParams.WRAP_CONTENT && !coupledToGrid,
         )
     }
 }

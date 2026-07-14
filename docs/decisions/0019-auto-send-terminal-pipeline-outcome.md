@@ -393,3 +393,36 @@ axis-local `surfacedAsPending` flag was chosen over a cross-axis read because th
 fires off the pipeline thread, making any "has the cascade reduced yet?" assumption a race. The
 alternatives (a fourth producer, a `Running` FSM during dispatch, `AcceptAndInsert` acknowledge,
 blocking sends behind a failure) each reintroduced one of the invariants this design preserves.
+
+### 2026-07-14 — Documented the review×auto-send process-death recovery exception
+
+**Trigger:** The windows-dispatch code-quality review (post-implementation gate) found that the
+Failure Modes bullet above ("Process death mid-dispatch surfaces the text once, possibly
+redundantly") reads as universal across all producers, but one path does not hold it: the
+review-panel **"Insert" → PC** route. This entry documents the exception honestly; the ADR body is
+unchanged (Accepted → append-only).
+
+**Before:** The Failure Modes section claimed the process-death safety net ("one extra part beats a
+lost text", `inserted_at` stays NULL until `Succeeded`) without naming the one path where it does
+not apply.
+
+**After:** The exception is recorded. The review-panel Insert path acknowledges **eagerly**:
+`onReviewInsertClicked` (`DictateInputMethodService.java:5085`) dispatches `ReviewPanelAction.Insert`,
+which runs `markInserted` (stamps `inserted_at`) **before** the async PC send, so the coordinator
+runs with `acknowledgeOnSuccess = false` to avoid a double `markInserted` (§4.2(c) — "review decides
+*whether*, auto-send decides *where*"). Consequence: on a send **failure**,
+`WindowsDispatchModule.Failed(surfacedAsPending = false)` surfaces the text only as an **in-memory**
+pending part; because `inserted_at` is already set, cold-boot `findPendingInsertion` (which requires
+`inserted_at IS NULL`) does **not** recover it if the process dies in the window between the eager
+acknowledge and the dispatch resolution. The three other producers (IME seam, headless sink, history
+row) keep `inserted_at` NULL until `Succeeded`, so their process-death net holds — **only this path
+is strictly weaker**. **No data loss:** the text persists as `final_output_text` in the DB and is
+re-sendable from the history row's "Send to Windows". Sharp-edge trigger: the review panel is open in
+auto-send mode **AND** the PC send fails **AND** the process dies in that narrow window.
+
+**Reasoning:** The edge is narrow and lossless, so documenting it honestly now (option a) is the
+right closeout. The durable fix (option b, deferred) is genuine state-machine surgery spanning
+ADR-0013 (review panel) and this ADR — **defer the review acknowledge until the dispatch resolves**
+(an Insert-without-ack variant) so this path gains the same `inserted_at IS NULL`-until-`Succeeded`
+guarantee as the other three producers. It is worth its own careful change, not a review-closeout
+patch. Tracked in `docs/architecture/windows-dispatch/README.md` §4 (Information Gaps).

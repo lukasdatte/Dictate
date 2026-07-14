@@ -217,6 +217,15 @@ case (ADR-0019).
 3. **MSI code-signing** — V1 ships unsigned; SmartScreen warns. Owner: a follow-up.
 4. **CI** — the repo has no CI; a `windows-latest` `packageMsi` job is a separate work
    package. Fallback: the manual Windows device checklist in the runbook.
+5. **Review×auto-send process-death durability** — the review-panel "Insert" → PC path
+   acknowledges eagerly (`markInserted` before the async send, coordinator
+   `acknowledgeOnSuccess = false`), so on a send *failure* the text is surfaced only as an
+   in-memory pending part; with `inserted_at` already set, a process death in that window is
+   not recovered by cold-boot `findPendingInsertion` (the other three producers hold
+   `inserted_at` NULL until `Succeeded` and are recoverable). No data loss — the text stays in
+   the DB (`final_output_text`) and is re-sendable from the history row. Owner: a follow-up —
+   defer the review acknowledge until the dispatch resolves (an Insert-without-ack variant),
+   state-machine surgery over ADR-0013 + ADR-0019. See ADR-0019 Decision History (2026-07-14).
 
 ## 5. References
 

@@ -15,6 +15,9 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.net.ServerSocket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Robolectric tests for the C8 composition-root extensions
@@ -272,6 +275,45 @@ class DictatePipelineServiceCompositionTest {
                 binder.pipelineOrchestrator,
             )
         } finally {
+            prefs.edit().clear().commit()
+        }
+    }
+
+    @Test
+    fun `onCreate actually fires the app-start sync when a PC is paired`() {
+        // Regression (review — L4-c): the inert test above proves a FAILED start-sync doesn't break
+        // startup, but it would still pass if the onCreate trigger were deleted entirely (an unpaired
+        // service never syncs). This pins the POSITIVE half of the wd-15 / ADR-0020 trigger: pair to a
+        // real listening socket and assert onCreate makes a connection attempt to it. We only accept
+        // the TCP connection — the attempt alone proves the fire-and-forget sync ran.
+        val listener = ServerSocket(0)
+        val connected = CountDownLatch(1)
+        val accepter = Thread {
+            try {
+                listener.accept().use { connected.countDown() }
+            } catch (ignored: Throwable) {
+            }
+        }.apply { isDaemon = true; start() }
+
+        val prefs = ApplicationProvider.getApplicationContext<Context>()
+            .getSharedPreferences(DictatePipelineService.PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(Pref.WindowsTargetUrl.key, "http://127.0.0.1:${listener.localPort}")
+            .putString(Pref.WindowsDeviceId.key, "device-under-test")
+            .putString(Pref.WindowsDeviceSecret.key, "s3cr3t")
+            .putString(Pref.WindowsServerName.key, "Paired-PC")
+            .commit()
+
+        try {
+            controller.create()
+            controller.get().onBind(Intent())
+            assertTrue(
+                "onCreate must fire the app-start cursor sync at the paired PC",
+                connected.await(5, TimeUnit.SECONDS),
+            )
+        } finally {
+            accepter.interrupt()
+            listener.close()
             prefs.edit().clear().commit()
         }
     }

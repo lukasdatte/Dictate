@@ -31,8 +31,13 @@ class WindowsDispatchCoordinatorTest {
     /** Synchronous executor so the fire-and-forget body runs inline. */
     private val inline = Executor { it.run() }
 
-    private val emptySource = object : SyncSource {
-        override fun sessionsAfter(cursor: SyncCursor?, limit: Int): List<SessionUpsert> = emptyList()
+    /** Spy source: records each pull so a test can prove the post-dispatch sync actually fired (ADR-0020). */
+    private val syncPulls = mutableListOf<SyncCursor?>()
+    private val spySource = object : SyncSource {
+        override fun sessionsAfter(cursor: SyncCursor?, limit: Int): List<SessionUpsert> {
+            syncPulls += cursor
+            return emptyList()
+        }
     }
 
     private fun coordinator(
@@ -41,7 +46,7 @@ class WindowsDispatchCoordinatorTest {
     ): WindowsDispatchCoordinator {
         val service = WindowsDispatchService(
             clientFactory = { t -> DispatchClient(transport) { t.credentials() } },
-            syncClientFactory = { t -> SyncClient(DispatchClient(transport) { t.credentials() }, emptySource) },
+            syncClientFactory = { t -> SyncClient(DispatchClient(transport) { t.credentials() }, spySource) },
         )
         return WindowsDispatchCoordinator(
             service = service,
@@ -75,6 +80,9 @@ class WindowsDispatchCoordinatorTest {
         assertEquals(InsertionOutcomeWire.TYPED_CTRL_V, succeeded.outcome)
         // Audit carries the target device id.
         assertEquals(Triple("s1", "hello", "device-1"), audits.single())
+        // ADR-0020 — a delivered dispatch triggers the lazy cursor sync (review — L4-b: this line was
+        // unasserted, so deleting the coordinator's `service.sync(target)` passed the whole suite).
+        assertEquals("a delivered dispatch must trigger exactly one sync pull", 1, syncPulls.size)
     }
 
     @Test
@@ -95,6 +103,8 @@ class WindowsDispatchCoordinatorTest {
         val failed = emitted[1] as Action.WindowsDispatchAction.Failed
         assertEquals(PipelineErrorKind.WINDOWS_UNREACHABLE, failed.errorKind)
         assertTrue(audits.isEmpty())
+        // ADR-0020 — sync is triggered ONLY on the delivered branch, never on a failure.
+        assertTrue("a failed dispatch must not trigger a sync", syncPulls.isEmpty())
     }
 
     @Test

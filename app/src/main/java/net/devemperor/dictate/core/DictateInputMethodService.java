@@ -2854,9 +2854,8 @@ public class DictateInputMethodService extends InputMethodService
                     vibrate();
                     promptQueueManager.clear();
                 } else if (model.getId() == -2) {  // add prompt clicked
-                    Intent intent = new Intent(DictateInputMethodService.this, PromptsOverviewActivity.class);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(intent);
+                    startActivity(ImeActivityLauncher.INSTANCE.intentFor(
+                            DictateInputMethodService.this, PromptsOverviewActivity.class));
                 } else {
                     if (isEffectiveRecordingInFlight() && !livePrompt) {
                         promptQueueManager.togglePrompt(model.getId());
@@ -2889,8 +2888,8 @@ public class DictateInputMethodService extends InputMethodService
                 PromptEntity longClickModel = promptsAdapter.getItem(position);
                 if (longClickModel.getId() >= 0) {
                     vibrate();
-                    Intent intent = new Intent(DictateInputMethodService.this, PromptEditActivity.class);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    Intent intent = ImeActivityLauncher.INSTANCE.intentFor(
+                            DictateInputMethodService.this, PromptEditActivity.class);
                     intent.putExtra("net.devemperor.dictate.prompt_edit_activity_id", longClickModel.getId());
                     startActivity(intent);
                 }
@@ -3337,8 +3336,7 @@ public class DictateInputMethodService extends InputMethodService
      * to the input-languages preference so the user can curate the list.
      */
     private void openLanguageSettings() {
-        Intent intent = new Intent(this, DictateSettingsActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent intent = ImeActivityLauncher.INSTANCE.intentFor(this, DictateSettingsActivity.class);
         intent.putExtra(DictateSettingsActivity.EXTRA_SCROLL_TO,
                 "net.devemperor.dictate.input_languages");
         startActivity(intent);
@@ -3915,9 +3913,7 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void openSettingsActivity() {
-        Intent intent = new Intent(this, DictateSettingsActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        startActivity(intent);
+        startActivity(ImeActivityLauncher.INSTANCE.intentFor(this, DictateSettingsActivity.class));
     }
 
     /**
@@ -5821,9 +5817,8 @@ public class DictateInputMethodService extends InputMethodService
      */
     private void openWindowsPairingActivity() {
         try {
-            Intent intent = new Intent(this, net.devemperor.dictate.settings.WindowsPairingActivity.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(intent);
+            startActivity(ImeActivityLauncher.INSTANCE.intentFor(
+                    this, net.devemperor.dictate.settings.WindowsPairingActivity.class));
         } catch (Exception e) {
             Log.w("DictateIME", "Failed to launch Windows pairing screen", e);
         }
@@ -5919,8 +5914,7 @@ public class DictateInputMethodService extends InputMethodService
     // imeSideAffordance(RECORD, isLongPress=true).
     public void onRecordLongClicked() {
         if (isEffectiveRecordingIdle()) {
-            Intent intent = new Intent(this, DictateSettingsActivity.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            Intent intent = ImeActivityLauncher.INSTANCE.intentFor(this, DictateSettingsActivity.class);
             intent.putExtra("net.devemperor.dictate.open_file_picker", true);
             startActivity(intent);
         } else if (isEffectiveRecordingActiveOrPaused() && !livePrompt && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -6507,9 +6501,7 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void openHistoryActivity() {
-        Intent intent = new Intent(this, HistoryActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        startActivity(intent);
+        startActivity(ImeActivityLauncher.INSTANCE.intentFor(this, HistoryActivity.class));
     }
 
     /**

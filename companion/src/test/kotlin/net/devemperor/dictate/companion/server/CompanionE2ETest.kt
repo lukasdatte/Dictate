@@ -294,6 +294,28 @@ class CompanionE2ETest {
     }
 
     @Test
+    fun aMalformedBody_neverEchoesTheDictatedTextInTheEnvelope() {
+        // Regression (review — L2-F2): a body truncated mid-`text` makes kotlinx-serialization throw
+        // a decode error whose message can quote a window of the raw input — i.e. the dictated text.
+        // That message must NOT reach the ErrorEnvelope, which is logged on BOTH sides and is the one
+        // structure the redaction contract (ADR-0016) says never carries the dictated text.
+        val credentials = pairedCredentials()
+        val sentinel = "TOPSECRETDICTATIONdoNotLeakMe"
+        // Deliberately truncated: no closing quote/brace → SerializationException → Malformed branch.
+        val truncated = """{"protocolVersion":1,"sessionId":"$SESSION_ID","createdAt":42,"origin":"KEYBOARD","text":"$sentinel"""
+
+        val response = rawPost(Endpoints.DISPATCH, truncated, AuthHeaders.forDevice(credentials))
+
+        assertEquals(400, response.status)
+        assertEquals(ErrorCode.VALIDATION_FAILED, response.envelope().code)
+        assertEquals(listOf("<body>"), response.envelope().details.map { it.path })
+        assertFalse(
+            "the malformed-decode message leaked the dictated text into the wire envelope",
+            response.body.contains(sentinel),
+        )
+    }
+
+    @Test
     fun anUnsupportedProtocolHeader_isRejectedBeforeAuth() {
         // No valid credentials at all — and yet the answer is 400 PROTOCOL_VERSION_UNSUPPORTED, not
         // 401: an outdated peer must be told to update, not left guessing about its secret.

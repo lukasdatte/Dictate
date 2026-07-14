@@ -67,9 +67,14 @@ suspend fun <T> ApplicationCall.receiveValidated(
         is DecodeResult.Invalid -> throw CompanionException.ValidationException(decoded.details)
         is DecodeResult.Malformed ->
             // A broken wire format and a violated constraint both leave the peer with the same job
-            // (fix the payload), so they share the 400 — but the detail says which of the two it was.
+            // (fix the payload), so they share the 400 — the "<body>" path distinguishes the two.
+            //
+            // The message is a CONSTANT, never `decoded.reason`: a kotlinx-serialization decode error
+            // can quote a window of the raw input in its message (the dictated text), and this detail
+            // flows into the ErrorEnvelope, which is logged on both sides and must never carry the
+            // dictated text (ADR-0016 redaction contract; ProtocolCalls.respondEnvelope KDoc).
             throw CompanionException.ValidationException(
-                listOf(ValidationDetail(path = "<body>", message = decoded.reason)),
+                listOf(ValidationDetail(path = "<body>", message = "malformed request body")),
             )
     }
 }

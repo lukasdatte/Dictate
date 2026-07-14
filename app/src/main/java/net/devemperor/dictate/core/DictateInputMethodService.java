@@ -495,7 +495,11 @@ public class DictateInputMethodService extends InputMethodService
     // id when constructing its [RealMotionSurface] wrapper.
     private ViewGroup mainButtonsClGroup;
     private MaterialButton editSettingsButton;
-    private ConstraintLayout editButtonsKeyboardLl;
+    // PeekingButtonBar since the edit-bar stopped being a ConstraintLayout
+    // chain. Only ever read as a View (ContentAreaController flips its
+    // visibility); typed as View so the field does not have to change again
+    // the next time the bar's container does.
+    private View editButtonsKeyboardLl;
     private MaterialButton recordButton;
     private MaterialButton resendButton;
     // ADR-0009 secondary-recording mic button (rendered in SEND_MODE only).

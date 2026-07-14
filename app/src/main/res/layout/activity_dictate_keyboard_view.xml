@@ -649,178 +649,164 @@
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 
-    <androidx.constraintlayout.widget.ConstraintLayout
+    <!-- ════════════════════════════════════════════════════════════
+         EDIT-BAR — the always-on button strip above the keyboard.
+
+         Was a ConstraintLayout chain of `0dp` buttons: the width was
+         divided by the button count, so every button added shrank all the
+         others. That degrades silently — past some count the icons just
+         collide — and no width ever admits that buttons exist off-screen.
+         The widget / a11y / PC toggles pushed it past that point.
+
+         PeekingButtonBar derives the slot width at measure time instead and
+         reserves a sliver of the next button whenever the row overflows, so
+         "there is more to the right" is always visible. Adding a button here
+         is now appending a child — no constraint chain to re-thread.
+
+         Slot widths are OVERWRITTEN at measure time; the `layout_width`
+         below is only the inflation-time fallback. The 4dp gap between
+         buttons is an inset, NOT a margin — margins would sit between slots
+         and break the exact `rowWidth == count * slotWidth` identity the
+         peek arithmetic relies on (see EditBarWidthCalculator).
+         ════════════════════════════════════════════════════════════ -->
+    <net.devemperor.dictate.widget.PeekingButtonBar
         android:id="@+id/edit_buttons_keyboard_ll"
         android:layout_width="0dp"
         android:layout_height="36dp"
         android:layout_marginTop="16dp"
-        android:orientation="horizontal"
+        android:clipToPadding="false"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/prompts_keyboard_cl">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_undo_btn"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:layout_width="wrap_content"
             android:layout_height="match_parent"
-            android:layout_marginStart="16dp"
-            android:layout_marginEnd="4dp"
-            android:foreground="@drawable/ic_baseline_undo_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_redo_btn"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
+            android:orientation="horizontal">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_redo_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_redo_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_cut_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_undo_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_undo_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_undo_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_cut_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_content_cut_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_copy_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_redo_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_redo_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_redo_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_copy_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_content_copy_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_paste_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_cut_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_cut_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_content_cut_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_paste_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_content_paste_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_emoji_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_copy_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_copy_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_content_copy_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_emoji_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:foreground="@drawable/ic_baseline_emoji_emotions_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_keyboard_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_paste_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_paste_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_content_paste_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_keyboard_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_numbers_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_history_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_emoji_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_emoji_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_emoji_emotions_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_history_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_history_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_audio_focus_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_keyboard_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_keyboard_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_numbers_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-        <!-- Block 2: audio-focus toggle (Edit-Bar variant). Always visible,
-             foreground icon + contentDescription are flipped at runtime via
-             MainButtonsController.refreshAudioFocusIcon(enabled). -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_audio_focus_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_volume_off_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_settings_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_history_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_history_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_history_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_settings_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_settings_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_numbers_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_audio_focus_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <!-- Audio-focus toggle (Edit-Bar variant). Always visible; the
+                 foreground icon + contentDescription are flipped at runtime
+                 via EditBarController.refreshAudioFocusIcon(enabled). -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_audio_focus_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_volume_off_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-        <!-- edit_numbers_btn — SmallMode-Toggle (Click: EditBarController
-             onSmallModeToggled, Long-press: onSingleRowModeToggled).
-             Relocated 2026-05-22 from its old position between emoji + keyboard
-             to the right edge of the bar, between settings and widget-toggle
-             (user-requested ordering). -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_numbers_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginHorizontal="4dp"
-            android:foreground="@drawable/ic_baseline_keyboard_arrow_down_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/edit_widget_toggle_btn"
-            app:layout_constraintStart_toEndOf="@+id/edit_settings_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_settings_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_settings_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-        <!-- edit_widget_toggle_btn — relocated 2026-05-22 from the main
-             action row (motion_scene_keyboard.xml widget_toggle_btn) into
-             the edit-bar. The main-row view stays in place as a GONE
-             structural placeholder (LayoutCatalog WIDGET_TOGGLE slot now
-             returns visibilityPredicate { false } in TWO_ROW + SINGLE_ROW).
-             Click handler bound by EditBarController.onWidgetToggleClicked. -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/edit_widget_toggle_btn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="16dp"
-            android:foreground="@drawable/ic_outline_change_circle_24"
-            android:foregroundGravity="center"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toEndOf="@+id/edit_numbers_btn"
-            app:layout_constraintTop_toTopOf="parent" />
+            <!-- edit_numbers_btn — SmallMode toggle (click: onSmallModeToggled,
+                 long-press: onSingleRowModeToggled). -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_numbers_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_keyboard_arrow_down_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
 
-    </androidx.constraintlayout.widget.ConstraintLayout>
+            <!-- edit_widget_toggle_btn — relocated 2026-05-22 from the main
+                 action row (motion_scene_keyboard.xml widget_toggle_btn) into
+                 the edit-bar. The main-row view stays in place as a GONE
+                 structural placeholder (LayoutCatalog WIDGET_TOGGLE slot now
+                 returns visibilityPredicate { false } in TWO_ROW + SINGLE_ROW).
+                 Click handler bound by EditBarController.onWidgetToggleClicked. -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_widget_toggle_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_outline_change_circle_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
+
+        </LinearLayout>
+    </net.devemperor.dictate.widget.PeekingButtonBar>
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/prompts_keyboard_cl"

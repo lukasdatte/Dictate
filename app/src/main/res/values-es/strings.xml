@@ -338,6 +338,8 @@
     <string name="dictate_pairing_test_no_insert">Conectado con \"%1$s\", pero no puede escribir texto automáticamente: los dictados llegan al portapapeles y deben pegarse con Ctrl+V.</string>
     <string name="dictate_windows_unreachable_msg">PC no accesible.</string>
     <string name="dictate_windows_unauthorized_msg">Emparejamiento del PC no válido: vuelve a emparejar.</string>
+    <string name="dictate_windows_clipboard_only_msg">Copiado al portapapeles del PC: pégalo allí con Ctrl+V.</string>
+    <string name="dictate_windows_review_send_btn">Enviar al PC</string>
 
     <string name="dictate_changelog_30">v3.2.0\n\n¡Esta actualización trae mejoras importantes y nuevas funciones! 🚀\n\n- Claves API separadas: Ahora puedes guardar claves API separadas para cada proveedor (OpenAI, Groq, Custom), facilitando el cambio entre ellos. 🔑\n\n- Bluetooth mejorado: La conexión con auriculares Bluetooth es ahora más rápida y fiable. 🎧\n\n- Auto Enter: Nueva opción para pulsar automáticamente Enter/Enviar tras la transcripción. ⚡\n\n- Nuevos modelos: Añadido soporte para OpenAI o1, o4-mini y GPT-5.2, con precios actualizados. 🤖\n\n- Correcciones de errores y mejoras. ✨\n\n¡Os deseo un bendecido año nuevo 2026! 🎆\n\nComo siempre, no dudes en contactarme con preguntas e ideas a través de GitHub o el botón de correo abajo. ☺️\n\n\n</string>
 

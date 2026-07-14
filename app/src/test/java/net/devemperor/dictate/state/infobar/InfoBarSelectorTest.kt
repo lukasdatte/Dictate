@@ -92,6 +92,64 @@ class InfoBarSelectorTest {
         assertEquals(InfoBarStyle.ERROR, msg.style)
     }
 
+    // ── Windows-dispatch notice producer (ADR-0019, §3.2.2) ────────────
+
+    private fun stateWithNotice(notice: net.devemperor.dictate.state.DispatchNotice): DictateUiState =
+        defaultState().copy(
+            windowsDispatch = net.devemperor.dictate.state.WindowsDispatchState(notice = notice),
+        )
+
+    @Test
+    fun `clipboard-only notice is an INFO dismiss-only item`() {
+        val items = InfoBarSelector.select(
+            stateWithNotice(net.devemperor.dictate.state.DispatchNotice.ClipboardOnly),
+        )
+        val item = items.single { it.id == "windows-dispatch:notice" }
+        assertEquals(InfoBarStyle.INFO, item.message.style)
+        assertEquals(net.devemperor.dictate.R.string.dictate_windows_clipboard_only_msg, item.message.textResId)
+        assertNull("clipboard-only is dismiss-only", item.confirmAction)
+        assertEquals(Action.WindowsDispatchAction.DismissNotice, item.dismissAction)
+    }
+
+    @Test
+    fun `unauthorized error notice is ERROR with a confirm that opens pairing`() {
+        val items = InfoBarSelector.select(
+            stateWithNotice(
+                net.devemperor.dictate.state.DispatchNotice.Error(
+                    net.devemperor.dictate.state.PipelineErrorKind.WINDOWS_UNAUTHORIZED,
+                ),
+            ),
+        )
+        val item = items.single { it.id == "windows-dispatch:notice" }
+        assertEquals(InfoBarStyle.ERROR, item.message.style)
+        assertEquals(net.devemperor.dictate.R.string.dictate_windows_unauthorized_msg, item.message.textResId)
+        assertEquals(Action.WindowsDispatchAction.OpenPairing, item.confirmAction)
+        assertEquals(Action.WindowsDispatchAction.DismissNotice, item.dismissAction)
+    }
+
+    @Test
+    fun `unreachable error notice is ERROR dismiss-only`() {
+        val items = InfoBarSelector.select(
+            stateWithNotice(
+                net.devemperor.dictate.state.DispatchNotice.Error(
+                    net.devemperor.dictate.state.PipelineErrorKind.WINDOWS_UNREACHABLE,
+                ),
+            ),
+        )
+        val item = items.single { it.id == "windows-dispatch:notice" }
+        assertEquals(InfoBarStyle.ERROR, item.message.style)
+        assertEquals(net.devemperor.dictate.R.string.dictate_windows_unreachable_msg, item.message.textResId)
+        assertNull("unreachable is dismiss-only (text held as pending part)", item.confirmAction)
+        assertEquals(Action.WindowsDispatchAction.DismissNotice, item.dismissAction)
+    }
+
+    @Test
+    fun `no notice yields no windows-dispatch item`() {
+        assertTrue(
+            InfoBarSelector.select(defaultState()).none { it.id == "windows-dispatch:notice" },
+        )
+    }
+
     // ── Overlay-Permission-Onboarding producer (Block D) ───────────────
 
     @Test

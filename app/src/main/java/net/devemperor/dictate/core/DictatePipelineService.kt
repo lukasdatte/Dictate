@@ -62,8 +62,19 @@ import net.devemperor.dictate.state.render.overlay.DefaultOverlayPermissionGate
 import net.devemperor.dictate.state.render.overlay.OverlayBackend
 import net.devemperor.dictate.state.render.overlay.OverlayPermissionGate
 import net.devemperor.dictate.state.render.overlay.OverlayPermissionObserver
+import net.devemperor.dictate.database.entity.InsertionMethod
+import net.devemperor.dictate.preferences.WindowsTarget
+import net.devemperor.dictate.shared.client.DispatchClient
+import net.devemperor.dictate.shared.sync.SyncClient
+import net.devemperor.dictate.shared.transport.OkHttpDispatchTransport
+import net.devemperor.dictate.windows.AndroidSyncSource
+import net.devemperor.dictate.windows.WindowsAutoSend
+import net.devemperor.dictate.windows.WindowsDispatchCoordinator
+import net.devemperor.dictate.windows.WindowsDispatchService
 import kotlinx.coroutines.launch
 import java.util.Locale
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Foreground Service that hosts the Dictate pipeline state container.
@@ -167,6 +178,16 @@ class DictatePipelineService : Service() {
     // orchestrator exists (it emits actions); fired on every IME bind.
     private lateinit var pipelineBindReconciliationImpl: PipelineBindReconciliation
     private lateinit var recordingRepositoryImpl: RecordingRepository
+
+    // ── Windows dispatch (ADR-0019) ────────────────────────────────────
+    //
+    // THE single dispatch primitive, built in onCreate and shared by BOTH
+    // terminal producers (the IME seam via the LocalBinder, and the headless
+    // sink below). Its own single-thread executor — NOT the JobExecutor: a
+    // dispatch is not a pipeline job and must not occupy that serialized slot
+    // (§3.1). Shut down in onDestroy.
+    private lateinit var windowsDispatchCoordinatorImpl: WindowsDispatchCoordinator
+    private lateinit var windowsDispatchExecutorImpl: ExecutorService
 
     // ── C8 — Subsystem adapters (production-quality) ───────────────────
     private lateinit var audioFocusGateImpl: AudioFocusGate
@@ -778,6 +799,52 @@ class DictatePipelineService : Service() {
             Log.e(TAG, "Registry coverage assertion failed — module(s) missing", t)
             throw t
         }
+
+        // ──────────────────────────────────────────────────────────────
+        // Windows-dispatch primitive (ADR-0019). Built HERE — after the
+        // orchestrator (it needs `emitAction`) and before the headless sink
+        // (which calls it). THE single instance: the IME reaches it through
+        // the LocalBinder, the headless sink through the field. There is no
+        // second DispatchClient and no second executor anywhere (§3.1).
+        //
+        // The transport/clients are rebuilt per call from the current
+        // WindowsTarget (the factory lambdas read the prefs lazily), so a
+        // re-pairing takes effect without rebuilding anything here.
+        // ──────────────────────────────────────────────────────────────
+        val windowsSyncSource = AndroidSyncSource(database.sessionDao(), database.textInsertionDao())
+        val windowsDispatchService = WindowsDispatchService(
+            clientFactory = { t ->
+                DispatchClient(OkHttpDispatchTransport(t.baseUrl)) { t.credentials() }
+            },
+            syncClientFactory = { t ->
+                SyncClient(
+                    DispatchClient(OkHttpDispatchTransport(t.baseUrl)) { t.credentials() },
+                    windowsSyncSource,
+                    log = { Log.i(TAG, it) },
+                )
+            },
+            logger = { Log.i(TAG, it) },
+        )
+        windowsDispatchExecutorImpl = Executors.newSingleThreadExecutor()
+        windowsDispatchCoordinatorImpl = WindowsDispatchCoordinator(
+            service = windowsDispatchService,
+            targetProvider = { WindowsTarget.from(sharedPrefs) },
+            emitAction = { action -> orchestrator.emitAction(action) },
+            // The ONE audit authority (SessionManager.logTextInsertion — the sole
+            // writer of text_insertions) with method=WINDOWS_DISPATCH + the target
+            // device id, and NO Android host package (§2.1a). Runs on the dispatch
+            // executor thread (the coordinator calls it inside executor.execute), so
+            // the DB write never touches main.
+            audit = { sessionId, text, deviceId ->
+                sessionManagerImpl.logTextInsertion(
+                    sessionId = sessionId,
+                    text = text,
+                    targetDeviceId = deviceId,
+                    method = InsertionMethod.WINDOWS_DISPATCH,
+                )
+            },
+            executor = windowsDispatchExecutorImpl,
+        )
 
         // ──────────────────────────────────────────────────────────────
         // ADR-0011 — Headless terminal fallback wiring.
@@ -1709,6 +1776,15 @@ class DictatePipelineService : Service() {
                 Log.w(TAG, "PipelineOrchestrator shutdown failed", t)
             }
         }
+        // Shut down the dedicated Windows-dispatch executor (ADR-0019, §3.1) —
+        // its own single thread, separate from the pipeline JobExecutor.
+        if (::windowsDispatchExecutorImpl.isInitialized) {
+            try {
+                windowsDispatchExecutorImpl.shutdown()
+            } catch (t: Throwable) {
+                Log.w(TAG, "Windows-dispatch executor shutdown failed", t)
+            }
+        }
         serviceScope.cancel()
         // C4-B2 — explicit notification cancel (Spec 1 §7.3 final
         // step). Idempotent: `stopSelf()` on a terminal state already
@@ -1825,6 +1901,14 @@ class DictatePipelineService : Service() {
         /** The service-owned [SessionManager]. */
         val sessionManager: SessionManager
             get() = sessionManagerImpl
+
+        /**
+         * THE service-owned [WindowsDispatchCoordinator] (ADR-0019). The IME's auto-send seam
+         * dispatches through this SAME instance the headless sink uses — one primitive, no second
+         * DispatchClient or executor in the IME (§3.1).
+         */
+        val windowsDispatchCoordinator: WindowsDispatchCoordinator
+            get() = windowsDispatchCoordinatorImpl
 
         /** The service-owned [SessionTracker]. */
         val sessionTracker: SessionTracker

@@ -649,13 +649,20 @@ class SessionManager(private val db: DictateDatabase) {
     // region Text insertion logging
 
     /**
-     * Logs a text insertion (commit or paste) into the target app.
+     * Logs a text insertion into the target app (COMMIT / PASTE into the Android host field)
+     * or, with [method] = [InsertionMethod.WINDOWS_DISPATCH], a delivery to the paired PC.
+     *
+     * This is the single writer of `text_insertions` (see MigrationTo10's retrofit note). A
+     * Windows dispatch passes [targetDeviceId] (the PC's device id) and leaves [targetAppPackage]
+     * null — the text went to no Android package (§2.1a). Every host insertion is the mirror:
+     * [targetDeviceId] null, [targetAppPackage] the host package.
      */
     fun logTextInsertion(
         sessionId: String?,
         text: String,
         replacedText: String? = null,
         targetAppPackage: String? = null,
+        targetDeviceId: String? = null,
         cursorPosition: Int? = null,
         sourceStepId: String? = null,
         sourceTranscriptionId: String? = null,
@@ -668,6 +675,7 @@ class SessionManager(private val db: DictateDatabase) {
                 insertedText = text,
                 replacedText = replacedText,
                 targetAppPackage = targetAppPackage,
+                targetDeviceId = targetDeviceId,
                 cursorPosition = cursorPosition,
                 sourceStepId = sourceStepId,
                 sourceTranscriptionId = sourceTranscriptionId,

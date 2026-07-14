@@ -5,6 +5,7 @@ import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.database.entity.SessionStatus
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
+import net.devemperor.dictate.state.DispatchNotice
 import net.devemperor.dictate.state.EngagementHint
 import net.devemperor.dictate.state.InterruptionReason
 import net.devemperor.dictate.state.PipelineErrorHint
@@ -300,6 +301,20 @@ object InfoBarSelector {
         // gives the error its authentic event timestamp.
         state.infoHints.pipelineError?.let { add(pipelineErrorItem(it)) }
 
+        // ── Windows-dispatch notice (ADR-0019, §3.2.2) ──────────────────
+        // A state-derived, dismissible notice set by a CLIPBOARD_ONLY success
+        // (INFO — the text is on the PC's clipboard, Ctrl+V there) or any
+        // dispatch failure (ERROR). WINDOWS_UNAUTHORIZED offers a confirm →
+        // the pairing screen (the pairing is invalid); WINDOWS_UNREACHABLE is
+        // dismiss-only (the text is safely held as a pending part). Because it
+        // carries no event timestamp in the state, `createdAt = Long.MAX_VALUE`
+        // ranks it like the engagement nags: it always yields to a real
+        // timestamped item (a pending-parts nudge or an error), which for a
+        // failure is the actionable "Tap to paste" — the notice is the
+        // explanation, not the recovery. A CLIPBOARD_ONLY success has no
+        // competing item, so it shows alone.
+        state.windowsDispatch.notice?.let { add(windowsDispatchNoticeItem(it)) }
+
         // ── Cancellation notice (R5, ADR-0009 / spec §3.6) ──────────────
         // The user cancelled the active run; before R5 a cancel vanished
         // without user-visible trace (F-076 deliberately keeps the
@@ -433,6 +448,48 @@ object InfoBarSelector {
         confirmAction = Action.InfoHintAction.ConfirmEngagementHint(hint),
         dismissAction = Action.InfoHintAction.DismissEngagementHint(hint),
     )
+
+    /**
+     * Build the item for a [DispatchNotice] (ADR-0019, §3.2.2). Three shapes:
+     *
+     *  - [DispatchNotice.ClipboardOnly] → INFO, dismiss-only. The text reached the PC's clipboard
+     *    (Ctrl+V there); not a failure, but the user must be told or they think it was typed.
+     *  - [DispatchNotice.Error] with [PipelineErrorKind.WINDOWS_UNAUTHORIZED] → ERROR with a confirm
+     *    that opens the pairing screen ([Action.WindowsDispatchAction.OpenPairing]); the pairing is
+     *    invalid and re-pairing is the fix.
+     *  - [DispatchNotice.Error] with [PipelineErrorKind.WINDOWS_UNREACHABLE] (or any other kind) →
+     *    ERROR, dismiss-only; the text is safely held as a pending part.
+     *
+     * Dismiss always routes through [Action.WindowsDispatchAction.DismissNotice], which clears
+     * `state.windowsDispatch.notice` — no resurrection.
+     */
+    private fun windowsDispatchNoticeItem(notice: DispatchNotice): InfoBarItem {
+        val message: InfoBarMessage
+        val confirmAction: Action?
+        when (notice) {
+            DispatchNotice.ClipboardOnly -> {
+                message = InfoBarMessage(R.string.dictate_windows_clipboard_only_msg, style = InfoBarStyle.INFO)
+                confirmAction = null
+            }
+            is DispatchNotice.Error -> when (notice.kind) {
+                PipelineErrorKind.WINDOWS_UNAUTHORIZED -> {
+                    message = InfoBarMessage(R.string.dictate_windows_unauthorized_msg, style = InfoBarStyle.ERROR)
+                    confirmAction = Action.WindowsDispatchAction.OpenPairing
+                }
+                else -> {
+                    message = InfoBarMessage(R.string.dictate_windows_unreachable_msg, style = InfoBarStyle.ERROR)
+                    confirmAction = null
+                }
+            }
+        }
+        return InfoBarItem(
+            id = "windows-dispatch:notice",
+            createdAt = Long.MAX_VALUE,
+            message = message,
+            confirmAction = confirmAction,
+            dismissAction = Action.WindowsDispatchAction.DismissNotice,
+        )
+    }
 
     // ─── B4 helpers ────────────────────────────────────────────────────
 

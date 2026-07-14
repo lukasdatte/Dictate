@@ -41,6 +41,13 @@ data class ReviewPanelViews(
  */
 class ReviewPanelRenderer(
     private val views: ReviewPanelViews,
+    /**
+     * ADR-0019 §4.2 — whether auto-send is active. When true the Insert button reads "send to PC"
+     * instead of "Insert", because the review decision (WHETHER) routes the output to the paired PC
+     * (WHERE), not the host. A supplier (not a value) so a pref toggle reflects on the next render;
+     * defaults to `{ false }` so existing callers/tests are unaffected.
+     */
+    private val autoSendActive: () -> Boolean = { false },
 ) : RenderBackend {
 
     override val backendType: BackendType? = null
@@ -57,6 +64,10 @@ class ReviewPanelRenderer(
         }
         container.visibility = View.VISIBLE
 
+        (views.insertButton as? TextView)?.setText(
+            if (autoSendActive()) R.string.dictate_windows_review_send_btn
+            else R.string.dictate_review_insert,
+        )
         views.outputView?.text = panel.output
         views.messageView?.let { mv ->
             if (panel.message.isNullOrBlank()) {

@@ -1271,6 +1271,14 @@ sealed class Action {
 
         /** The user dismissed the notice bar. */
         data object DismissNotice : WindowsDispatchAction()
+
+        /**
+         * The user confirmed a WINDOWS_UNAUTHORIZED notice ("re-pair"). Clears the notice in the
+         * reducer (like [DismissNotice]) and is intercepted by the IME side-channel to open the
+         * pairing screen — the state layer cannot start an Activity. Dismiss and this confirm must
+         * be DISTINCT actions so the side-channel can tell them apart (only confirm opens pairing).
+         */
+        data object OpenPairing : WindowsDispatchAction()
     }
 
     // ════════════════════════════════════════════════════════════════

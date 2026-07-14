@@ -25,7 +25,11 @@ object SessionEntityMapper {
      * The app's `SessionOrigin` name onto the protocol enum. A separate wire enum on purpose
      * (Dtos.kt): an app-side origin the protocol does not know lands on [SessionOriginWire.UNKNOWN]
      * instead of dragging the protocol along with an internal refactor.
+     *
+     * Public + `@JvmStatic` so the two dispatch producers (the IME seam in Java, the headless sink
+     * in Kotlin) resolve a session's wire origin through this ONE mapping — no second, drifting copy.
      */
-    private fun originToWire(origin: String): SessionOriginWire =
+    @JvmStatic
+    fun originToWire(origin: String): SessionOriginWire =
         runCatching { SessionOriginWire.valueOf(origin) }.getOrDefault(SessionOriginWire.UNKNOWN)
 }

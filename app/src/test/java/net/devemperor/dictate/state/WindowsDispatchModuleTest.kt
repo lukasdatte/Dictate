@@ -252,6 +252,25 @@ class WindowsDispatchModuleTest {
         assertNull(module.reduce(state(), Action.WindowsDispatchAction.DismissNotice, ctx()))
     }
 
+    // ── OpenPairing (ADR-0019 §3.2.2 — confirm on an unauthorized notice) ──
+
+    @Test
+    fun `openPairing_clearsNotice`() {
+        val r = module.reduce(
+            state(notice = DispatchNotice.Error(PipelineErrorKind.WINDOWS_UNAUTHORIZED)),
+            Action.WindowsDispatchAction.OpenPairing,
+            ctx(),
+        )!!
+        // Reducer only clears the notice; the Activity launch is the IME side-channel's job.
+        assertNull(r.nextState.notice)
+        assertTrue(r.sideEffects.isEmpty())
+    }
+
+    @Test
+    fun `openPairing_withoutNotice_isNoOp`() {
+        assertNull(module.reduce(state(), Action.WindowsDispatchAction.OpenPairing, ctx()))
+    }
+
     // ── Teardown cascade ──
 
     @Test

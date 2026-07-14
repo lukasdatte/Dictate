@@ -552,6 +552,10 @@ public class DictateInputMethodService extends InputMethodService
     private SessionManager sessionManager;
     private SessionTracker sessionTracker;
     private RecordingRepository recordingRepository;
+    // ADR-0019 — THE service-owned Windows-dispatch primitive, read from the
+    // binder on bind. The IME is only ONE of its producers (the headless sink
+    // is the other, §3.6); it holds no DispatchClient/executor of its own.
+    private net.devemperor.dictate.windows.WindowsDispatchCoordinator windowsDispatchCoordinator;
 
     // ===== Block 2 — DictatePipelineService bind state =====
     //
@@ -809,6 +813,7 @@ public class DictateInputMethodService extends InputMethodService
         promptService = binder.getPromptService();
         recordingRepository = binder.getRecordingRepository();
         pipelineOrchestrator = binder.getPipelineOrchestrator();
+        windowsDispatchCoordinator = binder.getWindowsDispatchCoordinator();
 
         // Register the IME-side callbacks. The bridge routes
         // PipelineOrchestrator callbacks back to this IME instance;
@@ -1923,7 +1928,9 @@ public class DictateInputMethodService extends InputMethodService
                 dictateKeyboardView.findViewById(R.id.review_message_tv),
                 dictateKeyboardView.findViewById(R.id.review_output_tv),
                 dictateKeyboardView.findViewById(R.id.review_refining_tv),
-                reviewInsertBtn, reviewRedictateBtn, reviewDiscardBtn));
+                reviewInsertBtn, reviewRedictateBtn, reviewDiscardBtn),
+            // ADR-0019 §4.2 — relabel Insert → "send to PC" in auto-send mode.
+            this::isWindowsAutoSendActive);
         if (reviewInsertBtn != null) reviewInsertBtn.setOnClickListener(v -> onReviewInsertClicked());
         if (reviewRedictateBtn != null) reviewRedictateBtn.setOnClickListener(v -> onReviewRedictateClicked());
         if (reviewDiscardBtn != null) reviewDiscardBtn.setOnClickListener(v -> onReviewDiscardClicked());
@@ -4799,6 +4806,41 @@ public class DictateInputMethodService extends InputMethodService
                             new net.devemperor.dictate.state.Action.ReviewPanelAction.Show(sid, text, review.getMessage()),
                             "ReviewPanel.Show");
                 }
+            } else if (isWindowsAutoSendActive()) {
+                // ADR-0019 — Auto-send-to-Windows. THE docking point the K7-seam
+                // comment (Gate 1) reserved, now live. The IME is only ONE of two
+                // producers (the headless sink is the other, §3.6); BOTH call the
+                // SAME windowsDispatchCoordinator.dispatch(...) — there is no second
+                // code path, no IME-owned DispatchClient or executor.
+                //
+                // V2 (D4-hotfix): PipelineDone MUST fire, or the keyboard sticks in
+                // SEND_MODE and the next StartRecording hits a stale FSM. We dispatch
+                // it FIRST and SYNCHRONOUSLY, before the HTTP call. awaitingDispatch=true
+                // means: the ADR-0009 queue drains, but NEITHER MarkSessionInserted NOR
+                // AddPendingInsertSession fires — WindowsDispatchModule resolves the
+                // acknowledge once the HTTP call returns.
+                //
+                // V3 (#AE-DEEP): irrelevant — we do NOT commit into the host here, so
+                // isAutoEnterActive() is never read. Do NOT "repair" this into a commit.
+                //
+                // V4 (R4 / ADR-0009 §3.5): NO pending-part flush. Older pending parts are
+                // host-directed; flushing them into the host while the fresh text goes to
+                // the PC would be the wrong order in both targets. The consequence (global
+                // dictation order can fray on mixed success/failure) is documented in
+                // ADR-0019 Consequences → Negative.
+                if (sid != null) {
+                    dispatchPipelineActionToOrchestrator(
+                            new net.devemperor.dictate.state.Action.PipelineAction.PipelineDone(
+                                    sid, text, false, false, true),
+                            "PipelineDone(awaitingDispatch)");
+                    // acknowledgeOnSuccess = true: a freshly finished session is by
+                    // definition uninserted — a success MUST acknowledge it, or the
+                    // findPendingInsertion recovery re-surfaces it on the next cold boot.
+                    // Text is `text` (V5: the one text source — the seam already holds it).
+                    windowsDispatchCoordinator.dispatch(
+                            sid, text, sessionCreatedAt(sid), originOf(sid),
+                            /* acknowledgeOnSuccess = */ true, /* surfacedAsPending = */ false);
+                }
             } else {
                 // RESERVED SEAM — Auto-send-to-Windows dispatch (M1/M4, later
                 // Windows package) docks HERE, at the terminal delivery point of
@@ -4868,6 +4910,42 @@ public class DictateInputMethodService extends InputMethodService
                 }
             }
         });
+    }
+
+    /**
+     * ADR-0019 — the single gate at the IME seam: the auto-send toggle is on AND a PC is paired
+     * ({@link net.devemperor.dictate.windows.WindowsAutoSend#shouldAutoSend}), AND the service-owned
+     * coordinator is bound. When false the terminal {@code else} branch runs unchanged (host commit),
+     * so a not-yet-bound coordinator falls through to the safe legacy path.
+     */
+    private boolean isWindowsAutoSendActive() {
+        return windowsDispatchCoordinator != null
+                && net.devemperor.dictate.windows.WindowsAutoSend.INSTANCE.shouldAutoSend(sp);
+    }
+
+    /**
+     * The session's {@code created_at}, read from the DB (single-row PK lookup). Falls back to the
+     * wall clock if the row is missing — the dispatch still carries a sane timestamp, and a missing
+     * row is impossible on the terminal path (the pipeline just wrote it).
+     */
+    private long sessionCreatedAt(String sessionId) {
+        net.devemperor.dictate.database.entity.SessionEntity s =
+                sessionManager != null ? sessionManager.getSessionById(sessionId) : null;
+        return s != null ? s.getCreatedAt() : System.currentTimeMillis();
+    }
+
+    /**
+     * The session's wire origin, resolved through the ONE mapping authority
+     * ({@link net.devemperor.dictate.windows.SessionEntityMapper#originToWire}) — the same one the
+     * headless sink uses, so the two producers never disagree.
+     */
+    private net.devemperor.dictate.shared.protocol.SessionOriginWire originOf(String sessionId) {
+        net.devemperor.dictate.database.entity.SessionEntity s =
+                sessionManager != null ? sessionManager.getSessionById(sessionId) : null;
+        String origin = s != null
+                ? s.getOrigin()
+                : net.devemperor.dictate.database.entity.SessionOrigin.KEYBOARD.name();
+        return net.devemperor.dictate.windows.SessionEntityMapper.originToWire(origin);
     }
 
     @Override
@@ -4993,8 +5071,20 @@ public class DictateInputMethodService extends InputMethodService
         // stale event can never double-commit an about-to-be-refined output.
         if (panel == null || !panel.getOpen() || panel.getRefining()
                 || panel.getRefinementRecording() || reviewRefinementTargetSessionId != null) return;
-        insertionService().insert(new InsertionRequest(
-                panel.getOutput(), InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE, null, panel.getSessionId()));
+        String reviewSid = panel.getSessionId();
+        if (isWindowsAutoSendActive() && reviewSid != null) {
+            // ADR-0019 §4.2 — review decides WHETHER text is committed; auto-send decides
+            // WHERE. The refined output goes to the PC, not the host. The ReviewPanelAction.Insert
+            // below already closes the panel and acknowledges (markInserted), so the coordinator
+            // runs with acknowledgeOnSuccess = false (it must NOT re-acknowledge). On failure the
+            // coordinator surfaces the text as a pending part — the ADR-0011 fallback, unchanged.
+            windowsDispatchCoordinator.dispatch(
+                    reviewSid, panel.getOutput(), sessionCreatedAt(reviewSid), originOf(reviewSid),
+                    /* acknowledgeOnSuccess = */ false, /* surfacedAsPending = */ false);
+        } else {
+            insertionService().insert(new InsertionRequest(
+                    panel.getOutput(), InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE, null, panel.getSessionId()));
+        }
         dispatchPipelineActionToOrchestrator(
                 net.devemperor.dictate.state.Action.ReviewPanelAction.Insert.INSTANCE, "ReviewPanel.Insert");
     }
@@ -5275,7 +5365,8 @@ public class DictateInputMethodService extends InputMethodService
                             final String pkg = editor != null ? editor.packageName : null;
                             dbExecutor.execute(() -> {
                                 sessionManager.logTextInsertion(fSessionId, text, replaced, pkg,
-                                        null, fStepId, fTranscriptionId, InsertionMethod.COMMIT);
+                                        /* targetDeviceId = */ null, null, fStepId, fTranscriptionId,
+                                        InsertionMethod.COMMIT);
                                 if (fSessionId != null) {
                                     sessionManager.updateFinalOutputText(fSessionId, text);
                                 }
@@ -5561,6 +5652,16 @@ public class DictateInputMethodService extends InputMethodService
                 case DONATE:
                     openUrlInBrowser(DONATE_URL);
                     break;
+            }
+        } else if (action == net.devemperor.dictate.state.Action.WindowsDispatchAction.OpenPairing.INSTANCE) {
+            // ADR-0019 §3.2.2 — the user confirmed a WINDOWS_UNAUTHORIZED notice; open the pairing
+            // screen so they can re-pair. The reducer already cleared the notice.
+            try {
+                Intent intent = new Intent(this, net.devemperor.dictate.settings.WindowsPairingActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            } catch (Exception e) {
+                Log.w("DictateIME", "Failed to launch Windows pairing screen", e);
             }
         }
     }

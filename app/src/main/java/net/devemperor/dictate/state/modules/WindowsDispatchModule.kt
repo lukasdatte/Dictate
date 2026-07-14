@@ -152,6 +152,11 @@ object WindowsDispatchModule :
 
         Action.WindowsDispatchAction.DismissNotice ->
             if (state.notice != null) TransitionResult(state.copy(notice = null), emptyList()) else null
+
+        // Clears the notice like DismissNotice; the Activity launch is the IME side-channel's job
+        // (keyed on this distinct action type — the reducer only owns state).
+        Action.WindowsDispatchAction.OpenPairing ->
+            if (state.notice != null) TransitionResult(state.copy(notice = null), emptyList()) else null
     }
 
     override fun runEffect(effect: Effect, services: ModuleServices) {

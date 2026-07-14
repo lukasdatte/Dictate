@@ -31,6 +31,7 @@ class KeyboardHistoryAdapterBindTest {
     private lateinit var ctx: Context
     private val inserts = mutableListOf<Pair<String, Boolean>>()
     private val sends = mutableListOf<Pair<String, Boolean>>()
+    private val details = mutableListOf<String>()
     private val callback = object : KeyboardHistoryAdapter.Callback {
         override fun onInsert(session: SessionEntity, pending: Boolean) {
             inserts += session.id to pending
@@ -38,6 +39,10 @@ class KeyboardHistoryAdapterBindTest {
 
         override fun onSendToWindows(session: SessionEntity, pending: Boolean) {
             sends += session.id to pending
+        }
+
+        override fun onOpenDetail(session: SessionEntity) {
+            details += session.id
         }
     }
     private lateinit var adapter: KeyboardHistoryAdapter
@@ -94,6 +99,14 @@ class KeyboardHistoryAdapterBindTest {
         assertTrue(h.insertButton.isEnabled)
         h.insertButton.performClick()
         assertEquals(listOf("s1" to true), inserts)
+    }
+
+    @Test
+    fun `row body tap opens the detail view`() {
+        val h = holder()
+        adapter.bindRow(h, session(id = "s5"))
+        h.itemView.performClick()
+        assertEquals(listOf("s5"), details)
     }
 
     @Test

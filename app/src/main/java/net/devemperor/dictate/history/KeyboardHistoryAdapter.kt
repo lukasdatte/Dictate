@@ -43,6 +43,13 @@ class KeyboardHistoryAdapter(
         fun onInsert(session: SessionEntity, pending: Boolean)
 
         /**
+         * The row body (not an action button) was tapped — open the full-text detail
+         * view for [session] (Block B). The buttons keep their own listeners, so a tap
+         * on Insert/Send does not open the detail.
+         */
+        fun onOpenDetail(session: SessionEntity)
+
+        /**
          * ADR-0014's reserved hook, now live (ADR-0019): send [session]'s final output to the
          * paired PC. [pending] mirrors [SessionEntity.isPendingInsertion] — it drives both the
          * acknowledge and the pending-part cleanup in the dispatch coordinator.
@@ -71,6 +78,10 @@ class KeyboardHistoryAdapter(
         holder.pendingDot.visibility = if (pending) View.VISIBLE else View.GONE
         holder.dateView.text = dateFormat.format(Date(session.createdAt))
         holder.previewView.text = session.finalOutputText ?: session.inputText ?: ""
+
+        // Row-body short-press opens the full-text detail (Block B). The action buttons
+        // below keep their own listeners, so tapping Insert/Send does not open the detail.
+        holder.itemView.setOnClickListener { callback.onOpenDetail(session) }
 
         val hasText = session.hasInsertableText()
         holder.insertButton.isEnabled = hasText

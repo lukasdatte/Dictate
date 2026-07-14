@@ -562,6 +562,91 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintBottom_toBottomOf="parent" />
 
+        <!-- Full-text detail (Block B, option B-ii). Shown IN PLACE of the list+handle
+             when a row is short-pressed (history_panel.detailSessionId != null). The
+             HistoryPanelRenderer toggles list vs detail visibility; the IME loads the
+             full text via getFinalOutput and reuses the list Insert/Send handlers; Back
+             dispatches CloseDetail. Own capped height (wrap_content, like the review
+             panel) so a long text scrolls within bounds. GONE by default. -->
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/history_panel_detail_group"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:background="?attr/colorSurface"
+            android:visibility="gone"
+            app:layout_constraintTop_toBottomOf="@id/history_panel_title_tv"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            tools:visibility="gone">
+
+            <ScrollView
+                android:id="@+id/history_panel_detail_scroll"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fillViewport="true"
+                app:layout_constrainedHeight="true"
+                app:layout_constraintHeight_max="@dimen/dictate_history_panel_detail_max"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent">
+
+                <TextView
+                    android:id="@+id/history_panel_detail_tv"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="15sp"
+                    android:textColor="?attr/colorOnSurface"
+                    android:textIsSelectable="true"
+                    tools:text="The full text of the selected history item." />
+            </ScrollView>
+
+            <LinearLayout
+                android:id="@+id/history_panel_detail_buttons"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                app:layout_constraintTop_toBottomOf="@id/history_panel_detail_scroll"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/history_panel_detail_back_btn"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/dictate_history_panel_back" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/history_panel_detail_send_btn"
+                    style="@style/Widget.Material3.Button.TextButton.Icon"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="4dp"
+                    android:minWidth="0dp"
+                    android:insetLeft="0dp"
+                    android:insetRight="0dp"
+                    android:contentDescription="@string/dictate_windows_send_btn"
+                    app:icon="@drawable/ic_baseline_send_24"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/history_panel_detail_insert_btn"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/dictate_history_panel_insert" />
+            </LinearLayout>
+        </androidx.constraintlayout.widget.ConstraintLayout>
+
     </androidx.constraintlayout.widget.ConstraintLayout>
 
     <androidx.constraintlayout.widget.ConstraintLayout

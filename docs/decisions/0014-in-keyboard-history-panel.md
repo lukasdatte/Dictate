@@ -222,6 +222,9 @@ keep their axes; history reprocess/regenerate (ADR-0012) is untouched.
 ## References
 
 - **Related ADRs:**
+  - ADR-0019 — Auto-Send (realizes this ADR's reserved "Send to Windows" per-row
+    button + the `onSendToWindows` hook — see the 2026-07-14 Decision-History entry)
+  - ADR-0020 — Lazy-Sync (excludes the `REVIEW_REFINEMENT` carrier this ADR tags)
   - ADR-0013 — Ambiguity Modes and the In-Keyboard Review Panel (the axis +
     LayoutMode precedent; the `REVIEW_REFINEMENT` carrier this ADR finally tags;
     review outranks history in `forKeyboard`)
@@ -302,3 +305,31 @@ out of the immutable snapshot while still letting `forKeyboard` swap the surface
 queryable `REVIEW_REFINEMENT` origin is the sustainable marker under the project's
 Double-Enum discipline, and the CHECK-widening recreate discharges the last
 `sessions` Double-Enum debt at no extra cost.
+
+### 2026-07-14 — The reserved "Send to Windows" per-row button is realized (ADR-0019)
+
+**Trigger:** The Windows-Dispatch work package (ADR-0019) implemented the second per-row
+action this ADR reserved in its Follow-ups ("Send to Windows" — the GONE slot + the
+documented `Callback.onSendToWindows` hook).
+
+**Before:** `item_keyboard_history.xml` held an `item_kbd_history_send_btn` that was
+always `GONE`, and `KeyboardHistoryAdapter.Callback` documented `onSendToWindows` only
+as a commented-out reserved hook. A history row exposed a single action, "Insert".
+
+**After:** `Callback.onSendToWindows(session, pending)` is live, and the adapter takes a
+`windowsTargetPaired` flag: the send slot is `VISIBLE` only when a PC is paired
+(`WindowsTarget.from(sp) != null`) and `GONE` otherwise, so an unpaired install keeps
+the exact pre-ADR-0019 layout. It is an icon button (the row is narrow; the label lives
+in `contentDescription`), disabled for text-less rows exactly like Insert. The IME
+handler `onKeyboardHistorySendClicked` routes through the **same**
+`WindowsDispatchCoordinator.dispatch(...)` primitive as the IME seam and the headless
+sink — one send, one reducer, one acknowledge — with `acknowledgeOnSuccess = pending`
+and `surfacedAsPending = pending` so a still-uninserted row is dismissed (removed +
+acknowledged) on success and an already-inserted row is a pure re-send that leaves
+`inserted_at` untouched. The review⇄history mutex is unchanged. `KeyboardHistoryAdapterBindTest`'s
+old GONE assertion was rewritten into visibility/enabled/callback tests.
+
+**Reasoning:** Reusing the reserved slot + hook (rather than a new surface) kept the
+change local to the adapter + one handler. Routing the send through the shared dispatch
+primitive — not a bespoke acknowledge branch — is what prevents a second acknowledge
+channel and the ghost-pending gap ADR-0019 documents. See ADR-0019.

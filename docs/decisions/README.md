@@ -80,6 +80,12 @@ editing rules".
 | [0012](0012-pipeline-post-processing-conversation.md) | Pipeline — Post-Processing as a Persisted Multi-Turn Conversation | service, state, ai · *Project-Wide* | Accepted | 2026-07-12 |
 | [0013](0013-review-panel-and-ambiguity-modes.md) | Ambiguity Modes and the In-Keyboard Review Panel | state, ai, ui-rendering, service · *Project-Wide* | Accepted | 2026-07-12 |
 | [0014](0014-in-keyboard-history-panel.md) | In-Keyboard History Panel — a Paged List Surface in the IME | state, ui-rendering, service · *Project-Wide* | Accepted | 2026-07-12 |
+| [0015](0015-companion-monorepo-topology.md) | Companion Monorepo Topology — shared/ (JVM) + companion/ (Compose Desktop) | build, architecture · *Project-Wide* | Accepted | 2026-07-14 |
+| [0016](0016-wire-protocol-typed-dtos-konform.md) | Wire Protocol — Typed DTOs, Konform Validation as SSoT, Protocol Versioning | protocol, architecture · *Project-Wide* | Accepted | 2026-07-14 |
+| [0017](0017-client-server-roles-transport-pairing.md) | Client/Server Role Split, Transport, and Pairing over Tailscale | protocol, security · *Project-Wide* | Accepted | 2026-07-14 |
+| [0018](0018-windows-text-insertion-port.md) | Windows Text Insertion Behind a Port — Clipboard + SendInput(Ctrl+V) via JNA | companion, platform | Accepted | 2026-07-14 |
+| [0019](0019-auto-send-terminal-pipeline-outcome.md) | Auto-Send as a Third Terminal Pipeline Outcome — Two Producers, One Dispatch Primitive | state, service · *Project-Wide* | Accepted | 2026-07-14 |
+| [0020](0020-lazy-cursor-sync.md) | Lazy-Sync — Cursor-Based, Idempotent Delta Upserts with the Phone Authoritative | protocol, data | Accepted | 2026-07-14 |
 
 ## Relationship graph
 

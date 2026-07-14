@@ -104,6 +104,9 @@ is its own decision and its own work package, not something to bolt onto a relea
 
 - ADR-0017 — the companion is the only server; the 200 is the delivery confirmation
 - ADR-0018 — Windows insertion behind a port; `CLIPBOARD_ONLY` is a success with a hint
+- ADR-0019 — auto-send + the pending-part fallback and the history-row re-send (checklist #3, #4, #10)
+- ADR-0020 — lazy cursor sync (the PC's derived history copy; triggered after dispatch and at app start)
+- `docs/architecture/windows-dispatch/README.md` — the cross-cutting subsystem overview
 - `companion/src/main/kotlin/.../platform/windows/Win32TextInserter.kt` — the insertion policy and
   its three deliberate imperfections
 - `companion/src/main/kotlin/.../platform/windows/WinRegistryAutostart.kt` — the Run-key contract

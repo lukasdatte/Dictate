@@ -218,16 +218,17 @@ The following columns follow this pattern:
 |-------|--------|------------|----------|
 | `sessions` | `status` | `SessionStatus` | `database/entity/SessionStatus.kt` |
 | `sessions` | `origin` | `SessionOrigin` | `database/entity/SessionOrigin.kt` |
+| `sessions` | `type` | `SessionType` | `database/entity/SessionType.kt` (CHECK added in schema v9, `MigrationTo9`) |
 | `sessions` | `last_error_type` | `AIProviderException.ErrorType` (reused) | `ai/AIProviderException.kt` |
 | `processing_steps` | `status` | `StepStatus` | `database/entity/StepStatus.kt` |
+| `processing_steps` | `step_type` | `StepType` | `database/entity/StepType.kt` (CHECK added in schema v8, `MigrationTo8`) |
+| `text_insertions` | `insertion_method` | `InsertionMethod` | `database/entity/InsertionMethod.kt` (CHECK added in schema v10, `MigrationTo10`, alongside the new value `WINDOWS_DISPATCH` — ADR-0019) |
 
 Columns that should be retrofitted to this pattern when next touched:
 
-| Table | Column | Current state |
-|-------|--------|---------------|
-| `sessions` | `type` | Plain String, values from `SessionType` enum but no CHECK |
-| `processing_steps` | `step_type` | Plain String, values from `StepType` enum but no CHECK |
-| `insertion_log` | `insertion_method` | Plain String, values from `InsertionMethod` enum but no CHECK |
+*None.* The last three retrofit debts were discharged in successive migrations: `processing_steps.step_type` (v8), `sessions.type` (v9), and `text_insertions.insertion_method` (v10, which also widened it with `WINDOWS_DISPATCH` and added `target_device_id` — a `CHECK` can only change via a table recreate, so a new enum value *is* the "next touched" event). Every finite-set column now carries its Double-Enum `CHECK`. Room's `validateMigration` ignores `CHECK` constraints, so these stay invisible to schema validation exactly as the existing `status`/`origin` CHECKs do.
+
+`target_device_id` (added in v10) is deliberately NOT a Double-Enum column: a device id is an open vocabulary (a UUID), like `target_app_package` — the pattern explicitly does not apply to open vocabularies.
 
 ---
 

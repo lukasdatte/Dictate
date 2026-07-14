@@ -229,6 +229,9 @@ conversation (ADR-0012) and is unchanged.
 ## References
 
 - **Related ADRs:**
+  - ADR-0019 — Auto-Send (adds `PipelineDone`'s third terminal outcome
+    `awaitingDispatch` beside `heldForReview`; review-Insert routes to the PC in
+    auto-send mode — see the 2026-07-14 Decision-History entry)
   - ADR-0012 — Post-Processing Conversation (conversation foundation + `{message,
     output}` wire format this extends)
   - ADR-0011 — Headless Completion Fallback (`getFinalOutput`, `committed=false`
@@ -406,3 +409,33 @@ part (reusing the `SurfacePendingPart` teardown channel) when it holds a
 finished-but-uninserted result that must degrade to a pending part rather than
 vanish. Both are expressed in the reducers/cascades so no IME call-site ordering
 can violate them. The complementary info-bar suppression lives in ADR-0006.
+
+### 2026-07-14 — PipelineDone gains a third terminal outcome; review-Insert routes to the PC in auto-send mode (ADR-0019)
+
+**Trigger:** The Windows-Dispatch work package (ADR-0019) added auto-send-to-PC as a
+terminal pipeline outcome, modelled directly on this ADR's `heldForReview` flag.
+
+**Before:** `PipelineDone` carried two terminal shapes: `committed` (text went into the
+host field → `MarkSessionInserted`) and `heldForReview` (the review panel owns the
+surface → no acknowledge yet). The review panel's "Insert" always committed the
+refined output into the Android host field via `InsertionService`.
+
+**After:** `PipelineDone` has a **third** terminal outcome, `awaitingDispatch`, parallel
+to `heldForReview`: the reducer arm emits neither `MarkSessionInserted` nor
+`AddPendingInsertSession`, the ADR-0009 queue still drains, and a new `windowsDispatch`
+axis holds the session in-flight until the HTTP result resolves it. The arm checks
+`awaitingDispatch` **before** `committed`, so `committed=false && awaitingDispatch=true`
+produces no pending part (a reducer test pins this precedence). `heldForReview &&
+awaitingDispatch` is impossible (review precedes sending). Separately, the review
+panel's "Insert" now branches on the auto-send gate: in auto-send mode the refined
+output goes to the **PC** (via `WindowsDispatchCoordinator.dispatch(...)`), not the
+host, and the button label reads "Send to PC". Because `ReviewPanelAction.Insert`
+already acknowledges (closes the panel + `markInserted`), the dispatch runs with
+`acknowledgeOnSuccess=false` — it must not re-acknowledge. The clean rule: **review
+decides *whether* text is delivered; auto-send decides *where*** — two orthogonal axes,
+no cross-product of special cases.
+
+**Reasoning:** Reusing the `heldForReview` shape kept the terminal path uniform — one
+more guard-free, non-terminal follow-up family instead of a new terminal producer.
+The `acknowledgeOnSuccess=false` split avoids a double `markInserted` on the same
+session. See ADR-0019 for the full design.

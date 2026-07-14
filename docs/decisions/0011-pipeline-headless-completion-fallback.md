@@ -237,6 +237,9 @@ or a headless dispatch.
 - **Related Spec:** [External Dictation Entry Points](../research/2026-07-09 - external-dictation-entry-points.md)
   §6.1 (Known Limitation, now RESOLVED) + decision-log D3 (deferred → implemented)
 - **Related ADRs:**
+  - ADR-0019 — Auto-Send (the headless sink's third mode + a fourth pending-part
+    producer; the terminal guard and bind-reconciliation stay doubly excluded — see
+    the 2026-07-14 Decision-History entry)
   - ADR-0003 — Service Foreground Pipeline Architecture (FGS host; pipeline is IME-independent)
   - ADR-0009 — Ordered Run-Queue with Serialized Execution (`committed=false`
     deferred insertion + `nextAfterTerminal` queue drain)
@@ -365,3 +368,35 @@ producers therefore still holds verbatim.
 idempotent" failure-mode argument as the whole story once a mutating upsert
 exists on the same axis. The recovery/reconciliation guarantees are unaffected
 because they do not use the mutating primitive.
+
+### 2026-07-14 — Headless sink gains a third mode + a fourth pending-part producer (ADR-0019 auto-send)
+
+**Trigger:** The Windows-Dispatch work package (ADR-0019) made auto-send-to-PC a
+terminal pipeline outcome at **both** producers — including the headless sink this
+ADR owns, so that a widget/QS-tile/shortcut dictation (no bound IME) can go to the PC.
+
+**Before:** The headless sink had exactly two arms: `onCompleted` →
+`PipelineDone(committed=false)` → pending part, and `onFailed` → `PipelineFailed`.
+The only producers of pending parts were the three enumerated in this ADR.
+
+**After:** `onCompleted` now branches on `WindowsAutoSend.shouldAutoSend(sp)`. When
+auto-send is active it emits `PipelineDone(committed=false, awaitingDispatch=true)`
+and calls `WindowsDispatchCoordinator.dispatch(...)` (the service-owned primitive);
+the plain `committed=false` → pending-part path is otherwise **byte-identical** to
+before. A **fourth** pending-part producer now exists — a *dispatch failure* (and the
+IME-teardown cascade) surfaces the text as a pending part via the same `AddOne`,
+deduped by sessionId. Two contracts of this ADR are explicitly preserved: (1) the
+"no headless text commit" rule holds **verbatim** — a dispatch to the PC is **not** a
+text commit into an `InputConnection`; text commit stays IME-exclusive. (2) The
+`PipelineTerminalDispatchGuard` is untouched by auto-send: the bridge still consumes
+it **before** the sink runs, so exactly-once is preserved and the bind-reconciliation
+(Decision 2) stays **doubly** excluded — the guard is already consumed (`tryConsume`
+→ `false`) **and** `PipelineDone(awaitingDispatch)` drives the FSM to `Idle` (it runs
+`nextAfterTerminal`), which reconciliation never re-touches (it only acts on
+`Preparing`/`Running`).
+
+**Reasoning:** The strongest auto-send case is conceptually the headless one ("I
+dictate via the widget, the text should land on my PC"), so deferring it would have
+left the weakest coverage where the need is greatest. Routing it through the same
+service-owned primitive — instead of a fourth terminal producer — is what keeps
+exactly-once intact. See ADR-0019 for the full two-producer design.

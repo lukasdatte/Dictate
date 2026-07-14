@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- In-keyboard history-panel row (ADR-0014). A pending marker + date + preview
-     on the left, and an action-button column on the right. The column is laid
-     out to hold a second button ("Send to Windows") in a later package — the
-     reserved `item_kbd_history_send_btn` is GONE for now. -->
+     on the left, and an action-button column on the right. The column holds a
+     second button ("Send to Windows", ADR-0019); `item_kbd_history_send_btn`
+     starts GONE and the adapter makes it VISIBLE only when a PC is paired. -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
@@ -65,16 +65,24 @@
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent">
 
-        <!-- RESERVED for the Windows-dispatch package (ADR-0014 follow-up). GONE. -->
+        <!-- "Send to Windows" (ADR-0019). Icon-only to fit the narrow keyboard row;
+             the label lives in contentDescription. Starts GONE — the adapter makes
+             it VISIBLE only when a PC is paired. -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/item_kbd_history_send_btn"
-            style="@style/Widget.Material3.Button.TextButton"
+            style="@style/Widget.Material3.Button.TextButton.Icon"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginEnd="4dp"
             android:minWidth="0dp"
+            android:insetLeft="0dp"
+            android:insetRight="0dp"
+            android:contentDescription="@string/dictate_windows_send_btn"
+            app:icon="@drawable/ic_baseline_send_24"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
             android:visibility="gone"
-            tools:visibility="gone" />
+            tools:visibility="visible" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/item_kbd_history_insert_btn"

@@ -18,10 +18,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * ADR-0014: binds a row of the in-keyboard history adapter against the real
- * inflated `item_keyboard_history` layout (via the extracted `bindRow`, so the
- * Paging machinery is not needed). Verifies the pending marker, the insert
- * callback, the text-less disable gate, and the reserved (GONE) send slot.
+ * ADR-0014 / ADR-0019: binds a row of the in-keyboard history adapter against the
+ * real inflated `item_keyboard_history` layout (via the extracted `bindRow`, so the
+ * Paging machinery is not needed). Verifies the pending marker, the insert callback,
+ * the text-less disable gate, and the per-row "Send to Windows" slot — GONE when no
+ * PC is paired, VISIBLE + wired when one is.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -29,9 +30,14 @@ class KeyboardHistoryAdapterBindTest {
 
     private lateinit var ctx: Context
     private val inserts = mutableListOf<Pair<String, Boolean>>()
+    private val sends = mutableListOf<Pair<String, Boolean>>()
     private val callback = object : KeyboardHistoryAdapter.Callback {
         override fun onInsert(session: SessionEntity, pending: Boolean) {
             inserts += session.id to pending
+        }
+
+        override fun onSendToWindows(session: SessionEntity, pending: Boolean) {
+            sends += session.id to pending
         }
     }
     private lateinit var adapter: KeyboardHistoryAdapter
@@ -46,6 +52,9 @@ class KeyboardHistoryAdapterBindTest {
         adapter = KeyboardHistoryAdapter(callback)
         parent = FrameLayout(ctx)
     }
+
+    /** An adapter that shows the send slot (a PC is paired). */
+    private fun pairedAdapter() = KeyboardHistoryAdapter(callback, windowsTargetPaired = true)
 
     private fun holder(): KeyboardHistoryAdapter.ViewHolder {
         val view = LayoutInflater.from(ctx).inflate(R.layout.item_keyboard_history, parent, false)
@@ -104,9 +113,43 @@ class KeyboardHistoryAdapterBindTest {
     }
 
     @Test
-    fun `reserved send-to-windows slot is gone`() {
-        val view = LayoutInflater.from(ctx).inflate(R.layout.item_keyboard_history, parent, false)
-        val sendBtn = view.findViewById<View>(R.id.item_kbd_history_send_btn)
-        assertEquals(View.GONE, sendBtn.visibility)
+    fun `send slot is gone when no PC is paired`() {
+        val h = holder()
+        adapter.bindRow(h, session(insertedAt = null))
+        assertEquals(View.GONE, h.sendButton.visibility)
+        // No callback wiring on an unpaired install, even for a text-bearing row.
+        h.sendButton.performClick()
+        assertTrue(sends.isEmpty())
+    }
+
+    @Test
+    fun `send slot is visible and forwards session and pending flag when paired`() {
+        val paired = pairedAdapter()
+        val h = holder()
+        paired.bindRow(h, session(id = "s1", insertedAt = null))
+        assertEquals(View.VISIBLE, h.sendButton.visibility)
+        assertTrue(h.sendButton.isEnabled)
+        h.sendButton.performClick()
+        assertEquals(listOf("s1" to true), sends)
+    }
+
+    @Test
+    fun `send slot forwards pending=false for an already-inserted row`() {
+        val paired = pairedAdapter()
+        val h = holder()
+        paired.bindRow(h, session(id = "s2", insertedAt = 123L))
+        h.sendButton.performClick()
+        assertEquals(listOf("s2" to false), sends)
+    }
+
+    @Test
+    fun `text-less row disables the send button and fires no callback when paired`() {
+        val paired = pairedAdapter()
+        val h = holder()
+        paired.bindRow(h, session(status = SessionStatus.RECORDING, finalOutput = null, input = null))
+        assertEquals(View.VISIBLE, h.sendButton.visibility)
+        assertFalse(h.sendButton.isEnabled)
+        h.sendButton.performClick()
+        assertTrue(sends.isEmpty())
     }
 }

@@ -18,25 +18,36 @@ import net.devemperor.dictate.database.entity.SessionEntity
  * Paged adapter for the in-keyboard history panel (ADR-0014).
  *
  * Renders one [SessionEntity] per row: a pending marker (for uninserted
- * completed rows), the date, a text preview, and an "Insert" action. The action
- * row is laid out to hold a second button ("Send to Windows") in a later package
- * — see [Callback].
+ * completed rows), the date, a text preview, an "Insert" action, and — once a
+ * PC is paired — a "Send to Windows" action (ADR-0019).
  *
- * The Insert button is disabled for rows with no insertable text
+ * The reserved second button in the action column is now live: it is VISIBLE
+ * only while [windowsTargetPaired] is true (a companion is paired) and GONE
+ * otherwise, so an unpaired install sees the exact pre-ADR-0019 layout. Both
+ * actions are disabled for rows with no insertable text
  * ([SessionEntity.hasInsertableText]); `getFinalOutput` stays authoritative at
  * click time.
  */
 class KeyboardHistoryAdapter(
     private val callback: Callback,
+    /**
+     * Whether a Windows companion is paired ([net.devemperor.dictate.preferences.WindowsTarget]
+     * non-null). When false the per-row "Send to Windows" slot stays GONE — the one gate that
+     * keeps the button out of an unpaired install's layout (ADR-0019 / ADR-0014 §6).
+     */
+    private val windowsTargetPaired: Boolean = false,
 ) : PagingDataAdapter<SessionEntity, KeyboardHistoryAdapter.ViewHolder>(DIFF_CALLBACK) {
 
     interface Callback {
         /** "Insert" tapped for [session]; [pending] mirrors [SessionEntity.isPendingInsertion]. */
         fun onInsert(session: SessionEntity, pending: Boolean)
 
-        // RESERVED for the Windows-dispatch package (ADR-0014 follow-up), docking
-        // at the GONE `item_kbd_history_send_btn` slot — do NOT implement in Paket 3:
-        // fun onSendToWindows(session: SessionEntity)
+        /**
+         * ADR-0014's reserved hook, now live (ADR-0019): send [session]'s final output to the
+         * paired PC. [pending] mirrors [SessionEntity.isPendingInsertion] — it drives both the
+         * acknowledge and the pending-part cleanup in the dispatch coordinator.
+         */
+        fun onSendToWindows(session: SessionEntity, pending: Boolean)
     }
 
     private val dateFormat = SimpleDateFormat("dd.MM.yyyy, HH:mm", Locale.getDefault())
@@ -66,6 +77,18 @@ class KeyboardHistoryAdapter(
         holder.insertButton.setOnClickListener(
             if (hasText) View.OnClickListener { callback.onInsert(session, pending) } else null
         )
+
+        // The reserved second action (ADR-0019): only present once a PC is paired, and — like
+        // Insert — disabled for text-less rows. GONE keeps the unpaired layout byte-identical.
+        holder.sendButton.visibility = if (windowsTargetPaired) View.VISIBLE else View.GONE
+        holder.sendButton.isEnabled = hasText
+        holder.sendButton.setOnClickListener(
+            if (hasText && windowsTargetPaired) {
+                View.OnClickListener { callback.onSendToWindows(session, pending) }
+            } else {
+                null
+            }
+        )
     }
 
     class ViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
@@ -73,6 +96,7 @@ class KeyboardHistoryAdapter(
         val dateView: TextView = itemView.findViewById(R.id.item_kbd_history_date_tv)
         val previewView: TextView = itemView.findViewById(R.id.item_kbd_history_preview_tv)
         val insertButton: MaterialButton = itemView.findViewById(R.id.item_kbd_history_insert_btn)
+        val sendButton: MaterialButton = itemView.findViewById(R.id.item_kbd_history_send_btn)
     }
 
     companion object {

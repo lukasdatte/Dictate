@@ -1952,7 +1952,17 @@ public class DictateInputMethodService extends InputMethodService
                                          boolean pending) {
                         onKeyboardHistoryInsertClicked(session, pending);
                     }
-                });
+
+                    @Override
+                    public void onSendToWindows(net.devemperor.dictate.database.entity.SessionEntity session,
+                                                boolean pending) {
+                        onKeyboardHistorySendClicked(session, pending);
+                    }
+                },
+                // ADR-0019 — the per-row send slot is only shown when a PC is paired. Read once
+                // at view creation (mirrors PreferencesFragment); a fresh pairing surfaces the
+                // button the next time the keyboard is inflated.
+                net.devemperor.dictate.preferences.WindowsTarget.from(sp) != null);
             historyRv.setAdapter(historyAdapter);
             // "Distinctly taller": ~50% of the display height, clamped to
             // [min, max] so the panel scales across device sizes.
@@ -6356,6 +6366,38 @@ public class DictateInputMethodService extends InputMethodService
                 ? new net.devemperor.dictate.state.Action.PendingSessionsAction.AcceptAndInsert(sid)
                 : new net.devemperor.dictate.state.Action.HistoryPanelAction.AcknowledgeInsert(sid),
             "HistoryPanel.Insert");
+    }
+
+    /**
+     * "Send to Windows" on a history row (ADR-0019, the ADR-0014 follow-up). The text comes —
+     * exactly like Insert — from getFinalOutput(sid) (V5: the ONE text source).
+     *
+     * <p>Commits NOTHING into the host. That is the whole difference from Insert. It runs through
+     * the SAME {@link net.devemperor.dictate.windows.WindowsDispatchCoordinator#dispatch} primitive
+     * as the IME seam and the headless sink — one send, one reducer, one acknowledge. In particular
+     * it never dispatches {@code PendingSessionsAction.AcceptAndInsert}: that action is intercepted
+     * by the IME side-channel and would ADDITIONALLY commit the text into the Android field (double
+     * delivery). Cleaning up a pending part is the WindowsDispatchModule reducer's job, via Dismiss
+     * (remove + acknowledge), and only AFTER the PC has confirmed.
+     *
+     * <p>{@code acknowledgeOnSuccess = pending}: a still-uninserted row is acknowledged on success;
+     * an already-inserted row is a pure re-send and leaves {@code inserted_at} alone (parity with
+     * onKeyboardHistoryInsertClicked's {@code if (!pending) return;}). {@code surfacedAsPending =
+     * pending}: a still-uninserted row IS already a pending part, so a success must remove it via
+     * Dismiss rather than leave a "Tap to paste" ghost (P1). A re-send types the text on the PC
+     * again but creates no second history row there (the upsert is idempotent over the sessionId,
+     * ADR-0020).
+     */
+    private void onKeyboardHistorySendClicked(
+            net.devemperor.dictate.database.entity.SessionEntity session, boolean pending) {
+        if (session == null || sessionManager == null || windowsDispatchCoordinator == null) return;
+        String sid = session.getId();
+        String text = sessionManager.getFinalOutput(sid);
+        if (text == null || text.isEmpty()) return;
+        if (net.devemperor.dictate.preferences.WindowsTarget.from(sp) == null) return; // slot would be GONE
+        windowsDispatchCoordinator.dispatch(
+                sid, text, session.getCreatedAt(), originOf(sid),
+                /* acknowledgeOnSuccess = */ pending, /* surfacedAsPending = */ pending);
     }
 
     /**

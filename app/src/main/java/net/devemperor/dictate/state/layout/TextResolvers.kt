@@ -122,6 +122,16 @@ data class LayoutStrings(
      * `R.string.dictate_action_resume`.
      */
     val resumeLabel: CharSequence = "Resume",
+    /**
+     * Badge appended to the record label while PC send-mode is active
+     * (ADR-0019) — backed by `R.string.dictate_pc_badge`.
+     *
+     * A constant, not a pre-composed label: PC-mode flips at runtime but
+     * [LayoutStrings] is built once, so a `"Aufnehmen PC"` baked in here
+     * would freeze at whatever the mode was at construction. The *composition*
+     * therefore happens in [resolveRecordButtonText], which sees state.
+     */
+    val pcBadge: String = "PC",
     @Deprecated(
         "Variante 2a (dictate-widget-integration §6.5) merged OVERLAY_SEND " +
             "into OVERLAY_RECORD; this field is no longer read by any " +
@@ -145,18 +155,51 @@ data class LayoutStrings(
  * effective-language axis) so it differs across languages — e.g.
  * `"Dictate (en)"` vs `"Dictate (de)"`. Read-only consumption of
  * `LanguageState`; no legacy writer is introduced (D-13 scope).
+ *
+ * **PC send-mode (ADR-0019):** while `features.windowsAutoSendActive` the
+ * record word carries a `PC` badge — `"Aufnehmen PC (de)"` — so the user
+ * knows the dictation is bound for the paired PC *before* speaking rather
+ * than after the text fails to appear. The badge follows the record word
+ * itself, not the trailing language hint, because that is the word it
+ * qualifies.
+ *
+ * `Active`/`Paused` are deliberately left un-badged: they read "Senden",
+ * not "Aufnehmen", and during a live recording the button text is replaced
+ * wholesale by the amplitude visualizer anyway — that surface carries its
+ * own PC badge next to the timer (see `AmplitudeVisualizerDrawable`).
  */
 fun resolveRecordButtonText(state: DictateUiState, strings: LayoutStrings): CharSequence =
     when (state.recording) {
         is RecordingState.Active -> strings.send
         is RecordingState.Paused -> strings.send
-        is RecordingState.Preparing -> strings.record
+        is RecordingState.Preparing -> strings.record.withPcBadge(state, strings)
         RecordingState.Idle -> strings.dictateButtonText(state.language.effective)
+            .withPcBadge(state, strings)
         // Interrupted (2026-05-22): rendered "as if paused" — the frozen
         // timer overlay carries the elapsed seconds; the button label is
         // the plain record text since a tap continues recording.
-        is RecordingState.Interrupted -> strings.record
+        is RecordingState.Interrupted -> strings.record.withPcBadge(state, strings)
     }
+
+/**
+ * Insert [LayoutStrings.pcBadge] after the record word when PC send-mode is
+ * active, leaving the label untouched otherwise.
+ *
+ * The receiver may already carry a trailing language hint
+ * (`"Aufnehmen (de)"`), and the badge belongs to the verb rather than the
+ * hint, so it is spliced in *before* a trailing `(…)` group when one is
+ * present and appended otherwise.
+ */
+private fun CharSequence.withPcBadge(state: DictateUiState, strings: LayoutStrings): CharSequence {
+    if (!state.features.windowsAutoSendActive) return this
+    val label = toString()
+    val hintStart = label.indexOf(" (")
+    return if (hintStart >= 0) {
+        label.substring(0, hintStart) + " " + strings.pcBadge + label.substring(hintStart)
+    } else {
+        "$label ${strings.pcBadge}"
+    }
+}
 
 /**
  * Record-button text while the pipeline is live (SEND_MODE).

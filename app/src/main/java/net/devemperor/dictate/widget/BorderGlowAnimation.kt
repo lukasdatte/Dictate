@@ -40,6 +40,13 @@ class BorderGlowAnimation(
 
     private var button: MaterialButton? = null
     private var visualizer: AmplitudeVisualizerDrawable? = null
+
+    /**
+     * PC-send-mode badge (ADR-0019). Held here rather than only on the
+     * visualizer because the visualizer is rebuilt on every [start] while the
+     * badge reflects a setting that outlives any single recording.
+     */
+    private var badgeText: String = ""
     private var previousForeground: Drawable? = null
     private var previousText: CharSequence? = null
     private var previousStartDrawable: Drawable? = null
@@ -82,6 +89,10 @@ class BorderGlowAnimation(
             insetTopPx = insetTop,
             insetBottomPx = insetBottom
         )
+        // The visualizer is rebuilt on every start(), so the badge has to be
+        // re-seeded here — it reflects a setting that outlives the recording,
+        // unlike the timer, which starts from zero each time.
+        visualizer?.setBadgeText(badgeText)
 
         // Transform button: clear text + drawables, set visualizer as foreground
         btn.text = ""
@@ -118,6 +129,14 @@ class BorderGlowAnimation(
     override fun onTimerTick(timerText: String) {
         if (!isActive) return
         visualizer?.setTimerText(timerText)
+    }
+
+    override fun onBadge(badgeText: String) {
+        // Deliberately NOT gated on isActive (unlike onTimerTick): the badge
+        // is typically set while idle, before any recording exists, and start()
+        // re-seeds it onto the freshly built visualizer.
+        this.badgeText = badgeText
+        visualizer?.setBadgeText(badgeText)
     }
 
     override fun updateColor(color: Int) {

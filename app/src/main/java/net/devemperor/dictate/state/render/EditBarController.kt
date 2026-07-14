@@ -127,6 +127,22 @@ class EditBarController(
          * missing, ToggleViewModeWidget otherwise.
          */
         fun onWidgetToggleClicked()
+
+        /**
+         * PC button **short-press** (ADR-0019) — flips PC send-mode, so the
+         * next dictation goes to the paired PC instead of the host field.
+         * Mirrors the settings switch; the button is disabled while unpaired.
+         */
+        fun onPcModeToggled()
+
+        /**
+         * PC button **long-press** — opens the pairing screen. Split the same
+         * way the history button splits: the everyday toggle sits on the tap,
+         * the occasional heavyweight screen on the deliberate long-press.
+         * Stays live while the button is disabled, so a user with no PC can
+         * still reach pairing from here.
+         */
+        fun onPcLongClicked()
     }
 
     /**
@@ -210,6 +226,15 @@ class EditBarController(
                 callback.onVibrate()
                 callback.onWidgetToggleClicked()
             },
+            editPcClick = View.OnClickListener {
+                callback.onVibrate()
+                callback.onPcModeToggled()
+            },
+            editPcLong = View.OnLongClickListener {
+                callback.onVibrate()
+                callback.onPcLongClicked()
+                true
+            },
             // undo/redo/cut/copy/paste — per-button click forwarding the
             // android.R.id.* action id (legacy `:151-164` parity).
             editActionClicks = editActionViews().map { (view, actionId) ->
@@ -244,6 +269,8 @@ class EditBarController(
         views.editKeyboardButton.setOnClickListener(c.editKeyboardClick)
         views.editKeyboardButton.setOnLongClickListener(c.editKeyboardLong)
         views.editWidgetToggleButton?.setOnClickListener(c.editWidgetToggleClick)
+        views.editPcButton?.setOnClickListener(c.editPcClick)
+        views.editPcButton?.setOnLongClickListener(c.editPcLong)
         for ((view, listener) in c.editActionClicks) {
             view.setOnClickListener(listener)
         }
@@ -287,6 +314,11 @@ class EditBarController(
         // Edit-bar widget-toggle (2026-05-22 relocation) — themed with
         // the same accentMedium tier as the other edit-bar buttons.
         views.editWidgetToggleButton?.setBackgroundColor(accentMedium)
+        // The PC button's BACKGROUND is themed like its siblings; its
+        // FOREGROUND (the purple "PC-mode is on" tint) is owned by
+        // EditBarPcButtonRenderer. Two different axes on two different
+        // properties, so there is no writer race here.
+        views.editPcButton?.setBackgroundColor(accentMedium)
     }
 
     /**
@@ -374,6 +406,7 @@ class EditBarController(
         views.editCopyButton,
         views.editPasteButton,
         views.editWidgetToggleButton,
+        views.editPcButton,
     )
 
     private var cached: CachedListeners? = null
@@ -389,6 +422,8 @@ class EditBarController(
         val editKeyboardClick: View.OnClickListener,
         val editKeyboardLong: View.OnLongClickListener,
         val editWidgetToggleClick: View.OnClickListener,
+        val editPcClick: View.OnClickListener,
+        val editPcLong: View.OnLongClickListener,
         val editActionClicks: List<Pair<MaterialButton, View.OnClickListener>>,
     )
 
@@ -438,4 +473,10 @@ data class EditBarViews(
      * inflated tree.
      */
     val editWidgetToggleButton: MaterialButton? = null,
+    /**
+     * Edit-bar PC send-mode toggle (ADR-0019). Nullable for the same reason as
+     * [editWidgetToggleButton]: tests built before it existed keep compiling
+     * without listing it.
+     */
+    val editPcButton: MaterialButton? = null,
 )

@@ -177,6 +177,7 @@ public class DictateInputMethodService extends InputMethodService
 
     // ADR-0014 — in-keyboard history panel (renderer + IME-owned Paging lifecycle).
     private net.devemperor.dictate.state.render.HistoryPanelRenderer historyPanelRenderer;
+    private net.devemperor.dictate.state.render.EditBarPcButtonRenderer editBarPcButtonRenderer;
     private net.devemperor.dictate.history.KeyboardHistoryController historyController;
     private net.devemperor.dictate.history.KeyboardHistoryAdapter historyAdapter;
     /** Block B — the session currently shown in the history-panel detail view (loaded by
@@ -531,6 +532,7 @@ public class DictateInputMethodService extends InputMethodService
     // row's widget_toggle_btn slot; see EditBarController.Callback
     // .onWidgetToggleClicked).
     private MaterialButton editWidgetToggleButton;
+    private MaterialButton editPcButton;
     private FrameLayout qwertzContainer;
     private QwertzKeyboardView qwertzKeyboardView;
     private QwertzKeyboardController qwertzController;
@@ -952,6 +954,7 @@ public class DictateInputMethodService extends InputMethodService
         editNumbersButton = dictateKeyboardView.findViewById(R.id.edit_numbers_btn);
         editKeyboardButton = dictateKeyboardView.findViewById(R.id.edit_keyboard_btn);
         editWidgetToggleButton = dictateKeyboardView.findViewById(R.id.edit_widget_toggle_btn);
+        editPcButton = dictateKeyboardView.findViewById(R.id.edit_pc_btn);
         emojiPickerCl = dictateKeyboardView.findViewById(R.id.emoji_picker_cl);
         emojiPickerTitleTv = dictateKeyboardView.findViewById(R.id.emoji_picker_title_tv);
         emojiPickerCloseButton = dictateKeyboardView.findViewById(R.id.emoji_picker_close_btn);
@@ -1349,12 +1352,20 @@ public class DictateInputMethodService extends InputMethodService
             () -> DictatePrefsKt.get(sp, Pref.Animations.INSTANCE);
         kotlin.jvm.functions.Function0<Integer> accentColorLambda =
             () -> DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
+        // PC send-mode (ADR-0019): the record button breathes this colour
+        // instead of the accent, and carries a "PC" badge next to the timer.
+        // The colour is a lambda for the same reason the accent is — the
+        // controller outlives a night-mode flip.
+        kotlin.jvm.functions.Function0<Integer> pcModeColorLambda =
+            () -> androidx.core.content.ContextCompat.getColor(this, R.color.dictate_pc_mode);
         RecordingAnimationController recordingAnimationCtrlForBackend =
             new RecordingAnimationController(
                 recordingAnimationForBackend,
                 recordButton,
                 accentColorLambda,
-                animationsEnabledLambda
+                animationsEnabledLambda,
+                pcModeColorLambda,
+                getString(R.string.dictate_pc_badge)
             );
         // Phase 3 of dictate-render-cutover-completion-vol2 — single
         // writer for record_btn's left + right compound drawables
@@ -2057,6 +2068,8 @@ public class DictateInputMethodService extends InputMethodService
                     "HistoryPanel.CloseDetail");
             });
         }
+        editBarPcButtonRenderer =
+            new net.devemperor.dictate.state.render.EditBarPcButtonRenderer(editPcButton);
         historyPanelRenderer = new net.devemperor.dictate.state.render.HistoryPanelRenderer(
             new net.devemperor.dictate.state.render.HistoryPanelViews(
                 historyPanelCl, historyRv, historyResizeHandle, historyDetailGroup),
@@ -2102,6 +2115,11 @@ public class DictateInputMethodService extends InputMethodService
             keyboardLayoutManager.attachBackend(overlayResetHandler);
             keyboardLayoutManager.attachBackend(reviewPanelRenderer);
             keyboardLayoutManager.attachBackend(historyPanelRenderer);
+            // ADR-0019 — the edit-bar PC button's tint + dim. A backend rather
+            // than a sibling of EditBarAudioFocusObserver: attachBackend
+            // renders immediately and every state emit fans out here already,
+            // so no second collector and no seed call are needed.
+            keyboardLayoutManager.attachBackend(editBarPcButtonRenderer);
             // Arm the three gates so the controllers are the SOLE LIVE
             // writers of the ContentArea / Promptbar / overlay-reset
             // axes. Post-CR-DEL there is no legacy `KeyboardStateManager`
@@ -2237,7 +2255,7 @@ public class DictateInputMethodService extends InputMethodService
                 editNumbersButton, editSettingsButton, editHistoryButton,
                 pipelineCancelBtn, editAudioFocusButton, editKeyboardButton,
                 editUndoButton, editRedoButton, editCutButton,
-                editCopyButton, editPasteButton, editWidgetToggleButton),
+                editCopyButton, editPasteButton, editWidgetToggleButton, editPcButton),
             this);
         editBarController.installDormant();
         editBarController.attachToViews();
@@ -5786,13 +5804,28 @@ public class DictateInputMethodService extends InputMethodService
         } else if (action == net.devemperor.dictate.state.Action.WindowsDispatchAction.OpenPairing.INSTANCE) {
             // ADR-0019 §3.2.2 — the user confirmed a WINDOWS_UNAUTHORIZED notice; open the pairing
             // screen so they can re-pair. The reducer already cleared the notice.
-            try {
-                Intent intent = new Intent(this, net.devemperor.dictate.settings.WindowsPairingActivity.class);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(intent);
-            } catch (Exception e) {
-                Log.w("DictateIME", "Failed to launch Windows pairing screen", e);
-            }
+            openWindowsPairingActivity();
+        }
+    }
+
+    /**
+     * Open the Windows pairing screen. One launch site, two callers: the
+     * WINDOWS_UNAUTHORIZED info-bar confirm (ADR-0019 §3.2.2) and the edit-bar
+     * PC button's long-press.
+     *
+     * <p>The long-press deliberately does NOT route through
+     * {@code WindowsDispatchAction.OpenPairing}: that action's reducer rejects
+     * itself unless a notice is pending ({@code state.notice != null}), so a
+     * dispatch from the button would be silently dropped. The action exists to
+     * clear the notice; opening the screen is this side-channel's job.
+     */
+    private void openWindowsPairingActivity() {
+        try {
+            Intent intent = new Intent(this, net.devemperor.dictate.settings.WindowsPairingActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            Log.w("DictateIME", "Failed to launch Windows pairing screen", e);
         }
     }
 
@@ -6368,6 +6401,34 @@ public class DictateInputMethodService extends InputMethodService
                 pipelineBinder.getState().getValue();
         Log.i("DictateTrace", "IME.onWidgetToggleClicked() AFTER viewMode=" + after.getViewMode()
                 + " widget=" + after.getWidget().getClass().getSimpleName());
+    }
+
+    /**
+     * PC button short-press (ADR-0019) — flip PC send-mode.
+     *
+     * <p>While no PC is paired the tap opens the pairing screen instead of
+     * toggling. A toggle would be a dead tap: the reducer rejects it (there is
+     * nowhere to send to), so the button would simply do nothing and the user
+     * would have no way to learn why. Pairing is the only thing a tap can
+     * usefully mean in that state, and it is where the long-press goes anyway.
+     */
+    @Override
+    public void onPcModeToggled() {
+        if (pipelineBinder == null) return;
+        net.devemperor.dictate.state.DictateUiState state =
+                pipelineBinder.getState().getValue();
+        if (!state.getFeatures().getWindowsPaired()) {
+            openWindowsPairingActivity();
+            return;
+        }
+        pipelineBinder.dispatch(
+                net.devemperor.dictate.state.Action.FeatureToggleAction.ToggleWindowsAutoSend.INSTANCE);
+    }
+
+    /** PC button long-press — the pairing screen, paired or not. */
+    @Override
+    public void onPcLongClicked() {
+        openWindowsPairingActivity();
     }
 
     @Override

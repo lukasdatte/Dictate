@@ -25,6 +25,53 @@ class TextResolversTest {
 
     private fun audioFile(): File = stubAudioFile()
 
+    // ── PC send-mode badge (ADR-0019) ───────────────────────────────────
+
+    private fun pcState(recording: RecordingState): DictateUiState = baseState.copy(
+        recording = recording,
+        features = baseState.features.copy(windowsAutoSendActive = true),
+    )
+
+    @Test
+    fun `PC badge follows the record word, not the language hint`() {
+        // The badge qualifies the verb ("this recording goes to the PC"), so
+        // it belongs next to it rather than trailing the whole label.
+        val text = resolveRecordButtonText(pcState(RecordingState.Idle), strings).toString()
+        assertEquals("Dictate PC (system)", text)
+    }
+
+    @Test
+    fun `PC badge appends when the label carries no language hint`() {
+        val text = resolveRecordButtonText(
+            pcState(
+                RecordingState.Preparing(
+                    useBluetooth = false, audioFile = audioFile(), sessionId = "s",
+                ),
+            ),
+            strings,
+        ).toString()
+        assertEquals("Record PC", text)
+    }
+
+    @Test
+    fun `no PC badge while PC-mode is off`() {
+        val text = resolveRecordButtonText(
+            baseState.copy(recording = RecordingState.Idle), strings,
+        ).toString()
+        assertEquals("Dictate (system)", text)
+    }
+
+    @Test
+    fun `Active keeps the plain send label (the visualizer carries the badge)`() {
+        // During a live recording the button's text is replaced wholesale by
+        // the amplitude visualizer, which draws its own PC badge beside the
+        // timer. Badging "Senden" here would be dead pixels.
+        val s = pcState(
+            RecordingState.Active(useBluetooth = false, audioFile = audioFile(), sessionId = "x"),
+        )
+        assertEquals(strings.send, resolveRecordButtonText(s, strings))
+    }
+
     @Test
     fun `overlay text Idle reflects keyboard Idle label`() {
         val s = baseState.copy(recording = RecordingState.Idle, pipeline = PipelineUiState.Idle)

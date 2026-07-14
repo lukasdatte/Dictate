@@ -5,6 +5,15 @@
          warning resolves its color through this attr (ADR-0010 point 4). -->
     <attr name="dictateColorWarning" format="color" />
 
+    <!-- App-defined PC-send-mode color (light + night values in colors.xml).
+         M3 has no role for "this output is routed somewhere else", so the
+         PC-mode signal resolves its color through this attr (ADR-0010 point 4).
+         The keyboard's own consumers (record button, edit-bar PC button) read
+         @color/dictate_pc_mode directly instead — they paint programmatically,
+         which ADR-0010 exempts, and resource qualifiers already give them the
+         night variant without a theme lookup. -->
+    <attr name="dictateColorPcMode" format="color" />
+
     <declare-styleable name="PulseLayout">
         <attr name="pulseCount" format="integer" />
         <attr name="pulseDuration" format="integer" />

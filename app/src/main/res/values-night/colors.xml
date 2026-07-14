@@ -3,4 +3,9 @@
     <!-- Dark-mode warning: lighter amber so it stays legible on a dark surface
          (light value #B26A00 in values/colors.xml). -->
     <color name="dictate_warning">#FFB74D</color>
+
+    <!-- Dark-mode PC send-mode: a lighter purple so the record button still
+         reads as clearly "not the accent" on the dark keyboard surface
+         (light value #7E57C2 in values/colors.xml). -->
+    <color name="dictate_pc_mode">#9575CD</color>
 </resources>

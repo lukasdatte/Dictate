@@ -805,6 +805,21 @@
                 android:insetLeft="4dp"
                 android:insetRight="4dp" />
 
+            <!-- edit_pc_btn — PC send-mode toggle (ADR-0019). Tap flips
+                 auto-send, long-press opens the pairing screen. The icon is
+                 re-tinted at render time by EditBarPcButtonRenderer (purple =
+                 on), and the button is disabled while no PC is paired —
+                 mirroring the settings switch, which is greyed out until
+                 pairing completes. -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_pc_btn"
+                android:layout_width="@dimen/dictate_editbar_slot_min"
+                android:layout_height="match_parent"
+                android:foreground="@drawable/ic_baseline_computer_24"
+                android:foregroundGravity="center"
+                android:insetLeft="4dp"
+                android:insetRight="4dp" />
+
         </LinearLayout>
     </net.devemperor.dictate.widget.PeekingButtonBar>
 

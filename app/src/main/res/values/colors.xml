@@ -18,4 +18,19 @@
     <!-- Semantic warning (amber). Light value; dark override in values-night.
          Contrast-checked against colorSurface in both modes. -->
     <color name="dictate_warning">#B26A00</color>
+
+    <!--
+      PC send-mode (ADR-0019). The record button breathes this colour instead of
+      the accent while a dictation is routed to the paired PC, so "where does
+      this text land" is answered before the user speaks rather than after.
+
+      Deliberately NOT derived from the accent: the accent is user-configurable
+      (Pref.AccentColor), so an accent-derived signal would vanish for anyone
+      who already picked purple. A fixed hue is the only way the signal always
+      reads as "different from normal".
+
+      Night value in values-night/colors.xml. Contrast-checked against both
+      keyboard backgrounds with white button text.
+    -->
+    <color name="dictate_pc_mode">#7E57C2</color>
 </resources>

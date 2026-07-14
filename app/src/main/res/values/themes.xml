@@ -15,6 +15,9 @@
         <!-- App-defined warning color (dark override in values-night/themes.xml). -->
         <item name="dictateColorWarning">@color/dictate_warning</item>
 
+        <!-- App-defined PC-send-mode color (dark override in values-night/themes.xml). -->
+        <item name="dictateColorPcMode">@color/dictate_pc_mode</item>
+
         <!-- Customize your theme here. -->
 
     </style>

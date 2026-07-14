@@ -23,8 +23,8 @@ import org.robolectric.annotation.Config
  *
  * The arithmetic itself is covered exhaustively (and Robolectric-free) by
  * `EditBarWidthCalculatorTest`; this suite covers the wiring the calculator
- * cannot see — that the XML really is a bar, that its row children are the
- * twelve edit-bar buttons, and that measuring narrow writes narrow slots.
+ * cannot see — that the XML really is a bar, that every edit-bar button is
+ * one of its row children, and that measuring narrow writes narrow slots.
  *
  * Pixel-level appearance (icon centring, light/dark, RTL) stays on the
  * manual device checklist.
@@ -74,6 +74,7 @@ class EditBarPeekInflationTest {
             R.id.edit_copy_btn, R.id.edit_paste_btn, R.id.edit_emoji_btn,
             R.id.edit_keyboard_btn, R.id.edit_history_btn, R.id.edit_audio_focus_btn,
             R.id.edit_settings_btn, R.id.edit_numbers_btn, R.id.edit_widget_toggle_btn,
+            R.id.edit_pc_btn,
         )
         for (id in ids) {
             val button = root.findViewById<View>(id)
@@ -90,17 +91,17 @@ class EditBarPeekInflationTest {
     fun `a wide bar fits every button and shows no peek`() {
         measureAt(2000)
         val r = bar.lastResult!!
-        assertTrue("2000px must fit 12 buttons", !r.overflowing)
+        assertTrue("2000px must fit the whole bar", !r.overflowing)
         assertEquals(0, r.peekPx)
         assertEquals(visibleSlots().size, r.fullyVisibleCount)
     }
 
     @Test
     fun `a narrow bar overflows and writes the computed slot width onto the buttons`() {
-        // 480px ≈ a 320dp phone at 1.5x — the row cannot fit twelve buttons.
+        // 480px ≈ a 320dp phone at 1.5x — too narrow for the whole bar.
         measureAt(480)
         val r = bar.lastResult!!
-        assertTrue("480px must overflow with 12 buttons", r.overflowing)
+        assertTrue("480px cannot fit the whole bar", r.overflowing)
         assertTrue("the overflow must advertise itself", r.peekPx > 0)
         // The point of the measure pass: the arithmetic has to land on the
         // actual children, not just in `lastResult`.

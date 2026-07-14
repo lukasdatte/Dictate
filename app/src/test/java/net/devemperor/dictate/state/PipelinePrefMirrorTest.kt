@@ -1,6 +1,7 @@
 package net.devemperor.dictate.state
 
 import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.preferences.put
 import net.devemperor.dictate.testutil.FakeSharedPreferences
 import org.junit.Assert.assertEquals
@@ -177,6 +178,78 @@ class PipelinePrefMirrorTest {
     // ────────────────────────────────────────────────────────────────
     // applyChange() — per-key listener path
     // ────────────────────────────────────────────────────────────────
+
+    // ── PC send-mode: four keys, one predicate (ADR-0019) ───────────────
+    //
+    // The load-bearing property is that the lit button and the actual send
+    // destination cannot disagree. The mirror gets that by CALLING
+    // WindowsAutoSend.shouldAutoSend rather than re-deriving "toggle &&
+    // paired", so these tests pin the observable consequence: every input of
+    // the predicate re-derives the state field.
+
+    private fun pairedPrefs(): FakeSharedPreferences = FakeSharedPreferences().apply {
+        edit().put(Pref.WindowsTargetUrl, "https://pc.example")
+            .put(Pref.WindowsDeviceId, "dev-1")
+            .put(Pref.WindowsDeviceSecret, "s3cret")
+            .apply()
+    }
+
+    @Test
+    fun `toggle on while paired mirrors PC-mode active`() {
+        val sp = pairedPrefs()
+        sp.edit().put(Pref.WindowsAutoSendEnabled, true).apply()
+
+        val next = PipelinePrefMirror(sp)
+            .applyChange(DictateUiState.initial(), Pref.WindowsAutoSendEnabled.key)
+
+        assertTrue(next.features.windowsAutoSendActive)
+        assertTrue(next.features.windowsPaired)
+    }
+
+    @Test
+    fun `toggle on while UNpaired does not mirror PC-mode active`() {
+        // The exact drift ADR-0019 warns about: pref says yes, no target
+        // exists, so the pipeline would still commit locally. The button must
+        // not claim otherwise.
+        val sp = FakeSharedPreferences()
+        sp.edit().put(Pref.WindowsAutoSendEnabled, true).apply()
+
+        val next = PipelinePrefMirror(sp)
+            .applyChange(DictateUiState.initial(), Pref.WindowsAutoSendEnabled.key)
+
+        assertFalse("no target ⇒ PC-mode is not active however the pref reads", next.features.windowsAutoSendActive)
+        assertFalse(next.features.windowsPaired)
+    }
+
+    @Test
+    fun `unpairing re-derives PC-mode off without touching the toggle`() {
+        // WindowsPairingActivity clears the secret on unpair. The toggle pref
+        // survives, so only a mirror that keys on the pairing prefs too will
+        // drop the lit button.
+        val sp = pairedPrefs()
+        sp.edit().put(Pref.WindowsAutoSendEnabled, true).apply()
+        val mirror = PipelinePrefMirror(sp)
+        val paired = mirror.applyChange(DictateUiState.initial(), Pref.WindowsAutoSendEnabled.key)
+        assertTrue(paired.features.windowsAutoSendActive)
+
+        sp.edit().put(Pref.WindowsDeviceSecret, "").apply()
+        val unpaired = mirror.applyChange(paired, Pref.WindowsDeviceSecret.key)
+
+        assertFalse("unpair must drop PC-mode in the UI, as it does in the pipeline", unpaired.features.windowsAutoSendActive)
+        assertFalse(unpaired.features.windowsPaired)
+        assertTrue("the user's toggle preference itself is untouched", sp.get(Pref.WindowsAutoSendEnabled))
+    }
+
+    @Test
+    fun `initial snapshot mirrors PC-mode`() {
+        val sp = pairedPrefs()
+        sp.edit().put(Pref.WindowsAutoSendEnabled, true).apply()
+        val store = DictateUiStateStore(DictateUiState.initial())
+        PipelinePrefMirror(sp).attach(store, storeOnlyDispatcher(store))
+
+        assertTrue(store.snapshot.features.windowsAutoSendActive)
+        assertTrue(store.snapshot.features.windowsPaired)
+    }
 
     @Test
     fun `applyChange mirrors SingleRowMode flip into LayoutState only`() {

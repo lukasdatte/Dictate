@@ -494,4 +494,10 @@
     <string name="dictate_history_transcription">Transkription</string>
     <string name="dictate_history_version">v%1$d</string>
     <string name="dictate_history_version_warning">Nachfolgende Schritte basieren auf einer anderen Version</string>
+
+    <!-- PC-Sendemodus (ADR-0019). dictate_pc_badge ist translatable="false" —
+         "PC" ist in beiden Sprachen identisch. -->
+    <string name="dictate_pc_mode_state_on">PC-Sendemodus an: Diktate gehen an den gekoppelten PC</string>
+    <string name="dictate_pc_mode_state_off">PC-Sendemodus aus: Diktate werden hier eingefügt</string>
+    <string name="dictate_pc_mode_state_unpaired">PC-Sendemodus nicht verfügbar: kein PC gekoppelt. Lange drücken zum Koppeln.</string>
 </resources>

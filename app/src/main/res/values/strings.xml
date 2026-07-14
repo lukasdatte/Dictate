@@ -282,6 +282,14 @@
          ("the focus IS active"), not in the contentDescription. -->
     <string name="dictate_audio_focus_state_on">Audio-Fokus aktiv: Musik wird beim Aufnehmen pausiert</string>
     <string name="dictate_audio_focus_state_off">Audio-Fokus inaktiv: Musik läuft beim Aufnehmen weiter</string>
+
+    <!-- PC send-mode (ADR-0019). The badge is appended to the record label and
+         drawn next to the recording timer, so "this dictation goes to the PC"
+         is visible both before and during recording. -->
+    <string name="dictate_pc_badge" translatable="false">PC</string>
+    <string name="dictate_pc_mode_state_on">PC send-mode on: dictations go to the paired PC</string>
+    <string name="dictate_pc_mode_state_off">PC send-mode off: dictations are inserted here</string>
+    <string name="dictate_pc_mode_state_unpaired">PC send-mode unavailable: no PC paired. Long-press to pair.</string>
     <string name="dictate_changelog_17">v2.4.5\n\nThis is just a tiny update that adds a settings option to disable the audio focus. You can now control whether background audio (e.g. music, podcasts, …) should be paused automatically.\n\n\n</string>
     <string name="dictate_changelog_18">v2.5.0\n\n- This update brings a cool new feature:\nYou can now undo and redo changes that were made after transcribing or rewording a text. Just click on the two buttons in the rewording section to jump through the history. ⏪\n\n- Some design changes and bug fixes have been made. ✨\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
     <string name="dictate_changelog_19">v2.6.0\n\n- Advanced reasoning models were added (o1, o3, o3-mini), which allow even better rewording. ✨\n\n- This update adds a better indicator for switching between input languages: The text on the record button now adapts to the currently selected input language. 💪\n\n- Some design changes and bug fixes have been made. ✨\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>

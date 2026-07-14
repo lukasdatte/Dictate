@@ -85,7 +85,7 @@ class WindowsDispatchCoordinator(
                 is DispatchResult.Success -> {
                     audit(sessionId, text, target.deviceId) // insertion_method = WINDOWS_DISPATCH
                     emitAction(Action.WindowsDispatchAction.Succeeded(sessionId, result.value.outcome))
-                    executor.execute { service.syncAfterSend(target) } // fire & forget (ADR-0020)
+                    executor.execute { service.sync(target) } // fire & forget (ADR-0020)
                 }
                 is DispatchResult.Failure ->
                     emitAction(

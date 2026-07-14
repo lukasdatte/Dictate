@@ -849,6 +849,28 @@ class DictatePipelineService : Service() {
         )
 
         // ──────────────────────────────────────────────────────────────
+        // App-start sync trigger (ADR-0020). The AFTER-dispatch sync lives
+        // in the coordinator's Delivered branch (fires for all three
+        // triggers); this is the OTHER one: on service start, push any
+        // sessions the PC has not seen yet — e.g. dictations made while the
+        // PC was offline. Only when paired. Fire-and-forget on
+        // Dispatchers.IO so the FGS 5-second start budget is untouched. A
+        // failed start-sync is NOT a user event: it is logged and never
+        // surfaced, and it can never affect anything else the service does
+        // (the outer try/catch guards even a factory-construction throw;
+        // WindowsDispatchService.sync itself already never throws).
+        // ──────────────────────────────────────────────────────────────
+        serviceScope.launch(Dispatchers.IO) {
+            WindowsTarget.from(sharedPrefs)?.let { target ->
+                try {
+                    windowsDispatchService.sync(target)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "app-start windows-sync failed (ignored)", t)
+                }
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────
         // ADR-0011 — Headless terminal fallback wiring.
         //
         // The bridge drops UI-progress callbacks when no IME delegate is

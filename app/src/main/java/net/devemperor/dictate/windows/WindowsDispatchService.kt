@@ -38,13 +38,16 @@ class WindowsDispatchService(
         clientFactory(target).dispatch(request)
 
     /**
-     * Fire-and-forget follow-up sync (ADR-0020). A sync failure must NEVER downgrade a dispatch
-     * success — the text is already on the PC — so this only logs the outcome and never throws.
+     * Fire-and-forget cursor sync (ADR-0020). The ONE sync entry point, shared by both triggers:
+     * after a successful dispatch (the coordinator's Delivered branch) and at app start
+     * ([net.devemperor.dictate.core.DictatePipelineService.onCreate]). A sync failure must NEVER
+     * matter to the caller — after a dispatch the text is already on the PC, and an app-start sync
+     * is not a user event — so this only logs a non-trivial outcome and never throws.
      */
-    fun syncAfterSend(target: WindowsTarget) {
+    fun sync(target: WindowsTarget) {
         val outcome = syncClientFactory(target).sync()
         if (outcome !is SyncOutcome.UpToDate) {
-            logger("windows-sync after dispatch ended as ${outcome::class.simpleName}")
+            logger("windows-sync ended as ${outcome::class.simpleName}")
         }
     }
 }

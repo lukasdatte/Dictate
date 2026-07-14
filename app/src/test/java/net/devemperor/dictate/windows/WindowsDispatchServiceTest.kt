@@ -48,7 +48,7 @@ class WindowsDispatchServiceTest {
     }
 
     @Test
-    fun `syncAfterSend never throws and logs a non-UpToDate outcome`() {
+    fun `sync never throws and logs a non-UpToDate outcome`() {
         // A transport that fails the sync's cursor GET → SyncOutcome.Failed, which must be swallowed.
         val brokenSync = object : DispatchTransport {
             override fun post(path: String, body: String, headers: Map<String, String>): HttpResponseLite =
@@ -58,7 +58,7 @@ class WindowsDispatchServiceTest {
         }
         val logs = mutableListOf<String>()
         // Does not throw:
-        service(brokenSync, logger = { logs += it }).syncAfterSend(target)
+        service(brokenSync, logger = { logs += it }).sync(target)
         assertTrue(logs.isNotEmpty())
     }
 }

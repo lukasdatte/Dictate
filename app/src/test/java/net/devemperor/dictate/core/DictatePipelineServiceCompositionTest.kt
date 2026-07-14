@@ -1,6 +1,9 @@
 package net.devemperor.dictate.core
 
+import android.content.Context
 import android.content.Intent
+import androidx.test.core.app.ApplicationProvider
+import net.devemperor.dictate.preferences.Pref
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -239,6 +242,38 @@ class DictatePipelineServiceCompositionTest {
         // ModuleServices/orchestrator-level integration tests.
         binder.registerInputConnectionProvider { null }
         binder.registerInputConnectionProvider(null)
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // App-start Windows sync (C15 — ADR-0020)
+    // ──────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `onCreate boots cleanly when paired to an unreachable PC — app-start sync is inert`() {
+        // C15: onCreate kicks off a fire-and-forget cursor sync when a PC is paired. It runs on
+        // Dispatchers.IO and must NEVER affect service startup — a failed start-sync is not a user
+        // event. Pair to a connection-refused address (127.0.0.1:1) so the background sync fails,
+        // and assert the service still constructs its whole surface. (When unpaired — every other
+        // test here — the trigger is skipped entirely, so those tests never touch the network.)
+        val prefs = ApplicationProvider.getApplicationContext<Context>()
+            .getSharedPreferences(DictatePipelineService.PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(Pref.WindowsTargetUrl.key, "http://127.0.0.1:1")
+            .putString(Pref.WindowsDeviceId.key, "device-under-test")
+            .putString(Pref.WindowsDeviceSecret.key, "s3cr3t")
+            .putString(Pref.WindowsServerName.key, "Unreachable-PC")
+            .commit()
+
+        try {
+            controller.create()
+            val binder = controller.get().onBind(Intent()) as DictatePipelineService.LocalBinder
+            assertNotNull(
+                "The service must construct its full surface even when the app-start sync fails",
+                binder.pipelineOrchestrator,
+            )
+        } finally {
+            prefs.edit().clear().commit()
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────

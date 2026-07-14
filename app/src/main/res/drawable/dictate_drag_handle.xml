@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A centered "grabber" bar for the history-panel resize handle (Block A). The
+     touch target is the full-width host View; this draws only a small centered bar
+     so the affordance reads as draggable without the handle looking like a button. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:gravity="center">
+        <shape android:shape="rectangle">
+            <size android:width="40dp" android:height="4dp" />
+            <corners android:radius="2dp" />
+            <solid android:color="?attr/colorOutline" />
+        </shape>
+    </item>
+</layer-list>

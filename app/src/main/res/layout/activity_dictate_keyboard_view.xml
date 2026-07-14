@@ -542,8 +542,25 @@
             app:layout_constraintTop_toBottomOf="@id/history_panel_title_tv"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintBottom_toTopOf="@+id/history_panel_resize_handle"
             tools:listitem="@layout/item_keyboard_history" />
+
+        <!-- Drag-to-resize grab handle (Block A). Full-width touch target at the
+             BOTTOM of the panel; dragging it down enlarges the list (growWhenDraggingDown),
+             up shrinks it. The RV height is driven imperatively by the IME
+             (applyHistoryPanelHeight + VerticalDragResizeHandler), persisted to
+             Pref.HistoryPanelHeightDp on release. -->
+        <View
+            android:id="@+id/history_panel_resize_handle"
+            android:layout_width="0dp"
+            android:layout_height="@dimen/dictate_history_panel_handle_height"
+            android:layout_marginTop="2dp"
+            android:background="@drawable/dictate_drag_handle"
+            android:contentDescription="@string/dictate_history_panel_resize_handle"
+            app:layout_constraintTop_toBottomOf="@id/history_panel_rv"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 

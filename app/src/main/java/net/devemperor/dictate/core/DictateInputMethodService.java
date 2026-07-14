@@ -4816,9 +4816,18 @@ public class DictateInputMethodService extends InputMethodService
                             new net.devemperor.dictate.state.Action.ReviewPanelAction.Show(sid, text, review.getMessage()),
                             "ReviewPanel.Show");
                 }
-            } else if (isWindowsAutoSendActive()) {
+            } else if (windowsDispatchCoordinator != null
+                    && net.devemperor.dictate.windows.WindowsAutoSend.INSTANCE.shouldDivertToPc(source, sp)) {
                 // ADR-0019 — Auto-send-to-Windows. THE docking point the K7-seam
                 // comment (Gate 1) reserved, now live. The IME is only ONE of two
+                //
+                // Source-aware (Block C / guards 27b91b3): only genuine DICTATION output
+                // (TRANSCRIPTION / REWORDING / QUEUED_PROMPT / PENDING_PART) is diverted.
+                // A STATIC_PROMPT completion (a long-pressed text-only pill) is NOT dictation
+                // — shouldDivertToPc returns false for it, so it falls through to the host
+                // commit below and is inserted 1:1 locally. (The review→PC route at
+                // onReviewInsertClicked still uses isWindowsAutoSendActive() — a reviewed
+                // dictation output IS dictation, WHERE-routing is unchanged there.)
                 // producers (the headless sink is the other, §3.6); BOTH call the
                 // SAME windowsDispatchCoordinator.dispatch(...) — there is no second
                 // code path, no IME-owned DispatchClient or executor.

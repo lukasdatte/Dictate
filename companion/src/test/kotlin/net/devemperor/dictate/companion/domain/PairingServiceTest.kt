@@ -2,6 +2,8 @@ package net.devemperor.dictate.companion.domain
 
 import net.devemperor.dictate.companion.data.CompanionDatabase
 import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
+import net.devemperor.dictate.companion.domain.model.Device
+import net.devemperor.dictate.companion.domain.port.DeviceRepository
 import net.devemperor.dictate.companion.fakes.MutableClock
 import net.devemperor.dictate.shared.auth.Secrets
 import net.devemperor.dictate.shared.protocol.Endpoints
@@ -10,6 +12,8 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.atomic.AtomicInteger
 
 class PairingServiceTest {
 
@@ -67,6 +71,45 @@ class PairingServiceTest {
 
         assertTrue("$failure", failure is CompanionException.InvalidTokenException)
         assertNull(devices.findById(DEVICE_ID))
+    }
+
+    /**
+     * Regression (review — L2-F1): the one-token-one-device invariant (ADR-0017) must survive
+     * concurrent redemption. Ktor CIO serves calls in parallel, so two `POST /v1/pair` with the same
+     * valid token can race. A non-atomic get→check-consumed→save→burn lets BOTH pass the consumed
+     * check and BOTH persist a device. The `save` sleeps to widen the TOCTOU window so a regression
+     * fails reliably rather than flakily.
+     */
+    @Test
+    fun redeem_concurrentlyWithTheSameToken_savesExactlyOneDevice() {
+        val saves = AtomicInteger(0)
+        val countingDevices = object : DeviceRepository {
+            override fun findById(deviceId: String): Device? = null
+            override fun save(device: Device) {
+                saves.incrementAndGet()
+                Thread.sleep(25) // widen the race window: a non-atomic redeem double-saves here
+            }
+            override fun touchLastSeen(deviceId: String, at: Long) {}
+            override fun all(): List<Device> = emptyList()
+            override fun revoke(deviceId: String) {}
+        }
+        val service = PairingService(countingDevices, clock, serverName = "test-pc")
+        val token = service.issue().token
+
+        val barrier = CyclicBarrier(2)
+        val successes = AtomicInteger(0)
+        val threads = (0 until 2).map { i ->
+            Thread {
+                barrier.await()
+                runCatching { service.redeem(token, "device-$i", "Pixel $i") }
+                    .onSuccess { successes.incrementAndGet() }
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+
+        assertEquals("one token, one device — a concurrent redeem must not double-save", 1, saves.get())
+        assertEquals("exactly one of the two racing redemptions may win", 1, successes.get())
     }
 
     @Test

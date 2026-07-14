@@ -82,10 +82,21 @@ class PairingService(
         if (now >= open.expiresAt) {
             // Burn it even though it failed: a token that has been *presented* has been on a
             // network, and re-showing the same one after a clock correction would be careless.
-            pending.set(open.copy(consumed = true))
+            // compareAndSet, not set: never clobber a token issue() replaced in the meantime.
+            pending.compareAndSet(open, open.copy(consumed = true))
             throw CompanionException.TokenExpiredException()
         }
         if (open.consumed) throw CompanionException.TokenConsumedException()
+
+        // Claim the token ATOMICALLY, before the save. Ktor CIO serves calls concurrently, so two
+        // redemptions of the same token can both pass the checks above; the compareAndSet is the one
+        // point where exactly one wins. The loser lost the race → the token is now spent → Consumed.
+        // (The CAS also refuses to overwrite a token issue() replaced concurrently.) Burning before
+        // the save means a save failure spends the token — acceptable: pairing is re-triable with a
+        // fresh QR, and one-token-one-device is the stronger invariant (ADR-0017).
+        if (!pending.compareAndSet(open, open.copy(consumed = true))) {
+            throw CompanionException.TokenConsumedException()
+        }
 
         val secret = Secrets.newDeviceSecret(random)
         devices.save(
@@ -97,7 +108,6 @@ class PairingService(
                 lastSeenAt = now,
             ),
         )
-        pending.set(open.copy(consumed = true))
 
         return PairResponse(deviceId = deviceId, deviceSecret = secret, serverName = serverName)
     }

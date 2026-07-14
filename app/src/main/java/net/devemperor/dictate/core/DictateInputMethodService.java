@@ -179,6 +179,10 @@ public class DictateInputMethodService extends InputMethodService
     private net.devemperor.dictate.state.render.HistoryPanelRenderer historyPanelRenderer;
     private net.devemperor.dictate.history.KeyboardHistoryController historyController;
     private net.devemperor.dictate.history.KeyboardHistoryAdapter historyAdapter;
+    /** Block B — the session currently shown in the history-panel detail view (loaded by
+     *  onDetailChanged off the DB thread); Insert/Send in the detail reuse the list handlers
+     *  against it. Null when no detail is open. */
+    private net.devemperor.dictate.database.entity.SessionEntity historyDetailSession;
     private boolean vibrationEnabled = true;
     // Block 3b: the audio-focus flag is no longer cached as a service field.
     // The single persistent source of truth is Pref.AudioFocus; the per-session
@@ -1942,6 +1946,15 @@ public class DictateInputMethodService extends InputMethodService
             dictateKeyboardView.findViewById(R.id.history_panel_rv);
         View historyPanelCl = dictateKeyboardView.findViewById(R.id.history_panel_cl);
         View historyCloseBtn = dictateKeyboardView.findViewById(R.id.history_panel_close_btn);
+        View historyResizeHandle = dictateKeyboardView.findViewById(R.id.history_panel_resize_handle);
+        // Block B — item detail views (loaded/wired below; shared across the panel lifecycle).
+        View historyDetailGroup = dictateKeyboardView.findViewById(R.id.history_panel_detail_group);
+        android.widget.TextView historyDetailTv =
+            dictateKeyboardView.findViewById(R.id.history_panel_detail_tv);
+        View historyDetailBackBtn = dictateKeyboardView.findViewById(R.id.history_panel_detail_back_btn);
+        View historyDetailInsertBtn = dictateKeyboardView.findViewById(R.id.history_panel_detail_insert_btn);
+        View historyDetailSendBtn = dictateKeyboardView.findViewById(R.id.history_panel_detail_send_btn);
+        boolean windowsPaired = net.devemperor.dictate.preferences.WindowsTarget.from(sp) != null;
         if (historyRv != null && dictateDb != null) {
             historyRv.setLayoutManager(
                 new androidx.recyclerview.widget.LinearLayoutManager(this));
@@ -1958,11 +1971,19 @@ public class DictateInputMethodService extends InputMethodService
                                                 boolean pending) {
                         onKeyboardHistorySendClicked(session, pending);
                     }
+
+                    @Override
+                    public void onOpenDetail(net.devemperor.dictate.database.entity.SessionEntity session) {
+                        // Block B — row short-press opens the in-keyboard full-text detail.
+                        dispatchPipelineActionToOrchestrator(
+                            new net.devemperor.dictate.state.Action.HistoryPanelAction.ShowDetail(session.getId()),
+                            "HistoryPanel.ShowDetail");
+                    }
                 },
                 // ADR-0019 — the per-row send slot is only shown when a PC is paired. Read once
                 // at view creation (mirrors PreferencesFragment); a fresh pairing surfaces the
                 // button the next time the keyboard is inflated.
-                net.devemperor.dictate.preferences.WindowsTarget.from(sp) != null);
+                windowsPaired);
             historyRv.setAdapter(historyAdapter);
             // "Distinctly taller": the dragged height (Pref.HistoryPanelHeightDp) or the
             // ~50%-of-display auto-default, clamped to the live drag bounds.
@@ -1972,8 +1993,6 @@ public class DictateInputMethodService extends InputMethodService
             // finger) and persists the chosen height once on release. The RV's own height
             // is the single source of truth the handler reads/writes; no state axis is
             // involved (ADR-0014 Alternative 3 — a view dimension belongs to the IME).
-            View historyResizeHandle =
-                dictateKeyboardView.findViewById(R.id.history_panel_resize_handle);
             if (historyResizeHandle != null) {
                 androidx.recyclerview.widget.RecyclerView resizeTarget = historyRv;
                 historyResizeHandle.setOnTouchListener(
@@ -2001,11 +2020,70 @@ public class DictateInputMethodService extends InputMethodService
                 historyAdapter);
             historyController.onViewCreated();
         }
+        // Block B — item detail buttons. Back returns to the list; Insert/Send reuse the
+        // EXACT list handlers (one insert path, one send path) against the loaded detail
+        // session, then return to the list. `historyDetailSession` is set by onDetailChanged.
+        if (historyDetailSendBtn != null) {
+            historyDetailSendBtn.setVisibility(windowsPaired ? View.VISIBLE : View.GONE);
+        }
+        if (historyDetailBackBtn != null) {
+            historyDetailBackBtn.setOnClickListener(v -> dispatchPipelineActionToOrchestrator(
+                net.devemperor.dictate.state.Action.HistoryPanelAction.CloseDetail.INSTANCE,
+                "HistoryPanel.CloseDetail"));
+        }
+        if (historyDetailInsertBtn != null) {
+            historyDetailInsertBtn.setOnClickListener(v -> {
+                net.devemperor.dictate.database.entity.SessionEntity s = historyDetailSession;
+                if (s == null) return;
+                onKeyboardHistoryInsertClicked(
+                    s, net.devemperor.dictate.history.SessionRowPredicatesKt.isPendingInsertion(s));
+                dispatchPipelineActionToOrchestrator(
+                    net.devemperor.dictate.state.Action.HistoryPanelAction.CloseDetail.INSTANCE,
+                    "HistoryPanel.CloseDetail");
+            });
+        }
+        if (historyDetailSendBtn != null) {
+            historyDetailSendBtn.setOnClickListener(v -> {
+                net.devemperor.dictate.database.entity.SessionEntity s = historyDetailSession;
+                if (s == null) return;
+                onKeyboardHistorySendClicked(
+                    s, net.devemperor.dictate.history.SessionRowPredicatesKt.isPendingInsertion(s));
+                dispatchPipelineActionToOrchestrator(
+                    net.devemperor.dictate.state.Action.HistoryPanelAction.CloseDetail.INSTANCE,
+                    "HistoryPanel.CloseDetail");
+            });
+        }
         historyPanelRenderer = new net.devemperor.dictate.state.render.HistoryPanelRenderer(
-            new net.devemperor.dictate.state.render.HistoryPanelViews(historyPanelCl),
+            new net.devemperor.dictate.state.render.HistoryPanelViews(
+                historyPanelCl, historyRv, historyResizeHandle, historyDetailGroup),
             open -> {
                 if (historyController == null) return kotlin.Unit.INSTANCE;
                 if (open) historyController.onPanelOpen(); else historyController.onPanelClosed();
+                return kotlin.Unit.INSTANCE;
+            },
+            detailSessionId -> {
+                // Block B — the detail view opened/closed. Load the full text off the DB
+                // thread (getFinalOutput — the ONE text source) and post it to the detail
+                // TextView; cache the session so Insert/Send reuse the list handlers.
+                if (detailSessionId == null) {
+                    historyDetailSession = null;
+                    return kotlin.Unit.INSTANCE;
+                }
+                dbExecutor.execute(() -> {
+                    net.devemperor.dictate.database.entity.SessionEntity s =
+                        sessionManager != null ? sessionManager.getSessionById(detailSessionId) : null;
+                    String text =
+                        sessionManager != null ? sessionManager.getFinalOutput(detailSessionId) : null;
+                    mainHandler.post(() -> {
+                        historyDetailSession = s;
+                        boolean hasText = text != null && !text.isEmpty();
+                        if (historyDetailTv != null) historyDetailTv.setText(text != null ? text : "");
+                        if (historyDetailInsertBtn != null) historyDetailInsertBtn.setEnabled(hasText);
+                        if (historyDetailSendBtn != null) {
+                            historyDetailSendBtn.setEnabled(hasText && windowsPaired);
+                        }
+                    });
+                });
                 return kotlin.Unit.INSTANCE;
             });
         if (historyCloseBtn != null) {

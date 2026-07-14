@@ -1964,9 +1964,38 @@ public class DictateInputMethodService extends InputMethodService
                 // button the next time the keyboard is inflated.
                 net.devemperor.dictate.preferences.WindowsTarget.from(sp) != null);
             historyRv.setAdapter(historyAdapter);
-            // "Distinctly taller": ~50% of the display height, clamped to
-            // [min, max] so the panel scales across device sizes.
+            // "Distinctly taller": the dragged height (Pref.HistoryPanelHeightDp) or the
+            // ~50%-of-display auto-default, clamped to the live drag bounds.
             applyHistoryPanelHeight(historyRv);
+            // Block A — drag-to-resize. The grab handle at the bottom of the panel drives
+            // the RV height live (root is wrap_content → the IME window grows with the
+            // finger) and persists the chosen height once on release. The RV's own height
+            // is the single source of truth the handler reads/writes; no state axis is
+            // involved (ADR-0014 Alternative 3 — a view dimension belongs to the IME).
+            View historyResizeHandle =
+                dictateKeyboardView.findViewById(R.id.history_panel_resize_handle);
+            if (historyResizeHandle != null) {
+                androidx.recyclerview.widget.RecyclerView resizeTarget = historyRv;
+                historyResizeHandle.setOnTouchListener(
+                    new net.devemperor.dictate.keyboard.VerticalDragResizeHandler(
+                        historyPanelDragMinPx(),
+                        historyPanelDragMaxPx(),
+                        () -> resizeTarget.getLayoutParams().height,
+                        /* growWhenDraggingDown = */ true,
+                        android.view.ViewConfiguration.get(this).getScaledTouchSlop(),
+                        newPx -> {
+                            android.view.ViewGroup.LayoutParams lp = resizeTarget.getLayoutParams();
+                            lp.height = newPx;
+                            resizeTarget.setLayoutParams(lp);
+                            return kotlin.Unit.INSTANCE;
+                        },
+                        committedPx -> {
+                            sp.edit()
+                                .putInt(Pref.HistoryPanelHeightDp.INSTANCE.getKey(), pxToDp(committedPx))
+                                .apply();
+                            return kotlin.Unit.INSTANCE;
+                        }));
+            }
             historyController = new net.devemperor.dictate.history.KeyboardHistoryController(
                 new net.devemperor.dictate.history.KeyboardHistoryPager(dictateDb.sessionDao()),
                 historyAdapter);
@@ -6410,22 +6439,51 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * Sets the history-panel list height to ~50% of the display height, clamped
-     * to [min, max] (ADR-0014) so the panel is "distinctly taller" than the grid
-     * across device sizes. The XML default is the pre-measurement fallback.
+     * Sets the history-panel list height (Block A). Uses the user's dragged height
+     * ({@link Pref.HistoryPanelHeightDp}, dp) when set, else the ~50%-of-display
+     * auto-default. Either way clamped to the live drag bounds
+     * [{@link #historyPanelDragMinPx()} .. {@link #historyPanelDragMaxPx()}], so a
+     * persisted value and a fresh value share the same range and a smaller/rotated
+     * screen can never leave the panel out of bounds. The XML dimen is only the
+     * pre-measurement fallback.
      */
     private void applyHistoryPanelHeight(android.view.View list) {
         try {
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-            int minPx = getResources().getDimensionPixelSize(R.dimen.dictate_history_panel_list_min);
-            int maxPx = getResources().getDimensionPixelSize(R.dimen.dictate_history_panel_list_max);
-            int target = Math.max(minPx, Math.min(maxPx, dm.heightPixels / 2));
+            int minPx = historyPanelDragMinPx();
+            int maxPx = historyPanelDragMaxPx();
+            int savedDp = DictatePrefsKt.get(sp, Pref.HistoryPanelHeightDp.INSTANCE);
+            int desired = savedDp > 0 ? dpToPx(savedDp) : dm.heightPixels / 2;
+            int target = Math.max(minPx, Math.min(maxPx, desired));
             android.view.ViewGroup.LayoutParams lp = list.getLayoutParams();
             lp.height = target;
             list.setLayoutParams(lp);
         } catch (Throwable t) {
             Log.w("DictateIME", "history panel height sizing failed; using XML default", t);
         }
+    }
+
+    /** Lower drag bound (px): a generous fixed floor (Block A decision — 200dp). */
+    private int historyPanelDragMinPx() {
+        return getResources().getDimensionPixelSize(R.dimen.dictate_history_panel_drag_min);
+    }
+
+    /**
+     * Upper drag bound (px): 60% of the CURRENT display height — computed at runtime,
+     * not a dimen, so it tracks the live screen / split-screen size. Never below the
+     * lower bound (defensive for very short screens).
+     */
+    private int historyPanelDragMaxPx() {
+        int sixtyPercent = Math.round(getResources().getDisplayMetrics().heightPixels * 0.6f);
+        return Math.max(historyPanelDragMinPx(), sixtyPercent);
+    }
+
+    private int dpToPx(int dp) {
+        return Math.round(dp * getResources().getDisplayMetrics().density);
+    }
+
+    private int pxToDp(int px) {
+        return Math.round(px / getResources().getDisplayMetrics().density);
     }
 
     @Override

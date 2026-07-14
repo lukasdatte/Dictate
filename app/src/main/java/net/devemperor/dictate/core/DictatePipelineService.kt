@@ -63,11 +63,13 @@ import net.devemperor.dictate.state.render.overlay.OverlayBackend
 import net.devemperor.dictate.state.render.overlay.OverlayPermissionGate
 import net.devemperor.dictate.state.render.overlay.OverlayPermissionObserver
 import net.devemperor.dictate.database.entity.InsertionMethod
+import net.devemperor.dictate.database.entity.SessionOrigin
 import net.devemperor.dictate.preferences.WindowsTarget
 import net.devemperor.dictate.shared.client.DispatchClient
 import net.devemperor.dictate.shared.sync.SyncClient
 import net.devemperor.dictate.shared.transport.OkHttpDispatchTransport
 import net.devemperor.dictate.windows.AndroidSyncSource
+import net.devemperor.dictate.windows.SessionEntityMapper
 import net.devemperor.dictate.windows.WindowsAutoSend
 import net.devemperor.dictate.windows.WindowsDispatchCoordinator
 import net.devemperor.dictate.windows.WindowsDispatchService
@@ -886,13 +888,45 @@ class DictatePipelineService : Service() {
                 // a "Tap to paste" pending part — text commit stays
                 // IME-exclusive (ADR-0011).
                 val text = sessionManagerImpl.getFinalOutput(sessionId) ?: callbackText
-                orchestrator.emitAction(
-                    Action.PipelineAction.PipelineDone(
+                if (WindowsAutoSend.shouldAutoSend(sharedPrefs)) {
+                    // D1 / ADR-0019 — the SECOND auto-send producer. Same predicate, same
+                    // primitive as the IME seam (§3.6). The guard is ALREADY consumed by the
+                    // bridge at this point (PipelineCallbackBridge, headless arm), so exactly-once
+                    // holds; the bind-reconciliation is doubly excluded (guard gone AND the FSM
+                    // goes Idle the instant PipelineDone(awaitingDispatch) reduces — it only acts
+                    // on Preparing/Running). awaitingDispatch must therefore NOT hold the FSM
+                    // non-Idle. This branch never fires with a bound IME (the delegate path runs
+                    // the IME seam instead); it is the pure-headless case (widget / QS-tile /
+                    // shortcut, app backgrounded) — conceptually the strongest auto-send case.
+                    val session = sessionManagerImpl.getSessionById(sessionId)
+                    orchestrator.emitAction(
+                        Action.PipelineAction.PipelineDone(
+                            sessionId = sessionId,
+                            finalText = text,
+                            committed = false,
+                            awaitingDispatch = true,
+                        ),
+                    )
+                    windowsDispatchCoordinatorImpl.dispatch(
                         sessionId = sessionId,
-                        finalText = text,
-                        committed = false,
-                    ),
-                )
+                        text = text,
+                        createdAt = session?.createdAt ?: System.currentTimeMillis(),
+                        origin = SessionEntityMapper.originToWire(
+                            session?.origin ?: SessionOrigin.KEYBOARD.name,
+                        ),
+                        acknowledgeOnSuccess = true,
+                        surfacedAsPending = false,
+                    )
+                } else {
+                    // UNCHANGED — the existing committed=false → pending-part path (ADR-0011).
+                    orchestrator.emitAction(
+                        Action.PipelineAction.PipelineDone(
+                            sessionId = sessionId,
+                            finalText = text,
+                            committed = false,
+                        ),
+                    )
+                }
             },
             onFailed = { sessionId, reason ->
                 orchestrator.emitAction(

@@ -53,6 +53,47 @@ class HistoryPanelModuleTest {
         assertEquals(42L, eff.at)
     }
 
+    // ── detail view (Block B) ──
+
+    @Test
+    fun `ShowDetail sets the detail session while open`() {
+        val r = module.reduce(HistoryPanelState(open = true), Action.HistoryPanelAction.ShowDetail("s7"), ctx())!!
+        assertEquals("s7", r.nextState.detailSessionId)
+        assertTrue(r.nextState.open)
+    }
+
+    @Test
+    fun `ShowDetail on a closed panel is a no-op`() {
+        assertNull(module.reduce(HistoryPanelState(), Action.HistoryPanelAction.ShowDetail("s7"), ctx()))
+    }
+
+    @Test
+    fun `ShowDetail with the same session is a no-op`() {
+        val open = HistoryPanelState(open = true, detailSessionId = "s7")
+        assertNull(module.reduce(open, Action.HistoryPanelAction.ShowDetail("s7"), ctx()))
+    }
+
+    @Test
+    fun `CloseDetail returns to the list, panel stays open`() {
+        val detail = HistoryPanelState(open = true, detailSessionId = "s7")
+        val r = module.reduce(detail, Action.HistoryPanelAction.CloseDetail, ctx())!!
+        assertNull(r.nextState.detailSessionId)
+        assertTrue(r.nextState.open)
+    }
+
+    @Test
+    fun `CloseDetail with no detail open is a no-op`() {
+        assertNull(module.reduce(HistoryPanelState(open = true), Action.HistoryPanelAction.CloseDetail, ctx()))
+    }
+
+    @Test
+    fun `Close clears an open detail view`() {
+        val detail = HistoryPanelState(open = true, detailSessionId = "s7")
+        val r = module.reduce(detail, Action.HistoryPanelAction.Close, ctx())!!
+        assertFalse(r.nextState.open)
+        assertNull(r.nextState.detailSessionId)
+    }
+
     // ── auto-close cascade ──
 
     @Test

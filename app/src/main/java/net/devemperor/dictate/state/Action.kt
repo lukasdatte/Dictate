@@ -929,6 +929,16 @@ sealed class Action {
          * acknowledges). The host commit itself is an IME side-channel.
          */
         data class AcknowledgeInsert(val sessionId: String) : HistoryPanelAction()
+
+        /**
+         * Open the full-text detail of [sessionId] inside the panel (Block B) — a
+         * row short-press. Only meaningful while the panel is open; the IME loads the
+         * full text via `SessionManager.getFinalOutput`.
+         */
+        data class ShowDetail(val sessionId: String) : HistoryPanelAction()
+
+        /** Leave the detail view and return to the list (Block B — the detail "Back"). */
+        data object CloseDetail : HistoryPanelAction()
     }
 
     // ════════════════════════════════════════════════════════════════

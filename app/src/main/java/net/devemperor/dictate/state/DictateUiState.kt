@@ -943,9 +943,14 @@ data class ReviewPanelState(
  * constructor is the closed sentinel.
  *
  * @property open whether the history panel is showing.
+ * @property detailSessionId when non-null, the panel shows the full-text detail of
+ *   this session instead of the list (Block B). Only the id lives in state (like
+ *   `open`); the loaded full text is IME-owned (via `SessionManager.getFinalOutput`),
+ *   not part of the immutable snapshot. `null` = the list is shown.
  */
 data class HistoryPanelState(
     val open: Boolean = false,
+    val detailSessionId: String? = null,
 )
 
 /**

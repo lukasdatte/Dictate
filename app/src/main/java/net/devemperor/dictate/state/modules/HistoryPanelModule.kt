@@ -61,7 +61,24 @@ object HistoryPanelModule
             if (!state.open) TransitionResult(HistoryPanelState(open = true), emptyList()) else null
 
         Action.HistoryPanelAction.Close ->
+            // Resets to the default (closed, no detail) — closing always clears any
+            // open detail view, so the panel reopens on the list.
             if (state.open) TransitionResult(HistoryPanelState(), emptyList()) else null
+
+        is Action.HistoryPanelAction.ShowDetail ->
+            // Only meaningful while open; switch the panel to the session's detail view.
+            if (state.open && state.detailSessionId != action.sessionId) {
+                TransitionResult(state.copy(detailSessionId = action.sessionId), emptyList())
+            } else {
+                null
+            }
+
+        Action.HistoryPanelAction.CloseDetail ->
+            if (state.detailSessionId != null) {
+                TransitionResult(state.copy(detailSessionId = null), emptyList())
+            } else {
+                null
+            }
 
         is Action.HistoryPanelAction.AcknowledgeInsert ->
             // State unchanged (open/close is orthogonal); acknowledge only.

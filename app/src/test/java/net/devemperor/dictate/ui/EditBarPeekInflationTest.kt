@@ -74,7 +74,7 @@ class EditBarPeekInflationTest {
             R.id.edit_copy_btn, R.id.edit_paste_btn, R.id.edit_emoji_btn,
             R.id.edit_keyboard_btn, R.id.edit_history_btn, R.id.edit_audio_focus_btn,
             R.id.edit_settings_btn, R.id.edit_numbers_btn, R.id.edit_widget_toggle_btn,
-            R.id.edit_pc_btn,
+            R.id.edit_a11y_btn, R.id.edit_pc_btn,
         )
         for (id in ids) {
             val button = root.findViewById<View>(id)

@@ -54,6 +54,53 @@ class FeatureToggleModuleTest {
         assertNull(module.reduce(state, Action.FeatureToggleAction.ToggleWindowsAutoSend, ctx()))
     }
 
+    // ── Screen context (opt-in a11y) ────────────────────────────────────
+
+    @Test
+    fun `ToggleScreenContext flips the opt-in and persists it`() {
+        val state = FeatureToggles(screenContextAvailable = true, screenContextEnabled = false)
+        val result = module.reduce(state, Action.FeatureToggleAction.ToggleScreenContext, ctx())!!
+
+        assertTrue(result.nextState.screenContextEnabled)
+        assertEquals(
+            listOf(FeatureToggleModule.Effect.PersistScreenContext(true)),
+            result.sideEffects,
+        )
+    }
+
+    @Test
+    fun `ToggleScreenContext is rejected while the a11y service is off`() {
+        // Lighting the button would promise context that no read can deliver.
+        val state = FeatureToggles(screenContextAvailable = false)
+        assertNull(module.reduce(state, Action.FeatureToggleAction.ToggleScreenContext, ctx()))
+    }
+
+    @Test
+    fun `SetScreenContextAvailable only emits on a real change`() {
+        // Pushed on every onStartInputView; a no-op must not churn the store.
+        val state = FeatureToggles(screenContextAvailable = true)
+        assertNull(
+            module.reduce(state, Action.FeatureToggleAction.SetScreenContextAvailable(true), ctx()),
+        )
+        val flipped = module.reduce(
+            state, Action.FeatureToggleAction.SetScreenContextAvailable(false), ctx(),
+        )!!
+        assertFalse(flipped.nextState.screenContextAvailable)
+    }
+
+    @Test
+    fun `losing the a11y service does not clear the user's opt-in`() {
+        // The opt-in is the user's intent; the service being off is a fact
+        // about the system. Clearing the pref would silently forget the intent
+        // and make them re-opt-in after every OS hiccup.
+        val state = FeatureToggles(screenContextAvailable = true, screenContextEnabled = true)
+        val next = module.reduce(
+            state, Action.FeatureToggleAction.SetScreenContextAvailable(false), ctx(),
+        )!!.nextState
+        assertTrue(next.screenContextEnabled)
+        assertFalse(next.screenContextAvailable)
+    }
+
     @Test
     fun `ToggleRewording flips rewordingEnabled`() {
         val state = FeatureToggles(rewordingEnabled = true)

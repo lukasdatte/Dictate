@@ -25,6 +25,14 @@ object ConversationTurnBuilder {
     fun hasWork(inputs: PostProcessingInputs): Boolean =
         inputs.forceTurn || inputs.autoFormatEnabled || inputs.instructions.isNotEmpty()
 
+    /**
+     * Builds the consolidated first user message.
+     *
+     * Tag order is `<guardrail>` → `<instructions>` → `<language-hint>` →
+     * `<ui-context>` → `<transcript>`: the two data blocks sit last, adjacent
+     * and behind everything that tells the model how to treat them, and the
+     * transcript stays in final position where it has always been.
+     */
     fun buildFirstUserMessage(inputs: PostProcessingInputs): String {
         val items = ArrayList<String>()
         if (inputs.autoFormatEnabled) {
@@ -40,10 +48,23 @@ object ConversationTurnBuilder {
             items.add(PromptTemplates.AMBIGUITY_TASK)
         }
 
+        val uiContext = inputs.uiContext?.takeIf { it.isNotBlank() }
+        val guardrail = if (uiContext != null) {
+            // Only extend the guardrail when the block it governs is actually
+            // present — spending tokens explaining a tag that is not there
+            // would also invite the model to hallucinate one.
+            PromptTemplates.TRANSCRIPT_GUARDRAIL + "\n" + PromptTemplates.UI_CONTEXT_GUARDRAIL
+        } else {
+            PromptTemplates.TRANSCRIPT_GUARDRAIL
+        }
+
         return PromptBuilder.create()
-            .section("guardrail", PromptTemplates.TRANSCRIPT_GUARDRAIL)
+            .section("guardrail", guardrail)
             .instructions(items)
             .languageHint(inputs.languageHint)
+            // dataSection, NOT section: this is a third-party app's content and
+            // must not be able to forge tags (N6).
+            .apply { if (uiContext != null) dataSection("ui-context", uiContext) }
             .transcript(inputs.transcript)
             .build()
     }

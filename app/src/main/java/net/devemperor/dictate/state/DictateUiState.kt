@@ -1008,6 +1008,17 @@ data class LanguageState(
  *   its answer here. The record button's colour and label can then be
  *   plain state reads that cannot drift from where the transcript actually
  *   goes. Four prefs feed this one field; see `PipelinePrefMirror`.
+ * @property screenContextEnabled the user's opt-in for sending the foreground
+ *   app's screen along as prompt context (ADR draft adr-a11y-screen-context).
+ *   Mirrors `Pref.AccessibilityContextEnabled`. On its own it does nothing:
+ *   without [screenContextAvailable] there is no service to read with.
+ * @property screenContextAvailable whether the accessibility service is enabled
+ *   in system settings. Separate from [screenContextEnabled] for the same
+ *   reason [windowsPaired] is separate from [windowsAutoSendActive]: "you have
+ *   not set this up" and "you set it up and turned it off" are different
+ *   states, and only the first one should point at the setup screen. NOT
+ *   mirrored from a pref — it is a system setting, so the IME pushes it in on
+ *   the render path (see `Action.FeatureToggleAction.SetScreenContextAvailable`).
  * @property windowsPaired whether a PC is paired at all
  *   (`WindowsTarget.from(sp) != null`). Separate from
  *   [windowsAutoSendActive] because "you have no PC" and "you have a PC and
@@ -1022,6 +1033,8 @@ data class FeatureToggles(
     val autoEnterEnabled: Boolean = false,
     val windowsAutoSendActive: Boolean = false,
     val windowsPaired: Boolean = false,
+    val screenContextEnabled: Boolean = false,
+    val screenContextAvailable: Boolean = false,
 )
 
 /**

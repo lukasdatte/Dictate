@@ -33,5 +33,20 @@ data class PostProcessingInputs(
     val autoFormatEnabled: Boolean,
     val instructions: List<TurnInstruction>,
     val includeAmbiguityTask: Boolean = true,
-    val forceTurn: Boolean = false
+    val forceTurn: Boolean = false,
+    /**
+     * The foreground app's screen, serialised, or `null` when the user has not
+     * opted in / the accessibility service is not connected. Opt-in feature —
+     * `null` is the normal case and must stay cheap.
+     *
+     * Already a plain String by the time it gets here: the platform types
+     * (`AccessibilityNodeInfo`) are resolved by
+     * [net.devemperor.dictate.accessibility.AccessibilityContextReader] at the
+     * send-tap, keeping this class and the builder Android-free per ADR-0012.
+     *
+     * **Untrusted.** This is another app's content, so
+     * [ConversationTurnBuilder] must emit it through
+     * `PromptBuilder.dataSection` (escaped), never `section`.
+     */
+    val uiContext: String? = null,
 )

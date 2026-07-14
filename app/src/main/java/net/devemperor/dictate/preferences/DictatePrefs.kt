@@ -41,6 +41,23 @@ sealed class Pref<T>(val key: String, val default: T) {
     object SmallMode : Pref<Boolean>("net.devemperor.dictate.small_mode", false)
     object SingleRowMode : Pref<Boolean>("net.devemperor.dictate.single_row_mode", false)
 
+    /**
+     * Send the foreground app's view tree along as `<ui-context>` when
+     * post-processing a dictation.
+     *
+     * **Opt-in, and default `false` on purpose.** Turning this on means the
+     * contents of other apps' screens leave the device — and because ADR-0012
+     * persists the built user message verbatim, they also land in the local
+     * conversation history and get replayed on every regenerate. That is a
+     * decision only the user can make, so the default is no.
+     *
+     * Enabling this pref is necessary but not sufficient: the accessibility
+     * service must also be enabled in system settings
+     * ([net.devemperor.dictate.accessibility.A11yEnablementGate]).
+     */
+    object AccessibilityContextEnabled :
+        Pref<Boolean>("net.devemperor.dictate.accessibility_context_enabled", false)
+
     // ── Windows Dispatch ──
     /**
      * Auto-send mode (ADR-0019). When on, a completed pipeline's final text is sent to the

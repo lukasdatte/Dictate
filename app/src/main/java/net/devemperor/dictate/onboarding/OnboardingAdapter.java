@@ -15,6 +15,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
+import net.devemperor.dictate.accessibility.A11yEnablementGate;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
@@ -104,6 +105,24 @@ public class OnboardingAdapter extends RecyclerView.Adapter<OnboardingAdapter.Vi
             }
 
             keyboardBtn.setOnClickListener(v -> activity.startActivity(new Intent(android.provider.Settings.ACTION_INPUT_METHOD_SETTINGS)));
+
+            // Screen context — optional, so it sits below the divider and never
+            // blocks onboarding. It routes through its own explainer Activity
+            // rather than straight to the system switch: this is the one
+            // permission here that sends other apps' content off-device, so it
+            // needs a rationale the user can actually read, plus (on sideloaded
+            // builds) the "Allow restricted settings" detour.
+            TextView a11yStatusTv = holder.itemView.findViewById(R.id.onboarding_permissions_a11y_status_tv);
+            Button a11yBtn = holder.itemView.findViewById(R.id.onboarding_permissions_a11y_btn);
+            boolean a11yEnabled = A11yEnablementGate.isServiceEnabled(activity);
+            a11yStatusTv.setText(activity.getString(a11yEnabled
+                    ? R.string.dictate_a11y_state_enabled
+                    : R.string.dictate_a11y_state_disabled));
+            // Deliberately NOT disabled when enabled (unlike the buttons above):
+            // this screen is also the way to review what is shared and turn it
+            // back off, which stays useful after it is on.
+            a11yBtn.setOnClickListener(v ->
+                    activity.startActivity(new Intent(activity, A11yContextOnboardingActivity.class)));
         } else if (position == 2) {
             TextView requestApiKeyTv = holder.itemView.findViewById(R.id.onboarding_api_key_request_tv);
             EditText apiKeyEt = holder.itemView.findViewById(R.id.onboarding_api_key_et);

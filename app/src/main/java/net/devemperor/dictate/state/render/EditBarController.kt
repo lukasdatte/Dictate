@@ -143,6 +143,18 @@ class EditBarController(
          * still reach pairing from here.
          */
         fun onPcLongClicked()
+
+        /**
+         * Screen-context button **short-press** — flips the opt-in for sending
+         * the foreground app's screen along as prompt context.
+         */
+        fun onScreenContextToggled()
+
+        /**
+         * Screen-context button **long-press** — opens the explainer / setup
+         * screen. Same tap/long-press split as the history and PC buttons.
+         */
+        fun onScreenContextLongClicked()
     }
 
     /**
@@ -235,6 +247,15 @@ class EditBarController(
                 callback.onPcLongClicked()
                 true
             },
+            editA11yClick = View.OnClickListener {
+                callback.onVibrate()
+                callback.onScreenContextToggled()
+            },
+            editA11yLong = View.OnLongClickListener {
+                callback.onVibrate()
+                callback.onScreenContextLongClicked()
+                true
+            },
             // undo/redo/cut/copy/paste — per-button click forwarding the
             // android.R.id.* action id (legacy `:151-164` parity).
             editActionClicks = editActionViews().map { (view, actionId) ->
@@ -271,6 +292,8 @@ class EditBarController(
         views.editWidgetToggleButton?.setOnClickListener(c.editWidgetToggleClick)
         views.editPcButton?.setOnClickListener(c.editPcClick)
         views.editPcButton?.setOnLongClickListener(c.editPcLong)
+        views.editA11yButton?.setOnClickListener(c.editA11yClick)
+        views.editA11yButton?.setOnLongClickListener(c.editA11yLong)
         for ((view, listener) in c.editActionClicks) {
             view.setOnClickListener(listener)
         }
@@ -319,6 +342,7 @@ class EditBarController(
         // EditBarPcButtonRenderer. Two different axes on two different
         // properties, so there is no writer race here.
         views.editPcButton?.setBackgroundColor(accentMedium)
+        views.editA11yButton?.setBackgroundColor(accentMedium)
     }
 
     /**
@@ -407,6 +431,7 @@ class EditBarController(
         views.editPasteButton,
         views.editWidgetToggleButton,
         views.editPcButton,
+        views.editA11yButton,
     )
 
     private var cached: CachedListeners? = null
@@ -424,6 +449,8 @@ class EditBarController(
         val editWidgetToggleClick: View.OnClickListener,
         val editPcClick: View.OnClickListener,
         val editPcLong: View.OnLongClickListener,
+        val editA11yClick: View.OnClickListener,
+        val editA11yLong: View.OnLongClickListener,
         val editActionClicks: List<Pair<MaterialButton, View.OnClickListener>>,
     )
 
@@ -479,4 +506,6 @@ data class EditBarViews(
      * without listing it.
      */
     val editPcButton: MaterialButton? = null,
+    /** Edit-bar screen-context toggle. Nullable for the same reason as [editPcButton]. */
+    val editA11yButton: MaterialButton? = null,
 )

@@ -8,10 +8,13 @@ import net.devemperor.dictate.preferences.Pref
 import kotlin.reflect.KClass
 
 /**
- * Owns the [FeatureToggles] axis — four user-toggle booleans
+ * Owns the [FeatureToggles] axis — the user-toggle booleans
  * (`rewordingEnabled`, `autoFormattingEnabled`, `instantOutputEnabled`,
- * `autoEnterEnabled`). All four are Pref-mirrored via
- * `PipelinePrefMirror` (C7).
+ * `autoEnterEnabled`, plus PC send-mode and screen context). All are
+ * Pref-mirrored via `PipelinePrefMirror` (C7) except
+ * `screenContextAvailable`, which mirrors a SYSTEM setting the app can only
+ * observe — the IME pushes it in via
+ * [Action.FeatureToggleAction.SetScreenContextAvailable].
  *
  * **`ToggleVibration` deviation note (Phase 1):**
  *
@@ -36,10 +39,11 @@ import kotlin.reflect.KClass
  * **Effects — one, and why only one.** The four original toggles have no
  * effects: their only surface is the settings screen, which writes
  * SharedPreferences directly and lets `PipelinePrefMirror` carry the value
- * back into state (C7). `ToggleWindowsAutoSend` is different — its primary
- * surface is the keyboard's PC button, so nothing else would perform the
- * write. It therefore persists via [Effect.PersistWindowsAutoSend], the same
- * shape `AudioModule` uses for `ToggleAudioFocusPref`.
+ * back into state (C7). `ToggleWindowsAutoSend` and `ToggleScreenContext` are
+ * different — their primary surface is a keyboard button, so nothing else
+ * would perform the write. They persist via [Effect.PersistWindowsAutoSend] /
+ * [Effect.PersistScreenContext], the same shape `AudioModule` uses for
+ * `ToggleAudioFocusPref`.
  *
  * @see net.devemperor.dictate.state.FeatureToggles
  * @see net.devemperor.dictate.state.Action.FeatureToggleAction
@@ -62,6 +66,9 @@ object FeatureToggleModule : DictateModule<FeatureToggles, Action.FeatureToggleA
     sealed interface Effect : SideEffect {
         /** Persist `Pref.WindowsAutoSendEnabled`; the mirror re-derives state. */
         data class PersistWindowsAutoSend(val value: Boolean) : Effect
+
+        /** Persist `Pref.AccessibilityContextEnabled`; the mirror re-derives state. */
+        data class PersistScreenContext(val value: Boolean) : Effect
     }
 
     override fun reduce(
@@ -113,6 +120,32 @@ object FeatureToggleModule : DictateModule<FeatureToggles, Action.FeatureToggleA
             }
         }
 
+        Action.FeatureToggleAction.ToggleScreenContext -> {
+            // No service → reject. The button would claim the model can see the
+            // screen while every read returns null.
+            if (!state.screenContextAvailable) {
+                null
+            } else {
+                val next = !state.screenContextEnabled
+                TransitionResult(
+                    nextState = state.copy(screenContextEnabled = next),
+                    sideEffects = listOf(Effect.PersistScreenContext(next)),
+                )
+            }
+        }
+
+        is Action.FeatureToggleAction.SetScreenContextAvailable ->
+            if (state.screenContextAvailable == action.available) {
+                // Pushed on every keyboard-visible tick; only a real change is
+                // worth a state emit.
+                null
+            } else {
+                TransitionResult(
+                    nextState = state.copy(screenContextAvailable = action.available),
+                    sideEffects = emptyList(),
+                )
+            }
+
         // See "ToggleVibration deviation" in the module KDoc.
         Action.FeatureToggleAction.ToggleVibration -> null
     }
@@ -120,5 +153,8 @@ object FeatureToggleModule : DictateModule<FeatureToggles, Action.FeatureToggleA
     override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {
         is Effect.PersistWindowsAutoSend ->
             services.prefs.persist(Pref.WindowsAutoSendEnabled, effect.value)
+
+        is Effect.PersistScreenContext ->
+            services.prefs.persist(Pref.AccessibilityContextEnabled, effect.value)
     }
 }

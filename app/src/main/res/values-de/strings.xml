@@ -500,4 +500,20 @@
     <string name="dictate_pc_mode_state_on">PC-Sendemodus an: Diktate gehen an den gekoppelten PC</string>
     <string name="dictate_pc_mode_state_off">PC-Sendemodus aus: Diktate werden hier eingefügt</string>
     <string name="dictate_pc_mode_state_unpaired">PC-Sendemodus nicht verfügbar: kein PC gekoppelt. Lange drücken zum Koppeln.</string>
+
+    <!-- Bedienungshilfe (optionaler Bildschirm-Kontext). -->
+    <string name="dictate_onboarding_permissions_a11y_request">Optional: Die KI deinen Bildschirm sehen lassen für besseren Kontext</string>
+    <string name="dictate_onboarding_permissions_a11y_button">Bildschirm-Kontext</string>
+    <string name="dictate_a11y_service_label">Dictate Bildschirm-Kontext</string>
+    <string name="dictate_a11y_service_description">Erlaubt Dictate zu lesen, was auf deinem Bildschirm steht, damit die KI das als Kontext nutzen kann — zum Beispiel, um einen Namen richtig zu schreiben, der in der App sichtbar ist, in die du diktierst.\n\nOptional. Wird nur genutzt, solange der Bildschirm-Kontext-Button in der Tastatur an ist. Passwort-, E-Mail- und Adressfelder werden nie gelesen, und Apps, die ihre Inhalte schützen (etwa Banking-Apps), bleiben für Dictate unsichtbar.</string>
+    <string name="dictate_a11y_onboarding_title">Bildschirm-Kontext</string>
+    <string name="dictate_a11y_onboarding_body">Dictate kann eine Beschreibung deines Bildschirms zusammen mit dem Diktat schicken, damit die KI auflösen kann, worauf du dich beziehst — ein Name im Chat, eine Nummer in einem Formular.\n\nDabei wird der Inhalt der App gelesen, in die du diktierst, und zusammen mit dem Transkript an deinen KI-Anbieter geschickt; er landet außerdem in deinem lokalen Verlauf. Passwort-, E-Mail- und Adressfelder werden nie gelesen, und Apps, die ihre Inhalte schützen, bleiben unsichtbar.\n\nStandardmäßig aus. Du kannst es jederzeit über den Bildschirm-Kontext-Button in der Tastatur umschalten.</string>
+    <string name="dictate_a11y_onboarding_restricted_hint">Ist der Schalter ausgegraut?\n\nAndroid sperrt Bedienungshilfen-Einstellungen für Apps, die nicht aus dem Play Store kommen. So gibst du sie frei: App-Info öffnen, oben rechts auf ⋮ tippen, „Eingeschränkte Einstellungen zulassen“ wählen, dann hierher zurückkommen.</string>
+    <string name="dictate_a11y_onboarding_open_settings">Bedienungshilfen öffnen</string>
+    <string name="dictate_a11y_onboarding_open_app_info">App-Info öffnen</string>
+    <string name="dictate_a11y_state_enabled">Bildschirm-Kontext ist aktiv.</string>
+    <string name="dictate_a11y_state_disabled">Bildschirm-Kontext ist noch nicht aktiviert.</string>
+    <string name="dictate_a11y_toggle_state_on">Bildschirm-Kontext an: Die KI sieht, was auf deinem Bildschirm steht</string>
+    <string name="dictate_a11y_toggle_state_off">Bildschirm-Kontext aus</string>
+    <string name="dictate_a11y_toggle_state_unavailable">Bildschirm-Kontext nicht verfügbar: in den Systemeinstellungen nicht aktiviert. Lange drücken zum Einrichten.</string>
 </resources>

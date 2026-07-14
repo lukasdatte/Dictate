@@ -191,6 +191,42 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+
+        <!--
+            Opt-in accessibility service: reads the foreground app's view tree so a
+            dictation can be post-processed with the screen as context.
+
+            Inert until the user enables it in system settings AND opts the feature
+            in (Pref.AccessibilityContextEnabled) — declaring it costs nothing and
+            grants nothing.
+
+            BIND_ACCESSIBILITY_SERVICE is a service attribute, not a <uses-permission>:
+            it constrains who may bind us (only the system), which is why exported
+            must be true. Same shape as the IME service above.
+
+            Note for sideloaded builds: Android 13+ greys the accessibility toggle out
+            for apps installed by a non-session installer ("Restricted setting"). The
+            user has to allow it via App info → ⋮ → Allow restricted settings first;
+            A11yContextOnboardingActivity walks through that.
+        -->
+        <service
+            android:name=".accessibility.DictateAccessibilityService"
+            android:exported="true"
+            android:label="@string/dictate_a11y_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <activity
+            android:name=".onboarding.A11yContextOnboardingActivity"
+            android:exported="false"
+            android:label="@string/dictate_a11y_onboarding_title" />
+
         <activity
             android:name=".onboarding.OnboardingActivity"
             android:exported="false"

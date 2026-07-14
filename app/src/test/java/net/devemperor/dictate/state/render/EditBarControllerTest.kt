@@ -66,6 +66,8 @@ class EditBarControllerTest {
         override fun onWidgetToggleClicked() { events += "widgetToggle" }
         override fun onPcModeToggled() { events += "pcToggle" }
         override fun onPcLongClicked() { events += "pcLong" }
+        override fun onScreenContextToggled() { events += "ctxToggle" }
+        override fun onScreenContextLongClicked() { events += "ctxLong" }
         override fun onEditAction(actionId: Int) {
             events += "editAction"
             editActionIds += actionId
@@ -91,6 +93,7 @@ class EditBarControllerTest {
             editCopyButton = btn(),
             editPasteButton = btn(),
             editPcButton = btn(),
+            editA11yButton = btn(),
         )
         rec = Recorder()
     }
@@ -290,6 +293,20 @@ class EditBarControllerTest {
 
         assertTrue(views.editPcButton!!.performLongClick())
         assertEquals(listOf("vibrate", "pcLong"), rec.events)
+    }
+
+    @Test
+    fun editA11y_click_toggles_and_longpress_opens_setup() {
+        val c = newController()
+        c.installDormant()
+        c.attachToViews()
+
+        views.editA11yButton!!.performClick()
+        assertEquals(listOf("vibrate", "ctxToggle"), rec.events)
+
+        rec.events.clear()
+        assertTrue(views.editA11yButton!!.performLongClick())
+        assertEquals(listOf("vibrate", "ctxLong"), rec.events)
     }
 
     @Test

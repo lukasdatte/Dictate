@@ -215,6 +215,7 @@ class PipelinePrefMirror(
             autoEnterEnabled = sp.get(Pref.AutoEnter),
             windowsAutoSendActive = WindowsAutoSend.shouldAutoSend(sp),
             windowsPaired = WindowsTarget.from(sp) != null,
+            screenContextEnabled = sp.get(Pref.AccessibilityContextEnabled),
         ),
         theming = current.theming.copy(
             theme = sp.get(Pref.Theme),
@@ -302,6 +303,15 @@ class PipelinePrefMirror(
             current.copy(features = current.features.copy(instantOutputEnabled = sp.get(Pref.InstantOutput)))
         Pref.AutoEnter.key ->
             current.copy(features = current.features.copy(autoEnterEnabled = sp.get(Pref.AutoEnter)))
+        // Only the opt-in is a pref. Whether the service is actually enabled is
+        // a SYSTEM setting with no key here — the IME pushes that in via
+        // SetScreenContextAvailable.
+        Pref.AccessibilityContextEnabled.key ->
+            current.copy(
+                features = current.features.copy(
+                    screenContextEnabled = sp.get(Pref.AccessibilityContextEnabled),
+                ),
+            )
 
         // PC send-mode (ADR-0019). FOUR keys collapse onto ONE field because
         // the answer is a predicate over all of them ("toggle on AND paired").

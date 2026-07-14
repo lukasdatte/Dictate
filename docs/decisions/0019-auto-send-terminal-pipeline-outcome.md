@@ -426,3 +426,37 @@ ADR-0013 (review panel) and this ADR — **defer the review acknowledge until th
 (an Insert-without-ack variant) so this path gains the same `inserted_at IS NULL`-until-`Succeeded`
 guarantee as the other three producers. It is worth its own careful change, not a review-closeout
 patch. Tracked in `docs/architecture/windows-dispatch/README.md` §4 (Information Gaps).
+
+### 2026-07-14 — Auto-send diversion is source-aware (STATIC_PROMPT stays local)
+
+**Trigger:** A user-reported regression: while a recording is active, long-pressing a text-only
+("pure text") pill in the top pill row used to insert the pill's literal text 1:1 into the host
+field; it stopped working once auto-send + pairing were active. Git archaeology pinned it to the
+SEAM-1 wiring (`27b91b3`, this ADR's realization).
+
+**Before:** The IME terminal branch in `onPipelineCompleted`
+(`DictateInputMethodService.java`) gated the divert-to-PC purely on `isWindowsAutoSendActive()`
+(toggle on AND paired) — it did **not** inspect the completion's `InsertionSource`. A long-pressed
+text-only pill produces a `STATIC_PROMPT` completion (a static `[...]` response, no AI call). With
+auto-send active it was funneled through the same divert branch as a dictation transcript and sent
+to the PC instead of committed locally; because that branch also skips the pending-part fallback,
+the pill's text appeared **nowhere** on the phone.
+
+**After:** The gate is `WindowsAutoSend.shouldDivertToPc(source, sp)` = `shouldAutoSend(sp)` AND
+`source` is a **dictation output** (`TRANSCRIPTION` / `REWORDING` / `QUEUED_PROMPT` /
+`PENDING_PART`). `STATIC_PROMPT` is never diverted — it falls through to the host commit and is
+inserted 1:1, matching the user's expectation ("long-press just pastes the pill"). The decision
+lives in the same single `WindowsAutoSend` gate both auto-send producers read, so the classification
+cannot drift between them; an exhaustive `when` (no `else`) forces any new `InsertionSource` to be
+classified deliberately. The review-panel Insert→PC route (`onReviewInsertClicked`) is unchanged: a
+reviewed dictation output IS dictation, and review decides *whether* / auto-send decides *where*
+(§4.2). Standalone-prompt `REWORDING` results are intentionally left divertible (no new signal
+introduced — the reported regression is specifically about `STATIC_PROMPT`). Guarded by
+`WindowsAutoSendTest` (STATIC_PROMPT stays local while auto-send active; dictation sources divert).
+
+**Reasoning:** Auto-send is conceptually "dictation → PC", so sharpening the *one* routing gate on
+`InsertionSource` fixes the regression at the source of truth rather than adding an ad-hoc check in
+the IME. Excluding only `STATIC_PROMPT` (vs. also excluding standalone `REWORDING`) is the precise,
+non-speculative fix: `source` alone cannot distinguish a standalone-prompt `REWORDING` from a
+dictation+rewording `REWORDING`, and the reported break is unambiguously the `STATIC_PROMPT` pill —
+so no extra origin signal is warranted yet.

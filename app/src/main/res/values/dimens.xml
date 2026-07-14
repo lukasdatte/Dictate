@@ -10,4 +10,14 @@
     <dimen name="dictate_history_panel_list_height">320dp</dimen>
     <dimen name="dictate_history_panel_list_min">280dp</dimen>
     <dimen name="dictate_history_panel_list_max">400dp</dimen>
+
+    <!--
+      In-keyboard review panel (ADR-0013 / Block D). The panel owns its height
+      (wrap_content) instead of borrowing it from the mode-emptied button grid.
+      `min` guarantees a usable surface even for a tiny output; the output scroll
+      is capped at `output_max` so a very long output scrolls within a bounded
+      region rather than blowing up the IME window.
+    -->
+    <dimen name="dictate_review_panel_min">120dp</dimen>
+    <dimen name="dictate_review_panel_output_max">240dp</dimen>
 </resources>

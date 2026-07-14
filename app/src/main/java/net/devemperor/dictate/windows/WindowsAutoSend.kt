@@ -1,6 +1,7 @@
 package net.devemperor.dictate.windows
 
 import android.content.SharedPreferences
+import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.WindowsTarget
 import net.devemperor.dictate.preferences.get
@@ -20,4 +21,14 @@ object WindowsAutoSend {
     /** True iff the auto-send toggle is on AND a PC is paired. */
     fun shouldAutoSend(sp: SharedPreferences): Boolean =
         sp.get(Pref.WindowsAutoSendEnabled) && WindowsTarget.from(sp) != null
+
+    /**
+     * Should a finished pipeline completion of this [source] be diverted to the paired PC
+     * (instead of committed into the host field)?
+     *
+     * TODO(C.2): source-aware — for now this is the verbatim pre-fix behaviour (source
+     * ignored) so the [WindowsAutoSendTest] STATIC_PROMPT regression is RED first.
+     */
+    fun shouldDivertToPc(source: InsertionSource, sp: SharedPreferences): Boolean =
+        shouldAutoSend(sp)
 }

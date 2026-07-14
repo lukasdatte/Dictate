@@ -57,6 +57,14 @@ android {
         // tests that need a real Context (channel-order / FGS-budget tests
         // in Block 1 chunk C2 — Spec 1 §10 Phase-B S-5 acceptance).
         unitTests.includeAndroidResources = true
+        unitTests.all {
+            // The Robolectric inflation suite inflates the full keyboard layout many
+            // times; a single test fork on the default heap accumulates enough shadow
+            // state to OOM. Give the fork a real heap and recycle the JVM periodically
+            // so memory does not grow unbounded across the whole suite.
+            maxHeapSize = "2g"
+            forkEvery = 80
+        }
     }
 
     lint {

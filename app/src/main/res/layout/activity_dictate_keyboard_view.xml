@@ -370,16 +370,26 @@
          it; driven entirely by ReviewPanelRenderer (visibility + text +
          button-enable). GONE by default.
          ════════════════════════════════════════════════════════════ -->
+    <!-- HEIGHT (Block D fix): the panel OWNS its height — wrap_content, top-anchored
+         BELOW the edit bar (exactly where main_buttons_cl starts, so the visual
+         position is unchanged) and fully decoupled from the grid — no top/bottom
+         coupling to main_buttons_cl. KEYBOARD_REVIEW_PANEL forces every
+         main_buttons_cl slot GONE, so that grid collapses to its padding;
+         the old 0dp top+bottom coupling made the panel collapse with it (VISIBLE but
+         invisibly flat). Mirrors the history-panel pattern (own height → root
+         wrap_content grows the IME window). The inner output scroll is height-capped so
+         a long output cannot blow up the window. (Future dock: a drag-resize handle
+         reusing Block A's VerticalDragResizeHandler — not wired yet.) -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/review_panel_cl"
         android:layout_width="0dp"
-        android:layout_height="0dp"
+        android:layout_height="wrap_content"
         android:background="?attr/colorSurface"
         android:elevation="8dp"
         android:padding="12dp"
+        android:minHeight="@dimen/dictate_review_panel_min"
         android:visibility="gone"
-        app:layout_constraintTop_toTopOf="@id/main_buttons_cl"
-        app:layout_constraintBottom_toBottomOf="@id/main_buttons_cl"
+        app:layout_constraintTop_toBottomOf="@id/edit_buttons_keyboard_ll"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         tools:visibility="visible">
@@ -398,14 +408,20 @@
             app:layout_constraintEnd_toEndOf="parent"
             tools:text="Did you mean the first or second option?" />
 
+        <!-- wrap_content + capped max so the panel (now wrap_content) sizes to the
+             actual output and a very long output scrolls within a bounded region
+             instead of blowing up the IME window (Block D). Top-anchored only —
+             the buttons row sits below it (top-down flow, unambiguous under
+             wrap_content). -->
         <ScrollView
             android:id="@+id/review_output_scroll"
             android:layout_width="0dp"
-            android:layout_height="0dp"
+            android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:fillViewport="true"
+            app:layout_constrainedHeight="true"
+            app:layout_constraintHeight_max="@dimen/dictate_review_panel_output_max"
             app:layout_constraintTop_toBottomOf="@id/review_message_tv"
-            app:layout_constraintBottom_toTopOf="@id/review_buttons_row"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent">
 
@@ -438,7 +454,7 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:layout_marginTop="8dp"
-            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/review_output_scroll"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent">
 
@@ -526,8 +542,110 @@
             app:layout_constraintTop_toBottomOf="@id/history_panel_title_tv"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintBottom_toTopOf="@+id/history_panel_resize_handle"
             tools:listitem="@layout/item_keyboard_history" />
+
+        <!-- Drag-to-resize grab handle (Block A). Full-width touch target at the
+             BOTTOM of the panel; dragging it down enlarges the list (growWhenDraggingDown),
+             up shrinks it. The RV height is driven imperatively by the IME
+             (applyHistoryPanelHeight + VerticalDragResizeHandler), persisted to
+             Pref.HistoryPanelHeightDp on release. -->
+        <View
+            android:id="@+id/history_panel_resize_handle"
+            android:layout_width="0dp"
+            android:layout_height="@dimen/dictate_history_panel_handle_height"
+            android:layout_marginTop="2dp"
+            android:background="@drawable/dictate_drag_handle"
+            android:contentDescription="@string/dictate_history_panel_resize_handle"
+            app:layout_constraintTop_toBottomOf="@id/history_panel_rv"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent" />
+
+        <!-- Full-text detail (Block B, option B-ii). Shown IN PLACE of the list+handle
+             when a row is short-pressed (history_panel.detailSessionId != null). The
+             HistoryPanelRenderer toggles list vs detail visibility; the IME loads the
+             full text via getFinalOutput and reuses the list Insert/Send handlers; Back
+             dispatches CloseDetail. Own capped height (wrap_content, like the review
+             panel) so a long text scrolls within bounds. GONE by default. -->
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/history_panel_detail_group"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:background="?attr/colorSurface"
+            android:visibility="gone"
+            app:layout_constraintTop_toBottomOf="@id/history_panel_title_tv"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            tools:visibility="gone">
+
+            <ScrollView
+                android:id="@+id/history_panel_detail_scroll"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fillViewport="true"
+                app:layout_constrainedHeight="true"
+                app:layout_constraintHeight_max="@dimen/dictate_history_panel_detail_max"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent">
+
+                <TextView
+                    android:id="@+id/history_panel_detail_tv"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="15sp"
+                    android:textColor="?attr/colorOnSurface"
+                    android:textIsSelectable="true"
+                    tools:text="The full text of the selected history item." />
+            </ScrollView>
+
+            <LinearLayout
+                android:id="@+id/history_panel_detail_buttons"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                app:layout_constraintTop_toBottomOf="@id/history_panel_detail_scroll"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/history_panel_detail_back_btn"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/dictate_history_panel_back" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/history_panel_detail_send_btn"
+                    style="@style/Widget.Material3.Button.TextButton.Icon"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="4dp"
+                    android:minWidth="0dp"
+                    android:insetLeft="0dp"
+                    android:insetRight="0dp"
+                    android:contentDescription="@string/dictate_windows_send_btn"
+                    app:icon="@drawable/ic_baseline_send_24"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/history_panel_detail_insert_btn"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/dictate_history_panel_insert" />
+            </LinearLayout>
+        </androidx.constraintlayout.widget.ConstraintLayout>
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 

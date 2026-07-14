@@ -179,6 +179,10 @@ public class DictateInputMethodService extends InputMethodService
     private net.devemperor.dictate.state.render.HistoryPanelRenderer historyPanelRenderer;
     private net.devemperor.dictate.history.KeyboardHistoryController historyController;
     private net.devemperor.dictate.history.KeyboardHistoryAdapter historyAdapter;
+    /** Block B — the session currently shown in the history-panel detail view (loaded by
+     *  onDetailChanged off the DB thread); Insert/Send in the detail reuse the list handlers
+     *  against it. Null when no detail is open. */
+    private net.devemperor.dictate.database.entity.SessionEntity historyDetailSession;
     private boolean vibrationEnabled = true;
     // Block 3b: the audio-focus flag is no longer cached as a service field.
     // The single persistent source of truth is Pref.AudioFocus; the per-session
@@ -1942,6 +1946,15 @@ public class DictateInputMethodService extends InputMethodService
             dictateKeyboardView.findViewById(R.id.history_panel_rv);
         View historyPanelCl = dictateKeyboardView.findViewById(R.id.history_panel_cl);
         View historyCloseBtn = dictateKeyboardView.findViewById(R.id.history_panel_close_btn);
+        View historyResizeHandle = dictateKeyboardView.findViewById(R.id.history_panel_resize_handle);
+        // Block B — item detail views (loaded/wired below; shared across the panel lifecycle).
+        View historyDetailGroup = dictateKeyboardView.findViewById(R.id.history_panel_detail_group);
+        android.widget.TextView historyDetailTv =
+            dictateKeyboardView.findViewById(R.id.history_panel_detail_tv);
+        View historyDetailBackBtn = dictateKeyboardView.findViewById(R.id.history_panel_detail_back_btn);
+        View historyDetailInsertBtn = dictateKeyboardView.findViewById(R.id.history_panel_detail_insert_btn);
+        View historyDetailSendBtn = dictateKeyboardView.findViewById(R.id.history_panel_detail_send_btn);
+        boolean windowsPaired = net.devemperor.dictate.preferences.WindowsTarget.from(sp) != null;
         if (historyRv != null && dictateDb != null) {
             historyRv.setLayoutManager(
                 new androidx.recyclerview.widget.LinearLayoutManager(this));
@@ -1958,25 +1971,119 @@ public class DictateInputMethodService extends InputMethodService
                                                 boolean pending) {
                         onKeyboardHistorySendClicked(session, pending);
                     }
+
+                    @Override
+                    public void onOpenDetail(net.devemperor.dictate.database.entity.SessionEntity session) {
+                        // Block B — row short-press opens the in-keyboard full-text detail.
+                        dispatchPipelineActionToOrchestrator(
+                            new net.devemperor.dictate.state.Action.HistoryPanelAction.ShowDetail(session.getId()),
+                            "HistoryPanel.ShowDetail");
+                    }
                 },
                 // ADR-0019 — the per-row send slot is only shown when a PC is paired. Read once
                 // at view creation (mirrors PreferencesFragment); a fresh pairing surfaces the
                 // button the next time the keyboard is inflated.
-                net.devemperor.dictate.preferences.WindowsTarget.from(sp) != null);
+                windowsPaired);
             historyRv.setAdapter(historyAdapter);
-            // "Distinctly taller": ~50% of the display height, clamped to
-            // [min, max] so the panel scales across device sizes.
+            // "Distinctly taller": the dragged height (Pref.HistoryPanelHeightDp) or the
+            // ~50%-of-display auto-default, clamped to the live drag bounds.
             applyHistoryPanelHeight(historyRv);
+            // Block A — drag-to-resize. The grab handle at the bottom of the panel drives
+            // the RV height live (root is wrap_content → the IME window grows with the
+            // finger) and persists the chosen height once on release. The RV's own height
+            // is the single source of truth the handler reads/writes; no state axis is
+            // involved (ADR-0014 Alternative 3 — a view dimension belongs to the IME).
+            if (historyResizeHandle != null) {
+                androidx.recyclerview.widget.RecyclerView resizeTarget = historyRv;
+                historyResizeHandle.setOnTouchListener(
+                    new net.devemperor.dictate.keyboard.VerticalDragResizeHandler(
+                        historyPanelDragMinPx(),
+                        historyPanelDragMaxPx(),
+                        () -> resizeTarget.getLayoutParams().height,
+                        /* growWhenDraggingDown = */ true,
+                        android.view.ViewConfiguration.get(this).getScaledTouchSlop(),
+                        newPx -> {
+                            android.view.ViewGroup.LayoutParams lp = resizeTarget.getLayoutParams();
+                            lp.height = newPx;
+                            resizeTarget.setLayoutParams(lp);
+                            return kotlin.Unit.INSTANCE;
+                        },
+                        committedPx -> {
+                            sp.edit()
+                                .putInt(Pref.HistoryPanelHeightDp.INSTANCE.getKey(), pxToDp(committedPx))
+                                .apply();
+                            return kotlin.Unit.INSTANCE;
+                        }));
+            }
             historyController = new net.devemperor.dictate.history.KeyboardHistoryController(
                 new net.devemperor.dictate.history.KeyboardHistoryPager(dictateDb.sessionDao()),
                 historyAdapter);
             historyController.onViewCreated();
         }
+        // Block B — item detail buttons. Back returns to the list; Insert/Send reuse the
+        // EXACT list handlers (one insert path, one send path) against the loaded detail
+        // session, then return to the list. `historyDetailSession` is set by onDetailChanged.
+        if (historyDetailSendBtn != null) {
+            historyDetailSendBtn.setVisibility(windowsPaired ? View.VISIBLE : View.GONE);
+        }
+        if (historyDetailBackBtn != null) {
+            historyDetailBackBtn.setOnClickListener(v -> dispatchPipelineActionToOrchestrator(
+                net.devemperor.dictate.state.Action.HistoryPanelAction.CloseDetail.INSTANCE,
+                "HistoryPanel.CloseDetail"));
+        }
+        if (historyDetailInsertBtn != null) {
+            historyDetailInsertBtn.setOnClickListener(v -> {
+                net.devemperor.dictate.database.entity.SessionEntity s = historyDetailSession;
+                if (s == null) return;
+                onKeyboardHistoryInsertClicked(
+                    s, net.devemperor.dictate.history.SessionRowPredicatesKt.isPendingInsertion(s));
+                dispatchPipelineActionToOrchestrator(
+                    net.devemperor.dictate.state.Action.HistoryPanelAction.CloseDetail.INSTANCE,
+                    "HistoryPanel.CloseDetail");
+            });
+        }
+        if (historyDetailSendBtn != null) {
+            historyDetailSendBtn.setOnClickListener(v -> {
+                net.devemperor.dictate.database.entity.SessionEntity s = historyDetailSession;
+                if (s == null) return;
+                onKeyboardHistorySendClicked(
+                    s, net.devemperor.dictate.history.SessionRowPredicatesKt.isPendingInsertion(s));
+                dispatchPipelineActionToOrchestrator(
+                    net.devemperor.dictate.state.Action.HistoryPanelAction.CloseDetail.INSTANCE,
+                    "HistoryPanel.CloseDetail");
+            });
+        }
         historyPanelRenderer = new net.devemperor.dictate.state.render.HistoryPanelRenderer(
-            new net.devemperor.dictate.state.render.HistoryPanelViews(historyPanelCl),
+            new net.devemperor.dictate.state.render.HistoryPanelViews(
+                historyPanelCl, historyRv, historyResizeHandle, historyDetailGroup),
             open -> {
                 if (historyController == null) return kotlin.Unit.INSTANCE;
                 if (open) historyController.onPanelOpen(); else historyController.onPanelClosed();
+                return kotlin.Unit.INSTANCE;
+            },
+            detailSessionId -> {
+                // Block B — the detail view opened/closed. Load the full text off the DB
+                // thread (getFinalOutput — the ONE text source) and post it to the detail
+                // TextView; cache the session so Insert/Send reuse the list handlers.
+                if (detailSessionId == null) {
+                    historyDetailSession = null;
+                    return kotlin.Unit.INSTANCE;
+                }
+                dbExecutor.execute(() -> {
+                    net.devemperor.dictate.database.entity.SessionEntity s =
+                        sessionManager != null ? sessionManager.getSessionById(detailSessionId) : null;
+                    String text =
+                        sessionManager != null ? sessionManager.getFinalOutput(detailSessionId) : null;
+                    mainHandler.post(() -> {
+                        historyDetailSession = s;
+                        boolean hasText = text != null && !text.isEmpty();
+                        if (historyDetailTv != null) historyDetailTv.setText(text != null ? text : "");
+                        if (historyDetailInsertBtn != null) historyDetailInsertBtn.setEnabled(hasText);
+                        if (historyDetailSendBtn != null) {
+                            historyDetailSendBtn.setEnabled(hasText && windowsPaired);
+                        }
+                    });
+                });
                 return kotlin.Unit.INSTANCE;
             });
         if (historyCloseBtn != null) {
@@ -4816,9 +4923,18 @@ public class DictateInputMethodService extends InputMethodService
                             new net.devemperor.dictate.state.Action.ReviewPanelAction.Show(sid, text, review.getMessage()),
                             "ReviewPanel.Show");
                 }
-            } else if (isWindowsAutoSendActive()) {
+            } else if (windowsDispatchCoordinator != null
+                    && net.devemperor.dictate.windows.WindowsAutoSend.INSTANCE.shouldDivertToPc(source, sp)) {
                 // ADR-0019 — Auto-send-to-Windows. THE docking point the K7-seam
                 // comment (Gate 1) reserved, now live. The IME is only ONE of two
+                //
+                // Source-aware (Block C / guards 27b91b3): only genuine DICTATION output
+                // (TRANSCRIPTION / REWORDING / QUEUED_PROMPT / PENDING_PART) is diverted.
+                // A STATIC_PROMPT completion (a long-pressed text-only pill) is NOT dictation
+                // — shouldDivertToPc returns false for it, so it falls through to the host
+                // commit below and is inserted 1:1 locally. (The review→PC route at
+                // onReviewInsertClicked still uses isWindowsAutoSendActive() — a reviewed
+                // dictation output IS dictation, WHERE-routing is unchanged there.)
                 // producers (the headless sink is the other, §3.6); BOTH call the
                 // SAME windowsDispatchCoordinator.dispatch(...) — there is no second
                 // code path, no IME-owned DispatchClient or executor.
@@ -6401,22 +6517,51 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     /**
-     * Sets the history-panel list height to ~50% of the display height, clamped
-     * to [min, max] (ADR-0014) so the panel is "distinctly taller" than the grid
-     * across device sizes. The XML default is the pre-measurement fallback.
+     * Sets the history-panel list height (Block A). Uses the user's dragged height
+     * ({@link Pref.HistoryPanelHeightDp}, dp) when set, else the ~50%-of-display
+     * auto-default. Either way clamped to the live drag bounds
+     * [{@link #historyPanelDragMinPx()} .. {@link #historyPanelDragMaxPx()}], so a
+     * persisted value and a fresh value share the same range and a smaller/rotated
+     * screen can never leave the panel out of bounds. The XML dimen is only the
+     * pre-measurement fallback.
      */
     private void applyHistoryPanelHeight(android.view.View list) {
         try {
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-            int minPx = getResources().getDimensionPixelSize(R.dimen.dictate_history_panel_list_min);
-            int maxPx = getResources().getDimensionPixelSize(R.dimen.dictate_history_panel_list_max);
-            int target = Math.max(minPx, Math.min(maxPx, dm.heightPixels / 2));
+            int minPx = historyPanelDragMinPx();
+            int maxPx = historyPanelDragMaxPx();
+            int savedDp = DictatePrefsKt.get(sp, Pref.HistoryPanelHeightDp.INSTANCE);
+            int desired = savedDp > 0 ? dpToPx(savedDp) : dm.heightPixels / 2;
+            int target = Math.max(minPx, Math.min(maxPx, desired));
             android.view.ViewGroup.LayoutParams lp = list.getLayoutParams();
             lp.height = target;
             list.setLayoutParams(lp);
         } catch (Throwable t) {
             Log.w("DictateIME", "history panel height sizing failed; using XML default", t);
         }
+    }
+
+    /** Lower drag bound (px): a generous fixed floor (Block A decision — 200dp). */
+    private int historyPanelDragMinPx() {
+        return getResources().getDimensionPixelSize(R.dimen.dictate_history_panel_drag_min);
+    }
+
+    /**
+     * Upper drag bound (px): 60% of the CURRENT display height — computed at runtime,
+     * not a dimen, so it tracks the live screen / split-screen size. Never below the
+     * lower bound (defensive for very short screens).
+     */
+    private int historyPanelDragMaxPx() {
+        int sixtyPercent = Math.round(getResources().getDisplayMetrics().heightPixels * 0.6f);
+        return Math.max(historyPanelDragMinPx(), sixtyPercent);
+    }
+
+    private int dpToPx(int dp) {
+        return Math.round(dp * getResources().getDisplayMetrics().density);
+    }
+
+    private int pxToDp(int px) {
+        return Math.round(px / getResources().getDisplayMetrics().density);
     }
 
     @Override

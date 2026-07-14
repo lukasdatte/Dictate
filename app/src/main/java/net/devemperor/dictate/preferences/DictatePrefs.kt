@@ -79,6 +79,20 @@ sealed class Pref<T>(val key: String, val default: T) {
      */
     object WidgetOpacity : Pref<Int>("net.devemperor.dictate.widget_opacity", 100)
 
+    /**
+     * User-chosen in-keyboard history-panel list height in **dp** (Block A). `0` = never
+     * dragged → the IME falls back to the auto-default (~50 % of the display). When applied
+     * it is always clamped to the live drag bounds `[dictate_history_panel_drag_min .. 60 %
+     * of the display height]` — stored in dp so it is density/-device portable. Written once
+     * per drag (on UP), read in `DictateInputMethodService.applyHistoryPanelHeight`.
+     *
+     * Kept OUT of the immutable `DictateUiState` on purpose (ADR-0014 Alternative 3 — a
+     * lifecycle-bound view dimension belongs to the IME, like the `InputConnection`, not to
+     * the structurally-shared snapshot); persisted directly via SharedPreferences, mirroring
+     * the overlay-position persistence pattern.
+     */
+    object HistoryPanelHeightDp : Pref<Int>("net.devemperor.dictate.history_panel_height_dp", 0)
+
     // ── Language Selection ──
     // InputLanguages (Set<String>) needs separate access – not via get()
     object InputLanguagePos : Pref<Int>("net.devemperor.dictate.input_language_pos", 0)

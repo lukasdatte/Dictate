@@ -45,6 +45,7 @@ class KeyboardHistoryControllerTest {
     private object NoopCallback : KeyboardHistoryAdapter.Callback {
         override fun onInsert(session: SessionEntity, pending: Boolean) = Unit
         override fun onSendToWindows(session: SessionEntity, pending: Boolean) = Unit
+        override fun onOpenDetail(session: SessionEntity) = Unit
     }
 
     @Test

@@ -47,7 +47,7 @@ class KeyboardHistoryPanelInflationTest {
         container = root.findViewById(R.id.history_panel_cl)
         rv = root.findViewById(R.id.history_panel_rv)
         close = root.findViewById(R.id.history_panel_close_btn)
-        renderer = HistoryPanelRenderer(HistoryPanelViews(container)) { openChanges += it }
+        renderer = HistoryPanelRenderer(HistoryPanelViews(container), onOpenChanged = { openChanges += it })
     }
 
     private fun mode() = net.devemperor.dictate.state.layout.LayoutCatalog(mirrorLayoutStrings())
@@ -78,4 +78,36 @@ class KeyboardHistoryPanelInflationTest {
         render(false)          // true -> false, fires
         assertEquals(listOf(false, true, false), openChanges)
     }
+
+    // ── Block B: item detail toggle ──
+
+    @Test
+    fun `detail session swaps the list surface for the detail group`() {
+        val handle = root.findViewById<View>(R.id.history_panel_resize_handle)
+        val detailGroup = root.findViewById<View>(R.id.history_panel_detail_group)
+        val details = mutableListOf<String?>()
+        val r = HistoryPanelRenderer(
+            HistoryPanelViews(container, rv, handle, detailGroup),
+            onOpenChanged = {},
+            onDetailChanged = { details += it },
+        )
+
+        // Open, no detail → list (RV + handle) visible, detail GONE.
+        r.render(state(open = true, detail = null), mode())
+        assertEquals(View.VISIBLE, rv.visibility)
+        assertEquals(View.VISIBLE, handle.visibility)
+        assertEquals(View.GONE, detailGroup.visibility)
+
+        // Open with a detail session → list GONE, detail VISIBLE.
+        r.render(state(open = true, detail = "s1"), mode())
+        assertEquals(View.GONE, rv.visibility)
+        assertEquals(View.GONE, handle.visibility)
+        assertEquals(View.VISIBLE, detailGroup.visibility)
+
+        // onDetailChanged fires only on transitions (null then s1).
+        assertEquals(listOf<String?>(null, "s1"), details)
+    }
+
+    private fun state(open: Boolean, detail: String?) =
+        DictateUiState.initial().copy(historyPanel = HistoryPanelState(open = open, detailSessionId = detail))
 }

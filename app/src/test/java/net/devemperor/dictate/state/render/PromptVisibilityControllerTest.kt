@@ -9,6 +9,8 @@ import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.InsertionTarget
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
+import net.devemperor.dictate.state.WidgetOrigin
+import net.devemperor.dictate.state.WidgetState
 import net.devemperor.dictate.state.layout.LayoutCatalog
 import net.devemperor.dictate.state.layout.testLayoutStrings
 import org.junit.Assert.assertEquals
@@ -279,5 +281,79 @@ class PromptVisibilityControllerTest {
         )
 
         assertEquals(View.GONE, promptsContainer.visibility)
+    }
+
+    // ── Widget(USER) collapses the IME to a strip — the prompts must go ──
+    //
+    // Regression guard for the gap `3c47cba` left behind: that commit's
+    // message promised "main buttons, qwertz, emoji picker, edit-bar,
+    // prompts and info-bars all collapse", but its diff only touched
+    // ContentAreaController's four containers. `prompts_keyboard_cl` is a
+    // SIBLING of `main_buttons_cl` owned by THIS controller, so it kept
+    // rendering its 72dp self next to the 2dp strip whenever the
+    // "recording/pipeline is live" arm of the truth-table fired — which
+    // is exactly the widget's main use-case (dictate with the keyboard
+    // collapsed). Mirrors `ContentAreaControllerTest`'s HIDDEN_STRIP block.
+
+    private fun stateWithUserWidget(base: DictateUiState): DictateUiState = base.copy(
+        widget = WidgetState.Visible(WidgetOrigin.USER),
+    )
+
+    @Test
+    fun `widget Visible USER hides the prompts even while recording (strip regression)`() {
+        val state = stateWithUserWidget(
+            DictateUiState.initial().copy(
+                recording = RecordingState.Active(
+                    useBluetooth = false, audioFile = File("/tmp/x"), sessionId = "sid-test",
+                ),
+            ),
+        )
+        controller.render(state, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(
+            "USER widget → the IME is a 2dp strip; the pill row must not float next to it",
+            View.GONE, promptsContainer.visibility,
+        )
+    }
+
+    @Test
+    fun `widget Visible USER hides the prompts in the rewording-only idle flow`() {
+        val state = stateWithUserWidget(
+            DictateUiState.initial().copy(
+                features = DictateUiState.initial().features.copy(rewordingEnabled = true),
+            ),
+        )
+        controller.render(state, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.GONE, promptsContainer.visibility)
+    }
+
+    @Test
+    fun `widget Visible PIPELINE does NOT hide the prompts`() {
+        // Symmetry with ContentAreaControllerTest's PIPELINE-origin case:
+        // a pipeline-origin widget implies the IME-View is already hidden,
+        // so there is no strip to compete with and no reason to suppress.
+        val state = DictateUiState.initial().copy(
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = File("/tmp/x"), sessionId = "sid-test",
+            ),
+            widget = WidgetState.Visible(WidgetOrigin.PIPELINE),
+        )
+        controller.render(state, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(
+            "PIPELINE widget must not trigger the strip suppression",
+            View.VISIBLE, promptsContainer.visibility,
+        )
+    }
+
+    @Test
+    fun `widget Hidden leaves the truth-table untouched`() {
+        // Guard against over-reach: the fix must not alter any pre-existing row.
+        val state = DictateUiState.initial().copy(
+            recording = RecordingState.Active(
+                useBluetooth = false, audioFile = File("/tmp/x"), sessionId = "sid-test",
+            ),
+            widget = WidgetState.Hidden,
+        )
+        controller.render(state, catalog.KEYBOARD_TWO_ROW)
+        assertEquals(View.VISIBLE, promptsContainer.visibility)
     }
 }

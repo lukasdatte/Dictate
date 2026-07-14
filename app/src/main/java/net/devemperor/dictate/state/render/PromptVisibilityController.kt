@@ -5,6 +5,7 @@ import net.devemperor.dictate.core.ContentArea
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.PipelineUiState
+import net.devemperor.dictate.state.imeCollapsedToStrip
 import net.devemperor.dictate.state.isActiveOrPaused
 import net.devemperor.dictate.state.layout.BackendType
 import net.devemperor.dictate.state.layout.LayoutMode
@@ -37,13 +38,17 @@ import net.devemperor.dictate.state.layout.RenderBackend
  * # Visibility truth-table (Spec 2 §9.3 / Spec 2 §4.1 R.10 prompt
  * sub-axis carve-out)
  *
- * | smallMode | EMOJI_PICKER | active/staging/pipeline | rewordingEnabled | promptsCl |
- * |-----------|--------------|-------------------------|------------------|-----------|
- * | true      | —            | —                       | —                | GONE      |
- * | false     | true         | —                       | —                | GONE      |
- * | false     | false        | true                    | —                | VISIBLE   |
- * | false     | false        | false                   | true             | VISIBLE   |
- * | false     | false        | false                   | false            | GONE      |
+ * | collapsedToStrip | smallMode | EMOJI_PICKER | active/staging/pipeline | rewordingEnabled | promptsCl |
+ * |------------------|-----------|--------------|-------------------------|------------------|-----------|
+ * | true             | —         | —            | —                       | —                | GONE      |
+ * | false            | true      | —            | —                       | —                | GONE      |
+ * | false            | false     | true         | —                       | —                | GONE      |
+ * | false            | false     | false        | true                    | —                | VISIBLE   |
+ * | false            | false     | false        | false                   | true             | VISIBLE   |
+ * | false            | false     | false        | false                   | false            | GONE      |
+ *
+ * `collapsedToStrip` = [net.devemperor.dictate.state.imeCollapsedToStrip]
+ * (user holds the floating widget open → the IME is a 2dp strip).
  *
  * `pipelineProgress` replaces the `promptsRv` when
  * `state.pipeline is Running && !isReprocessStaging` (the staging
@@ -136,6 +141,14 @@ class PromptVisibilityController(
         // in the class KDoc. The `else` branch maps to `rewordingEnabled`
         // so the prompt list stays visible in the rewording-only flow.
         val showPrompts = when {
+            // Must be the FIRST arm: the "recording/pipeline is live" arm
+            // below would otherwise force the 72dp pill row on screen next
+            // to the 2dp strip — and dictating with the keyboard collapsed
+            // is the widget's whole point, so that arm fires precisely when
+            // the strip is up. (`3c47cba` collapsed the four containers
+            // ContentAreaController owns and promised the prompt row in its
+            // message, but never touched this file.)
+            state.imeCollapsedToStrip -> false
             infoBarActive -> false
             layout.smallMode -> false
             layout.contentArea == ContentArea.EMOJI_PICKER -> false

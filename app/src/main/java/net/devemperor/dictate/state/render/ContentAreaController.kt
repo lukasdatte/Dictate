@@ -4,8 +4,7 @@ import android.view.View
 import net.devemperor.dictate.core.ContentArea
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DictateUiState
-import net.devemperor.dictate.state.WidgetOrigin
-import net.devemperor.dictate.state.WidgetState
+import net.devemperor.dictate.state.imeCollapsedToStrip
 import net.devemperor.dictate.state.layout.BackendType
 import net.devemperor.dictate.state.layout.LayoutMode
 import net.devemperor.dictate.state.layout.RenderBackend
@@ -116,19 +115,19 @@ class ContentAreaController(
 
         // 2026-05-23 — derive HIDDEN_STRIP override.
         //
-        // While the user holds the floating widget overlay open
-        // (`Visible(USER)`), the IME must collapse to a thin strip so
-        // it doesn't visually compete with the widget. The override
-        // only triggers for USER origin: a PIPELINE-origin widget
-        // implies the IME-View is hidden anyway (W3 surfaced the
-        // widget *because* `OnImeViewHidden` fired), so hiding the
-        // keyboard would be redundant. The decision is pure render-
-        // time derivation — `state.layout.contentArea` is untouched
-        // so the user's pre-widget content area pops right back when
-        // the widget is closed.
-        val effectiveArea = if (state.widget is WidgetState.Visible &&
-            state.widget.origin == WidgetOrigin.USER
-        ) {
+        // While the user holds the floating widget overlay open, the IME
+        // must collapse to a thin strip so it doesn't visually compete
+        // with the widget. The decision is pure render-time derivation —
+        // `state.layout.contentArea` is untouched so the user's
+        // pre-widget content area pops right back when the widget is
+        // closed.
+        //
+        // The predicate itself lives on `DictateUiState` because this
+        // controller is not the only surface that must collapse (the
+        // prompt row and the info-bar are siblings of the strip, not
+        // children of this controller's containers) — see
+        // [imeCollapsedToStrip]'s KDoc for why it was centralised.
+        val effectiveArea = if (state.imeCollapsedToStrip) {
             ContentArea.HIDDEN_STRIP
         } else {
             state.layout.contentArea

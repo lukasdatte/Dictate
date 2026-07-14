@@ -364,6 +364,34 @@ val DictateUiState.canCommitToHost: Boolean
     get() = imeViewVisible
 
 /**
+ * `true` when the IME surface has collapsed to the 2dp minimal strip
+ * because the user is holding the floating widget open — i.e. **nothing
+ * but the strip may render**.
+ *
+ * **Only `USER` origin collapses.** A `PIPELINE`-origin widget was
+ * auto-surfaced by W3 *because* the IME-View is already hidden, so
+ * there is no visible keyboard to compete with and collapsing would be
+ * redundant (`ContentAreaControllerTest` pins both directions).
+ *
+ * Canonical, named home for the "the IME is a strip" rule. It exists
+ * because the rule was previously inlined in exactly ONE renderer:
+ * `3c47cba` collapsed `ContentAreaController`'s four containers and its
+ * commit message claimed "prompts and info-bars" collapsed too — but the
+ * diff never touched them, and no test could see the gap because each
+ * renderer only tested its own containers. Every container-owning
+ * surface reads this predicate instead of re-deriving `widget is
+ * Visible && origin == USER`, so a newly added container inherits the
+ * collapse by construction rather than by someone remembering.
+ *
+ * @see net.devemperor.dictate.state.render.ContentAreaController
+ * @see net.devemperor.dictate.state.render.PromptVisibilityController
+ * @see net.devemperor.dictate.state.infobar.InfoBarSelector
+ * @see docs/decisions/0008-ui-surface-axes-widget-state-and-ime-view.md
+ */
+val DictateUiState.imeCollapsedToStrip: Boolean
+    get() = widget is WidgetState.Visible && widget.origin == WidgetOrigin.USER
+
+/**
  * Lifecycle status of one [StepRowItem] inside [PipelineUiState.Running.stepHistory].
  *
  * Phase 5.A of `2026-05-21 - dictate-render-cutover-completion-vol2`

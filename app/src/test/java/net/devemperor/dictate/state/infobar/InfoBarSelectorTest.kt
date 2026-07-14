@@ -870,4 +870,46 @@ class InfoBarSelectorTest {
             InfoBarSelector.select(withHistoryPanel).isEmpty(),
         )
     }
+
+    // ── Widget(USER) collapses the IME to a strip — same suppression as K5 ─
+    //
+    // When the user holds the floating widget open the IME collapses to a
+    // 2dp strip (ContentAreaController.HIDDEN_STRIP). The info-bar container
+    // is a sibling of that strip and, like the prompt row, kept surfacing
+    // items next to it — the same class of gap `3c47cba` left in the prompt
+    // controller. The suppression belongs in the selector (the single source
+    // both the renderer and the prompt-mutex read), not duplicated per
+    // renderer. Only USER origin collapses; a PIPELINE-origin widget implies
+    // the IME-View is already hidden.
+
+    @Test
+    fun `USER widget collapses the IME so the info-bar is suppressed`() {
+        val base = stateWithPendingPart()
+        // Sanity: without a widget the pending part DOES surface.
+        assertTrue(InfoBarSelector.select(base).isNotEmpty())
+
+        val withUserWidget = base.copy(
+            widget = net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.USER,
+            ),
+        )
+        assertTrue(
+            "USER widget → the IME is a strip; the info-bar must not float next to it",
+            InfoBarSelector.select(withUserWidget).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `PIPELINE widget does NOT suppress the info-bar`() {
+        val base = stateWithPendingPart()
+        val withPipelineWidget = base.copy(
+            widget = net.devemperor.dictate.state.WidgetState.Visible(
+                net.devemperor.dictate.state.WidgetOrigin.PIPELINE,
+            ),
+        )
+        assertTrue(
+            "PIPELINE widget must leave the info-bar items intact",
+            InfoBarSelector.select(withPipelineWidget).isNotEmpty(),
+        )
+    }
 }

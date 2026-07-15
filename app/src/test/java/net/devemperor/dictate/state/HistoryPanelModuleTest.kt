@@ -113,6 +113,29 @@ class HistoryPanelModuleTest {
     }
 
     @Test
+    fun `user widget opening while history is open cascades Close`() {
+        // The widget collapses the IME to a 2dp strip. Suppressing the panel
+        // at render-time is NOT enough: LayoutCatalog.forKeyboard keys the
+        // whole layout mode on `historyPanel.open`, so a merely-invisible
+        // panel would leave the catalog in KEYBOARD_HISTORY_PANEL while the
+        // IME is a strip. Closing it keeps state and surface in agreement.
+        val prev = DictateUiState.initial().copy(
+            widget = WidgetState.Hidden, historyPanel = HistoryPanelState(open = true),
+        )
+        val next = prev.copy(widget = WidgetState.Visible(WidgetOrigin.USER))
+        assertEquals(listOf(Action.HistoryPanelAction.Close), module.onCrossModuleStateChange(prev, next))
+    }
+
+    @Test
+    fun `pipeline widget opening while history is open does NOT cascade`() {
+        val prev = DictateUiState.initial().copy(
+            widget = WidgetState.Hidden, historyPanel = HistoryPanelState(open = true),
+        )
+        val next = prev.copy(widget = WidgetState.Visible(WidgetOrigin.PIPELINE))
+        assertTrue(module.onCrossModuleStateChange(prev, next).isEmpty())
+    }
+
+    @Test
     fun `review panel opening while history is open cascades Close (G2-3)`() {
         val prev = DictateUiState.initial().copy(
             reviewPanel = ReviewPanelState(), historyPanel = HistoryPanelState(open = true),

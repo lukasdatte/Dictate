@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Config for DictateAccessibilityService (opt-in screen context).
+
+  canRetrieveWindowContent is the one hard requirement: without it
+  getRootInActiveWindow() and getWindows() return null and the service is inert.
+
+  accessibilityEventTypes is declared because the platform requires it, NOT
+  because we consume events — the service is a pull, not a subscription (see the
+  service's KDoc). typeWindowStateChanged is the narrowest thing that satisfies
+  the requirement; onAccessibilityEvent ignores it.
+
+  packageNames is deliberately absent: restricting it would limit the service to
+  a fixed app list, and the point is to read whatever the user is dictating into.
+
+  flagReportViewIds buys getViewIdResourceName() (e.g. "com.app:id/username"),
+  which is often the only place a field's purpose is actually named — high value
+  per token. flagRetrieveInteractiveWindows buys getWindows(), which lets the
+  reader pick the focused application window explicitly instead of trusting the
+  active-window default in split-screen / overlay cases.
+
+  flagIncludeNotImportantViews is deliberately NOT set: views the app itself
+  marked as unimportant for accessibility are decoration, and including them
+  would inflate the prompt for no gain.
+
+  isAccessibilityTool is false and must stay false. This service assists an AI
+  feature; it is not an assistive tool for users with disabilities, and claiming
+  otherwise would be a false declaration.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/dictate_a11y_service_description"
+    android:isAccessibilityTool="false"
+    android:notificationTimeout="100" />

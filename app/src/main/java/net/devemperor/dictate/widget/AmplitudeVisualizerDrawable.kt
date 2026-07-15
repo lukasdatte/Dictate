@@ -15,8 +15,13 @@ import kotlin.math.max
  *
  * Layout (left to right):
  * ```
- * [send icon]  [||||amplitude bars||||]  [MM:SS]
+ * [send icon]  [||||amplitude bars||||]  [MM:SS] [PC]
  * ```
+ *
+ * The trailing badge is optional and carries the PC-send-mode marker
+ * (ADR-0019) — during a recording the button's own text is cleared and
+ * replaced by this drawable, so the label's "PC" suffix is not on screen and
+ * this is the only place left to say where the dictation is headed.
  *
  * The bars show a rolling history of recent amplitude values, creating a
  * scrolling waveform effect. New values are pushed from the right.
@@ -67,6 +72,12 @@ class AmplitudeVisualizerDrawable(
     private val amplitudeBuffer = FloatArray(MAX_BAR_COUNT)
     private var timerText: String = ""
 
+    /**
+     * Trailing badge drawn to the right of the timer; empty = no badge.
+     * Carries the PC-send-mode marker (ADR-0019).
+     */
+    private var badgeText: String = ""
+
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = barColor
@@ -97,6 +108,19 @@ class AmplitudeVisualizerDrawable(
         invalidateSelf()
     }
 
+    /**
+     * Sets the trailing badge (e.g. "PC"); empty string removes it.
+     *
+     * Kept separate from [setTimerText] because the two change on completely
+     * different clocks — the timer ticks every second, the badge only when the
+     * user flips PC-mode.
+     */
+    fun setBadgeText(text: String) {
+        if (badgeText == text) return
+        badgeText = text
+        invalidateSelf()
+    }
+
     /** Updates the bar color (e.g. after theme change). */
     fun updateBarColor(color: Int) {
         barColor = color
@@ -108,6 +132,8 @@ class AmplitudeVisualizerDrawable(
     fun reset() {
         amplitudeBuffer.fill(0f)
         timerText = ""
+        // NOT badgeText: the badge reflects a user setting that outlives the
+        // recording, and the drawable is reused across start/stop cycles.
         invalidateSelf()
     }
 
@@ -153,19 +179,35 @@ class AmplitudeVisualizerDrawable(
             afterIcon = contentLeft
         }
 
-        // ── 2. Timer Text (right side, only if enough space) ──
+        // ── 2. Badge (far right) + Timer Text (left of it), space permitting ──
+        val textY = contentTop + contentHeight / 2f -
+                (textPaint.descent() + textPaint.ascent()) / 2f
+
+        // The badge is drawn first because the timer's right edge depends on
+        // how much room it takes; both are RIGHT-aligned, so each x is the
+        // text's right edge.
+        val badgeWidth = if (badgeText.isNotEmpty()) textPaint.measureText(badgeText) else 0f
+        val showBadge = badgeText.isNotEmpty() &&
+                (barCountMode !is BarCountMode.Adaptive || contentWidth > badgeWidth * 3)
+        val beforeBadge: Float
+        if (showBadge) {
+            canvas.drawText(badgeText, contentRight, textY, textPaint)
+            beforeBadge = contentRight - badgeWidth - paddingH * 0.5f
+        } else {
+            beforeBadge = contentRight
+        }
+
         val timerWidth = if (timerText.isNotEmpty()) textPaint.measureText(timerText) else 0f
+        // Measure the timer against the room left AFTER the badge, otherwise a
+        // narrow button would keep the timer and let the two overlap.
         val showTimer = barCountMode !is BarCountMode.Adaptive ||
-                contentWidth > timerWidth * 2
+                beforeBadge - contentLeft > timerWidth * 2
         val beforeTimer: Float
         if (showTimer && timerText.isNotEmpty()) {
-            val timerX = contentRight
-            val timerY = contentTop + contentHeight / 2f -
-                    (textPaint.descent() + textPaint.ascent()) / 2f
-            canvas.drawText(timerText, timerX, timerY, textPaint)
-            beforeTimer = contentRight - timerWidth - paddingH * 0.5f
+            canvas.drawText(timerText, beforeBadge, textY, textPaint)
+            beforeTimer = beforeBadge - timerWidth - paddingH * 0.5f
         } else {
-            beforeTimer = contentRight
+            beforeTimer = beforeBadge
         }
 
         // ── 3. Amplitude Bars (center area) ──

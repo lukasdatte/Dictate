@@ -93,13 +93,22 @@ object HistoryPanelModule
     }
 
     /**
-     * Auto-close the panel on IME-view teardown OR when a recording starts
-     * (ADR-0014). No data is lost either way (the panel is a read-only list).
+     * Auto-close the panel on IME-view teardown, when a recording starts
+     * (ADR-0014), when the review panel takes the surface (G2-3), or when the
+     * user's widget collapses the IME to a strip. No data is lost in any case
+     * (the panel is a read-only list).
      */
     override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> {
         if (!next.historyPanel.open) return emptyList()
         val imeTornDown = prev.imeViewVisible && !next.imeViewVisible
         val recordingStarted = prev.recording is RecordingState.Idle && next.recording !is RecordingState.Idle
+        // The user opened the floating widget → the IME is a 2dp strip, so the
+        // panel has no surface. Closing (rather than merely hiding it at render
+        // time) is required, not cosmetic: `LayoutCatalog.forKeyboard` keys the
+        // entire layout mode on `historyPanel.open`, so an open-but-invisible
+        // panel would hold the catalog in KEYBOARD_HISTORY_PANEL while the IME
+        // renders as a strip — state and surface would disagree.
+        val widgetCollapsedIme = !prev.imeCollapsedToStrip && next.imeCollapsedToStrip
         // G2-3: the review panel opening (a held ambiguous turn) must close the
         // history panel, or both grids render at once — the history row shows the
         // same held session with its own Insert button, which would commit to the
@@ -107,7 +116,7 @@ object HistoryPanelModule
         // on history being closed, so enforce the mutex here as a state invariant
         // rather than relying on call-site discipline.
         val reviewOpened = !prev.reviewPanel.open && next.reviewPanel.open
-        return if (imeTornDown || recordingStarted || reviewOpened) {
+        return if (imeTornDown || recordingStarted || reviewOpened || widgetCollapsedIme) {
             listOf(Action.HistoryPanelAction.Close)
         } else {
             emptyList()

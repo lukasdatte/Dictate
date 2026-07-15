@@ -1403,6 +1403,10 @@ class DictatePipelineService : Service() {
         record = getString(R.string.dictate_record),
         send = getString(R.string.dictate_send, getString(R.string.dictate_record)),
         sending = getString(R.string.dictate_sending),
+        // Just the badge word. `resolveRecordButtonText` decides whether to
+        // splice it in, because PC-mode flips at runtime while this factory
+        // runs once — see LayoutStrings.pcBadge.
+        pcBadge = getString(R.string.dictate_pc_badge),
         // F-15 — language-aware label. `effectiveLanguage` is
         // `DictateUiState.language.effective` (LanguageModule axis). The
         // `"system"` sentinel (boot default before the pref resolves)

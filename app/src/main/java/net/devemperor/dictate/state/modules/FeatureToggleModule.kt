@@ -4,13 +4,17 @@
 // to the same package.
 package net.devemperor.dictate.state
 
+import net.devemperor.dictate.preferences.Pref
 import kotlin.reflect.KClass
 
 /**
- * Owns the [FeatureToggles] axis — four user-toggle booleans
+ * Owns the [FeatureToggles] axis — the user-toggle booleans
  * (`rewordingEnabled`, `autoFormattingEnabled`, `instantOutputEnabled`,
- * `autoEnterEnabled`). All four are Pref-mirrored via
- * `PipelinePrefMirror` (C7).
+ * `autoEnterEnabled`, plus PC send-mode and screen context). All are
+ * Pref-mirrored via `PipelinePrefMirror` (C7) except
+ * `screenContextAvailable`, which mirrors a SYSTEM setting the app can only
+ * observe — the IME pushes it in via
+ * [Action.FeatureToggleAction.SetScreenContextAvailable].
  *
  * **`ToggleVibration` deviation note (Phase 1):**
  *
@@ -32,8 +36,14 @@ import kotlin.reflect.KClass
  * `FeatureToggle × Pipeline`) — that's a Pipeline-side read, not a
  * FeatureToggle cascade.
  *
- * **No effects.** All four toggles are Pref-mirrored — SP writes
- * happen through `PipelinePrefMirror` (C7).
+ * **Effects — one, and why only one.** The four original toggles have no
+ * effects: their only surface is the settings screen, which writes
+ * SharedPreferences directly and lets `PipelinePrefMirror` carry the value
+ * back into state (C7). `ToggleWindowsAutoSend` and `ToggleScreenContext` are
+ * different — their primary surface is a keyboard button, so nothing else
+ * would perform the write. They persist via [Effect.PersistWindowsAutoSend] /
+ * [Effect.PersistScreenContext], the same shape `AudioModule` uses for
+ * `ToggleAudioFocusPref`.
  *
  * @see net.devemperor.dictate.state.FeatureToggles
  * @see net.devemperor.dictate.state.Action.FeatureToggleAction
@@ -51,9 +61,15 @@ object FeatureToggleModule : DictateModule<FeatureToggles, Action.FeatureToggleA
     override fun initialState(): FeatureToggles = FeatureToggles()
 
     /**
-     * No module-local effects — see Pref-mirror note in the module KDoc.
+     * See the "Effects — one, and why only one" note in the module KDoc.
      */
-    sealed interface Effect : SideEffect
+    sealed interface Effect : SideEffect {
+        /** Persist `Pref.WindowsAutoSendEnabled`; the mirror re-derives state. */
+        data class PersistWindowsAutoSend(val value: Boolean) : Effect
+
+        /** Persist `Pref.AccessibilityContextEnabled`; the mirror re-derives state. */
+        data class PersistScreenContext(val value: Boolean) : Effect
+    }
 
     override fun reduce(
         state: FeatureToggles,
@@ -81,11 +97,64 @@ object FeatureToggleModule : DictateModule<FeatureToggles, Action.FeatureToggleA
             sideEffects = emptyList(),
         )
 
+        Action.FeatureToggleAction.ToggleWindowsAutoSend -> {
+            // No pairing → reject. Lighting the button while every dictation
+            // still lands in the host field would be a lie, and ADR-0019's
+            // gate would veto the send anyway. The button is disabled without
+            // a pairing, so this is the backstop, not the primary guard.
+            if (!state.windowsPaired) {
+                null
+            } else {
+                // Paired ⇒ `windowsAutoSendActive == Pref.WindowsAutoSendEnabled`
+                // (the pairing half of the predicate is satisfied), so
+                // inverting the effective flag is the same as inverting the
+                // pref — no need to carry the raw toggle as a second field.
+                val next = !state.windowsAutoSendActive
+                TransitionResult(
+                    // Flip optimistically so the button lights on this frame;
+                    // the mirror re-derives the same value from the predicate
+                    // once the SP write lands (idempotent, absorbed as a no-op).
+                    nextState = state.copy(windowsAutoSendActive = next),
+                    sideEffects = listOf(Effect.PersistWindowsAutoSend(next)),
+                )
+            }
+        }
+
+        Action.FeatureToggleAction.ToggleScreenContext -> {
+            // No service → reject. The button would claim the model can see the
+            // screen while every read returns null.
+            if (!state.screenContextAvailable) {
+                null
+            } else {
+                val next = !state.screenContextEnabled
+                TransitionResult(
+                    nextState = state.copy(screenContextEnabled = next),
+                    sideEffects = listOf(Effect.PersistScreenContext(next)),
+                )
+            }
+        }
+
+        is Action.FeatureToggleAction.SetScreenContextAvailable ->
+            if (state.screenContextAvailable == action.available) {
+                // Pushed on every keyboard-visible tick; only a real change is
+                // worth a state emit.
+                null
+            } else {
+                TransitionResult(
+                    nextState = state.copy(screenContextAvailable = action.available),
+                    sideEffects = emptyList(),
+                )
+            }
+
         // See "ToggleVibration deviation" in the module KDoc.
         Action.FeatureToggleAction.ToggleVibration -> null
     }
 
-    override fun runEffect(effect: Effect, services: ModuleServices) {
-        // No effects — see [Effect] KDoc. Empty sealed interface.
+    override fun runEffect(effect: Effect, services: ModuleServices) = when (effect) {
+        is Effect.PersistWindowsAutoSend ->
+            services.prefs.persist(Pref.WindowsAutoSendEnabled, effect.value)
+
+        is Effect.PersistScreenContext ->
+            services.prefs.persist(Pref.AccessibilityContextEnabled, effect.value)
     }
 }

@@ -24,4 +24,11 @@ interface RecordingAnimation {
     fun onAmplitude(level: Float) {}
     fun onTimerTick(timerText: String) {}
     fun updateColor(color: Int) {}
+
+    /**
+     * Set a short badge shown alongside the timer (PC-send-mode marker,
+     * ADR-0019); empty string clears it. Default no-op — an animation without
+     * a text surface has nowhere to put it.
+     */
+    fun onBadge(badgeText: String) {}
 }

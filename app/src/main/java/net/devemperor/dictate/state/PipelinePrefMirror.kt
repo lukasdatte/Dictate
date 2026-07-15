@@ -3,7 +3,9 @@ package net.devemperor.dictate.state
 import android.content.SharedPreferences
 import net.devemperor.dictate.preferences.LanguageResolver
 import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.WindowsTarget
 import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.windows.WindowsAutoSend
 
 /**
  * Sink the mirror calls to apply a state mutation that **also runs
@@ -211,6 +213,9 @@ class PipelinePrefMirror(
             autoFormattingEnabled = sp.get(Pref.AutoFormattingEnabled),
             instantOutputEnabled = sp.get(Pref.InstantOutput),
             autoEnterEnabled = sp.get(Pref.AutoEnter),
+            windowsAutoSendActive = WindowsAutoSend.shouldAutoSend(sp),
+            windowsPaired = WindowsTarget.from(sp) != null,
+            screenContextEnabled = sp.get(Pref.AccessibilityContextEnabled),
         ),
         theming = current.theming.copy(
             theme = sp.get(Pref.Theme),
@@ -298,6 +303,36 @@ class PipelinePrefMirror(
             current.copy(features = current.features.copy(instantOutputEnabled = sp.get(Pref.InstantOutput)))
         Pref.AutoEnter.key ->
             current.copy(features = current.features.copy(autoEnterEnabled = sp.get(Pref.AutoEnter)))
+        // Only the opt-in is a pref. Whether the service is actually enabled is
+        // a SYSTEM setting with no key here — the IME pushes that in via
+        // SetScreenContextAvailable.
+        Pref.AccessibilityContextEnabled.key ->
+            current.copy(
+                features = current.features.copy(
+                    screenContextEnabled = sp.get(Pref.AccessibilityContextEnabled),
+                ),
+            )
+
+        // PC send-mode (ADR-0019). FOUR keys collapse onto ONE field because
+        // the answer is a predicate over all of them ("toggle on AND paired").
+        // ADR-0019 makes WindowsAutoSend.shouldAutoSend the single owner of
+        // that predicate and forbids copying it, so the mirror *calls* it
+        // instead of re-deriving `toggle && paired` here — that is what keeps
+        // the lit button and the actual send destination from ever disagreeing.
+        // Any pairing key changing (pair, unpair, re-pair) re-derives both
+        // fields, so an unpair silently drops PC-mode in the UI exactly as it
+        // does in the pipeline.
+        Pref.WindowsAutoSendEnabled.key,
+        Pref.WindowsTargetUrl.key,
+        Pref.WindowsDeviceId.key,
+        Pref.WindowsDeviceSecret.key,
+        ->
+            current.copy(
+                features = current.features.copy(
+                    windowsAutoSendActive = WindowsAutoSend.shouldAutoSend(sp),
+                    windowsPaired = WindowsTarget.from(sp) != null,
+                ),
+            )
 
         Pref.Theme.key ->
             current.copy(theming = current.theming.copy(theme = sp.get(Pref.Theme)))

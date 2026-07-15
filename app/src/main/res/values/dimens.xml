@@ -35,4 +35,24 @@
     -->
     <dimen name="dictate_review_panel_min">120dp</dimen>
     <dimen name="dictate_review_panel_output_max">240dp</dimen>
+
+    <!--
+      Edit-bar (PeekingButtonBar). The bar keeps growing — widget toggle, a11y
+      toggle, PC toggle — so slot widths are derived at measure time rather than
+      divided out of a ConstraintLayout chain (which shrank every button each
+      time one was added, until the icons collided).
+
+      slot_min  the hard floor for one slot = the accessibility touch target.
+                52dp = a 44dp visible pill plus the 4dp gap drawn on each side
+                as a MaterialButton inset. The gap is an inset rather than a
+                margin on purpose: margins sit between slots and would break
+                the exact `rowWidth == count * slotWidth` identity the peek
+                arithmetic depends on.
+      peek      how much of the first cut button stays on screen while the row
+                overflows, so it is always obvious that more exists to the
+                right. See EditBarWidthCalculator for why this is reserved
+                up-front rather than checked afterwards.
+    -->
+    <dimen name="dictate_editbar_slot_min">52dp</dimen>
+    <dimen name="dictate_editbar_peek">12dp</dimen>
 </resources>

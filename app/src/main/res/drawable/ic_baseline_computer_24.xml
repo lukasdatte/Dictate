@@ -1,0 +1,13 @@
+<!--
+  Material "computer" (baseline). The tint literal matches every other
+  edit-bar icon: the bar draws icons as an untinted `android:foreground`, so
+  an asset without a baked tint renders white there (ADR-0010's decision
+  history records exactly that breakage). The PC button re-tints this
+  drawable at render time to signal PC-mode; the baked value is what it looks
+  like between inflate and the first render pass.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:height="24dp" android:tint="#000000" android:viewportHeight="24" android:viewportWidth="24" android:width="24dp">
+
+    <path android:fillColor="@android:color/white" android:pathData="M20,18c1.1,0 1.99,-0.9 1.99,-2L22,5c0,-1.1 -0.9,-2 -2,-2L4,3c-1.1,0 -2,0.9 -2,2v11c0,1.1 0.9,2 2,2L0,18v2h24v-2h-4zM4,5h16v11L4,16L4,5z"/>
+
+</vector>

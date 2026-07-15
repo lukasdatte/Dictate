@@ -177,6 +177,8 @@ public class DictateInputMethodService extends InputMethodService
 
     // ADR-0014 — in-keyboard history panel (renderer + IME-owned Paging lifecycle).
     private net.devemperor.dictate.state.render.HistoryPanelRenderer historyPanelRenderer;
+    private net.devemperor.dictate.state.render.EditBarToggleButtonRenderer editBarPcButtonRenderer;
+    private net.devemperor.dictate.state.render.EditBarToggleButtonRenderer editBarA11yButtonRenderer;
     private net.devemperor.dictate.history.KeyboardHistoryController historyController;
     private net.devemperor.dictate.history.KeyboardHistoryAdapter historyAdapter;
     /** Block B — the session currently shown in the history-panel detail view (loaded by
@@ -281,6 +283,17 @@ public class DictateInputMethodService extends InputMethodService
     private String reprocessTargetSessionId = null;
 
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
+
+    /**
+     * Worker for the opt-in screen-context read (ADR draft
+     * adr-a11y-screen-context).
+     *
+     * <p>Its own thread, not dbExecutor: walking an AccessibilityNodeInfo tree
+     * is a chain of synchronous IPC calls into the foreground app's process,
+     * and queueing that behind a database write would mean the send-tap waits
+     * for both.
+     */
+    private final ExecutorService uiContextExecutor = Executors.newSingleThreadExecutor();
     private PipelineOrchestrator pipelineOrchestrator;
     // CR-DEL (Theme C-R / C10-C3) — KeyboardUiController DELETED; the
     // pipeline-progress step-row UI + PipelineUiState machinery (Spec 1
@@ -495,7 +508,11 @@ public class DictateInputMethodService extends InputMethodService
     // id when constructing its [RealMotionSurface] wrapper.
     private ViewGroup mainButtonsClGroup;
     private MaterialButton editSettingsButton;
-    private ConstraintLayout editButtonsKeyboardLl;
+    // PeekingButtonBar since the edit-bar stopped being a ConstraintLayout
+    // chain. Only ever read as a View (ContentAreaController flips its
+    // visibility); typed as View so the field does not have to change again
+    // the next time the bar's container does.
+    private View editButtonsKeyboardLl;
     private MaterialButton recordButton;
     private MaterialButton resendButton;
     // ADR-0009 secondary-recording mic button (rendered in SEND_MODE only).
@@ -527,6 +544,8 @@ public class DictateInputMethodService extends InputMethodService
     // row's widget_toggle_btn slot; see EditBarController.Callback
     // .onWidgetToggleClicked).
     private MaterialButton editWidgetToggleButton;
+    private MaterialButton editPcButton;
+    private MaterialButton editA11yButton;
     private FrameLayout qwertzContainer;
     private QwertzKeyboardView qwertzKeyboardView;
     private QwertzKeyboardController qwertzController;
@@ -948,6 +967,8 @@ public class DictateInputMethodService extends InputMethodService
         editNumbersButton = dictateKeyboardView.findViewById(R.id.edit_numbers_btn);
         editKeyboardButton = dictateKeyboardView.findViewById(R.id.edit_keyboard_btn);
         editWidgetToggleButton = dictateKeyboardView.findViewById(R.id.edit_widget_toggle_btn);
+        editPcButton = dictateKeyboardView.findViewById(R.id.edit_pc_btn);
+        editA11yButton = dictateKeyboardView.findViewById(R.id.edit_a11y_btn);
         emojiPickerCl = dictateKeyboardView.findViewById(R.id.emoji_picker_cl);
         emojiPickerTitleTv = dictateKeyboardView.findViewById(R.id.emoji_picker_title_tv);
         emojiPickerCloseButton = dictateKeyboardView.findViewById(R.id.emoji_picker_close_btn);
@@ -1345,12 +1366,20 @@ public class DictateInputMethodService extends InputMethodService
             () -> DictatePrefsKt.get(sp, Pref.Animations.INSTANCE);
         kotlin.jvm.functions.Function0<Integer> accentColorLambda =
             () -> DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
+        // PC send-mode (ADR-0019): the record button breathes this colour
+        // instead of the accent, and carries a "PC" badge next to the timer.
+        // The colour is a lambda for the same reason the accent is — the
+        // controller outlives a night-mode flip.
+        kotlin.jvm.functions.Function0<Integer> pcModeColorLambda =
+            () -> androidx.core.content.ContextCompat.getColor(this, R.color.dictate_pc_mode);
         RecordingAnimationController recordingAnimationCtrlForBackend =
             new RecordingAnimationController(
                 recordingAnimationForBackend,
                 recordButton,
                 accentColorLambda,
-                animationsEnabledLambda
+                animationsEnabledLambda,
+                pcModeColorLambda,
+                getString(R.string.dictate_pc_badge)
             );
         // Phase 3 of dictate-render-cutover-completion-vol2 — single
         // writer for record_btn's left + right compound drawables
@@ -2053,6 +2082,29 @@ public class DictateInputMethodService extends InputMethodService
                     "HistoryPanel.CloseDetail");
             });
         }
+        // Two instances of one renderer: same widget, different nouns.
+        editBarPcButtonRenderer = new net.devemperor.dictate.state.render.EditBarToggleButtonRenderer(
+            editPcButton,
+            R.drawable.ic_baseline_computer_24,
+            R.color.dictate_pc_mode,
+            new net.devemperor.dictate.state.render.EditBarToggleButtonRenderer.Descriptions(
+                R.string.dictate_pc_mode_state_on,
+                R.string.dictate_pc_mode_state_off,
+                R.string.dictate_pc_mode_state_unpaired),
+            state -> new net.devemperor.dictate.state.render.EditBarToggleButtonRenderer.Status(
+                state.getFeatures().getWindowsAutoSendActive(),
+                state.getFeatures().getWindowsPaired()));
+        editBarA11yButtonRenderer = new net.devemperor.dictate.state.render.EditBarToggleButtonRenderer(
+            editA11yButton,
+            R.drawable.ic_baseline_screen_search_24,
+            R.color.dictate_green,
+            new net.devemperor.dictate.state.render.EditBarToggleButtonRenderer.Descriptions(
+                R.string.dictate_a11y_toggle_state_on,
+                R.string.dictate_a11y_toggle_state_off,
+                R.string.dictate_a11y_toggle_state_unavailable),
+            state -> new net.devemperor.dictate.state.render.EditBarToggleButtonRenderer.Status(
+                state.getFeatures().getScreenContextEnabled(),
+                state.getFeatures().getScreenContextAvailable()));
         historyPanelRenderer = new net.devemperor.dictate.state.render.HistoryPanelRenderer(
             new net.devemperor.dictate.state.render.HistoryPanelViews(
                 historyPanelCl, historyRv, historyResizeHandle, historyDetailGroup),
@@ -2098,6 +2150,12 @@ public class DictateInputMethodService extends InputMethodService
             keyboardLayoutManager.attachBackend(overlayResetHandler);
             keyboardLayoutManager.attachBackend(reviewPanelRenderer);
             keyboardLayoutManager.attachBackend(historyPanelRenderer);
+            // ADR-0019 — the edit-bar PC button's tint + dim. A backend rather
+            // than a sibling of EditBarAudioFocusObserver: attachBackend
+            // renders immediately and every state emit fans out here already,
+            // so no second collector and no seed call are needed.
+            keyboardLayoutManager.attachBackend(editBarPcButtonRenderer);
+            keyboardLayoutManager.attachBackend(editBarA11yButtonRenderer);
             // Arm the three gates so the controllers are the SOLE LIVE
             // writers of the ContentArea / Promptbar / overlay-reset
             // axes. Post-CR-DEL there is no legacy `KeyboardStateManager`
@@ -2233,7 +2291,8 @@ public class DictateInputMethodService extends InputMethodService
                 editNumbersButton, editSettingsButton, editHistoryButton,
                 pipelineCancelBtn, editAudioFocusButton, editKeyboardButton,
                 editUndoButton, editRedoButton, editCutButton,
-                editCopyButton, editPasteButton, editWidgetToggleButton),
+                editCopyButton, editPasteButton, editWidgetToggleButton, editPcButton,
+                editA11yButton),
             this);
         editBarController.installDormant();
         editBarController.attachToViews();
@@ -2511,6 +2570,11 @@ public class DictateInputMethodService extends InputMethodService
         } catch (Throwable t) {
             Log.w("DictateTrace", "snapshot in IME.onDestroy failed", t);
         }
+        // The screen-context worker holds a reference to the accessibility
+        // service while a read is in flight; let it go with the IME.
+        // (dbExecutor deliberately not touched here — untangling its shutdown
+        // from the in-flight history writes is out of this change's scope.)
+        uiContextExecutor.shutdownNow();
         // C15 — Detach the ImeViewBackend so the KeyboardLayoutManager
         // drops its View references. Calling detach via the cached
         // manager (the binder may have already been nulled in
@@ -2832,9 +2896,8 @@ public class DictateInputMethodService extends InputMethodService
                     vibrate();
                     promptQueueManager.clear();
                 } else if (model.getId() == -2) {  // add prompt clicked
-                    Intent intent = new Intent(DictateInputMethodService.this, PromptsOverviewActivity.class);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(intent);
+                    startActivity(ImeActivityLauncher.INSTANCE.intentFor(
+                            DictateInputMethodService.this, PromptsOverviewActivity.class));
                 } else {
                     if (isEffectiveRecordingInFlight() && !livePrompt) {
                         promptQueueManager.togglePrompt(model.getId());
@@ -2867,8 +2930,8 @@ public class DictateInputMethodService extends InputMethodService
                 PromptEntity longClickModel = promptsAdapter.getItem(position);
                 if (longClickModel.getId() >= 0) {
                     vibrate();
-                    Intent intent = new Intent(DictateInputMethodService.this, PromptEditActivity.class);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    Intent intent = ImeActivityLauncher.INSTANCE.intentFor(
+                            DictateInputMethodService.this, PromptEditActivity.class);
                     intent.putExtra("net.devemperor.dictate.prompt_edit_activity_id", longClickModel.getId());
                     startActivity(intent);
                 }
@@ -3315,8 +3378,7 @@ public class DictateInputMethodService extends InputMethodService
      * to the input-languages preference so the user can curate the list.
      */
     private void openLanguageSettings() {
-        Intent intent = new Intent(this, DictateSettingsActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent intent = ImeActivityLauncher.INSTANCE.intentFor(this, DictateSettingsActivity.class);
         intent.putExtra(DictateSettingsActivity.EXTRA_SCROLL_TO,
                 "net.devemperor.dictate.input_languages");
         startActivity(intent);
@@ -3389,6 +3451,15 @@ public class DictateInputMethodService extends InputMethodService
             pipelineBinder.dispatch(
                     new net.devemperor.dictate.state.Action.KeyboardInputAction.HostEditorAttached(
                             net.devemperor.dictate.state.HostEditorMapper.hostEditorStateFrom(info)));
+            // Screen context: whether the accessibility service is enabled is a
+            // SYSTEM setting, not a pref, so the mirror cannot see it and there
+            // is no callback when it changes. Re-read it whenever the keyboard
+            // comes up — which is exactly when the user returns from those
+            // settings. Same reasoning (and the same spot) as the overlay
+            // permission re-read below. The reducer no-ops when unchanged.
+            pipelineBinder.dispatch(
+                    new net.devemperor.dictate.state.Action.FeatureToggleAction.SetScreenContextAvailable(
+                            net.devemperor.dictate.accessibility.A11yEnablementGate.isServiceEnabled(this)));
         }
         bluetoothScoManager.registerReceiver();
 
@@ -3893,9 +3964,7 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void openSettingsActivity() {
-        Intent intent = new Intent(this, DictateSettingsActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        startActivity(intent);
+        startActivity(ImeActivityLauncher.INSTANCE.intentFor(this, DictateSettingsActivity.class));
     }
 
     /**
@@ -4443,7 +4512,8 @@ public class DictateInputMethodService extends InputMethodService
                         showResend,
                         ambiguityMode,
                         transcriptionOnly,
-                        origin));
+                        origin,
+                        readUiContextOrNull()));
 
         // Mirror the legacy post-build flag handling
         // (DictateInputMethodService.java:2232-2234 pre-C5): the
@@ -4454,6 +4524,57 @@ public class DictateInputMethodService extends InputMethodService
         livePrompt = false;
         autoSwitchKeyboard = false;
     }
+
+    /**
+     * Serialise the foreground app's screen for the prompt, or {@code null}
+     * when the feature is off, the service is not connected, or the read did
+     * not finish in time (ADR draft adr-a11y-screen-context).
+     *
+     * <p><b>Read here, at the send-tap, and nowhere else.</b> This is the last
+     * instant at which the target app is still guaranteed to be in front — the
+     * pipeline runs on a background executor seconds later, by which time the
+     * user may have switched apps entirely and the tree would describe the
+     * wrong screen. It is also where {@code EditorInfo} and the rest of the
+     * per-run snapshot are already captured, so the context stays consistent
+     * with the app it belongs to.
+     *
+     * <p><b>Why it blocks, and why only briefly.</b> The read cannot run on the
+     * main thread (each level is a synchronous IPC into another process), but
+     * {@link ImePipelineConfigResolver#snapshotFresh} is synchronous and the
+     * dispatch happens immediately after. So it runs on a worker and the tap
+     * waits — bounded by {@link #UI_CONTEXT_TIMEOUT_MS}. A slow or hostile app
+     * therefore costs a fraction of a second and loses the context, rather than
+     * hanging the keyboard. Missing context is a degraded prompt; a frozen
+     * keyboard is a broken one.
+     */
+    @androidx.annotation.Nullable
+    private String readUiContextOrNull() {
+        if (!DictatePrefsKt.get(sp, Pref.AccessibilityContextEnabled.INSTANCE)) return null;
+        net.devemperor.dictate.accessibility.DictateAccessibilityService a11yService =
+                net.devemperor.dictate.accessibility.DictateAccessibilityService.getInstance();
+        // Enabled in settings but not bound yet (just switched on, or the system
+        // restarted it) — a read would return null anyway.
+        if (a11yService == null) return null;
+        try {
+            return uiContextExecutor.submit(() ->
+                    net.devemperor.dictate.accessibility.ViewTreeSerializer.INSTANCE.serialize(
+                            net.devemperor.dictate.accessibility.AccessibilityContextReader.INSTANCE
+                                    .read(a11yService)))
+                    .get(UI_CONTEXT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            // Includes TimeoutException. Never fail the dictation over optional
+            // context: the transcript is what the user asked for.
+            Log.w("DictateIME", "Screen-context read skipped", e);
+            return null;
+        }
+    }
+
+    /**
+     * How long the send-tap will wait for the screen-context read. Generous
+     * enough for a normal screen (tens of ms with the accessibility cache warm),
+     * short enough that a pathological one is not felt as a stutter.
+     */
+    private static final long UI_CONTEXT_TIMEOUT_MS = 250L;
 
     /**
      * C5 — drive the pipeline step-row UI for the new path so the
@@ -5782,13 +5903,27 @@ public class DictateInputMethodService extends InputMethodService
         } else if (action == net.devemperor.dictate.state.Action.WindowsDispatchAction.OpenPairing.INSTANCE) {
             // ADR-0019 §3.2.2 — the user confirmed a WINDOWS_UNAUTHORIZED notice; open the pairing
             // screen so they can re-pair. The reducer already cleared the notice.
-            try {
-                Intent intent = new Intent(this, net.devemperor.dictate.settings.WindowsPairingActivity.class);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(intent);
-            } catch (Exception e) {
-                Log.w("DictateIME", "Failed to launch Windows pairing screen", e);
-            }
+            openWindowsPairingActivity();
+        }
+    }
+
+    /**
+     * Open the Windows pairing screen. One launch site, two callers: the
+     * WINDOWS_UNAUTHORIZED info-bar confirm (ADR-0019 §3.2.2) and the edit-bar
+     * PC button's long-press.
+     *
+     * <p>The long-press deliberately does NOT route through
+     * {@code WindowsDispatchAction.OpenPairing}: that action's reducer rejects
+     * itself unless a notice is pending ({@code state.notice != null}), so a
+     * dispatch from the button would be silently dropped. The action exists to
+     * clear the notice; opening the screen is this side-channel's job.
+     */
+    private void openWindowsPairingActivity() {
+        try {
+            startActivity(ImeActivityLauncher.INSTANCE.intentFor(
+                    this, net.devemperor.dictate.settings.WindowsPairingActivity.class));
+        } catch (Exception e) {
+            Log.w("DictateIME", "Failed to launch Windows pairing screen", e);
         }
     }
 
@@ -5882,8 +6017,7 @@ public class DictateInputMethodService extends InputMethodService
     // imeSideAffordance(RECORD, isLongPress=true).
     public void onRecordLongClicked() {
         if (isEffectiveRecordingIdle()) {
-            Intent intent = new Intent(this, DictateSettingsActivity.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            Intent intent = ImeActivityLauncher.INSTANCE.intentFor(this, DictateSettingsActivity.class);
             intent.putExtra("net.devemperor.dictate.open_file_picker", true);
             startActivity(intent);
         } else if (isEffectiveRecordingActiveOrPaused() && !livePrompt && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -6366,6 +6500,66 @@ public class DictateInputMethodService extends InputMethodService
                 + " widget=" + after.getWidget().getClass().getSimpleName());
     }
 
+    /**
+     * PC button short-press (ADR-0019) — flip PC send-mode.
+     *
+     * <p>While no PC is paired the tap opens the pairing screen instead of
+     * toggling. A toggle would be a dead tap: the reducer rejects it (there is
+     * nowhere to send to), so the button would simply do nothing and the user
+     * would have no way to learn why. Pairing is the only thing a tap can
+     * usefully mean in that state, and it is where the long-press goes anyway.
+     */
+    @Override
+    public void onPcModeToggled() {
+        if (pipelineBinder == null) return;
+        net.devemperor.dictate.state.DictateUiState state =
+                pipelineBinder.getState().getValue();
+        if (!state.getFeatures().getWindowsPaired()) {
+            openWindowsPairingActivity();
+            return;
+        }
+        pipelineBinder.dispatch(
+                net.devemperor.dictate.state.Action.FeatureToggleAction.ToggleWindowsAutoSend.INSTANCE);
+    }
+
+    /** PC button long-press — the pairing screen, paired or not. */
+    @Override
+    public void onPcLongClicked() {
+        openWindowsPairingActivity();
+    }
+
+    /**
+     * Screen-context button short-press — flip the opt-in.
+     *
+     * <p>Without the accessibility service the tap opens the setup screen
+     * instead of toggling, for the same reason the PC button opens pairing:
+     * the reducer would reject the toggle, and a dead tap teaches the user
+     * nothing.
+     */
+    @Override
+    public void onScreenContextToggled() {
+        if (pipelineBinder == null) return;
+        net.devemperor.dictate.state.DictateUiState state =
+                pipelineBinder.getState().getValue();
+        if (!state.getFeatures().getScreenContextAvailable()) {
+            openA11yOnboardingActivity();
+            return;
+        }
+        pipelineBinder.dispatch(
+                net.devemperor.dictate.state.Action.FeatureToggleAction.ToggleScreenContext.INSTANCE);
+    }
+
+    /** Screen-context long-press — the explainer/setup screen, on or off. */
+    @Override
+    public void onScreenContextLongClicked() {
+        openA11yOnboardingActivity();
+    }
+
+    private void openA11yOnboardingActivity() {
+        startActivity(ImeActivityLauncher.INSTANCE.intentFor(
+                this, net.devemperor.dictate.onboarding.A11yContextOnboardingActivity.class));
+    }
+
     @Override
     public void onEmojiToggleClicked() {
         toggleEmojiPicker();
@@ -6442,9 +6636,7 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void openHistoryActivity() {
-        Intent intent = new Intent(this, HistoryActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        startActivity(intent);
+        startActivity(ImeActivityLauncher.INSTANCE.intentFor(this, HistoryActivity.class));
     }
 
     /**

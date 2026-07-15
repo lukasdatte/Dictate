@@ -86,6 +86,8 @@ editing rules".
 | [0018](0018-windows-text-insertion-port.md) | Windows Text Insertion Behind a Port — Clipboard + SendInput(Ctrl+V) via JNA | companion, platform | Accepted | 2026-07-14 |
 | [0019](0019-auto-send-terminal-pipeline-outcome.md) | Auto-Send as a Third Terminal Pipeline Outcome — Two Producers, One Dispatch Primitive | state, service · *Project-Wide* | Accepted | 2026-07-14 |
 | [0020](0020-lazy-cursor-sync.md) | Lazy-Sync — Cursor-Based, Idempotent Delta Upserts with the Phone Authoritative | protocol, data | Accepted | 2026-07-14 |
+| [0021](0021-a11y-screen-context.md) | Screen Context via AccessibilityService as an Opt-In Prompt Data Block | ai, service, privacy · *Project-Wide* | Accepted | 2026-07-15 |
+| [0022](0022-editbar-overflow-peek.md) | Edit-Bar Slot Widths Derived at Measure Time, with a Forced Peek | ui-rendering | Accepted | 2026-07-15 |
 
 ## Relationship graph
 

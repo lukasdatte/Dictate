@@ -1112,6 +1112,46 @@ sealed class Action {
         data object ToggleAutoEnter : FeatureToggleAction()
 
         /**
+         * Flip PC send-mode (ADR-0019) from the edit-bar's PC button.
+         *
+         * Unlike its four siblings this leaf carries a real side effect: it
+         * persists `Pref.WindowsAutoSendEnabled`. The others are only ever
+         * written by the settings screen (which edits SharedPreferences
+         * directly and lets the mirror carry the change into state), but this
+         * toggle's primary surface *is* the keyboard, so the dispatch has to
+         * own the write — the same shape as `AudioAction.ToggleAudioFocusPref`.
+         *
+         * Rejected (`null`) while no PC is paired: toggling on without a
+         * target would leave the button lit while every dictation still went
+         * to the host field. The button is disabled in that state, so this is
+         * a state-level backstop rather than the primary guard.
+         */
+        data object ToggleWindowsAutoSend : FeatureToggleAction()
+
+        /**
+         * Flip the screen-context opt-in from the edit-bar's a11y button
+         * (ADR draft adr-a11y-screen-context). Persists
+         * `Pref.AccessibilityContextEnabled` — same reasoning as
+         * [ToggleWindowsAutoSend]: the keyboard is its primary surface, so the
+         * dispatch owns the write.
+         *
+         * Rejected (`null`) while the accessibility service is not enabled in
+         * system settings: lighting the button would promise context that no
+         * read can deliver.
+         */
+        data object ToggleScreenContext : FeatureToggleAction()
+
+        /**
+         * Push the system's accessibility-service state into the axis.
+         *
+         * A setter rather than a mirrored pref because this is not a pref: the
+         * user flips it in system settings, and the app can only observe it.
+         * The IME re-reads it whenever the keyboard becomes visible — which is
+         * exactly when the user comes back from those settings.
+         */
+        data class SetScreenContextAvailable(val available: Boolean) : FeatureToggleAction()
+
+        /**
          * **Deviation note:** `vibrationEnabled` lives on `AudioState`,
          * not `FeatureToggles`, so the reducer in `FeatureToggleModule`
          * returns `null` (cross-axis writes are forbidden by the lens,

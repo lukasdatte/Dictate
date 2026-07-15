@@ -282,6 +282,32 @@
          ("the focus IS active"), not in the contentDescription. -->
     <string name="dictate_audio_focus_state_on">Audio-Fokus aktiv: Musik wird beim Aufnehmen pausiert</string>
     <string name="dictate_audio_focus_state_off">Audio-Fokus inaktiv: Musik läuft beim Aufnehmen weiter</string>
+
+    <!-- PC send-mode (ADR-0019). The badge is appended to the record label and
+         drawn next to the recording timer, so "this dictation goes to the PC"
+         is visible both before and during recording. -->
+    <string name="dictate_pc_badge" translatable="false">PC</string>
+
+    <!-- Accessibility service (opt-in screen context). The description is shown
+         by the system on the service's settings page, so it has to say plainly
+         what is read and where it goes — that page is where the user decides. -->
+    <string name="dictate_onboarding_permissions_a11y_request">Optional: let the AI see your screen for better context</string>
+    <string name="dictate_onboarding_permissions_a11y_button">Screen context</string>
+    <string name="dictate_a11y_service_label">Dictate screen context</string>
+    <string name="dictate_a11y_service_description">Lets Dictate read what is on your screen so the AI can use it as context — for example to spell a name correctly that is visible in the app you are dictating into.\n\nOptional. Only used while the screen-context button in the keyboard is on. Password fields, email and address fields are never read, and apps that mark their content as protected (banking apps, for example) stay invisible to Dictate.</string>
+    <string name="dictate_a11y_onboarding_title">Screen context</string>
+    <string name="dictate_a11y_onboarding_body">Dictate can send a description of what is on your screen along with your dictation, so the AI can resolve things you refer to — a name in a chat, a number in a form.\n\nThis reads the content of the app you are dictating into and sends it to your AI provider along with the transcript, where it is also kept in your local history. Password, email and address fields are never read, and apps that protect their content stay invisible.\n\nOff by default. You can toggle it any time with the screen-context button in the keyboard.</string>
+    <string name="dictate_a11y_onboarding_restricted_hint">Is the switch greyed out?\n\nAndroid blocks accessibility settings for apps installed outside the Play Store. To allow it: open App info, tap ⋮ in the top right, choose “Allow restricted settings”, then come back here.</string>
+    <string name="dictate_a11y_onboarding_open_settings">Open accessibility settings</string>
+    <string name="dictate_a11y_onboarding_open_app_info">Open App info</string>
+    <string name="dictate_a11y_state_enabled">Screen context is active.</string>
+    <string name="dictate_a11y_state_disabled">Screen context is not enabled yet.</string>
+    <string name="dictate_a11y_toggle_state_on">Screen context on: the AI sees what is on your screen</string>
+    <string name="dictate_a11y_toggle_state_off">Screen context off</string>
+    <string name="dictate_a11y_toggle_state_unavailable">Screen context unavailable: not enabled in system settings. Long-press to set up.</string>
+    <string name="dictate_pc_mode_state_on">PC send-mode on: dictations go to the paired PC</string>
+    <string name="dictate_pc_mode_state_off">PC send-mode off: dictations are inserted here</string>
+    <string name="dictate_pc_mode_state_unpaired">PC send-mode unavailable: no PC paired. Long-press to pair.</string>
     <string name="dictate_changelog_17">v2.4.5\n\nThis is just a tiny update that adds a settings option to disable the audio focus. You can now control whether background audio (e.g. music, podcasts, …) should be paused automatically.\n\n\n</string>
     <string name="dictate_changelog_18">v2.5.0\n\n- This update brings a cool new feature:\nYou can now undo and redo changes that were made after transcribing or rewording a text. Just click on the two buttons in the rewording section to jump through the history. ⏪\n\n- Some design changes and bug fixes have been made. ✨\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>
     <string name="dictate_changelog_19">v2.6.0\n\n- Advanced reasoning models were added (o1, o3, o3-mini), which allow even better rewording. ✨\n\n- This update adds a better indicator for switching between input languages: The text on the record button now adapts to the currently selected input language. 💪\n\n- Some design changes and bug fixes have been made. ✨\n\nAs always, feel free to contact me with questions and ideas via GitHub or the email button below. ☺️\n\n\n</string>

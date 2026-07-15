@@ -122,14 +122,68 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:layout_marginBottom="48dp"
             android:text="@string/dictate_keyboard_disabled"
+            android:textSize="16sp"
+            android:textStyle="italic"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/onboarding_permissions_keyboard_btn" />
+
+        <View
+            android:id="@+id/divider_a11y"
+            android:layout_width="313dp"
+            android:layout_height="1dp"
+            android:layout_marginTop="24dp"
+            android:background="?android:attr/listDivider"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/onboarding_permissions_keyboard_status_tv" />
+
+        <!--
+             Screen context (optional, ADR draft adr-a11y-screen-context). Sits
+             below the divider and is worded as optional because, unlike the
+             three above, the app works completely without it.
+
+             The button opens A11yContextOnboardingActivity rather than the
+             system screen directly: this permission needs a real explainer
+             (what leaves the device, and where it is stored), and on sideloaded
+             builds it also needs the "Allow restricted settings" detour, which
+             does not fit in a status line.
+        -->
+        <TextView
+            android:id="@+id/onboarding_permissions_a11y_request_tv"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/dictate_onboarding_permissions_a11y_request"
+            android:textSize="16sp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/divider_a11y" />
+
+        <Button
+            android:id="@+id/onboarding_permissions_a11y_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/dictate_onboarding_permissions_a11y_button"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/onboarding_permissions_a11y_request_tv" />
+
+        <TextView
+            android:id="@+id/onboarding_permissions_a11y_status_tv"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="48dp"
+            android:text="@string/dictate_a11y_state_disabled"
             android:textSize="16sp"
             android:textStyle="italic"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@+id/onboarding_permissions_keyboard_btn" />
+            app:layout_constraintTop_toBottomOf="@+id/onboarding_permissions_a11y_btn" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 

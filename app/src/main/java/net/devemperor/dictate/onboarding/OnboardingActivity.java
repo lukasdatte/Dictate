@@ -53,16 +53,17 @@ public class OnboardingActivity extends AppCompatActivity {
         tabLayoutMediator.attach();
     }
 
-    // checks if the user enabled the keyboard and updates the status text
+    // Refreshes the permissions page after the user comes back from a system
+    // settings screen. Unconditional rebind: none of the settings this page
+    // mirrors (keyboard, accessibility) report back via a result callback, so
+    // re-reading on resume is the only way to learn the outcome. This used to
+    // rebind only when the keyboard had been enabled, which meant a user who
+    // returned having enabled screen context (or nothing) kept looking at a
+    // stale status line.
     @Override
     public void onResume() {
         super.onResume();
-        List<InputMethodInfo> inputMethodsList = ((InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE)).getEnabledInputMethodList();
-        for (InputMethodInfo inputMethod : inputMethodsList) {
-            if (inputMethod.getPackageName().equals(getPackageName())) {
-                onboardingAdapter.notifyItemChanged(1);
-            }
-        }
+        onboardingAdapter.notifyItemChanged(1);
     }
 
     // refresh the permissions page after a microphone (1337) or

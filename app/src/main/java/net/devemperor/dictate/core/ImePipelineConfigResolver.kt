@@ -116,6 +116,14 @@ class ImePipelineConfigResolver(
          * can hide it.
          */
         val origin: SessionOrigin = SessionOrigin.KEYBOARD,
+        /**
+         * ADR draft adr-a11y-screen-context: the foreground app's screen at the
+         * send-tap, or `null` when the feature is off / the service is not
+         * connected. Snapshotted here, alongside `targetAppPackage`, for the
+         * same reason: it describes the app the user was dictating into, and
+         * that is only knowable at the trigger instant.
+         */
+        val uiContext: String? = null,
     )
 
     /**
@@ -189,6 +197,7 @@ class ImePipelineConfigResolver(
             /* showResendButton */ cfg.showResendButton,
             /* ambiguityMode */ cfg.ambiguityMode,
             /* transcriptionOnly */ cfg.transcriptionOnly,
+            /* uiContext */ cfg.uiContext,
         )
     }
 

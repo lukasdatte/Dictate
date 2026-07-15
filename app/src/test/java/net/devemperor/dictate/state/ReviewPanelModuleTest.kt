@@ -169,6 +169,31 @@ class ReviewPanelModuleTest {
     }
 
     @Test
+    fun `user widget opening while open cascades ConvertToPendingAndClose`() {
+        // Same reasoning as the IME-teardown cascade: the widget collapses the
+        // IME to a strip, so the panel has no surface. Converting (rather than
+        // plain-closing) keeps the ADR-0013 no-data-loss guarantee — the held
+        // output becomes a pending part and resurfaces once the widget closes.
+        val prev = DictateUiState.initial().copy(
+            widget = WidgetState.Hidden, reviewPanel = openState(),
+        )
+        val next = prev.copy(widget = WidgetState.Visible(WidgetOrigin.USER))
+        assertEquals(
+            listOf(Action.ReviewPanelAction.ConvertToPendingAndClose),
+            module.onCrossModuleStateChange(prev, next),
+        )
+    }
+
+    @Test
+    fun `pipeline widget opening while open does NOT cascade`() {
+        val prev = DictateUiState.initial().copy(
+            widget = WidgetState.Hidden, reviewPanel = openState(),
+        )
+        val next = prev.copy(widget = WidgetState.Visible(WidgetOrigin.PIPELINE))
+        assertTrue(module.onCrossModuleStateChange(prev, next).isEmpty())
+    }
+
+    @Test
     fun `IME view hidden while closed does not cascade`() {
         val prev = DictateUiState.initial().copy(imeViewVisible = true)
         val next = prev.copy(imeViewVisible = false)

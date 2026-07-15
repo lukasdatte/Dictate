@@ -314,7 +314,15 @@ sealed class JobRequest {
         val ambiguityMode: net.devemperor.dictate.preferences.AmbiguityMode =
             net.devemperor.dictate.preferences.AmbiguityMode.ALWAYS_INSERT,
         /** ADR-0013: the review-refinement recording (S2) — never runs a turn. */
-        val transcriptionOnly: Boolean = false
+        val transcriptionOnly: Boolean = false,
+        /**
+         * ADR draft adr-a11y-screen-context: the foreground app's screen,
+         * serialised at the send-tap, or `null` when the user has not opted in
+         * (the normal case). Carried as a plain String — the platform types are
+         * resolved in the IME so the pipeline and the Android-free
+         * `ConversationTurnBuilder` never see an `AccessibilityNodeInfo`.
+         */
+        val uiContext: String? = null,
     ) : JobRequest() {
         /**
          * W6: `toPipelineConfig()` is only defined on [TranscriptionPipeline] —
@@ -348,6 +356,7 @@ sealed class JobRequest {
             queuedPromptSlots = queuedPromptSlots,
             ambiguityMode = ambiguityMode,
             transcriptionOnly = transcriptionOnly,
+            uiContext = uiContext,
             // W3: for a brand-new session (reuseSessionId == null) the
             // orchestrator must persist under THIS sessionId, because
             // JobExecutor has already registered this ID in ActiveJobRegistry

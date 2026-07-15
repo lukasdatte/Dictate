@@ -75,6 +75,25 @@ class RecordingAnimationController(
     private val recordButton: MaterialButton?,
     private val accentColorProvider: () -> Int,
     private val animationsEnabled: () -> Boolean,
+    /**
+     * Yields the PC-send-mode colour (ADR-0019) — used in place of the accent
+     * for the whole button while `features.windowsAutoSendActive`, so "this
+     * dictation is bound for the PC" is legible before the user speaks.
+     *
+     * Only the *colour* comes from a lambda (it needs resources); whether
+     * PC-mode is on is read from state in [onState], where it belongs.
+     *
+     * Defaults to [accentColorProvider], i.e. "no PC colour supplied → PC-mode
+     * looks like any other recording". Callers that do not render the PC
+     * signal (and tests that do not care) then need no fake colour.
+     */
+    private val pcModeColorProvider: () -> Int = accentColorProvider,
+    /**
+     * The badge drawn next to the recording timer while PC-mode is active
+     * (`"PC"`). Empty default keeps callers that do not render the signal —
+     * and tests — unaffected.
+     */
+    private val pcModeBadge: String = "",
 ) {
 
     /**
@@ -83,6 +102,20 @@ class RecordingAnimationController(
      * until the first [onState] call.
      */
     private var lastRecordingState: RecordingState? = null
+
+    /**
+     * Cached `features.windowsAutoSendActive`, so [paletteColor] can answer
+     * outside [onState] (the animator helpers and [updateColor] have no state
+     * to read).
+     */
+    private var lastPcMode: Boolean = false
+
+    /**
+     * Last colour actually painted. Comparing the *resolved* colour — rather
+     * than the PC flag and the accent separately — means one check covers
+     * both reasons the palette can move (PC-mode flip, accent change).
+     */
+    private var lastPalette: Int? = null
 
     /**
      * The breathing background animator. Reused across start/stop cycles
@@ -104,13 +137,39 @@ class RecordingAnimationController(
      */
     fun onState(state: DictateUiState) {
         val curr = state.recording
-        if (lastRecordingState?.let { prev -> prev::class == curr::class } == true) return
+        val pcMode = state.features.windowsAutoSendActive
+        if (pcMode != lastPcMode) {
+            // Push before the branch check below can return early: while a
+            // recording is live the button text is gone and this badge is the
+            // only PC marker on screen, so it must track a mid-recording flip.
+            animation.onBadge(if (pcMode) pcModeBadge else "")
+        }
+        lastPcMode = pcMode
+        val palette = paletteColor()
+        val sameBranch = lastRecordingState?.let { prev -> prev::class == curr::class } == true
+
+        if (sameBranch) {
+            // The recording branch is unchanged, so the animation lifecycle
+            // must not be touched — re-running `Active` here would call
+            // `animation.start()` on an already-started visualizer, which
+            // would capture the visualizer itself as `previousForeground`.
+            // But the palette CAN change without a branch change (the user
+            // flips PC-mode while idle), and the old early-return swallowed
+            // exactly that: the button kept its accent until the next
+            // recording transition. Repaint, then leave.
+            if (palette != lastPalette) {
+                lastPalette = palette
+                repaint()
+            }
+            return
+        }
+        lastPalette = palette
 
         when (curr) {
             is RecordingState.Idle -> {
                 animation.cancel()
                 stopBackgroundAnimator()
-                applyBackground(accentColorProvider())
+                applyBackground(palette)
             }
 
             is RecordingState.Preparing -> {
@@ -129,7 +188,7 @@ class RecordingAnimationController(
                     // Reduced-motion: still mark the button visually as
                     // "active" via the brighter peak colour so the user
                     // sees something happen, just without interpolation.
-                    applyBackground(accentColorProvider())
+                    applyBackground(palette)
                 }
             }
 
@@ -138,7 +197,7 @@ class RecordingAnimationController(
                     animation.pause()
                 }
                 stopBackgroundAnimator()
-                applyBackground(dimmed(accentColorProvider()))
+                applyBackground(dimmed(palette))
             }
 
             is RecordingState.Interrupted -> {
@@ -161,7 +220,7 @@ class RecordingAnimationController(
                     onTimerTick(curr.elapsedMs)
                 }
                 stopBackgroundAnimator()
-                applyBackground(dimmed(accentColorProvider()))
+                applyBackground(dimmed(palette))
             }
         }
         lastRecordingState = curr
@@ -185,32 +244,59 @@ class RecordingAnimationController(
     }
 
     /**
-     * Re-paint the animation for a new accent colour. Called by the
-     * service when the user changes the accent in settings.
+     * Re-paint for a new accent colour. Called by the service when the user
+     * changes the accent in settings.
      *
-     * The breathing background animator picks up the new accent on its
-     * next start (via [accentColorProvider]); for the in-flight active
-     * case we restart it so the colour change is visible immediately.
+     * The parameter is honoured only when PC-mode is off: PC-mode replaces the
+     * accent wholesale, so an accent change must not repaint the purple away.
+     * [paletteColor] arbitrates; the argument is kept because callers already
+     * hold the new accent and passing it keeps this an explicit push rather
+     * than an implicit "something might have changed" ping.
      */
     fun updateColor(accentColor: Int) {
-        animation.updateColor(accentColor)
+        lastPalette = if (lastPcMode) pcModeColorProvider() else accentColor
+        repaint()
+    }
+
+    /**
+     * Paint [lastPalette] onto the button in whatever way the current
+     * recording branch calls for, **without touching the animation
+     * lifecycle**. Shared by [updateColor] and the palette-only path in
+     * [onState].
+     */
+    private fun repaint() {
+        val palette = lastPalette ?: paletteColor()
+        animation.updateColor(palette)
         val curr = lastRecordingState
-        if (curr is RecordingState.Active) {
+        if (curr is RecordingState.Active && animationsEnabled()) {
+            // Re-seed the interpolator's endpoints; the visualizer keeps
+            // running (this restarts the ValueAnimator, not the animation).
             stopBackgroundAnimator()
             startBackgroundAnimator()
         } else {
             // Static colour for non-active states. Also covers the
             // pre-first-tick case (`curr == null`) — without this the
             // button would keep whatever colour `applyTheme` left
-            // behind and the new accent would not become visible until
+            // behind and the new colour would not become visible until
             // the next state-class transition.
             applyBackground(
-                if (curr is RecordingState.Paused || curr is RecordingState.Interrupted)
-                    dimmed(accentColor)
-                else accentColor
+                if (curr is RecordingState.Paused || curr is RecordingState.Interrupted) {
+                    dimmed(palette)
+                } else {
+                    palette
+                },
             )
         }
     }
+
+    /**
+     * The colour the button is painted in right now: PC-send-mode replaces the
+     * accent entirely rather than tinting it, because the accent is
+     * user-configurable and a blend would be invisible for anyone who already
+     * picked purple.
+     */
+    private fun paletteColor(): Int =
+        if (lastPcMode) pcModeColorProvider() else accentColorProvider()
 
     /**
      * Reset internal cache. Called from [ImeViewBackend.detach] so a
@@ -219,6 +305,10 @@ class RecordingAnimationController(
      */
     fun reset() {
         lastRecordingState = null
+        // Drop the palette too: a re-attach must repaint from scratch for the
+        // same reason it must re-apply the recording state — the fresh view
+        // carries whatever colour `applyTheme` left on it, not ours.
+        lastPalette = null
         stopBackgroundAnimator()
     }
 
@@ -227,9 +317,9 @@ class RecordingAnimationController(
     private fun startBackgroundAnimator() {
         val button = recordButton ?: return
         stopBackgroundAnimator()
-        val accent = accentColorProvider()
-        val dim = dimmed(accent)
-        backgroundAnimator = ValueAnimator.ofObject(ArgbEvaluator(), accent, dim).apply {
+        val peak = paletteColor()
+        val dim = dimmed(peak)
+        backgroundAnimator = ValueAnimator.ofObject(ArgbEvaluator(), peak, dim).apply {
             duration = 1500L
             repeatCount = ValueAnimator.INFINITE
             repeatMode = ValueAnimator.REVERSE

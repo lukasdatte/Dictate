@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Explainer + setup path for the opt-in screen-context accessibility service.
+
+    Mirrors activity_overlay_permission_onboarding: a special permission the app
+    cannot request programmatically, so all we can do is explain and open the
+    right settings screen, then poll on resume.
+
+    The App-info button exists for the sideload path only: Android 13+ greys the
+    accessibility toggle out for apps not installed via the session installer,
+    and the switch then silently refuses to move. It sits behind the restricted
+    hint rather than next to the main action so it does not read as a required
+    step for everyone.
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/activity_a11y_context_onboarding"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="24dp">
+
+        <TextView
+            android:id="@+id/a11y_onboarding_title_tv"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/dictate_a11y_onboarding_title"
+            android:textAppearance="?attr/textAppearanceHeadlineSmall"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <TextView
+            android:id="@+id/a11y_onboarding_explainer_tv"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/dictate_a11y_onboarding_body"
+            android:textAppearance="?attr/textAppearanceBodyMedium"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/a11y_onboarding_title_tv" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/a11y_onboarding_open_settings_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/dictate_a11y_onboarding_open_settings"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/a11y_onboarding_explainer_tv" />
+
+        <TextView
+            android:id="@+id/a11y_onboarding_status_tv"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textAppearance="?attr/textAppearanceBodyMedium"
+            android:textStyle="bold"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/a11y_onboarding_open_settings_btn"
+            tools:ignore="MissingPrefix" />
+
+        <TextView
+            android:id="@+id/a11y_onboarding_restricted_hint_tv"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/dictate_a11y_onboarding_restricted_hint"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/a11y_onboarding_status_tv" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/a11y_onboarding_open_app_info_btn"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/dictate_a11y_onboarding_open_app_info"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/a11y_onboarding_restricted_hint_tv" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</ScrollView>

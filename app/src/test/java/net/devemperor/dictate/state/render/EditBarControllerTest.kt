@@ -64,6 +64,10 @@ class EditBarControllerTest {
         override fun onKeyboardToggleClicked() { events += "kbToggle" }
         override fun onKeyboardLongClicked() { events += "kbLong" }
         override fun onWidgetToggleClicked() { events += "widgetToggle" }
+        override fun onPcModeToggled() { events += "pcToggle" }
+        override fun onPcLongClicked() { events += "pcLong" }
+        override fun onScreenContextToggled() { events += "ctxToggle" }
+        override fun onScreenContextLongClicked() { events += "ctxLong" }
         override fun onEditAction(actionId: Int) {
             events += "editAction"
             editActionIds += actionId
@@ -88,6 +92,8 @@ class EditBarControllerTest {
             editCutButton = btn(),
             editCopyButton = btn(),
             editPasteButton = btn(),
+            editPcButton = btn(),
+            editA11yButton = btn(),
         )
         rec = Recorder()
     }
@@ -254,6 +260,53 @@ class EditBarControllerTest {
 
         assertTrue("history long-press must return true (suppress the click)", consumed)
         assertEquals(listOf("vibrate", "historyLong"), rec.events)
+    }
+
+    @Test
+    fun editPc_click_toggles_and_longpress_opens_pairing() {
+        // ADR-0019: same tap/long-press split as the history button — the
+        // everyday toggle on the tap, the occasional screen on the long-press.
+        val c = newController()
+        c.installDormant()
+        c.attachToViews()
+
+        views.editPcButton!!.performClick()
+        assertEquals(listOf("vibrate", "pcToggle"), rec.events)
+
+        rec.events.clear()
+        val consumed = views.editPcButton!!.performLongClick()
+
+        assertTrue("pc long-press must return true (suppress the click)", consumed)
+        assertEquals(listOf("vibrate", "pcLong"), rec.events)
+    }
+
+    @Test
+    fun editPc_longpress_still_fires_when_the_button_is_dimmed() {
+        // The renderer dims the button while unpaired but must NOT disable it:
+        // a disabled View delivers no long-press, which would strand exactly
+        // the users who need to reach pairing. Alpha is not enablement, so this
+        // pins that the dimmed button still works.
+        val c = newController()
+        c.installDormant()
+        c.attachToViews()
+        views.editPcButton!!.alpha = 0.4f
+
+        assertTrue(views.editPcButton!!.performLongClick())
+        assertEquals(listOf("vibrate", "pcLong"), rec.events)
+    }
+
+    @Test
+    fun editA11y_click_toggles_and_longpress_opens_setup() {
+        val c = newController()
+        c.installDormant()
+        c.attachToViews()
+
+        views.editA11yButton!!.performClick()
+        assertEquals(listOf("vibrate", "ctxToggle"), rec.events)
+
+        rec.events.clear()
+        assertTrue(views.editA11yButton!!.performLongClick())
+        assertEquals(listOf("vibrate", "ctxLong"), rec.events)
     }
 
     @Test

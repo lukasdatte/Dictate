@@ -24,7 +24,9 @@ import kotlin.reflect.KClass
  * `PendingSessionsAction.AcceptAndInsert`) — the reducer cannot reach the
  * `InputConnection`.
  *
- * **Teardown safety net:** if the IME view goes away while the panel is open,
+ * **Teardown safety net:** if the panel loses its surface while open — the IME
+ * view goes away, or the user's widget collapses the IME to a strip
+ * ([net.devemperor.dictate.state.imeCollapsedToStrip]) —
  * [onCrossModuleStateChange] cascades [Action.ReviewPanelAction.ConvertToPendingAndClose]
  * so the held text becomes a pending part (no data loss) instead of vanishing.
  *
@@ -174,10 +176,21 @@ class ReviewPanelModule(
      * Teardown safety net: IME view disappeared with the panel open → convert
      * the held text to a pending part and close (ADR-0013 §3.4).
      */
-    override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> =
-        if (next.reviewPanel.open && prev.imeViewVisible && !next.imeViewVisible) {
+    override fun onCrossModuleStateChange(prev: DictateUiState, next: DictateUiState): List<Action> {
+        if (!next.reviewPanel.open) return emptyList()
+        val imeTornDown = prev.imeViewVisible && !next.imeViewVisible
+        // The user opened the floating widget → the IME collapsed to a 2dp
+        // strip, so the panel has no surface to hold its decision on. Note
+        // `imeViewVisible` stays TRUE during a collapse (the view is still
+        // attached, just hidden), so the teardown arm above does NOT cover
+        // this. Converting rather than closing preserves the ADR-0013
+        // no-data-loss guarantee: the held output becomes a pending part and
+        // resurfaces once the widget goes away.
+        val widgetCollapsedIme = !prev.imeCollapsedToStrip && next.imeCollapsedToStrip
+        return if (imeTornDown || widgetCollapsedIme) {
             listOf(Action.ReviewPanelAction.ConvertToPendingAndClose)
         } else {
             emptyList()
         }
+    }
 }

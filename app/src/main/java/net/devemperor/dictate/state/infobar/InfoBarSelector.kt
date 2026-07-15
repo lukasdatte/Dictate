@@ -12,6 +12,7 @@ import net.devemperor.dictate.state.PipelineErrorHint
 import net.devemperor.dictate.state.PipelineErrorKind
 import net.devemperor.dictate.state.RecordingState
 import net.devemperor.dictate.state.canCommitToHost
+import net.devemperor.dictate.state.imeCollapsedToStrip
 import net.devemperor.dictate.state.insertion.orderedCompletedParts
 
 /**
@@ -93,6 +94,19 @@ object InfoBarSelector {
         // held open. All items here are state-derived, so they reappear
         // untouched the moment the panel closes; nothing is lost.
         if (state.reviewPanel.open || state.historyPanel.open) return@buildList
+
+        // ── Widget ownership of the keyboard surface ────────────────────
+        // Same shape as K5, different owner: while the user holds the
+        // floating widget open the IME collapses to a 2dp strip, so there
+        // is no surface left to render a bar on. `infobar_cl` is a sibling
+        // of that strip (not a child of the containers ContentAreaController
+        // collapses), so without this guard the bar kept floating next to
+        // the strip — the same gap `3c47cba` left in the prompt row.
+        // Suppressing here rather than in InfoBarRenderer keeps ONE answer
+        // for all three readers of this selector (renderer, the prompt-row
+        // mutex, and LayoutCatalog's single-row force-expand). Items are
+        // state-derived, so they resurface untouched when the widget closes.
+        if (state.imeCollapsedToStrip) return@buildList
 
         // ── Overlay-Permission-Onboarding (ADR-0005 §5.4 + ADR-0006) ──
         // The user toggled the widget without SYSTEM_ALERT_WINDOW

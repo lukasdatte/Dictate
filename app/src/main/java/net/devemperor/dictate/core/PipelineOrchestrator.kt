@@ -233,7 +233,16 @@ class PipelineOrchestrator @JvmOverloads constructor(
          * and is snapshotted with an empty queue so it does not consume the
          * live prompt queue.
          */
-        val transcriptionOnly: Boolean = false
+        val transcriptionOnly: Boolean = false,
+        /**
+         * ADR draft adr-a11y-screen-context: the foreground app's screen,
+         * serialised at the send-tap by the IME, or `null` when the user has not
+         * opted in (the normal case). Already a String: reading the tree is the
+         * IME's job because it must happen on the main thread while the target
+         * app is still in front — by the time this config reaches the executor
+         * thread the user may well have switched apps.
+         */
+        val uiContext: String? = null,
     )
 
     data class StandaloneConfig(
@@ -540,7 +549,13 @@ class PipelineOrchestrator @JvmOverloads constructor(
                 executeConversationTurn(
                     transcription.text, session.language, sessionId,
                     queuedSlotsAtStart, cancellationToken,
-                    forceTurn = false
+                    forceTurn = false,
+                    // Same reasoning as forceTurn above: screen context is a
+                    // live-keyboard concern and is not persisted per session.
+                    // Resuming hours later, whatever is on screen NOW is not
+                    // what the user was dictating into, so no context beats a
+                    // misleading one.
+                    uiContext = null,
                 )
             }
             val source = if (queuedSlotsAtStart.isNotEmpty()) {
@@ -1390,7 +1405,9 @@ class PipelineOrchestrator @JvmOverloads constructor(
         // ADR-0013: AUTO/ALWAYS_REVIEW force a turn on a bare transcription; the
         // transcription-only refinement recording (S2) never forces a turn.
         val forceTurn = config.ambiguityMode.forcesTurn && !config.transcriptionOnly
-        val outcome = executeConversationTurn(text, config.language, sid, slotsForTurn, token, forceTurn)
+        val outcome = executeConversationTurn(
+            text, config.language, sid, slotsForTurn, token, forceTurn, config.uiContext,
+        )
         text = outcome.text
         token.throwIfCancelled()
         if (cancelled) throw java.util.concurrent.CancellationException("cancelled flag set")
@@ -1615,9 +1632,10 @@ class PipelineOrchestrator @JvmOverloads constructor(
         sid: String,
         slots: List<PromptQueueSlot>,
         token: CancellationToken,
-        forceTurn: Boolean
+        forceTurn: Boolean,
+        uiContext: String?,
     ): TurnOutcome {
-        val inputs = buildPostProcessingInputs(text, languageHint, slots, forceTurn)
+        val inputs = buildPostProcessingInputs(text, languageHint, slots, forceTurn, uiContext)
         if (!ConversationTurnBuilder.hasWork(inputs)) return TurnOutcome(text, null)
 
         // K3: detect a resumable error turn BEFORE conversing so the resume path
@@ -1710,7 +1728,8 @@ class PipelineOrchestrator @JvmOverloads constructor(
         text: String,
         languageHint: String?,
         slots: List<PromptQueueSlot>,
-        forceTurn: Boolean
+        forceTurn: Boolean,
+        uiContext: String?,
     ): PostProcessingInputs {
         val instructions = slots.mapNotNull { slot ->
             val resolved = resolveQueueSlot(slot) ?: return@mapNotNull null
@@ -1728,7 +1747,11 @@ class PipelineOrchestrator @JvmOverloads constructor(
             // transcription-only refinement carrier"; ALWAYS_INSERT (forceTurn
             // false) inserts regardless, so the task + needsClarification field
             // would just burn tokens on a verdict that is ignored (ADR-0013).
-            includeAmbiguityTask = forceTurn
+            includeAmbiguityTask = forceTurn,
+            // Opt-in screen context. Passed through even when null (the normal
+            // case) so the builder owns the "omit the block" decision in one
+            // place rather than every caller re-deciding it.
+            uiContext = uiContext,
         )
     }
 

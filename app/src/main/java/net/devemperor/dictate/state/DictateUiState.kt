@@ -364,6 +364,34 @@ val DictateUiState.canCommitToHost: Boolean
     get() = imeViewVisible
 
 /**
+ * `true` when the IME surface has collapsed to the 2dp minimal strip
+ * because the user is holding the floating widget open — i.e. **nothing
+ * but the strip may render**.
+ *
+ * **Only `USER` origin collapses.** A `PIPELINE`-origin widget was
+ * auto-surfaced by W3 *because* the IME-View is already hidden, so
+ * there is no visible keyboard to compete with and collapsing would be
+ * redundant (`ContentAreaControllerTest` pins both directions).
+ *
+ * Canonical, named home for the "the IME is a strip" rule. It exists
+ * because the rule was previously inlined in exactly ONE renderer:
+ * `3c47cba` collapsed `ContentAreaController`'s four containers and its
+ * commit message claimed "prompts and info-bars" collapsed too — but the
+ * diff never touched them, and no test could see the gap because each
+ * renderer only tested its own containers. Every container-owning
+ * surface reads this predicate instead of re-deriving `widget is
+ * Visible && origin == USER`, so a newly added container inherits the
+ * collapse by construction rather than by someone remembering.
+ *
+ * @see net.devemperor.dictate.state.render.ContentAreaController
+ * @see net.devemperor.dictate.state.render.PromptVisibilityController
+ * @see net.devemperor.dictate.state.infobar.InfoBarSelector
+ * @see docs/decisions/0008-ui-surface-axes-widget-state-and-ime-view.md
+ */
+val DictateUiState.imeCollapsedToStrip: Boolean
+    get() = widget is WidgetState.Visible && widget.origin == WidgetOrigin.USER
+
+/**
  * Lifecycle status of one [StepRowItem] inside [PipelineUiState.Running.stepHistory].
  *
  * Phase 5.A of `2026-05-21 - dictate-render-cutover-completion-vol2`
@@ -967,15 +995,46 @@ data class LanguageState(
 )
 
 /**
- * Five product toggles. Owned by `FeatureToggleModule`.
+ * Product toggles. Owned by `FeatureToggleModule`.
  *
- * All five mirror their `Pref.*` counterparts via `PipelinePrefMirror`.
+ * All fields mirror `Pref.*` counterparts via `PipelinePrefMirror`.
+ *
+ * @property windowsAutoSendActive the **effective** PC send-mode: the
+ *   toggle is on AND a PC is paired. Deliberately mirrors
+ *   `WindowsAutoSend.shouldAutoSend(sp)` rather than
+ *   `Pref.WindowsAutoSendEnabled` alone. ADR-0019 makes that predicate the
+ *   single gate and forbids copying it, but a pure resolver may not touch
+ *   SharedPreferences (K-4) — so the mirror *calls* the predicate and caches
+ *   its answer here. The record button's colour and label can then be
+ *   plain state reads that cannot drift from where the transcript actually
+ *   goes. Four prefs feed this one field; see `PipelinePrefMirror`.
+ * @property screenContextEnabled the user's opt-in for sending the foreground
+ *   app's screen along as prompt context (ADR draft adr-a11y-screen-context).
+ *   Mirrors `Pref.AccessibilityContextEnabled`. On its own it does nothing:
+ *   without [screenContextAvailable] there is no service to read with.
+ * @property screenContextAvailable whether the accessibility service is enabled
+ *   in system settings. Separate from [screenContextEnabled] for the same
+ *   reason [windowsPaired] is separate from [windowsAutoSendActive]: "you have
+ *   not set this up" and "you set it up and turned it off" are different
+ *   states, and only the first one should point at the setup screen. NOT
+ *   mirrored from a pref — it is a system setting, so the IME pushes it in on
+ *   the render path (see `Action.FeatureToggleAction.SetScreenContextAvailable`).
+ * @property windowsPaired whether a PC is paired at all
+ *   (`WindowsTarget.from(sp) != null`). Separate from
+ *   [windowsAutoSendActive] because "you have no PC" and "you have a PC and
+ *   PC-mode is off" are different UI states: the former disables the toggle
+ *   (mirroring the settings switch, which is greyed out until paired),
+ *   the latter just leaves it unlit.
  */
 data class FeatureToggles(
     val rewordingEnabled: Boolean = true,
     val autoFormattingEnabled: Boolean = false,
     val instantOutputEnabled: Boolean = true,
     val autoEnterEnabled: Boolean = false,
+    val windowsAutoSendActive: Boolean = false,
+    val windowsPaired: Boolean = false,
+    val screenContextEnabled: Boolean = false,
+    val screenContextAvailable: Boolean = false,
 )
 
 /**

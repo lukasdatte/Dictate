@@ -629,6 +629,7 @@
     <string name="dictate_windows_clipboard_only_msg">Placed on the PC clipboard — paste there with Ctrl+V.</string>
     <string name="dictate_windows_input_failed_msg">PC not reachable — action not performed.</string>
     <string name="dictate_windows_input_companion_outdated_msg">Companion update required.</string>
+    <string name="dictate_pc_mode_active_a11y">PC mode active</string>
     <string name="dictate_windows_review_send_btn">Send to PC</string>
     <string name="dictate_windows_send_btn">Send to PC</string>
 

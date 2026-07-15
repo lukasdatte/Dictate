@@ -1405,6 +1405,20 @@ public class DictateInputMethodService extends InputMethodService
         net.devemperor.dictate.state.render.RecordButtonColorController recordButtonColorControllerForBackend =
             new net.devemperor.dictate.state.render.RecordButtonColorController(
                 recordButton, 0xFFF44336, android.graphics.Color.WHITE);
+        // Keyboard-action engine (§7.1, D4) — the PC-mode frame writer. Sets the purple frame as the
+        // root container's foreground (over every panel) while PC-mode is on, and a screenreader
+        // description as the non-colour second signal; clears both when off. Idempotent via the
+        // renderer's own cache.
+        final android.graphics.drawable.Drawable pcModeFrameDrawable =
+            androidx.core.content.ContextCompat.getDrawable(context, R.drawable.pc_mode_frame);
+        final ConstraintLayout pcModeFrameRoot = dictateKeyboardView;
+        net.devemperor.dictate.state.render.PcModeFrameRenderer pcModeFrameRendererForBackend =
+            new net.devemperor.dictate.state.render.PcModeFrameRenderer(active -> {
+                pcModeFrameRoot.setForeground(active ? pcModeFrameDrawable : null);
+                pcModeFrameRoot.setContentDescription(
+                    active ? getString(R.string.dictate_pc_mode_active_a11y) : null);
+                return kotlin.Unit.INSTANCE;
+            });
 
         kotlin.jvm.functions.Function0<kotlin.Unit> vibrateLambda = () -> {
             vibrate();
@@ -1649,6 +1663,8 @@ public class DictateInputMethodService extends InputMethodService
             recordingAnimationCtrlForBackend,
             autoEnterRendererForBackend,
             recordButtonColorControllerForBackend,
+            // Keyboard-action engine (§7.1): PC-mode frame side-channel.
+            pcModeFrameRendererForBackend,
             // Phase 5.B (Vol 2): reactive step-row renderer driven by
             // ImeViewBackend.render → onState.
             pipelineStepRowRenderer,

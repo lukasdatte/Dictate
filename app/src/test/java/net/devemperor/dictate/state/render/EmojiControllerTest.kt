@@ -18,6 +18,8 @@ import net.devemperor.dictate.state.insertion.HostTarget
 import net.devemperor.dictate.state.insertion.InsertionAuditLog
 import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.state.insertion.InsertionService
+import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
+import net.devemperor.dictate.state.insertion.LocalImeSink
 import net.devemperor.dictate.state.insertion.RecoveryHandler
 import net.devemperor.dictate.testutil.FakeHostTextReader
 import org.junit.Assert.assertEquals
@@ -117,7 +119,7 @@ class EmojiControllerTest {
         )
 
     private fun newController(connection: InputConnection? = ic) =
-        EmojiController(views, rec, { keystrokeInsertionService(connection) })
+        EmojiController(views, rec, { KeyboardActionDispatcher(LocalImeSink(keystrokeInsertionService(connection))) })
 
     // ── 1. RR-1 single-owner invariant ────────────────────────────────
 
@@ -248,7 +250,7 @@ class EmojiControllerTest {
         val accent = 0xFF3366CC.toInt()
         val medium = net.devemperor.dictate.DictateUtils.darkenColor(accent, 0.18f)
 
-        EmojiController(v, rec, { keystrokeInsertionService(ic) }).applyTheme(accent)
+        EmojiController(v, rec, { KeyboardActionDispatcher(LocalImeSink(keystrokeInsertionService(ic))) }).applyTheme(accent)
 
         // Legacy MainButtonsController.applyTheme (:421/:424):
         // editEmojiButton = accentMedium; emojiPickerCloseButton = accent.

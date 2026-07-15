@@ -13,6 +13,7 @@ import net.devemperor.dictate.state.insertion.ControlOp
 import net.devemperor.dictate.state.insertion.InsertionPolicy
 import net.devemperor.dictate.state.insertion.InsertionRequest
 import net.devemperor.dictate.state.insertion.InsertionService
+import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
 import net.devemperor.dictate.state.layout.LogicalButtonId
 
 /**
@@ -100,8 +101,8 @@ import net.devemperor.dictate.state.layout.LogicalButtonId
  *   the IME's `getCurrentInputConnection`). Threaded into all three
  *   §11.7 handlers exactly as the legacy `MainButtonsController` does.
  *   READ-only now (null-guards, compound-drawable reset); all host WRITES
- *   go through [insertionService] (P4 keystroke-path migration).
- * @property insertionService the single InsertionService owning all host-IC
+ *   go through [keyboardActions] (§4.2 keyboard-action router).
+ * @property keyboardActions the keyboard-action router facade owning all host-IC
  *   writes (nullable → no-op). Threaded into the SPACE handler (tap = space
  *   insert, swipe = cursor move) and forwarded to the BACKSPACE / ENTER
  *   handlers so their writes funnel through the same owner.
@@ -127,6 +128,10 @@ import net.devemperor.dictate.state.layout.LogicalButtonId
  */
 class SpecialTouchHandlerInstaller(
     private val inputConnectionProvider: () -> InputConnection?,
+    // Space + cursor-swipe route through the PC-aware seam (§4.2); the backspace-swipe and
+    // enter-overlay sub-handlers still take the raw InsertionService (their PC paths — §4.5 word
+    // selection — are a follow-up).
+    private val keyboardActions: () -> KeyboardActionDispatcher?,
     private val insertionService: () -> InsertionService?,
     private val accentColorProvider: () -> Int,
     private val onVibrate: () -> Unit,
@@ -259,7 +264,7 @@ class SpecialTouchHandlerInstaller(
                 onVibrate()
                 // P4: space insert funnels through the InsertionService
                 // (KEYSTROKE policy). Null = no-op, as the legacy null-IC.
-                insertionService()?.insert(
+                keyboardActions()?.insert(
                     InsertionRequest(" ", null, InsertionPolicy.KEYSTROKE, null, null))
             },
             onCursorMove = { dir ->
@@ -267,7 +272,7 @@ class SpecialTouchHandlerInstaller(
                 // P4: cursor move funnels through the InsertionService as a
                 // CursorMove ControlOp carrying the raw swipe direction; the
                 // service owns the selection-safe, grapheme-clamped move (F-021).
-                insertionService()?.control(ControlOp.CursorMove(dir))
+                keyboardActions()?.control(ControlOp.CursorMove(dir))
             },
             onSwipeStateChanged = { isSwiping ->
                 if (isSwiping) {

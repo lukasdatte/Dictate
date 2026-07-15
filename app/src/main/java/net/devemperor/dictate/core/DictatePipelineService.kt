@@ -71,6 +71,10 @@ import net.devemperor.dictate.shared.transport.OkHttpDispatchTransport
 import net.devemperor.dictate.windows.AndroidSyncSource
 import net.devemperor.dictate.windows.SessionEntityMapper
 import net.devemperor.dictate.windows.WindowsAutoSend
+import net.devemperor.dictate.windows.PcInputCoordinator
+import net.devemperor.dictate.windows.PcInputFailure
+import net.devemperor.dictate.windows.PcInputOutcomeMapper
+import net.devemperor.dictate.windows.PcSendResult
 import net.devemperor.dictate.windows.WindowsDispatchCoordinator
 import net.devemperor.dictate.windows.WindowsDispatchService
 import kotlinx.coroutines.launch
@@ -190,6 +194,11 @@ class DictatePipelineService : Service() {
     // (§3.1). Shut down in onDestroy.
     private lateinit var windowsDispatchCoordinatorImpl: WindowsDispatchCoordinator
     private lateinit var windowsDispatchExecutorImpl: ExecutorService
+
+    // The keyboard-action send window (§4.3.2). Shares windowsDispatchExecutorImpl with the dictation
+    // dispatch — the single-thread executor is what gives keyboard actions and dictation a total order
+    // (Akzeptanzkriterium 8). Built right after the dispatch coordinator below.
+    private lateinit var pcInputCoordinatorImpl: PcInputCoordinator
 
     // ── C8 — Subsystem adapters (production-quality) ───────────────────
     private lateinit var audioFocusGateImpl: AudioFocusGate
@@ -717,6 +726,7 @@ class DictatePipelineService : Service() {
             notificationCoordinator = notificationCoordinatorImpl,
             inputConnectionProvider = { binder.delegateInputConnectionProvider?.invoke() },
             insertionServiceProvider = { binder.delegateInsertionService?.invoke() },
+            keyboardActionsProvider = { binder.delegateKeyboardActions?.invoke() },
             clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager,
             sharedPrefs = sharedPrefs,
             // Chunk 3.0 (indirection-cleanup) — typed State → SP write
@@ -846,6 +856,20 @@ class DictatePipelineService : Service() {
                 )
             },
             executor = windowsDispatchExecutorImpl,
+        )
+        pcInputCoordinatorImpl = PcInputCoordinator(
+            // Resolve the paired target per send (re-pairing takes effect at once); no target = the
+            // same "pair again" outcome as a rejected secret.
+            send = { batch ->
+                WindowsTarget.from(sharedPrefs)?.let { target ->
+                    PcInputOutcomeMapper.classify(windowsDispatchService.input(target, batch))
+                } ?: PcSendResult.Failed(PcInputFailure.UNAUTHORIZED, opensCircuit = true)
+            },
+            emitFailure = { failure ->
+                orchestrator.emitAction(Action.InfoHintAction.PipelineErrorOccurred(failure.toErrorKind(), null))
+            },
+            executor = windowsDispatchExecutorImpl,
+            clock = { System.currentTimeMillis() },
         )
 
         // ──────────────────────────────────────────────────────────────
@@ -1970,6 +1994,14 @@ class DictatePipelineService : Service() {
         val windowsDispatchCoordinator: WindowsDispatchCoordinator
             get() = windowsDispatchCoordinatorImpl
 
+        /**
+         * THE service-owned [PcInputCoordinator] (§4.3.2). The IME builds its keyboard-action router
+         * around this instance, so keyboard actions ride the SAME send window and executor as the
+         * dictation dispatch — one ordered channel to the PC.
+         */
+        val pcInputCoordinator: PcInputCoordinator
+            get() = pcInputCoordinatorImpl
+
         /** The service-owned [SessionTracker]. */
         val sessionTracker: SessionTracker
             get() = sessionTrackerImpl
@@ -2128,6 +2160,15 @@ class DictatePipelineService : Service() {
             (() -> net.devemperor.dictate.state.insertion.InsertionService?)? = null
 
         /**
+         * IME-side supplier of the keyboard-action router facade (§4.2). Keystroke module effects
+         * route through this so Space/Backspace/Enter reach the PC in PC-mode; `null` when the
+         * IME-View is detached (a no-op, like [delegateInsertionService]).
+         */
+        @Volatile
+        internal var delegateKeyboardActions:
+            (() -> net.devemperor.dictate.state.insertion.KeyboardActionDispatcher?)? = null
+
+        /**
          * IME-side affordance hook for the overlay-surface RECORD click
          * (dictate-widget-integration §8.3 Chunk 3.2). The IME registers
          * the same lambda it uses for the keyboard-surface RECORD click
@@ -2213,6 +2254,16 @@ class DictatePipelineService : Service() {
             provider: (() -> net.devemperor.dictate.state.insertion.InsertionService?)?,
         ) {
             delegateInsertionService = provider
+        }
+
+        /**
+         * Register the IME's keyboard-action router facade so module effects route keystroke writes
+         * through the PC-aware seam via [ModuleServices.keyboardActionsProvider]. Pass `null` on unbind.
+         */
+        fun registerKeyboardActionsProvider(
+            provider: (() -> net.devemperor.dictate.state.insertion.KeyboardActionDispatcher?)?,
+        ) {
+            delegateKeyboardActions = provider
         }
 
         /**

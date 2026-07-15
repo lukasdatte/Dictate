@@ -5,7 +5,7 @@ import android.view.inputmethod.InputConnection
 import net.devemperor.dictate.state.insertion.ControlOp
 import net.devemperor.dictate.state.insertion.InsertionPolicy
 import net.devemperor.dictate.state.insertion.InsertionRequest
-import net.devemperor.dictate.state.insertion.InsertionService
+import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
 
 /**
  * Controller for the QWERTZ keyboard. Implements the state machine for shift
@@ -27,8 +27,8 @@ import net.devemperor.dictate.state.insertion.InsertionService
  * @param view the keyboard view to control
  * @param inputConnectionProvider provides the current InputConnection (may be null).
  *   READ-only here (cursor/auto-shift text peeks); all WRITES go through
- *   [insertionService] (P4 keystroke-path migration).
- * @param insertionService supplies the single InsertionService that owns all
+ *   [keyboardActions] (§4.2 keyboard-action router — reaches the PC in PC-mode).
+ * @param keyboardActions supplies the keyboard-action router facade that owns all
  *   host-IC writes (may be null when the IME-View is detached → write is a
  *   no-op). Character/space commits and cursor moves route through it with the
  *   KEYSTROKE policy / ControlOp, reproducing the legacy raw-commit behaviour.
@@ -39,7 +39,7 @@ import net.devemperor.dictate.state.insertion.InsertionService
 class QwertzKeyboardController(
     private val view: QwertzKeyboardView,
     private val inputConnectionProvider: () -> InputConnection?,
-    private val insertionService: () -> InsertionService?,
+    private val keyboardActions: () -> KeyboardActionDispatcher?,
     private val vibrate: () -> Unit,
     private val deleteOneCharacter: () -> Unit,
     private val performEnterAction: () -> Unit,
@@ -68,7 +68,7 @@ class QwertzKeyboardController(
             vibrate()
             // Pass the raw swipe direction (>0 = right, <0 = left). The service
             // owns the selection-safe, grapheme-clamped move (F-021).
-            insertionService()?.control(ControlOp.CursorMove(direction))
+            keyboardActions()?.control(ControlOp.CursorMove(direction))
         }
     )
 
@@ -166,7 +166,7 @@ class QwertzKeyboardController(
         }
 
         if (text != null) {
-            insertionService()?.insert(
+            keyboardActions()?.insert(
                 InsertionRequest(text, null, InsertionPolicy.KEYSTROKE, null, null))
         }
 
@@ -205,7 +205,7 @@ class QwertzKeyboardController(
         // InsertionService (P4).
         val ic = inputConnectionProvider() ?: return
         vibrate()
-        insertionService()?.insert(
+        keyboardActions()?.insert(
             InsertionRequest(" ", null, InsertionPolicy.KEYSTROKE, null, null))
         // Reset shift first (e.g. after typing a shifted letter then space),
         // then check for auto-shift. Order matters: checkAutoShiftAfterSpace

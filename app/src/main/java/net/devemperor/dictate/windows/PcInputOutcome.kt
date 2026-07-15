@@ -4,6 +4,7 @@ import net.devemperor.dictate.shared.client.DispatchError
 import net.devemperor.dictate.shared.client.DispatchResult
 import net.devemperor.dictate.shared.protocol.InputCommandResponse
 import net.devemperor.dictate.shared.protocol.InputOutcomeWire
+import net.devemperor.dictate.state.PipelineErrorKind
 
 /**
  * Why a batch of keyboard actions did not reach the PC — the classification the InfoBar reads (§6.1).
@@ -26,6 +27,14 @@ enum class PcInputFailure {
      * fine, so this does **not** open the circuit — the next action may well land.
      */
     NOT_PERFORMED,
+    ;
+
+    /** The InfoBar classification (§6.1): a distinct "not performed" kind, or the shared "pair again". */
+    fun toErrorKind(): PipelineErrorKind = when (this) {
+        UNREACHABLE, NOT_PERFORMED -> PipelineErrorKind.WINDOWS_INPUT_FAILED
+        COMPANION_UPDATE_REQUIRED -> PipelineErrorKind.WINDOWS_INPUT_COMPANION_OUTDATED
+        UNAUTHORIZED -> PipelineErrorKind.WINDOWS_UNAUTHORIZED
+    }
 }
 
 /** The coordinator's view of one send attempt. */

@@ -59,6 +59,7 @@ fun fakeModuleServices(
     notificationCoordinator: PipelineNotificationCoordinatorSubsystem = NoopNotificationCoordinator,
     inputConnectionProvider: () -> InputConnection? = { null },
     insertionServiceProvider: () -> net.devemperor.dictate.state.insertion.InsertionService? = { null },
+    keyboardActionsProvider: () -> net.devemperor.dictate.state.insertion.KeyboardActionDispatcher? = { null },
     clipboard: ClipboardManager? = null,
     sharedPrefs: SharedPreferences = FakeSharedPreferences(),
     // Chunk 3.0 — defaults to a service backed by the same `sharedPrefs`
@@ -82,6 +83,7 @@ fun fakeModuleServices(
     notificationCoordinator = notificationCoordinator,
     inputConnectionProvider = inputConnectionProvider,
     insertionServiceProvider = insertionServiceProvider,
+    keyboardActionsProvider = keyboardActionsProvider,
     clipboard = clipboard,
     sharedPrefs = sharedPrefs,
     prefs = prefs,

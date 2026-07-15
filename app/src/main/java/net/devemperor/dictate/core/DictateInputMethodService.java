@@ -581,6 +581,12 @@ public class DictateInputMethodService extends InputMethodService
     // is the other, §3.6); it holds no DispatchClient/executor of its own.
     private net.devemperor.dictate.windows.WindowsDispatchCoordinator windowsDispatchCoordinator;
 
+    // The service-owned keyboard-action send window (§4.3.2), grabbed on bind. Wrapped by the IME's
+    // KeyboardActionRouter (built lazily in {@link #keyboardActions()}) so live keyboard actions go
+    // to the PC in PC-mode and to the local InsertionService otherwise.
+    private net.devemperor.dictate.windows.PcInputCoordinator pcInputCoordinator;
+    private net.devemperor.dictate.state.insertion.KeyboardActionDispatcher keyboardActions;
+
     // ===== Block 2 — DictatePipelineService bind state =====
     //
     // The pipeline service is bound in onCreateInputView() so it is alive
@@ -838,6 +844,7 @@ public class DictateInputMethodService extends InputMethodService
         recordingRepository = binder.getRecordingRepository();
         pipelineOrchestrator = binder.getPipelineOrchestrator();
         windowsDispatchCoordinator = binder.getWindowsDispatchCoordinator();
+        pcInputCoordinator = binder.getPcInputCoordinator();
 
         // Register the IME-side callbacks. The bridge routes
         // PipelineOrchestrator callbacks back to this IME instance;
@@ -850,6 +857,10 @@ public class DictateInputMethodService extends InputMethodService
         // Enter/PhysicalEnter) route their host writes through the same
         // owner the IME-side controllers use. Cleared on unbind below.
         binder.registerInsertionServiceProvider(() -> insertionService());
+        // Keyboard-action seam (§4.2): the same module effects route through the PC-aware router so
+        // Space/Backspace/Enter reach the companion in PC-mode. Local mode delegates to the very same
+        // InsertionService, so behaviour is unchanged off PC-mode. Cleared on unbind below.
+        binder.registerKeyboardActionsProvider(() -> keyboardActions());
 
         // C5 (R-1 closure) — install the IME-faithful PipelineConfigResolver
         // so the new recording-drive path builds a JobRequest
@@ -876,6 +887,7 @@ public class DictateInputMethodService extends InputMethodService
             binder.registerPromptQueueCallback(null);
             binder.registerInputConnectionProvider(null);
             binder.registerInsertionServiceProvider(null);
+            binder.registerKeyboardActionsProvider(null);
             binder.registerPipelineConfigResolver(null);
             // dictate-widget-integration §8.3 Chunk 3.2 — clear the
             // overlay affordance lambda so a click that races the unbind
@@ -982,7 +994,7 @@ public class DictateInputMethodService extends InputMethodService
             () -> getCurrentInputConnection(),
             // P4: the single InsertionService owner for all QWERTZ host-IC
             // writes (char / space / cursor-move). Lazy getter, null-safe.
-            () -> insertionService(),
+            () -> keyboardActions(),
             () -> { vibrate(); return kotlin.Unit.INSTANCE; },
             () -> { deleteOneCharacter(); return kotlin.Unit.INSTANCE; },
             () -> {
@@ -1421,8 +1433,9 @@ public class DictateInputMethodService extends InputMethodService
         // does the setOnTouchListener (the same cached handler instances).
         specialTouchHandlerInstaller = new SpecialTouchHandlerInstaller(
             () -> getCurrentInputConnection(),
-            // P4: the single InsertionService owner — forwarded to the
-            // SPACE/BACKSPACE/ENTER special-touch handlers for their writes.
+            // Space + cursor-swipe route through the PC-aware seam (§4.2); the sub-handlers still
+            // take the raw InsertionService (their PC paths are a follow-up).
+            () -> keyboardActions(),
             () -> insertionService(),
             () -> DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE),
             vibrateLambda,
@@ -2310,7 +2323,7 @@ public class DictateInputMethodService extends InputMethodService
             new EmojiViews(editEmojiButton, emojiPickerCloseButton, emojiPickerView),
             this,
             // P4: the single InsertionService owner for the picked-emoji commit.
-            () -> insertionService());
+            () -> keyboardActions());
         emojiController.installDormant();
         emojiController.attachToViews();
 
@@ -3979,7 +3992,7 @@ public class DictateInputMethodService extends InputMethodService
         // Routed through the single InsertionService (control → executeControlOp
         // → sendKeyEvent). The service is lazily built and independent of the
         // orchestrator binder, so it is available even on this pre-bind path.
-        insertionService().control(ControlOp.PhysicalEnter.INSTANCE);
+        keyboardActions().control(ControlOp.PhysicalEnter.INSTANCE);
     }
 
     private void openSettingsActivity() {
@@ -5717,6 +5730,29 @@ public class DictateInputMethodService extends InputMethodService
         return insertionService;
     }
 
+    /**
+     * The single routing seam (§4.1): live keyboard actions submit here instead of to
+     * {@link #insertionService()} directly. In local mode the router delegates byte-for-byte to the
+     * same {@link InsertionService}; in PC-mode it diverts to the companion through the
+     * service-owned {@link net.devemperor.dictate.windows.PcInputCoordinator}. Built lazily (after
+     * the bind that sets {@link #pcInputCoordinator}); the mode is read per submit from state, so a
+     * PC-mode toggle takes effect on the next keystroke.
+     */
+    private net.devemperor.dictate.state.insertion.KeyboardActionDispatcher keyboardActions() {
+        if (keyboardActions == null) {
+            net.devemperor.dictate.state.insertion.KeyboardActionSink local =
+                    new net.devemperor.dictate.state.insertion.LocalImeSink(insertionService());
+            net.devemperor.dictate.state.insertion.KeyboardActionSink pc =
+                    new net.devemperor.dictate.windows.PcInputSink(pcInputCoordinator);
+            net.devemperor.dictate.state.insertion.KeyboardActionRouter router =
+                    new net.devemperor.dictate.state.insertion.KeyboardActionRouter(
+                            local, pc,
+                            () -> pipelineBinder.getState().getValue().getFeatures().getWindowsAutoSendActive());
+            keyboardActions = new net.devemperor.dictate.state.insertion.KeyboardActionDispatcher(router);
+        }
+        return keyboardActions;
+    }
+
     /** Execute a non-text {@link ControlOp} on {@code ic} (always succeeds). */
     private boolean executeControlOp(InputConnection ic, ControlOp op) {
         if (op instanceof ControlOp.Backspace) {
@@ -6014,7 +6050,7 @@ public class DictateInputMethodService extends InputMethodService
      * diverge.
      */
     private void deleteOneCharacter() {
-        insertionService().control(ControlOp.DeleteGrapheme.INSTANCE);
+        keyboardActions().control(ControlOp.DeleteGrapheme.INSTANCE);
     }
 
     // ===== MainButtonsController.Callback =====
@@ -6956,7 +6992,7 @@ public class DictateInputMethodService extends InputMethodService
             }
             return;
         }
-        insertionService().editAction(action);
+        keyboardActions().editAction(action);
     }
 
     /**

@@ -18,6 +18,8 @@ import net.devemperor.dictate.state.insertion.HostTarget
 import net.devemperor.dictate.state.insertion.InsertionAuditLog
 import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.state.insertion.InsertionService
+import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
+import net.devemperor.dictate.state.insertion.LocalImeSink
 import net.devemperor.dictate.state.insertion.RecoveryHandler
 import net.devemperor.dictate.state.layout.LogicalButtonId
 import net.devemperor.dictate.testutil.FakeHostTextReader
@@ -149,6 +151,7 @@ class SpecialTouchHandlerInstallerTest {
     ): SpecialTouchHandlerInstaller =
         SpecialTouchHandlerInstaller(
             inputConnectionProvider = { connection },
+            keyboardActions = { KeyboardActionDispatcher(LocalImeSink(keystrokeInsertionService(connection))) },
             insertionService = { keystrokeInsertionService(connection) },
             accentColorProvider = { 0xFF0000FF.toInt() },
             onVibrate = { vibrations += Unit },

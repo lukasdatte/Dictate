@@ -7,6 +7,8 @@ import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.state.insertion.AutoEnterScheduler
 import net.devemperor.dictate.state.insertion.ClipboardGateway
 import net.devemperor.dictate.state.insertion.ControlOp
+import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
+import net.devemperor.dictate.state.insertion.LocalImeSink
 import net.devemperor.dictate.state.insertion.EditAction
 import net.devemperor.dictate.state.insertion.HostSelection
 import net.devemperor.dictate.state.insertion.HostTarget
@@ -218,6 +220,13 @@ class KeyboardInputModuleTest {
             },
             textReader = reader,
         )
+
+        /**
+         * The seam facade the module now writes through (§4.2). LocalImeSink delegates byte-for-byte
+         * to [service], so the same `controlOps`/inserts are recorded — this is the rot-vor-grün proof
+         * that the Space/Backspace/Enter behaviour survives the router rewire unchanged.
+         */
+        val dispatcher = KeyboardActionDispatcher(LocalImeSink(service))
     }
 
     @Test
@@ -226,7 +235,7 @@ class KeyboardInputModuleTest {
         // ControlOp.Backspace (deleteSurroundingText(1,0)), which per Android
         // contract deletes AROUND an active selection instead of deleting it.
         val rec = RecordingInsertion(FakeHostTextReader(selection = HostSelection(2, 5)))
-        val services = fakeModuleServices(insertionServiceProvider = { rec.service })
+        val services = fakeModuleServices(keyboardActionsProvider = { rec.dispatcher })
 
         module.runEffect(KeyboardInputModule.Effect.SendBackspace, services)
 
@@ -240,7 +249,7 @@ class KeyboardInputModuleTest {
         val rec = RecordingInsertion(
             FakeHostTextReader(selection = HostSelection(3, 3), beforeCursor = "x😀"),
         )
-        val services = fakeModuleServices(insertionServiceProvider = { rec.service })
+        val services = fakeModuleServices(keyboardActionsProvider = { rec.dispatcher })
 
         module.runEffect(KeyboardInputModule.Effect.SendBackspace, services)
 
@@ -249,7 +258,7 @@ class KeyboardInputModuleTest {
 
     @Test
     fun `SendBackspace without insertion service is a no-op`() {
-        val services = fakeModuleServices(insertionServiceProvider = { null })
+        val services = fakeModuleServices(keyboardActionsProvider = { null })
         // Must not throw — legacy null-IC behaviour.
         module.runEffect(KeyboardInputModule.Effect.SendBackspace, services)
     }

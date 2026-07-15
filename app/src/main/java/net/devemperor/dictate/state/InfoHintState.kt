@@ -125,7 +125,20 @@ enum class PipelineErrorKind {
     WINDOWS_UNREACHABLE,
 
     /** ADR-0019 — 401, the pairing is invalid. Confirm opens the pairing screen (wired at the seam, Block 3b). */
-    WINDOWS_UNAUTHORIZED;
+    WINDOWS_UNAUTHORIZED,
+
+    /**
+     * Keyboard-action engine — a PC-mode keyboard action could not be performed (§6.1). Distinct
+     * from [WINDOWS_UNREACHABLE], whose wording implies "text held as a pending part": a keyboard
+     * action is never buffered (Entscheidung 4), so its message says "not performed". Dismiss-only.
+     */
+    WINDOWS_INPUT_FAILED,
+
+    /**
+     * Keyboard-action engine — the paired companion is too old to serve `/v1/input` (404). "Update
+     * the companion". Dismiss-only.
+     */
+    WINDOWS_INPUT_COMPANION_OUTDATED;
 
     companion object {
         /**

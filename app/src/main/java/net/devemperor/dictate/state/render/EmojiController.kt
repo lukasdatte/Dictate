@@ -8,7 +8,7 @@ import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.R
 import net.devemperor.dictate.state.insertion.InsertionPolicy
 import net.devemperor.dictate.state.insertion.InsertionRequest
-import net.devemperor.dictate.state.insertion.InsertionService
+import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
 
 /**
  * Owns the **emoji-picker** click/picked listeners — the listeners
@@ -58,9 +58,9 @@ import net.devemperor.dictate.state.insertion.InsertionService
  *   service from the inflated tree).
  * @property callback the emoji action sink — a narrow ISP subset of the
  *   legacy `MainButtonsController.Callback` (parity contract).
- * @property insertionService the single InsertionService owning all host-IC
- *   writes (nullable when the IME-View is detached → write is a no-op). The
- *   picked-emoji commit goes through it with the KEYSTROKE policy.
+ * @property keyboardActions the keyboard-action router facade (§4.2): the picked-emoji
+ *   commit routes through it so it reaches the PC in PC-mode and the local InsertionService
+ *   otherwise (nullable when the IME-View is detached → no-op).
  *
  * @see EditBarController — the sibling owner; full CR4-IMPL-1 narrative.
  * @see SpecialTouchHandlerInstaller — the CR2 staged-pattern precedent.
@@ -70,7 +70,7 @@ import net.devemperor.dictate.state.insertion.InsertionService
 class EmojiController(
     private val views: EmojiViews,
     private val callback: Callback,
-    private val insertionService: () -> InsertionService?,
+    private val keyboardActions: () -> KeyboardActionDispatcher?,
 ) {
 
     /**
@@ -118,7 +118,7 @@ class EmojiController(
                     // P4: the emoji commit funnels through the single
                     // InsertionService owner (KEYSTROKE policy = instant,
                     // no auto-enter/guard/audit). Null = no-op, as before.
-                    insertionService()?.insert(
+                    keyboardActions()?.insert(
                         InsertionRequest(emoji, null, InsertionPolicy.KEYSTROKE, null, null))
                 }
             },

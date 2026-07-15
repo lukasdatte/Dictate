@@ -12,6 +12,9 @@ import net.devemperor.dictate.shared.protocol.Endpoints
 import net.devemperor.dictate.shared.protocol.ErrorCode
 import net.devemperor.dictate.shared.protocol.ErrorEnvelope
 import net.devemperor.dictate.shared.protocol.HealthResponse
+import net.devemperor.dictate.shared.protocol.InputCommandRequest
+import net.devemperor.dictate.shared.protocol.InputCommandResponse
+import net.devemperor.dictate.shared.protocol.InputCommandWire
 import net.devemperor.dictate.shared.protocol.PairRequest
 import net.devemperor.dictate.shared.protocol.PairResponse
 import net.devemperor.dictate.shared.protocol.ProtocolCodec
@@ -82,6 +85,35 @@ class DispatchClient(
             // The server should have answered 503 instead. It did not, so trust the flag, not the
             // status: `delivered` is the delivery confirmation, and it says no.
             return DispatchResult.Failure(DispatchError.InsertionFailed)
+        }
+        return result
+    }
+
+    /**
+     * Replays a batch of keyboard actions on the PC (§4.4). Order of [commands] is the execution
+     * order.
+     *
+     * A 404 is re-mapped from the generic [DispatchError.Server] to [DispatchError.EndpointMissing]:
+     * an old companion has no such route, and the app must tell the user to update it rather than
+     * blame the network. Every other outcome flows through the shared classification.
+     */
+    fun input(commands: List<InputCommandWire>): DispatchResult<InputCommandResponse> {
+        val result = authenticated { credentials ->
+            call(
+                request = InputCommandRequest(commands = commands),
+                requestSerializer = InputCommandRequest.serializer(),
+                requestValidation = Validations.inputCommandRequest,
+                path = Endpoints.INPUT,
+                headers = AuthHeaders.forDevice(credentials),
+                responseSerializer = InputCommandResponse.serializer(),
+                responseValidation = Validations.inputCommandResponse,
+            )
+        }
+        if (result is DispatchResult.Failure) {
+            val error = result.error
+            if (error is DispatchError.Server && error.status == 404) {
+                return DispatchResult.Failure(DispatchError.EndpointMissing)
+            }
         }
         return result
     }

@@ -151,6 +151,11 @@ class ImeViewBackend @JvmOverloads constructor(
      */
     private val recordButtonColorController: RecordButtonColorController? = null,
     /**
+     * Keyboard-action engine (§7.1, D4) — single writer for the PC-mode frame on the root
+     * container's foreground. On/off idempotently with `features.windowsAutoSendActive`.
+     */
+    private val pcModeFrameRenderer: PcModeFrameRenderer? = null,
+    /**
      * Phase 5.B of dictate-render-cutover-completion-vol2 — reactive
      * step-row consumer. Diffs `state.pipeline.stepHistory` against
      * its inflated row views, replaces the legacy imperative
@@ -230,6 +235,7 @@ class ImeViewBackend @JvmOverloads constructor(
         recordingAnimationController?.reset()
         autoEnterRenderer?.reset()
         recordButtonColorController?.reset()
+        pcModeFrameRenderer?.reset()
         pipelineStepRowRenderer?.reset()
         // Click-listeners stay wired on the Views — they short-circuit
         // because `onAction == null` and `stateRef == null`. The Views
@@ -289,6 +295,10 @@ class ImeViewBackend @JvmOverloads constructor(
         //     dictate-render-cutover-completion-vol2 §7 Q2). Paints
         //     red while `Running.hasFailure`, white elsewhere.
         recordButtonColorController?.onState(state)
+
+        // 4b — PC-mode frame (§7.1, D4): set/clear the purple foreground frame on the root
+        //      container with `features.windowsAutoSendActive`. Idempotent, over all panels.
+        pcModeFrameRenderer?.onState(state)
 
         // 5 — Diff the orchestrator's stepHistory into the step-row
         //     view children (Phase 5.B of

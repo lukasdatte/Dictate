@@ -25,6 +25,7 @@ import net.devemperor.dictate.companion.CompanionContainer
 @Composable
 fun SettingsScreen(container: CompanionContainer) {
     val viewModel = remember { SettingsViewModel(container.settings, container.autostart, container.addressCatalog) }
+    val chordViewModel = remember { ChordSettingsViewModel(container.chordMapping) }
     val state by viewModel.state.collectAsState()
 
     var port by remember { mutableStateOf(state.port.toString()) }
@@ -94,5 +95,7 @@ fun SettingsScreen(container: CompanionContainer) {
                 color = MaterialTheme.colorScheme.error,
             )
         }
+
+        ChordSettingsSection(chordViewModel)
     }
 }

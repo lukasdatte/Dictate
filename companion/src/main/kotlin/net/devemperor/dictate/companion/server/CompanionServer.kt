@@ -17,6 +17,7 @@ import net.devemperor.dictate.companion.server.plugins.installSerialization
 import net.devemperor.dictate.companion.server.plugins.installStatusPages
 import net.devemperor.dictate.companion.server.routes.dispatchRoutes
 import net.devemperor.dictate.companion.server.routes.healthRoutes
+import net.devemperor.dictate.companion.server.routes.inputRoutes
 import net.devemperor.dictate.companion.server.routes.pairRoutes
 import net.devemperor.dictate.companion.server.routes.syncRoutes
 
@@ -102,6 +103,7 @@ fun Application.companionModule(container: CompanionContainer) {
 
         authenticated(container.authService) {
             dispatchRoutes(container.dispatchService)
+            inputRoutes(container.inputCommandService)
             syncRoutes(container.syncService)
             healthRoutes(container.healthService)
         }

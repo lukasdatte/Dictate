@@ -2,6 +2,7 @@ package net.devemperor.dictate.companion.platform
 
 import net.devemperor.dictate.companion.domain.model.InsertionOutcome
 import net.devemperor.dictate.companion.fakes.FakeClipboard
+import net.devemperor.dictate.companion.platform.windows.JnaWin32Keyboard
 import net.devemperor.dictate.companion.platform.windows.Win32Keyboard
 import net.devemperor.dictate.companion.platform.windows.Win32TextInserter
 import org.junit.Assert.assertEquals
@@ -142,9 +143,12 @@ class Win32TextInserterTest {
 
         override fun hasForegroundWindow(): Boolean = foregroundWindow
 
-        override fun sendCtrlV(): Int {
+        override fun sendCtrlV(): Int = sendKeySequence(JnaWin32Keyboard.CTRL_V_SEQUENCE)
+
+        override fun sendKeySequence(events: List<net.devemperor.dictate.companion.platform.windows.KeyEventSpec>): Int {
             sent++
-            return acceptedEvents
+            // Mirrors the real UIPI degradation: Windows never accepts *more* than it was handed.
+            return minOf(acceptedEvents, events.size)
         }
     }
 }

@@ -97,6 +97,84 @@ enum class InsertionOutcomeWire {
     CLIPBOARD_ONLY,
 }
 
+// ── Input commands ──────────────────────────────────────────────────────────────────────
+
+/**
+ * A batch of keyboard actions to replay on the PC — the semantic remote-control channel
+ * (`POST /v1/input`, ADR "Input-Command-Protokoll").
+ *
+ * Additive to the protocol: shipped **without** a [ProtocolVersion] bump. An older companion has
+ * no such route and answers 404, which the client maps to a distinct `EndpointMissing` so the app
+ * can say "update the companion" rather than "PC unreachable".
+ *
+ * The commands travel as **semantics**, never raw VK codes: the phone says `REDO`, the companion
+ * decides that `REDO` is Ctrl+Y (or whatever the user rebound it to). That keeps the wire
+ * Konform-validatable, layout-agnostic for the phone, and small in injection surface (§1.3).
+ */
+@Serializable
+data class InputCommandRequest(
+    val protocolVersion: Int = ProtocolVersion.CURRENT,
+    /** 1..[Endpoints.MAX_INPUT_BATCH]; list order **is** the execution order on the PC. */
+    val commands: List<InputCommandWire>,
+)
+
+@Serializable
+data class InputCommandWire(
+    val kind: InputCommandKindWire,
+    /** Only for [InputCommandKindWire.TYPE_TEXT]; 1..[Endpoints.MAX_TEXT_LENGTH]. Null for every other kind. */
+    val text: String? = null,
+    /**
+     * Repeat count for the movement/deletion kinds (BACKSPACE, CURSOR_*, CURSOR_WORD_SELECT_*).
+     * 1..[Endpoints.MAX_INPUT_REPEAT]. Coalesces a burst of same-direction presses into one command.
+     * Ignored (kept at 1) for TYPE_TEXT, ENTER, SPACE and the clipboard/undo kinds.
+     */
+    val count: Int = 1,
+)
+
+/**
+ * The wire vocabulary of remote keyboard actions.
+ *
+ * A separate enum from the companion's internal `KeyCommand` domain enum on purpose (as
+ * `SessionOriginWire` is separate from `SessionOrigin`): the wire vocabulary must not be dragged
+ * along by a companion-internal refactor, and vice versa.
+ */
+@Serializable
+enum class InputCommandKindWire {
+    TYPE_TEXT, BACKSPACE, ENTER, SPACE,
+    CURSOR_LEFT, CURSOR_RIGHT,
+
+    /** Ctrl+Shift+←/→ on the PC — select one word back/forward, for the PC backspace-swipe (D1). */
+    CURSOR_WORD_SELECT_BACK, CURSOR_WORD_SELECT_FORWARD,
+    SELECT_ALL, CUT, COPY, PASTE, UNDO, REDO,
+}
+
+@Serializable
+data class InputCommandResponse(
+    val protocolVersion: Int = ProtocolVersion.CURRENT,
+    /** TRUE only for a full success — mirrors `delivered` (ADR-0017): a partial UIPI rejection is `false`. */
+    val executed: Boolean,
+    val outcome: InputOutcomeWire,
+)
+
+/**
+ * How a batch of input commands landed on the PC. Only [SENT] is a success.
+ *
+ * Unlike `InsertionOutcomeWire` (where CLIPBOARD_ONLY is still a success because the text reached
+ * the clipboard), a keyboard action has no fallback surface: if it could not be injected, it
+ * simply did not happen and the phone must say so (Entscheidung 4 — immediate error, no buffering).
+ */
+@Serializable
+enum class InputOutcomeWire {
+    /** Every command was injected into the foreground window. */
+    SENT,
+
+    /** No foreground window to receive the input — nothing was sent. */
+    NO_FOREGROUND_WINDOW,
+
+    /** UIPI (an elevated target) rejected the injection in part or whole — treated as not sent. */
+    REJECTED,
+}
+
 // ── Sync ────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -149,4 +227,12 @@ data class HealthResponse(
     val appVersion: String,
     /** false on Linux/macOS or when no inserter is available → the phone can warn while pairing. */
     val canInsert: Boolean,
+    /**
+     * Whether this companion serves `POST /v1/input` (the keyboard-action channel).
+     *
+     * Additive, defaulted `false` so an older companion's health response (which lacks the field)
+     * decodes as "no support" under `ignoreUnknownKeys` — the phone reads it at pairing/health time
+     * and can warn proactively before the first keyboard action hits a 404.
+     */
+    val supportsInputCommands: Boolean = false,
 )

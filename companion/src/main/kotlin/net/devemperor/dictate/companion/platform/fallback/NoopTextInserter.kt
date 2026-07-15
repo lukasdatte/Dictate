@@ -25,3 +25,20 @@ object NoopClipboard : net.devemperor.dictate.companion.domain.port.ClipboardPor
     override fun readText(): String? = null
     override fun writeText(text: String): Boolean = true
 }
+
+/**
+ * The input performer on every OS that is not Windows (and the reason the companion runs on Linux).
+ *
+ * Reports [available] = false → `/v1/health` says `supportsInputCommands = false`. It never
+ * pretends: a keyboard action here cannot reach any window, so it answers [InputOutcome.REJECTED],
+ * which the phone shows as a failure rather than believing an action landed (§5.3).
+ */
+object NoopInputCommandPerformer : net.devemperor.dictate.companion.domain.port.InputCommandPerformer {
+
+    override val available: Boolean = false
+
+    override fun perform(
+        commands: List<net.devemperor.dictate.companion.domain.model.InputCommand>,
+    ): net.devemperor.dictate.companion.domain.model.InputOutcome =
+        net.devemperor.dictate.companion.domain.model.InputOutcome.REJECTED
+}

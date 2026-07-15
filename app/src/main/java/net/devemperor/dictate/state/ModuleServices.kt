@@ -121,6 +121,14 @@ class ModuleServices(
      * no-op, identical to the legacy null-IC behaviour.
      */
     val insertionServiceProvider: () -> net.devemperor.dictate.state.insertion.InsertionService?,
+    /**
+     * Lazy supplier of the IME's keyboard-action router facade (§4.2). Keystroke-emitting effects
+     * ([net.devemperor.dictate.state.modules.KeyboardInputModule]) route Space/Backspace/Enter
+     * through this instead of [insertionServiceProvider], so in PC-mode they divert to the paired
+     * companion and in local mode they hit the very same [net.devemperor.dictate.state.insertion.InsertionService].
+     * `null` when the IME-View is detached — a no-op.
+     */
+    val keyboardActionsProvider: () -> net.devemperor.dictate.state.insertion.KeyboardActionDispatcher?,
     val clipboard: ClipboardManager?,
     val sharedPrefs: SharedPreferences,
     val prefs: PrefPersistenceService,

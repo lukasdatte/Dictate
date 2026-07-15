@@ -104,10 +104,54 @@ class ProtocolCodecTest {
 
     @Test
     fun roundTrip_healthResponse() {
-        val original = HealthResponse(serverName = "WORKSTATION", appVersion = "1.0.0", canInsert = false)
+        val original = HealthResponse(serverName = "WORKSTATION", appVersion = "1.0.0", canInsert = false, supportsInputCommands = true)
         val raw = ProtocolCodec.encode(original, HealthResponse.serializer(), Validations.healthResponse)
 
         assertEquals(original, decodeOk(ProtocolCodec.decode(raw, HealthResponse.serializer(), Validations.healthResponse)))
+    }
+
+    @Test
+    fun decode_healthFromOldCompanion_defaultsInputSupportToFalse() {
+        // An older companion's health body has no `supportsInputCommands` key at all → the additive
+        // default must land on `false`, so the phone treats it as "no keyboard-action channel".
+        val raw = """{"protocolVersion":1,"serverName":"PC","appVersion":"1.0.0","canInsert":true}"""
+
+        val health = decodeOk(ProtocolCodec.decode(raw, HealthResponse.serializer(), Validations.healthResponse))
+        assertEquals(false, health.supportsInputCommands)
+    }
+
+    @Test
+    fun roundTrip_inputCommandRequest() {
+        val original = InputCommandRequest(
+            commands = listOf(
+                InputCommandWire(kind = InputCommandKindWire.TYPE_TEXT, text = "hi"),
+                InputCommandWire(kind = InputCommandKindWire.CURSOR_LEFT, count = 4),
+                InputCommandWire(kind = InputCommandKindWire.REDO),
+            ),
+        )
+        val raw = ProtocolCodec.encode(original, InputCommandRequest.serializer(), Validations.inputCommandRequest)
+
+        assertEquals(original, decodeOk(ProtocolCodec.decode(raw, InputCommandRequest.serializer(), Validations.inputCommandRequest)))
+    }
+
+    @Test
+    fun roundTrip_inputCommandResponse() {
+        val original = InputCommandResponse(executed = false, outcome = InputOutcomeWire.NO_FOREGROUND_WINDOW)
+        val raw = ProtocolCodec.encode(original, InputCommandResponse.serializer(), Validations.inputCommandResponse)
+
+        assertEquals(original, decodeOk(ProtocolCodec.decode(raw, InputCommandResponse.serializer(), Validations.inputCommandResponse)))
+    }
+
+    @Test
+    fun encode_inputCommand_textOnCursorMove_throws() {
+        val broken = InputCommandRequest(commands = listOf(InputCommandWire(kind = InputCommandKindWire.CURSOR_LEFT, text = "oops")))
+
+        try {
+            ProtocolCodec.encode(broken, InputCommandRequest.serializer(), Validations.inputCommandRequest)
+            fail("expected ProtocolViolationException")
+        } catch (e: ProtocolViolationException) {
+            assertEquals(listOf("commands[0]"), e.details.map { it.path })
+        }
     }
 
     @Test

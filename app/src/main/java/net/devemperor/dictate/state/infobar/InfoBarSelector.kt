@@ -431,6 +431,16 @@ object InfoBarSelector {
                 message = InfoBarMessage(R.string.dictate_windows_unauthorized_msg, style = InfoBarStyle.ERROR)
                 confirmAction = null
             }
+            // Keyboard-action engine (§6.1): surfaced through the InfoHint path, dismiss-only, with
+            // wording that (unlike WINDOWS_UNREACHABLE) does not promise a pending part.
+            PipelineErrorKind.WINDOWS_INPUT_FAILED -> {
+                message = InfoBarMessage(R.string.dictate_windows_input_failed_msg, style = InfoBarStyle.ERROR)
+                confirmAction = null
+            }
+            PipelineErrorKind.WINDOWS_INPUT_COMPANION_OUTDATED -> {
+                message = InfoBarMessage(R.string.dictate_windows_input_companion_outdated_msg, style = InfoBarStyle.ERROR)
+                confirmAction = null
+            }
         }
         return InfoBarItem(
             id = "pipeline-error:${hint.kind.name.lowercase()}",

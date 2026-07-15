@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PC-mode frame (§7.1, D4). A foreground drawable on @id/dictate_keyboard_view: a 2dp purple stroke
+  around all four edges plus a bolder 4dp top stripe (the edge toward the app content above — the
+  most noticeable position, chosen against the "too subtle" critique). Colour @color/dictate_pc_mode
+  gets its Night variant (#9575CD) for free from values-night/colors.xml.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Umlaufender 2dp-Stroke, transparenter Kern (verdeckt keinen Inhalt). -->
+    <item>
+        <shape android:shape="rectangle">
+            <stroke android:width="2dp" android:color="@color/dictate_pc_mode" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+
+    <!-- Kräftiger 4dp-Top-Streifen. -->
+    <item
+        android:gravity="top"
+        android:height="4dp">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/dictate_pc_mode" />
+        </shape>
+    </item>
+
+</layer-list>

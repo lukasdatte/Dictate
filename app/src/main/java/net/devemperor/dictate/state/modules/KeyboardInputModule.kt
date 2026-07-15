@@ -163,12 +163,12 @@ object KeyboardInputModule : DictateModule<KeyboardInputState, Action.KeyboardIn
             // raw one-UTF-16-unit Backspace, so the main-keyboard tap matches the
             // QWERTZ/long-press paths and never splits an emoji or ignores a
             // selection. The semantics live once in InsertionService.control().
-            services.insertionServiceProvider()?.control(
+            services.keyboardActionsProvider()?.control(
                 net.devemperor.dictate.state.insertion.ControlOp.DeleteGrapheme)
             Unit
         }
         Effect.SendSpace -> {
-            services.insertionServiceProvider()?.insert(
+            services.keyboardActionsProvider()?.insert(
                 net.devemperor.dictate.state.insertion.InsertionRequest(
                     " ",
                     null,
@@ -183,12 +183,12 @@ object KeyboardInputModule : DictateModule<KeyboardInputState, Action.KeyboardIn
             Unit
         }
         is Effect.PerformEnter -> {
-            services.insertionServiceProvider()?.control(
+            services.keyboardActionsProvider()?.control(
                 net.devemperor.dictate.state.insertion.ControlOp.Enter(effect.role, effect.actionId))
             Unit
         }
         Effect.SendPhysicalEnter -> {
-            services.insertionServiceProvider()?.control(
+            services.keyboardActionsProvider()?.control(
                 net.devemperor.dictate.state.insertion.ControlOp.PhysicalEnter)
             Unit
         }

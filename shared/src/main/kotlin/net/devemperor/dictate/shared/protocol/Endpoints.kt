@@ -19,6 +19,9 @@ object Endpoints {
     const val SYNC_CURSOR = "$BASE/sync/cursor"
     const val HEALTH = "$BASE/health"
 
+    /** Keyboard-action remote control (POST, authenticated). Additive — no version bump (ADR "Input-Command-Protokoll"). */
+    const val INPUT = "$BASE/input"
+
     const val HEADER_AUTHORIZATION = "Authorization"
     const val HEADER_DEVICE_ID = "X-Dictate-Device"
     const val HEADER_PROTOCOL = "X-Dictate-Protocol"
@@ -28,6 +31,12 @@ object Endpoints {
 
     /** Rows per sync page. Also the server's hard cap on an accepted [SyncRequest]. */
     const val MAX_SYNC_BATCH = 200
+
+    /** Commands per `POST /v1/input` batch — one send-window flush never exceeds this (§4.3.2). */
+    const val MAX_INPUT_BATCH = 20
+
+    /** Repeat count cap on a single coalesced movement/deletion command (`count`). */
+    const val MAX_INPUT_REPEAT = 50
 
     const val MAX_SESSION_ID_LENGTH = 64
     const val MAX_DEVICE_NAME_LENGTH = 64

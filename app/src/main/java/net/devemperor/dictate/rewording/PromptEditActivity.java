@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.text.Editable;
 import android.view.MenuItem;
+import android.view.View;
 import android.widget.EditText;
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.ActionBar;
@@ -13,6 +14,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.materialswitch.MaterialSwitch;
 
@@ -21,6 +23,7 @@ import net.devemperor.dictate.SimpleTextWatcher;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.dao.PromptDao;
 import net.devemperor.dictate.database.entity.PromptEntity;
+import net.devemperor.dictate.database.entity.PromptType;
 
 public class PromptEditActivity extends AppCompatActivity {
 
@@ -29,6 +32,9 @@ public class PromptEditActivity extends AppCompatActivity {
     private EditText promptPromptEt;
     private MaterialSwitch promptRequiresSelectionSwitch;
     private MaterialSwitch promptAutoApplySwitch;
+    private MaterialButtonToggleGroup typeToggle;
+    private View requiresSelectionContainer;
+    private View autoApplyContainer;
     private MaterialButton savePromptBtn;
     private int promptId;
 
@@ -36,6 +42,8 @@ public class PromptEditActivity extends AppCompatActivity {
     private String initialPrompt = "";
     private boolean initialRequiresSelection = true;
     private boolean initialAutoApply = false;
+    private PromptType currentType = PromptType.PROMPT;
+    private PromptType initialType = PromptType.PROMPT;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,6 +66,9 @@ public class PromptEditActivity extends AppCompatActivity {
         promptPromptEt = findViewById(R.id.prompt_edit_prompt_et);
         promptRequiresSelectionSwitch = findViewById(R.id.prompt_edit_requires_selection_switch);
         promptAutoApplySwitch = findViewById(R.id.prompt_edit_auto_apply_switch);
+        typeToggle = findViewById(R.id.prompt_edit_type_toggle);
+        requiresSelectionContainer = findViewById(R.id.prompt_edit_requires_selection_container);
+        autoApplyContainer = findViewById(R.id.prompt_edit_auto_apply_container);
         savePromptBtn = findViewById(R.id.prompt_edit_save_btn);
 
         promptDao = DictateDatabase.getInstance(this).promptDao();
@@ -70,10 +81,12 @@ public class PromptEditActivity extends AppCompatActivity {
                 promptPromptEt.setText(entity.getPrompt());
                 promptRequiresSelectionSwitch.setChecked(entity.getRequiresSelection());
                 promptAutoApplySwitch.setChecked(entity.getAutoApply());
+                currentType = entity.getTypeEnum();
                 initialName = entity.getName();
                 initialPrompt = entity.getPrompt();
                 initialRequiresSelection = entity.getRequiresSelection();
                 initialAutoApply = entity.getAutoApply();
+                initialType = currentType;
             } else {
                 promptId = -1;
             }
@@ -84,7 +97,22 @@ public class PromptEditActivity extends AppCompatActivity {
             initialPrompt = "";
             initialRequiresSelection = true;
             initialAutoApply = false;
+            currentType = PromptType.PROMPT;
+            initialType = PromptType.PROMPT;
         }
+
+        // Reflect the loaded type, then react to user toggles. The initial
+        // check() must precede the listener so it doesn't count as a change.
+        typeToggle.check(currentType == PromptType.TEXT
+                ? R.id.prompt_edit_type_text_btn : R.id.prompt_edit_type_prompt_btn);
+        applyTypeVisibility(currentType);
+        typeToggle.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
+            if (!isChecked) return;
+            currentType = checkedId == R.id.prompt_edit_type_text_btn
+                    ? PromptType.TEXT : PromptType.PROMPT;
+            applyTypeVisibility(currentType);
+            updateSaveButtonState();
+        });
 
         SimpleTextWatcher tw = new SimpleTextWatcher() {
             @Override
@@ -123,6 +151,20 @@ public class PromptEditActivity extends AppCompatActivity {
         savePromptBtn.setEnabled(isValid);
     }
 
+    /**
+     * Shows/hides the type-specific controls: a TEXT pill inserts its content
+     * literally, so {@code requiresSelection} / {@code autoApply} are meaningless
+     * and hidden, and the prompt field carries the literal-text hint.
+     */
+    private void applyTypeVisibility(PromptType type) {
+        boolean isText = type == PromptType.TEXT;
+        requiresSelectionContainer.setVisibility(isText ? View.GONE : View.VISIBLE);
+        autoApplyContainer.setVisibility(isText ? View.GONE : View.VISIBLE);
+        promptPromptEt.setHint(isText
+                ? R.string.dictate_prompt_type_text_hint
+                : R.string.dictate_edit_prompt_prompt_hint);
+    }
+
     private boolean hasUnsavedChanges() {
         String currentName = promptNameEt.getText().toString();
         String currentPrompt = promptPromptEt.getText().toString();
@@ -133,14 +175,16 @@ public class PromptEditActivity extends AppCompatActivity {
                 && currentName.isEmpty()
                 && currentPrompt.isEmpty()
                 && currentRequiresSelection
-                && !currentAutoApply) {
+                && !currentAutoApply
+                && currentType == PromptType.PROMPT) {
             return false;
         }
 
         return !currentName.equals(initialName)
                 || !currentPrompt.equals(initialPrompt)
                 || currentRequiresSelection != initialRequiresSelection
-                || currentAutoApply != initialAutoApply;
+                || currentAutoApply != initialAutoApply
+                || currentType != initialType;
     }
 
     private void handleBackNavigation() {
@@ -168,18 +212,21 @@ public class PromptEditActivity extends AppCompatActivity {
 
         String name = promptNameEt.getText().toString();
         String prompt = promptPromptEt.getText().toString();
-        boolean requiresSelection = promptRequiresSelectionSwitch.isChecked();
-        boolean autoApply = promptAutoApplySwitch.isChecked();
+        // A TEXT pill has no selection/auto-apply semantics — force both off so a
+        // pill switched to TEXT never carries stale flags into the queue paths.
+        boolean isText = currentType == PromptType.TEXT;
+        boolean requiresSelection = !isText && promptRequiresSelectionSwitch.isChecked();
+        boolean autoApply = !isText && promptAutoApplySwitch.isChecked();
 
         Intent result = new Intent();
         if (promptId == -1) {
-            PromptEntity newEntity = new PromptEntity(0, promptDao.count(), name, prompt, requiresSelection, autoApply);
+            PromptEntity newEntity = new PromptEntity(0, promptDao.count(), name, prompt, requiresSelection, autoApply, currentType.name());
             long addId = promptDao.insert(newEntity);
             result.putExtra("added_id", (int) addId);
         } else {
             PromptEntity existing = promptDao.getById(promptId);
             if (existing != null) {
-                PromptEntity updated = new PromptEntity(existing.getId(), existing.getPos(), name, prompt, requiresSelection, autoApply);
+                PromptEntity updated = new PromptEntity(existing.getId(), existing.getPos(), name, prompt, requiresSelection, autoApply, currentType.name());
                 promptDao.update(updated);
             }
             result.putExtra("updated_id", promptId);

@@ -24,6 +24,7 @@ import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.database.entity.MessageRole
 import net.devemperor.dictate.database.entity.ProcessingStepEntity
 import net.devemperor.dictate.database.entity.PromptEntity
+import net.devemperor.dictate.database.entity.PromptType
 import net.devemperor.dictate.database.entity.SessionOrigin
 import net.devemperor.dictate.database.entity.SessionStatus
 import net.devemperor.dictate.database.entity.SessionType
@@ -1057,10 +1058,14 @@ class PipelineOrchestrator @JvmOverloads constructor(
         val model = config.promptEntity
         val prompt = model.prompt
 
-        // Static response [text] - no API call needed
-        if (promptService.isStaticResponse(prompt)) {
-            val text = promptService.extractStaticResponse(prompt!!)
-            callback.onPipelineCompleted(text, InsertionSource.STATIC_PROMPT, null)
+        // Text pills are inserted pipeline-free by the service before they ever
+        // reach the orchestrator (plan §4.2). This guard is a defensive fallback:
+        // if a TEXT model still arrives here, emit its literal (already
+        // bracket-free) content with no AI call. The former string-format
+        // `isStaticResponse` check is gone — the pill kind is now explicit.
+        if (model.typeEnum == PromptType.TEXT) {
+            Log.w("PipelineOrchestrator", "runStandalonePrompt got a TEXT pill; inserting it literally without an AI call")
+            callback.onPipelineCompleted(prompt ?: "", InsertionSource.STATIC_PROMPT, null)
             callback.onPipelineFinished()
             return
         }
@@ -1855,6 +1860,14 @@ class PipelineOrchestrator @JvmOverloads constructor(
      */
     private fun resolveQueueSlot(slot: PromptQueueSlot): ResolvedQueueSlot? {
         val entity = slot.entityId?.let { promptDao.getById(it) }
+        // A text pill is a literal snippet inserted pipeline-free on click; it is
+        // never an AI instruction. Skip it defensively if it ever reaches the
+        // queue (auto-apply, reprocess editor), so its raw text can never leak
+        // into a conversation turn (plan §4.2 "Queue-Härtung").
+        if (entity != null && entity.typeEnum == PromptType.TEXT) {
+            Log.w("PipelineOrchestrator", "resolveQueueSlot skipped a TEXT pill (id=${entity.id}); text pills are never AI instructions")
+            return null
+        }
         return when {
             entity != null -> ResolvedQueueSlot(
                 instruction = slot.text ?: entity.prompt ?: "",

@@ -31,7 +31,11 @@ interface PromptDao {
     @Query("DELETE FROM prompts")
     fun deleteAll()
 
-    @Query("SELECT id FROM prompts WHERE auto_apply = 1 ORDER BY pos ASC")
+    // Text pills (type = 'TEXT') are never auto-applied — their literal content
+    // would otherwise be sent to the model as an instruction. Filter them out at
+    // the source (plan §4.2 "Queue-Härtung"); the editor additionally hides the
+    // auto-apply switch for text pills.
+    @Query("SELECT id FROM prompts WHERE auto_apply = 1 AND type <> 'TEXT' ORDER BY pos ASC")
     fun getAutoApplyIds(): List<Int>
 
     @Query("SELECT COUNT(*) FROM prompts")

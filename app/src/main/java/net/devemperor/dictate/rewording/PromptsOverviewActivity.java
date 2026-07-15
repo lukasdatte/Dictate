@@ -27,7 +27,6 @@ import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.dao.PromptDao;
 import net.devemperor.dictate.database.entity.PromptEntity;
 
-import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -147,19 +146,9 @@ public class PromptsOverviewActivity extends AppCompatActivity {
 
     private void exportPrompts(Uri uri) {
         List<PromptEntity> prompts = promptDao.getAll();
-        JSONObject root = new JSONObject();
-        JSONArray promptsArray = new JSONArray();
+        JSONObject root;
         try {
-            for (PromptEntity entity : prompts) {
-                JSONObject promptObject = new JSONObject();
-                promptObject.put("name", entity.getName());
-                promptObject.put("prompt", entity.getPrompt());
-                promptObject.put("requiresSelection", entity.getRequiresSelection());
-                promptObject.put("autoApply", entity.getAutoApply());
-                promptsArray.put(promptObject);
-            }
-            root.put("version", 1);
-            root.put("prompts", promptsArray);
+            root = PromptImportExport.buildExport(prompts);
         } catch (JSONException e) {
             showToast(R.string.dictate_prompts_export_failed);
             return;
@@ -213,31 +202,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
     }
 
     private List<PromptEntity> parsePrompts(String json) throws JSONException {
-        JSONArray promptsArray = null;
-        try {
-            JSONObject root = new JSONObject(json);
-            promptsArray = root.optJSONArray("prompts");
-        } catch (JSONException ignored) {
-        }
-
-        if (promptsArray == null) {
-            promptsArray = new JSONArray(json);
-        }
-
-        List<PromptEntity> prompts = new ArrayList<>();
-        for (int i = 0; i < promptsArray.length(); i++) {
-            JSONObject promptObject = promptsArray.optJSONObject(i);
-            if (promptObject == null) continue;
-
-            String name = promptObject.optString("name", "");
-            String prompt = promptObject.optString("prompt", "");
-            if (name.isEmpty() || prompt.isEmpty()) continue;
-
-            boolean requiresSelection = promptObject.optBoolean("requiresSelection", false);
-            boolean autoApply = promptObject.optBoolean("autoApply", false);
-            prompts.add(new PromptEntity(0, prompts.size(), name, prompt, requiresSelection, autoApply));
-        }
-        return prompts;
+        return PromptImportExport.parse(json);
     }
 
     private void showImportModeDialog(List<PromptEntity> importedPrompts) {
@@ -254,7 +219,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
         List<PromptEntity> sanitized = new ArrayList<>(importedPrompts.size());
         for (int i = 0; i < importedPrompts.size(); i++) {
             PromptEntity entity = importedPrompts.get(i);
-            sanitized.add(new PromptEntity(0, i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply()));
+            sanitized.add(new PromptEntity(0, i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply(), entity.getType()));
         }
         promptDao.deleteAll();
         promptDao.insertAll(sanitized);
@@ -267,7 +232,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
         List<PromptEntity> sanitized = new ArrayList<>(importedPrompts.size());
         for (int i = 0; i < importedPrompts.size(); i++) {
             PromptEntity entity = importedPrompts.get(i);
-            sanitized.add(new PromptEntity(0, startPos + i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply()));
+            sanitized.add(new PromptEntity(0, startPos + i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply(), entity.getType()));
         }
         promptDao.insertAll(sanitized);
         reloadPrompts();

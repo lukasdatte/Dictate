@@ -89,6 +89,7 @@ editing rules".
 | [0021](0021-a11y-screen-context.md) | Screen Context via AccessibilityService as an Opt-In Prompt Data Block | ai, service, privacy · *Project-Wide* | Accepted | 2026-07-15 |
 | [0022](0022-editbar-overflow-peek.md) | Edit-Bar Slot Widths Derived at Measure Time, with a Forced Peek | ui-rendering | Accepted | 2026-07-15 |
 | [0023](0023-companion-bind-address.md) | Bind-Address Selection — Materialised Tailscale Default and Multi-Connector Binding | companion, security | Accepted | 2026-07-15 |
+| [0024](0024-prompt-pill-types.md) | Prompt Pills vs. Text Pills — Typed Column Replaces the Bracket Convention | database, ui | Accepted | 2026-07-16 |
 
 ## Relationship graph
 

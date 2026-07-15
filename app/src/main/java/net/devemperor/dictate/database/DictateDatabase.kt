@@ -34,6 +34,8 @@ import net.devemperor.dictate.database.migration.MIGRATION_6_7
 import net.devemperor.dictate.database.migration.MIGRATION_7_8
 import net.devemperor.dictate.database.migration.MIGRATION_8_9
 import net.devemperor.dictate.database.migration.MIGRATION_9_10
+import net.devemperor.dictate.database.migration.MIGRATION_10_11
+import net.devemperor.dictate.database.entity.PromptType
 
 @Database(
     entities = [
@@ -46,7 +48,7 @@ import net.devemperor.dictate.database.migration.MIGRATION_9_10
         TextInsertionEntity::class,
         ConversationMessageEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -130,6 +132,7 @@ abstract class DictateDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                     MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+                    MIGRATION_10_11,
                 )
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
@@ -144,16 +147,18 @@ abstract class DictateDatabase : RoomDatabase() {
                             DefaultPrompt(1, R.string.dictate_example_prompt_two_name, R.string.dictate_example_prompt_two_prompt, requiresSelection = true),
                             DefaultPrompt(2, R.string.dictate_example_prompt_three_name, R.string.dictate_example_prompt_three_prompt, requiresSelection = true),
                             DefaultPrompt(3, R.string.dictate_example_prompt_four_name, R.string.dictate_example_prompt_four_prompt, requiresSelection = false),
-                            DefaultPrompt(4, R.string.dictate_example_prompt_five_name, R.string.dictate_example_prompt_five_prompt, requiresSelection = false),
+                            // Prompt 5 is a literal text pill (no brackets in strings.xml since v11).
+                            DefaultPrompt(4, R.string.dictate_example_prompt_five_name, R.string.dictate_example_prompt_five_prompt, requiresSelection = false, type = PromptType.TEXT),
                         )
                         for (prompt in defaultPrompts) {
                             db.execSQL(
-                                "INSERT INTO prompts (pos, name, prompt, requires_selection, auto_apply) VALUES (?, ?, ?, ?, 0)",
+                                "INSERT INTO prompts (pos, name, prompt, requires_selection, auto_apply, type) VALUES (?, ?, ?, ?, 0, ?)",
                                 arrayOf<Any>(
                                     prompt.pos,
                                     appContext.getString(prompt.nameRes),
                                     appContext.getString(prompt.promptRes),
-                                    if (prompt.requiresSelection) 1 else 0
+                                    if (prompt.requiresSelection) 1 else 0,
+                                    prompt.type.name
                                 )
                             )
                         }
@@ -167,7 +172,8 @@ abstract class DictateDatabase : RoomDatabase() {
             val pos: Int,
             val nameRes: Int,
             val promptRes: Int,
-            val requiresSelection: Boolean
+            val requiresSelection: Boolean,
+            val type: PromptType = PromptType.PROMPT
         )
     }
 }

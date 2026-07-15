@@ -20,6 +20,7 @@ import net.devemperor.dictate.ai.runner.TranscriptionRunner
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.database.entity.InsertionSource
 import net.devemperor.dictate.database.entity.PromptEntity
+import net.devemperor.dictate.database.entity.PromptType
 import net.devemperor.dictate.database.entity.ResponseFormatKind
 import net.devemperor.dictate.database.entity.SessionOrigin
 import net.devemperor.dictate.database.entity.SessionStatus
@@ -152,6 +153,27 @@ class PipelineOrchestratorQueueExecutionTest {
         val session = db.sessionDao().getById(sid)!!
         assertEquals(SessionStatus.COMPLETED.name, session.status)
         assertEquals(factory.output(1), sessionManager.getFinalOutput(sid))
+    }
+
+    @Test
+    fun `a TEXT pill in the queue never becomes an AI instruction`() {
+        // Regression (Chunk 3): before the type guard, a queued text pill leaked
+        // its literal content into the conversation turn as an instruction. A
+        // TEXT pill must be skipped entirely — no converse call, no step.
+        val sid = createRecordingSession()
+        db.promptDao().insert(
+            PromptEntity(
+                id = 9, pos = 0, name = "Greeting", prompt = "Beste Grüße",
+                requiresSelection = false, autoApply = false, type = PromptType.TEXT.name
+            )
+        )
+
+        reprocess(sid, listOf(PromptQueueSlot.ofSavedPrompt(9)))
+
+        assertEquals("a text pill must not trigger a conversation turn", 0, factory.converseCalls.size)
+        assertEquals(0, db.processingStepDao().getCurrentChain(sid).size)
+        // The transcript is inserted unchanged (no post-processing happened).
+        assertEquals(factory.transcriptText, sessionManager.getFinalOutput(sid))
     }
 
     @Test

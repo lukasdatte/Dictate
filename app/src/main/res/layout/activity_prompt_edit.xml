@@ -8,6 +8,34 @@
     android:layout_margin="16dp"
     tools:context=".rewording.PromptEditActivity">
 
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/prompt_edit_type_toggle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        app:singleSelection="true"
+        app:selectionRequired="true"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/prompt_edit_type_prompt_btn"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:text="@string/dictate_prompt_type_prompt" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/prompt_edit_type_text_btn"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:text="@string/dictate_prompt_type_text" />
+    </com.google.android.material.button.MaterialButtonToggleGroup>
+
     <EditText
         android:id="@+id/prompt_edit_name_et"
         android:layout_width="match_parent"
@@ -18,7 +46,7 @@
         android:singleLine="true"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toBottomOf="@+id/prompt_edit_type_toggle" />
 
     <EditText
         android:id="@+id/prompt_edit_prompt_et"

@@ -38,6 +38,14 @@
             android:layout_height="16dp"
             android:layout_marginStart="4dp"
             android:src="@drawable/ic_baseline_autorenew_24" />
+
+        <ImageView
+            android:id="@+id/item_prompts_overview_type_iv"
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:layout_marginStart="4dp"
+            android:visibility="gone"
+            android:src="@drawable/ic_baseline_content_paste_24" />
     </LinearLayout>
 
     <TextView

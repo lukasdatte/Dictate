@@ -223,6 +223,7 @@ The following columns follow this pattern:
 | `processing_steps` | `status` | `StepStatus` | `database/entity/StepStatus.kt` |
 | `processing_steps` | `step_type` | `StepType` | `database/entity/StepType.kt` (CHECK added in schema v8, `MigrationTo8`) |
 | `text_insertions` | `insertion_method` | `InsertionMethod` | `database/entity/InsertionMethod.kt` (CHECK added in schema v10, `MigrationTo10`, alongside the new value `WINDOWS_DISPATCH` — ADR-0019) |
+| `prompts` | `type` | `PromptType` | `database/entity/PromptType.kt` (CHECK added in schema v11, `MigrationTo11`; replaces the former `[bracketed]` string convention for text pills — ADR — prompt pill types) |
 
 Columns that should be retrofitted to this pattern when next touched:
 

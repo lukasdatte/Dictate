@@ -116,15 +116,21 @@ class Win32TextInserterTest {
     }
 
     @Test
-    fun onThisLinuxVm_thePlatformModuleWiresTheNoOps() {
+    fun platformDetectionMatchesTheHostOs() {
         val bindings = PlatformModule.detect()
 
-        // The whole point of the port: the app runs here, it just cannot type — and it says so
-        // rather than pretending (ADR-0018). On Windows this test's expectations invert; the CI for
-        // that is the Windows checklist.
-        assertEquals(false, bindings.inserter.available)
-        assertEquals(InsertionOutcome.FAILED, bindings.inserter.insert("anything"))
-        assertEquals(false, bindings.autostart.supported)
+        // The whole point of the port: on a non-Windows host the app runs, it just cannot type —
+        // and it says so rather than pretending (ADR-0018). On Windows the same detection must wire
+        // the real bindings. Only availability is asserted on Windows: calling insert() here would
+        // really type into whatever window is focused on the build machine.
+        if (System.getProperty("os.name").startsWith("Windows")) {
+            assertEquals(true, bindings.inserter.available)
+            assertEquals(true, bindings.autostart.supported)
+        } else {
+            assertEquals(false, bindings.inserter.available)
+            assertEquals(InsertionOutcome.FAILED, bindings.inserter.insert("anything"))
+            assertEquals(false, bindings.autostart.supported)
+        }
         assertNull(System.getenv("DICTATE_FORCE_WINDOWS")) // guards against a stray override in CI
     }
 

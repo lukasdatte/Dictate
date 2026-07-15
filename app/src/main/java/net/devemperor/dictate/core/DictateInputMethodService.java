@@ -3869,6 +3869,14 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void handleSelectAllToggle() {
+        // §6.2: in PC-mode the toggle is stateless — the PC selection state is unknown, so we always
+        // send SELECT_ALL (Ctrl+A) and never read/clear the (invisible) Android field. The deselection
+        // branch below is a purely local, IC-read-bound affordance.
+        if (isPcModeActive()) {
+            keyboardActions().editAction(EditAction.SELECT_ALL);
+            return;
+        }
+
         InputConnection inputConnection = getCurrentInputConnection();
         if (inputConnection == null) return;
 
@@ -4808,7 +4816,10 @@ public class DictateInputMethodService extends InputMethodService
     private void insertTextPill(PromptEntity model) {
         String text = model.getPrompt();
         if (text == null) text = "";
-        insertionService().insert(new InsertionRequest(
+        // D3: a text pill routes through the keyboard-action seam — in PC-mode it lands on the PC as
+        // TYPE_TEXT (no pending part, no history), locally it delegates 1:1 to the same InsertionService
+        // with the historical PIPELINE policy (animated, host-guarded, audited).
+        keyboardActions().insert(new InsertionRequest(
                 text, InsertionSource.STATIC_PROMPT, InsertionPolicy.PIPELINE, null, null));
     }
 
@@ -5762,11 +5773,16 @@ public class DictateInputMethodService extends InputMethodService
                     new net.devemperor.dictate.windows.PcInputSink(pcInputCoordinator);
             net.devemperor.dictate.state.insertion.KeyboardActionRouter router =
                     new net.devemperor.dictate.state.insertion.KeyboardActionRouter(
-                            local, pc,
-                            () -> pipelineBinder.getState().getValue().getFeatures().getWindowsAutoSendActive());
+                            local, pc, this::isPcModeActive);
             keyboardActions = new net.devemperor.dictate.state.insertion.KeyboardActionDispatcher(router);
         }
         return keyboardActions;
+    }
+
+    /** True iff PC-mode is on (auto-send active). Read from state; false before the binder arrives. */
+    private boolean isPcModeActive() {
+        return pipelineBinder != null
+                && pipelineBinder.getState().getValue().getFeatures().getWindowsAutoSendActive();
     }
 
     /** Execute a non-text {@link ControlOp} on {@code ic} (always succeeds). */

@@ -90,6 +90,8 @@ editing rules".
 | [0022](0022-editbar-overflow-peek.md) | Edit-Bar Slot Widths Derived at Measure Time, with a Forced Peek | ui-rendering | Accepted | 2026-07-15 |
 | [0023](0023-companion-bind-address.md) | Bind-Address Selection — Materialised Tailscale Default and Multi-Connector Binding | companion, security | Accepted | 2026-07-15 |
 | [0024](0024-prompt-pill-types.md) | Prompt Pills vs. Text Pills — Typed Column Replaces the Bracket Convention | database, ui | Accepted | 2026-07-16 |
+| [0025](0025-input-command-protocol.md) | Input-Command Protocol — Semantic Keyboard Commands over the Wire, not VK Codes | shared, companion · *Project-Wide* | Accepted | 2026-07-15 |
+| [0026](0026-keyboard-action-routing.md) | Keyboard-Action Routing — Exclusive Sink Router in front of the InsertionService | state, service · *Project-Wide* | Accepted | 2026-07-15 |
 
 ## Relationship graph
 

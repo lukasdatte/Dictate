@@ -24,7 +24,7 @@ import net.devemperor.dictate.companion.CompanionContainer
 
 @Composable
 fun SettingsScreen(container: CompanionContainer) {
-    val viewModel = remember { SettingsViewModel(container.settings, container.autostart) }
+    val viewModel = remember { SettingsViewModel(container.settings, container.autostart, container.addressCatalog) }
     val state by viewModel.state.collectAsState()
 
     var port by remember { mutableStateOf(state.port.toString()) }
@@ -49,14 +49,7 @@ fun SettingsScreen(container: CompanionContainer) {
             modifier = Modifier.width(220.dp),
         )
 
-        OutlinedTextField(
-            value = state.bindAddress,
-            onValueChange = viewModel::setBindAddress,
-            label = { Text("Bind address") },
-            supportingText = { Text("0.0.0.0 listens on every interface, including the tailnet.") },
-            singleLine = true,
-            modifier = Modifier.width(320.dp),
-        )
+        BindAddressSection(state, viewModel)
 
         OutlinedTextField(
             value = delay,

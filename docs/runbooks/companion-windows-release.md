@@ -75,6 +75,26 @@ wrong one. It was generated once (2026-07-13) and is frozen with a comment sayin
 - **The bundle is large** (~110 MB): it carries its own Java runtime and Skia. That is the price of
   an app the user does not have to install a JDK for.
 
+## AppCDS evaluated and rejected (2026-07)
+
+Application Class-Data Sharing was measured against the cold-start cost and **deliberately not
+adopted**. Recorded here so it is not re-evaluated from scratch.
+
+- **No measurable win on the metric that matters here.** Time-to-server-ready (port 8756 listening),
+  laptop, 3 runs: **median 2937 ms without CDS vs 2907 ms with a warm archive** — inside the noise.
+  The reason is structural: start-up already runs the database open and the server start on a
+  background thread (see `Main.kt` / `CompanionBootstrap`), so the socket no longer waits on class
+  loading — which is the only thing CDS speeds up. What CDS could still help is *window-paint* time,
+  and a large part of that is Skiko's **native** GL/D3D init, which CDS does not touch at all.
+- **Cost is real.** The archive recorded from a full boot is **~25.8 MB** (+23 % on the ~110 MB
+  bundle). A user-side `-XX:+AutoCreateSharedArchive` has no writable home — the JVM does not expand
+  `%LOCALAPPDATA%` in `-XX:SharedArchiveFile` (tested), and `C:\Program Files` is read-only, so the
+  archive would have to be prebuilt and shipped and regenerated on a display-capable host each
+  release. Not worth it for a within-noise result.
+
+If this is revisited, measure **first-frame / window-paint on a real display** (not a headless WinRM
+session — Skiko cannot create a graphics context there and the number is unobtainable).
+
 ## Post-install verification — the Windows checklist
 
 Everything below is what a Linux CI **cannot** prove. The rest of the system is covered by

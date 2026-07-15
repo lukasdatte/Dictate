@@ -8,6 +8,10 @@ import net.devemperor.dictate.shared.protocol.DispatchResponse
 import net.devemperor.dictate.shared.protocol.Endpoints
 import net.devemperor.dictate.shared.protocol.ErrorCode
 import net.devemperor.dictate.shared.protocol.ErrorEnvelope
+import net.devemperor.dictate.shared.protocol.InputCommandResponse
+import net.devemperor.dictate.shared.protocol.InputCommandWire
+import net.devemperor.dictate.shared.protocol.InputCommandKindWire
+import net.devemperor.dictate.shared.protocol.InputOutcomeWire
 import net.devemperor.dictate.shared.protocol.InsertionOutcomeWire
 import net.devemperor.dictate.shared.protocol.PairResponse
 import net.devemperor.dictate.shared.protocol.ProtocolCodec
@@ -241,6 +245,52 @@ class DispatchClientTest {
         val transport = FakeTransport().respond(Endpoints.PAIR, 409, errorBody(ErrorCode.TOKEN_CONSUMED))
 
         assertEquals(DispatchError.TokenConsumed, failure(client(transport).pair("K7M49QXR", "device-1", "Pixel 8")))
+    }
+
+    // ── Input commands ──────────────────────────────────────────────────────────────────
+
+    private fun inputBody(executed: Boolean = true, outcome: InputOutcomeWire = InputOutcomeWire.SENT) =
+        ProtocolCodec.encode(
+            InputCommandResponse(executed = executed, outcome = outcome),
+            InputCommandResponse.serializer(),
+            Validations.inputCommandResponse,
+        )
+
+    private fun inputCommands() = listOf(InputCommandWire(kind = InputCommandKindWire.CURSOR_LEFT, count = 3))
+
+    @Test
+    fun input_200Sent_isSuccess_andCarriesTheAuthHeaders() {
+        val transport = FakeTransport().respond(Endpoints.INPUT, 200, inputBody())
+
+        val result = client(transport).input(inputCommands())
+
+        assertEquals(InputOutcomeWire.SENT, (result as DispatchResult.Success).value.outcome)
+        val headers = transport.calls.single().headers
+        assertEquals("Bearer secret-1", headers[Endpoints.HEADER_AUTHORIZATION])
+        assertEquals("device-1", headers[Endpoints.HEADER_DEVICE_ID])
+    }
+
+    @Test
+    fun input_404FromOldCompanion_isEndpointMissing_notServer() {
+        // Ktor answers a bare, non-envelope 404 for an unknown route → must become the distinct
+        // EndpointMissing so the app says "update the companion", not "PC unreachable".
+        val transport = FakeTransport().respond(Endpoints.INPUT, 404, "Not Found")
+
+        assertEquals(DispatchError.EndpointMissing, failure(client(transport).input(inputCommands())))
+    }
+
+    @Test
+    fun input_503_isInsertionFailed_stillClassifiedNormally() {
+        val transport = FakeTransport().respond(Endpoints.INPUT, 503, errorBody(ErrorCode.INSERTION_FAILED))
+
+        assertEquals(DispatchError.InsertionFailed, failure(client(transport).input(inputCommands())))
+    }
+
+    @Test
+    fun input_ioException_isUnreachable() {
+        val transport = FakeTransport().fail(Endpoints.INPUT, SocketTimeoutException("timeout"))
+
+        assertTrue(failure(client(transport).input(inputCommands())) is DispatchError.Unreachable)
     }
 
     // ── Health / cursor ─────────────────────────────────────────────────────────────────

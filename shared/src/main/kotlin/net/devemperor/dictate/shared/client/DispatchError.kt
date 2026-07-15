@@ -42,6 +42,15 @@ sealed class DispatchError {
     /** 400 PROTOCOL_VERSION_UNSUPPORTED — the companion is too old or too new. "Update the companion". */
     object ProtocolMismatch : DispatchError()
 
+    /**
+     * 404 — the companion does not serve this endpoint at all.
+     *
+     * A paired-but-old companion has no `/v1/input` route, so Ktor answers a bare 404 that is not
+     * an `ErrorEnvelope`. Told apart from a generic [Server] so the app can say "update the
+     * companion" for a keyboard action rather than "PC unreachable" (§5.1).
+     */
+    object EndpointMissing : DispatchError()
+
     /** 503 — the companion is alive but could not place the text. Pending part + a hint. */
     object InsertionFailed : DispatchError()
 

@@ -152,6 +152,66 @@ class ValidationsTest {
         )
     }
 
+    // ── InputCommandRequest ─────────────────────────────────────────────────────────────
+
+    private fun typeText(text: String = "hi") = InputCommandWire(kind = InputCommandKindWire.TYPE_TEXT, text = text)
+    private fun cursorLeft(count: Int = 1) = InputCommandWire(kind = InputCommandKindWire.CURSOR_LEFT, count = count)
+
+    @Test
+    fun inputCommandRequest_batchSizeBoundaries() {
+        val full = List(Endpoints.MAX_INPUT_BATCH) { cursorLeft() }
+        assertValid(Validations.inputCommandRequest, InputCommandRequest(commands = full))
+
+        val overfull = List(Endpoints.MAX_INPUT_BATCH + 1) { cursorLeft() }
+        assertEquals(listOf("commands"), paths(Validations.inputCommandRequest, InputCommandRequest(commands = overfull)))
+    }
+
+    @Test
+    fun inputCommandRequest_emptyBatch_isRejected() {
+        // An empty batch is nothing to do — the send window never flushes one, so it is a bug.
+        assertEquals(listOf("commands"), paths(Validations.inputCommandRequest, InputCommandRequest(commands = emptyList())))
+    }
+
+    @Test
+    fun inputCommandRequest_countBoundaries() {
+        assertValid(Validations.inputCommandRequest, InputCommandRequest(commands = listOf(cursorLeft(count = Endpoints.MAX_INPUT_REPEAT))))
+
+        assertEquals(listOf("commands[0].count"), paths(Validations.inputCommandRequest, InputCommandRequest(commands = listOf(cursorLeft(count = 0)))))
+        assertEquals(listOf("commands[0].count"), paths(Validations.inputCommandRequest, InputCommandRequest(commands = listOf(cursorLeft(count = Endpoints.MAX_INPUT_REPEAT + 1)))))
+    }
+
+    @Test
+    fun inputCommandRequest_textOnlyOnTypeText() {
+        assertValid(Validations.inputCommandRequest, InputCommandRequest(commands = listOf(typeText())))
+
+        // text on a non-TYPE_TEXT command → whole-element violation at commands[0]
+        assertEquals(
+            listOf("commands[0]"),
+            paths(Validations.inputCommandRequest, InputCommandRequest(commands = listOf(InputCommandWire(kind = InputCommandKindWire.BACKSPACE, text = "x")))),
+        )
+        // TYPE_TEXT without text → same whole-element violation
+        assertEquals(
+            listOf("commands[0]"),
+            paths(Validations.inputCommandRequest, InputCommandRequest(commands = listOf(InputCommandWire(kind = InputCommandKindWire.TYPE_TEXT, text = null)))),
+        )
+    }
+
+    @Test
+    fun inputCommandRequest_textLengthBoundaries() {
+        assertValid(Validations.inputCommandRequest, InputCommandRequest(commands = listOf(typeText("a".repeat(Endpoints.MAX_TEXT_LENGTH)))))
+
+        // Length is a whole-element constrain (see Validations), so the path is the element, not `.text`.
+        assertEquals(listOf("commands[0]"), paths(Validations.inputCommandRequest, InputCommandRequest(commands = listOf(typeText("a".repeat(Endpoints.MAX_TEXT_LENGTH + 1))))))
+    }
+
+    @Test
+    fun inputCommandRequest_unsupportedProtocolVersion_isRejected() {
+        assertEquals(
+            listOf("protocolVersion"),
+            paths(Validations.inputCommandRequest, InputCommandRequest(protocolVersion = 2, commands = listOf(cursorLeft()))),
+        )
+    }
+
     // ── Responses ───────────────────────────────────────────────────────────────────────
 
     @Test

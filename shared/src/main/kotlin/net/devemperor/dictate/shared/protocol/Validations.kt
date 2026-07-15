@@ -5,6 +5,8 @@ import io.konform.validation.ValidationBuilder
 import io.konform.validation.onEach
 import io.konform.validation.constraints.maxItems
 import io.konform.validation.constraints.maxLength
+import io.konform.validation.constraints.maximum
+import io.konform.validation.constraints.minItems
 import io.konform.validation.constraints.minLength
 import io.konform.validation.constraints.minimum
 import io.konform.validation.constraints.pattern
@@ -75,6 +77,33 @@ object Validations {
         }
     }
 
+    val inputCommandRequest = Validation<InputCommandRequest> {
+        InputCommandRequest::protocolVersion { supportedProtocol() }
+        InputCommandRequest::commands {
+            minItems(1)
+            maxItems(Endpoints.MAX_INPUT_BATCH)
+            onEach {
+                // text ⇔ TYPE_TEXT: a text on a cursor move, or a TYPE_TEXT without text, is a
+                // malformed command. Never interpolate `{value}` here — it would copy the typed
+                // text into the error message and from there into both sides' logs (redaction rule).
+                constrain("text must be present iff kind is TYPE_TEXT") {
+                    (it.kind == InputCommandKindWire.TYPE_TEXT) == (it.text != null)
+                }
+                InputCommandWire::count {
+                    minimum(1)
+                    maximum(Endpoints.MAX_INPUT_REPEAT)
+                }
+                // Length bound only when text is present (presence is owned by the ⇔ rule above).
+                // A whole-element constrain, not a property block: a nullable-text property block
+                // would reject the legitimate `null` on every non-TYPE_TEXT command. The message
+                // names the limit, never the value (redaction rule).
+                constrain("text must have at most ${Endpoints.MAX_TEXT_LENGTH} characters") {
+                    it.text == null || it.text.length in 1..Endpoints.MAX_TEXT_LENGTH
+                }
+            }
+        }
+    }
+
     // ── Responses ───────────────────────────────────────────────────────────────────────
 
     val pairResponse = Validation<PairResponse> {
@@ -104,6 +133,10 @@ object Validations {
     val healthResponse = Validation<HealthResponse> {
         HealthResponse::protocolVersion { supportedProtocol() }
         HealthResponse::serverName { minLength(1) }
+    }
+
+    val inputCommandResponse = Validation<InputCommandResponse> {
+        InputCommandResponse::protocolVersion { supportedProtocol() }
     }
 
     /**

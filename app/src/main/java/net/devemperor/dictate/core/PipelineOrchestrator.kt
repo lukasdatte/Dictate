@@ -1860,6 +1860,14 @@ class PipelineOrchestrator @JvmOverloads constructor(
      */
     private fun resolveQueueSlot(slot: PromptQueueSlot): ResolvedQueueSlot? {
         val entity = slot.entityId?.let { promptDao.getById(it) }
+        // A text pill is a literal snippet inserted pipeline-free on click; it is
+        // never an AI instruction. Skip it defensively if it ever reaches the
+        // queue (auto-apply, reprocess editor), so its raw text can never leak
+        // into a conversation turn (plan §4.2 "Queue-Härtung").
+        if (entity != null && entity.typeEnum == PromptType.TEXT) {
+            Log.w("PipelineOrchestrator", "resolveQueueSlot skipped a TEXT pill (id=${entity.id}); text pills are never AI instructions")
+            return null
+        }
         return when {
             entity != null -> ResolvedQueueSlot(
                 instruction = slot.text ?: entity.prompt ?: "",

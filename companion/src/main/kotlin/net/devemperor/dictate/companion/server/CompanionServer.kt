@@ -4,6 +4,8 @@ import io.ktor.server.application.Application
 import io.ktor.server.cio.CIO
 import io.ktor.server.cio.CIOApplicationEngine
 import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.applicationEnvironment
+import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.runBlocking
@@ -27,10 +29,14 @@ import net.devemperor.dictate.companion.server.routes.syncRoutes
  * every test instead of faking the transport.
  *
  * Start/stop are idempotent so the tray's "pause receiving" can toggle them without bookkeeping.
+ *
+ * **One connector per host** (ADR-0017 refinement): the [hosts] list becomes N CIO connectors on the
+ * same port, so the companion can listen on the tailnet address alone, on several addresses at once,
+ * or on `0.0.0.0`. The list is never empty — the domain resolves a dead selection to loopback first.
  */
 class CompanionServer(
     private val container: CompanionContainer,
-    private val host: String = CompanionSettings.DEFAULT_BIND_ADDRESS,
+    private val hosts: List<String> = listOf(CompanionSettings.BIND_ALL),
     private val port: Int = CompanionSettings.DEFAULT_PORT,
 ) {
 
@@ -40,8 +46,12 @@ class CompanionServer(
 
     fun start() {
         if (engine != null) return
-        engine = embeddedServer(CIO, host = host, port = port) { companionModule(container) }
-            .also { it.start(wait = false) }
+        engine = embeddedServer(
+            CIO,
+            environment = applicationEnvironment { },
+            configure = { hosts.forEach { host -> connector { this.host = host; this.port = this@CompanionServer.port } } },
+            module = { companionModule(container) },
+        ).also { it.start(wait = false) }
     }
 
     fun stop() {
@@ -49,15 +59,27 @@ class CompanionServer(
         engine = null
     }
 
+    /** Every bound `host:port` — the honest accessor when there is more than one connector. */
+    fun resolvedEndpoints(): List<Pair<String, Int>> {
+        val running = checkNotNull(engine) { "server is not running" }
+        return runBlocking { running.engine.resolvedConnectors().map { it.host to it.port } }
+    }
+
     /**
-     * The port the socket actually got — with `port = 0` that is the only way to know it, and the
-     * pairing QR needs it.
+     * The port the socket actually got — with `port = 0` the only way to know it, and the pairing QR
+     * needs it.
      *
-     * @throws IllegalStateException when the server is not running.
+     * Guards the multi-connector footgun: with `port = 0` **each** connector gets its own ephemeral
+     * port, so "the" bound port is a lie unless they all agree (which they do for a fixed port, and
+     * with a single connector). Call [resolvedEndpoints] when they might not.
+     *
+     * @throws IllegalStateException when the server is not running, or when connectors bound
+     *   different ports.
      */
     fun boundPort(): Int {
-        val running = checkNotNull(engine) { "server is not running" }
-        return runBlocking { running.engine.resolvedConnectors().first().port }
+        val ports = resolvedEndpoints().map { it.second }.distinct()
+        check(ports.size == 1) { "connectors bound $ports; use resolvedEndpoints()" }
+        return ports.first()
     }
 
     companion object {

@@ -11,7 +11,6 @@ import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import net.devemperor.dictate.companion.platform.AdvertisedAddress
 import net.devemperor.dictate.companion.server.CompanionServer
 import net.devemperor.dictate.companion.ui.App
 import net.devemperor.dictate.companion.ui.CompanionIcon
@@ -27,7 +26,20 @@ import net.devemperor.dictate.companion.ui.CompanionIcon
  */
 fun main(args: Array<String>) = application {
     val container = remember { CompanionContainer.production() }
-    val server = remember { CompanionServer(container, container.settings.bindAddress, container.settings.port) }
+
+    // Resolve the bind address once at start-up, alongside the "take effect on next start" contract.
+    // First run has no stored selection → materialise the Tailscale default (or all-interfaces) and
+    // persist it, so it is a default exactly once and a setting thereafter. An auto-heal (a moved
+    // tailnet address) is persisted too, so the correction does not repeat every launch.
+    val binding = remember {
+        val catalog = container.addressCatalog
+        val selection = container.settings.storedBindSelection
+            ?: catalog.firstSetupSelection().also { container.settings.bindSelection = it }
+        catalog.resolve(selection).also { resolved ->
+            resolved.healedSelection?.let { container.settings.bindSelection = it }
+        }
+    }
+    val server = remember { CompanionServer(container, binding.hosts, container.settings.port) }
 
     var windowVisible by remember { mutableStateOf(!args.contains(FLAG_MINIMIZED) && !container.settings.startMinimized) }
     var receiving by remember { mutableStateOf(true) }
@@ -62,9 +74,10 @@ fun main(args: Array<String>) = application {
         state = rememberWindowState(width = 980.dp, height = 680.dp),
     ) {
         if (receiving) {
-            // The QR must carry an address the PHONE can reach — the Tailscale IP, not the AD
-            // hostname the phone cannot resolve. serverName stays the human-facing display name.
-            App(container) { "http://${AdvertisedAddress.detect { container.serverName }}:${server.boundPort()}" }
+            // The QR carries the address DERIVED from the binding (ADR-0017 refinement): whatever the
+            // server actually listens on, highest-priority first. Only when there is no reachable
+            // candidate at all does it fall back to the human-facing server name.
+            App(container) { "http://${binding.advertised ?: container.serverName}:${server.boundPort()}" }
         } else {
             MaterialTheme { Text("Receiving is paused. Resume it from the tray menu.") }
         }

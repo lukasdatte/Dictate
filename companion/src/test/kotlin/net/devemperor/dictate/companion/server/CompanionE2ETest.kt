@@ -67,7 +67,7 @@ class CompanionE2ETest {
             history = history,
             serverName = SERVER_NAME,
         )
-        server = CompanionServer(container, host = "127.0.0.1", port = 0)
+        server = CompanionServer(container, hosts = listOf("127.0.0.1"), port = 0)
         server.start()
         baseUrl = "http://127.0.0.1:${server.boundPort()}"
     }

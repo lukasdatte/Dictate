@@ -1,5 +1,7 @@
 package net.devemperor.dictate.companion.domain
 
+import net.devemperor.dictate.companion.domain.net.BindSelection
+import net.devemperor.dictate.companion.domain.net.Ipv4
 import net.devemperor.dictate.companion.domain.port.SettingsRepository
 
 /**
@@ -22,9 +24,50 @@ class CompanionSettings(private val settings: SettingsRepository) {
         get() = settings.get(KEY_PORT)?.toIntOrNull()?.takeIf { it in 1..65_535 } ?: DEFAULT_PORT
         set(value) = settings.put(KEY_PORT, value.toString())
 
-    var bindAddress: String
-        get() = settings.get(KEY_BIND)?.takeIf { it.isNotBlank() } ?: DEFAULT_BIND_ADDRESS
-        set(value) = settings.put(KEY_BIND, value)
+    /**
+     * The persisted bind choice, or `null` when the user has never configured one.
+     *
+     * The nullability is the whole migration contract: `null` is the *only* signal that lets the
+     * caller run first-setup (the Tailscale default) exactly once. Reading order — an explicit
+     * `server.bind.mode` wins; otherwise the legacy `server.bind` key is migrated (a manual address
+     * becomes [BindSelection.Explicit] and is thus preserved, a bare `0.0.0.0` becomes
+     * [BindSelection.AllInterfaces] rather than being narrowed silently); anything corrupt or absent
+     * reads as `null`, so a hand-mangled table self-heals into first-setup instead of crashing.
+     */
+    val storedBindSelection: BindSelection?
+        get() = when (settings.get(KEY_BIND_MODE)) {
+            MODE_ALL -> BindSelection.AllInterfaces
+            MODE_EXPLICIT -> readExplicitAddresses()?.let { BindSelection.Explicit(it) }
+            else -> migrateLegacyBind()
+        }
+
+    /** The effective selection: [storedBindSelection], or all-interfaces when never configured. */
+    var bindSelection: BindSelection
+        get() = storedBindSelection ?: BindSelection.AllInterfaces
+        set(value) = when (value) {
+            is BindSelection.AllInterfaces -> {
+                settings.put(KEY_BIND_MODE, MODE_ALL)
+                settings.put(KEY_BIND_ADDRESSES, "")
+            }
+            is BindSelection.Explicit -> {
+                settings.put(KEY_BIND_MODE, MODE_EXPLICIT)
+                settings.put(KEY_BIND_ADDRESSES, value.addresses.joinToString(","))
+            }
+        }
+
+    /** Valid IPv4 literals from the explicit-addresses row, or `null` when none survive. */
+    private fun readExplicitAddresses(): Set<String>? =
+        settings.get(KEY_BIND_ADDRESSES)
+            ?.split(',')
+            ?.map { it.trim() }
+            ?.filter { Ipv4.isValid(it) }
+            ?.toSet()
+            ?.takeIf { it.isNotEmpty() }
+
+    private fun migrateLegacyBind(): BindSelection? {
+        val legacy = settings.get(KEY_BIND)?.takeIf { it.isNotBlank() } ?: return null
+        return if (legacy == BIND_ALL) BindSelection.AllInterfaces else BindSelection.Explicit(setOf(legacy))
+    }
 
     var clipboardRestoreDelayMillis: Long
         get() = settings.get(KEY_RESTORE_DELAY)?.toLongOrNull()?.takeIf { it in 0..MAX_RESTORE_DELAY_MILLIS }
@@ -38,8 +81,8 @@ class CompanionSettings(private val settings: SettingsRepository) {
 
     companion object {
 
-        /** 0.0.0.0 — the phone reaches the PC over the tailnet interface, not over loopback. */
-        const val DEFAULT_BIND_ADDRESS = "0.0.0.0"
+        /** 0.0.0.0 — the `AllInterfaces` host; the legacy `server.bind` default before selection. */
+        const val BIND_ALL = "0.0.0.0"
         const val DEFAULT_PORT = 8756
 
         /**
@@ -51,7 +94,14 @@ class CompanionSettings(private val settings: SettingsRepository) {
         const val MAX_RESTORE_DELAY_MILLIS = 10_000L
 
         private const val KEY_PORT = "server.port"
+
+        /** Legacy single-address key — read for migration, never written again. */
         private const val KEY_BIND = "server.bind"
+        private const val KEY_BIND_MODE = "server.bind.mode"
+        private const val KEY_BIND_ADDRESSES = "server.bind.addresses"
+        private const val MODE_ALL = "all"
+        private const val MODE_EXPLICIT = "explicit"
+
         private const val KEY_RESTORE_DELAY = "insertion.clipboardRestoreDelayMillis"
         private const val KEY_START_MINIMIZED = "ui.startMinimized"
     }

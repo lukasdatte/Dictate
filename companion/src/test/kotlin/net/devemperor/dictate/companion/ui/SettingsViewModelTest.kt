@@ -2,7 +2,10 @@ package net.devemperor.dictate.companion.ui
 
 import net.devemperor.dictate.companion.data.memory.InMemorySettings
 import net.devemperor.dictate.companion.domain.CompanionSettings
+import net.devemperor.dictate.companion.domain.net.AddressCatalog
+import net.devemperor.dictate.companion.domain.net.BindSelection
 import net.devemperor.dictate.companion.domain.port.AutostartManager
+import net.devemperor.dictate.companion.domain.port.NetworkAdapter
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
 import net.devemperor.dictate.companion.ui.settings.SettingsViewModel
 import org.junit.Assert.assertEquals
@@ -17,13 +20,81 @@ class SettingsViewModelTest {
     private val store = InMemorySettings()
     private val settings = CompanionSettings(store)
 
+    private val emptyCatalog = AddressCatalog { emptyList() }
+    private val richCatalog = AddressCatalog {
+        listOf(
+            NetworkAdapter("tailscale0", listOf("100.66.155.18"), isLoopback = false),
+            NetworkAdapter("enp3s0", listOf("192.168.1.42"), isLoopback = false),
+        )
+    }
+
+    private fun viewModel(
+        autostart: AutostartManager = NoopAutostart,
+        catalog: AddressCatalog = emptyCatalog,
+    ) = SettingsViewModel(settings, autostart, catalog)
+
     @Test
     fun defaultsHold_whenNothingWasEverSaved() {
-        val state = SettingsViewModel(settings, NoopAutostart).state.value
+        val state = viewModel().state.value
 
         assertEquals(CompanionSettings.DEFAULT_PORT, state.port)
-        assertEquals(CompanionSettings.DEFAULT_BIND_ADDRESS, state.bindAddress)
+        assertEquals(BindSelection.AllInterfaces, state.bindSelection)
         assertFalse(state.restartRequired)
+    }
+
+    @Test
+    fun switchingToSelected_seedsTheHighestPriorityAddress_andPersists() {
+        val vm = viewModel(catalog = richCatalog)
+
+        vm.listenOnSelected()
+
+        assertEquals(BindSelection.Explicit(setOf("100.66.155.18")), vm.state.value.bindSelection)
+        assertEquals(BindSelection.Explicit(setOf("100.66.155.18")), CompanionSettings(store).bindSelection)
+        assertTrue(vm.state.value.restartRequired)
+    }
+
+    @Test
+    fun clearingTheLastAddress_isRejected_withAnError() {
+        val vm = viewModel(catalog = richCatalog)
+        vm.listenOnSelected() // now Explicit({100.66.155.18})
+
+        vm.toggleAddress("100.66.155.18", checked = false)
+
+        assertNotNull(vm.state.value.bindError)
+        assertEquals(BindSelection.Explicit(setOf("100.66.155.18")), vm.state.value.bindSelection)
+    }
+
+    @Test
+    fun aGarbageManualAddress_isRejected_withoutPersisting() {
+        val vm = viewModel(catalog = richCatalog)
+        vm.listenOnSelected()
+
+        vm.addManualAddress("192.168.1.999")
+
+        assertNotNull(vm.state.value.bindError)
+        assertFalse(vm.state.value.selectedAddresses.contains("192.168.1.999"))
+    }
+
+    @Test
+    fun aValidManualAddress_isAdded() {
+        val vm = viewModel(catalog = richCatalog)
+        vm.listenOnSelected()
+
+        vm.addManualAddress(" 10.0.0.9 ")
+
+        assertTrue(vm.state.value.selectedAddresses.contains("10.0.0.9"))
+    }
+
+    @Test
+    fun onAllInterfacesWithTailscalePresent_aSuggestionIsOffered_andAppliesInOneClick() {
+        val vm = viewModel(catalog = richCatalog) // starts AllInterfaces (nothing stored)
+
+        assertEquals("100.66.155.18", vm.state.value.tailscaleSuggestion)
+
+        vm.applyTailscaleSuggestion()
+
+        assertEquals(BindSelection.Explicit(setOf("100.66.155.18")), vm.state.value.bindSelection)
+        assertNull(vm.state.value.tailscaleSuggestion) // no longer on AllInterfaces
     }
 
     @Test
@@ -37,7 +108,7 @@ class SettingsViewModelTest {
 
     @Test
     fun changingThePort_isPersisted_andSaysARestartIsNeeded() {
-        val viewModel = SettingsViewModel(settings, NoopAutostart)
+        val viewModel = viewModel()
 
         viewModel.setPort("9000")
 
@@ -51,7 +122,7 @@ class SettingsViewModelTest {
 
     @Test
     fun anImpossiblePort_isRejectedWithoutTouchingTheSetting() {
-        val viewModel = SettingsViewModel(settings, NoopAutostart)
+        val viewModel = viewModel()
 
         viewModel.setPort("70000")
 
@@ -62,7 +133,7 @@ class SettingsViewModelTest {
 
     @Test
     fun theRestoreDelayIsClamped() {
-        val viewModel = SettingsViewModel(settings, NoopAutostart)
+        val viewModel = viewModel()
 
         viewModel.setClipboardRestoreDelay(999_999)
 
@@ -73,7 +144,7 @@ class SettingsViewModelTest {
     fun anAutostartWriteThatDoesNotStick_doesNotFlipTheToggle() {
         // NoopAutostart accepts setEnabled(true) and still reports false — precisely the shape of a
         // failed registry write. The toggle must not lie about it.
-        val viewModel = SettingsViewModel(settings, NoopAutostart)
+        val viewModel = viewModel()
 
         viewModel.setAutostart(true)
 
@@ -90,7 +161,7 @@ class SettingsViewModelTest {
             override fun setEnabled(enabled: Boolean) { this.enabled = enabled }
         }
 
-        val viewModel = SettingsViewModel(settings, working)
+        val viewModel = viewModel(working)
         viewModel.setAutostart(true)
 
         assertTrue(viewModel.state.value.autostartEnabled)

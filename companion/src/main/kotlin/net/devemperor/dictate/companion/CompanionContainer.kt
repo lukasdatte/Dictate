@@ -11,14 +11,17 @@ import net.devemperor.dictate.companion.domain.DispatchService
 import net.devemperor.dictate.companion.domain.HealthService
 import net.devemperor.dictate.companion.domain.PairingService
 import net.devemperor.dictate.companion.domain.SyncService
+import net.devemperor.dictate.companion.domain.net.AddressCatalog
 import net.devemperor.dictate.companion.domain.port.AutostartManager
 import net.devemperor.dictate.companion.domain.port.ClipboardPort
 import net.devemperor.dictate.companion.domain.port.ClockPort
 import net.devemperor.dictate.companion.domain.port.DeviceRepository
 import net.devemperor.dictate.companion.domain.port.HistoryRepository
+import net.devemperor.dictate.companion.domain.port.NetworkInterfaces
 import net.devemperor.dictate.companion.domain.port.SettingsRepository
 import net.devemperor.dictate.companion.domain.port.TextInserter
 import net.devemperor.dictate.companion.platform.AppPaths
+import net.devemperor.dictate.companion.platform.JvmNetworkInterfaces
 import net.devemperor.dictate.companion.platform.PlatformModule
 import net.devemperor.dictate.companion.platform.SystemClock
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
@@ -44,10 +47,12 @@ class CompanionContainer(
     val clock: ClockPort,
     val serverName: String,
     val appVersion: String,
+    networkInterfaces: NetworkInterfaces,
     random: SecureRandom = SecureRandom(),
 ) {
 
     val settings = CompanionSettings(settingsRepository)
+    val addressCatalog = AddressCatalog(networkInterfaces)
 
     val pairingService = PairingService(devices, clock, serverName, random)
     val authService = AuthService(devices)
@@ -80,6 +85,7 @@ class CompanionContainer(
                 clock = SystemClock,
                 serverName = defaultServerName(),
                 appVersion = APP_VERSION,
+                networkInterfaces = JvmNetworkInterfaces,
             )
         }
 
@@ -98,6 +104,7 @@ class CompanionContainer(
             clipboard: ClipboardPort = NoopClipboard,
             autostart: AutostartManager = NoopAutostart,
             serverName: String = "test-pc",
+            networkInterfaces: NetworkInterfaces = NetworkInterfaces { emptyList() },
             random: SecureRandom = SecureRandom(),
         ): CompanionContainer = CompanionContainer(
             devices = devices,
@@ -109,6 +116,7 @@ class CompanionContainer(
             clock = clock,
             serverName = serverName,
             appVersion = APP_VERSION,
+            networkInterfaces = networkInterfaces,
             random = random,
         )
 

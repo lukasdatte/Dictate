@@ -175,6 +175,19 @@ class AddressCatalogTest {
         assertEquals(listOf("127.0.0.1"), resolved.hosts)
     }
 
+    // ── First-setup default (§4.3) ─────────────────────────────────────────────────────
+
+    @Test
+    fun firstSetup_prefersTailscaleExclusively_whenPresent() {
+        val selection = catalogOf(tailscale(), lan()).firstSetupSelection()
+        assertEquals(BindSelection.Explicit(setOf("100.66.155.18")), selection)
+    }
+
+    @Test
+    fun firstSetup_fallsBackToAllInterfaces_withoutTailscale() {
+        assertEquals(BindSelection.AllInterfaces, catalogOf(lan()).firstSetupSelection())
+    }
+
     // ── The advertised-in-hosts invariant (§6) ─────────────────────────────────────────
 
     @Test

@@ -33,6 +33,17 @@ class AddressCatalog(private val interfaces: NetworkInterfaces) {
             .sortedBy { priority(it.kind) }
             .distinctBy { it.address }
 
+    /**
+     * The selection to persist when the user has never configured one: Tailscale-only if a tailnet
+     * address exists (the security default — nothing then listens on the LAN), otherwise every
+     * interface. Materialised into [BindSelection.Explicit] so the stored setting states the address,
+     * not a mode that re-resolves.
+     */
+    fun firstSetupSelection(): BindSelection {
+        val tailscale = enumerate().firstOrNull { it.kind == AddressKind.TAILSCALE }
+        return if (tailscale != null) BindSelection.Explicit(setOf(tailscale.address)) else BindSelection.AllInterfaces
+    }
+
     /** Match [selection] against the live catalogue; see [ResolvedBinding] for the guarantees. */
     fun resolve(selection: BindSelection): ResolvedBinding {
         val catalogue = enumerate()

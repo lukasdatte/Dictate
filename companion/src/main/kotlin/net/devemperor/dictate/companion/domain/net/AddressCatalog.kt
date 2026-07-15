@@ -18,7 +18,7 @@ import net.devemperor.dictate.companion.domain.port.NetworkInterfaces
  *
  * `enumerate` and `resolve` live on one object because `resolve` consumes `enumerate` and both share
  * the priority ordering; splitting them would duplicate that ordering. If `resolve` grows past a
- * screenful, `BindResolver(catalog)` is the clean later extraction (see ADR-0017 refinement).
+ * screenful, `BindResolver(catalog)` is the clean later extraction (see ADR-0023).
  */
 class AddressCatalog(private val interfaces: NetworkInterfaces) {
 

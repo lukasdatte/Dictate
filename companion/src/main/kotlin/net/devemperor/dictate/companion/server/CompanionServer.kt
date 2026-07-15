@@ -30,7 +30,7 @@ import net.devemperor.dictate.companion.server.routes.syncRoutes
  *
  * Start/stop are idempotent so the tray's "pause receiving" can toggle them without bookkeeping.
  *
- * **One connector per host** (ADR-0017 refinement): the [hosts] list becomes N CIO connectors on the
+ * **One connector per host** (ADR-0023): the [hosts] list becomes N CIO connectors on the
  * same port, so the companion can listen on the tailnet address alone, on several addresses at once,
  * or on `0.0.0.0`. The list is never empty — the domain resolves a dead selection to loopback first.
  */

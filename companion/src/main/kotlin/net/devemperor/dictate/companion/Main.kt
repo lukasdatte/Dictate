@@ -74,7 +74,7 @@ fun main(args: Array<String>) = application {
         state = rememberWindowState(width = 980.dp, height = 680.dp),
     ) {
         if (receiving) {
-            // The QR carries the address DERIVED from the binding (ADR-0017 refinement): whatever the
+            // The QR carries the address DERIVED from the binding (ADR-0023): whatever the
             // server actually listens on, highest-priority first. Only when there is no reachable
             // candidate at all does it fall back to the human-facing server name.
             App(container) { "http://${binding.advertised ?: container.serverName}:${server.boundPort()}" }

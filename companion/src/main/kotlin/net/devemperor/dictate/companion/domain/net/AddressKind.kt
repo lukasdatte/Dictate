@@ -9,7 +9,7 @@ package net.devemperor.dictate.companion.domain.net
  * only". The UI shows the kind so the user chooses with the exposure in view, and priority ordering
  * (Tailscale > LAN > loopback) falls out of it.
  *
- * IPv4-only for now (see ADR-0017 refinement); [OTHER] is the reserved catch-all that keeps the
+ * IPv4-only for now (see ADR-0023); [OTHER] is the reserved catch-all that keeps the
  * classifier total when an address is neither loopback, CGNAT, nor a valid dotted quad — and the
  * seam an `IPV6` constant slots into later without touching the call sites.
  */

@@ -51,9 +51,15 @@
         </intent>
     </queries>
 
+    <!-- usesCleartextTraffic: the Windows companion speaks plain HTTP inside the Tailscale
+         tunnel (transport is already encrypted end-to-end, ADR-0017). Android >= 28 blocks
+         cleartext by default, which surfaced as "PC unreachable" although the server answered
+         from everywhere else. AI provider calls are https and unaffected. TLS follow-up:
+         tailscale serve (ADR-0017). -->
     <application
         android:name=".DictateApplication"
         android:allowBackup="true"
+        android:usesCleartextTraffic="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"

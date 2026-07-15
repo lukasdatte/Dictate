@@ -173,8 +173,8 @@
     <string name="dictate_example_prompt_three_prompt">Reescreva o texto selecionado em um tom formal e profissional. Mantenha o significado e o idioma, não adicione novas informações e retorne apenas o texto reescrito sem aspas.</string>
     <string name="dictate_example_prompt_four_name">Ótima citação</string>
     <string name="dictate_example_prompt_four_prompt">Gere uma citação curta e memorável que toque muitas pessoas. Não mencione instruções e retorne apenas a citação.</string>
-    <string name="dictate_example_prompt_five_name">[Dictate is great]</string>
-    <string name="dictate_example_prompt_five_prompt">[Dictate is great]</string>
+    <string name="dictate_example_prompt_five_name">Dictate is great</string>
+    <string name="dictate_example_prompt_five_prompt">Dictate is great</string>
     <string name="dictate_changelog_7">v2.0\n\nEsta atualização traz mudanças importantes que tornam o Dictate uma ferramenta realmente poderosa:\n\n- Nas configurações agora você pode definir seus próprios prompts de reescrita. Isso permite que o ChatGPT revise o texto ditado, oferecendo possibilidades infinitas. Você encontrará prompts de exemplo nas configurações para usar como guia. 💡\n\n- A função de tradução anterior foi removida, pois agora é possível traduzir de maneira mais flexível com os prompts de reescrita. ❌\n\n- Ao manter o botão Enter pressionado, você pode deslizar para inserir caracteres rapidamente sem trocar de teclado. É possível definir até 8 caracteres personalizados nas configurações. 🔤\n\n- O Dictate agora usa o GPT-4o-mini para reduzir custos. Planejo permitir que você escolha o modelo GPT para reescrever no futuro. 💸\n\n- Foram feitas algumas alterações de design e correções de bugs. ✨\n\n\n</string>
     <string name="dictate_usage_no_usage">Ainda não há nada para ver aqui.\nComece uma transcrição com o Dictate\npara acompanhar o uso aqui.</string>
     <string name="dictate_usage_buy_new_credits">Comprar novos créditos em openai.com</string>

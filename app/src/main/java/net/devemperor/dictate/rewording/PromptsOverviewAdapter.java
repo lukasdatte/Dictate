@@ -98,8 +98,8 @@ public class PromptsOverviewAdapter extends RecyclerView.Adapter<PromptsOverview
             PromptEntity currentEntity = data.get(pos);
             PromptEntity prevEntity = data.get(pos - 1);
 
-            PromptEntity updatedCurrent = new PromptEntity(currentEntity.getId(), pos - 1, currentEntity.getName(), currentEntity.getPrompt(), currentEntity.getRequiresSelection(), currentEntity.getAutoApply());
-            PromptEntity updatedPrev = new PromptEntity(prevEntity.getId(), pos, prevEntity.getName(), prevEntity.getPrompt(), prevEntity.getRequiresSelection(), prevEntity.getAutoApply());
+            PromptEntity updatedCurrent = new PromptEntity(currentEntity.getId(), pos - 1, currentEntity.getName(), currentEntity.getPrompt(), currentEntity.getRequiresSelection(), currentEntity.getAutoApply(), currentEntity.getType());
+            PromptEntity updatedPrev = new PromptEntity(prevEntity.getId(), pos, prevEntity.getName(), prevEntity.getPrompt(), prevEntity.getRequiresSelection(), prevEntity.getAutoApply(), prevEntity.getType());
             promptDao.update(updatedCurrent);
             promptDao.update(updatedPrev);
             data.set(pos, updatedPrev);
@@ -117,8 +117,8 @@ public class PromptsOverviewAdapter extends RecyclerView.Adapter<PromptsOverview
             PromptEntity currentEntity = data.get(pos);
             PromptEntity nextEntity = data.get(pos + 1);
 
-            PromptEntity updatedCurrent = new PromptEntity(currentEntity.getId(), pos + 1, currentEntity.getName(), currentEntity.getPrompt(), currentEntity.getRequiresSelection(), currentEntity.getAutoApply());
-            PromptEntity updatedNext = new PromptEntity(nextEntity.getId(), pos, nextEntity.getName(), nextEntity.getPrompt(), nextEntity.getRequiresSelection(), nextEntity.getAutoApply());
+            PromptEntity updatedCurrent = new PromptEntity(currentEntity.getId(), pos + 1, currentEntity.getName(), currentEntity.getPrompt(), currentEntity.getRequiresSelection(), currentEntity.getAutoApply(), currentEntity.getType());
+            PromptEntity updatedNext = new PromptEntity(nextEntity.getId(), pos, nextEntity.getName(), nextEntity.getPrompt(), nextEntity.getRequiresSelection(), nextEntity.getAutoApply(), nextEntity.getType());
             promptDao.update(updatedCurrent);
             promptDao.update(updatedNext);
             data.set(pos, updatedNext);

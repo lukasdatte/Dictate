@@ -23,5 +23,18 @@ data class PromptEntity(
     val requiresSelection: Boolean = false,
 
     @ColumnInfo(name = "auto_apply")
-    val autoApply: Boolean = false
-)
+    val autoApply: Boolean = false,
+
+    // Column stores PromptType.name — see MigrationTo11 for the SQL CHECK.
+    // (Double-Enum pattern, docs/DATABASE-PATTERNS.md.)
+    @ColumnInfo(name = "type")
+    val type: String = PromptType.PROMPT.name
+) {
+    /**
+     * Boundary accessor: parses [type] into a [PromptType], falling back to
+     * [PromptType.PROMPT] for values a downgrade/rollback left unknown to this
+     * build (Double-Enum convenience accessor, docs/DATABASE-PATTERNS.md).
+     */
+    val typeEnum: PromptType
+        get() = runCatching { PromptType.valueOf(type) }.getOrDefault(PromptType.PROMPT)
+}

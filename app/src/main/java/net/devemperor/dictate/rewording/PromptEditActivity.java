@@ -21,6 +21,7 @@ import net.devemperor.dictate.SimpleTextWatcher;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.dao.PromptDao;
 import net.devemperor.dictate.database.entity.PromptEntity;
+import net.devemperor.dictate.database.entity.PromptType;
 
 public class PromptEditActivity extends AppCompatActivity {
 
@@ -173,13 +174,14 @@ public class PromptEditActivity extends AppCompatActivity {
 
         Intent result = new Intent();
         if (promptId == -1) {
-            PromptEntity newEntity = new PromptEntity(0, promptDao.count(), name, prompt, requiresSelection, autoApply);
+            // Type UI is wired in Chunk 4; new prompts default to PROMPT for now.
+            PromptEntity newEntity = new PromptEntity(0, promptDao.count(), name, prompt, requiresSelection, autoApply, PromptType.PROMPT.name());
             long addId = promptDao.insert(newEntity);
             result.putExtra("added_id", (int) addId);
         } else {
             PromptEntity existing = promptDao.getById(promptId);
             if (existing != null) {
-                PromptEntity updated = new PromptEntity(existing.getId(), existing.getPos(), name, prompt, requiresSelection, autoApply);
+                PromptEntity updated = new PromptEntity(existing.getId(), existing.getPos(), name, prompt, requiresSelection, autoApply, existing.getType());
                 promptDao.update(updated);
             }
             result.putExtra("updated_id", promptId);

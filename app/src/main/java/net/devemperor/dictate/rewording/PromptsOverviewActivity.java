@@ -26,6 +26,7 @@ import net.devemperor.dictate.R;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.dao.PromptDao;
 import net.devemperor.dictate.database.entity.PromptEntity;
+import net.devemperor.dictate.database.entity.PromptType;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -235,7 +236,8 @@ public class PromptsOverviewActivity extends AppCompatActivity {
 
             boolean requiresSelection = promptObject.optBoolean("requiresSelection", false);
             boolean autoApply = promptObject.optBoolean("autoApply", false);
-            prompts.add(new PromptEntity(0, prompts.size(), name, prompt, requiresSelection, autoApply));
+            // Chunk 4 reads a `type` field (export v2) / classifies v1 files here.
+            prompts.add(new PromptEntity(0, prompts.size(), name, prompt, requiresSelection, autoApply, PromptType.PROMPT.name()));
         }
         return prompts;
     }
@@ -254,7 +256,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
         List<PromptEntity> sanitized = new ArrayList<>(importedPrompts.size());
         for (int i = 0; i < importedPrompts.size(); i++) {
             PromptEntity entity = importedPrompts.get(i);
-            sanitized.add(new PromptEntity(0, i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply()));
+            sanitized.add(new PromptEntity(0, i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply(), entity.getType()));
         }
         promptDao.deleteAll();
         promptDao.insertAll(sanitized);
@@ -267,7 +269,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
         List<PromptEntity> sanitized = new ArrayList<>(importedPrompts.size());
         for (int i = 0; i < importedPrompts.size(); i++) {
             PromptEntity entity = importedPrompts.get(i);
-            sanitized.add(new PromptEntity(0, startPos + i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply()));
+            sanitized.add(new PromptEntity(0, startPos + i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply(), entity.getType()));
         }
         promptDao.insertAll(sanitized);
         reloadPrompts();

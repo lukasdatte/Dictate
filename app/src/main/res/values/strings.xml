@@ -227,8 +227,8 @@
     <string name="dictate_example_prompt_three_prompt">Rewrite the selected text in a formal, professional tone. Keep the meaning and language, add no new information, and return only the rewritten text without quotation marks.</string>
     <string name="dictate_example_prompt_four_name">Great Quote</string>
     <string name="dictate_example_prompt_four_prompt">Generate a short, memorable quote that would resonate with many people. Do not mention any instructions and return only the quote itself.</string>
-    <string name="dictate_example_prompt_five_name">[Dictate is great]</string>
-    <string name="dictate_example_prompt_five_prompt">[Dictate is great]</string>
+    <string name="dictate_example_prompt_five_name">Dictate is great</string>
+    <string name="dictate_example_prompt_five_prompt">Dictate is great</string>
     <string name="dictate_changelog_7">v2.0\n\nThis update brings some major changes that make Dictate a truly powerful tool:\n\n- In the settings, you can now define your own rewording prompts. This allows you to have dictated text revised by ChatGPT, offering endless possibilities. You will find some example prompts in the settings that you can use as guides. 💡\n\n- The previous translation function has been removed, as you can now translate more flexibly with the rewording prompts. ❌\n\n- When you hold down the Enter button, you can now swipe to quickly insert characters without having to switch to another keyboard. You can set up to 8 custom characters in the settings. 🔤\n\n- Dictate now uses GPT-4o-mini to reduce costs. I plan to let you choose the GPT model for rewording in the future. 💸\n\n- Some design changes and bug fixes have been made. ✨\n\n\n</string>
     <string name="dictate_usage_cost" translatable="false">%1$.2f $</string>
     <string name="dictate_usage_audio_time" translatable="false">%1$d min, %2$d s</string>

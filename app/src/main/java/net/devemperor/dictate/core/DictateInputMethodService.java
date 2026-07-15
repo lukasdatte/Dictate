@@ -76,6 +76,7 @@ import net.devemperor.dictate.R;
 import net.devemperor.dictate.database.dao.PromptDao;
 import net.devemperor.dictate.database.dao.UsageDao;
 import net.devemperor.dictate.database.entity.PromptEntity;
+import net.devemperor.dictate.database.entity.PromptType;
 import net.devemperor.dictate.ai.prompt.PromptService;
 import net.devemperor.dictate.rewording.PromptEditActivity;
 import net.devemperor.dictate.rewording.PromptsKeyboardAdapter;
@@ -5009,7 +5010,7 @@ public class DictateInputMethodService extends InputMethodService
                 }
                 pendingLivePromptChain = false;
                 if (pipelineStepRowRenderer == null) return;  // View recreation not yet complete
-                PromptEntity liveEntity = new PromptEntity(-1, Integer.MIN_VALUE, "", text, true, false);
+                PromptEntity liveEntity = new PromptEntity(-1, Integer.MIN_VALUE, "", text, true, false, PromptType.PROMPT.name());
                 runStandalonePromptViaOrchestrator(liveEntity);
             } else if (refineTarget != null) {
                 // (B) This recording (S2) is a review refinement: its transcript
@@ -5729,11 +5730,11 @@ public class DictateInputMethodService extends InputMethodService
      */
     private List<PromptEntity> buildPromptsWithControlButtons(List<PromptEntity> dbPrompts) {
         List<PromptEntity> result = new ArrayList<>(dbPrompts.size() + 4);
-        result.add(new PromptEntity(-1, Integer.MIN_VALUE, null, null, false, false));      // instant prompt
-        result.add(new PromptEntity(-3, Integer.MIN_VALUE + 1, null, null, false, false));  // select all
-        result.add(new PromptEntity(-4, Integer.MIN_VALUE + 2, null, null, false, false));  // clear queue
+        result.add(new PromptEntity(-1, Integer.MIN_VALUE, null, null, false, false, PromptType.PROMPT.name()));      // instant prompt
+        result.add(new PromptEntity(-3, Integer.MIN_VALUE + 1, null, null, false, false, PromptType.PROMPT.name()));  // select all
+        result.add(new PromptEntity(-4, Integer.MIN_VALUE + 2, null, null, false, false, PromptType.PROMPT.name()));  // clear queue
         result.addAll(dbPrompts);
-        result.add(new PromptEntity(-2, Integer.MAX_VALUE, null, null, false, false));       // add button
+        result.add(new PromptEntity(-2, Integer.MAX_VALUE, null, null, false, false, PromptType.PROMPT.name()));       // add button
         return result;
     }
 

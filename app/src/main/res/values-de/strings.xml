@@ -175,8 +175,8 @@
     <string name="dictate_example_prompt_three_prompt">Formuliere den markierten Text in einem formellen, professionellen Ton um. Behalte Bedeutung und Sprache bei, füge keine neuen Informationen hinzu und gib nur den umgeschriebenen Text ohne Anführungszeichen zurück.</string>
     <string name="dictate_example_prompt_four_name">Gutes Zitat</string>
     <string name="dictate_example_prompt_four_prompt">Gib ein kurzes, einprägsames Zitat aus, das viele Menschen anspricht. Erwähne keine Anweisungen und gib nur das Zitat selbst zurück.</string>
-    <string name="dictate_example_prompt_five_name">[Dictate is great]</string>
-    <string name="dictate_example_prompt_five_prompt">[Dictate is great]</string>
+    <string name="dictate_example_prompt_five_name">Dictate is great</string>
+    <string name="dictate_example_prompt_five_prompt">Dictate is great</string>
     <string name="dictate_changelog_7">v2.0\n\nDieses Update bringt einige große Änderungen, die aus Dictate ein wirklich mächtiges Werkzeug machen:\n\n- In den Einstellungen kannst du jetzt eigene Überarbeitungs-Anweisungen festlegen. Damit kannst du den diktierten Text von ChatGPT überarbeiten lassen, was endlos viele Möglichkeiten bietet. Du findest in den Einstellungen einige Beispiel-Anweisungen, an denen du dich orientieren kannst. 💡\n\n- Die vorherige Übersetzungs-Funktion wurde entfernt, da du nun mit den Überarbeitungs-Anweisungen flexibler übersetzen kannst. ❌\n\n- Wenn du die Enter-Taste gedrückt hälst, kannst du nun per Swipen schnell Zeichen einfügen, ohne zu einem anderen Keyboard wechseln zu müssen. Du kannst in den Einstellungen bis zu 8 eigene Zeichen festlegen. 🔤\n\n- Dictate verwendet nun GPT-4o-mini, um weniger Kosten zu verursachen. Ich plane, dass du demnächst selbst das GPT-Modell für die Überarbeitung wählen kannst. 💸\n\n- Einige Design Änderungen und Fehlerbehebungen wurden vorgenommen. ✨\n\n\n</string>
     <string name="dictate_usage_no_usage">Hier gibt es noch nichts zu sehen.\nStarte die Transkription mit Dictate,\num den Verbrauch hier zu sehen.</string>
     <string name="dictate_usage_buy_new_credits">Neue Credits auf openai.com kaufen</string>

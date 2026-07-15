@@ -13,6 +13,9 @@ package net.devemperor.dictate.state.insertion
  * The dictation-text terminal keeps its own `WindowsAutoSend.shouldDivertToPc` weiche with the
  * pending-part fallback (Entscheidung 4) and does NOT flow through here — this router carries only
  * the live keyboard actions, which have no pending semantics.
+ *
+ * @see docs/decisions ADR "Keyboard-Action Routing — an Exclusive Sink Router" (plan-scoped,
+ *   pending promotion) — the full decision, alternatives and failure modes.
  */
 class KeyboardActionRouter(
     private val local: KeyboardActionSink,

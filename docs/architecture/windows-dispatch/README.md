@@ -227,6 +227,39 @@ case (ADR-0019).
    defer the review acknowledge until the dispatch resolves (an Insert-without-ack variant),
    state-machine surgery over ADR-0013 + ADR-0019. See ADR-0019 Decision History (2026-07-14).
 
+## 4b. Keyboard-Action Engine — the PC as a full remote control
+
+Windows-Dispatch above carries the *finished dictation text*. The **keyboard-action engine**
+(plan `tmp/plan-keyboard-action-engine.md`) extends the reach so that in PC-mode **every** keyboard
+action — cursor moves, backspace, enter, clipboard (cut/copy/paste/undo/redo), text pills, emoji —
+goes to the PC **exclusively**, leaving the invisible Android field untouched. Two new ADRs own it
+(pending promotion): *Input-Command Protocol* and *Keyboard-Action Routing*.
+
+- **Wire (additive, no version bump).** `POST /v1/input` carries a batch of **semantic** commands
+  (`InputCommandKindWire`: `BACKSPACE`, `CURSOR_LEFT/RIGHT`, `CURSOR_WORD_SELECT_BACK/FORWARD`,
+  `SELECT_ALL`, `CUT/COPY/PASTE/UNDO/REDO`, `TYPE_TEXT`), never raw VK codes. `executed`-only
+  success mirrors `delivered` (ADR-0017); there is no clipboard fallback (a keyboard action that
+  cannot be injected simply did not happen). `HealthResponse.supportsInputCommands` + a 404→
+  `EndpointMissing` classification let the phone say "update the companion".
+
+- **Companion.** `Win32Keyboard.sendKeySequence` (with `sendCtrlV` refactored onto it) injects any
+  chord; `Win32InputPerformer` resolves each command to a `KeyChord` through the **single**
+  `ChordMappingRepository` port. Chords are **user-configurable and typed in the DB** (D6): the
+  `key_command_chords` table (Double-Enum, seeded by a `.sqm` migration from `DefaultChords` — the
+  one home of VK literals), a SqlDelight repo, and a settings section with key-capture + reset.
+
+- **App.** A `KeyboardActionRouter` in front of the single `InsertionService` fassade picks exactly
+  one sink per action (`PcInputSink` in PC-mode, `LocalImeSink` — byte-identical delegation —
+  otherwise). `PcInputCoordinator` runs on the **same** single-thread executor as the dictation
+  dispatch (total order) and implements the 500-ms linger-only-when-busy send window: first action
+  immediate, in-flight bursts coalesced into one batch, a failed batch **discarded** with one
+  `WINDOWS_INPUT_FAILED` notice + a 3-s circuit breaker, never retried. The dictation-text terminal
+  keeps its own pending-part fallback (ADR-0019) and does not flow through the router.
+
+- **Optics (D4).** A purple `dictate_pc_mode` frame (4dp top stripe + 2dp stroke) set as the
+  keyboard root's **foreground** — visible over every panel — marks PC-mode without touching the
+  accent or any button colour.
+
 ## 5. References
 
 - **ADR-0015** — Companion Monorepo Topology (`shared/` + `companion/`)

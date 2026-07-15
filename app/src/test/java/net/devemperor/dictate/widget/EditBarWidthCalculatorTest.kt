@@ -28,6 +28,21 @@ class EditBarWidthCalculatorTest {
     // ── Rule 1: everything fits ──────────────────────────────────────────
 
     @Test
+    fun `few visible buttons no longer stretch past the cap`() {
+        // 4 buttons on a 411dp phone stretched to ~102dp each — user-rejected.
+        val r = EditBarWidthCalculator.compute(411, 4, minSlot, minPeek, maxSlotWidthPx = 64)
+        assertEquals(64, r.slotWidthPx)
+        assertEquals(4, r.fullyVisibleCount)
+        assertFalse(r.overflowing)
+    }
+
+    @Test
+    fun `a cap below the floor is ignored`() {
+        val r = EditBarWidthCalculator.compute(1200, 12, minSlot, minPeek, maxSlotWidthPx = 10)
+        assertEquals(100, r.slotWidthPx)
+    }
+
+    @Test
     fun `row that fits is split evenly and reports no overflow`() {
         val r = compute(available = 1200, count = 12)
         assertEquals(100, r.slotWidthPx)

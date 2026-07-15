@@ -66,6 +66,9 @@ class PeekingButtonBar @JvmOverloads constructor(
     /** How much of the first cut slot stays visible while overflowing. */
     var minPeekPx: Int = resources.getDimensionPixelSize(R.dimen.dictate_editbar_peek)
 
+    /** Stretch cap for the fits-case — see [EditBarWidthCalculator.compute]. */
+    var maxSlotWidthPx: Int = resources.getDimensionPixelSize(R.dimen.dictate_editbar_slot_max)
+
     /**
      * The most recent arithmetic result — the assertion surface for tests
      * and a diagnostic when a row looks wrong on a device.
@@ -97,6 +100,7 @@ class PeekingButtonBar @JvmOverloads constructor(
             itemCount = slots.size,
             minSlotWidthPx = minSlotWidthPx,
             minPeekPx = minPeekPx,
+            maxSlotWidthPx = maxSlotWidthPx,
         )
         lastResult = result
         // Width 0 == the pre-measure tick (no viewport yet). Writing it would

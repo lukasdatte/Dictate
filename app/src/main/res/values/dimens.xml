@@ -55,4 +55,7 @@
     -->
     <dimen name="dictate_editbar_slot_min">52dp</dimen>
     <dimen name="dictate_editbar_peek">12dp</dimen>
+    <!-- Stretch cap: with few visible buttons an uncapped even split blows a slot up to a
+         quarter screen; the user asked for half that. -->
+    <dimen name="dictate_editbar_slot_max">64dp</dimen>
 </resources>

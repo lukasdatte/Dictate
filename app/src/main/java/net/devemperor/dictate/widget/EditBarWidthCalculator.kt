@@ -72,23 +72,31 @@ object EditBarWidthCalculator {
      * @param minSlotWidthPx hard floor for a slot — the accessibility touch
      *   target. Never undercut, even if that costs the peek.
      * @param minPeekPx how much of the first cut slot must stay visible.
+     * @param maxSlotWidthPx cap for the fits-case stretch. With few visible
+     *   buttons an uncapped even split blows a slot up to a quarter screen
+     *   and more — user-rejected on device. `0` (or anything below the
+     *   floor) disables the cap.
      */
     fun compute(
         availableWidthPx: Int,
         itemCount: Int,
         minSlotWidthPx: Int,
         minPeekPx: Int,
+        maxSlotWidthPx: Int = 0,
     ): Result {
         if (itemCount <= 0 || availableWidthPx <= 0 || minSlotWidthPx <= 0) {
             return Result(slotWidthPx = 0, fullyVisibleCount = 0, peekPx = 0, overflowing = false)
         }
 
         // Rule 1 — the row fits at (or above) the floor: fill the viewport
-        // evenly. No peek: nothing is hidden, so a flush right edge is the
-        // truth rather than a misleading coincidence.
+        // evenly, but never wider than the cap. No peek: nothing is hidden,
+        // so a flush right edge is the truth rather than a misleading
+        // coincidence (the row simply ends early when the cap bites).
         if (itemCount * minSlotWidthPx <= availableWidthPx) {
+            val even = availableWidthPx / itemCount
+            val capped = if (maxSlotWidthPx >= minSlotWidthPx) even.coerceAtMost(maxSlotWidthPx) else even
             return Result(
-                slotWidthPx = availableWidthPx / itemCount,
+                slotWidthPx = capped,
                 fullyVisibleCount = itemCount,
                 peekPx = 0,
                 overflowing = false,

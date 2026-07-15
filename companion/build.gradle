@@ -75,28 +75,6 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "net.devemperor.dictate.companion.MainKt"
-
-        // Memory footprint. Without a heap cap the JVM takes MaxRAMPercentage=25% of physical RAM as
-        // MaxHeapSize (8.5 GB on the test laptop) and — because MaxNewSize scales with it — a young
-        // generation of ~5 GB. Under Compose/Skiko render churn G1 lets that young gen balloon before
-        // it collects, so the process was seen resident at ~2.2 GB for what has a ~10 MB live set
-        // (measured with jcmd GC.heap_info). The cap fixes the ceiling; MaxNewSize then falls to
-        // ~230 MB and the process cannot grow into gigabytes again.
-        //
-        // 384 MB is deliberate headroom, not a measured need: the live set is ~10 MB and the idle
-        // heap ~23 MB, but the *windowed* peak (bitmaps during rendering) cannot be measured on the
-        // headless CI/test host — so the cap is set generously while still cutting the ceiling ~22×.
-        // G1 is kept (SerialGC measured a LARGER footprint here — 157 MB WS / 459 MB private vs G1's
-        // ~102/177). G1PeriodicGCInterval is the piece that returns memory to the OS: a companion
-        // lives almost all its life idle in the tray, and without a periodic trigger G1 never GCs an
-        // idle process, so heap grown during a burst of use would stay committed. Every 30 s of
-        // inactivity it now gives the pages back. MaxMetaspaceSize bounds class metadata (used ~39 MB).
-        jvmArgs.addAll([
-            "-Xmx384m",
-            "-XX:MaxMetaspaceSize=128m",
-            "-XX:G1PeriodicGCInterval=30000",
-        ])
-
         nativeDistributions {
             // jpackage CANNOT cross-compile — it builds for the HOST OS only (JEP 392). No
             // configuration makes an .msi appear on this Linux VM, and `packageMsi` fails here by

@@ -153,6 +153,7 @@ class SpecialTouchHandlerInstallerTest {
             inputConnectionProvider = { connection },
             keyboardActions = { KeyboardActionDispatcher(LocalImeSink(keystrokeInsertionService(connection))) },
             insertionService = { keystrokeInsertionService(connection) },
+            isPcMode = { false },
             accentColorProvider = { 0xFF0000FF.toInt() },
             onVibrate = { vibrations += Unit },
             onBackspaceDeleteCancelled = { deleteCancels += Unit },

@@ -111,6 +111,10 @@ class BackspaceSwipeHandlerTest {
     private fun handler(ic: InputConnection) = BackspaceSwipeHandler(
         inputConnectionProvider = { ic },
         insertionService = { recordingInsertionService(ic) },
+        // These local-path tests stay in local mode; the PC path has its own JVM test
+        // (BackspaceSwipePcSelectionTest).
+        keyboardActions = { null },
+        isPcMode = { false },
         vibrate = {},
         onDeleteCancelled = {},
     )

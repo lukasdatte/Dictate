@@ -7,6 +7,7 @@ import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import net.devemperor.dictate.state.insertion.ControlOp
 import net.devemperor.dictate.state.insertion.InsertionService
+import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
 import java.util.Collections
 
 /**
@@ -35,6 +36,10 @@ import java.util.Collections
 class BackspaceSwipeHandler(
     private val inputConnectionProvider: () -> InputConnection?,
     private val insertionService: () -> InsertionService?,
+    /** The PC-aware seam (§4.5): in PC-mode the swipe drives word selection on the PC. */
+    private val keyboardActions: () -> KeyboardActionDispatcher?,
+    /** True iff PC-mode is active — decided once at gesture start so the mode never flips mid-swipe. */
+    private val isPcMode: () -> Boolean,
     private val vibrate: () -> Unit,
     private val onDeleteCancelled: () -> Unit,
     private val keyPressAnimationHandler: ((View, MotionEvent) -> Unit)? = null
@@ -53,6 +58,12 @@ class BackspaceSwipeHandler(
     private var swipeStartOffset = 0
     private var swipeWordBoundaries: List<Int>? = null
     private var swipeSelectedSteps = 0
+
+    // PC-mode swipe state (§4.5). Decided at ACTION_DOWN so the whole gesture is one mode. In PC-mode
+    // there is no readable field, so word selection is driven purely by the swipe distance and mapped
+    // to Ctrl+Shift+←/→ on the PC via [pcSelection].
+    private var swipePcMode = false
+    private var pcSelection: BackspaceSwipePcSelection? = null
 
     override fun onTouch(v: View, event: MotionEvent): Boolean {
         keyPressAnimationHandler?.invoke(v, event)
@@ -73,11 +84,22 @@ class BackspaceSwipeHandler(
                 swipeBaseCursor = -1
                 swipeStartOffset = 0
                 backspaceStartX = event.x
+                // Lock the mode for this gesture. In PC-mode the swipe drives the PC's word selection
+                // (§4.5); the IC-read branches below are skipped entirely.
+                swipePcMode = isPcMode()
+                pcSelection = if (swipePcMode) {
+                    BackspaceSwipePcSelection { op -> keyboardActions()?.control(op) }
+                } else {
+                    null
+                }
                 return false // allow click/long-press detection
             }
 
             MotionEvent.ACTION_MOVE -> {
                 val dx = event.x - backspaceStartX
+
+                // PC-mode owns the whole move: no IC read, steps → Ctrl+Shift+←/→ (§4.5).
+                if (swipePcMode) return handlePcMove(v, dx, activationPx, stepPx)
 
                 if (dx < -activationPx) {
                     if (!isSwipeSelectingWords) {
@@ -156,6 +178,20 @@ class BackspaceSwipeHandler(
                 onDeleteCancelled()
 
                 if (isSwipeSelectingWords) {
+                    if (swipePcMode) {
+                        // §4.5: Release deletes the standing PC selection (→ BACKSPACE); a cancelled
+                        // gesture collapses it to the right edge (→ CURSOR_RIGHT). No IC read.
+                        val sel = pcSelection
+                        if (sel != null) {
+                            if (event.actionMasked == MotionEvent.ACTION_UP) {
+                                if (sel.release()) vibrate()
+                            } else {
+                                sel.cancel()
+                            }
+                        }
+                        isSwipeSelectingWords = false
+                        return true
+                    }
                     if (ic != null) {
                         if (swipeSelectedSteps > 0) {
                             // Deleting the active selection: route the empty
@@ -181,7 +217,43 @@ class BackspaceSwipeHandler(
         }
     }
 
+    /** The PC-mode move: activate on the first left step, then track the swipe distance as word steps. */
+    private fun handlePcMove(v: View, dx: Float, activationPx: Int, stepPx: Int): Boolean {
+        if (dx < -activationPx) {
+            if (!isSwipeSelectingWords) {
+                isSwipeSelectingWords = true
+                v.cancelLongPress()
+                v.parent?.requestDisallowInterceptTouchEvent(true)
+                onDeleteCancelled()
+            }
+            applyPcSteps(dx, stepPx)
+            return true
+        }
+        if (isSwipeSelectingWords) {
+            // Moving back toward the start reduces the selection (steps → 0).
+            applyPcSteps(dx, stepPx)
+            return true
+        }
+        return false
+    }
+
+    /** Map the swipe distance to a word-step count and let [pcSelection] emit the delta as chords. */
+    private fun applyPcSteps(dx: Float, stepPx: Int) {
+        val sel = pcSelection ?: return
+        val steps = ((-dx).toInt() / stepPx).coerceIn(0, MAX_PC_SELECT_STEPS)
+        if (steps != sel.steps) {
+            sel.toStep(steps)
+            vibrate()
+        }
+    }
+
     companion object {
+        /**
+         * Cap on PC-mode word-selection steps in one swipe. The send-window coalesces each step into
+         * a `count` (≤ MAX_INPUT_REPEAT); this bounds an absurdly long swipe to a sane word count.
+         */
+        const val MAX_PC_SELECT_STEPS = 50
+
         /**
          * Computes progressive word boundaries to the left of the cursor for swipe selection.
          * Returns absolute start indices (0..cursor): boundaries[0] = cursor,
@@ -218,5 +290,50 @@ class BackspaceSwipeHandler(
 
             return res
         }
+    }
+}
+
+/**
+ * The PC-mode backspace-swipe word selection, as pure emit-logic (§4.5, D1).
+ *
+ * Separated from the [View.OnTouchListener] so it is JVM-testable without a `MotionEvent`: the
+ * handler feeds it a monotone/receding step target and a release/cancel; this maps the **delta** to
+ * word-selection chords. Growing the selection emits `SelectWord(BACK)` (Ctrl+Shift+←) per step,
+ * shrinking emits `SelectWord(FORWARD)` (Ctrl+Shift+→); release deletes the standing selection
+ * (`DeleteSelection` → Backspace), cancel collapses it to the right edge (`CursorMove(right)`).
+ */
+class BackspaceSwipePcSelection(
+    private val emit: (ControlOp) -> Unit,
+) {
+    var steps: Int = 0
+        private set
+
+    /** Move the selection to [target] word-steps, emitting one chord per step of the delta. */
+    fun toStep(target: Int) {
+        val delta = target - steps
+        when {
+            delta > 0 -> repeat(delta) { emit(ControlOp.SelectWord(DIRECTION_BACK)) }
+            delta < 0 -> repeat(-delta) { emit(ControlOp.SelectWord(DIRECTION_FORWARD)) }
+        }
+        steps = target
+    }
+
+    /** Delete the standing selection. @return true iff there was a selection to delete. */
+    fun release(): Boolean {
+        if (steps <= 0) return false
+        emit(ControlOp.DeleteSelection)
+        return true
+    }
+
+    /** Collapse the standing selection to its right edge (gesture cancelled). */
+    fun cancel() {
+        if (steps <= 0) return
+        emit(ControlOp.CursorMove(DIRECTION_FORWARD))
+    }
+
+    private companion object {
+        /** SelectWord(direction): < 0 selects one word back, ≥ 0 one word forward. */
+        const val DIRECTION_BACK = -1
+        const val DIRECTION_FORWARD = 1
     }
 }

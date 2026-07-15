@@ -1451,6 +1451,7 @@ public class DictateInputMethodService extends InputMethodService
             // take the raw InsertionService (their PC paths are a follow-up).
             () -> keyboardActions(),
             () -> insertionService(),
+            this::isPcModeActive,
             () -> DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE),
             vibrateLambda,
             () -> {

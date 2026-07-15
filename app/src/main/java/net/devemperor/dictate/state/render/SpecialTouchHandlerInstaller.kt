@@ -133,6 +133,8 @@ class SpecialTouchHandlerInstaller(
     // selection — are a follow-up).
     private val keyboardActions: () -> KeyboardActionDispatcher?,
     private val insertionService: () -> InsertionService?,
+    /** True iff PC-mode is active — the backspace-swipe uses it to pick the PC word-selection path (§4.5). */
+    private val isPcMode: () -> Boolean,
     private val accentColorProvider: () -> Int,
     private val onVibrate: () -> Unit,
     private val onBackspaceDeleteCancelled: () -> Unit,
@@ -309,6 +311,8 @@ class SpecialTouchHandlerInstaller(
         BackspaceSwipeHandler(
             inputConnectionProvider = inputConnectionProvider,
             insertionService = insertionService,
+            keyboardActions = keyboardActions,
+            isPcMode = isPcMode,
             vibrate = onVibrate,
             onDeleteCancelled = onBackspaceDeleteCancelled,
             keyPressAnimationHandler = { v, e -> keyPressAnimator.handlePressAnimationEvent(v, e) },

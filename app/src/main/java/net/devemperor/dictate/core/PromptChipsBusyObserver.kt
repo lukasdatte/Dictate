@@ -79,9 +79,11 @@ class PromptChipsBusyObserver @JvmOverloads constructor(
         scope = s
         s.launch {
             state
-                .map { isBusy(it) }
+                // §6.2: also fire on the PC-mode axis — the selection-pill gating depends on it, and
+                // a PC-mode toggle can happen without any busy change. The listener re-reads both.
+                .map { isBusy(it) to it.features.windowsAutoSendActive }
                 .distinctUntilChanged()
-                .collect { busy -> onChanged.onPromptChipsBusyChanged(busy) }
+                .collect { (busy, _) -> onChanged.onPromptChipsBusyChanged(busy) }
         }
     }
 

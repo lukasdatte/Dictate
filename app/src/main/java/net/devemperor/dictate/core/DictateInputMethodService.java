@@ -2998,6 +2998,15 @@ public class DictateInputMethodService extends InputMethodService
                 }
                 runStandalonePromptViaOrchestrator(model);
             }
+
+            @Override
+            public void onSelectionUnavailableInPcMode() {
+                // §6.2: a selection prompt was pressed in PC-mode. The PC selection cannot be read in
+                // v1, so the pill is greyed and the press only shows this hint (no run).
+                vibrate();
+                Toast.makeText(DictateInputMethodService.this,
+                        R.string.dictate_pc_mode_selection_unavailable, Toast.LENGTH_SHORT).show();
+            }
         });
         promptsRv.setAdapter(promptsAdapter);
         // Phase 2 §2.4: chip-click listener is wired ONCE here (not per mode).
@@ -5922,14 +5931,18 @@ public class DictateInputMethodService extends InputMethodService
                             || pipe instanceof net.devemperor.dictate.state.PipelineUiState.Running;
         }
         disableNonSelectionPrompts = recordingBusy || pipelineBusy;
+        // §6.2: gate selection-requiring pills while PC-mode is active (read on the same observer tick).
+        final boolean pcMode = isPcModeActive();
         if (promptsAdapter == null) return;
         if (mainHandler != null) {
             mainHandler.post(() -> {
                 promptsAdapter.setDisableNonSelectionPrompts(disableNonSelectionPrompts);
+                promptsAdapter.setPcModeActive(pcMode);
                 updateSelectAllPromptState();
             });
         } else {
             promptsAdapter.setDisableNonSelectionPrompts(disableNonSelectionPrompts);
+            promptsAdapter.setPcModeActive(pcMode);
             updateSelectAllPromptState();
         }
     }

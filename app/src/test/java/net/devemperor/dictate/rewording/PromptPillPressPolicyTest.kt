@@ -91,4 +91,35 @@ class PromptPillPressPolicyTest {
             )
         }
     }
+
+    // ── §6.2 — PC-mode selection gate ────────────────────────────────────
+
+    @Test
+    fun `any press on a selection-gated pill in PC-mode shows the hint`() {
+        PromptPillPress.entries.forEach { press ->
+            assertEquals(
+                "selection-gated $press",
+                PromptPillAction.SELECTION_UNAVAILABLE_HINT,
+                PromptPillPressPolicy.decide(press, textOnlyDisabled = false, pillType = PromptType.PROMPT, selectionUnavailable = true),
+            )
+        }
+    }
+
+    @Test
+    fun `the PC-mode selection gate dominates the busy matrix`() {
+        // Even a would-be APPLY_DISABLED long-press becomes the hint when the pill needs a selection.
+        assertEquals(
+            PromptPillAction.SELECTION_UNAVAILABLE_HINT,
+            PromptPillPressPolicy.decide(PromptPillPress.LONG, textOnlyDisabled = true, pillType = PromptType.PROMPT, selectionUnavailable = true),
+        )
+    }
+
+    @Test
+    fun `selection-free pills are unaffected by the gate flag being false`() {
+        // The gate only turns on for selection-requiring pills; a normal pill behaves as before.
+        assertEquals(
+            PromptPillAction.ACTIVATE,
+            PromptPillPressPolicy.decide(PromptPillPress.SHORT, textOnlyDisabled = false, pillType = PromptType.PROMPT, selectionUnavailable = false),
+        )
+    }
 }

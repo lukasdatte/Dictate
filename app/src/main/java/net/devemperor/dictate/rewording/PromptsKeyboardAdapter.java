@@ -45,6 +45,9 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
     private final AdapterCallback callback;
     private final List<Integer> queuedPromptOrder = new ArrayList<>();
     private boolean disableNonSelectionPrompts = false;
+    // §6.2: when PC-mode is active, selection-requiring prompt pills are greyed and gated (their
+    // selection lives on the invisible PC). Driven by PromptChipsBusyObserver.
+    private boolean pcModeActive = false;
     private MaterialButton selectAllButton;
     private boolean selectAllActive = false;
 
@@ -70,6 +73,14 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
          * {@link PromptPillPressPolicy} and {@link PromptPillAction#APPLY_DISABLED}.
          */
         void onTextOnlyItemApplyRequested(Integer position);
+
+        /**
+         * Any press on a selection-requiring pill while PC-mode is active (§6.2). The PC selection
+         * cannot be read in v1, so the pill is greyed and the press shows a hint instead of running
+         * the prompt. See {@link PromptPillPressPolicy} and
+         * {@link PromptPillAction#SELECTION_UNAVAILABLE_HINT}.
+         */
+        void onSelectionUnavailableInPcMode();
     }
 
     public interface LanguageChipClickListener {
@@ -97,6 +108,13 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
     public void setQueuedPromptOrder(List<Integer> queuedPromptIds) {
         queuedPromptOrder.clear();
         queuedPromptOrder.addAll(queuedPromptIds);
+        notifyDataSetChanged();
+    }
+
+    /** §6.2: grey + gate selection-requiring pills while PC-mode is active. */
+    public void setPcModeActive(boolean active) {
+        if (pcModeActive == active) return;
+        pcModeActive = active;
         notifyDataSetChanged();
     }
 
@@ -284,8 +302,11 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
         final boolean textOnlyDisabled =
                 disableNonSelectionPrompts && model.getId() >= 0
                         && !model.getRequiresSelection() && !isTextPill;
+        // §6.2: a selection-requiring saved prompt is gated in PC-mode (no readable PC selection).
+        final boolean selectionUnavailable =
+                pcModeActive && model.getId() >= 0 && model.getRequiresSelection();
         holder.promptBtn.setEnabled(true);
-        holder.promptBtn.setAlpha(textOnlyDisabled ? 0.5f : 1f);
+        holder.promptBtn.setAlpha((textOnlyDisabled || selectionUnavailable) ? 0.5f : 1f);
         if (model.getId() >= 0) {
             holder.promptBtn.setIcon(queuedPromptOrder.contains(model.getId())
                     ? AppCompatResources.getDrawable(holder.promptBtn.getContext(), R.drawable.ic_baseline_check_circle_outline_24)
@@ -296,16 +317,22 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
         }
         final int dataPos = toDataIndex(position);
         holder.promptBtn.setOnClickListener(v -> {
-            if (PromptPillPressPolicy.decide(PromptPillPress.SHORT, textOnlyDisabled, model.getTypeEnum())
-                    == PromptPillAction.ACTIVATE) {
+            PromptPillAction action = PromptPillPressPolicy.decide(
+                    PromptPillPress.SHORT, textOnlyDisabled, model.getTypeEnum(), selectionUnavailable);
+            if (action == PromptPillAction.ACTIVATE) {
                 callback.onItemClicked(dataPos);
+            } else if (action == PromptPillAction.SELECTION_UNAVAILABLE_HINT) {
+                callback.onSelectionUnavailableInPcMode();
             }
             // IGNORE (greyed text-only pill) → short press stays inert.
         });
         holder.promptBtn.setOnLongClickListener(v -> {
-            if (PromptPillPressPolicy.decide(PromptPillPress.LONG, textOnlyDisabled, model.getTypeEnum())
-                    == PromptPillAction.APPLY_DISABLED) {
+            PromptPillAction action = PromptPillPressPolicy.decide(
+                    PromptPillPress.LONG, textOnlyDisabled, model.getTypeEnum(), selectionUnavailable);
+            if (action == PromptPillAction.APPLY_DISABLED) {
                 callback.onTextOnlyItemApplyRequested(dataPos);
+            } else if (action == PromptPillAction.SELECTION_UNAVAILABLE_HINT) {
+                callback.onSelectionUnavailableInPcMode();
             } else {
                 callback.onItemLongClicked(dataPos);
             }

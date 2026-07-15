@@ -58,6 +58,13 @@ enum class PromptPillAction {
 
     /** Short-press on a greyed text-only pill: inert (preserve the greyed semantics). */
     IGNORE,
+
+    /**
+     * Any press on a selection-requiring pill while PC-mode is active (§6.2). The PC selection cannot
+     * be read in v1, so the pill is greyed and a press shows a hint instead of running the prompt
+     * (`AdapterCallback.onSelectionUnavailableInPcMode`). Takes precedence over the busy-state matrix.
+     */
+    SELECTION_UNAVAILABLE_HINT,
 }
 
 /**
@@ -65,13 +72,23 @@ enum class PromptPillAction {
  */
 object PromptPillPressPolicy {
 
+    /**
+     * @param selectionUnavailable true iff PC-mode is active AND this pill requires a selection
+     *   (§6.2). When true it dominates every other column: the pill is gated and any press shows a
+     *   hint. Selection-free pills and recording pills are unaffected (`false`).
+     */
     @JvmStatic
     fun decide(
         press: PromptPillPress,
         textOnlyDisabled: Boolean,
         pillType: PromptType,
-    ): PromptPillAction =
-        when (pillType) {
+        selectionUnavailable: Boolean = false,
+    ): PromptPillAction {
+        // The PC-mode selection gate wins over the pillType/busy matrix — a selection prompt simply
+        // has no selection to work on while the field lives on the PC.
+        if (selectionUnavailable) return PromptPillAction.SELECTION_UNAVAILABLE_HINT
+
+        return when (pillType) {
             // Text pills insert their literal content in every state — the
             // busy-state greying never applies. Short = insert, long = edit.
             PromptType.TEXT -> when (press) {
@@ -86,4 +103,5 @@ object PromptPillPressPolicy {
                     if (textOnlyDisabled) PromptPillAction.APPLY_DISABLED else PromptPillAction.EDIT
             }
         }
+    }
 }

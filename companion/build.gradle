@@ -82,6 +82,15 @@ compose.desktop {
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb
             )
+            // The jlink runtime is built from an explicit module list. Compose's defaults cover the
+            // UI (java.desktop, java.prefs, …) but NOTHING else: without java.sql the very first
+            // thing main() does — CompanionContainer.production() opening the SQLite database —
+            // dies with NoClassDefFoundError: java/sql/DriverManager. The jpackage GUI launcher has
+            // no console, so that surfaces as a bare "Failed to launch JVM" dialog with no hint
+            // whatsoever. Keep this list in sync via `./gradlew :companion:suggestRuntimeModules`
+            // (jdeps) whenever a dependency is added. See the runbook's Troubleshooting section.
+            modules("java.instrument", "java.management", "java.sql", "jdk.unsupported")
+
             packageName = "DictateCompanion"
             packageVersion = "1.0.0"
             description = "Dictate Companion — receives dictated text from the phone"

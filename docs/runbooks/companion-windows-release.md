@@ -94,6 +94,53 @@ Everything below is what a Linux CI **cannot** prove. The rest of the system is 
 | 9 | SmartScreen on the unsigned MSI | A warning appears. Expected (see "Known state" above) |
 | 10 | End to end from the phone | Dictate → the text appears in the active Windows window. Then: quit the companion → the phone shows the text as a **pending part** → start the companion → "send" from the history row delivers it |
 
+## Troubleshooting
+
+### "Failed to launch JVM" on start
+
+A bare dialog with that text, and nothing else — no console, no log. It almost never means the JVM is
+missing. The jpackage Windows launcher is a **GUI-subsystem binary**: it has no stderr to print to,
+so *any* uncaught exception out of `main()` is reported as this one dialog. The message is a dead
+end; the exception behind it is what you want.
+
+**Get the real error.** The app image's runtime has no `java.exe` — jpackage strips the launchers.
+Borrow one from a JDK of the same version, then run the classpath the launcher would have run:
+
+```powershell
+$t = 'C:\Temp\dc-test'
+Copy-Item 'C:\Program Files\DictateCompanion\app'     $t -Recurse -Force
+Copy-Item 'C:\Program Files\DictateCompanion\runtime' $t -Recurse -Force
+Copy-Item 'C:\Users\lukas\dev-tools\jdk21\bin\java.exe' "$t\runtime\bin\java.exe" -Force
+
+$cp = (Get-Content "$t\app\DictateCompanion.cfg" |
+       Where-Object { $_ -match '^app\.classpath=' } |
+       ForEach-Object { $_ -replace '^app\.classpath=\$APPDIR', "$t\app" }) -join ';'
+
+& "$t\runtime\bin\java.exe" "-Dcompose.application.resources.dir=$t\app\resources" `
+    "-Dskiko.library.path=$t\app" -cp $cp 'net.devemperor.dictate.companion.MainKt'
+```
+
+The stack trace prints to the console. Delete `C:\Temp\dc-test` afterwards.
+
+### Root cause once seen: a JDK module missing from the jlink runtime
+
+`NoClassDefFoundError: java/sql/DriverManager`, thrown from `CompanionContainer.production()` before
+a single window exists. The runtime jlink builds contains **only the modules that are declared**, and
+Compose's defaults cover the UI alone (`java.desktop`, `java.prefs`, `java.datatransfer`, …) — not
+`java.sql`, which sqlite-jdbc needs the moment the database opens.
+
+The fix is the `modules(...)` list in `companion/build.gradle`. **When you add a dependency, re-run:**
+
+```bash
+./gradlew :companion:suggestRuntimeModules    # jdeps; works on Linux too
+```
+
+and reconcile the output with that list. Verify without Windows via `./gradlew
+:companion:createDistributable`, then check
+`companion/build/compose/binaries/main/app/DictateCompanion/lib/runtime/release` for the expected
+`MODULES=` line. Note jdeps only sees *static* references — a dependency that reaches for a module
+reflectively will still slip through and land you back at the dialog above.
+
 ## If there is no Windows machine
 
 A GitHub Actions job on `windows-latest` running `packageMsi` and uploading the artefact would do

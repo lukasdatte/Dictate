@@ -4550,6 +4550,10 @@ public class DictateInputMethodService extends InputMethodService
     @androidx.annotation.Nullable
     private String readUiContextOrNull() {
         if (!DictatePrefsKt.get(sp, Pref.AccessibilityContextEnabled.INSTANCE)) return null;
+        // PC send-mode: the dictation is bound for the PC's focused window, not the app on the
+        // phone's screen — its view tree is the WRONG context and must not steer (or leak into)
+        // the prompt. Checked at the send-tap, the same instant the divert decision snapshots.
+        if (net.devemperor.dictate.windows.WindowsAutoSend.INSTANCE.shouldAutoSend(sp)) return null;
         net.devemperor.dictate.accessibility.DictateAccessibilityService a11yService =
                 net.devemperor.dictate.accessibility.DictateAccessibilityService.getInstance();
         // Enabled in settings but not bound yet (just switched on, or the system

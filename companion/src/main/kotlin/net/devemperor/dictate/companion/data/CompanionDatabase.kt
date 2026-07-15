@@ -4,6 +4,7 @@ import app.cash.sqldelight.EnumColumnAdapter
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import net.devemperor.dictate.companion.db.DictateCompanionDb
+import net.devemperor.dictate.companion.db.Key_command_chords
 import net.devemperor.dictate.companion.db.Received_texts
 import java.nio.file.Files
 import java.nio.file.Path
@@ -39,6 +40,9 @@ object CompanionDatabase {
             received_textsAdapter = Received_texts.Adapter(
                 originAdapter = EnumColumnAdapter(),
                 last_outcomeAdapter = EnumColumnAdapter(),
+            ),
+            key_command_chordsAdapter = Key_command_chords.Adapter(
+                commandAdapter = EnumColumnAdapter(),
             ),
         )
     }

@@ -3,6 +3,7 @@ package net.devemperor.dictate.companion
 import net.devemperor.dictate.companion.data.CompanionDatabase
 import net.devemperor.dictate.companion.data.memory.InMemoryChordMapping
 import net.devemperor.dictate.companion.data.memory.InMemorySettings
+import net.devemperor.dictate.companion.data.SqlDelightChordMappingRepository
 import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
 import net.devemperor.dictate.companion.data.SqlDelightHistoryRepository
 import net.devemperor.dictate.companion.data.SqlDelightSettingsRepository
@@ -83,9 +84,7 @@ class CompanionContainer(
             platform: PlatformModule.Bindings = PlatformModule.detect(),
         ): CompanionContainer {
             val database = CompanionDatabase.open(AppPaths.databaseFile())
-            // §B stand-in: chords are in memory (defaults). §B2 replaces this with the SQLDelight
-            // repository so re-bound chords persist across restarts.
-            val chordMapping = InMemoryChordMapping()
+            val chordMapping = SqlDelightChordMappingRepository(database)
             return CompanionContainer(
                 devices = SqlDelightDeviceRepository(database),
                 history = SqlDelightHistoryRepository(database),

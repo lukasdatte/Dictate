@@ -48,6 +48,20 @@ CREATE TABLE settings (
     value TEXT NOT NULL
 );
 
+-- Configurable command -> chord mapping for /v1/input (D6, §5.4). Double-Enum, like received_texts
+-- above: `command` is a Kotlin `KeyCommand` AND a SQL CHECK; the modifier flags and `vk` carry their
+-- own CHECKs so a bogus mapping fails at the write boundary, not at injection time. Seeded from
+-- DefaultChords by the v1 -> v2 migration; a missing row falls back to DefaultChords in the repo.
+CREATE TABLE key_command_chords (
+    command TEXT AS net.devemperor.dictate.companion.domain.model.KeyCommand NOT NULL PRIMARY KEY
+            CHECK (command IN ('BACKSPACE','ENTER','SPACE','CURSOR_LEFT','CURSOR_RIGHT','CURSOR_WORD_SELECT_BACK','CURSOR_WORD_SELECT_FORWARD','SELECT_ALL','CUT','COPY','PASTE','UNDO','REDO')),
+    ctrl    INTEGER AS kotlin.Boolean NOT NULL CHECK (ctrl IN (0,1)),
+    shift   INTEGER AS kotlin.Boolean NOT NULL CHECK (shift IN (0,1)),
+    alt     INTEGER AS kotlin.Boolean NOT NULL CHECK (alt IN (0,1)),
+    win     INTEGER AS kotlin.Boolean NOT NULL CHECK (win IN (0,1)),
+    vk      INTEGER NOT NULL CHECK (vk BETWEEN 1 AND 254)
+);
+
 -- ── devices ───────────────────────────────────────────────────────────────────────────────
 
 deviceById:
@@ -133,3 +147,19 @@ SELECT value FROM settings WHERE key = ?;
 
 putSetting:
 INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?);
+
+-- ── key_command_chords ──────────────────────────────────────────────────────────────────────
+
+chordByCommand:
+SELECT * FROM key_command_chords WHERE command = ?;
+
+allChords:
+SELECT * FROM key_command_chords;
+
+upsertChord:
+INSERT OR REPLACE INTO key_command_chords(command, ctrl, shift, alt, win, vk)
+VALUES (?, ?, ?, ?, ?, ?);
+
+-- Reset = clear every override; the repo then falls back to DefaultChords for each command.
+deleteAllChords:
+DELETE FROM key_command_chords;

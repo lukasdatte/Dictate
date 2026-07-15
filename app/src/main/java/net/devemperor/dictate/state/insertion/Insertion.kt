@@ -221,6 +221,18 @@ sealed interface ControlOp {
      * range with nothing). A no-op when there is no selection.
      */
     data object DeleteSelection : ControlOp
+
+    /**
+     * Extend the selection by one word toward [direction] (< 0 = back, ≥ 0 =
+     * forward) — the PC-mode mapping of the backspace-swipe word selection (D1,
+     * §4.5). On the PC this becomes Ctrl+Shift+←/→.
+     *
+     * **PC-only.** The local IME never produces this: the on-device
+     * backspace-swipe reads the field directly via `setSelection`
+     * ([BackspaceSwipeHandler]). Routed to the local sink it is reported
+     * [SubmitResult.Unsupported] rather than silently dropped.
+     */
+    data class SelectWord(val direction: Int) : ControlOp
 }
 
 /**

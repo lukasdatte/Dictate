@@ -28,6 +28,10 @@ object DispatchOutcomeMapper {
         is DispatchError.Invalid,
         DispatchError.ProtocolMismatch,
         DispatchError.InsertionFailed,
+        // A dictation dispatch never hits /v1/input, so EndpointMissing cannot arise here; map it
+        // to the same dismiss-only "unreachable" for completeness (the keyboard-action path has its
+        // own PcInputFailure.COMPANION_UPDATE_REQUIRED classification, §6.1).
+        DispatchError.EndpointMissing,
         is DispatchError.Server,
         -> PipelineErrorKind.WINDOWS_UNREACHABLE
     }

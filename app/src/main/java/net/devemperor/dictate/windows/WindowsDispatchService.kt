@@ -5,6 +5,8 @@ import net.devemperor.dictate.shared.client.DispatchClient
 import net.devemperor.dictate.shared.client.DispatchResult
 import net.devemperor.dictate.shared.protocol.DispatchRequest
 import net.devemperor.dictate.shared.protocol.DispatchResponse
+import net.devemperor.dictate.shared.protocol.InputCommandResponse
+import net.devemperor.dictate.shared.protocol.InputCommandWire
 import net.devemperor.dictate.shared.sync.SyncClient
 import net.devemperor.dictate.shared.sync.SyncOutcome
 
@@ -36,6 +38,14 @@ class WindowsDispatchService(
      */
     fun send(target: WindowsTarget, request: DispatchRequest): DispatchResult<DispatchResponse> =
         clientFactory(target).dispatch(request)
+
+    /**
+     * The blocking keyboard-action send (`/v1/input`, §5.3). Like [send] it returns the shared
+     * [DispatchResult] verbatim — a 404 already arrives as `DispatchError.EndpointMissing` so the
+     * caller can tell "companion too old" apart from "PC unreachable".
+     */
+    fun input(target: WindowsTarget, commands: List<InputCommandWire>): DispatchResult<InputCommandResponse> =
+        clientFactory(target).input(commands)
 
     /**
      * Fire-and-forget cursor sync (ADR-0020). The ONE sync entry point, shared by both triggers:

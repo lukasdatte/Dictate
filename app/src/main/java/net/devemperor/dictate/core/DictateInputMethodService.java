@@ -5340,6 +5340,10 @@ public class DictateInputMethodService extends InputMethodService
                         new net.devemperor.dictate.state.Action.ReviewPanelAction.Update(output, message),
                         "ReviewPanel.Update");
             } else {
+                // Deliberately NOT routed: this is fresh review/refinement dictation output, not a
+                // live keyboard action. Its PC delivery belongs on the dispatch path (with the
+                // pending-part fallback) like the review "Insert" button (onReviewInsertClicked), not
+                // on the no-pending keyboard-action router (§4.4 "Diktat-Text-Sonderweg bleibt").
                 insertionService().insert(new InsertionRequest(
                         output, InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE, null, sessionId));
                 dispatchPipelineActionToOrchestrator(
@@ -6286,7 +6290,11 @@ public class DictateInputMethodService extends InputMethodService
         // enableAutoEnter is folded into the policy (RESEND ⇒ autoEnter=false):
         // a resend is a recovery insert, never a new transcription, and Stage 2
         // commits on the captured IC while auto-enter would target the live IC.
-        insertionService().insert(new InsertionRequest(
+        // §2.2/§4.4: routed through the seam — in PC-mode the stored text lands on the PC as
+        // TYPE_TEXT (the captured-IC anchor is meaningless there and the PC sink ignores it); in
+        // local mode LocalImeSink delegates the FULL request (RESEND policy + captured IC) 1:1, so
+        // the recovery behaviour is byte-identical.
+        keyboardActions().insert(new InsertionRequest(
                 output,
                 InsertionSource.TRANSCRIPTION,
                 InsertionPolicy.RESEND,
@@ -6782,7 +6790,10 @@ public class DictateInputMethodService extends InputMethodService
         String sid = session.getId();
         String text = sessionManager.getFinalOutput(sid);
         if (text == null || text.isEmpty()) return;
-        insertionService().insert(new net.devemperor.dictate.state.insertion.InsertionRequest(
+        // §2.2/§4.4: the history-row "Insert" routes through the seam — in PC-mode the stored text
+        // lands at the PC cursor as TYPE_TEXT (the row's "Send to PC" button is the dispatch path);
+        // in local mode LocalImeSink delegates 1:1 to the same InsertionService.
+        keyboardActions().insert(new net.devemperor.dictate.state.insertion.InsertionRequest(
             text,
             pending
                 ? net.devemperor.dictate.database.entity.InsertionSource.PENDING_PART
@@ -6928,6 +6939,9 @@ public class DictateInputMethodService extends InputMethodService
 
             if (lastOutput != null) {
                 String finalOutput = lastOutput;
+                // Deliberately NOT routed: the cancelled pipeline's partial output is dictation, not a
+                // live keyboard action — the no-pending router would drop it on an unreachable PC. Its
+                // PC treatment (dispatch + pending) is a follow-up like the review path above.
                 mainHandler.post(() -> insertionService().insert(new InsertionRequest(
                         finalOutput, InsertionSource.TRANSCRIPTION, InsertionPolicy.PIPELINE, null, null)));
             }

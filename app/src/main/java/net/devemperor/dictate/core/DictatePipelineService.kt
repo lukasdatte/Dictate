@@ -1154,6 +1154,12 @@ class DictatePipelineService : Service() {
                         recordButton,
                         { sharedPrefs.get(Pref.AccentColor) },
                         animationsEnabledLambda,
+                        // §7.1 parity: the floating overlay's record button breathes the PC-mode
+                        // colour too, so PC-mode is legible in the widget (the controller reads
+                        // features.windowsAutoSendActive from state itself).
+                        pcModeColorProvider = {
+                            androidx.core.content.ContextCompat.getColor(ctx, net.devemperor.dictate.R.color.dictate_pc_mode)
+                        },
                     )
                 }
             val autoEnterFactory =

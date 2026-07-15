@@ -3,6 +3,8 @@ package net.devemperor.dictate.rewording;
 import android.animation.TimeInterpolator;
 import android.annotation.SuppressLint;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
+import android.graphics.Color;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -185,10 +187,15 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
 
     public static class RecyclerViewHolder extends RecyclerView.ViewHolder {
         final MaterialButton promptBtn;
+        // Captured once from the freshly inflated (filled) button so the filled
+        // path can restore the exact default label colour after a recycled view
+        // was used for an outlined text pill.
+        final ColorStateList defaultTextColors;
 
         public RecyclerViewHolder(View itemView) {
             super(itemView);
             promptBtn = itemView.findViewById(R.id.prompts_keyboard_btn);
+            defaultTextColors = promptBtn.getTextColors();
         }
     }
 
@@ -315,7 +322,11 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
         } else {
             backgroundColor = accentColorMedium;
         }
-        applyPromptButtonColors(holder.promptBtn, backgroundColor);
+        if (isTextPill) {
+            applyTextPillColors(holder.promptBtn, accentColor);
+        } else {
+            applyFilledPromptButtonColors(holder.promptBtn, backgroundColor, holder.defaultTextColors);
+        }
         if (DictatePrefsKt.get(sp, Pref.Animations.INSTANCE)) {
             holder.promptBtn.setOnTouchListener((v, event) -> {
                 switch (event.getActionMasked()) {
@@ -368,6 +379,35 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
     private void applyPromptButtonColors(MaterialButton button, int backgroundColor) {
         if (button == null) return;
         button.setBackgroundColor(backgroundColor);
+    }
+
+    /**
+     * Filled treatment for AI prompt pills (and sentinels): solid accent-tinted
+     * background, default label colour. Also RESETS the stroke + label colour so
+     * a view recycled from an outlined text pill returns to the filled look.
+     */
+    private void applyFilledPromptButtonColors(MaterialButton button, int backgroundColor, ColorStateList defaultTextColors) {
+        if (button == null) return;
+        button.setStrokeWidth(0);
+        button.setBackgroundColor(backgroundColor);
+        if (defaultTextColors != null) {
+            button.setTextColor(defaultTextColors);
+        }
+    }
+
+    /**
+     * Outlined/tonal treatment for text pills (F1 Option 1): transparent fill +
+     * accent stroke + accent label. Reads differently from a filled AI prompt
+     * pill with ANY accent (colour-blind-safe — distinguished by form + tone, not
+     * hue) and never collides with the reserved PC-mode purple.
+     */
+    private void applyTextPillColors(MaterialButton button, int accentColor) {
+        if (button == null) return;
+        int strokePx = Math.round(button.getResources().getDisplayMetrics().density * 1.5f);
+        button.setBackgroundColor(Color.TRANSPARENT);
+        button.setStrokeColor(ColorStateList.valueOf(accentColor));
+        button.setStrokeWidth(strokePx);
+        button.setTextColor(accentColor);
     }
 
     private void updateSelectAllButtonIcon() {

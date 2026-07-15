@@ -18,6 +18,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.database.dao.PromptDao;
 import net.devemperor.dictate.database.entity.PromptEntity;
+import net.devemperor.dictate.database.entity.PromptType;
 
 import java.util.List;
 
@@ -51,6 +52,7 @@ public class PromptsOverviewAdapter extends RecyclerView.Adapter<PromptsOverview
         final TextView itemPromptTv;
         final ImageView requiresSelectionIv;
         final ImageView autoApplyIv;
+        final ImageView typeIv;
         final View nameContainer;
         final MaterialButton moveUpBtn;
         final MaterialButton moveDownBtn;
@@ -62,6 +64,7 @@ public class PromptsOverviewAdapter extends RecyclerView.Adapter<PromptsOverview
             itemPromptTv = itemView.findViewById(R.id.item_prompts_overview_prompt_tv);
             requiresSelectionIv = itemView.findViewById(R.id.item_prompts_overview_requires_selection_iv);
             autoApplyIv = itemView.findViewById(R.id.item_prompts_overview_auto_apply_iv);
+            typeIv = itemView.findViewById(R.id.item_prompts_overview_type_iv);
             nameContainer = itemView.findViewById(R.id.item_prompts_overview_name_container);
             moveUpBtn = itemView.findViewById(R.id.item_prompts_overview_move_up_btn);
             moveDownBtn = itemView.findViewById(R.id.item_prompts_overview_move_down_btn);
@@ -83,6 +86,13 @@ public class PromptsOverviewAdapter extends RecyclerView.Adapter<PromptsOverview
 
         int enabledColor = ContextCompat.getColor(holder.itemView.getContext(), R.color.dictate_blue);
         int disabledColor = ContextCompat.getColor(holder.itemView.getContext(), R.color.dictate_grey);
+        // A text pill inserts literally — its requiresSelection/autoApply flags are
+        // meaningless, so show a single "text" indicator instead of those icons.
+        boolean isText = entity.getTypeEnum() == PromptType.TEXT;
+        holder.typeIv.setVisibility(isText ? View.VISIBLE : View.GONE);
+        holder.typeIv.setImageTintList(ColorStateList.valueOf(enabledColor));
+        holder.requiresSelectionIv.setVisibility(isText ? View.GONE : View.VISIBLE);
+        holder.autoApplyIv.setVisibility(isText ? View.GONE : View.VISIBLE);
         holder.requiresSelectionIv.setImageTintList(ColorStateList.valueOf(
                 entity.getRequiresSelection() ? enabledColor : disabledColor));
         holder.autoApplyIv.setImageTintList(ColorStateList.valueOf(

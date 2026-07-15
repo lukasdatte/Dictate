@@ -134,12 +134,16 @@
     <string name="dictate_delete_prompt_message">¿Seguro que quieres eliminar este prompt?</string>
     <string name="dictate_requires_selection">Enviar el texto seleccionado para reescribir</string>
     <string name="dictate_auto_apply">Aplicar automáticamente tras la transcripción</string>
+    <string name="dictate_prompt_type_prompt">Prompt</string>
+    <string name="dictate_prompt_type_text">Texto</string>
+    <string name="dictate_prompt_type_label">Tipo de pastilla</string>
+    <string name="dictate_prompt_type_text_hint">Introduce el texto exacto que se insertará. Esta pastilla inserta su contenido 1:1 sin contactar con la IA.</string>
     <string name="dictate_unsaved_changes_title">¿Descartar los cambios?</string>
     <string name="dictate_unsaved_changes_message">Tienes cambios sin guardar. ¿Qué te gustaría hacer?</string>
     <string name="dictate_discard_changes">Descartar</string>
     <string name="dictate_save">Guardar</string>
     <string name="dictate_edit_prompt_name_hint">Introduce un nombre para este prompt</string>
-    <string name="dictate_edit_prompt_prompt_hint">Introduce aquí una instrucción sobre qué debe hacer el modelo GPT con tu texto.\n\nSi has seleccionado \"requiere selección de texto\", Dictate enviará automáticamente el texto que hayas seleccionado. Si no hay texto seleccionado, Dictate selecciona todo el campo antes de enviarlo.\n\nPara mostrar exactamente un texto concreto, añade [ y ] al principio y al final del prompt y se mostrará exactamente el texto dentro de los corchetes.</string>
+    <string name="dictate_edit_prompt_prompt_hint">Introduce aquí una instrucción sobre qué debe hacer el modelo GPT con tu texto.\n\nSi has seleccionado \"requiere selección de texto\", Dictate enviará automáticamente el texto que hayas seleccionado. Si no hay texto seleccionado, Dictate selecciona todo el campo antes de enviarlo.</string>
     <string name="dictate_edit_prompt">Editar prompt</string>
     <string name="dictate_prompts">Prompts</string>
     <string name="dictate_prompts_export_json">Exportar</string>

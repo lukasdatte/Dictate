@@ -134,12 +134,16 @@
     <string name="dictate_delete_prompt_message">Tem certeza de que deseja excluir este prompt?</string>
     <string name="dictate_requires_selection">Enviar o texto selecionado para reescrever</string>
     <string name="dictate_auto_apply">Aplicar automaticamente após a transcrição</string>
+    <string name="dictate_prompt_type_prompt">Prompt</string>
+    <string name="dictate_prompt_type_text">Texto</string>
+    <string name="dictate_prompt_type_label">Tipo de pill</string>
+    <string name="dictate_prompt_type_text_hint">Digite o texto exato a inserir. Esta pill insere o seu conteúdo 1:1 sem contactar a IA.</string>
     <string name="dictate_unsaved_changes_title">Descartar alterações?</string>
     <string name="dictate_unsaved_changes_message">Você tem alterações não salvas. O que deseja fazer?</string>
     <string name="dictate_discard_changes">Descartar</string>
     <string name="dictate_save">Salvar</string>
     <string name="dictate_edit_prompt_name_hint">Digite um nome para este prompt</string>
-    <string name="dictate_edit_prompt_prompt_hint">Digite aqui uma instrução sobre o que o modelo GPT deve fazer com o seu texto.\n\nSe você marcou \"requer seleção de texto\", o Dictate enviará automaticamente o texto selecionado. Se nada estiver selecionado, o Dictate seleciona todo o campo antes de enviar.\n\nPara imprimir exatamente um texto específico, adicione [ e ] ao início e ao fim do prompt e exatamente o texto dentro dos colchetes será exibido.</string>
+    <string name="dictate_edit_prompt_prompt_hint">Digite aqui uma instrução sobre o que o modelo GPT deve fazer com o seu texto.\n\nSe você marcou \"requer seleção de texto\", o Dictate enviará automaticamente o texto selecionado. Se nada estiver selecionado, o Dictate seleciona todo o campo antes de enviar.</string>
     <string name="dictate_edit_prompt">Editar prompt</string>
     <string name="dictate_prompts">Prompts</string>
     <string name="dictate_prompts_export_json">Exportar</string>

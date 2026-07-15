@@ -1,6 +1,7 @@
 package net.devemperor.dictate.companion
 
 import net.devemperor.dictate.companion.data.CompanionDatabase
+import net.devemperor.dictate.companion.data.memory.InMemoryChordMapping
 import net.devemperor.dictate.companion.data.memory.InMemorySettings
 import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
 import net.devemperor.dictate.companion.data.SqlDelightHistoryRepository
@@ -9,14 +10,17 @@ import net.devemperor.dictate.companion.domain.AuthService
 import net.devemperor.dictate.companion.domain.CompanionSettings
 import net.devemperor.dictate.companion.domain.DispatchService
 import net.devemperor.dictate.companion.domain.HealthService
+import net.devemperor.dictate.companion.domain.InputCommandService
 import net.devemperor.dictate.companion.domain.PairingService
 import net.devemperor.dictate.companion.domain.SyncService
 import net.devemperor.dictate.companion.domain.net.AddressCatalog
 import net.devemperor.dictate.companion.domain.port.AutostartManager
+import net.devemperor.dictate.companion.domain.port.ChordMappingRepository
 import net.devemperor.dictate.companion.domain.port.ClipboardPort
 import net.devemperor.dictate.companion.domain.port.ClockPort
 import net.devemperor.dictate.companion.domain.port.DeviceRepository
 import net.devemperor.dictate.companion.domain.port.HistoryRepository
+import net.devemperor.dictate.companion.domain.port.InputCommandPerformer
 import net.devemperor.dictate.companion.domain.port.NetworkInterfaces
 import net.devemperor.dictate.companion.domain.port.SettingsRepository
 import net.devemperor.dictate.companion.domain.port.TextInserter
@@ -26,6 +30,7 @@ import net.devemperor.dictate.companion.platform.PlatformModule
 import net.devemperor.dictate.companion.platform.SystemClock
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
 import net.devemperor.dictate.companion.platform.fallback.NoopClipboard
+import net.devemperor.dictate.companion.platform.fallback.NoopInputCommandPerformer
 import java.net.InetAddress
 import java.security.SecureRandom
 
@@ -42,6 +47,8 @@ class CompanionContainer(
     val history: HistoryRepository,
     settingsRepository: SettingsRepository,
     val inserter: TextInserter,
+    val inputPerformer: InputCommandPerformer,
+    val chordMapping: ChordMappingRepository,
     val clipboard: ClipboardPort,
     val autostart: AutostartManager,
     val clock: ClockPort,
@@ -57,8 +64,9 @@ class CompanionContainer(
     val pairingService = PairingService(devices, clock, serverName, random)
     val authService = AuthService(devices)
     val dispatchService = DispatchService(inserter, history, devices, clock)
+    val inputCommandService = InputCommandService(inputPerformer)
     val syncService = SyncService(history, clock)
-    val healthService = HealthService(serverName, appVersion, inserter)
+    val healthService = HealthService(serverName, appVersion, inserter, inputPerformer)
 
     companion object {
 
@@ -75,11 +83,16 @@ class CompanionContainer(
             platform: PlatformModule.Bindings = PlatformModule.detect(),
         ): CompanionContainer {
             val database = CompanionDatabase.open(AppPaths.databaseFile())
+            // §B stand-in: chords are in memory (defaults). §B2 replaces this with the SQLDelight
+            // repository so re-bound chords persist across restarts.
+            val chordMapping = InMemoryChordMapping()
             return CompanionContainer(
                 devices = SqlDelightDeviceRepository(database),
                 history = SqlDelightHistoryRepository(database),
                 settingsRepository = SqlDelightSettingsRepository(database),
                 inserter = platform.inserter,
+                inputPerformer = platform.inputPerformer(chordMapping),
+                chordMapping = chordMapping,
                 clipboard = platform.clipboard,
                 autostart = platform.autostart,
                 clock = SystemClock,
@@ -101,6 +114,8 @@ class CompanionContainer(
             devices: DeviceRepository,
             history: HistoryRepository,
             settingsRepository: SettingsRepository = InMemorySettings(),
+            chordMapping: ChordMappingRepository = InMemoryChordMapping(),
+            inputPerformer: InputCommandPerformer = NoopInputCommandPerformer,
             clipboard: ClipboardPort = NoopClipboard,
             autostart: AutostartManager = NoopAutostart,
             serverName: String = "test-pc",
@@ -111,6 +126,8 @@ class CompanionContainer(
             history = history,
             settingsRepository = settingsRepository,
             inserter = inserter,
+            inputPerformer = inputPerformer,
+            chordMapping = chordMapping,
             clipboard = clipboard,
             autostart = autostart,
             clock = clock,

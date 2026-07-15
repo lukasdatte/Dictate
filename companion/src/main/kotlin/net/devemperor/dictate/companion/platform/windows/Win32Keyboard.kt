@@ -7,13 +7,17 @@ import com.sun.jna.platform.win32.WinUser
 import com.sun.jna.platform.win32.WinUser.INPUT
 
 /**
- * The two raw Win32 calls the insertion needs — and **nothing else**.
+ * One raw `SendInput` primitive, plus a foreground probe — and **nothing else**.
  *
- * The seam exists so that the insertion *policy* (save the clipboard, write it, check for a
- * foreground window, inject, restore) is ordinary Kotlin that the Linux test suite exercises in
- * full, while the part that genuinely cannot run here — `user32.dll` — is reduced to two methods
- * with no branching in them. What is left un-run on Linux is exactly what the Windows checklist
- * covers, and no more.
+ * The seam exists so that every *policy* built on keyboard injection (the insertion's
+ * save-clipboard-write-inject-restore, and the input engine's chord resolution) is ordinary Kotlin
+ * that the Linux test suite exercises in full, while the part that genuinely cannot run here —
+ * `user32.dll` — is reduced to two methods with no branching in them. What is left un-run on Linux
+ * is exactly what the Windows checklist covers, and no more.
+ *
+ * `sendCtrlV` is kept as a named convenience (the insertion path is Ctrl+V and nothing else,
+ * ADR-0018) but is now just `sendKeySequence([CTRL_V_SEQUENCE])` — one injection primitive, one set
+ * of JNA gotchas, one place to fix them (DRY).
  */
 interface Win32Keyboard {
 
@@ -21,10 +25,20 @@ interface Win32Keyboard {
     fun hasForegroundWindow(): Boolean
 
     /**
+     * Injects an ordered list of key-down/up events into whatever has focus.
+     *
+     * The caller brackets modifiers itself (downs in order, the key, then ups in reverse) — this
+     * method just replays the list verbatim through one `SendInput` call.
+     *
+     * @return how many of the `events.size` events Windows accepted. Fewer means UIPI blocked part
+     * of the injection — see [JnaWin32Keyboard] for why that is a degradation, not an error.
+     */
+    fun sendKeySequence(events: List<KeyEventSpec>): Int
+
+    /**
      * Injects Ctrl+V into whatever has focus.
      *
-     * @return how many of the [CTRL_V_EVENT_COUNT] events Windows accepted. Fewer means the
-     * injection was blocked — see [JnaWin32Keyboard] for why that is not an error.
+     * @return how many of the [CTRL_V_EVENT_COUNT] events Windows accepted (see [sendKeySequence]).
      */
     fun sendCtrlV(): Int
 
@@ -33,6 +47,15 @@ interface Win32Keyboard {
         const val CTRL_V_EVENT_COUNT = 4
     }
 }
+
+/**
+ * One key event: a virtual-key code and whether this is the release (`keyUp`) or the press.
+ *
+ * Plain data on purpose — a chord is *built* into a `List<KeyEventSpec>` by pure, Linux-testable
+ * code (the insertion's [JnaWin32Keyboard.CTRL_V_SEQUENCE], the input engine's chord resolution),
+ * and only the final replay touches `user32.dll`.
+ */
+data class KeyEventSpec(val vk: Int, val keyUp: Boolean)
 
 /**
  * `SendInput` against `user32.dll`, via JNA.
@@ -66,15 +89,28 @@ object JnaWin32Keyboard : Win32Keyboard {
     private const val VK_CONTROL = 0x11
     private const val VK_V = 0x56
 
+    /**
+     * The Ctrl+V event list — the single source of truth for the insertion's key sequence.
+     *
+     * Extracted to a constant so the sequence is unit-testable on Linux (`SendInput` is not) and so
+     * [sendCtrlV] is literally `sendKeySequence(CTRL_V_SEQUENCE)` — no second hand-rolled event loop.
+     */
+    val CTRL_V_SEQUENCE: List<KeyEventSpec> = listOf(
+        KeyEventSpec(VK_CONTROL, keyUp = false),
+        KeyEventSpec(VK_V, keyUp = false),
+        KeyEventSpec(VK_V, keyUp = true),
+        KeyEventSpec(VK_CONTROL, keyUp = true),
+    )
+
     override fun hasForegroundWindow(): Boolean = User32.INSTANCE.GetForegroundWindow() != null
 
-    override fun sendCtrlV(): Int {
-        val inputs = INPUT().toArray(Win32Keyboard.CTRL_V_EVENT_COUNT).map { it as INPUT }
+    override fun sendCtrlV(): Int = sendKeySequence(CTRL_V_SEQUENCE)
 
-        keyEvent(inputs[0], VK_CONTROL, keyUp = false)
-        keyEvent(inputs[1], VK_V, keyUp = false)
-        keyEvent(inputs[2], VK_V, keyUp = true)
-        keyEvent(inputs[3], VK_CONTROL, keyUp = true)
+    override fun sendKeySequence(events: List<KeyEventSpec>): Int {
+        if (events.isEmpty()) return 0
+
+        val inputs = INPUT().toArray(events.size).map { it as INPUT }
+        events.forEachIndexed { i, event -> keyEvent(inputs[i], event.vk, event.keyUp) }
 
         val accepted = User32.INSTANCE.SendInput(
             WinDef.DWORD(inputs.size.toLong()),

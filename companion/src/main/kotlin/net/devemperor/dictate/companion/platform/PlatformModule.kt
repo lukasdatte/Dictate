@@ -2,11 +2,16 @@ package net.devemperor.dictate.companion.platform
 
 import com.sun.jna.Platform
 import net.devemperor.dictate.companion.domain.port.AutostartManager
+import net.devemperor.dictate.companion.domain.port.ChordMappingRepository
 import net.devemperor.dictate.companion.domain.port.ClipboardPort
+import net.devemperor.dictate.companion.domain.port.InputCommandPerformer
 import net.devemperor.dictate.companion.domain.port.TextInserter
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
+import net.devemperor.dictate.companion.platform.fallback.NoopInputCommandPerformer
 import net.devemperor.dictate.companion.platform.fallback.NoopTextInserter
 import net.devemperor.dictate.companion.platform.windows.AwtClipboard
+import net.devemperor.dictate.companion.platform.windows.JnaWin32Keyboard
+import net.devemperor.dictate.companion.platform.windows.Win32InputPerformer
 import net.devemperor.dictate.companion.platform.windows.Win32TextInserter
 import net.devemperor.dictate.companion.platform.windows.WinRegistryAutostart
 
@@ -27,6 +32,12 @@ object PlatformModule {
         val inserter: TextInserter,
         val clipboard: ClipboardPort,
         val autostart: AutostartManager,
+        /**
+         * A **factory**, not an instance: the input performer resolves chords through a
+         * [ChordMappingRepository], and that repository is owned by the container (DB-backed, §B2) —
+         * not knowable at OS-detection time. The container hands its repository in here.
+         */
+        val inputPerformer: (ChordMappingRepository) -> InputCommandPerformer,
     )
 
     fun detect(): Bindings = if (Platform.isWindows()) windows() else fallback()
@@ -34,10 +45,13 @@ object PlatformModule {
     private fun windows(): Bindings {
         val clipboard = AwtClipboard()
         val executable = WinRegistryAutostart.currentExecutable()
+        val inserter = Win32TextInserter(clipboard)
 
         return Bindings(
-            inserter = Win32TextInserter(clipboard),
+            inserter = inserter,
             clipboard = clipboard,
+            // Reuses the same Ctrl+V inserter for TYPE_TEXT — one insertion path, one set of gotchas.
+            inputPerformer = { chords -> Win32InputPerformer(JnaWin32Keyboard, inserter, chords) },
             // No resolvable executable path (an exotic launcher, a JVM started by hand) means there
             // is nothing honest to put in the Run key — so the toggle reports "not supported" rather
             // than writing a command line that would fail silently at the next login.
@@ -56,5 +70,6 @@ object PlatformModule {
         inserter = NoopTextInserter,
         clipboard = AwtClipboard(),
         autostart = NoopAutostart,
+        inputPerformer = { NoopInputCommandPerformer },
     )
 }

@@ -11,6 +11,7 @@ import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import net.devemperor.dictate.companion.platform.AdvertisedAddress
 import net.devemperor.dictate.companion.server.CompanionServer
 import net.devemperor.dictate.companion.ui.App
 import net.devemperor.dictate.companion.ui.CompanionIcon
@@ -61,7 +62,9 @@ fun main(args: Array<String>) = application {
         state = rememberWindowState(width = 980.dp, height = 680.dp),
     ) {
         if (receiving) {
-            App(container) { "http://${container.serverName}:${server.boundPort()}" }
+            // The QR must carry an address the PHONE can reach — the Tailscale IP, not the AD
+            // hostname the phone cannot resolve. serverName stays the human-facing display name.
+            App(container) { "http://${AdvertisedAddress.detect { container.serverName }}:${server.boundPort()}" }
         } else {
             MaterialTheme { Text("Receiving is paused. Resume it from the tray menu.") }
         }

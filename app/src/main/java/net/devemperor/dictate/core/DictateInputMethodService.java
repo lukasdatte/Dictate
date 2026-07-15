@@ -2874,6 +2874,16 @@ public class DictateInputMethodService extends InputMethodService
                 vibrate();
                 PromptEntity model = promptsAdapter.getItem(position);
 
+                // Text pills insert their literal content 1:1 in EVERY state
+                // (idle, recording, pipeline-busy, reprocess-staging) — no AI, no
+                // queue. This is the single click-routing decision for text pills;
+                // it intentionally precedes the staging/recording branches so none
+                // of them can turn the literal text into an AI instruction.
+                if (model.getTypeEnum() == PromptType.TEXT) {
+                    insertTextPill(model);
+                    return;
+                }
+
                 // ReprocessStaging: prompt clicks toggle into/out of the editable queue.
                 // Phase 5.B: phase comes from the orchestrator state, not the (now-reactive) renderer.
                 net.devemperor.dictate.state.PipelineUiState currentState = getPipelinePhase();
@@ -2940,14 +2950,22 @@ public class DictateInputMethodService extends InputMethodService
 
             @Override
             public void onTextOnlyItemApplyRequested(Integer position) {
-                // Long-press on a greyed (recording/pipeline-busy) text-only pill:
-                // apply it exactly as an idle short-press would. Text-only pills are
-                // requiresSelection == false by definition, so the standalone
-                // orchestrator path is the full enabled behaviour — there is no
-                // selection step and no queue-toggle branch to reuse here.
+                // Long-press on a greyed (recording/pipeline-busy) AI prompt pill:
+                // apply it exactly as an idle short-press would. Text-only prompt
+                // pills are requiresSelection == false by definition, so the
+                // standalone orchestrator path is the full enabled behaviour —
+                // there is no selection step and no queue-toggle branch to reuse.
                 PromptEntity model = promptsAdapter.getItem(position);
                 if (model == null || model.getId() < 0) return;
                 vibrate();
+                // Defensive: a TEXT pill is never greyed (so this callback is not
+                // reachable for it), but if one ever arrives here, insert it
+                // pipeline-free rather than through the orchestrator — the latter's
+                // onPipelineFinished would clearCurrent a running pipeline (§1.3).
+                if (model.getTypeEnum() == PromptType.TEXT) {
+                    insertTextPill(model);
+                    return;
+                }
                 runStandalonePromptViaOrchestrator(model);
             }
         });
@@ -4742,6 +4760,29 @@ public class DictateInputMethodService extends InputMethodService
      * Prepares UI and launches a standalone prompt via PipelineOrchestrator.
      * Replaces the old startGPTApiRequest(model) method.
      */
+    /**
+     * Inserts a text pill's literal content ({@link PromptType#TEXT}) 1:1 into
+     * the host field, bypassing the pipeline entirely.
+     *
+     * <p>A text pill is a literal snippet, not a pipeline output, so it must NOT
+     * travel through the orchestrator's {@code onPipelineCompleted} /
+     * {@code onPipelineFinished} callbacks: {@code onPipelineFinished} calls
+     * {@code sessionTracker.clearCurrent()}, which would wipe the session
+     * tracking of a pipeline that happens to be running when the pill is tapped
+     * (plan §1.3 latent bug). Going direct also side-steps the Windows-divert
+     * gate, which never applies to a text pill anyway.</p>
+     *
+     * <p>{@link InsertionSource#STATIC_PROMPT} is kept as the audit classifier
+     * (unchanged from the former static-response path); {@link InsertionPolicy#PIPELINE}
+     * reproduces the historical commit behaviour (animated, host-guarded, audited).</p>
+     */
+    private void insertTextPill(PromptEntity model) {
+        String text = model.getPrompt();
+        if (text == null) text = "";
+        insertionService().insert(new InsertionRequest(
+                text, InsertionSource.STATIC_PROMPT, InsertionPolicy.PIPELINE, null, null));
+    }
+
     private void runStandalonePromptViaOrchestrator(PromptEntity model) {
         // Determine selected text (must be read on main thread)
         CharSequence selectedText = null;
@@ -5056,7 +5097,7 @@ public class DictateInputMethodService extends InputMethodService
                 //
                 // Source-aware (Block C / guards 27b91b3): only genuine DICTATION output
                 // (TRANSCRIPTION / REWORDING / QUEUED_PROMPT / PENDING_PART) is diverted.
-                // A STATIC_PROMPT completion (a long-pressed text-only pill) is NOT dictation
+                // A STATIC_PROMPT completion (a text pill, PromptType.TEXT) is NOT dictation
                 // — shouldDivertToPc returns false for it, so it falls through to the host
                 // commit below and is inserted 1:1 locally. (The review→PC route at
                 // onReviewInsertClicked still uses isWindowsAutoSendActive() — a reviewed

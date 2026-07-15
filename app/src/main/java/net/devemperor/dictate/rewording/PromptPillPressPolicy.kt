@@ -1,5 +1,7 @@
 package net.devemperor.dictate.rewording
 
+import net.devemperor.dictate.database.entity.PromptType
+
 /**
  * Press-type gate for the keyboard prompt pills (the chip row above the
  * keyboard). Kept as a pure function so the "which press type does what
@@ -26,7 +28,7 @@ package net.devemperor.dictate.rewording
  * disabled look via alpha only, and routes the short/long press through
  * this policy instead.
  *
- * Behaviour matrix:
+ * Behaviour matrix (AI `PROMPT` pills — the pre-existing behaviour):
  *
  * | press | textOnlyDisabled | outcome          |
  * |-------|------------------|------------------|
@@ -35,9 +37,9 @@ package net.devemperor.dictate.rewording
  * | LONG  | false            | [EDIT]           |
  * | LONG  | true             | [APPLY_DISABLED] |
  *
- * The `textOnlyDisabled == false` column is exactly the pre-existing
- * behaviour (short = run/queue, long = edit); only the greyed column is
- * new.
+ * `TEXT` pills (literal snippets, `PromptType.TEXT`) ignore `textOnlyDisabled`
+ * entirely: SHORT → [ACTIVATE] (insert 1:1 in every state), LONG → [EDIT].
+ * They are never greyed out, so the busy-state column does not apply.
  */
 enum class PromptPillPress { SHORT, LONG }
 
@@ -64,11 +66,24 @@ enum class PromptPillAction {
 object PromptPillPressPolicy {
 
     @JvmStatic
-    fun decide(press: PromptPillPress, textOnlyDisabled: Boolean): PromptPillAction =
-        when (press) {
-            PromptPillPress.SHORT ->
-                if (textOnlyDisabled) PromptPillAction.IGNORE else PromptPillAction.ACTIVATE
-            PromptPillPress.LONG ->
-                if (textOnlyDisabled) PromptPillAction.APPLY_DISABLED else PromptPillAction.EDIT
+    fun decide(
+        press: PromptPillPress,
+        textOnlyDisabled: Boolean,
+        pillType: PromptType,
+    ): PromptPillAction =
+        when (pillType) {
+            // Text pills insert their literal content in every state — the
+            // busy-state greying never applies. Short = insert, long = edit.
+            PromptType.TEXT -> when (press) {
+                PromptPillPress.SHORT -> PromptPillAction.ACTIVATE
+                PromptPillPress.LONG -> PromptPillAction.EDIT
+            }
+            // AI prompt pills keep the pre-existing press-vs-greyed matrix.
+            PromptType.PROMPT -> when (press) {
+                PromptPillPress.SHORT ->
+                    if (textOnlyDisabled) PromptPillAction.IGNORE else PromptPillAction.ACTIVATE
+                PromptPillPress.LONG ->
+                    if (textOnlyDisabled) PromptPillAction.APPLY_DISABLED else PromptPillAction.EDIT
+            }
         }
 }

@@ -28,10 +28,11 @@ object WindowsAutoSend {
      *
      * Auto-send is a *dictation* feature: a transcript (optionally reworded / queue-processed)
      * goes to the PC. A [InsertionSource.STATIC_PROMPT] completion is NOT dictation — it is the
-     * literal text of a long-pressed text-only pill that the user wants inserted 1:1 into the
+     * literal text of a text pill (PromptType.TEXT) that the user wants inserted 1:1 into the
      * host field. Diverting it would make the text vanish locally (the IME divert branch also
      * skips the pending-part fallback). So STATIC_PROMPT is never diverted; every genuine
-     * dictation output is (guards commit 27b91b3).
+     * dictation output is (guards commit 27b91b3). (Text pills normally insert pipeline-free and
+     * never reach this gate; the classifier stays source-aware for the defensive fallback path.)
      */
     fun shouldDivertToPc(source: InsertionSource, sp: SharedPreferences): Boolean =
         shouldAutoSend(sp) && source.isDictationOutput()
@@ -41,7 +42,7 @@ object WindowsAutoSend {
      * (no `else`) so a new source must be classified deliberately at compile time.
      */
     private fun InsertionSource.isDictationOutput(): Boolean = when (this) {
-        InsertionSource.STATIC_PROMPT -> false // pure text-only pill → always inserted locally
+        InsertionSource.STATIC_PROMPT -> false // literal text pill (PromptType.TEXT) → always inserted locally
         InsertionSource.TRANSCRIPTION,
         InsertionSource.REWORDING,
         InsertionSource.QUEUED_PROMPT,

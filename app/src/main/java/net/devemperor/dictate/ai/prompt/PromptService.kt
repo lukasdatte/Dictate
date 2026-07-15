@@ -58,13 +58,9 @@ class PromptService(
         return PromptPair(builder.build(), systemPromptResolver.resolve(PromptContext.QUEUED))
     }
 
-    // ── Kontext 6: Static Response [text] ──
-
-    fun isStaticResponse(prompt: String?): Boolean =
-        prompt != null && prompt.startsWith("[") && prompt.endsWith("]")
-
-    fun extractStaticResponse(prompt: String): String =
-        prompt.substring(1, prompt.length - 1)
+    // Static "[text]" pills are no longer recognised by string format — the pill
+    // kind is an explicit PromptType.TEXT column since schema v11. Text pills are
+    // inserted pipeline-free by the service (see DictateInputMethodService.insertTextPill).
 
     companion object {
         @JvmStatic

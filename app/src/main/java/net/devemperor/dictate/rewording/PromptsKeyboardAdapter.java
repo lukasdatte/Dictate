@@ -268,8 +268,15 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
         // is rendered via alpha only; the short/long press is gated through
         // PromptPillPressPolicy in the listeners below so a long-press still
         // applies the pill while a short-press stays inert.
+        // Text pills (PromptType.TEXT) are literal snippets that insert 1:1 with
+        // no AI call — they are safe in every state, so they are NEVER greyed out.
+        // Only AI prompt pills that don't require a selection get the busy-state
+        // greying (short-press inert, long-press applies).
+        final boolean isTextPill =
+                model.getTypeEnum() == net.devemperor.dictate.database.entity.PromptType.TEXT;
         final boolean textOnlyDisabled =
-                disableNonSelectionPrompts && model.getId() >= 0 && !model.getRequiresSelection();
+                disableNonSelectionPrompts && model.getId() >= 0
+                        && !model.getRequiresSelection() && !isTextPill;
         holder.promptBtn.setEnabled(true);
         holder.promptBtn.setAlpha(textOnlyDisabled ? 0.5f : 1f);
         if (model.getId() >= 0) {
@@ -282,14 +289,14 @@ public class PromptsKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.Vi
         }
         final int dataPos = toDataIndex(position);
         holder.promptBtn.setOnClickListener(v -> {
-            if (PromptPillPressPolicy.decide(PromptPillPress.SHORT, textOnlyDisabled)
+            if (PromptPillPressPolicy.decide(PromptPillPress.SHORT, textOnlyDisabled, model.getTypeEnum())
                     == PromptPillAction.ACTIVATE) {
                 callback.onItemClicked(dataPos);
             }
             // IGNORE (greyed text-only pill) → short press stays inert.
         });
         holder.promptBtn.setOnLongClickListener(v -> {
-            if (PromptPillPressPolicy.decide(PromptPillPress.LONG, textOnlyDisabled)
+            if (PromptPillPressPolicy.decide(PromptPillPress.LONG, textOnlyDisabled, model.getTypeEnum())
                     == PromptPillAction.APPLY_DISABLED) {
                 callback.onTextOnlyItemApplyRequested(dataPos);
             } else {

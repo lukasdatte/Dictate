@@ -33,4 +33,6 @@
       keyboard backgrounds with white button text.
     -->
     <color name="dictate_pc_mode">#7E57C2</color>
+    <!-- pc-dictation-activity: failure banner background (send-to-PC error surface). -->
+    <color name="dictate_error_banner_bg">#C62828</color>
 </resources>

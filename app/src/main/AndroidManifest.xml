@@ -183,6 +183,54 @@
         </activity-alias>
 
         <!--
+            PC-dictation Activity (pc-dictation-activity) — the full-screen "remote keyboard for the
+            PC" surface (keyboard grid + history; every output diverts to the paired PC). Not
+            exported: reached only via its own trampoline / alias / the keyboard's PC long-press.
+        -->
+        <activity
+            android:name=".core.PcDictationActivity"
+            android:exported="false"
+            android:label="@string/pc_dictation_label"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!--
+            Invisible trampoline behind the external PC-dictation entry points (alias + shortcut).
+            Mirrors StartDictationActivity: one precondition gate (mic + pairing), then routes.
+        -->
+        <activity
+            android:name=".core.StartPcDictationActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:icon="@mipmap/ic_dictation"
+            android:label="@string/pc_dictation_label"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="net.devemperor.dictate.OPEN_PC_DICTATION" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Third launcher entry "PC Dictation" (pc-dictation-activity), next to "Dictate" and
+            "Dictation". Funnels into StartPcDictationActivity. Never rename this component —
+            launchers drop pinned positions for renamed aliases.
+        -->
+        <activity-alias
+            android:name=".core.PcDictation"
+            android:exported="true"
+            android:icon="@mipmap/ic_dictation"
+            android:label="@string/pc_dictation_label"
+            android:targetActivity=".core.StartPcDictationActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!--
             Quick-Settings tile "Dictation" (third external trigger; same
             StartDictationActivity funnel). BIND_QUICK_SETTINGS_TILE is
             mandatory — without it the system never binds the tile.

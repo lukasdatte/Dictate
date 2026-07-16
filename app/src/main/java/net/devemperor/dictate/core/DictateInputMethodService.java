@@ -6677,7 +6677,18 @@ public class DictateInputMethodService extends InputMethodService
     /** PC button long-press — the pairing screen, paired or not. */
     @Override
     public void onPcLongClicked() {
-        openWindowsPairingActivity();
+        // pc-dictation-activity: repurpose the PC-key long-press. Paired → open the full-screen
+        // PC-dictation Activity (a "remote keyboard for the PC"); unpaired → keep opening pairing
+        // (there is no PC to dictate to yet). Activity-start from the IME MUST go through
+        // ImeActivityLauncher (NEW_TASK+CLEAR_TOP, see its KDoc) so a stale task is not resurrected.
+        boolean paired = sp != null
+                && net.devemperor.dictate.preferences.WindowsTarget.from(sp) != null;
+        if (paired) {
+            startActivity(ImeActivityLauncher.INSTANCE.intentFor(
+                    this, net.devemperor.dictate.core.PcDictationActivity.class));
+        } else {
+            openWindowsPairingActivity();
+        }
     }
 
     /**

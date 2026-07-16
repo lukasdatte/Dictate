@@ -25,4 +25,20 @@
             android:targetPackage="net.devemperor.dictate"
             android:targetClass="net.devemperor.dictate.core.StartDictationActivity" />
     </shortcut>
+    <!--
+        PC-dictation shortcut (pc-dictation-activity) — opens the full-screen "dictate to PC"
+        surface. GOTCHA (same as above): targetPackage is a LITERAL applicationId; the debug
+        variant at src/debug/res/xml/shortcuts.xml carries the ".debug" copy — keep BOTH in sync.
+    -->
+    <shortcut
+        android:shortcutId="pc_dictation"
+        android:enabled="true"
+        android:icon="@mipmap/ic_dictation"
+        android:shortcutShortLabel="@string/pc_dictation_label"
+        android:shortcutLongLabel="@string/pc_dictation_long_label">
+        <intent
+            android:action="net.devemperor.dictate.OPEN_PC_DICTATION"
+            android:targetPackage="net.devemperor.dictate"
+            android:targetClass="net.devemperor.dictate.core.StartPcDictationActivity" />
+    </shortcut>
 </shortcuts>

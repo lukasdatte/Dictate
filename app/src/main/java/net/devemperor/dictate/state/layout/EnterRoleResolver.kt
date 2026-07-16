@@ -155,6 +155,14 @@ fun resolveEnterIcon(state: DictateUiState): Int {
  * is `false` — the IME-View is not on screen so a commit/Enter would
  * land in the wrong target.
  *
+ * **pc-dictation-activity exception (F1):** in PC-only mode there is no
+ * local host at all, but the key is NOT dead — the reducer's `EnterKey`
+ * effect (`PerformEnter` / `SendPhysicalEnter`) both map to
+ * `ControlOp.Enter`/`PhysicalEnter`, which `PcInputCommandMapper` routes
+ * to the PC's ENTER. So `pcOnly` opens the gate: ENTER reaches the paired
+ * PC instead of being suppressed. (Without this the Activity's ENTER was
+ * a dead key while ADR-0027 promised "routes to PC".)
+ *
  * The Action itself is always [Action.KeyboardInputAction.EnterKey];
  * the role-derivation happens inside `KeyboardInputModule`'s reducer
  * so the Catalog and the Module agree on a single decision point
@@ -164,6 +172,6 @@ fun resolveEnterAction(
     state: DictateUiState,
     @Suppress("UNUSED_PARAMETER") services: ModuleServices,
 ): Action? {
-    if (!state.canCommitToHost) return null
+    if (!state.canCommitToHost && !state.features.pcOnly) return null
     return Action.KeyboardInputAction.EnterKey
 }

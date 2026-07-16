@@ -257,8 +257,13 @@ fun resolveRecordLongPressAction(
 fun resolveRecordActionPipeline(
     state: DictateUiState,
     @Suppress("UNUSED_PARAMETER") services: ModuleServices,
-): Action? =
-    when (state.pipeline) {
+): Action? {
+    // pc-dictation-activity (F11): auto-enter presses Enter in a local host AFTER inserting the
+    // transcript — but in PC-only mode the transcript is dispatched to the PC, never a host, so the
+    // per-run auto-enter toggle has no effect. Gate it: a tap-while-running is a no-op rather than a
+    // silent, PC-less toggle. (Consistent with the AutoEnter decoration never lighting in pcOnly.)
+    if (state.features.pcOnly) return null
+    return when (state.pipeline) {
         // Per-run auto-enter toggle — distinct from
         // FeatureToggleAction.ToggleAutoEnter (which would flip the
         // global Pref.AutoEnter). The in-pipeline toggle must NOT
@@ -275,6 +280,7 @@ fun resolveRecordActionPipeline(
         is PipelineUiState.Running -> Action.PipelineAction.ToggleRunningAutoEnter
         else -> null
     }
+}
 
 /**
  * Trash-button click resolver.

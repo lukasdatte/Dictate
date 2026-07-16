@@ -36,6 +36,12 @@ class KeyboardHistoryAdapter(
      * keeps the button out of an unpaired install's layout (ADR-0019 / ADR-0014 §6).
      */
     private val windowsTargetPaired: Boolean = false,
+    /**
+     * Whether the per-row "Insert" action is shown (pc-dictation-activity F9). The IME shows it
+     * (default); the PC-dictation Activity hides it — there is no local field to insert into, only
+     * "Send to PC". GONE keeps the row layout stable.
+     */
+    private val showInsertButton: Boolean = true,
 ) : PagingDataAdapter<SessionEntity, KeyboardHistoryAdapter.ViewHolder>(DIFF_CALLBACK) {
 
     interface Callback {
@@ -84,9 +90,15 @@ class KeyboardHistoryAdapter(
         holder.itemView.setOnClickListener { callback.onOpenDetail(session) }
 
         val hasText = session.hasInsertableText()
+        // F9: the Activity hides Insert (no local field) — only "Send to PC" remains.
+        holder.insertButton.visibility = if (showInsertButton) View.VISIBLE else View.GONE
         holder.insertButton.isEnabled = hasText
         holder.insertButton.setOnClickListener(
-            if (hasText) View.OnClickListener { callback.onInsert(session, pending) } else null
+            if (hasText && showInsertButton) {
+                View.OnClickListener { callback.onInsert(session, pending) }
+            } else {
+                null
+            }
         )
 
         // The reserved second action (ADR-0019): only present once a PC is paired, and — like

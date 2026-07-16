@@ -13,6 +13,7 @@ import androidx.constraintlayout.motion.widget.MotionLayout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.paging.LoadState
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
@@ -21,6 +22,8 @@ import net.devemperor.dictate.R
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.database.entity.SessionEntity
 import net.devemperor.dictate.database.entity.SessionOrigin
+import net.devemperor.dictate.history.HistoryActivity
+import net.devemperor.dictate.history.HistoryDetailActivity
 import net.devemperor.dictate.history.KeyboardHistoryAdapter
 import net.devemperor.dictate.history.KeyboardHistoryController
 import net.devemperor.dictate.history.KeyboardHistoryPager
@@ -29,8 +32,10 @@ import net.devemperor.dictate.preferences.AmbiguityMode
 import net.devemperor.dictate.preferences.LanguageResolver
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.settings.WindowsPairingActivity
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DispatchNotice
+import net.devemperor.dictate.state.PipelineErrorKind
 import net.devemperor.dictate.state.RecordingState
 import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
 import net.devemperor.dictate.state.layout.LogicalButtonId
@@ -97,6 +102,7 @@ class PcDictationActivity : AppCompatActivity() {
     private var historyController: KeyboardHistoryController? = null
     private var historyAdapter: KeyboardHistoryAdapter? = null
     private var noticeJob: kotlinx.coroutines.Job? = null
+    private var historyEmptyJob: kotlinx.coroutines.Job? = null
 
     /**
      * Whether the Activity currently holds the resumed (focused) state. The PC-only divert flag is
@@ -117,6 +123,13 @@ class PcDictationActivity : AppCompatActivity() {
     private lateinit var retryBtn: MaterialButton
     private lateinit var historyRv: RecyclerView
     private lateinit var historyEmptyTv: View
+    private lateinit var reviewHintTv: View
+
+    /** The session the banner's retry re-sends (F12/cleanup: a typed field, not `errorBanner.tag`). */
+    private var retrySessionId: String? = null
+
+    /** True when the current banner is an UNAUTHORIZED error → the button re-pairs, not retries. */
+    private var bannerUnauthorized = false
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -139,7 +152,8 @@ class PcDictationActivity : AppCompatActivity() {
         retryBtn = findViewById(R.id.pc_dictation_retry_btn)
         historyRv = findViewById(R.id.pc_dictation_history_rv)
         historyEmptyTv = findViewById(R.id.pc_dictation_history_empty_tv)
-        retryBtn.setOnClickListener { onRetryClicked() }
+        reviewHintTv = findViewById(R.id.pc_dictation_review_hint_tv)
+        retryBtn.setOnClickListener { onBannerActionClicked() }
     }
 
     override fun onStart() {
@@ -196,17 +210,32 @@ class PcDictationActivity : AppCompatActivity() {
         pcKeyboardActions = dispatcher
         b.registerForegroundKeyboardActionsProvider { pcKeyboardActions }
 
+        // F8: a stale-open in-keyboard history panel would make LayoutCatalog swap the grid for a
+        // panel the Activity does not render → a blank keyboard. Close it on attach (idempotent).
+        b.dispatch(Action.HistoryPanelAction.Close)
+
         attachBackend(b)
         wireHistory(b)
 
-        // The error banner is driven by state.windowsDispatch.notice. Collected here (once bound)
-        // rather than through the shared render manager, which owns the keyboard grid. repeatOnLifecycle
+        // The error banner + review-open hint are driven by state. Collected here (once bound) rather
+        // than through the shared render manager, which owns the keyboard grid. repeatOnLifecycle
         // keeps it STARTED-scoped; the job is cancelled in teardownBackend().
         noticeJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                b.state.collect { renderNotice(it.windowsDispatch.notice) }
+                b.state.collect { state ->
+                    renderNotice(state.windowsDispatch.notice)
+                    renderReviewHint(state.reviewPanel.open)
+                }
             }
         }
+    }
+
+    /**
+     * F8: a review panel open in the store hides every grid slot (review is IME-only, ADR-0013). Show
+     * a hint over the keyboard instead of a dead blank, pointing the user back to the IME.
+     */
+    private fun renderReviewHint(reviewOpen: Boolean) {
+        reviewHintTv.visibility = if (reviewOpen) View.VISIBLE else View.GONE
     }
 
     private fun attachBackend(b: DictatePipelineService.LocalBinder) {
@@ -344,6 +373,8 @@ class PcDictationActivity : AppCompatActivity() {
         recordingAnimation = null
         noticeJob?.cancel()
         noticeJob = null
+        historyEmptyJob?.cancel()
+        historyEmptyJob = null
         historyController?.onViewDestroyed()
         historyController = null
         historyAdapter = null
@@ -366,11 +397,18 @@ class PcDictationActivity : AppCompatActivity() {
                 }
 
                 override fun onOpenDetail(session: SessionEntity) {
-                    // The in-keyboard detail panel is an IME-surface concern; no-op here.
+                    // F9: row-tap opens the standalone full-text detail screen (reuses the app's
+                    // HistoryDetailActivity — the in-keyboard detail panel is an IME-surface concern).
+                    startActivity(
+                        Intent(this@PcDictationActivity, HistoryDetailActivity::class.java)
+                            .putExtra(HistoryActivity.EXTRA_SESSION_ID, session.id),
+                    )
                 }
             },
             // Paired is a precondition for entering the Activity, so the per-row send slot is shown.
             windowsTargetPaired = true,
+            // F9: no local field here — hide Insert, only "Send to PC" remains.
+            showInsertButton = false,
         )
         historyRv.adapter = adapter
         historyAdapter = adapter
@@ -378,6 +416,21 @@ class PcDictationActivity : AppCompatActivity() {
         controller.onViewCreated()
         controller.onPanelOpen()
         historyController = controller
+
+        // F14: empty-state text follows the adapter's load state (mirrors HistoryActivity). Cancelled
+        // with the notice collector via `noticeJob`'s scope is not possible (different lifecycle), so
+        // its own job is cancelled in teardownBackend().
+        historyEmptyJob = lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                adapter.loadStateFlow.collect { loadState ->
+                    if (loadState.refresh is LoadState.NotLoading) {
+                        val empty = adapter.itemCount == 0
+                        historyEmptyTv.visibility = if (empty) View.VISIBLE else View.GONE
+                        historyRv.visibility = if (empty) View.GONE else View.VISIBLE
+                    }
+                }
+            }
+        }
     }
 
     private fun sendToPc(session: SessionEntity, pending: Boolean) {
@@ -408,22 +461,39 @@ class PcDictationActivity : AppCompatActivity() {
     private fun renderNotice(notice: DispatchNotice?) {
         when (notice) {
             is DispatchNotice.Error -> {
-                errorTv.setText(R.string.pc_dictation_send_failed)
-                retryBtn.visibility = if (notice.sessionId != null) View.VISIBLE else View.GONE
+                // F12: differentiate by kind. UNAUTHORIZED (lost/invalid pairing) → a retry would
+                // just fail again, so the button re-pairs; every other error offers a retry when the
+                // failed session is known.
+                bannerUnauthorized = notice.kind == PipelineErrorKind.WINDOWS_UNAUTHORIZED
+                retrySessionId = notice.sessionId
+                errorTv.setText(
+                    if (bannerUnauthorized) R.string.dictate_windows_unauthorized_msg
+                    else R.string.pc_dictation_send_failed,
+                )
+                retryBtn.setText(
+                    if (bannerUnauthorized) R.string.pc_dictation_repair else R.string.pc_dictation_retry,
+                )
+                retryBtn.visibility =
+                    if (bannerUnauthorized || retrySessionId != null) View.VISIBLE else View.GONE
                 errorBanner.visibility = View.VISIBLE
-                errorBanner.tag = notice.sessionId
             }
             else -> {
                 errorBanner.visibility = View.GONE
-                errorBanner.tag = null
+                retrySessionId = null
+                bannerUnauthorized = false
             }
         }
     }
 
-    private fun onRetryClicked() {
+    private fun onBannerActionClicked() {
         val b = binder ?: return
-        val sid = errorBanner.tag as? String ?: return
         b.dispatch(Action.WindowsDispatchAction.DismissNotice)
+        if (bannerUnauthorized) {
+            // Re-pair instead of a doomed retry.
+            startActivity(Intent(this, WindowsPairingActivity::class.java))
+            return
+        }
+        val sid = retrySessionId ?: return
         dbExecutor.execute {
             val text = b.sessionManager.getFinalOutput(sid) ?: return@execute
             val session = b.sessionManager.getSessionById(sid)

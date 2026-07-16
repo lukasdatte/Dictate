@@ -101,4 +101,23 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <!-- F8: when a review panel is open in the store, LayoutCatalog hides every grid slot (the review
+         panel is IME-only, ADR-0013) — the Activity would render a blank keyboard. This hint takes the
+         keyboard's place and points the user back to the IME instead of a dead end. GONE by default. -->
+    <TextView
+        android:id="@+id/pc_dictation_review_hint_tv"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:gravity="center"
+        android:padding="24dp"
+        android:background="?attr/colorSurface"
+        android:textAppearance="?attr/textAppearanceBodyLarge"
+        android:text="@string/pc_dictation_review_open"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="@id/pc_dictation_keyboard"
+        app:layout_constraintBottom_toBottomOf="@id/pc_dictation_keyboard"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        tools:visibility="visible" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>

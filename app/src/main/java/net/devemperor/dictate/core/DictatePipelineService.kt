@@ -934,7 +934,12 @@ class DictatePipelineService : Service() {
                 // a "Tap to paste" pending part — text commit stays
                 // IME-exclusive (ADR-0011).
                 val text = sessionManagerImpl.getFinalOutput(sessionId) ?: callbackText
-                if (WindowsAutoSend.shouldAutoSend(sharedPrefs)) {
+                // pc-dictation-activity: the PC-only terminal mode diverts EVERY headless completion
+                // to the PC, independent of the persistent auto-send toggle. `pcOnly` is the
+                // Activity-foreground fact (state.features.pcOnly); a failure in this mode surfaces
+                // no local pending part (there is no IME host) — suppressPendingFallback carries that.
+                val pcOnly = store.snapshot.features.pcOnly
+                if (WindowsAutoSend.shouldAutoSend(sharedPrefs) || pcOnly) {
                     // D1 / ADR-0019 — the SECOND auto-send producer. Same predicate, same
                     // primitive as the IME seam (§3.6). The guard is ALREADY consumed by the
                     // bridge at this point (PipelineCallbackBridge, headless arm), so exactly-once
@@ -962,6 +967,7 @@ class DictatePipelineService : Service() {
                         ),
                         acknowledgeOnSuccess = true,
                         surfacedAsPending = false,
+                        suppressPendingFallback = pcOnly,
                     )
                 } else {
                     // UNCHANGED — the existing committed=false → pending-part path (ADR-0011).

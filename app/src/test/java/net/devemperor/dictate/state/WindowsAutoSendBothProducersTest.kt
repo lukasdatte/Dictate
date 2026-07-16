@@ -185,8 +185,8 @@ class WindowsAutoSendBothProducersTest(private val producer: Producer) {
         assertEquals(text, store.snapshot.pendingSessions[0].transcribedText)
         assertTrue("no acknowledge on failure — text not yet delivered", repo.markInsertedCalls.isEmpty())
         assertEquals(
-            "error notice surfaced",
-            DispatchNotice.Error(PipelineErrorKind.WINDOWS_UNREACHABLE),
+            "error notice surfaced (carrying the failed session id for a PC-only retry)",
+            DispatchNotice.Error(PipelineErrorKind.WINDOWS_UNREACHABLE, sid),
             store.snapshot.windowsDispatch.notice,
         )
     }

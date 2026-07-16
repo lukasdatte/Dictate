@@ -32,11 +32,13 @@ import net.devemperor.dictate.preferences.AmbiguityMode
 import net.devemperor.dictate.preferences.LanguageResolver
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.settings.DictateSettingsActivity
 import net.devemperor.dictate.settings.WindowsPairingActivity
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DispatchNotice
 import net.devemperor.dictate.state.PipelineErrorKind
 import net.devemperor.dictate.state.RecordingState
+import net.devemperor.dictate.state.insertion.EditAction
 import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
 import net.devemperor.dictate.state.layout.LogicalButtonId
 import net.devemperor.dictate.state.render.ImeViewBackend
@@ -217,6 +219,7 @@ class PcDictationActivity : AppCompatActivity() {
 
         attachBackend(b)
         wireHistory(b)
+        wireEditBar()
 
         // The error banner + review-open hint are driven by state. Collected here (once bound) rather
         // than through the shared render manager, which owns the keyboard grid. repeatOnLifecycle
@@ -402,6 +405,38 @@ class PcDictationActivity : AppCompatActivity() {
         historyController?.onViewDestroyed()
         historyController = null
         historyAdapter = null
+    }
+
+    // ── Edit bar (F5) ─────────────────────────────────────────────────────
+
+    /**
+     * Wire the edit bar for PC-only use (F5). The five edit actions (Undo/Redo/Cut/Copy/Paste) route
+     * to the PC through the same [KeyboardActionDispatcher] as the live keys (the exact edit-action
+     * semantics the IME's `EditBarController.onEditAction` reaches — `PcInputCommandMapper` maps each
+     * to its wire command). Settings stays useful (accent / language / pairing). Every purely-local
+     * button (emoji picker, QWERTZ, in-keyboard history, audio focus, small-mode, widget toggle,
+     * a11y, and the PC-mode toggle itself — redundant here) is hidden rather than shown-but-dead.
+     *
+     * Direct wiring rather than reusing `EditBarController`: that controller is IME state-rendering
+     * machinery (per-button visibility/enable driven by the live keyboard state) whose 25-method
+     * Callback the Activity's small static subset does not need — hiding + five click handlers is the
+     * more sustainable shape here, and the routed sink is identical.
+     */
+    private fun wireEditBar() {
+        val pc = pcKeyboardActions ?: return
+        findViewById<View?>(R.id.edit_undo_btn)?.setOnClickListener { pc.editAction(EditAction.UNDO) }
+        findViewById<View?>(R.id.edit_redo_btn)?.setOnClickListener { pc.editAction(EditAction.REDO) }
+        findViewById<View?>(R.id.edit_cut_btn)?.setOnClickListener { pc.editAction(EditAction.CUT) }
+        findViewById<View?>(R.id.edit_copy_btn)?.setOnClickListener { pc.editAction(EditAction.COPY) }
+        findViewById<View?>(R.id.edit_paste_btn)?.setOnClickListener { pc.editAction(EditAction.PASTE) }
+        findViewById<View?>(R.id.edit_settings_btn)?.setOnClickListener {
+            startActivity(Intent(this, DictateSettingsActivity::class.java))
+        }
+        intArrayOf(
+            R.id.edit_emoji_btn, R.id.edit_keyboard_btn, R.id.edit_history_btn,
+            R.id.edit_audio_focus_btn, R.id.edit_numbers_btn, R.id.edit_widget_toggle_btn,
+            R.id.edit_a11y_btn, R.id.edit_pc_btn,
+        ).forEach { id -> findViewById<View?>(id)?.visibility = View.GONE }
     }
 
     // ── History (top of screen) ──────────────────────────────────────────

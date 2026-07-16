@@ -325,8 +325,7 @@ Key facts:
   slot and fall back to the IME's when it is cleared (`onStop`) — the IME's
   own registrations are never overwritten.
 
-Owner ADR: `../../decisions/NNNN-pc-dictation-activity.md` (pc-dictation-activity,
-plan-scoped — pending promotion).
+Owner ADR: [ADR-0027 — pc-dictation-activity](../../decisions/0027-pc-dictation-activity.md) (Accepted).
 
 ## 7. `SlotRenderer.applySlotToView` (F-7 / DRY)
 

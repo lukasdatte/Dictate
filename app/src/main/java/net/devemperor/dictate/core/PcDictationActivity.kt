@@ -41,6 +41,7 @@ import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
 import net.devemperor.dictate.state.layout.LogicalButtonId
 import net.devemperor.dictate.state.render.ImeViewBackend
 import net.devemperor.dictate.state.render.RealMotionSurface
+import net.devemperor.dictate.state.render.RecordGlowFactory
 import net.devemperor.dictate.state.render.RecordingAnimationController
 import net.devemperor.dictate.state.render.SpecialTouchHandlerInstaller
 import net.devemperor.dictate.windows.PcInputSink
@@ -257,21 +258,12 @@ class PcDictationActivity : AppCompatActivity() {
         // single recording ticker via the additive foreground sinks — no second amplitude poller.
         // Same controller + animation the IME/overlay use; only the sink wiring differs.
         val recordBtn = views[LogicalButtonId.RECORD] as MaterialButton
-        val density = recordBtn.resources.displayMetrics.density
-        val glow = net.devemperor.dictate.widget.BorderGlowAnimation(
-            sp.get(Pref.AccentColor),
-            androidx.appcompat.content.res.AppCompatResources.getDrawable(this, R.drawable.ic_baseline_send_20),
-            net.devemperor.dictate.widget.AmplitudeVisualizerDrawable.BarCountMode.Fixed(30),
-            0.35f,
-            density,
-        ).apply { prepare(recordBtn) }
-        val animController = RecordingAnimationController(
-            glow,
+        val animController = RecordGlowFactory.create(
             recordBtn,
-            { sp.get(Pref.AccentColor) },
-            { sp.get(Pref.Animations) },
-            { androidx.core.content.ContextCompat.getColor(this, R.color.dictate_pc_mode) },
-            getString(R.string.dictate_pc_badge),
+            accentColorProvider = { sp.get(Pref.AccentColor) },
+            animationsEnabled = { sp.get(Pref.Animations) },
+            pcModeColorProvider = { androidx.core.content.ContextCompat.getColor(this, R.color.dictate_pc_mode) },
+            pcModeBadge = getString(R.string.dictate_pc_badge),
         )
         recordingAnimation = animController
         b.registerForegroundRecordingTickSinks(
@@ -314,15 +306,44 @@ class PcDictationActivity : AppCompatActivity() {
     }
 
     private fun onBackendAffordance(id: LogicalButtonId, isLongPress: Boolean) {
-        if (id != LogicalButtonId.RECORD || isLongPress) return
         val b = binder ?: return
-        val rec = b.state.value.recording
-        val session: Pair<String, File> = when (rec) {
-            is RecordingState.Active -> rec.sessionId to rec.audioFile
-            is RecordingState.Paused -> rec.sessionId to rec.audioFile
-            else -> return // Idle/Preparing: this is a START tap, the catalog resolver allocates.
+        when {
+            id == LogicalButtonId.RECORD && !isLongPress -> {
+                val rec = b.state.value.recording
+                val session: Pair<String, File> = when (rec) {
+                    is RecordingState.Active -> rec.sessionId to rec.audioFile
+                    is RecordingState.Paused -> rec.sessionId to rec.audioFile
+                    else -> return // Idle/Preparing: a START tap — the catalog resolver allocates.
+                }
+                snapshotFreshConfig(b, session.first, session.second)
+            }
+            // F6: RESEND re-sends the last dictation to the PC (the "wie IME-PC-Modus" intent). The
+            // IME's resend is IC-coupled (insertOrFallback / interrupted-resume); the Activity does
+            // the PC-relevant half only — re-dispatch the last keyboard session's final output. The
+            // catalog `ResendLastAudio` still arms the cooldown alongside this affordance.
+            // RESEND/RECORD long-press are gated (no sensible PC action) — no-op, not a dead tap.
+            id == LogicalButtonId.RESEND && !isLongPress -> resendLastToPc(b)
         }
-        snapshotFreshConfig(b, session.first, session.second)
+    }
+
+    private fun resendLastToPc(b: DictatePipelineService.LocalBinder) {
+        dbExecutor.execute {
+            val last = b.sessionTracker.getLastKeyboardSession() ?: return@execute
+            val text = b.sessionManager.getFinalOutput(last.id) ?: last.finalOutputText
+            if (text.isNullOrEmpty()) return@execute
+            runOnUiThread {
+                b.windowsDispatchCoordinator.dispatch(
+                    last.id,
+                    text,
+                    last.createdAt,
+                    SessionEntityMapper.originToWire(last.origin),
+                    // Pure re-send of an already-acknowledged row → do not touch inserted_at.
+                    /* acknowledgeOnSuccess = */ false,
+                    /* surfacedAsPending = */ false,
+                    /* suppressPendingFallback = */ true,
+                )
+            }
+        }
     }
 
     /**
@@ -352,6 +373,9 @@ class PcDictationActivity : AppCompatActivity() {
                 transcriptionOnly = false,
                 origin = SessionOrigin.KEYBOARD,
                 uiContext = null,
+                // F7: the Activity has no live prompt queue — send an EXPLICIT empty queue so the
+                // pipeline never falls back to the IME's live auto-apply queue (queue leak).
+                explicitEmptyQueue = true,
             ),
         )
     }

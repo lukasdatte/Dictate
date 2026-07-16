@@ -92,7 +92,7 @@ class ImePipelineConfigResolver(
      * at recording-trigger time. Each property is named after its legacy
      * line so a reviewer can diff the two constructions 1:1.
      */
-    data class FreshConfig(
+    data class FreshConfig @JvmOverloads constructor(
         val totalSteps: Int,
         val audioFilePath: String,
         val language: String?,
@@ -124,6 +124,14 @@ class ImePipelineConfigResolver(
          * that is only knowable at the trigger instant.
          */
         val uiContext: String? = null,
+        /**
+         * pc-dictation-activity (F7): force an EXPLICIT empty prompt queue instead of the
+         * empty-means-unset default. The keyboard seams treat an empty [queuedPromptIds] as UNSET
+         * (→ live auto-apply-queue fallback at run time, `fromIdsOrUnset`). The PC-dictation Activity
+         * has no live queue and must NOT inherit the IME's — so it sets this `true`, and
+         * [resolveFresh] emits `emptyList()` ("run zero prompts") rather than `null`.
+         */
+        val explicitEmptyQueue: Boolean = false,
     )
 
     /**
@@ -186,7 +194,11 @@ class ImePipelineConfigResolver(
             // (legacy semantics — see PromptQueueSlot shape 1). An empty
             // snapshot means UNSET (→ run-time live-queue fallback), not
             // "explicitly none" — fromIdsOrUnset keeps that distinction.
-            /* queuedPromptSlots */ PromptQueueSlot.fromIdsOrUnset(cfg.queuedPromptIds),
+            /* queuedPromptSlots */ if (cfg.explicitEmptyQueue) {
+                emptyList() // F7: explicit "run zero prompts" — never fall back to a live queue.
+            } else {
+                PromptQueueSlot.fromIdsOrUnset(cfg.queuedPromptIds)
+            },
             /* targetAppPackage */ cfg.targetAppPackage,
             /* recordingsDir */ File(recordingsDirProvider(), "recordings"),
             /* reuseSessionId */ null,

@@ -28,7 +28,7 @@ import net.devemperor.dictate.database.entity.SessionEntity
  * ([SessionEntity.hasInsertableText]); `getFinalOutput` stays authoritative at
  * click time.
  */
-class KeyboardHistoryAdapter(
+class KeyboardHistoryAdapter @JvmOverloads constructor(
     private val callback: Callback,
     /**
      * Whether a Windows companion is paired ([net.devemperor.dictate.preferences.WindowsTarget]

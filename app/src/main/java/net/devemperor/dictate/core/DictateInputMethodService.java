@@ -1364,34 +1364,18 @@ public class DictateInputMethodService extends InputMethodService
         // the controller is forwarded from ImeViewBackend.render.
         // animationsEnabled is read live from Pref.Animations so a
         // settings flip is reflected on the next state emit.
-        float displayDensity = recordButton.getResources().getDisplayMetrics().density;
-        net.devemperor.dictate.widget.RecordingAnimation recordingAnimationForBackend =
-            new net.devemperor.dictate.widget.BorderGlowAnimation(
-                DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE),
-                androidx.appcompat.content.res.AppCompatResources.getDrawable(
-                    context, R.drawable.ic_baseline_send_20),
-                new net.devemperor.dictate.widget.AmplitudeVisualizerDrawable.BarCountMode.Fixed(30),
-                0.35f,
-                displayDensity
-            );
-        recordingAnimationForBackend.prepare(recordButton);
+        // P3 DRY: the same glow+controller shape as the overlay backend and the PC-dictation
+        // Activity — built once in RecordGlowFactory. PC send-mode (ADR-0019): the record button
+        // breathes the PC colour and carries a "PC" badge; the colour is a lambda because the
+        // controller outlives a night-mode flip.
         kotlin.jvm.functions.Function0<Boolean> animationsEnabledLambda =
             () -> DictatePrefsKt.get(sp, Pref.Animations.INSTANCE);
-        kotlin.jvm.functions.Function0<Integer> accentColorLambda =
-            () -> DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE);
-        // PC send-mode (ADR-0019): the record button breathes this colour
-        // instead of the accent, and carries a "PC" badge next to the timer.
-        // The colour is a lambda for the same reason the accent is — the
-        // controller outlives a night-mode flip.
-        kotlin.jvm.functions.Function0<Integer> pcModeColorLambda =
-            () -> androidx.core.content.ContextCompat.getColor(this, R.color.dictate_pc_mode);
         RecordingAnimationController recordingAnimationCtrlForBackend =
-            new RecordingAnimationController(
-                recordingAnimationForBackend,
+            net.devemperor.dictate.state.render.RecordGlowFactory.INSTANCE.create(
                 recordButton,
-                accentColorLambda,
+                () -> DictatePrefsKt.get(sp, Pref.AccentColor.INSTANCE),
                 animationsEnabledLambda,
-                pcModeColorLambda,
+                () -> androidx.core.content.ContextCompat.getColor(this, R.color.dictate_pc_mode),
                 getString(R.string.dictate_pc_badge)
             );
         // Phase 3 of dictate-render-cutover-completion-vol2 — single

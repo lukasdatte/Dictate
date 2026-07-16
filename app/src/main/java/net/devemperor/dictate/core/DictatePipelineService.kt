@@ -1150,29 +1150,17 @@ class DictatePipelineService : Service() {
             val recordingAnimationFactory =
                 net.devemperor.dictate.state.render.overlay.RecordingAnimationControllerFactory {
                     recordButton ->
-                    val ctx = recordButton.context
-                    val displayDensity = ctx.resources.displayMetrics.density
-                    val animation = net.devemperor.dictate.widget.BorderGlowAnimation(
-                        sharedPrefs.get(Pref.AccentColor),
-                        androidx.appcompat.content.res.AppCompatResources.getDrawable(
-                            ctx, net.devemperor.dictate.R.drawable.ic_baseline_send_20,
-                        ),
-                        net.devemperor.dictate.widget.AmplitudeVisualizerDrawable
-                            .BarCountMode.Fixed(30),
-                        0.35f,
-                        displayDensity,
-                    )
-                    animation.prepare(recordButton)
-                    net.devemperor.dictate.state.render.RecordingAnimationController(
-                        animation,
+                    // P3 DRY: the same glow+controller shape as the IME and the PC-dictation Activity.
+                    // §7.1 parity: the overlay's record button breathes the PC-mode colour too (the
+                    // controller reads features.windowsAutoSendActive from state itself).
+                    net.devemperor.dictate.state.render.RecordGlowFactory.create(
                         recordButton,
-                        { sharedPrefs.get(Pref.AccentColor) },
-                        animationsEnabledLambda,
-                        // §7.1 parity: the floating overlay's record button breathes the PC-mode
-                        // colour too, so PC-mode is legible in the widget (the controller reads
-                        // features.windowsAutoSendActive from state itself).
+                        accentColorProvider = { sharedPrefs.get(Pref.AccentColor) },
+                        animationsEnabled = animationsEnabledLambda,
                         pcModeColorProvider = {
-                            androidx.core.content.ContextCompat.getColor(ctx, net.devemperor.dictate.R.color.dictate_pc_mode)
+                            androidx.core.content.ContextCompat.getColor(
+                                recordButton.context, net.devemperor.dictate.R.color.dictate_pc_mode,
+                            )
                         },
                     )
                 }

@@ -289,3 +289,23 @@ Activity, unpaired → pairing). Alias + shortcut funnel through the
   - **Reasoning:** append-only clarification of consequences and parity gaps
     surfaced by the audit; the core decision (third render host + transient
     `pcOnly` on existing seams) is unchanged.
+
+- **2026-07-16 — F7 text-pill display implemented (closes the deferred follow-up).**
+  - **Trigger:** the deferred "pill-bar display" follow-up from the audit-fixes
+    wave above; team decision on how to surface pills in the Activity.
+  - **Before:** text pills were not shown in the Activity (only the queue-leak
+    correctness half was fixed); the deferral flagged the IME's
+    `contentArea`/`PromptVisibilityController` panel machinery as the blocker.
+  - **After:** a **permanent text-pill row above the keyboard grid** (between the
+    history and the grid), analogous to the history wiring — NOT a toggle and NOT
+    the IME's mutually-exclusive `contentArea` panel. A lean Activity-owned
+    RecyclerView (`PcTextPillAdapter`) collects all prompts reactively
+    (`PromptDao.getAllFlow`) and filters to `PromptType.TEXT` in Kotlin
+    (`PcTextPills.filter`, JVM-tested); a tap types the pill content to the PC
+    (`PcTextPills.toRequest` → the Activity's PC dispatcher → `TYPE_TEXT`). PROMPT
+    pills stay hidden; the row is GONE when there are no text pills.
+  - **Reasoning (team, D4):** the Activity is a full-screen host with room for a
+    permanent row; a persistent row is more maintainable than another
+    panel-toggle state, and a lean own adapter avoids the IME's
+    `PromptsKeyboardAdapter` coupling (reprocess/instant/select-all/AI-run
+    branches irrelevant to a TEXT-only PC row).

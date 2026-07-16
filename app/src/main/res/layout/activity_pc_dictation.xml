@@ -26,7 +26,7 @@
         android:gravity="center_vertical"
         android:textAppearance="?attr/textAppearanceTitleMedium"
         android:textColor="@color/dictate_pc_mode"
-        android:text="@string/pc_dictation_title"
+        android:text="@string/pc_dictation_label"
         app:drawableStartCompat="@drawable/ic_baseline_computer_24"
         app:drawableTint="@color/dictate_pc_mode"
         app:layout_constraintTop_toTopOf="parent"

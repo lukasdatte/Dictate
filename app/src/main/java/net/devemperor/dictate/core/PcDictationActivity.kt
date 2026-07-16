@@ -35,6 +35,7 @@ import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.settings.DictateSettingsActivity
 import net.devemperor.dictate.settings.WindowsPairingActivity
 import net.devemperor.dictate.state.Action
+import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.DispatchNotice
 import net.devemperor.dictate.state.PipelineErrorKind
 import net.devemperor.dictate.state.RecordingState
@@ -131,9 +132,6 @@ class PcDictationActivity : AppCompatActivity() {
     /** The session the banner's retry re-sends (F12/cleanup: a typed field, not `errorBanner.tag`). */
     private var retrySessionId: String? = null
 
-    /** True when the current banner is an UNAUTHORIZED error → the button re-pairs, not retries. */
-    private var bannerUnauthorized = false
-
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val b = service as? DictatePipelineService.LocalBinder ?: return
@@ -227,7 +225,7 @@ class PcDictationActivity : AppCompatActivity() {
         noticeJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 b.state.collect { state ->
-                    renderNotice(state.windowsDispatch.notice)
+                    renderBanner(state)
                     renderReviewHint(state.reviewPanel.open)
                 }
             }
@@ -269,6 +267,19 @@ class PcDictationActivity : AppCompatActivity() {
             pcModeBadge = getString(R.string.dictate_pc_badge),
         )
         recordingAnimation = animController
+
+        // Item 9: pipeline step-progress rows in the Activity too (the container/scroll views come
+        // from the included keyboard layout — no extra plumbing). The backend forwards state to it.
+        val stepRowRenderer = net.devemperor.dictate.state.render.PipelineStepRowRenderer(
+            net.devemperor.dictate.state.render.PipelineStepRowRenderer.PipelineViews(
+                findViewById(R.id.pipeline_steps_container),
+                findViewById(R.id.pipeline_scroll_view),
+                recordBtn,
+                layoutInflater,
+                android.os.Handler(mainLooper),
+            ),
+        )
+
         b.registerForegroundRecordingTickSinks(
             { elapsedMs -> animController.onTimerTick(elapsedMs) },
             { raw -> animController.onAmplitude(amplitudeProcessor.process(raw)) },
@@ -296,6 +307,7 @@ class PcDictationActivity : AppCompatActivity() {
             services = b.moduleServices,
             onVibrate = {},
             recordingAnimationController = animController,
+            pipelineStepRowRenderer = stepRowRenderer,
             staticHandlerInstaller = { v ->
                 installer.installDormant(v)
                 installer.attachToViews(v)
@@ -517,41 +529,100 @@ class PcDictationActivity : AppCompatActivity() {
 
     // ── Error banner + retry ─────────────────────────────────────────────
 
-    private fun renderNotice(notice: DispatchNotice?) {
-        when (notice) {
-            is DispatchNotice.Error -> {
-                // F12: differentiate by kind. UNAUTHORIZED (lost/invalid pairing) → a retry would
-                // just fail again, so the button re-pairs; every other error offers a retry when the
-                // failed session is known.
-                bannerUnauthorized = notice.kind == PipelineErrorKind.WINDOWS_UNAUTHORIZED
+    /**
+     * The one error banner surface for the Activity (F6/F9/F12). It shows BOTH the PC-dispatch notice
+     * (with a per-session retry / re-pair, its PC-specific value) AND transcription/pipeline errors
+     * (`state.infoHints.pipelineError`). A single banner rather than additionally wiring the shared
+     * InfoBarRenderer: the Activity already owns this banner with the retry the InfoBar has no concept
+     * of, and running a second overlapping notice system would double-render the dispatch notice.
+     * Dispatch notices take precedence over pipeline errors (a failed send is the more actionable).
+     */
+    private enum class BannerMode { NONE, RETRY, REPAIR, SETTINGS, DISMISS }
+
+    private var bannerMode = BannerMode.NONE
+
+    private fun renderBanner(state: DictateUiState) {
+        val notice = state.windowsDispatch.notice
+        val pipelineError = state.infoHints.pipelineError
+        when {
+            notice is DispatchNotice.Error -> {
+                // F12: UNAUTHORIZED (lost/invalid pairing) → a retry would just fail again, so the
+                // button re-pairs; other errors offer a retry when the failed session is known.
+                val unauthorized = notice.kind == PipelineErrorKind.WINDOWS_UNAUTHORIZED
                 retrySessionId = notice.sessionId
+                bannerMode = when {
+                    unauthorized -> BannerMode.REPAIR
+                    retrySessionId != null -> BannerMode.RETRY
+                    else -> BannerMode.DISMISS
+                }
                 errorTv.setText(
-                    if (bannerUnauthorized) R.string.dictate_windows_unauthorized_msg
+                    if (unauthorized) R.string.dictate_windows_unauthorized_msg
                     else R.string.pc_dictation_send_failed,
                 )
-                retryBtn.setText(
-                    if (bannerUnauthorized) R.string.pc_dictation_repair else R.string.pc_dictation_retry,
+                showBannerButton(
+                    when (bannerMode) {
+                        BannerMode.REPAIR -> R.string.pc_dictation_repair
+                        BannerMode.RETRY -> R.string.pc_dictation_retry
+                        else -> R.string.pc_dictation_dismiss
+                    },
                 )
-                retryBtn.visibility =
-                    if (bannerUnauthorized || retrySessionId != null) View.VISIBLE else View.GONE
-                errorBanner.visibility = View.VISIBLE
+            }
+            pipelineError != null -> {
+                // F6: transcription/pipeline errors were invisible in the Activity. Key/model/quota
+                // errors are fixed in settings; a network error is dismiss-only.
+                retrySessionId = null
+                val settingsFixable = pipelineError.kind != PipelineErrorKind.INTERNET_ERROR
+                bannerMode = if (settingsFixable) BannerMode.SETTINGS else BannerMode.DISMISS
+                errorTv.setText(pipelineErrorMessage(pipelineError.kind))
+                showBannerButton(
+                    if (settingsFixable) R.string.pc_dictation_open_settings else R.string.pc_dictation_dismiss,
+                )
             }
             else -> {
                 errorBanner.visibility = View.GONE
                 retrySessionId = null
-                bannerUnauthorized = false
+                bannerMode = BannerMode.NONE
             }
         }
     }
 
+    private fun showBannerButton(labelRes: Int) {
+        retryBtn.setText(labelRes)
+        retryBtn.visibility = View.VISIBLE
+        errorBanner.visibility = View.VISIBLE
+    }
+
+    private fun pipelineErrorMessage(kind: PipelineErrorKind): Int = when (kind) {
+        PipelineErrorKind.INVALID_API_KEY -> R.string.dictate_invalid_api_key_msg
+        PipelineErrorKind.MODEL_NOT_FOUND -> R.string.dictate_model_not_found_msg
+        PipelineErrorKind.BAD_REQUEST -> R.string.dictate_bad_request_msg
+        PipelineErrorKind.QUOTA_EXCEEDED -> R.string.dictate_quota_exceeded_msg
+        PipelineErrorKind.INTERNET_ERROR -> R.string.dictate_internet_error_msg
+        else -> R.string.pc_dictation_pipeline_error
+    }
+
     private fun onBannerActionClicked() {
         val b = binder ?: return
-        b.dispatch(Action.WindowsDispatchAction.DismissNotice)
-        if (bannerUnauthorized) {
-            // Re-pair instead of a doomed retry.
-            startActivity(Intent(this, WindowsPairingActivity::class.java))
-            return
+        when (bannerMode) {
+            BannerMode.REPAIR -> {
+                b.dispatch(Action.WindowsDispatchAction.DismissNotice)
+                startActivity(Intent(this, WindowsPairingActivity::class.java))
+                return
+            }
+            BannerMode.SETTINGS -> {
+                b.dispatch(Action.InfoHintAction.DismissPipelineError)
+                startActivity(Intent(this, DictateSettingsActivity::class.java))
+                return
+            }
+            BannerMode.DISMISS -> {
+                b.dispatch(Action.WindowsDispatchAction.DismissNotice)
+                b.dispatch(Action.InfoHintAction.DismissPipelineError)
+                return
+            }
+            BannerMode.NONE -> return
+            BannerMode.RETRY -> Unit // fall through to the retry dispatch below.
         }
+        b.dispatch(Action.WindowsDispatchAction.DismissNotice)
         val sid = retrySessionId ?: return
         dbExecutor.execute {
             val text = b.sessionManager.getFinalOutput(sid) ?: return@execute

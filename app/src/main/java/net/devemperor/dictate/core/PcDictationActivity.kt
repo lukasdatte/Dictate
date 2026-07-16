@@ -28,7 +28,6 @@ import net.devemperor.dictate.keyboard.KeyPressAnimator
 import net.devemperor.dictate.preferences.AmbiguityMode
 import net.devemperor.dictate.preferences.LanguageResolver
 import net.devemperor.dictate.preferences.Pref
-import net.devemperor.dictate.preferences.WindowsTarget
 import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.state.Action
 import net.devemperor.dictate.state.DispatchNotice
@@ -99,6 +98,15 @@ class PcDictationActivity : AppCompatActivity() {
     private var historyAdapter: KeyboardHistoryAdapter? = null
     private var noticeJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * Whether the Activity currently holds the resumed (focused) state. The PC-only divert flag is
+     * bound to onResume/onPause — NOT onStart/onStop — so a multi-window split-screen where this
+     * Activity is visible but unfocused does NOT keep diverting the OTHER window's IME dictation to
+     * the PC (F1 split-screen leak). The binder-slot registrations stay onStart/onStop-scoped; only
+     * the divert flag is focus-scoped.
+     */
+    private var isResumed = false
+
     /** Off-main-thread reads (`getFinalOutput` / `getSessionById`) for the retry + history send. */
     private val dbExecutor = Executors.newSingleThreadExecutor()
 
@@ -143,6 +151,22 @@ class PcDictationActivity : AppCompatActivity() {
         )
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Focus-scoped divert flag (F1): only while THIS Activity is the focused window does every
+        // terminal go to the PC. If the bind is still in flight, onBound picks up `isResumed`.
+        isResumed = true
+        binder?.dispatch(Action.FeatureToggleAction.SetPcOnly(true))
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isResumed = false
+        // Split-screen safety: the moment focus leaves, stop diverting — the other window's IME
+        // dictation must land in its own field with the normal pending-part fallback.
+        binder?.dispatch(Action.FeatureToggleAction.SetPcOnly(false))
+    }
+
     override fun onStop() {
         super.onStop()
         teardownBackend()
@@ -162,8 +186,9 @@ class PcDictationActivity : AppCompatActivity() {
     // ── Bind / attach ────────────────────────────────────────────────────
 
     private fun onBound(b: DictatePipelineService.LocalBinder) {
-        // PC-only terminal mode: every completion diverts to the PC while this Activity is bound.
-        b.dispatch(Action.FeatureToggleAction.SetPcOnly(true))
+        // PC-only terminal mode is focus-scoped (F1): set it here only if we are already resumed
+        // (the bind may land after onResume). onResume/onPause own the flag from here on.
+        if (isResumed) b.dispatch(Action.FeatureToggleAction.SetPcOnly(true))
 
         // Foreground-host registrations (precedence over the IME, cleared in teardownBackend()).
         b.registerForegroundConfigResolver(configResolver)
@@ -305,6 +330,8 @@ class PcDictationActivity : AppCompatActivity() {
     private fun teardownBackend() {
         val b = binder
         if (b != null) {
+            // pcOnly is owned by onResume/onPause (F1); by onStop onPause has already cleared it.
+            // Defensive re-clear in case teardown runs via onServiceDisconnected without an onPause.
             b.dispatch(Action.FeatureToggleAction.SetPcOnly(false))
             b.registerForegroundConfigResolver(null)
             b.registerForegroundKeyboardActionsProvider(null)
@@ -359,7 +386,9 @@ class PcDictationActivity : AppCompatActivity() {
         dbExecutor.execute {
             val text = b.sessionManager.getFinalOutput(sid)
             if (text.isNullOrEmpty()) return@execute
-            if (WindowsTarget.from(sp) == null) return@execute
+            // F10: do NOT silently no-op when unpaired. The coordinator maps a null target to
+            // WINDOWS_UNAUTHORIZED → the error banner (with the "re-pair" hint, F12), so a lost
+            // pairing is visible instead of a dead button.
             runOnUiThread {
                 b.windowsDispatchCoordinator.dispatch(
                     sid,

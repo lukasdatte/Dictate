@@ -2240,7 +2240,9 @@ class DictatePipelineService : Service() {
          * [delegateKeyboardActions] while set.
          *
          * The full-screen PC-dictation Activity is a third input host (like the IME) but has no
-         * `InputConnection`: it registers these on `onResume` and clears them (`null`) on `onPause`.
+         * `InputConnection`: it registers these on bind (`onServiceConnected`, from `onStart`) and
+         * clears them (`null`) on `onStop`. (The PC-only *divert* flag `features.pcOnly` is separate
+         * and focus-scoped to `onResume`/`onPause` — F1 split-screen fix; these host slots are not.)
          * A separate slot — rather than overwriting the IME's — keeps the IME's registration intact,
          * so a bound-but-hidden IME still records/inserts correctly once the Activity closes. The
          * consumer lambdas ([DelegatingPipelineConfigResolver.imeResolverProvider],
@@ -2330,8 +2332,9 @@ class DictatePipelineService : Service() {
         /**
          * pc-dictation-activity — register/clear the foreground-host (PC-dictation Activity)
          * config resolver + keyboard-action dispatcher. Both take precedence over the IME's while
-         * set (see [delegateForegroundConfigResolver]). Called from the Activity's `onResume` /
-         * `onPause`; pass `null` to clear so a bound-but-hidden IME regains ownership.
+         * set (see [delegateForegroundConfigResolver]). Called from the Activity's `onServiceConnected`
+         * (via `onStart` bind) / `onStop`; pass `null` to clear so a bound-but-hidden IME regains
+         * ownership.
          */
         fun registerForegroundConfigResolver(resolver: PipelineConfigResolver?) {
             delegateForegroundConfigResolver = resolver

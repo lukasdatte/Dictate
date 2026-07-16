@@ -128,6 +128,8 @@ class PcDictationActivity : AppCompatActivity() {
     private lateinit var historyRv: RecyclerView
     private lateinit var historyEmptyTv: View
     private lateinit var reviewHintTv: View
+    private lateinit var pillsRv: RecyclerView
+    private var pillsJob: kotlinx.coroutines.Job? = null
 
     /** The session the banner's retry re-sends (F12/cleanup: a typed field, not `errorBanner.tag`). */
     private var retrySessionId: String? = null
@@ -154,6 +156,7 @@ class PcDictationActivity : AppCompatActivity() {
         historyRv = findViewById(R.id.pc_dictation_history_rv)
         historyEmptyTv = findViewById(R.id.pc_dictation_history_empty_tv)
         reviewHintTv = findViewById(R.id.pc_dictation_review_hint_tv)
+        pillsRv = findViewById(R.id.pc_dictation_pills_rv)
         retryBtn.setOnClickListener { onBannerActionClicked() }
     }
 
@@ -218,6 +221,7 @@ class PcDictationActivity : AppCompatActivity() {
         attachBackend(b)
         wireHistory(b)
         wireEditBar()
+        wirePills(b)
 
         // The error banner + review-open hint are driven by state. Collected here (once bound) rather
         // than through the shared render manager, which owns the keyboard grid. repeatOnLifecycle
@@ -414,9 +418,38 @@ class PcDictationActivity : AppCompatActivity() {
         noticeJob = null
         historyEmptyJob?.cancel()
         historyEmptyJob = null
+        pillsJob?.cancel()
+        pillsJob = null
         historyController?.onViewDestroyed()
         historyController = null
         historyAdapter = null
+    }
+
+    // ── Text pills (F7) ────────────────────────────────────────────────────
+
+    /**
+     * Wire the permanent text-pill row (F7). A lean RecyclerView (not the IME's contentArea panel):
+     * it collects ALL prompts from the DB reactively and filters to TEXT pills in Kotlin
+     * ([PcTextPills.filter], JVM-tested); a tap types the pill's content to the PC
+     * ([PcTextPills.toRequest] → the same PC dispatcher as the live keys). The row is GONE when there
+     * are no text pills (no empty placeholder — team decision).
+     */
+    private fun wirePills(b: DictatePipelineService.LocalBinder) {
+        val adapter = PcTextPillAdapter { pill ->
+            pcKeyboardActions?.insert(PcTextPills.toRequest(pill))
+        }
+        pillsRv.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        pillsRv.adapter = adapter
+        val dao = DictateDatabase.getInstance(this).promptDao()
+        pillsJob = lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                dao.getAllFlow().collect { all ->
+                    val textPills = PcTextPills.filter(all)
+                    adapter.submitList(textPills)
+                    pillsRv.visibility = if (textPills.isEmpty()) View.GONE else View.VISIBLE
+                }
+            }
+        }
     }
 
     // ── Edit bar (F5) ─────────────────────────────────────────────────────

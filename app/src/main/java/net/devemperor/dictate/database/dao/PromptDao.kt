@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import kotlinx.coroutines.flow.Flow
 import net.devemperor.dictate.database.entity.PromptEntity
 
 @Dao
@@ -12,6 +13,15 @@ interface PromptDao {
 
     @Query("SELECT * FROM prompts ORDER BY pos ASC")
     fun getAll(): List<PromptEntity>
+
+    /**
+     * Reactive stream of ALL prompts (pc-dictation-activity F7). The PC-dictation Activity's
+     * text-pill row collects this and filters to [net.devemperor.dictate.database.entity.PromptType.TEXT]
+     * in Kotlin (via `PcTextPills.filter`, JVM-testable) rather than in SQL, so the filter is unit-
+     * tested without Room instrumentation. Room re-emits on any `prompts` write (InvalidationTracker).
+     */
+    @Query("SELECT * FROM prompts ORDER BY pos ASC")
+    fun getAllFlow(): Flow<List<PromptEntity>>
 
     @Query("SELECT * FROM prompts WHERE id = :id")
     fun getById(id: Int): PromptEntity?

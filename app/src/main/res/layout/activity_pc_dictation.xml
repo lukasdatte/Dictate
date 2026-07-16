@@ -73,10 +73,27 @@
         android:layout_height="0dp"
         android:clipToPadding="false"
         app:layout_constraintTop_toBottomOf="@id/pc_dictation_error_banner"
-        app:layout_constraintBottom_toTopOf="@id/pc_dictation_keyboard"
+        app:layout_constraintBottom_toTopOf="@id/pc_dictation_pills_rv"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         tools:listitem="@layout/item_keyboard_history" />
+
+    <!-- F7: a permanent text-pill row above the keyboard grid (team decision: a plain row like the
+         history, not the IME's mutually-exclusive contentArea panel). Horizontal; only TEXT pills;
+         GONE when there are none. -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/pc_dictation_pills_rv"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:clipToPadding="false"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/pc_dictation_keyboard"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        tools:listitem="@layout/item_pc_text_pill"
+        tools:visibility="visible" />
 
     <TextView
         android:id="@+id/pc_dictation_history_empty_tv"

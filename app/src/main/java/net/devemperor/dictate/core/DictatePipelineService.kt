@@ -1150,29 +1150,17 @@ class DictatePipelineService : Service() {
             val recordingAnimationFactory =
                 net.devemperor.dictate.state.render.overlay.RecordingAnimationControllerFactory {
                     recordButton ->
-                    val ctx = recordButton.context
-                    val displayDensity = ctx.resources.displayMetrics.density
-                    val animation = net.devemperor.dictate.widget.BorderGlowAnimation(
-                        sharedPrefs.get(Pref.AccentColor),
-                        androidx.appcompat.content.res.AppCompatResources.getDrawable(
-                            ctx, net.devemperor.dictate.R.drawable.ic_baseline_send_20,
-                        ),
-                        net.devemperor.dictate.widget.AmplitudeVisualizerDrawable
-                            .BarCountMode.Fixed(30),
-                        0.35f,
-                        displayDensity,
-                    )
-                    animation.prepare(recordButton)
-                    net.devemperor.dictate.state.render.RecordingAnimationController(
-                        animation,
+                    // P3 DRY: the same glow+controller shape as the IME and the PC-dictation Activity.
+                    // §7.1 parity: the overlay's record button breathes the PC-mode colour too (the
+                    // controller reads features.windowsAutoSendActive from state itself).
+                    net.devemperor.dictate.state.render.RecordGlowFactory.create(
                         recordButton,
-                        { sharedPrefs.get(Pref.AccentColor) },
-                        animationsEnabledLambda,
-                        // §7.1 parity: the floating overlay's record button breathes the PC-mode
-                        // colour too, so PC-mode is legible in the widget (the controller reads
-                        // features.windowsAutoSendActive from state itself).
+                        accentColorProvider = { sharedPrefs.get(Pref.AccentColor) },
+                        animationsEnabled = animationsEnabledLambda,
                         pcModeColorProvider = {
-                            androidx.core.content.ContextCompat.getColor(ctx, net.devemperor.dictate.R.color.dictate_pc_mode)
+                            androidx.core.content.ContextCompat.getColor(
+                                recordButton.context, net.devemperor.dictate.R.color.dictate_pc_mode,
+                            )
                         },
                     )
                 }
@@ -2240,7 +2228,9 @@ class DictatePipelineService : Service() {
          * [delegateKeyboardActions] while set.
          *
          * The full-screen PC-dictation Activity is a third input host (like the IME) but has no
-         * `InputConnection`: it registers these on `onResume` and clears them (`null`) on `onPause`.
+         * `InputConnection`: it registers these on bind (`onServiceConnected`, from `onStart`) and
+         * clears them (`null`) on `onStop`. (The PC-only *divert* flag `features.pcOnly` is separate
+         * and focus-scoped to `onResume`/`onPause` — F1 split-screen fix; these host slots are not.)
          * A separate slot — rather than overwriting the IME's — keeps the IME's registration intact,
          * so a bound-but-hidden IME still records/inserts correctly once the Activity closes. The
          * consumer lambdas ([DelegatingPipelineConfigResolver.imeResolverProvider],
@@ -2330,8 +2320,9 @@ class DictatePipelineService : Service() {
         /**
          * pc-dictation-activity — register/clear the foreground-host (PC-dictation Activity)
          * config resolver + keyboard-action dispatcher. Both take precedence over the IME's while
-         * set (see [delegateForegroundConfigResolver]). Called from the Activity's `onResume` /
-         * `onPause`; pass `null` to clear so a bound-but-hidden IME regains ownership.
+         * set (see [delegateForegroundConfigResolver]). Called from the Activity's `onServiceConnected`
+         * (via `onStart` bind) / `onStop`; pass `null` to clear so a bound-but-hidden IME regains
+         * ownership.
          */
         fun registerForegroundConfigResolver(resolver: PipelineConfigResolver?) {
             delegateForegroundConfigResolver = resolver

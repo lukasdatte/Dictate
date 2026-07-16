@@ -1026,7 +1026,9 @@ data class LanguageState(
  *   (mirroring the settings switch, which is greyed out until paired),
  *   the latter just leaves it unlit.
  * @property pcOnly the **PC-only terminal mode** (pc-dictation-activity): active exactly while the
- *   full-screen PC-dictation Activity is in the foreground. It is a THIRD, transient mode-state
+ *   full-screen PC-dictation Activity is **focused** (resumed — NOT merely visible: in a
+ *   multi-window split-screen an unfocused-but-visible Activity must not divert the other window's
+ *   dictation, F1). It is a THIRD, transient mode-state
  *   next to [windowsAutoSendActive], deliberately kept separate rather than folded into it:
  *   [windowsAutoSendActive] is the user's persistent auto-send toggle (paired + toggle-on), while
  *   [pcOnly] is a host-scoped override that diverts EVERY pipeline terminal to the PC —

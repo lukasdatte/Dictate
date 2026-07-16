@@ -1155,8 +1155,9 @@ sealed class Action {
          * Push the PC-only terminal mode into the axis (pc-dictation-activity).
          *
          * A setter rather than a mirrored pref because `pcOnly` is not a pref: it is a runtime fact
-         * — "the full-screen PC-dictation Activity is currently in the foreground". The Activity
-         * dispatches `SetPcOnly(true)` in `onResume` and `SetPcOnly(false)` in `onPause`, mirroring
+         * — "the full-screen PC-dictation Activity is currently the focused window". The Activity
+         * dispatches `SetPcOnly(true)` in `onResume` and `SetPcOnly(false)` in `onPause` (focus-scoped,
+         * NOT onStart/onStop — a visible-but-unfocused split-screen window must not divert, F1), mirroring
          * how [SetScreenContextAvailable] pushes a system-observed fact. See
          * [net.devemperor.dictate.state.FeatureToggles.pcOnly].
          */

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One text pill in the PC-dictation Activity's pill row (pc-dictation-activity F7). -->
+<com.google.android.material.button.MaterialButton
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/pc_text_pill_btn"
+    style="@style/Widget.Material3.Button.TonalButton"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_marginEnd="8dp"
+    android:maxLines="1"
+    android:ellipsize="end"
+    android:maxWidth="220dp"
+    app:iconGravity="textStart"
+    tools:ignore="Overdraw"
+    xmlns:tools="http://schemas.android.com/tools" />

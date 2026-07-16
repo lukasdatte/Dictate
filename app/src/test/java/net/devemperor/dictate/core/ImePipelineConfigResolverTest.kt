@@ -78,6 +78,57 @@ class ImePipelineConfigResolverTest {
     }
 
     @Test
+    fun `resolveFresh with empty ids defaults to UNSET queue (live-queue fallback)`() {
+        // The keyboard seams: empty id list means "no explicit queue" → null (unset).
+        val r = resolver()
+        r.snapshotFresh(
+            "sid-unset",
+            ImePipelineConfigResolver.FreshConfig(
+                totalSteps = 1,
+                audioFilePath = audio.absolutePath,
+                language = null,
+                queuedPromptIds = emptyList(),
+                targetAppPackage = null,
+                stylePrompt = null,
+                livePrompt = false,
+                autoSwitchKeyboard = false,
+                showResendButton = false,
+            ),
+        )
+        assertNull(
+            "empty ids without explicitEmptyQueue → UNSET (falls back to the live queue)",
+            r.resolveFresh("sid-unset", audio).queuedPromptSlots,
+        )
+    }
+
+    @Test
+    fun `resolveFresh with explicitEmptyQueue sends an explicit empty queue (F7 no live-queue leak)`() {
+        // pc-dictation-activity: the Activity has no live queue and must send "run zero prompts"
+        // explicitly, or the pipeline would inherit the IME's live auto-apply queue.
+        val r = resolver()
+        r.snapshotFresh(
+            "sid-empty",
+            ImePipelineConfigResolver.FreshConfig(
+                totalSteps = 1,
+                audioFilePath = audio.absolutePath,
+                language = null,
+                queuedPromptIds = emptyList(),
+                targetAppPackage = null,
+                stylePrompt = null,
+                livePrompt = false,
+                autoSwitchKeyboard = false,
+                showResendButton = false,
+                explicitEmptyQueue = true,
+            ),
+        )
+        assertEquals(
+            "explicitEmptyQueue → an EMPTY (non-null) slot list, never UNSET",
+            emptyList<PromptQueueSlot>(),
+            r.resolveFresh("sid-empty", audio).queuedPromptSlots,
+        )
+    }
+
+    @Test
     fun `resolveFresh consumes the snapshot (one submit per snapshot)`() {
         val r = resolver()
         r.snapshotFresh(

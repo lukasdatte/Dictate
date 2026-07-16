@@ -26,7 +26,7 @@
         android:gravity="center_vertical"
         android:textAppearance="?attr/textAppearanceTitleMedium"
         android:textColor="@color/dictate_pc_mode"
-        android:text="@string/pc_dictation_title"
+        android:text="@string/pc_dictation_label"
         app:drawableStartCompat="@drawable/ic_baseline_computer_24"
         app:drawableTint="@color/dictate_pc_mode"
         app:layout_constraintTop_toTopOf="parent"
@@ -73,10 +73,27 @@
         android:layout_height="0dp"
         android:clipToPadding="false"
         app:layout_constraintTop_toBottomOf="@id/pc_dictation_error_banner"
-        app:layout_constraintBottom_toTopOf="@id/pc_dictation_keyboard"
+        app:layout_constraintBottom_toTopOf="@id/pc_dictation_pills_rv"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         tools:listitem="@layout/item_keyboard_history" />
+
+    <!-- F7: a permanent text-pill row above the keyboard grid (team decision: a plain row like the
+         history, not the IME's mutually-exclusive contentArea panel). Horizontal; only TEXT pills;
+         GONE when there are none. -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/pc_dictation_pills_rv"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:clipToPadding="false"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/pc_dictation_keyboard"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        tools:listitem="@layout/item_pc_text_pill"
+        tools:visibility="visible" />
 
     <TextView
         android:id="@+id/pc_dictation_history_empty_tv"
@@ -100,5 +117,24 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- F8: when a review panel is open in the store, LayoutCatalog hides every grid slot (the review
+         panel is IME-only, ADR-0013) — the Activity would render a blank keyboard. This hint takes the
+         keyboard's place and points the user back to the IME instead of a dead end. GONE by default. -->
+    <TextView
+        android:id="@+id/pc_dictation_review_hint_tv"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:gravity="center"
+        android:padding="24dp"
+        android:background="?attr/colorSurface"
+        android:textAppearance="?attr/textAppearanceBodyLarge"
+        android:text="@string/pc_dictation_review_open"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="@id/pc_dictation_keyboard"
+        app:layout_constraintBottom_toBottomOf="@id/pc_dictation_keyboard"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        tools:visibility="visible" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

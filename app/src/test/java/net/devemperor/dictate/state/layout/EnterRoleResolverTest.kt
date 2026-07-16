@@ -181,6 +181,20 @@ class EnterRoleResolverTest {
         assertEquals(null, resolveEnterAction(state, fakeServices()))
     }
 
+    @Test
+    fun `resolveEnterAction returns EnterKey in pcOnly even with no host (F1)`() {
+        // pc-dictation-activity: no local host, but ENTER routes to the PC (PhysicalEnter/Enter →
+        // PcInputCommandMapper ENTER), so the key must not be dead.
+        val state = net.devemperor.dictate.state.DictateUiState.initial().copy(
+            imeViewVisible = false,
+            features = net.devemperor.dictate.state.FeatureToggles(pcOnly = true),
+        )
+        assertEquals(
+            net.devemperor.dictate.state.Action.KeyboardInputAction.EnterKey,
+            resolveEnterAction(state, fakeServices()),
+        )
+    }
+
     // ─── helpers ─────────────────────────────────────────────────────
 
     private fun stateWith(host: HostEditorState) = net.devemperor.dictate.state.DictateUiState.initial()

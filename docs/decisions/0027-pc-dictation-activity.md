@@ -166,7 +166,11 @@ Activity, unpaired → pairing). Alias + shortcut funnel through the
   no PC command; in the IME's own PC-mode it likewise writes locally. The
   `SpecialTouchHandlerInstaller` `pcOnlyMode` therefore gates it (does not
   install it). ENTER as a plain key still routes to the PC via the catalog
-  resolver. This is the "IC-read-bound feature, gated in PC-mode, documented"
+  resolver. **[Fact correction 2026-07-16 audit — see Decision History: this
+  last sentence was aspirational at promotion. `resolveEnterAction` was gated on
+  `canCommitToHost`, so the Activity's ENTER was in fact a dead key; the
+  audit-fixes wave opened that gate for `pcOnly` to make the statement true.]**
+  This is the "IC-read-bound feature, gated in PC-mode, documented"
   case. All other gestures (Space tap, cursor-swipe, backspace-swipe word
   selection) run in the Activity via their existing PC branches.
 
@@ -177,6 +181,9 @@ Activity, unpaired → pairing). Alias + shortcut funnel through the
   because it is not visible, but it means `pcOnly` is not strictly per-host.
   Mitigated by keeping the PC-mode *visual* signalling in the Activity's own
   chrome (the purple PC accent) rather than in the shared renderers.
+  **[Superseded 2026-07-16 audit — see Decision History: this per-host caveat is
+  now a split-screen bug (F1). `pcOnly` is scoped to onResume/onPause (focus),
+  not visibility, so a visible-but-unfocused window no longer diverts.]**
 - Two config-resolver slots (IME + foreground) is marginally more machinery
   than one; justified by the collision-free hand-off.
 
@@ -223,3 +230,82 @@ Activity, unpaired → pairing). Alias + shortcut funnel through the
   - **After:** `docs/decisions/0027-pc-dictation-activity.md`, Status
     Accepted, indexed in `docs/decisions/README.md`.
   - **Reasoning:** the decision is active in the codebase from this merge on.
+
+- **2026-07-16 — Audit-fixes wave (branch `feature/pc-dictation-audit-fixes`).**
+  - **Trigger:** a triple audit (bugs / clean / feature-gaps) of the merged
+    feature. This entry is the append-only home for the parity-gap additions and
+    fact corrections the audit produced (the accepted body above is untouched
+    except for two bracketed, dated correction notes pointing here).
+  - **Before:** split-screen `pcOnly` leak; ENTER a dead key (the §"Parity gaps"
+    "routes to the PC" sentence was aspirational); edit bar fully visible but
+    every button dead; RESEND dead; pipeline/transcription errors invisible;
+    history "Insert" a dead-end; open review/history panels blanked the grid;
+    history send silently no-op'd when unpaired; Activity dictations leaked onto
+    the IME's live prompt queue.
+  - **After (parity gaps + fixes):**
+    - **F1 — `pcOnly` focus-scoped.** Bound to onResume/onPause, not
+      onStart/onStop; the §Negative per-host caveat above is thereby resolved.
+      The host-slot registrations stay onStart/onStop.
+    - **F1 — ENTER routes to the PC.** `resolveEnterAction`'s `canCommitToHost`
+      gate now also opens on `pcOnly` (`PhysicalEnter`/`Enter` →
+      `PcInputCommandMapper` ENTER). The overlay-character picker stays gated.
+    - **F5 — edit bar.** Undo/Redo/Cut/Copy/Paste route to the PC; Settings
+      opens the app settings; every purely-local button (emoji, QWERTZ,
+      in-keyboard history, audio focus, small-mode, widget toggle, a11y, PC-mode
+      toggle) is hidden rather than shown-but-dead.
+    - **F6 — RESEND** re-dispatches the last dictation to the PC (the
+      PC-relevant half; the IC-coupled `insertOrFallback`/interrupted-`Resume`
+      paths are not reproduced). **Pipeline/transcription errors** surface in the
+      Activity's error banner (`state.infoHints.pipelineError`) alongside the
+      dispatch notice.
+    - **F7 — prompt pills.** User decision: TEXT pills shown + typed to the PC,
+      PROMPT pills hidden. The **display** is deferred (a full IME subsystem:
+      `PromptVisibilityController` + `PromptsKeyboardAdapter` + DB reload + the
+      `contentArea` mutually-exclusive keyboard/pills panel swap; the pill-bar
+      toggle was among the hidden edit-bar buttons). The **queue-leak** half IS
+      fixed: `FreshConfig.explicitEmptyQueue` → an EXPLICIT empty queue, never
+      the IME's live auto-apply queue.
+    - **F8 — panel dead-ends.** A store-open review panel shows a hint pointing
+      back to the IME (review stays IME-only, ADR-0013); the in-keyboard history
+      panel is closed on attach — both avoid a blank grid.
+    - **F9 — history UX.** Row-tap opens `HistoryDetailActivity`; the per-row
+      "Insert" is hidden (no local field), only "Send to PC" remains.
+    - **F10/F12 — banner.** Unpaired history send no longer silently no-ops (→
+      `WINDOWS_UNAUTHORIZED` banner); the banner differentiates by kind
+      (UNAUTHORIZED → "Pair again", others → retry / dismiss).
+    - **F11 — auto-enter + long-press gated** in PC-only mode (no PC action).
+    - **Clean:** record-glow construction DRY'd into `RecordGlowFactory` (IME +
+      overlay + Activity); dead string + typed `retrySessionId` cleanups.
+  - **Documented edges / follow-ups (not implemented):**
+    - **F16 (edge):** the floating overlay widget over the Activity shares
+      `pcOnly` — its record button also diverts to the PC while the Activity is
+      focused (consistent, but not independent).
+    - **F13 (edge):** the onStop teardown window — a completion between onPause
+      (clears `pcOnly`) and onStop is handled by the normal non-pcOnly policy;
+      the window is milliseconds.
+    - **Pill-bar display** (see F7), **F14 keyboard theming** (grid renders with
+      default theming, cosmetic), **F15 bespoke launcher icon** (reuses the
+      dictation mipmap) — all deferred.
+  - **Reasoning:** append-only clarification of consequences and parity gaps
+    surfaced by the audit; the core decision (third render host + transient
+    `pcOnly` on existing seams) is unchanged.
+
+- **2026-07-16 — F7 text-pill display implemented (closes the deferred follow-up).**
+  - **Trigger:** the deferred "pill-bar display" follow-up from the audit-fixes
+    wave above; team decision on how to surface pills in the Activity.
+  - **Before:** text pills were not shown in the Activity (only the queue-leak
+    correctness half was fixed); the deferral flagged the IME's
+    `contentArea`/`PromptVisibilityController` panel machinery as the blocker.
+  - **After:** a **permanent text-pill row above the keyboard grid** (between the
+    history and the grid), analogous to the history wiring — NOT a toggle and NOT
+    the IME's mutually-exclusive `contentArea` panel. A lean Activity-owned
+    RecyclerView (`PcTextPillAdapter`) collects all prompts reactively
+    (`PromptDao.getAllFlow`) and filters to `PromptType.TEXT` in Kotlin
+    (`PcTextPills.filter`, JVM-tested); a tap types the pill content to the PC
+    (`PcTextPills.toRequest` → the Activity's PC dispatcher → `TYPE_TEXT`). PROMPT
+    pills stay hidden; the row is GONE when there are no text pills.
+  - **Reasoning (team, D4):** the Activity is a full-screen host with room for a
+    permanent row; a persistent row is more maintainable than another
+    panel-toggle state, and a lean own adapter avoids the IME's
+    `PromptsKeyboardAdapter` coupling (reprocess/instant/select-all/AI-run
+    branches irrelevant to a TEXT-only PC row).

@@ -101,6 +101,25 @@ class FeatureToggleModuleTest {
         assertFalse(next.screenContextAvailable)
     }
 
+    // ── PC-only terminal mode (pc-dictation-activity) ───────────────────
+
+    @Test
+    fun `SetPcOnly flips the transient mode with no side effect`() {
+        val on = module.reduce(FeatureToggles(pcOnly = false), Action.FeatureToggleAction.SetPcOnly(true), ctx())!!
+        assertTrue(on.nextState.pcOnly)
+        assertTrue("pcOnly is purely transient — never persisted", on.sideEffects.isEmpty())
+
+        val off = module.reduce(FeatureToggles(pcOnly = true), Action.FeatureToggleAction.SetPcOnly(false), ctx())!!
+        assertFalse(off.nextState.pcOnly)
+    }
+
+    @Test
+    fun `SetPcOnly only emits on a real change`() {
+        // The Activity may re-push on every resume/rebind; a no-op must not churn the store.
+        val state = FeatureToggles(pcOnly = true)
+        assertNull(module.reduce(state, Action.FeatureToggleAction.SetPcOnly(true), ctx()))
+    }
+
     @Test
     fun `ToggleRewording flips rewordingEnabled`() {
         val state = FeatureToggles(rewordingEnabled = true)

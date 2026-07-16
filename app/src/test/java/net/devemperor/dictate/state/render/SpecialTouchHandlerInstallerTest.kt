@@ -422,6 +422,121 @@ class SpecialTouchHandlerInstallerTest {
         )
     }
 
+    // ── 7. PC-only mode (pc-dictation-activity) — gestures route to the PC, no IC ──
+    //
+    // The PC-dictation Activity installs the handlers with `pcOnlyMode = true`, a null IC provider,
+    // and a keyboardActions dispatcher wrapping the PC sink. These tests prove the gestures emit the
+    // expected PC KeyboardActions and never crash on the absent InputConnection.
+
+    /** Records every KeyboardAction the dispatcher submits (the PC sink's stand-in). */
+    private class RecordingSink : net.devemperor.dictate.state.insertion.KeyboardActionSink {
+        val actions = mutableListOf<net.devemperor.dictate.state.insertion.KeyboardAction>()
+        override fun submit(
+            action: net.devemperor.dictate.state.insertion.KeyboardAction,
+        ): net.devemperor.dictate.state.insertion.SubmitResult {
+            actions += action
+            return net.devemperor.dictate.state.insertion.SubmitResult.Accepted
+        }
+    }
+
+    private fun pcOnlyInstaller(sink: RecordingSink): SpecialTouchHandlerInstaller =
+        SpecialTouchHandlerInstaller(
+            // Null IC: the Activity has no InputConnection. A dereference here would NPE — the
+            // gestures must never read it in PC-only mode.
+            inputConnectionProvider = { null },
+            keyboardActions = { KeyboardActionDispatcher(sink) },
+            insertionService = { null },
+            isPcMode = { true },
+            accentColorProvider = { 0xFF0000FF.toInt() },
+            onVibrate = { vibrations += Unit },
+            onBackspaceDeleteCancelled = { deleteCancels += Unit },
+            keyPressAnimator = KeyPressAnimator(),
+            pcOnlyMode = true,
+        )
+
+    @Test
+    fun `pcOnly SPACE tap emits a type-space to the PC without touching the IC`() {
+        val sink = RecordingSink()
+        val installer = pcOnlyInstaller(sink)
+        installer.installDormant(buttons)
+        installer.attachToViews(buttons)
+        val handler = shadowOf(space).onTouchListener!!
+
+        handler.onTouch(space, motionEvent(android.view.MotionEvent.ACTION_DOWN, 0f))
+        handler.onTouch(space, motionEvent(android.view.MotionEvent.ACTION_UP, 0f))
+
+        // The null-IC short-circuit is skipped in pcOnly mode, so the tap reaches the PC sink.
+        assertEquals(1, sink.actions.size)
+        val typed = sink.actions.single() as net.devemperor.dictate.state.insertion.KeyboardAction.TypeText
+        assertEquals(" ", typed.request.text)
+    }
+
+    @Test
+    fun `pcOnly SPACE swipe emits a cursor move to the PC`() {
+        val sink = RecordingSink()
+        val installer = pcOnlyInstaller(sink)
+        installer.installDormant(buttons)
+        installer.attachToViews(buttons)
+        val handler = shadowOf(space).onTouchListener!!
+
+        handler.onTouch(space, motionEvent(android.view.MotionEvent.ACTION_DOWN, 0f))
+        handler.onTouch(space, motionEvent(android.view.MotionEvent.ACTION_MOVE, 500f))
+
+        val moves = sink.actions
+            .filterIsInstance<net.devemperor.dictate.state.insertion.KeyboardAction.Control>()
+            .map { it.op }
+        assertEquals(
+            "the horizontal swipe must emit at least one CursorMove to the PC",
+            true,
+            moves.any { it is ControlOp.CursorMove },
+        )
+    }
+
+    @Test
+    fun `pcOnly BACKSPACE swipe emits word selection then delete on release`() {
+        val sink = RecordingSink()
+        val installer = pcOnlyInstaller(sink)
+        installer.installDormant(buttons)
+        installer.attachToViews(buttons)
+        val handler = shadowOf(backspace).onTouchListener!!
+
+        // Swipe left past the activation slop (PC word-selection), then release to delete.
+        handler.onTouch(backspace, motionEvent(android.view.MotionEvent.ACTION_DOWN, 500f))
+        handler.onTouch(backspace, motionEvent(android.view.MotionEvent.ACTION_MOVE, 0f))
+        handler.onTouch(backspace, motionEvent(android.view.MotionEvent.ACTION_UP, 0f))
+
+        val ops = sink.actions
+            .filterIsInstance<net.devemperor.dictate.state.insertion.KeyboardAction.Control>()
+            .map { it.op }
+        assertEquals(
+            "the swipe must select at least one word on the PC (Ctrl+Shift+Left)",
+            true,
+            ops.any { it is ControlOp.SelectWord },
+        )
+        assertEquals(
+            "releasing a standing selection must delete it on the PC (Backspace)",
+            true,
+            ops.any { it is ControlOp.DeleteSelection },
+        )
+        // No IC exists — the gesture must have driven the PC entirely (no crash reaching here proves it).
+    }
+
+    @Test
+    fun `pcOnly gates the ENTER overlay handler (no PC path for overlay chars)`() {
+        val installer = pcOnlyInstaller(RecordingSink())
+        installer.installDormant(buttons)
+        installer.attachToViews(buttons)
+
+        assertNull(
+            "the ENTER overlay-char handler has no PC path and must not be installed in pcOnly mode",
+            installer.enterHandler,
+        )
+        assertNull("ENTER keeps no touch listener in pcOnly mode", shadowOf(enter).onTouchListener)
+        // SPACE + BACKSPACE ARE installed.
+        assertNotNull(installer.spaceHandler)
+        assertNotNull(installer.backspaceHandler)
+    }
+
     private fun motionEvent(action: Int, x: Float): android.view.MotionEvent =
         android.view.MotionEvent.obtain(0L, 0L, action, x, 0f, 0)
 

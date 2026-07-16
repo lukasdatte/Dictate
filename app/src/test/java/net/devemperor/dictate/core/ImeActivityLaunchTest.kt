@@ -76,7 +76,10 @@ class ImeActivityLaunchTest {
     }
 
     @Test
-    fun `PC long-press opens the pairing screen`() {
+    fun `PC long-press opens the pairing screen while unpaired`() {
+        // pc-dictation-activity: the PC-key long-press now branches on pairing — unpaired (the
+        // default here, no WindowsTarget in prefs) keeps opening the pairing screen; the paired
+        // branch opens PcDictationActivity (device-verified, needs a stored target).
         service().onPcLongClicked()
         assertLaunches(
             lastIntent(),

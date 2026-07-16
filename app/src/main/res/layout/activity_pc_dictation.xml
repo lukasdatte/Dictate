@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PC-dictation Activity (pc-dictation-activity) — a THIRD render host next to the IME view and the
+  floating overlay widget (ADR-0004 multi-backend, ADR pc-dictation-activity). Top: the full session
+  history; bottom: the full Dictate keyboard grid reused verbatim via <include>. Every output in this
+  Activity is diverted to the paired PC (features.pcOnly) — there is no local InputConnection here.
+-->
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/pc_dictation_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?attr/colorSurface"
+    tools:context=".core.PcDictationActivity">
+
+    <!-- Toolbar-less header: a plain title + the PC-mode purple accent, so the surface reads
+         "everything here goes to the PC" without touching the shared PcModeFrameRenderer (Q3). -->
+    <TextView
+        android:id="@+id/pc_dictation_title_tv"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:drawablePadding="12dp"
+        android:gravity="center_vertical"
+        android:textAppearance="?attr/textAppearanceTitleMedium"
+        android:textColor="@color/dictate_pc_mode"
+        android:text="@string/pc_dictation_title"
+        app:drawableStartCompat="@drawable/ic_baseline_computer_24"
+        app:drawableTint="@color/dictate_pc_mode"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Failure banner + retry (pc-dictation-activity error policy): no local "Tap to paste"
+         pending part exists in PC-only mode, so a failed dispatch surfaces here. GONE by default;
+         driven by state.windowsDispatch.notice. -->
+    <LinearLayout
+        android:id="@+id/pc_dictation_error_banner"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="12dp"
+        android:background="@color/dictate_error_banner_bg"
+        android:visibility="gone"
+        app:layout_constraintTop_toBottomOf="@id/pc_dictation_title_tv"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        tools:visibility="visible">
+
+        <TextView
+            android:id="@+id/pc_dictation_error_tv"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="@android:color/white"
+            tools:text="@string/pc_dictation_send_failed" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/pc_dictation_retry_btn"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@android:color/white"
+            android:text="@string/pc_dictation_retry" />
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/pc_dictation_history_rv"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:clipToPadding="false"
+        app:layout_constraintTop_toBottomOf="@id/pc_dictation_error_banner"
+        app:layout_constraintBottom_toTopOf="@id/pc_dictation_keyboard"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        tools:listitem="@layout/item_keyboard_history" />
+
+    <TextView
+        android:id="@+id/pc_dictation_history_empty_tv"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/dictate_history_no_sessions"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="@id/pc_dictation_history_rv"
+        app:layout_constraintBottom_toBottomOf="@id/pc_dictation_history_rv"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        tools:visibility="visible" />
+
+    <!-- The full Dictate keyboard grid, reused verbatim. Its own in-keyboard history / review /
+         prompt panels stay GONE (this Activity drives the top-of-screen history instead). -->
+    <include
+        android:id="@+id/pc_dictation_keyboard"
+        layout="@layout/activity_dictate_keyboard_view"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

@@ -20,4 +20,19 @@
             android:targetPackage="net.devemperor.dictate.debug"
             android:targetClass="net.devemperor.dictate.core.StartDictationActivity" />
     </shortcut>
+    <!--
+        PC-dictation shortcut (pc-dictation-activity) — debug copy. targetPackage is the LITERAL
+        ".debug" applicationId. Keep in sync with src/main/res/xml/shortcuts.xml.
+    -->
+    <shortcut
+        android:shortcutId="pc_dictation"
+        android:enabled="true"
+        android:icon="@mipmap/ic_dictation"
+        android:shortcutShortLabel="@string/pc_dictation_label"
+        android:shortcutLongLabel="@string/pc_dictation_long_label">
+        <intent
+            android:action="net.devemperor.dictate.OPEN_PC_DICTATION"
+            android:targetPackage="net.devemperor.dictate.debug"
+            android:targetClass="net.devemperor.dictate.core.StartPcDictationActivity" />
+    </shortcut>
 </shortcuts>

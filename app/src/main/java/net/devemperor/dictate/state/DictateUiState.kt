@@ -1025,6 +1025,17 @@ data class LanguageState(
  *   PC-mode is off" are different UI states: the former disables the toggle
  *   (mirroring the settings switch, which is greyed out until paired),
  *   the latter just leaves it unlit.
+ * @property pcOnly the **PC-only terminal mode** (pc-dictation-activity): active exactly while the
+ *   full-screen PC-dictation Activity is in the foreground. It is a THIRD, transient mode-state
+ *   next to [windowsAutoSendActive], deliberately kept separate rather than folded into it:
+ *   [windowsAutoSendActive] is the user's persistent auto-send toggle (paired + toggle-on), while
+ *   [pcOnly] is a host-scoped override that diverts EVERY pipeline terminal to the PC —
+ *   source-independent, including `STATIC_PROMPT` (which [windowsAutoSendActive] deliberately
+ *   excludes, see `WindowsAutoSend.shouldDivertToPc`). NOT pref-mirrored — like
+ *   [screenContextAvailable] it is a runtime fact the Activity pushes in via
+ *   [Action.FeatureToggleAction.SetPcOnly], never a `Pref.*`. In this mode a failed dispatch does
+ *   NOT surface a local "Tap to paste" pending part (there is no IME host); the error surfaces in
+ *   the Activity with a retry instead (ADR pc-dictation-activity).
  */
 data class FeatureToggles(
     val rewordingEnabled: Boolean = true,
@@ -1035,6 +1046,7 @@ data class FeatureToggles(
     val windowsPaired: Boolean = false,
     val screenContextEnabled: Boolean = false,
     val screenContextAvailable: Boolean = false,
+    val pcOnly: Boolean = false,
 )
 
 /**

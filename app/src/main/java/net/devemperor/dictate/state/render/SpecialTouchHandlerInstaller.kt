@@ -126,7 +126,7 @@ import net.devemperor.dictate.state.layout.LogicalButtonId
  * @see docs/plans/2026-05-15 - dictate-cutover-completion/research/render-path-cutover.md §6 RR-1 + §4 NOTE
  * @see docs/plans/2026-05-07 - dictate-keyboard-layout-refactor/research/2-keyboard-layout/2-keyboard-layout.reviewed.md §11.7
  */
-class SpecialTouchHandlerInstaller(
+class SpecialTouchHandlerInstaller @JvmOverloads constructor(
     private val inputConnectionProvider: () -> InputConnection?,
     // Space + cursor-swipe route through the PC-aware seam (§4.2); the backspace-swipe and
     // enter-overlay sub-handlers still take the raw InsertionService (their PC paths — §4.5 word
@@ -139,6 +139,26 @@ class SpecialTouchHandlerInstaller(
     private val onVibrate: () -> Unit,
     private val onBackspaceDeleteCancelled: () -> Unit,
     private val keyPressAnimator: KeyPressAnimator,
+    /**
+     * PC-only host mode (pc-dictation-activity): the installer runs in a host with **no**
+     * `InputConnection` (the PC-dictation Activity), so only the PC branches of the gestures are
+     * installed and no IC read is ever attempted. Concretely:
+     *
+     *  - **SPACE (`CursorSwipeTouchHandler`)** — the outer null-IC short-circuit is skipped, so the
+     *    tap (= type space) and horizontal swipe (= cursor move) run: both already route through
+     *    [keyboardActions] → the PC, never the IC.
+     *  - **BACKSPACE (`BackspaceSwipeHandler`)** — already null-IC-safe: with [isPcMode] true the
+     *    swipe drives PC word-selection chords ([BackspaceSwipePcSelection]) and its IC reads are
+     *    skipped. (Callers set [isPcMode] `= { true }` here.)
+     *  - **ENTER (`EnterOverlayHandler`)** — **gated (not installed)**. Its overlay-character
+     *    insertion has no PC path (it writes through [insertionService] into a local field); in the
+     *    IME's own PC-mode it likewise stays a local-IC feature. ENTER as a plain key still works via
+     *    the catalog click resolver (→ [keyboardActions] → PC), so only the overlay-char picker is
+     *    unavailable here. Documented parity gap (pc-dictation-activity ADR §Consequences).
+     *
+     * Defaults to `false` — the IME keeps the full local behaviour.
+     */
+    private val pcOnlyMode: Boolean = false,
 ) {
 
     /** The built CursorSwipe handler for SPACE (G4). `null` until [installDormant]. */
@@ -187,7 +207,9 @@ class SpecialTouchHandlerInstaller(
             guardSingleOwner(LogicalButtonId.BACKSPACE, backspace)
             backspaceHandler = buildBackspaceSwipeHandler()
         }
-        if (enter != null) {
+        // ENTER overlay-character picker is IC-only (no PC path) — gated in PC-only mode. ENTER as a
+        // plain key still routes through the catalog click resolver to the PC (pc-dictation-activity).
+        if (enter != null && !pcOnlyMode) {
             guardSingleOwner(LogicalButtonId.ENTER, enter)
             enterHandler = buildEnterOverlayHandler(enter)
         }
@@ -290,7 +312,10 @@ class SpecialTouchHandlerInstaller(
         )
         return View.OnTouchListener { v, event ->
             keyPressAnimator.handlePressAnimationEvent(v, event)
-            if (inputConnectionProvider() == null) {
+            // In PC-only mode there is deliberately no InputConnection; the tap/swipe route through
+            // keyboardActions → the PC, so the legacy null-IC short-circuit must NOT fire here
+            // (pc-dictation-activity). In IME mode a null IC still means "no focused field" → no-op.
+            if (!pcOnlyMode && inputConnectionProvider() == null) {
                 space.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0)
                 return@OnTouchListener false
             }

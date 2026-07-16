@@ -92,6 +92,7 @@ editing rules".
 | [0024](0024-prompt-pill-types.md) | Prompt Pills vs. Text Pills — Typed Column Replaces the Bracket Convention | database, ui | Accepted | 2026-07-16 |
 | [0025](0025-input-command-protocol.md) | Input-Command Protocol — Semantic Keyboard Commands over the Wire, not VK Codes | shared, companion · *Project-Wide* | Accepted | 2026-07-15 |
 | [0026](0026-keyboard-action-routing.md) | Keyboard-Action Routing — Exclusive Sink Router in front of the InsertionService | state, service · *Project-Wide* | Accepted | 2026-07-15 |
+| [0027](0027-pc-dictation-activity.md) | PC-Dictation Activity — a Third Render Host with a PC-only Terminal Mode | ui-mode, state, windows · *Project-Wide* | Accepted | 2026-07-16 |
 
 ## Relationship graph
 

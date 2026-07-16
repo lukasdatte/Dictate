@@ -79,4 +79,30 @@ class WindowsAutoSendTest {
         assertFalse(WindowsAutoSend.shouldDivertToPc(InsertionSource.STATIC_PROMPT, paired))
         assertFalse(WindowsAutoSend.shouldDivertToPc(InsertionSource.TRANSCRIPTION, paired))
     }
+
+    // ── pcOnly: the PC-only terminal mode (pc-dictation-activity) ──
+    //
+    // While the full-screen PC-dictation Activity owns the foreground, EVERY terminal diverts to
+    // the PC source-independently — even STATIC_PROMPT, which the persistent auto-send path
+    // excludes. There is no local IME host in the Activity, so a "local" insert would vanish.
+
+    @Test
+    fun `pcOnly diverts every source including static prompt`() {
+        val off = sp() // auto-send OFF, not even paired
+        assertTrue(WindowsAutoSend.shouldDivertToPc(InsertionSource.STATIC_PROMPT, off, pcOnly = true))
+        assertTrue(WindowsAutoSend.shouldDivertToPc(InsertionSource.TRANSCRIPTION, off, pcOnly = true))
+        assertTrue(WindowsAutoSend.shouldDivertToPc(InsertionSource.REWORDING, off, pcOnly = true))
+        assertTrue(WindowsAutoSend.shouldDivertToPc(InsertionSource.QUEUED_PROMPT, off, pcOnly = true))
+        assertTrue(WindowsAutoSend.shouldDivertToPc(InsertionSource.PENDING_PART, off, pcOnly = true))
+    }
+
+    @Test
+    fun `pcOnly false is exactly the persistent auto-send gate`() {
+        val on = onAndPaired()
+        // pcOnly=false must be identical to the two-arg gate on every source.
+        assertFalse(WindowsAutoSend.shouldDivertToPc(InsertionSource.STATIC_PROMPT, on, pcOnly = false))
+        assertTrue(WindowsAutoSend.shouldDivertToPc(InsertionSource.TRANSCRIPTION, on, pcOnly = false))
+        // and nothing diverts when both the toggle and pcOnly are off.
+        assertFalse(WindowsAutoSend.shouldDivertToPc(InsertionSource.TRANSCRIPTION, sp(), pcOnly = false))
+    }
 }

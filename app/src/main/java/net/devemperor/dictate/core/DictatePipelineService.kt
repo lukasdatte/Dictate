@@ -656,7 +656,11 @@ class DictatePipelineService : Service() {
                 fallback = DefaultPipelineConfigResolver(
                     filesDirProvider = { filesDir },
                 ),
-                imeResolverProvider = { binder.delegatePipelineConfigResolver },
+                // pc-dictation-activity: the foreground host (PC-dictation Activity) resolver wins
+                // over the IME's while set, so a headless Activity recording resolves its own config.
+                imeResolverProvider = {
+                    binder.delegateForegroundConfigResolver ?: binder.delegatePipelineConfigResolver
+                },
             ),
             // ADR-0009 §3.3 submit-when-free gate: the deferred submit
             // launches on the service scope and, on timeout, fails the
@@ -726,7 +730,11 @@ class DictatePipelineService : Service() {
             notificationCoordinator = notificationCoordinatorImpl,
             inputConnectionProvider = { binder.delegateInputConnectionProvider?.invoke() },
             insertionServiceProvider = { binder.delegateInsertionService?.invoke() },
-            keyboardActionsProvider = { binder.delegateKeyboardActions?.invoke() },
+            // pc-dictation-activity: the foreground host's PC-only dispatcher wins over the IME's
+            // while the PC-dictation Activity is in the foreground (falls back to the IME slot).
+            keyboardActionsProvider = {
+                (binder.delegateForegroundKeyboardActions ?: binder.delegateKeyboardActions)?.invoke()
+            },
             clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager,
             sharedPrefs = sharedPrefs,
             // Chunk 3.0 (indirection-cleanup) — typed State → SP write
@@ -934,7 +942,12 @@ class DictatePipelineService : Service() {
                 // a "Tap to paste" pending part — text commit stays
                 // IME-exclusive (ADR-0011).
                 val text = sessionManagerImpl.getFinalOutput(sessionId) ?: callbackText
-                if (WindowsAutoSend.shouldAutoSend(sharedPrefs)) {
+                // pc-dictation-activity: the PC-only terminal mode diverts EVERY headless completion
+                // to the PC, independent of the persistent auto-send toggle. `pcOnly` is the
+                // Activity-foreground fact (state.features.pcOnly); a failure in this mode surfaces
+                // no local pending part (there is no IME host) — suppressPendingFallback carries that.
+                val pcOnly = store.snapshot.features.pcOnly
+                if (WindowsAutoSend.shouldAutoSend(sharedPrefs) || pcOnly) {
                     // D1 / ADR-0019 — the SECOND auto-send producer. Same predicate, same
                     // primitive as the IME seam (§3.6). The guard is ALREADY consumed by the
                     // bridge at this point (PipelineCallbackBridge, headless arm), so exactly-once
@@ -962,6 +975,7 @@ class DictatePipelineService : Service() {
                         ),
                         acknowledgeOnSuccess = true,
                         surfacedAsPending = false,
+                        suppressPendingFallback = pcOnly,
                     )
                 } else {
                     // UNCHANGED — the existing committed=false → pending-part path (ADR-0011).
@@ -1246,6 +1260,8 @@ class DictatePipelineService : Service() {
             { elapsedMs ->
                 overlayBackendImpl?.onTimerTick(elapsedMs)
                 binder.delegateRecordingTimerSink?.invoke(elapsedMs)
+                // pc-dictation-activity: additive foreground-host sink (the PC-dictation Activity).
+                binder.delegateForegroundRecordingTimerSink?.invoke(elapsedMs)
             },
             { rawAmplitude ->
                 // Normalise per-surface: the overlay gets the service's
@@ -1256,6 +1272,9 @@ class DictatePipelineService : Service() {
                     overlayTickerAmplitudeProcessor.process(rawAmplitude),
                 )
                 binder.delegateRecordingAmplitudeSink?.invoke(rawAmplitude)
+                // pc-dictation-activity: additive foreground-host sink — RAW sample, the Activity
+                // normalises with its own processor (independent EMA state, same math).
+                binder.delegateForegroundRecordingAmplitudeSink?.invoke(rawAmplitude)
             },
             { recordingHardwareAdapterImpl.maxAmplitudeOrNull() },
         ).also { it.start() }
@@ -2216,6 +2235,42 @@ class DictatePipelineService : Service() {
         internal var delegatePipelineConfigResolver: PipelineConfigResolver? = null
 
         /**
+         * pc-dictation-activity — the **foreground-host** config resolver + keyboard-action
+         * dispatcher, taking PRECEDENCE over the IME's [delegatePipelineConfigResolver] /
+         * [delegateKeyboardActions] while set.
+         *
+         * The full-screen PC-dictation Activity is a third input host (like the IME) but has no
+         * `InputConnection`: it registers these on `onResume` and clears them (`null`) on `onPause`.
+         * A separate slot — rather than overwriting the IME's — keeps the IME's registration intact,
+         * so a bound-but-hidden IME still records/inserts correctly once the Activity closes. The
+         * consumer lambdas ([DelegatingPipelineConfigResolver.imeResolverProvider],
+         * [ModuleServices.keyboardActionsProvider]) prefer the foreground slot when non-null and fall
+         * back to the IME slot otherwise. `@Volatile` — set/cleared on the Activity main thread, read
+         * on the orchestrator dispatch thread.
+         */
+        @Volatile
+        internal var delegateForegroundConfigResolver: PipelineConfigResolver? = null
+
+        @Volatile
+        internal var delegateForegroundKeyboardActions:
+            (() -> net.devemperor.dictate.state.insertion.KeyboardActionDispatcher?)? = null
+
+        /**
+         * pc-dictation-activity — **additive** foreground-host recording-tick sinks (timer +
+         * amplitude), for the PC-dictation Activity's record-button animation. The single service
+         * ticker forwards each tick to the overlay AND the IME sinks AND (when set) these, so the
+         * Activity's `RecordingAnimationController` breathes/pulses without adding a second poller
+         * (the `getMaxAmplitude` read is destructive — single-poller invariant). Additive, not
+         * precedence: multiple animation surfaces tick independently. Registered on
+         * `onServiceConnected`, cleared on `onStop`.
+         */
+        @Volatile
+        internal var delegateForegroundRecordingTimerSink: ((Long) -> Unit)? = null
+
+        @Volatile
+        internal var delegateForegroundRecordingAmplitudeSink: ((Int) -> Unit)? = null
+
+        /**
          * Register the IME's [PipelineOrchestrator.PipelineCallback] as the
          * active delegate. Called from `onServiceConnected`. Pass `null` on
          * unbind to clear.
@@ -2270,6 +2325,34 @@ class DictatePipelineService : Service() {
             provider: (() -> net.devemperor.dictate.state.insertion.KeyboardActionDispatcher?)?,
         ) {
             delegateKeyboardActions = provider
+        }
+
+        /**
+         * pc-dictation-activity — register/clear the foreground-host (PC-dictation Activity)
+         * config resolver + keyboard-action dispatcher. Both take precedence over the IME's while
+         * set (see [delegateForegroundConfigResolver]). Called from the Activity's `onResume` /
+         * `onPause`; pass `null` to clear so a bound-but-hidden IME regains ownership.
+         */
+        fun registerForegroundConfigResolver(resolver: PipelineConfigResolver?) {
+            delegateForegroundConfigResolver = resolver
+        }
+
+        fun registerForegroundKeyboardActionsProvider(
+            provider: (() -> net.devemperor.dictate.state.insertion.KeyboardActionDispatcher?)?,
+        ) {
+            delegateForegroundKeyboardActions = provider
+        }
+
+        /**
+         * pc-dictation-activity — register/clear the foreground-host recording-tick sinks (additive;
+         * see [delegateForegroundRecordingTimerSink]). Pass `null, null` on `onStop`.
+         */
+        fun registerForegroundRecordingTickSinks(
+            timerSink: ((Long) -> Unit)?,
+            amplitudeSink: ((Int) -> Unit)?,
+        ) {
+            delegateForegroundRecordingTimerSink = timerSink
+            delegateForegroundRecordingAmplitudeSink = amplitudeSink
         }
 
         /**

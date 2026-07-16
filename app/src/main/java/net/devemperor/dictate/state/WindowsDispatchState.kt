@@ -42,6 +42,16 @@ data class InFlightDispatch(
     val createdAt: Long,
     val acknowledgeOnSuccess: Boolean,
     val surfacedAsPending: Boolean,
+    /**
+     * PC-only terminal mode (pc-dictation-activity): when `true`, a [Action.WindowsDispatchAction.Failed]
+     * must NOT surface a local "Tap to paste" pending part. The dispatch originated from the
+     * full-screen PC-dictation Activity, which has no IME host — a pending part (ADR-0011) presumes
+     * one. The failure surfaces in the Activity (visible error + retry) instead; the text stays
+     * durably recoverable via `final_output_text` (ADR-0013 §3). Captured at [Action.WindowsDispatchAction.Started]
+     * time, the same way [acknowledgeOnSuccess] / [surfacedAsPending] are, so the Failed arm reads
+     * it from this axis without a cross-module lookup.
+     */
+    val suppressPendingFallback: Boolean = false,
 )
 
 /**
@@ -56,6 +66,12 @@ sealed interface DispatchNotice {
      */
     data object ClipboardOnly : DispatchNotice
 
-    /** ERROR — the dispatch failed. [kind] is WINDOWS_UNREACHABLE (dismiss-only) or WINDOWS_UNAUTHORIZED. */
-    data class Error(val kind: PipelineErrorKind) : DispatchNotice
+    /**
+     * ERROR — the dispatch failed. [kind] is WINDOWS_UNREACHABLE (dismiss-only) or WINDOWS_UNAUTHORIZED.
+     *
+     * @property sessionId the failed session, carried so a PC-only-mode surface (the PC-dictation
+     *   Activity) can offer a **retry** that re-dispatches this exact session. `null` for the
+     *   in-keyboard InfoBar path, which does not retry per-session. (pc-dictation-activity)
+     */
+    data class Error(val kind: PipelineErrorKind, val sessionId: String? = null) : DispatchNotice
 }

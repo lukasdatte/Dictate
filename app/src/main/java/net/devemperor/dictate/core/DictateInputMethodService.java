@@ -5141,7 +5141,8 @@ public class DictateInputMethodService extends InputMethodService
                             "ReviewPanel.Show");
                 }
             } else if (windowsDispatchCoordinator != null
-                    && net.devemperor.dictate.windows.WindowsAutoSend.INSTANCE.shouldDivertToPc(source, sp)) {
+                    && net.devemperor.dictate.windows.WindowsAutoSend.INSTANCE.shouldDivertToPc(
+                            source, sp, isPcOnlyActive())) {
                 // ADR-0019 — Auto-send-to-Windows. THE docking point the K7-seam
                 // comment (Gate 1) reserved, now live. The IME is only ONE of two
                 //
@@ -5180,9 +5181,13 @@ public class DictateInputMethodService extends InputMethodService
                     // definition uninserted — a success MUST acknowledge it, or the
                     // findPendingInsertion recovery re-surfaces it on the next cold boot.
                     // Text is `text` (V5: the one text source — the seam already holds it).
+                    // suppressPendingFallback = pcOnly (pc-dictation-activity): in PC-only mode
+                    // there is no IME host to hold a "Tap to paste" part on failure — the Activity
+                    // surfaces the error + retry instead.
                     windowsDispatchCoordinator.dispatch(
                             sid, text, sessionCreatedAt(sid), originOf(sid),
-                            /* acknowledgeOnSuccess = */ true, /* surfacedAsPending = */ false);
+                            /* acknowledgeOnSuccess = */ true, /* surfacedAsPending = */ false,
+                            /* suppressPendingFallback = */ isPcOnlyActive());
                 }
             } else {
                 // RESERVED SEAM — Auto-send-to-Windows dispatch (M1/M4, later
@@ -5264,6 +5269,17 @@ public class DictateInputMethodService extends InputMethodService
     private boolean isWindowsAutoSendActive() {
         return windowsDispatchCoordinator != null
                 && net.devemperor.dictate.windows.WindowsAutoSend.INSTANCE.shouldAutoSend(sp);
+    }
+
+    /**
+     * True iff the PC-only terminal mode is active (pc-dictation-activity) — the full-screen
+     * PC-dictation Activity owns the foreground and has pushed {@code features.pcOnly}. Read from
+     * state; false before the binder arrives. In this mode every completed pipeline diverts to the
+     * PC source-independently and a failure surfaces no local pending part.
+     */
+    private boolean isPcOnlyActive() {
+        return pipelineBinder != null
+                && pipelineBinder.getState().getValue().getFeatures().getPcOnly();
     }
 
     /**
@@ -6661,7 +6677,18 @@ public class DictateInputMethodService extends InputMethodService
     /** PC button long-press — the pairing screen, paired or not. */
     @Override
     public void onPcLongClicked() {
-        openWindowsPairingActivity();
+        // pc-dictation-activity: repurpose the PC-key long-press. Paired → open the full-screen
+        // PC-dictation Activity (a "remote keyboard for the PC"); unpaired → keep opening pairing
+        // (there is no PC to dictate to yet). Activity-start from the IME MUST go through
+        // ImeActivityLauncher (NEW_TASK+CLEAR_TOP, see its KDoc) so a stale task is not resurrected.
+        boolean paired = sp != null
+                && net.devemperor.dictate.preferences.WindowsTarget.from(sp) != null;
+        if (paired) {
+            startActivity(ImeActivityLauncher.INSTANCE.intentFor(
+                    this, net.devemperor.dictate.core.PcDictationActivity.class));
+        } else {
+            openWindowsPairingActivity();
+        }
     }
 
     /**

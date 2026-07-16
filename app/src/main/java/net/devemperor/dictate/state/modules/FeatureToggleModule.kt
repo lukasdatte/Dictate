@@ -146,6 +146,19 @@ object FeatureToggleModule : DictateModule<FeatureToggles, Action.FeatureToggleA
                 )
             }
 
+        is Action.FeatureToggleAction.SetPcOnly ->
+            if (state.pcOnly == action.active) {
+                // The Activity may re-push on every resume/rebind; only a real
+                // change is worth a state emit. No effect — pcOnly is purely
+                // transient (never persisted), owned by the Activity lifecycle.
+                null
+            } else {
+                TransitionResult(
+                    nextState = state.copy(pcOnly = action.active),
+                    sideEffects = emptyList(),
+                )
+            }
+
         // See "ToggleVibration deviation" in the module KDoc.
         Action.FeatureToggleAction.ToggleVibration -> null
     }

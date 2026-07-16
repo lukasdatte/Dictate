@@ -24,6 +24,7 @@ import net.devemperor.dictate.database.entity.SessionOrigin
 import net.devemperor.dictate.history.KeyboardHistoryAdapter
 import net.devemperor.dictate.history.KeyboardHistoryController
 import net.devemperor.dictate.history.KeyboardHistoryPager
+import net.devemperor.dictate.keyboard.KeyPressAnimator
 import net.devemperor.dictate.preferences.AmbiguityMode
 import net.devemperor.dictate.preferences.LanguageResolver
 import net.devemperor.dictate.preferences.Pref
@@ -36,6 +37,8 @@ import net.devemperor.dictate.state.insertion.KeyboardActionDispatcher
 import net.devemperor.dictate.state.layout.LogicalButtonId
 import net.devemperor.dictate.state.render.ImeViewBackend
 import net.devemperor.dictate.state.render.RealMotionSurface
+import net.devemperor.dictate.state.render.RecordingAnimationController
+import net.devemperor.dictate.state.render.SpecialTouchHandlerInstaller
 import net.devemperor.dictate.windows.PcInputSink
 import net.devemperor.dictate.windows.SessionEntityMapper
 import java.io.File
@@ -85,6 +88,12 @@ class PcDictationActivity : AppCompatActivity() {
 
     /** PC-only live-key dispatcher (no local sink — every key goes to the PC). */
     private var pcKeyboardActions: KeyboardActionDispatcher? = null
+
+    /** Record-button pulse animation, fed by the service ticker's foreground sinks. */
+    private var recordingAnimation: RecordingAnimationController? = null
+
+    /** Per-surface amplitude normaliser (own EMA state, same math as the IME/overlay). */
+    private val amplitudeProcessor = AmplitudeProcessor()
 
     private var historyController: KeyboardHistoryController? = null
     private var historyAdapter: KeyboardHistoryAdapter? = null
@@ -190,12 +199,58 @@ class PcDictationActivity : AppCompatActivity() {
         views[LogicalButtonId.ENTER] = findViewById(R.id.enter_btn)
         findViewById<View?>(R.id.widget_toggle_btn)?.let { views[LogicalButtonId.WIDGET_TOGGLE] = it }
 
+        // Record-button pulse/border-glow animation (pc-dictation-activity), fed by the service's
+        // single recording ticker via the additive foreground sinks — no second amplitude poller.
+        // Same controller + animation the IME/overlay use; only the sink wiring differs.
+        val recordBtn = views[LogicalButtonId.RECORD] as MaterialButton
+        val density = recordBtn.resources.displayMetrics.density
+        val glow = net.devemperor.dictate.widget.BorderGlowAnimation(
+            sp.get(Pref.AccentColor),
+            androidx.appcompat.content.res.AppCompatResources.getDrawable(this, R.drawable.ic_baseline_send_20),
+            net.devemperor.dictate.widget.AmplitudeVisualizerDrawable.BarCountMode.Fixed(30),
+            0.35f,
+            density,
+        ).apply { prepare(recordBtn) }
+        val animController = RecordingAnimationController(
+            glow,
+            recordBtn,
+            { sp.get(Pref.AccentColor) },
+            { sp.get(Pref.Animations) },
+            { androidx.core.content.ContextCompat.getColor(this, R.color.dictate_pc_mode) },
+            getString(R.string.dictate_pc_badge),
+        )
+        recordingAnimation = animController
+        b.registerForegroundRecordingTickSinks(
+            { elapsedMs -> animController.onTimerTick(elapsedMs) },
+            { raw -> animController.onAmplitude(amplitudeProcessor.process(raw)) },
+        )
+
+        // Special-touch gestures in PC-only mode (pc-dictation-activity): SPACE tap/cursor-swipe and
+        // BACKSPACE word-select route to the PC via `pcKeyboardActions`; there is no InputConnection
+        // (null provider) and the ENTER overlay-char picker is gated (no PC path). Same handlers as
+        // the IME — only the wiring differs (no new gesture code).
+        val installer = SpecialTouchHandlerInstaller(
+            inputConnectionProvider = { null },
+            keyboardActions = { pcKeyboardActions },
+            insertionService = { null },
+            isPcMode = { true },
+            accentColorProvider = { sp.get(Pref.AccentColor) },
+            onVibrate = {},
+            onBackspaceDeleteCancelled = {},
+            keyPressAnimator = KeyPressAnimator(),
+            pcOnlyMode = true,
+        )
         val b2 = ImeViewBackend(
             motionSurface = RealMotionSurface(motion),
             buttonViews = views,
             ctx = this,
             services = b.moduleServices,
             onVibrate = {},
+            recordingAnimationController = animController,
+            staticHandlerInstaller = { v ->
+                installer.installDormant(v)
+                installer.attachToViews(v)
+            },
             // RECORD send-tap: snapshot the headless recording config BEFORE the catalog dispatches
             // StopRecordingAndSend, or resolveFresh throws (R-1). Mirrors the IME's affordance.
             imeSideAffordance = { id, isLongPress -> onBackendAffordance(id, isLongPress) },
@@ -253,10 +308,13 @@ class PcDictationActivity : AppCompatActivity() {
             b.dispatch(Action.FeatureToggleAction.SetPcOnly(false))
             b.registerForegroundConfigResolver(null)
             b.registerForegroundKeyboardActionsProvider(null)
+            b.registerForegroundRecordingTickSinks(null, null)
             backend?.let { b.keyboardLayoutManager.detachBackend(it) }
         }
         backend = null
         pcKeyboardActions = null
+        recordingAnimation?.reset()
+        recordingAnimation = null
         noticeJob?.cancel()
         noticeJob = null
         historyController?.onViewDestroyed()

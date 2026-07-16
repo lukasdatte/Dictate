@@ -1260,6 +1260,8 @@ class DictatePipelineService : Service() {
             { elapsedMs ->
                 overlayBackendImpl?.onTimerTick(elapsedMs)
                 binder.delegateRecordingTimerSink?.invoke(elapsedMs)
+                // pc-dictation-activity: additive foreground-host sink (the PC-dictation Activity).
+                binder.delegateForegroundRecordingTimerSink?.invoke(elapsedMs)
             },
             { rawAmplitude ->
                 // Normalise per-surface: the overlay gets the service's
@@ -1270,6 +1272,9 @@ class DictatePipelineService : Service() {
                     overlayTickerAmplitudeProcessor.process(rawAmplitude),
                 )
                 binder.delegateRecordingAmplitudeSink?.invoke(rawAmplitude)
+                // pc-dictation-activity: additive foreground-host sink — RAW sample, the Activity
+                // normalises with its own processor (independent EMA state, same math).
+                binder.delegateForegroundRecordingAmplitudeSink?.invoke(rawAmplitude)
             },
             { recordingHardwareAdapterImpl.maxAmplitudeOrNull() },
         ).also { it.start() }
@@ -2251,6 +2256,21 @@ class DictatePipelineService : Service() {
             (() -> net.devemperor.dictate.state.insertion.KeyboardActionDispatcher?)? = null
 
         /**
+         * pc-dictation-activity — **additive** foreground-host recording-tick sinks (timer +
+         * amplitude), for the PC-dictation Activity's record-button animation. The single service
+         * ticker forwards each tick to the overlay AND the IME sinks AND (when set) these, so the
+         * Activity's `RecordingAnimationController` breathes/pulses without adding a second poller
+         * (the `getMaxAmplitude` read is destructive — single-poller invariant). Additive, not
+         * precedence: multiple animation surfaces tick independently. Registered on
+         * `onServiceConnected`, cleared on `onStop`.
+         */
+        @Volatile
+        internal var delegateForegroundRecordingTimerSink: ((Long) -> Unit)? = null
+
+        @Volatile
+        internal var delegateForegroundRecordingAmplitudeSink: ((Int) -> Unit)? = null
+
+        /**
          * Register the IME's [PipelineOrchestrator.PipelineCallback] as the
          * active delegate. Called from `onServiceConnected`. Pass `null` on
          * unbind to clear.
@@ -2321,6 +2341,18 @@ class DictatePipelineService : Service() {
             provider: (() -> net.devemperor.dictate.state.insertion.KeyboardActionDispatcher?)?,
         ) {
             delegateForegroundKeyboardActions = provider
+        }
+
+        /**
+         * pc-dictation-activity — register/clear the foreground-host recording-tick sinks (additive;
+         * see [delegateForegroundRecordingTimerSink]). Pass `null, null` on `onStop`.
+         */
+        fun registerForegroundRecordingTickSinks(
+            timerSink: ((Long) -> Unit)?,
+            amplitudeSink: ((Int) -> Unit)?,
+        ) {
+            delegateForegroundRecordingTimerSink = timerSink
+            delegateForegroundRecordingAmplitudeSink = amplitudeSink
         }
 
         /**

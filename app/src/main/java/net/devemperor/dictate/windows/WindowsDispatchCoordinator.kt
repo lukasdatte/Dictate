@@ -52,7 +52,12 @@ class WindowsDispatchCoordinator(
      *   `inserted_at`).
      * @param surfacedAsPending true when a pending part for this session ALREADY exists (a re-sent
      *   still-pending history row). The reducer's Succeeded arm then needs no cross-axis read.
+     * @param suppressPendingFallback true in the PC-only terminal mode (pc-dictation-activity): a
+     *   failure must NOT surface a local pending part (there is no IME host). Threaded onto the
+     *   in-flight axis so the reducer's Failed arm honours it. Defaults to `false` — the persistent
+     *   auto-send producers keep the ADR-0011 pending fallback.
      */
+    @JvmOverloads
     fun dispatch(
         sessionId: String,
         text: String,
@@ -60,6 +65,7 @@ class WindowsDispatchCoordinator(
         origin: SessionOriginWire,
         acknowledgeOnSuccess: Boolean,
         surfacedAsPending: Boolean = false,
+        suppressPendingFallback: Boolean = false,
     ) {
         val target = targetProvider() ?: run {
             // Not paired — treat exactly like a rejected secret (both end in the pending-part
@@ -74,6 +80,7 @@ class WindowsDispatchCoordinator(
                 createdAt = createdAt,
                 acknowledgeOnSuccess = acknowledgeOnSuccess,
                 surfacedAsPending = surfacedAsPending,
+                suppressPendingFallback = suppressPendingFallback,
             ),
         )
         executor.execute {

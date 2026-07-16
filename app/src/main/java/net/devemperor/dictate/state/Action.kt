@@ -1152,6 +1152,17 @@ sealed class Action {
         data class SetScreenContextAvailable(val available: Boolean) : FeatureToggleAction()
 
         /**
+         * Push the PC-only terminal mode into the axis (pc-dictation-activity).
+         *
+         * A setter rather than a mirrored pref because `pcOnly` is not a pref: it is a runtime fact
+         * — "the full-screen PC-dictation Activity is currently in the foreground". The Activity
+         * dispatches `SetPcOnly(true)` in `onResume` and `SetPcOnly(false)` in `onPause`, mirroring
+         * how [SetScreenContextAvailable] pushes a system-observed fact. See
+         * [net.devemperor.dictate.state.FeatureToggles.pcOnly].
+         */
+        data class SetPcOnly(val active: Boolean) : FeatureToggleAction()
+
+        /**
          * **Deviation note:** `vibrationEnabled` lives on `AudioState`,
          * not `FeatureToggles`, so the reducer in `FeatureToggleModule`
          * returns `null` (cross-axis writes are forbidden by the lens,
@@ -1297,6 +1308,13 @@ sealed class Action {
             val createdAt: Long,
             val acknowledgeOnSuccess: Boolean,
             val surfacedAsPending: Boolean,
+            /**
+             * PC-only terminal mode (pc-dictation-activity): a failure of this dispatch must not
+             * surface a local pending part (there is no IME host). Threaded onto [InFlightDispatch]
+             * so the module's Failed arm can honour it. Defaults to `false` — the persistent
+             * auto-send producers (IME seam + headless sink) keep the ADR-0011 pending fallback.
+             */
+            val suppressPendingFallback: Boolean = false,
         ) : WindowsDispatchAction()
 
         /** HTTP 200 + delivered=true — the ONLY success path. [outcome] drives the notice. */

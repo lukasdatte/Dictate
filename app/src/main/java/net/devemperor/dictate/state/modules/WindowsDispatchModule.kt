@@ -81,6 +81,7 @@ object WindowsDispatchModule :
                                 createdAt = action.createdAt,
                                 acknowledgeOnSuccess = action.acknowledgeOnSuccess,
                                 surfacedAsPending = action.surfacedAsPending,
+                                suppressPendingFallback = action.suppressPendingFallback,
                             ),
                         ),
                         notice = null, // a fresh send clears the previous notice
@@ -137,12 +138,17 @@ object WindowsDispatchModule :
             TransitionResult(
                 state.copy(
                     inFlight = state.inFlight.removeAll { it.sessionId == action.sessionId },
-                    notice = DispatchNotice.Error(action.errorKind),
+                    // Carry the sessionId so a PC-only surface (the Activity) can retry this exact
+                    // session (pc-dictation-activity).
+                    notice = DispatchNotice.Error(action.errorKind, f.sessionId),
                 ),
-                // A part already exists (cascade / re-sent pending row) → do nothing. Otherwise
-                // surface the text as a pending part (the existing ADR-0011 fallback). AddOne also
-                // dedups by sessionId — belt AND braces: exactly one part, never two.
-                if (f.surfacedAsPending) {
+                // Pending-part fallback (ADR-0011), unless:
+                //  - a part already exists (cascade / re-sent pending row) → nothing to add, or
+                //  - suppressPendingFallback (PC-only mode, pc-dictation-activity) → there is no IME
+                //    host to hold a "Tap to paste" part; the Activity surfaces the error + retry
+                //    and the text stays durably recoverable via final_output_text (ADR-0013 §3).
+                // AddOne also dedups by sessionId — belt AND braces: exactly one part, never two.
+                if (f.surfacedAsPending || f.suppressPendingFallback) {
                     emptyList()
                 } else {
                     listOf(Effect.SurfacePendingPart(f.sessionId, f.text, f.createdAt))

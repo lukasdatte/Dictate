@@ -28,12 +28,14 @@ class WindowsDispatchModuleTest {
         sessionId: String = "s1",
         acknowledgeOnSuccess: Boolean = true,
         surfacedAsPending: Boolean = false,
+        suppressPendingFallback: Boolean = false,
     ) = InFlightDispatch(
         sessionId = sessionId,
         text = "text-$sessionId",
         createdAt = 1_000L,
         acknowledgeOnSuccess = acknowledgeOnSuccess,
         surfacedAsPending = surfacedAsPending,
+        suppressPendingFallback = suppressPendingFallback,
     )
 
     private fun state(vararg entries: InFlightDispatch, notice: DispatchNotice? = null) =
@@ -191,7 +193,27 @@ class WindowsDispatchModuleTest {
             listOf(WindowsDispatchModule.Effect.SurfacePendingPart("s1", "text-s1", 1_000L)),
             r.sideEffects,
         )
-        assertEquals(DispatchNotice.Error(PipelineErrorKind.WINDOWS_UNREACHABLE), r.nextState.notice)
+        assertEquals(
+            DispatchNotice.Error(PipelineErrorKind.WINDOWS_UNREACHABLE, "s1"),
+            r.nextState.notice,
+        )
+        assertTrue(r.nextState.inFlight.isEmpty())
+    }
+
+    @Test
+    fun `failed_inPcOnlyMode_suppressesPendingPartButKeepsErrorNoticeWithSessionId`() {
+        // PC-only mode (pc-dictation-activity): no IME host → no "Tap to paste" part. The Activity
+        // surfaces the error + a retry keyed on the sessionId carried in the notice.
+        val r = module.reduce(
+            state(inFlight("s1", surfacedAsPending = false, suppressPendingFallback = true)),
+            Action.WindowsDispatchAction.Failed("s1", PipelineErrorKind.WINDOWS_UNREACHABLE),
+            ctx(),
+        )!!
+        assertTrue("no pending part in PC-only mode", r.sideEffects.isEmpty())
+        assertEquals(
+            DispatchNotice.Error(PipelineErrorKind.WINDOWS_UNREACHABLE, "s1"),
+            r.nextState.notice,
+        )
         assertTrue(r.nextState.inFlight.isEmpty())
     }
 

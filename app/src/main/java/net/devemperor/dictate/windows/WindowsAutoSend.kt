@@ -38,6 +38,24 @@ object WindowsAutoSend {
         shouldAutoSend(sp) && source.isDictationOutput()
 
     /**
+     * The [shouldDivertToPc] gate widened by the **PC-only terminal mode** (pc-dictation-activity).
+     *
+     * When [pcOnly] is `true` (the full-screen PC-dictation Activity owns the foreground), EVERY
+     * pipeline terminal diverts to the PC **source-independently** — including
+     * [InsertionSource.STATIC_PROMPT], which the persistent auto-send path deliberately excludes.
+     * The Activity has no local IME host, so there is nowhere else the output could go: a text pill
+     * inserted "locally" would simply vanish. The [pcOnly] flag is read from
+     * `state.features.pcOnly`, not from [SharedPreferences], because it is a transient runtime mode
+     * (see [net.devemperor.dictate.state.FeatureToggles.pcOnly]) — hence it is a separate parameter
+     * rather than a fourth pref folded into [shouldAutoSend].
+     *
+     * When [pcOnly] is `false` this is exactly [shouldDivertToPc] — the persistent auto-send
+     * behaviour is unchanged.
+     */
+    fun shouldDivertToPc(source: InsertionSource, sp: SharedPreferences, pcOnly: Boolean): Boolean =
+        pcOnly || shouldDivertToPc(source, sp)
+
+    /**
      * Which [InsertionSource]s are dictation outputs (auto-send-eligible)? Exhaustive `when`
      * (no `else`) so a new source must be classified deliberately at compile time.
      */

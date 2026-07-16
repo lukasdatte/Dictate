@@ -286,6 +286,48 @@ simultaneously. Each render-tick fans out to all active backends.
 > multi-backend. The architecture-doc tutorial is the
 > single-source-of-truth; in code, the manager keeps a list.
 
+### 6.1 Third render host — the PC-dictation Activity
+
+The multi-backend list has a **third** attach point besides the IME view
+and the floating overlay widget: `PcDictationActivity`
+(`core/PcDictationActivity.kt`, pc-dictation-activity). It is a full-screen
+"remote keyboard for the PC" — the Dictate keyboard grid (the same
+`activity_dictate_keyboard_view` layout, reused verbatim via `<include>`)
+with the session history on top.
+
+Key facts:
+
+- **It reuses `ImeViewBackend` unchanged** — the class is host-agnostic
+  (it takes a `MotionSurface` + a `LogicalButtonId → View` map + the
+  service-owned `ModuleServices`, none IME-specific). The Activity builds
+  its own view instances and its own backend, then calls
+  `binder.keyboardLayoutManager.attachBackend(...)`. Both the IME's and the
+  Activity's backends are `BackendType.IME_VIEW`, so both receive
+  `catalog.forKeyboard(state)`. The `attachBackend` duplicate guard is
+  by object identity, so two distinct backends coexist fine (a
+  bound-but-hidden IME view stays attached while the Activity is up — both
+  render the one live state; only the Activity's is visible).
+
+- **Everything diverts to the PC (`features.pcOnly`).** There is no local
+  `InputConnection`. While foregrounded the Activity pushes
+  `SetPcOnly(true)`; every pipeline terminal then diverts to the paired PC
+  source-independently (`WindowsAutoSend.shouldDivertToPc(source, sp, pcOnly)`),
+  and a failed dispatch surfaces in the Activity (error banner + retry keyed
+  on `DispatchNotice.Error.sessionId`) instead of a local pending part.
+
+- **Two foreground-host binder registrations, with precedence over the
+  IME.** A headless recording cannot resolve its `JobRequest` on the
+  service-side default resolver (it throws for a fresh recording), and live
+  keys must reach the PC, so the Activity registers a `PipelineConfigResolver`
+  (an `ImePipelineConfigResolver`, snapshotted at the RECORD send-tap) and a
+  PC-only `KeyboardActionDispatcher` via dedicated `delegateForeground*`
+  slots on the `LocalBinder`. The consumer lambdas prefer the foreground
+  slot and fall back to the IME's when it is cleared (`onStop`) — the IME's
+  own registrations are never overwritten.
+
+Owner ADR: `../../decisions/NNNN-pc-dictation-activity.md` (pc-dictation-activity,
+plan-scoped — pending promotion).
+
 ## 7. `SlotRenderer.applySlotToView` (F-7 / DRY)
 
 The shared helper:

@@ -30,8 +30,10 @@ import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.content.res.Configuration;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
@@ -707,6 +709,12 @@ public class DictateInputMethodService extends InputMethodService
                 unbindAiInfrastructureFromService(pipelineBinder);
             }
             pipelineBinder = null;
+            // §B3 — with view retention the view-rebuild no longer implicitly
+            // heals a service restart, so clear the attached-marker and stop
+            // the service-bound renderers/observers here. The retained view
+            // tree + backend are kept; onServiceConnected re-attaches them to
+            // the fresh manager.
+            onServiceLostClearAttachedRenderers();
         }
 
         // ── onBindingDied ──
@@ -723,6 +731,8 @@ public class DictateInputMethodService extends InputMethodService
                 // already unbound; no-op
             }
             pipelineBinder = null;
+            // §B3 — same rationale as onServiceDisconnected.
+            onServiceLostClearAttachedRenderers();
             Intent intent = new Intent(DictateInputMethodService.this, DictatePipelineService.class);
             bindService(intent, this, Context.BIND_AUTO_CREATE);
         }
@@ -737,6 +747,14 @@ public class DictateInputMethodService extends InputMethodService
         }
     };
     private boolean pipelineServiceBindAttempted = false;
+
+    // render-latency-wave2 §B2 — the Configuration the currently-retained
+    // dictateKeyboardView was inflated (or last reused) under. Compared
+    // against the live Configuration on each onCreateInputView to decide
+    // whether the view tree can be reused (pure-geometry delta → reuse) or
+    // must be rebuilt (night-mode / locale / density / font-scale / … →
+    // fresh resources). Null until the first inflation.
+    private Configuration inflatedAtConfig;
 
     // Record-latency fix B1 (2026-07-17) — cold-start blind window.
     // After a process kill/restart the keyboard becomes visible ~0.4 s
@@ -994,6 +1012,36 @@ public class DictateInputMethodService extends InputMethodService
                 pipelineServiceBindAttempted = false;
             }
         }
+
+        // ── 0b. Selective view retention (render-latency-wave2 §B2) ──
+        // A configuration change (rotation / window resize) re-enters
+        // onCreateInputView. When the delta is pure geometry the existing
+        // view tree re-lays-out to the new width in the normal
+        // measure/layout pass (all constraints are dp-based; no
+        // orientation-qualified resources exist), so return it unchanged
+        // and skip the whole ~210ms teardown/rebuild: NO
+        // cleanupOldControllers(), NO inflate, NO re-attach — backend,
+        // visibility controllers, observers, InfoBar, listeners and the
+        // firstRender flag all stay live, and the next state-emit (or the
+        // current render stand) remains valid. Per-show work still runs in
+        // onStartInputView as before. The bind block above stays ahead of
+        // this (idempotent; must run on the fast path too), which keeps
+        // bindService gated to onCreateInputView (ADR-0003 §4).
+        Configuration nowCfg = getResources().getConfiguration();
+        if (dictateKeyboardView != null && inflatedAtConfig != null
+                && InputViewRetentionPolicy.canReuseInputView(inflatedAtConfig, nowCfg)) {
+            Log.i("DictateTrace", "IME.onCreateInputView(): reusing retained view tree");
+            // The framework requires the returned view to be parent-less.
+            ViewParent p = dictateKeyboardView.getParent();
+            if (p instanceof ViewGroup) {
+                ((ViewGroup) p).removeView(dictateKeyboardView);
+            }
+            inflatedAtConfig = new Configuration(nowCfg);
+            return dictateKeyboardView;
+        }
+        // Snapshot the config the fresh tree is about to be inflated under,
+        // before the rebuild below.
+        inflatedAtConfig = new Configuration(nowCfg);
 
         // ── 1. Clean up old controllers (on view recreation, not first call) ──
         cleanupOldControllers();
@@ -2865,6 +2913,73 @@ public class DictateInputMethodService extends InputMethodService
      *
      * IMPORTANT: Does NOT call stopPipeline() — that has side-effects
      * (mode reset, state change callbacks on old controllers).
+     */
+    /**
+     * §B3 — service-loss hardening (precondition for the §B2 retention
+     * fast-path). Without retention, a service restart used to be healed
+     * implicitly by the next view-rebuild (a fresh
+     * attachImeViewBackendToService against the new KeyboardLayoutManager).
+     * With retention that safety net is gone, so on
+     * {@code onServiceDisconnected} / {@code onBindingDied} we explicitly
+     * clear the attached-marker and stop the renderers/observers that were
+     * collecting from the now-dead service's {@code StateFlow}.
+     *
+     * <p>The retained view tree, the {@link ImeViewBackend}, and the view
+     * references are deliberately <b>kept</b> — the backend's old entry in
+     * the dead manager dies with the service
+     * ({@code DictatePipelineService} detaches service-side), and the
+     * re-bind flows through the normal {@code onServiceConnected} path →
+     * {@link #attachImeViewBackendToService(Context)} (its
+     * {@code !imeViewBackendAttached} gate now passes), which re-attaches
+     * the same backend to the fresh manager and re-starts these observers.
+     * Same-process this is a defensive path (onServiceDisconnected "should
+     * never fire"); it is pinned by T5.
+     */
+    private void onServiceLostClearAttachedRenderers() {
+        imeViewBackendAttached = false;
+        if (infoBarRenderer != null) {
+            infoBarRenderer.stop();
+        }
+        if (pipelineUiStateObserver != null) {
+            pipelineUiStateObserver.stop();
+            pipelineUiStateObserver = null;
+        }
+        if (languageEffectiveObserver != null) {
+            languageEffectiveObserver.stop();
+            languageEffectiveObserver = null;
+        }
+        if (editBarAudioFocusObserver != null) {
+            editBarAudioFocusObserver.stop();
+            editBarAudioFocusObserver = null;
+        }
+        if (editNumbersSmallModeObserver != null) {
+            editNumbersSmallModeObserver.stop();
+            editNumbersSmallModeObserver = null;
+        }
+        if (promptChipsBusyObserver != null) {
+            promptChipsBusyObserver.stop();
+            promptChipsBusyObserver = null;
+        }
+        if (pipelineStepRowRenderer != null) {
+            // Stop the per-row elapsed timer so the dead service's last
+            // Running snapshot doesn't keep a ticker thread alive; the view
+            // references stay intact for the re-attach.
+            pipelineStepRowRenderer.stopActiveTimer();
+        }
+    }
+
+    /**
+     * Tear down the controllers/observers bound to the current view tree
+     * before it is re-inflated.
+     *
+     * <p><b>§B4 retention contract:</b> this runs <b>only on the rebuild
+     * path</b>. The §B2 retention fast-path in {@link #onCreateInputView()}
+     * returns the retained tree <b>before</b> reaching this call, so it
+     * skips teardown AND the matching re-inflate/re-attach <b>as a pair</b>
+     * — the backend, visibility controllers, observers, listeners and the
+     * {@code firstRender} flag all stay live across a pure-geometry config
+     * change. Never call this on the fast path: a lone teardown without the
+     * paired rebuild would blank the retained UI.
      */
     private void cleanupOldControllers() {
         // Stop only the elapsed timer — no mode reset, no side-effects.

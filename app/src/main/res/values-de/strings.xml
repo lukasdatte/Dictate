@@ -130,8 +130,15 @@
     <string name="dictate_history_review_refinement_tag">Nachschärfung</string>
     <string name="dictate_settings_auto_formatting_summary">Nutze KI, um gesprochene Formatierungsbefehle (Absätze, buchstabierte Korrekturen, etc.) anzuwenden</string>
     <string name="dictate_settings_edit_custom_rewording_prompts">Überarbeitungsanweisungen bearbeiten</string>
-    <string name="dictate_prompts_overview_info">Hier kannst du deine Anweisungen für das Überarbeiten mit den GPT-Modellen von OpenAI erstellen und bearbeiten.</string>
-    <string name="dictate_prompts_overview_no_prompts">Du hast keine Anweisungen erstellt.\nKlicke auf die Schaltfläche unten, um eine hinzuzufügen.</string>
+    <string name="dictate_prompts_overview_info">Erstelle und verwalte die Pills über deiner Tastatur: Prompts schicken deinen Text zum Überarbeiten an den eingestellten KI-Anbieter, Text-Pills fügen ihren Inhalt 1:1 ein. Halte eine Karte gedrückt und ziehe sie, um die Reihenfolge zu ändern.</string>
+    <string name="dictate_prompts_overview_no_prompts">Du hast noch keine Anweisungen erstellt.\nFüge eine hinzu, um loszulegen.</string>
+    <string name="dictate_prompts_overview_empty_title">Noch keine Anweisungen</string>
+    <string name="dictate_prompts_overview_empty_add">Erste Anweisung erstellen</string>
+    <string name="dictate_prompts_reorder">Verschieben</string>
+    <string name="dictate_prompts_duplicate">Duplizieren</string>
+    <string name="dictate_prompts_delete">Löschen</string>
+    <string name="dictate_prompts_duplicated">Anweisung dupliziert.</string>
+    <string name="dictate_prompts_copy_suffix">(Kopie)</string>
     <string name="dictate_delete_prompt">Anweisung löschen?</string>
     <string name="dictate_delete_prompt_message">Bist du sicher, dass du diese Anweisung löschen möchtest?</string>
     <string name="dictate_requires_selection">Ausgewählten Text zur Überarbeitung senden</string>

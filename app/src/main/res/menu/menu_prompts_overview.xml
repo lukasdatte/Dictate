@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/menu_prompts_overview_export"
+        android:icon="@drawable/ic_baseline_file_upload_24"
+        android:title="@string/dictate_prompts_export_json"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_prompts_overview_import"
+        android:icon="@drawable/ic_baseline_file_download_24"
+        android:title="@string/dictate_prompts_import_json"
+        app:showAsAction="never" />
+</menu>

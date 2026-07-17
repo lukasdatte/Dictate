@@ -4212,6 +4212,26 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private void startRecording() {
+        // Record-latency fix B1 (2026-07-17); guard hoisted to the method
+        // head (render-latency-wave2 §2.3). The binder-guard MUST run before
+        // any other field access: `promptQueueManager` (and the
+        // AudioFileRepository below) are only wired in
+        // `bindAiInfrastructureFromService` (post-bind), so a cold-start tap
+        // that reaches startRecording() in the window between
+        // onCreateInputView and onServiceConnected would NPE on
+        // `promptQueueManager` *before* this buffer could catch it. Instead of
+        // dropping (or crashing on) the tap, buffer a single pending record
+        // intent and let onServiceConnected auto-fire it the moment the binder
+        // lands, so the user's first record after a process restart is not
+        // lost. This is the entry point the Problem-A pre-bind bootstrap
+        // record-listener routes through, so the guard-order is load-bearing.
+        if (pipelineBinder == null) {
+            pendingRecordOnBind = true;
+            Log.i("DictateTrace",
+                    "startRecording: binder not ready — buffering pending record tap (B1)");
+            return;
+        }
+
         promptQueueManager.prepareAutoApplyQueue();
 
         // Pre-Dispatch-Allocation (Spec 1 §4.11.4, R.2). The initial
@@ -4223,17 +4243,7 @@ public class DictateInputMethodService extends InputMethodService
         // LegacyAudioFileMigration on the next Service boot.
         //
         // The repository is only available once the Service binder is up
-        // (`onServiceConnected`). Record-latency fix B1 (2026-07-17):
-        // instead of dropping this cold-start tap with a "service not
-        // ready" toast, buffer a single pending record intent and let
-        // onServiceConnected auto-fire it the moment the binder lands, so
-        // the user's first record after a process restart is not lost.
-        if (pipelineBinder == null) {
-            pendingRecordOnBind = true;
-            Log.i("DictateTrace",
-                    "startRecording: binder not ready — buffering pending record tap (B1)");
-            return;
-        }
+        // (`onServiceConnected`).
 
         // B2 / ADR-0008 §"Auto-Continuation" — before allocating a fresh
         // recording session, ask the ContinuationLookup whether the most

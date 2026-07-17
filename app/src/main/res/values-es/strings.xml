@@ -128,8 +128,15 @@
     <string name="dictate_history_review_refinement_tag">Refinamiento</string>
     <string name="dictate_settings_auto_formatting_summary">Utilizar IA para aplicar instrucciones de formato habladas (saltos de párrafo, correcciones deletreadas, etc.)</string>
     <string name="dictate_settings_edit_custom_rewording_prompts">Editar prompts de reescritura</string>
-    <string name="dictate_prompts_overview_info">Aquí puedes crear y editar tus prompts para reescribir utilizando los modelos GPT de OpenAI.</string>
-    <string name="dictate_prompts_overview_no_prompts">No has creado ningún prompt.\nPulsa el botón de abajo para añadir uno.</string>
+    <string name="dictate_prompts_overview_info">Crea y gestiona las pastillas que aparecen sobre tu teclado: los prompts envían tu texto al proveedor de IA configurado para reescribirlo, las pastillas de texto insertan su contenido tal cual. Mantén pulsada una tarjeta y arrástrala para cambiar el orden.</string>
+    <string name="dictate_prompts_overview_no_prompts">Aún no has creado ningún prompt.\nAñade uno para empezar.</string>
+    <string name="dictate_prompts_overview_empty_title">Aún no hay prompts</string>
+    <string name="dictate_prompts_overview_empty_add">Crear el primer prompt</string>
+    <string name="dictate_prompts_reorder">Reordenar</string>
+    <string name="dictate_prompts_duplicate">Duplicar</string>
+    <string name="dictate_prompts_delete">Eliminar</string>
+    <string name="dictate_prompts_duplicated">Prompt duplicado.</string>
+    <string name="dictate_prompts_copy_suffix">(Copia)</string>
     <string name="dictate_delete_prompt">¿Eliminar prompt?</string>
     <string name="dictate_delete_prompt_message">¿Seguro que quieres eliminar este prompt?</string>
     <string name="dictate_requires_selection">Enviar el texto seleccionado para reescribir</string>

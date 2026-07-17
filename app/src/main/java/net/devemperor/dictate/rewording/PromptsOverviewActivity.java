@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.Toast;
@@ -16,11 +17,14 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.recyclerview.widget.ConcatAdapter;
+import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.database.DictateDatabase;
@@ -46,6 +50,7 @@ public class PromptsOverviewActivity extends AppCompatActivity {
     List<PromptEntity> data;
     RecyclerView recyclerView;
     PromptsOverviewAdapter adapter;
+    ItemTouchHelper itemTouchHelper;
 
     ActivityResultLauncher<Intent> addEditPromptLauncher;
     private ActivityResultLauncher<String> exportPromptsLauncher;
@@ -72,27 +77,55 @@ public class PromptsOverviewActivity extends AppCompatActivity {
         data = new ArrayList<>(promptDao.getAll());
 
         recyclerView = findViewById(R.id.prompts_overview_rv);
-        recyclerView.setHasFixedSize(true);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
-        adapter = new PromptsOverviewAdapter(this, data, promptDao, position -> {
-            PromptEntity entity = data.get(position);
+        adapter = new PromptsOverviewAdapter(data, new PromptsOverviewAdapter.AdapterCallback() {
+            @Override
+            public void onItemClicked(int position) {
+                PromptEntity entity = data.get(position);
+                Intent intent = new Intent(PromptsOverviewActivity.this, PromptEditActivity.class);
+                intent.putExtra("net.devemperor.dictate.prompt_edit_activity_id", entity.getId());
+                addEditPromptLauncher.launch(intent);
+            }
 
-            Intent intent = new Intent(this, PromptEditActivity.class);
-            intent.putExtra("net.devemperor.dictate.prompt_edit_activity_id", entity.getId());
-            addEditPromptLauncher.launch(intent);
+            @Override
+            public void onDeleteClicked(int position) {
+                confirmDeletePrompt(position);
+            }
+
+            @Override
+            public void onDuplicateClicked(int position) {
+                duplicatePrompt(position);
+            }
+
+            @Override
+            public void onStartDrag(RecyclerView.ViewHolder holder) {
+                itemTouchHelper.startDrag(holder);
+            }
         });
-        recyclerView.setAdapter(adapter);
+        // Header + cards share the RecyclerView so the info text scrolls with the list.
+        recyclerView.setAdapter(new ConcatAdapter(new PromptsInfoHeaderAdapter(), adapter));
+
+        itemTouchHelper = new ItemTouchHelper(new PromptReorderCallback(new PromptReorderCallback.Listener() {
+            @Override
+            public boolean onItemMoved(int fromPosition, int toPosition) {
+                data.add(toPosition, data.remove(fromPosition));
+                adapter.notifyItemMoved(fromPosition, toPosition);
+                return true;
+            }
+
+            @Override
+            public void onDragFinished() {
+                persistOrder();
+            }
+        }));
+        itemTouchHelper.attachToRecyclerView(recyclerView);
 
         updateEmptyState();
 
-        MaterialButton addPromptBtn = findViewById(R.id.prompts_overview_add_btn);
-        addPromptBtn.setOnClickListener(v -> {
-            Intent intent = new Intent(PromptsOverviewActivity.this, PromptEditActivity.class);
-            addEditPromptLauncher.launch(intent);
-        });
-
-        MaterialButton exportBtn = findViewById(R.id.prompts_overview_export_btn);
-        MaterialButton importBtn = findViewById(R.id.prompts_overview_import_btn);
+        ExtendedFloatingActionButton addPromptBtn = findViewById(R.id.prompts_overview_add_btn);
+        addPromptBtn.setOnClickListener(v -> launchAddPrompt());
+        MaterialButton emptyAddBtn = findViewById(R.id.prompts_overview_empty_add_btn);
+        emptyAddBtn.setOnClickListener(v -> launchAddPrompt());
 
         exportPromptsLauncher = registerForActivityResult(
                 new ActivityResultContracts.CreateDocument("application/json"),
@@ -111,9 +144,6 @@ public class PromptsOverviewActivity extends AppCompatActivity {
                     }
                 }
         );
-
-        exportBtn.setOnClickListener(v -> exportPromptsLauncher.launch(getString(R.string.dictate_prompts_export_filename)));
-        importBtn.setOnClickListener(v -> importPromptsLauncher.launch(new String[]{"application/json"}));
 
         addEditPromptLauncher = registerForActivityResult(
                 new ActivityResultContracts.StartActivityForResult(),
@@ -144,6 +174,63 @@ public class PromptsOverviewActivity extends AppCompatActivity {
         );
     }
 
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.menu_prompts_overview, menu);
+        return true;
+    }
+
+    private void launchAddPrompt() {
+        Intent intent = new Intent(PromptsOverviewActivity.this, PromptEditActivity.class);
+        addEditPromptLauncher.launch(intent);
+    }
+
+    private void confirmDeletePrompt(int position) {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.dictate_delete_prompt)
+                .setMessage(R.string.dictate_delete_prompt_message)
+                .setPositiveButton(R.string.dictate_yes, (di, i) -> {
+                    if (position >= data.size()) return;
+                    promptDao.deleteById(data.get(position).getId());
+                    data.remove(position);
+                    adapter.notifyItemRemoved(position);
+                    persistOrder();
+                    updateEmptyState();
+                })
+                .setNegativeButton(R.string.dictate_no, null)
+                .show();
+    }
+
+    /**
+     * Inserts a copy of the prompt at {@code position} directly after it. The
+     * copy is written with a unique tail position first, then the whole list is
+     * resequenced so every row's {@code pos} matches its list index again.
+     */
+    private void duplicatePrompt(int position) {
+        PromptEntity source = data.get(position);
+        PromptEntity copy = PromptListMutations.copyOf(source, getString(R.string.dictate_prompts_copy_suffix), data.size());
+        int copyId = (int) promptDao.insert(copy);
+        data.add(position + 1, promptDao.getById(copyId));
+        adapter.notifyItemInserted(position + 1);
+        persistOrder();
+        showToast(R.string.dictate_prompts_duplicated);
+    }
+
+    /** Persists {@code pos = list index} for every row whose stored pos drifted. */
+    private void persistOrder() {
+        List<PromptEntity> changed = PromptListMutations.resequenced(data);
+        for (int i = 0; i < changed.size(); i++) {
+            PromptEntity entity = changed.get(i);
+            promptDao.update(entity);
+            for (int j = 0; j < data.size(); j++) {
+                if (data.get(j).getId() == entity.getId()) {
+                    data.set(j, entity);
+                    break;
+                }
+            }
+        }
+    }
+
     private void exportPrompts(Uri uri) {
         List<PromptEntity> prompts = promptDao.getAll();
         JSONObject root;
@@ -163,7 +250,10 @@ public class PromptsOverviewActivity extends AppCompatActivity {
                 writer.write(root.toString(2));
                 writer.flush();
             } catch (JSONException e) {
-                throw new RuntimeException(e);
+                // Serialisation failure must degrade like every other export
+                // error (toast + abort), never crash the app.
+                showToast(R.string.dictate_prompts_export_failed);
+                return;
             }
             showToast(R.string.dictate_prompts_export_success);
         } catch (IOException e) {
@@ -248,10 +338,9 @@ public class PromptsOverviewActivity extends AppCompatActivity {
     }
 
     private void updateEmptyState() {
-        View emptyView = findViewById(R.id.prompts_overview_no_prompts_tv);
-        if (emptyView != null) {
-            emptyView.setVisibility(data.isEmpty() ? View.VISIBLE : View.GONE);
-        }
+        boolean isEmpty = data.isEmpty();
+        recyclerView.setVisibility(isEmpty ? View.GONE : View.VISIBLE);
+        findViewById(R.id.prompts_overview_empty_container).setVisibility(isEmpty ? View.VISIBLE : View.GONE);
     }
 
     private void showToast(int resId) {
@@ -260,8 +349,15 @@ public class PromptsOverviewActivity extends AppCompatActivity {
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        if (item.getItemId() == android.R.id.home) {
+        int itemId = item.getItemId();
+        if (itemId == android.R.id.home) {
             finish();
+            return true;
+        } else if (itemId == R.id.menu_prompts_overview_export) {
+            exportPromptsLauncher.launch(getString(R.string.dictate_prompts_export_filename));
+            return true;
+        } else if (itemId == R.id.menu_prompts_overview_import) {
+            importPromptsLauncher.launch(new String[]{"application/json"});
             return true;
         }
         return super.onOptionsItemSelected(item);

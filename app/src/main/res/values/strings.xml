@@ -180,8 +180,15 @@
     <string name="dictate_history_review_refinement_tag">Refinement</string>
     <string name="dictate_settings_auto_formatting_summary">Use AI to apply spoken formatting instructions (paragraph breaks, spelled-out corrections, etc.)</string>
     <string name="dictate_settings_edit_custom_rewording_prompts">Edit rewording prompts</string>
-    <string name="dictate_prompts_overview_info">Below you can create and edit your prompts for rewording using OpenAI\'s GPT models.</string>
-    <string name="dictate_prompts_overview_no_prompts">You have no prompts created.\nClick the button below to add one.</string>
+    <string name="dictate_prompts_overview_info">Create and manage the pills shown above your keyboard: prompts send your text to the configured AI provider for rewording, text pills insert their content 1:1. Long-press and drag a card to reorder.</string>
+    <string name="dictate_prompts_overview_no_prompts">You have no prompts created yet.\nAdd one to get started.</string>
+    <string name="dictate_prompts_overview_empty_title">No prompts yet</string>
+    <string name="dictate_prompts_overview_empty_add">Create first prompt</string>
+    <string name="dictate_prompts_reorder">Reorder</string>
+    <string name="dictate_prompts_duplicate">Duplicate</string>
+    <string name="dictate_prompts_delete">Delete</string>
+    <string name="dictate_prompts_duplicated">Prompt duplicated.</string>
+    <string name="dictate_prompts_copy_suffix">(Copy)</string>
     <string name="dictate_delete_prompt">Delete prompt?</string>
     <string name="dictate_delete_prompt_message">Are you sure to delete this prompt?</string>
     <string name="dictate_requires_selection">Send selected text for rewriting</string>

@@ -83,6 +83,10 @@ internal object PipelineServiceStubSubsystems {
     val bluetoothSco: BluetoothScoSubsystem = object : BluetoothScoSubsystem {
         override fun start() { Log.w(TAG, "bluetoothSco.start(): $MESSAGE") }
         override fun stop() { Log.w(TAG, "bluetoothSco.stop(): $MESSAGE") }
+        // No real AudioManager here → conservatively "no BT route". The
+        // AudioModule effect handler then resolves straight to the mic,
+        // which is the only sane fallback when the service is unbound.
+        override fun isAvailable(): Boolean = false
     }
 
     /** System AudioFocus subsystem stub. */

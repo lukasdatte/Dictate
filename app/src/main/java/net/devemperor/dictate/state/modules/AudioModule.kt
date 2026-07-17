@@ -312,7 +312,37 @@ object AudioModule : DictateModule<AudioState, Action.AudioAction, AudioModule.E
     override fun runEffect(effect: Effect, services: ModuleServices): Unit = when (effect) {
         Effect.RequestAudioFocus -> services.audioFocus.request()
         Effect.ReleaseAudioFocus -> services.audioFocus.release()
-        Effect.StartBluetoothSco -> services.bluetoothSco.start()
+        // Record-latency fix (2026-07-17). The `StartRecording` reducer
+        // enters `Preparing(awaitingSco=true)` on the `useBluetoothMic`
+        // **pref** alone — a pure reducer must not read hardware
+        // (ADR-0001 forbidden-pattern (b)). The "is a BT headset actually
+        // there?" question therefore lives HERE, in the effect handler
+        // (legitimate hardware access). With the pref on but no headset
+        // paired, `services.bluetoothSco.start()` used to arm
+        // `AudioManager.startBluetoothSco()` and wait out the full
+        // ~2.5 s timeout for a `SCO_AUDIO_STATE_CONNECTED` broadcast that
+        // never comes, before falling back to the mic — a fixed ~2.5 s
+        // stall on EVERY record-start (empirically 2516 ms, measurements
+        // 2026-07-17 §V2). When no route is available we instead emit the
+        // same terminal `Failed` phase the timeout path would eventually
+        // produce, so the existing `ScoRouteResolved(useBluetooth=false)`
+        // cascade fires now and the deferred `AllocateMediaRecorder`
+        // sources the built-in mic immediately. `emitAction` is the
+        // sanctioned async re-dispatch seam (ADR-0001 forbidden-pattern
+        // (h) — never re-enter `dispatch` synchronously from an effect).
+        // A real headset (`isAvailable() == true`) keeps the unchanged
+        // handshake, so the BT capture path is untouched.
+        Effect.StartBluetoothSco ->
+            if (services.bluetoothSco.isAvailable()) {
+                services.bluetoothSco.start()
+            } else {
+                services.emitAction(
+                    Action.AudioAction.OnBluetoothScoStateChanged(
+                        phase = ScoPhase.Failed,
+                        reason = "no-bt-device",
+                    ),
+                )
+            }
         Effect.StopBluetoothSco -> services.bluetoothSco.stop()
         // 2026-05-21 indirection-cleanup Chunk 3.1 — route the State → SP
         // write through the canonical PrefPersistenceService seam. The

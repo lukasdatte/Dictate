@@ -342,6 +342,25 @@ interface RecordingHardwareSubsystem {
 interface BluetoothScoSubsystem {
     fun start()
     fun stop()
+
+    /**
+     * Whether a Bluetooth-SCO mic route is actually usable right now
+     * (SCO available off-call AND a BT input device present).
+     *
+     * Record-latency fix (2026-07-17): the `StartRecording` reducer
+     * branches into the `Preparing(awaitingSco=true)` SCO-wait path on
+     * the `useBluetoothMic` **pref** alone (a pure reducer cannot read
+     * hardware — ADR-0001 forbidden-pattern (b)). The availability probe
+     * is therefore consulted in the effect handler
+     * ([net.devemperor.dictate.state.AudioModule.runEffect] for
+     * [net.devemperor.dictate.state.AudioModule.Effect.StartBluetoothSco]),
+     * where hardware access is legitimate. When it returns `false` the
+     * handler resolves the route to the built-in mic immediately instead
+     * of waiting out the full ~2.5 s SCO handshake timeout that can never
+     * connect (pref on, but no headset paired). `true` keeps the existing
+     * handshake behaviour unchanged (a real headset still waits for SCO).
+     */
+    fun isAvailable(): Boolean
 }
 
 /**

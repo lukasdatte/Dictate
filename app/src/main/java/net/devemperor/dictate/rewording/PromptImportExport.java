@@ -89,6 +89,19 @@ public final class PromptImportExport {
                 prompt = classified.getSecond();
                 name = PromptTypeClassifier.stripName(rawName);
             }
+
+            // A TEXT pill inserts its content literally, so requiresSelection /
+            // autoApply have no meaning (ADR-0024). PromptEditActivity.savePrompt
+            // forces both off on save; import is the other write seam and must
+            // clamp identically — otherwise a hand-crafted or legacy file could
+            // persist a TEXT pill carrying stale flags that resurface in the
+            // editor (visible once toggled back to PROMPT) and in a re-export,
+            // even though getAutoApplyIds already excludes TEXT at query time.
+            if (PromptType.TEXT.name().equals(type)) {
+                requiresSelection = false;
+                autoApply = false;
+            }
+
             prompts.add(new PromptEntity(0, prompts.size(), name, prompt, requiresSelection, autoApply, type));
         }
         return prompts;

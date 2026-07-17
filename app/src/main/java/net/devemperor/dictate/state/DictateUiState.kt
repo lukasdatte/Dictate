@@ -138,6 +138,25 @@ data class DictateUiState(
 ) {
     companion object {
         /**
+         * The Problem-A pre-bind **bootstrap** state (render-latency-wave2
+         * §A4): [initial] with a single IME-side pref override,
+         * `singleRowMode`.
+         *
+         * The IME paints this once through the shared `LayoutCatalog`
+         * before the service binder arrives, so the keyboard shows the
+         * correct idle surface in its first frame. The `singleRowMode`
+         * override is needed because the service-side `PipelinePrefMirror`
+         * (which normally feeds `layout.singleRowMode`) is not running
+         * pre-bind — without it a single-row user would briefly see the
+         * two-row surface and a layout-jump on bind. Every other axis
+         * stays at the [initial] idle default (RECORD visible, MAIN_BUTTONS
+         * content area, Idle recording/pipeline).
+         */
+        @JvmStatic
+        fun bootstrap(singleRowMode: Boolean): DictateUiState =
+            initial().let { it.copy(layout = it.layout.copy(singleRowMode = singleRowMode)) }
+
+        /**
          * The "boot" state — used as the initial value of the store
          * before any module reducer runs.
          */

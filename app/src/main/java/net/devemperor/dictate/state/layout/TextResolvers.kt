@@ -2,11 +2,14 @@
 
 package net.devemperor.dictate.state.layout
 
+import android.content.Context
+import net.devemperor.dictate.R
 import net.devemperor.dictate.state.DictateUiState
 import net.devemperor.dictate.state.PipelineUiState
 import net.devemperor.dictate.state.RecordingState
 import net.devemperor.dictate.state.WidgetState
 import net.devemperor.dictate.state.currentStepName
+import java.util.Locale
 
 /**
  * Shared `ButtonSlot.textResolver` helpers consumed by the
@@ -138,7 +141,95 @@ data class LayoutStrings(
             "catalog slot. Remove once external callers stop passing it.",
     )
     val overlaySend: CharSequence = "Send",
-)
+) {
+    companion object {
+        /**
+         * Build a [LayoutStrings] from a [Context]'s string resources —
+         * the **single source of truth** for the keyboard's static
+         * labels and the dynamic label formatters (render-latency-wave2
+         * §A2).
+         *
+         * Both render hosts now share this factory:
+         *  - `DictatePipelineService` builds the live catalog's strings
+         *    from the service context (post-bind).
+         *  - the IME builds a cheap **bootstrap** catalog from the themed
+         *    view context to paint the idle keyboard **before** the
+         *    service binder arrives (Problem A). Sharing this factory
+         *    keeps the two catalogs' string logic byte-identical — there
+         *    is no second place where a label could drift.
+         *
+         * Pure formatting lambdas (staging / pipeline / preparing labels)
+         * carry no `Context` capture beyond the resolved base strings, so
+         * the returned instance is safe to outlive the `Context` used to
+         * build it (it holds only the already-resolved `CharSequence`s).
+         */
+        @JvmStatic
+        fun from(context: Context): LayoutStrings = LayoutStrings(
+            record = context.getString(R.string.dictate_record),
+            send = context.getString(
+                R.string.dictate_send,
+                context.getString(R.string.dictate_record),
+            ),
+            sending = context.getString(R.string.dictate_sending),
+            // Just the badge word. `resolveRecordButtonText` decides
+            // whether to splice it in, because PC-mode flips at runtime
+            // while this factory runs once — see LayoutStrings.pcBadge.
+            pcBadge = context.getString(R.string.dictate_pc_badge),
+            // F-15 — language-aware idle label. The `"system"` sentinel
+            // (boot default before the pref resolves) renders the plain
+            // "Record" label; any concrete language code is suffixed.
+            dictateButtonText = { effectiveLanguage ->
+                if (effectiveLanguage.isEmpty() || effectiveLanguage == "system") {
+                    context.getString(R.string.dictate_record)
+                } else {
+                    "${context.getString(R.string.dictate_record)} ($effectiveLanguage)"
+                }
+            },
+            formatStagingLabel = { audioDurationSeconds ->
+                // Locale.US: technical format — keeps digits ASCII
+                // regardless of device locale (B4-VAL F-5).
+                val minutes = audioDurationSeconds / 60
+                val seconds = audioDurationSeconds % 60
+                String.format(Locale.US, "Audio %d:%02d · Send", minutes, seconds)
+            },
+            formatPipelineLabel = { stepName, completedSteps, totalSteps, autoEnterActive, elapsedMs ->
+                // Locale.US: ASCII digits regardless of device locale
+                // (B4-VAL F-5 / F-13). OQ-1 Variante A two-line layout.
+                val seconds = (elapsedMs / 1000L).toInt()
+                val mm = seconds / 60
+                val ss = seconds % 60
+                val arrow = if (autoEnterActive) " ↵" else ""
+                val phase = stepName?.takeIf { it.isNotBlank() }
+                if (phase != null) {
+                    String.format(
+                        Locale.US,
+                        "%s\n%d/%d%s %d:%02d",
+                        phase, completedSteps, totalSteps, arrow, mm, ss,
+                    )
+                } else {
+                    String.format(
+                        Locale.US,
+                        "%d/%d%s %d:%02d",
+                        completedSteps, totalSteps, arrow, mm, ss,
+                    )
+                }
+            },
+            formatPreparingLabel = { autoEnterActive ->
+                // #AE-DEEP2 — Preparing carries an autoEnter-toggle too;
+                // append the same ↵ marker the pipeline formatter uses.
+                if (autoEnterActive) {
+                    context.getString(R.string.dictate_sending) + " ↵"
+                } else {
+                    context.getString(R.string.dictate_sending)
+                }
+            },
+            // B3.4 — Pause-Toggle labels, reusing the notification-action
+            // strings so localisation stays in one place.
+            pauseLabel = context.getString(R.string.dictate_action_pause),
+            resumeLabel = context.getString(R.string.dictate_action_resume),
+        )
+    }
+}
 
 /**
  * Record-button text in standard (non-SEND-MODE) keyboard layouts.

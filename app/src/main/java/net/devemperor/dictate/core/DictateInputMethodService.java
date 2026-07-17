@@ -429,6 +429,28 @@ public class DictateInputMethodService extends InputMethodService
     // service-side KeyboardLayoutManager via the LocalBinder. Detached in
     // onDestroyInputView() / onDestroy().
     private ImeViewBackend imeViewBackend;
+    // render-latency-wave2 §A3 — the ImeViewBackend is now constructed in
+    // buildImeViewRenderers() BEFORE the service binder arrives (Problem A
+    // pre-bind bootstrap render), so `imeViewBackend != null` no longer
+    // implies "attached to the service-side KeyboardLayoutManager". This
+    // marker tracks the second half: true only while the backend is
+    // attached to the live manager (set in attachImeViewBackendToService,
+    // cleared in cleanupOldControllers and on onServiceDisconnected /
+    // onBindingDied — §B3).
+    private boolean imeViewBackendAttached = false;
+    // render-latency-wave2 §A3 — the IME-side affordance lambda is built in
+    // the bind-free buildImeViewRenderers() half but consumed in the
+    // binder-required attachImeViewBackendToService() half
+    // (registerImeSideAffordance) and shared with the OverlayBackend, so it
+    // is held on a field to cross the split.
+    private kotlin.jvm.functions.Function2<LogicalButtonId, Boolean, kotlin.Unit> imeSideAffordanceFn;
+    // render-latency-wave2 §A2/§A4 — a cheap IME-side LayoutCatalog used
+    // ONLY for the pre-bind bootstrap render (Problem A). Built lazily from
+    // the shared LayoutStrings.from(context) factory (one SoT with the
+    // service catalog). Post-bind the service-owned catalog drives every
+    // render via attachBackend's state-replay; this field is never used
+    // again once the binder lands.
+    private net.devemperor.dictate.state.layout.LayoutCatalog imeBootstrapCatalog;
     // CR2 (Theme C-R) — builds the three Spec 2 §11.7 special-touch
     // handlers (SPACE/BACKSPACE/ENTER) but keeps them DORMANT (built, not
     // attached) until CR4. RR-1: the legacy MainButtonsController is the
@@ -616,10 +638,20 @@ public class DictateInputMethodService extends InputMethodService
             // render path now. Otherwise the next onCreateInputView pass
             // (which always runs while the user has the keyboard open)
             // will pick it up.
-            if (dictateKeyboardView != null && imeViewBackend == null) {
+            //
+            // §A3 — the backend is now constructed pre-bind (bootstrap
+            // render), so `imeViewBackend != null` no longer means "already
+            // wired to the service". Gate on the new attached-marker and run
+            // only the binder-required half here; the bind-free
+            // buildImeViewRenderers already ran in onCreateInputView.
+            if (dictateKeyboardView != null && !imeViewBackendAttached) {
                 Context themedContext = new ContextThemeWrapper(
                     DictateInputMethodService.this, R.style.Theme_Dictate);
-                attachImeViewBackendIfReady(themedContext);
+                // Defensive: if the view tree inflated pre-bind, the backend
+                // exists (bootstrap). If a prior build bailed (broken
+                // layout) imeViewBackend is null and attach is a no-op — the
+                // next onCreateInputView rebuilds it.
+                attachImeViewBackendToService(themedContext);
             }
             // D-13 / R-3 boot-before-bind closure: onCreateInputView's
             // pushPermanentLanguageToOrchestrator() ran BEFORE this binder
@@ -1331,31 +1363,52 @@ public class DictateInputMethodService extends InputMethodService
         //       is also a precondition for the attach because we need
         //       its ModuleServices reference for the resolvers' audio-file
         //       factory access).
-        attachImeViewBackendIfReady(context);
+        // §A3 — always build the renderers (bind-free; finishes with the
+        // pre-bind bootstrap render when the binder isn't up). Attach to the
+        // service only when the binder is already present — otherwise
+        // onServiceConnected does it the moment the binder lands.
+        buildImeViewRenderers(context);
+        if (pipelineBinder != null) {
+            attachImeViewBackendToService(context);
+        }
 
         return dictateKeyboardView;
     }
 
     /**
-     * Construct an {@link ImeViewBackend} for the freshly inflated view
-     * tree and attach it to the service-side {@link KeyboardLayoutManager}.
-     *
-     * Called at the tail of {@link #onCreateInputView()}; the matching
-     * detach lives in {@link #cleanupOldControllers()} (view-recreate)
-     * and {@link #onDestroy()} (process tear-down).
-     *
-     * Idempotent — a second call without a preceding detach raises in
-     * {@link KeyboardLayoutManager#attachBackend(net.devemperor.dictate.state.layout.RenderBackend)}.
-     * The caller is expected to detach first (which is what
-     * cleanupOldControllers does on view-recreate).
+     * §A4 — the Problem-A pre-bind bootstrap render state. Reads the
+     * IME-side {@code SingleRowMode} pref (the service-side
+     * PipelinePrefMirror is not running pre-bind) and delegates to
+     * {@link net.devemperor.dictate.state.DictateUiState#bootstrap(boolean)}
+     * for the rest of the idle default.
      */
-    private void attachImeViewBackendIfReady(Context context) {
-        if (pipelineBinder == null) {
-            // Service not bound yet. The onServiceConnected callback
-            // will re-attempt the wiring once the binder arrives; in
-            // the meantime the legacy controllers still drive the UI.
-            return;
-        }
+    private net.devemperor.dictate.state.DictateUiState bootstrapUiState() {
+        boolean singleRow = DictatePrefsKt.get(sp, Pref.SingleRowMode.INSTANCE);
+        return net.devemperor.dictate.state.DictateUiState.bootstrap(singleRow);
+    }
+
+    /**
+     * Construct an {@link ImeViewBackend} (and its sibling renderers) for
+     * the freshly inflated view tree. **Bind-free half** of the former
+     * {@code attachImeViewBackendIfReady} (render-latency-wave2 §A3): this
+     * runs on every {@link #onCreateInputView()} regardless of whether the
+     * service binder has arrived yet.
+     *
+     * When the binder is NOT yet up (cold-start blind window), it finishes
+     * with the Problem-A **bootstrap render**: it paints
+     * {@link #bootstrapUiState()} through the shared {@link LayoutCatalog}
+     * so the keyboard shows the correct idle surface in its first frame,
+     * and installs a temporary record-click listener that routes a tap
+     * into the {@code pendingRecordOnBind} buffer. The binder-required
+     * wiring (attach to the service manager, observers, tick-sinks) is
+     * done later by {@link #attachImeViewBackendToService(Context)} — from
+     * {@link #onCreateInputView()} directly when the binder is already up,
+     * otherwise from {@code onServiceConnected}.
+     *
+     * The matching detach lives in {@link #cleanupOldControllers()}
+     * (view-recreate) and {@link #onDestroy()} (process tear-down).
+     */
+    private void buildImeViewRenderers(Context context) {
         // B4-VAL F-17: Java findViewById<T> throws ClassCastException on
         // type-mismatch rather than returning null — defend via instanceof
         // so the log warning actually fires in the broken-layout case.
@@ -1386,7 +1439,9 @@ public class DictateInputMethodService extends InputMethodService
             buttonViews.put(LogicalButtonId.WIDGET_TOGGLE, widgetToggleBtn);
         }
 
-        keyboardLayoutManager = pipelineBinder.getKeyboardLayoutManager();
+        // §A3 — `keyboardLayoutManager = pipelineBinder.getKeyboardLayoutManager()`
+        // moved to attachImeViewBackendToService (binder-required half);
+        // the construction below is bind-free.
 
         // RecordingAnimationController: drive BorderGlow + the breathing
         // background animator from state.recording transitions. Spec 2
@@ -1449,10 +1504,14 @@ public class DictateInputMethodService extends InputMethodService
         // mainButtonsController.registerAllListeners() (the LIVE owner of
         // the SPACE/BACKSPACE/ENTER setOnTouchListener pre-CR4) is now
         // removed on the bound path (it runs only as the unbound
-        // fallback — see the onCreateInputView CR4 comment). This whole
-        // method (attachImeViewBackendIfReady) only runs when
-        // pipelineBinder != null, so the legacy touch wiring was NOT
-        // applied. CR4 therefore calls attachToViews() (NOT
+        // fallback — see the onCreateInputView CR4 comment). §A3: the
+        // installer lambda is *built* here bind-free, but it is only
+        // *invoked* from ImeViewBackend.attach() (via staticHandlerInstaller)
+        // — and attach() runs only in the binder-required
+        // attachImeViewBackendToService half. So the touch wiring still
+        // lands only on the bound path (the pre-bind bootstrap render never
+        // attaches), and the legacy touch wiring was NOT applied. CR4
+        // therefore calls attachToViews() (NOT
         // installDormant()) so the new §11.7 handlers become the sole
         // live SPACE/BACKSPACE/ENTER touch owner — never both wired at
         // once (render-path-cutover.md §5/§6 RR-1; the dormant→attached
@@ -1531,8 +1590,10 @@ public class DictateInputMethodService extends InputMethodService
         // cooldown / models the FSM-half. render-path-cutover.md §7 A1
         // explicitly scopes "IME-side affordances with no FSM/dispatch
         // representation" as the CR4 IME-side activation.
-        kotlin.jvm.functions.Function2<LogicalButtonId, Boolean, kotlin.Unit>
-            imeSideAffordance = (id, isLongPress) -> {
+        // §A3 — assigned to the field (not a local) so the binder-required
+        // attachImeViewBackendToService half can register it with the
+        // service + share it with the OverlayBackend.
+        imeSideAffordanceFn = (id, isLongPress) -> {
                 if (id == LogicalButtonId.RECORD && isLongPress) {
                     onRecordLongClicked();
                 } else if (id == LogicalButtonId.OVERLAY_RECORD && isLongPress) {
@@ -1674,7 +1735,12 @@ public class DictateInputMethodService extends InputMethodService
             new RealMotionSurface(motionLayout),
             buttonViews,
             context,
-            pipelineBinder.getModuleServices(),
+            // §A1 — services is a provider resolved at click-time. Pre-bind
+            // it returns null (a click is then a silent no-op — the RECORD
+            // tap is caught by the pending-tap buffer via the bootstrap
+            // listener installed below); post-bind it resolves to the live
+            // ModuleServices, restoring the former eager semantics.
+            () -> pipelineBinder != null ? pipelineBinder.getModuleServices() : null,
             recordingAnimationCtrlForBackend,
             autoEnterRendererForBackend,
             recordButtonColorControllerForBackend,
@@ -1686,10 +1752,68 @@ public class DictateInputMethodService extends InputMethodService
             qwertzKeyboardView.getKeyPressAnimator(),
             staticHandlerInstaller,
             vibrateLambda,
-            imeSideAffordance,
+            imeSideAffordanceFn,
             themedContainers,
             accentTextViews
         );
+
+        // §A3 — Problem A pre-bind bootstrap render. When the binder is not
+        // up yet, paint the idle keyboard once through the shared catalog so
+        // the first frame shows a usable surface (record button visible,
+        // correct mode/theme) instead of dead XML defaults, and install a
+        // temporary record-click listener that buffers a tap into
+        // pendingRecordOnBind. The service-side attachBackend (post-bind)
+        // replays the live state synchronously onto this same backend,
+        // overwriting the bootstrap snapshot deterministically; the
+        // temporary listener is atomically replaced by wireStaticHandlers'
+        // setOnClickListener at attach() (same View slot — RR-1: never two
+        // owners at once).
+        if (pipelineBinder == null) {
+            net.devemperor.dictate.state.DictateUiState boot = bootstrapUiState();
+            if (imeBootstrapCatalog == null) {
+                imeBootstrapCatalog = new net.devemperor.dictate.state.layout.LayoutCatalog(
+                        net.devemperor.dictate.state.layout.LayoutStrings.from(context));
+            }
+            imeViewBackend.render(boot, imeBootstrapCatalog.forKeyboard(boot));
+            if (recordButton != null) {
+                recordButton.setOnClickListener(v -> {
+                    vibrate();
+                    // Routes through getPipelinePhase()'s Idle-fallback →
+                    // isEffectiveRecordingIdle() → the hoisted startRecording()
+                    // guard (§2.3), so the tap lands in pendingRecordOnBind
+                    // and auto-fires on bind. Dispatches nothing directly.
+                    onRecordClicked();
+                });
+            }
+        }
+    }
+
+    /**
+     * Attach the already-constructed {@link ImeViewBackend} to the
+     * service-side {@link KeyboardLayoutManager} and wire the
+     * binder-required renderers (visibility controllers, InfoBar,
+     * reactive observers, recording tick-sinks). **Binder-required half**
+     * of the former {@code attachImeViewBackendIfReady}
+     * (render-latency-wave2 §A3).
+     *
+     * Precondition: {@link #buildImeViewRenderers(Context)} has run and the
+     * service binder is up. Called from {@link #onCreateInputView()} when
+     * the binder is already present, otherwise from {@code
+     * onServiceConnected} once it lands. Idempotent guard via
+     * {@link #imeViewBackendAttached} (checked at the two call-sites).
+     *
+     * attachBackend renders the current live state synchronously onto the
+     * backend (state-replay), so any pre-bind bootstrap snapshot is
+     * overwritten here deterministically.
+     */
+    private void attachImeViewBackendToService(Context context) {
+        if (imeViewBackend == null) {
+            // buildImeViewRenderers bailed (broken layout — MotionLayout
+            // check failed). Nothing to attach; the inline theme fallback
+            // in onStartInputView keeps the surface painted.
+            return;
+        }
+        keyboardLayoutManager = pipelineBinder.getKeyboardLayoutManager();
 
         // dictate-widget-integration §8.3 Chunk 3.2 — share the exact
         // same IME-side affordance lambda with the service-owned
@@ -1704,10 +1828,14 @@ public class DictateInputMethodService extends InputMethodService
         // would hang in Preparing forever — the exact bug Plan §5 traces.
         // Self-gating: the lambda's RECORD branch is a no-op when state
         // is not Active|Paused, so registering unconditionally is safe.
-        pipelineBinder.registerImeSideAffordance(imeSideAffordance);
+        pipelineBinder.registerImeSideAffordance(imeSideAffordanceFn);
 
         try {
             keyboardLayoutManager.attachBackend(imeViewBackend);
+            // §A3 — mark attached only after the manager accepted the
+            // backend (state-replay done). cleanupOldControllers / §B3
+            // clear this.
+            imeViewBackendAttached = true;
         } catch (Throwable t) {
             Log.w("DictateIME", "KeyboardLayoutManager.attachBackend failed", t);
             imeViewBackend = null;
@@ -2321,8 +2449,9 @@ public class DictateInputMethodService extends InputMethodService
         }
 
         // CR4 (Theme C-R / CR4-IMPL-1 resolution — THE flip): this method
-        // is only reachable from attachImeViewBackendIfReady() which
-        // requires pipelineBinder != null, so the legacy
+        // is only reachable from attachImeViewBackendToService() (§A3, the
+        // binder-required half) which requires pipelineBinder != null, so
+        // the legacy
         // MainButtonsController.registerAllListeners() (the sole live
         // edit-bar/emoji/overlay-chars owner pre-CR4) was NOT applied
         // (it runs only as the unbound fallback — see the
@@ -2638,6 +2767,7 @@ public class DictateInputMethodService extends InputMethodService
             }
         }
         imeViewBackend = null;
+        imeViewBackendAttached = false;
         // CR3 — detach the three dormant R.10 visibility controllers
         // (symmetric with imeViewBackend) BEFORE nulling the manager.
         detachDormantVisibilityControllers();
@@ -2794,6 +2924,12 @@ public class DictateInputMethodService extends InputMethodService
             }
         }
         imeViewBackend = null;
+        // §A3/§B4 — the backend is gone; the fast-path (retention) skips
+        // this teardown AND the matching rebuild as a pair, so this only
+        // runs on the genuine rebuild path. The next buildImeViewRenderers
+        // reconstructs the backend; attachImeViewBackendToService re-sets
+        // the marker.
+        imeViewBackendAttached = false;
         // CR3 — detach the three dormant R.10 visibility controllers
         // before re-inflate (they hold direct View references too,
         // symmetric with imeViewBackend). Rebuilt against the fresh
@@ -3630,7 +3766,9 @@ public class DictateInputMethodService extends InputMethodService
                 // catalog hasn't fanned out yet, but the XML-inflated
                 // default (`@string/dictate_record`) is already visible
                 // and gets overwritten by the catalog on the first
-                // render-tick after `attachImeViewBackendIfReady`. The
+                // render-tick (§A3: the pre-bind bootstrap render in
+                // `buildImeViewRenderers`, or `attachImeViewBackendToService`
+                // once bound). The
                 // previous `recordButton.setText(getDictateButtonText())`
                 // here was a transient violation of the single-writer
                 // invariant (AC-A1); removed as part of the C-1
@@ -3676,13 +3814,17 @@ public class DictateInputMethodService extends InputMethodService
         // by `ImeViewBackend.applyKeyboardBackground` / `applyTheme`.
         // The inline `setBackgroundColor` + `setTextColor` loops here
         // are gone — the backend is the single writer for these axes.
-        // Pre-bind fallback: if the backend is null (narrow window), do
-        // the writes inline so the first-frame paint is correct.
+        // §A5 — the backend is now constructed pre-bind (bootstrap render),
+        // so this path takes the backend branch even in the cold-start
+        // window (applyKeyboardBackground / applyTheme are binder-free). The
+        // inline fallback below is now the BROKEN-LAYOUT defensive only: it
+        // fires solely when buildImeViewRenderers bailed on the MotionLayout
+        // check and left imeViewBackend null.
         if (imeViewBackend != null) {
             imeViewBackend.applyKeyboardBackground(keyboardBackgroundColor);
             imeViewBackend.applyTheme(accentColor);
         } else {
-            // pre-bind fallback — backend not constructed yet
+            // broken-layout fallback — backend construction bailed
             dictateKeyboardView.setBackgroundColor(keyboardBackgroundColor);
             emojiPickerCl.setBackgroundColor(keyboardBackgroundColor);
             qwertzContainer.setBackgroundColor(keyboardBackgroundColor);

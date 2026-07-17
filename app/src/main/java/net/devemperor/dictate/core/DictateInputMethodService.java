@@ -648,6 +648,21 @@ public class DictateInputMethodService extends InputMethodService
             if (promptsAdapter != null) {
                 reloadPrompts();
             }
+
+            // Record-latency fix B1 (2026-07-17) — flush a record tap that
+            // arrived during the cold-start blind window. The binder + AI
+            // infrastructure are now fully wired (above), so re-enter the
+            // normal record path via onRecordClicked() — it re-applies the
+            // full phase/permission gate against the now-live orchestrator
+            // state (a fresh service is Idle), so the buffered intent is
+            // handled identically to a fresh tap. Cleared first so a
+            // re-bind can never double-fire.
+            if (pendingRecordOnBind) {
+                pendingRecordOnBind = false;
+                Log.i("DictateTrace",
+                        "onServiceConnected: auto-firing buffered record tap (B1)");
+                onRecordClicked();
+            }
         }
 
         // ── onServiceDisconnected ──
@@ -690,6 +705,21 @@ public class DictateInputMethodService extends InputMethodService
         }
     };
     private boolean pipelineServiceBindAttempted = false;
+
+    // Record-latency fix B1 (2026-07-17) — cold-start blind window.
+    // After a process kill/restart the keyboard becomes visible ~0.4 s
+    // before the pipeline service binder is delivered (bindService is
+    // async and Service.onCreate runs on the same main looper behind the
+    // IME view work — measurements 2026-07-17 §V1: ~1.3 s blind window).
+    // A record tap in that window used to bail in startRecording() with a
+    // "service not ready" toast and was lost. Instead we buffer a SINGLE
+    // pending record intent here and auto-fire it from onServiceConnected
+    // once the binder lands. A newer tap simply re-arms the same flag
+    // (idempotent); onFinishInputView discards it (the user left the
+    // field). No store interaction is possible pre-bind — the record
+    // button's own ripple is the immediate touch feedback, and the
+    // Preparing state appears as soon as the auto-fire dispatches.
+    private boolean pendingRecordOnBind = false;
 
     // ===== PromptQueueManager.PromptQueueCallback =====
 
@@ -2411,6 +2441,12 @@ public class DictateInputMethodService extends InputMethodService
     @Override
     public void onFinishInputView(boolean finishingInput) {
         super.onFinishInputView(finishingInput);
+
+        // Record-latency fix B1 (2026-07-17) — the user left the field
+        // before the cold-start bind completed; discard any buffered
+        // record tap so it cannot auto-fire into a now-irrelevant editor
+        // when the binder finally lands.
+        pendingRecordOnBind = false;
 
         // DictateTrace — IME-Lifecycle log for the recording-loss-on-app-switch
         // investigation. Snapshots the recording / pipeline / viewMode at entry
@@ -4187,12 +4223,15 @@ public class DictateInputMethodService extends InputMethodService
         // LegacyAudioFileMigration on the next Service boot.
         //
         // The repository is only available once the Service binder is up
-        // (`onServiceConnected`). The early-tap defensive path below
-        // toasts and bails — the user retries once the bind lands.
+        // (`onServiceConnected`). Record-latency fix B1 (2026-07-17):
+        // instead of dropping this cold-start tap with a "service not
+        // ready" toast, buffer a single pending record intent and let
+        // onServiceConnected auto-fire it the moment the binder lands, so
+        // the user's first record after a process restart is not lost.
         if (pipelineBinder == null) {
-            android.widget.Toast.makeText(
-                    this, R.string.dictate_service_not_ready,
-                    android.widget.Toast.LENGTH_SHORT).show();
+            pendingRecordOnBind = true;
+            Log.i("DictateTrace",
+                    "startRecording: binder not ready — buffering pending record tap (B1)");
             return;
         }
 

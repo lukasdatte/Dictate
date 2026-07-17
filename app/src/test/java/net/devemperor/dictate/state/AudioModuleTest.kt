@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import net.devemperor.dictate.testutil.fakeModuleServices
 import java.io.File
 
 /**
@@ -506,6 +507,73 @@ class AudioModuleTest {
             audio = prev.audio.copy(bluetoothSco = BluetoothScoPublicState(ScoPhase.Connected)),
         )
         assertEquals(emptyList<Action>(), module.onCrossModuleStateChange(prev, next))
+    }
+
+    // ─── Record-latency fix (2026-07-17): StartBluetoothSco availability gate ─
+    //
+    // Regression guard for the ~2.5 s SCO-timeout stall that hit EVERY
+    // record-start when `use_bluetooth_mic` was on but no headset was
+    // paired (measurements 2026-07-17 §V2: tap→start 2516 ms vs 9 ms).
+    // The reducer cannot read hardware (ADR-0001 forbidden-pattern (b)),
+    // so the availability probe lives in the `StartBluetoothSco` effect
+    // handler. These tests exercise `runEffect` directly with counting
+    // fakes; the fix is in `AudioModule.runEffect`.
+
+    /** Counting [BluetoothScoSubsystem] fake with a configurable availability. */
+    private class FakeBluetoothSco(private val available: Boolean) : BluetoothScoSubsystem {
+        var startCount = 0
+            private set
+        var stopCount = 0
+            private set
+        override fun start() { startCount++ }
+        override fun stop() { stopCount++ }
+        override fun isAvailable(): Boolean = available
+    }
+
+    @Test
+    fun `StartBluetoothSco with NO available BT route resolves to MIC immediately (no SCO wait)`() {
+        // The bug: with the BT-mic pref on but no headset, the handler
+        // armed startSco() and waited out the full ~2.5 s timeout before
+        // falling back to the mic. The fix: emit the terminal Failed phase
+        // now so the ScoRouteResolved(false) → MIC cascade fires without
+        // the stall — and NEVER arm the SCO handshake.
+        val emitted = mutableListOf<Action>()
+        val sco = FakeBluetoothSco(available = false)
+        val services = fakeModuleServices(
+            bluetoothSco = sco,
+            emitAction = { emitted += it },
+        )
+
+        module.runEffect(AudioModule.Effect.StartBluetoothSco, services)
+
+        assertEquals("SCO handshake must NOT be armed when no route exists", 0, sco.startCount)
+        assertEquals(
+            "must resolve the route immediately via a Failed phase",
+            listOf<Action>(
+                Action.AudioAction.OnBluetoothScoStateChanged(
+                    phase = ScoPhase.Failed,
+                    reason = "no-bt-device",
+                ),
+            ),
+            emitted,
+        )
+    }
+
+    @Test
+    fun `StartBluetoothSco with an available BT route arms the handshake (unchanged)`() {
+        // A real headset must still wait for the SCO handshake — the fix
+        // must not regress the BT capture path.
+        val emitted = mutableListOf<Action>()
+        val sco = FakeBluetoothSco(available = true)
+        val services = fakeModuleServices(
+            bluetoothSco = sco,
+            emitAction = { emitted += it },
+        )
+
+        module.runEffect(AudioModule.Effect.StartBluetoothSco, services)
+
+        assertEquals("SCO handshake must be armed for a real headset", 1, sco.startCount)
+        assertTrue("no synthetic route-resolve when a real handshake runs", emitted.isEmpty())
     }
 
     // ─── Lens / IDs ─────────────────────────────────────────────────────

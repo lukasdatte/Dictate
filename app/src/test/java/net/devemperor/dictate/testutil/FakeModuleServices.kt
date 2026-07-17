@@ -154,6 +154,12 @@ object NoopRecordingHardware : RecordingHardwareSubsystem {
 object NoopBluetoothSco : BluetoothScoSubsystem {
     override fun start() = Unit
     override fun stop() = Unit
+    // Default `true` preserves the exact pre-fix effect-handler path for
+    // any orchestrator-level test that traverses the BT SCO branch:
+    // `runEffect(StartBluetoothSco)` still calls `start()` (a no-op here)
+    // rather than short-circuiting to the mic. The record-latency gate
+    // (2026-07-17) is exercised by a dedicated fake returning `false`.
+    override fun isAvailable(): Boolean = true
 }
 
 object NoopAudioFocus : AudioFocusSubsystem {

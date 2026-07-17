@@ -41,4 +41,18 @@ class BluetoothScoSubsystemAdapter(
     override fun stop() {
         manager.release()
     }
+
+    /**
+     * Record-latency fix (2026-07-17) — probe whether a BT-SCO mic route
+     * is actually usable. The parameter is fixed to `true` because this
+     * probe is only consulted once the `useBluetoothMic` pref has already
+     * routed recording onto the BT path (the reducer branched on it);
+     * `isBluetoothAvailable(true)` then reduces to "is SCO available
+     * off-call AND is a BT input device present". Delegates to the same
+     * [BluetoothScoControl.isBluetoothAvailable] the legacy path used, so
+     * production and the handwritten fakes share one availability
+     * definition.
+     */
+    override fun isAvailable(): Boolean =
+        manager.isBluetoothAvailable(useBluetoothMic = true)
 }

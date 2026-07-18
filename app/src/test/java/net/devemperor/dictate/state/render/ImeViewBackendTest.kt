@@ -103,7 +103,7 @@ class ImeViewBackendTest {
         motionSurface = motion,
         buttonViews = buttons.toMap(),
         ctx = ctx,
-        services = fakeModuleServices(emitAction = {}),
+        services = { fakeModuleServices(emitAction = {}) },
         recordingAnimationController = controller,
     )
 
@@ -224,6 +224,47 @@ class ImeViewBackendTest {
         assertTrue(
             "Expected no actions emitted, got: $captured",
             captured.isEmpty(),
+        )
+    }
+
+    // ─── T3 (render-latency-wave2 §A1) — services provider gate ───────
+
+    @Test
+    fun `T3 pre-bind provider null — RECORD click is inert, dispatches once bound`() {
+        // Problem A: the backend is constructed before the service binder,
+        // so `services` is a provider that returns null pre-bind. A click
+        // in that window must be a silent no-op (no throw, no dispatch) —
+        // the RECORD tap is instead caught by the IME's pending-tap buffer.
+        // Once the binder lands the provider returns a live container and
+        // the SAME click dispatches the catalog action (state-replay leaves
+        // the click listener in place).
+        var services: net.devemperor.dictate.state.ModuleServices? = null
+        val backend = ImeViewBackend(
+            motionSurface = motion,
+            buttonViews = buttons.toMap(),
+            ctx = ctx,
+            services = { services },
+            recordingAnimationController = controller,
+        )
+        backend.attach { captured += it }
+        backend.render(DictateUiState.initial(), catalog.KEYBOARD_TWO_ROW)
+
+        // Pre-bind: provider null → inert.
+        buttons[LogicalButtonId.RECORD]!!.performClick()
+        assertTrue(
+            "pre-bind RECORD click must not dispatch (provider null), got: $captured",
+            captured.isEmpty(),
+        )
+
+        // Bind: provider now resolves to a live container.
+        services = fakeModuleServices(emitAction = {})
+        buttons[LogicalButtonId.RECORD]!!.performClick()
+
+        assertEquals(1, captured.size)
+        assertTrue(
+            "post-bind RECORD click must dispatch the catalog StartRecording " +
+                "action, got: $captured",
+            captured.single() is Action.RecordingAction.StartRecording,
         )
     }
 
@@ -371,7 +412,7 @@ class ImeViewBackendTest {
             motionSurface = motion,
             buttonViews = buttons.toMap(),
             ctx = ctx,
-            services = fakeModuleServices(emitAction = {}),
+            services = { fakeModuleServices(emitAction = {}) },
             recordingAnimationController = controller,
             staticHandlerInstaller = { views ->
                 calls++
@@ -401,7 +442,7 @@ class ImeViewBackendTest {
             motionSurface = motion,
             buttonViews = buttons.toMap(),
             ctx = ctx,
-            services = fakeModuleServices(emitAction = {}),
+            services = { fakeModuleServices(emitAction = {}) },
             recordingAnimationController = controller,
             staticHandlerInstaller = { _ -> calls++ },
         )
@@ -426,7 +467,7 @@ class ImeViewBackendTest {
             motionSurface = motion,
             buttonViews = buttons.toMap(),
             ctx = ctx,
-            services = fakeModuleServices(emitAction = {}),
+            services = { fakeModuleServices(emitAction = {}) },
             recordingAnimationController = controller,
             onVibrate = { vibrations++ },
         )
@@ -472,7 +513,7 @@ class ImeViewBackendTest {
             motionSurface = motion,
             buttonViews = recBtns.mapValues { it.value as View },
             ctx = ctx,
-            services = fakeModuleServices(emitAction = {}),
+            services = { fakeModuleServices(emitAction = {}) },
             recordingAnimationController = controller,
             keyPressAnimator = keyPressAnimator,
         )
@@ -528,7 +569,7 @@ class ImeViewBackendTest {
             motionSurface = motion,
             buttonViews = recBtns.mapValues { it.value as View },
             ctx = ctx,
-            services = fakeModuleServices(emitAction = {}),
+            services = { fakeModuleServices(emitAction = {}) },
             recordingAnimationController = controller,
             imeSideAffordance = { id, long -> affordances += id to long },
         )
@@ -554,7 +595,7 @@ class ImeViewBackendTest {
             motionSurface = motion,
             buttonViews = recBtns.mapValues { it.value as View },
             ctx = ctx,
-            services = fakeModuleServices(emitAction = {}),
+            services = { fakeModuleServices(emitAction = {}) },
             recordingAnimationController = controller,
             imeSideAffordance = { id, long -> affordances += id to long },
         )
@@ -603,7 +644,7 @@ class ImeViewBackendTest {
             motionSurface = motion,
             buttonViews = recBtns.mapValues { it.value as View },
             ctx = ctx,
-            services = fakeModuleServices(emitAction = {}),
+            services = { fakeModuleServices(emitAction = {}) },
             recordingAnimationController = controller,
             imeSideAffordance = { id, long -> affordances += id to long },
         )

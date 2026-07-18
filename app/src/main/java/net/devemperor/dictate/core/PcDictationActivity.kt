@@ -308,7 +308,10 @@ class PcDictationActivity : AppCompatActivity() {
             motionSurface = RealMotionSurface(motion),
             buttonViews = views,
             ctx = this,
-            services = b.moduleServices,
+            // §A1 — services is now a provider. The Activity binds before
+            // constructing the backend, so `b` (the binder) is non-null and
+            // the provider never returns null in this host.
+            services = { b.moduleServices },
             onVibrate = {},
             recordingAnimationController = animController,
             pipelineStepRowRenderer = stepRowRenderer,

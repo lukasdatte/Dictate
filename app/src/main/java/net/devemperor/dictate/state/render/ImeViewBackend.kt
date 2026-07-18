@@ -51,13 +51,23 @@ import net.devemperor.dictate.state.layout.RenderBackend
  *  - `actionResolver` returning `null` is a silent no-op (R.3 nullable
  *    contract) — verified via `?.let { onAction?.invoke(it) }`.
  *
- * # ModuleServices dependency (Phase-B S-7)
+ * # ModuleServices dependency (Phase-B S-7; render-latency-wave2 §A1)
  *
  * Pre-Dispatch-Allocation (R.2) requires the click-handler to call
  * `services.audioFileFactory.allocate()` before
  * `Action.RecordingAction.StartRecording`. Resolvers carry the
- * `(state, services) -> Action?` signature; the backend holds the
- * `services` reference and threads it into the resolver call.
+ * `(state, services) -> Action?` signature; the backend holds a
+ * `services` **provider** and resolves it **at click-time**, threading
+ * the result into the resolver call.
+ *
+ * The provider (rather than an eager `ModuleServices` reference) lets the
+ * backend be constructed **before the service binder arrives** — the
+ * Problem-A pre-bind bootstrap render needs a live [ImeViewBackend] to
+ * paint the idle keyboard, but `ModuleServices` only exists post-bind. A
+ * click while the provider still returns `null` (pre-bind) is a silent
+ * no-op (R.3 nullable-resolver idiom) — the RECORD tap is instead caught
+ * by the IME's own pending-tap buffer. Post-bind the provider resolves to
+ * the live `ModuleServices`, restoring the exact former semantics.
  *
  * @property motionSurface the `MotionLayout` indirection — see
  *   [MotionSurface] for the abstraction's rationale.
@@ -66,8 +76,11 @@ import net.devemperor.dictate.state.layout.RenderBackend
  *   map raises an `IllegalStateException` (Silent-Skip-Guard).
  * @property ctx Android context (for `ContextCompat.getDrawable` in
  *   the slot apply path).
- * @property services dependency-injection container (Pre-Dispatch
- *   allocator + toast sink + other subsystems).
+ * @property services provider for the dependency-injection container
+ *   (Pre-Dispatch allocator + toast sink + other subsystems), resolved
+ *   at click-time. Returns `null` before the service binder is up
+ *   (pre-bind bootstrap window) — a click then dispatches nothing
+ *   (render-latency-wave2 §A1).
  * @property recordingAnimationController the animator-bridge driving
  *   BorderGlow + PulseLayout from `state.recording` transitions.
  * @property keyPressAnimator the shared key-press scale animator (Spec 2
@@ -135,7 +148,7 @@ class ImeViewBackend @JvmOverloads constructor(
     private val motionSurface: MotionSurface,
     private val buttonViews: Map<LogicalButtonId, View>,
     private val ctx: Context,
-    private val services: ModuleServices,
+    private val services: () -> ModuleServices?,
     private val recordingAnimationController: RecordingAnimationController? = null,
     /**
      * Phase 3 of dictate-render-cutover-completion-vol2 — single
@@ -469,9 +482,15 @@ class ImeViewBackend @JvmOverloads constructor(
                     }
                     val s = stateRef ?: return@setOnClickListener
                     val slot = currentSlot(id) ?: return@setOnClickListener
+                    // §A1 — resolve the services provider at click-time.
+                    // `null` = pre-bind bootstrap window → silent no-op
+                    // (the RECORD tap is caught by the IME's pending-tap
+                    // buffer instead; every other button is inert pre-bind
+                    // by design, R.3 idiom).
+                    val svc = services() ?: return@setOnClickListener
                     // R.3 nullable-resolver-idiom: null = silent no-op,
                     // no Unrouted log-spam fires on the orchestrator.
-                    slot.actionResolver(s, services)?.let { action ->
+                    slot.actionResolver(s, svc)?.let { action ->
                         onAction?.invoke(action)
                     }
                 }
@@ -523,8 +542,13 @@ class ImeViewBackend @JvmOverloads constructor(
                 }
                 val s = stateRef
                 val slot = currentSlot(id)
-                if (s != null && slot != null) {
-                    slot.longClickResolver(s, services)?.let { action ->
+                // §A1 — services provider resolved at long-click-time; a
+                // null (pre-bind) result drops the catalog dispatch (the
+                // IME-side affordance above already fired for RECORD/RESEND/
+                // BACKSPACE, matching legacy parity).
+                val svc = services()
+                if (s != null && slot != null && svc != null) {
+                    slot.longClickResolver(s, svc)?.let { action ->
                         onAction?.invoke(action)
                     }
                 }

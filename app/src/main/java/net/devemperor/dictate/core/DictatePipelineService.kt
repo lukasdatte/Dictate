@@ -78,7 +78,6 @@ import net.devemperor.dictate.windows.PcSendResult
 import net.devemperor.dictate.windows.WindowsDispatchCoordinator
 import net.devemperor.dictate.windows.WindowsDispatchService
 import kotlinx.coroutines.launch
-import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -1436,95 +1435,7 @@ class DictatePipelineService : Service() {
      * from prefs via `preferences.LanguageResolver`), so this read now
      * reflects a live value rather than the `"system"` boot sentinel.
      */
-    private fun buildLayoutStrings(): LayoutStrings = LayoutStrings(
-        record = getString(R.string.dictate_record),
-        send = getString(R.string.dictate_send, getString(R.string.dictate_record)),
-        sending = getString(R.string.dictate_sending),
-        // Just the badge word. `resolveRecordButtonText` decides whether to
-        // splice it in, because PC-mode flips at runtime while this factory
-        // runs once — see LayoutStrings.pcBadge.
-        pcBadge = getString(R.string.dictate_pc_badge),
-        // F-15 — language-aware label. `effectiveLanguage` is
-        // `DictateUiState.language.effective` (LanguageModule axis). The
-        // `"system"` sentinel (boot default before the pref resolves)
-        // renders the plain "Record" label; any concrete language code
-        // is suffixed so the button reflects the current language. The
-        // legacy `MainButtonsController.updateRecordButtonText` path
-        // still runs in Phase 1; this is the new render path's source.
-        dictateButtonText = { effectiveLanguage ->
-            if (effectiveLanguage.isEmpty() || effectiveLanguage == "system") {
-                getString(R.string.dictate_record)
-            } else {
-                "${getString(R.string.dictate_record)} ($effectiveLanguage)"
-            }
-        },
-        formatStagingLabel = { audioDurationSeconds ->
-            // Defensive default — Spec 1 §3 `ReprocessStaging` will
-            // grow `audioDurationSeconds`; format as MM:SS.
-            // Locale.US: technical format — keeps digits ASCII regardless
-            // of device locale (B4-VAL F-5, mirrors RecordingAnimationController).
-            val minutes = audioDurationSeconds / 60
-            val seconds = audioDurationSeconds % 60
-            String.format(Locale.US, "Audio %d:%02d · Send", minutes, seconds)
-        },
-        formatPipelineLabel = { stepName, completedSteps, totalSteps, autoEnterActive, elapsedMs ->
-            // Live `stepName / completedSteps / totalSteps / elapsedMs`
-            // come from `PipelineUiState.Running` via
-            // `resolveRecordButtonTextPipeline` (F-13, Epic §4 Block A1
-            // + B-D-1, dictate-pipeline-render-and-state-unification §5.1).
-            //
-            // Layout (OQ-1 Variante A — two-line):
-            //   - With a non-empty stepName:
-            //     `"<stepName>\n<N>/<M>[ ↵] <M>:<SS>"`
-            //   - Without a step name (between steps / right after
-            //     StartPipeline before first StepStarted): single-line
-            //     legacy shape `"<N>/<M>[ ↵] <M>:<SS>"` so the empty-name
-            //     window doesn't shrink the button to one line + back
-            //     to two on every step boundary (a UX-jitter the
-            //     Variante-A two-line layout otherwise causes).
-            //
-            // Locale.US: technical format — keeps ASCII digits
-            // regardless of device locale (B4-VAL F-5, mirrors
-            // RecordingAnimationController + the F-13 formatter
-            // contract).
-            val seconds = (elapsedMs / 1000L).toInt()
-            val mm = seconds / 60
-            val ss = seconds % 60
-            val arrow = if (autoEnterActive) " ↵" else ""
-            val phase = stepName?.takeIf { it.isNotBlank() }
-            if (phase != null) {
-                String.format(
-                    Locale.US,
-                    "%s\n%d/%d%s %d:%02d",
-                    phase, completedSteps, totalSteps, arrow, mm, ss,
-                )
-            } else {
-                String.format(
-                    Locale.US,
-                    "%d/%d%s %d:%02d",
-                    completedSteps, totalSteps, arrow, mm, ss,
-                )
-            }
-        },
-        formatPreparingLabel = { autoEnterActive ->
-            // #AE-DEEP2 — Preparing carries an autoEnter-toggle too; append
-            // the same ↵ marker the formatPipelineLabel formatter uses so
-            // the two upload phases (Preparing then Running) read the same
-            // visual cue. Localised base via R.string.dictate_sending.
-            if (autoEnterActive) {
-                getString(R.string.dictate_sending) + " ↵"
-            } else {
-                getString(R.string.dictate_sending)
-            }
-        },
-        // B3.4 — Pause-Toggle labels. The overlay record-button morphs
-        // into a Pause/Resume toggle when the widget is visible
-        // (resolveOverlayRecordAction + resolveOverlayRecordButtonText).
-        // Strings reuse the existing notification-action labels for
-        // pause/resume so localisation stays in one place.
-        pauseLabel = getString(R.string.dictate_action_pause),
-        resumeLabel = getString(R.string.dictate_action_resume),
-    )
+    private fun buildLayoutStrings(): LayoutStrings = LayoutStrings.from(this)
 
     /**
      * Kick off the cleanup pass (Spec 1 §6.2 R.17 + §6.3.1):

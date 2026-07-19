@@ -105,6 +105,10 @@ dependencies {
     // :shared — the pure kotlin("jvm") protocol/client module (ADR-0015). First
     // consumed here (wd-10): the pairing screen uses PairingUri + DispatchClient.
     implementation project(':shared')
+    // :shared-ai — the single AI core, extracted from :app in Block A (ADR
+    // adr-shared-ai-module). Package unchanged (net.devemperor.dictate.ai / .database.entity
+    // / .preferences / .core stay split across this boundary at jvmTarget 1.8 — no JPMS).
+    implementation project(':shared-ai')
 
     implementation libs.appcompat
     implementation libs.material

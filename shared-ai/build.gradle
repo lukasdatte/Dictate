@@ -1,0 +1,41 @@
+plugins {
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.serialization)
+}
+
+// jvmTarget 1.8 — DO NOT raise without raising :app with it. :app consumes this
+// module and Kotlin refuses to inline 11/17-bytecode into 8-bytecode (ADR-0015).
+// The AI SDKs are compiled for Java 8 and already run inside :app today, so a
+// 1.8 target is safe for them. This is the deliberate reason :shared-ai is a
+// SEPARATE module from :shared: :shared forbids the AI SDKs (SharedPurityTest),
+// this module allows them but keeps the same Android/Ktor freedom via its own
+// SharedAiPurityTest. See ADR adr-shared-ai-module / ADR-0015.
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8
+    }
+}
+
+// No `repositories { }` — settings.gradle sets FAIL_ON_PROJECT_REPOS.
+
+dependencies {
+    // AI SDKs — the whole reason this is a separate module from :shared. Kept as
+    // `api` because the ProxyConfig port and the runner surface (Block A3) carry
+    // SDK builder types (OpenAIOkHttpClient.Builder, AnthropicOkHttpClient.Builder)
+    // on their public API. Chunk A2 only moves the 0-dependency core; the runner
+    // surface that decides api-vs-implementation lands in A3, so the leak-check
+    // (spec §10 Gap 2) is finalized there — `api` is the safe scaffold until then.
+    api libs.openai.java
+    api libs.anthropic.java
+    // okhttp: raw client for the ElevenLabs runner + proxy plumbing (arrives A3).
+    implementation libs.okhttp
+    // kotlinx-serialization replaces org.json (ElevenLabs parse + keyterms, A3.4).
+    implementation libs.kotlinx.serialization.json
+
+    testImplementation libs.junit
+    testImplementation libs.okhttp.mockwebserver
+}

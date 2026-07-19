@@ -27,3 +27,8 @@ include ':app'
 // :companion — Compose Desktop app (JVM 17), the ONLY server in the system (ADR-0017).
 include ':shared'
 include ':companion'
+// :shared-ai — pure kotlin("jvm") module (jvmTarget 1.8), consumed by BOTH :app and
+//              :companion (Block D). Android-free & Ktor-free (own SharedAiPurityTest),
+//              but — unlike :shared — the AI SDKs (openai-java, anthropic-java) and okhttp
+//              ARE allowed. Holds the single AI core. See ADR adr-shared-ai-module / ADR-0015.
+include ':shared-ai'

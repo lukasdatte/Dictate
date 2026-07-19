@@ -46,6 +46,13 @@ android {
         exclude 'META-INF/DEPENDENCIES'
     }
 
+    sourceSets {
+        // Room MigrationTestHelper reads the exported schemas as androidTest
+        // assets; without this wiring every migration test fails with
+        // "Cannot find schema file DictateDatabase/<n>.json".
+        androidTest.assets.srcDirs += files("$projectDir/schemas")
+    }
+
     testOptions {
         // Return default values instead of throwing for unmocked Android APIs
         // (e.g. android.util.Log). Keeps the pure-logic JVM tests light —

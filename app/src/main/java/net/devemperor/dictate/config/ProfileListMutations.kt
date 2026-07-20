@@ -15,7 +15,7 @@ import java.util.UUID
  * not shareable content — a `pos` payload field would pollute the `contentHash` (same reasoning as
  * `is_active`, spec §13 D4). The order is therefore a comma-joined id list in
  * [net.devemperor.dictate.preferences.Pref.ProfileOrder]; [ordered] merges it with the stored rows
- * (unknown ids dropped, missing ids appended alphabetically), [moved] returns the updated pref value.
+ * (unknown ids dropped, missing ids appended in incoming order), [moved] returns the updated pref value.
  *
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/entitaetenmodell-android.md §10.3
  */

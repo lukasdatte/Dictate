@@ -23,8 +23,11 @@ import net.devemperor.dictate.R
 import net.devemperor.dictate.config.CatalogExport
 import net.devemperor.dictate.config.CatalogImport
 import net.devemperor.dictate.config.ConfigEntityMapper
+import net.devemperor.dictate.config.ConfigRepository
+import net.devemperor.dictate.config.ConfigSecrets
 import net.devemperor.dictate.config.ProfileListMutations
 import net.devemperor.dictate.database.DictateDatabase
+import net.devemperor.dictate.secrets.AndroidKeystoreSecretStore
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.preferences.put
@@ -32,6 +35,7 @@ import net.devemperor.dictate.rewording.PromptImportExport
 import net.devemperor.dictate.shared.config.CatalogCodec
 import net.devemperor.dictate.shared.config.CatalogFileV3
 import net.devemperor.dictate.shared.config.ProfileEntity
+import net.devemperor.dictate.shared.config.ProviderConfigEntity
 import net.devemperor.dictate.shared.config.ProviderType
 
 /**
@@ -47,6 +51,7 @@ class APISettingsActivity : AppCompatActivity() {
 
     private lateinit var sp: SharedPreferences
     private lateinit var db: DictateDatabase
+    private lateinit var repo: ConfigRepository
     private lateinit var providerList: LinearLayout
     private lateinit var profileList: LinearLayout
 
@@ -72,6 +77,7 @@ class APISettingsActivity : AppCompatActivity() {
 
         sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE)
         db = DictateDatabase.getInstance(this)
+        repo = ConfigRepository(db)
         providerList = findViewById(R.id.api_settings_provider_list)
         profileList = findViewById(R.id.api_settings_profile_list)
 
@@ -110,7 +116,7 @@ class APISettingsActivity : AppCompatActivity() {
                 getString(R.string.dictate_config_key_missing)
             }
             val peerBadge = if (dto.sourceRef != null) " · ${getString(R.string.dictate_config_origin_peer)}" else ""
-            addRow(
+            val row = addRow(
                 providerList,
                 title = dto.label,
                 subtitle = "${providerTypeName(dto.providerType)} · $keyBadge$peerBadge",
@@ -121,10 +127,47 @@ class APISettingsActivity : AppCompatActivity() {
                     )
                 },
             )
+            val actions = row.findViewById<LinearLayout>(R.id.item_config_row_actions)
+            addAction(actions, R.drawable.ic_baseline_delete_24, R.string.dictate_config_delete) {
+                confirmDeleteProvider(dto)
+            }
         }
     }
 
     private fun providerTypeName(type: ProviderType): String = type.name
+
+    private fun confirmDeleteProvider(provider: ProviderConfigEntity) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(provider.label)
+            .setMessage(R.string.dictate_config_delete_provider_message)
+            .setPositiveButton(R.string.dictate_yes) { _, _ ->
+                deleteProvider(provider)
+                rebuildProviderList()
+                rebuildProfileList()
+            }
+            .setNegativeButton(R.string.dictate_no, null)
+            .show()
+    }
+
+    /**
+     * Deletes the provider row and its model refs; the credential (row + SecretStore key) falls
+     * with it when no OTHER provider references it — a credential without any provider would be
+     * unreachable in the UI (§10.1 references credentials only through providers).
+     */
+    private fun deleteProvider(provider: ProviderConfigEntity) {
+        db.runInTransaction {
+            db.modelRefDao().deleteByProvider(provider.id)
+            db.providerConfigDao().deleteById(provider.id)
+            val credentialId = provider.credentialRef
+            if (credentialId != null &&
+                db.providerConfigDao().getAll().none { it.credentialRef == credentialId }
+            ) {
+                db.apiCredentialDao().deleteById(credentialId)
+                val secretStore = AndroidKeystoreSecretStore.create(this)
+                if (secretStore.available) secretStore.delete(ConfigSecrets.credentialRef(credentialId))
+            }
+        }
+    }
 
     // ── Profiles (§10.3) ──────────────────────────────────────────────────────────────────────
 
@@ -177,7 +220,7 @@ class APISettingsActivity : AppCompatActivity() {
 
     private fun duplicateProfile(source: ProfileEntity, index: Int, displayedIds: List<String>) {
         val copy = ProfileListMutations.copyOf(source, getString(R.string.dictate_prompts_copy_suffix))
-        net.devemperor.dictate.config.ConfigRepository(db).upsertProfile(copy)
+        repo.upsertProfile(copy)
         // Insert the copy directly after its source in the display order.
         val newOrder = displayedIds.toMutableList().apply { add(index + 1, copy.id) }
         sp.edit().put(Pref.ProfileOrder, ProfileListMutations.serializeOrder(newOrder)).apply()
@@ -274,11 +317,17 @@ class APISettingsActivity : AppCompatActivity() {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.dictate_config_export_title)
             .setItems(labels) { _, which ->
-                pendingExport = if (which == 0) {
+                val catalog = if (which == 0) {
                     CatalogExport.fullCatalog(db)
                 } else {
                     CatalogExport.profileCatalog(db, profiles[which - 1].id)
                 }
+                if (catalog == null) {
+                    // Profile vanished between listing and selection — don't open SAF for nothing.
+                    Toast.makeText(this, R.string.dictate_config_export_failed, Toast.LENGTH_SHORT).show()
+                    return@setItems
+                }
+                pendingExport = catalog
                 exportLauncher.launch(getString(R.string.dictate_config_export_filename))
             }
             .setNegativeButton(R.string.dictate_cancel, null)

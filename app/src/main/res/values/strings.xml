@@ -667,6 +667,8 @@
     <string name="dictate_config_key_set">Key set</string>
     <string name="dictate_config_key_missing">No key</string>
     <string name="dictate_config_key_unchanged">A key is stored — leave empty to keep it.</string>
+    <string name="dictate_config_key_store_failed">Could not store the key securely</string>
+    <string name="dictate_config_save_provider_first">Save the provider first</string>
     <string name="dictate_config_models">Models</string>
     <string name="dictate_config_add_model">Add model</string>
     <string name="dictate_config_model_id">Model ID</string>

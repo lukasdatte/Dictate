@@ -155,7 +155,7 @@ class ProviderEditActivity : AppCompatActivity() {
         if (newKey.isNotEmpty()) {
             val secretStore = AndroidKeystoreSecretStore.create(this)
             if (!secretStore.available) {
-                Toast.makeText(this, R.string.dictate_config_export_failed, Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, R.string.dictate_config_key_store_failed, Toast.LENGTH_SHORT).show()
                 return
             }
             val credentialId = credentialRef ?: UUID.randomUUID().toString()
@@ -226,8 +226,9 @@ class ProviderEditActivity : AppCompatActivity() {
     private fun showModelDialog(existingModel: ModelRefEntity?) {
         val providerConfig = existing
         if (providerConfig == null) {
-            // The provider row must exist before models can reference it.
-            Toast.makeText(this, R.string.dictate_config_save, Toast.LENGTH_SHORT).show()
+            // The provider row must exist before models can reference it (add button is disabled
+            // for unsaved providers — this is the defensive backstop).
+            Toast.makeText(this, R.string.dictate_config_save_provider_first, Toast.LENGTH_SHORT).show()
             return
         }
         val provider = providerConfig.providerType.toAIProvider()

@@ -788,3 +788,40 @@ DELETE FROM subscriptions WHERE local_entity_id = :localEntityId;
 insertSubscription:
 INSERT INTO subscriptions(local_entity_id, peer_id, source_entity_id, kind, mode, last_hash, last_checked_at)
 VALUES (:localEntityId, :peerId, :sourceEntityId, :kind, :mode, :lastHash, :lastCheckedAt);
+
+-- ── catalog sync engine write path (E2, SqlDelightCatalogSubscriberStore, §6) ──────────────────
+--
+-- The sync engine's OWN persistence: the peers watermark, the subscription diff basis, and the
+-- staleness/fork bookkeeping. Read-plus-user-action queries above are E3's; these are E2's.
+
+peerById:
+SELECT * FROM peers WHERE peer_id = :peerId;
+
+-- A reached-but-unsuccessful attempt (§6.4, F33): only last_contact_at moves, so the peer shows as
+-- stale without any error — last_success_at (the staleness basis) is deliberately untouched.
+recordPeerContact:
+UPDATE peers SET last_contact_at = :at WHERE peer_id = :peerId;
+
+-- A successful run: both timestamps advance; last_root_hash advances ONLY on a clean run. A partial
+-- run passes :rootHash = NULL, and coalesce keeps the old hash so the cheap no-op path cannot skip
+-- the still-unresolved change on the next run (§6.1 step 4, CatalogSubscriberStore.recordSuccess doc).
+recordPeerSuccess:
+UPDATE peers
+SET last_contact_at = :at, last_success_at = :at, last_root_hash = coalesce(:rootHash, last_root_hash)
+WHERE peer_id = :peerId;
+
+-- Only SUBSCRIBE rows — the fork-protection query (AC8): a fork DELETED its row, a ONE_SHOT never had
+-- a SUBSCRIBE one, so neither is ever handed to the engine.
+activeSubscriptionsForPeer:
+SELECT * FROM subscriptions WHERE peer_id = :peerId AND mode = 'SUBSCRIBE' ORDER BY local_entity_id;
+
+-- Advance the diff watermark after a verified pull (§6.2): the copy's own content_hash is written by
+-- the config repo's save; this moves the subscription's last_hash/last_checked_at in the same txn.
+advanceSubscription:
+UPDATE subscriptions SET last_hash = :lastHash, last_checked_at = :at WHERE local_entity_id = :localEntityId;
+
+-- Source vanished upstream (§6.4): record the check, KEEP the copy. There is no stored SOURCE_REMOVED
+-- flag — the Explorer derives that state from the live index (a present index that lacks the entry),
+-- so persistence only stamps that we looked.
+touchSubscriptionChecked:
+UPDATE subscriptions SET last_checked_at = :at WHERE local_entity_id = :localEntityId;

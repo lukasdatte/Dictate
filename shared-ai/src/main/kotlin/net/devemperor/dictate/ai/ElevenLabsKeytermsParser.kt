@@ -1,8 +1,13 @@
 package net.devemperor.dictate.ai
 
-import org.json.JSONArray
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 
 object ElevenLabsKeytermsParser {
+
+    private val listSerializer = ListSerializer(String.serializer())
+
 
     const val MAX_TERMS = 100
     const val MAX_TERM_LENGTH = 50
@@ -59,13 +64,12 @@ object ElevenLabsKeytermsParser {
         return ParseResult(validTerms, errors, commentCount)
     }
 
-    fun toJson(terms: List<String>): String = JSONArray(terms).toString()
+    fun toJson(terms: List<String>): String = Json.encodeToString(listSerializer, terms)
 
     fun fromJson(json: String): List<String> {
         if (json.isBlank() || json == "[]") return emptyList()
         return try {
-            val arr = JSONArray(json)
-            (0 until arr.length()).map { arr.getString(it) }
+            Json.decodeFromString(listSerializer, json)
         } catch (_: Exception) { emptyList() }
     }
 }

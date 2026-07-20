@@ -7,6 +7,11 @@ import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.ai.AIProviderException
+import net.devemperor.dictate.ai.adapter.AndroidAiConfig
+import net.devemperor.dictate.ai.adapter.AndroidPromptConfig
+import net.devemperor.dictate.ai.adapter.MediaMetadataAudioDurationReader
+import net.devemperor.dictate.ai.adapter.RoomUsageSink
+import net.devemperor.dictate.ai.adapter.SharedPrefsProxyConfig
 import net.devemperor.dictate.ai.factory.RunnerFactory
 import net.devemperor.dictate.ai.prompt.PromptService
 import net.devemperor.dictate.ai.runner.CompletionOptions
@@ -67,8 +72,8 @@ class PipelineOrchestratorQueueExecutionTest {
     fun setUp() {
         db = DictateDatabase.getInstance(app)
         factory = CapturingRunnerFactory(sp)
-        val aiOrchestrator = AIOrchestrator(sp, db.usageDao(), factory)
-        promptService = PromptService.create(sp)
+        val aiOrchestrator = AIOrchestrator(AndroidAiConfig(sp), RoomUsageSink(db.usageDao()), factory)
+        promptService = PromptService.create(AndroidPromptConfig(sp))
         sessionManager = SessionManager(db)
         promptQueueManager = PromptQueueManager(
             { emptyList() },
@@ -548,7 +553,9 @@ class PipelineOrchestratorQueueExecutionTest {
      * Capturing AI layer (K-1): fake transcription + structured converse; outputs
      * numbered `generated-output-N`. complete() is unused on the pipeline path.
      */
-    private class CapturingRunnerFactory(sp: SharedPreferences) : RunnerFactory(sp) {
+    private class CapturingRunnerFactory(sp: SharedPreferences) : RunnerFactory(
+        AndroidAiConfig(sp), SharedPrefsProxyConfig(sp), MediaMetadataAudioDurationReader()
+    ) {
         val transcriptText = "raw transcript"
         val converseCalls = mutableListOf<ConversationRequest>()
         var cancelAtConverseCall: Int? = null

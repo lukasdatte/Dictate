@@ -1,6 +1,7 @@
 package net.devemperor.dictate.ai.runner
 
-import net.devemperor.dictate.testutil.FakeSharedPreferences
+import net.devemperor.dictate.ai.testutil.FakeAudioDurationReader
+import net.devemperor.dictate.ai.testutil.FakeProxyConfig
 import okhttp3.MultipartBody
 import okio.Buffer
 import org.junit.Assert.assertEquals
@@ -22,7 +23,11 @@ import java.io.File
 class ElevenLabsTranscriptionRunnerTest {
 
     private fun runner() =
-        ElevenLabsTranscriptionRunner(apiKey = "test-key", sp = FakeSharedPreferences())
+        ElevenLabsTranscriptionRunner(
+            apiKey = "test-key",
+            proxy = FakeProxyConfig(),
+            audioDuration = FakeAudioDurationReader()
+        )
 
     private fun tempAudio(): File =
         File.createTempFile("dictate-eleven", ".m4a").apply {

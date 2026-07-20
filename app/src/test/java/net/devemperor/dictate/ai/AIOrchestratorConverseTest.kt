@@ -1,6 +1,10 @@
 package net.devemperor.dictate.ai
 
 import android.content.SharedPreferences
+import net.devemperor.dictate.ai.adapter.AndroidAiConfig
+import net.devemperor.dictate.ai.adapter.MediaMetadataAudioDurationReader
+import net.devemperor.dictate.ai.adapter.RoomUsageSink
+import net.devemperor.dictate.ai.adapter.SharedPrefsProxyConfig
 import net.devemperor.dictate.ai.conversation.ConversationMessage
 import net.devemperor.dictate.ai.factory.RunnerFactory
 import net.devemperor.dictate.ai.runner.CompletionOptions
@@ -44,7 +48,7 @@ class AIOrchestratorConverseTest {
     private class FakeFactory(
         sp: SharedPreferences,
         val onConverse: (ConversationRequest) -> ConversationResult
-    ) : RunnerFactory(sp) {
+    ) : RunnerFactory(AndroidAiConfig(sp), SharedPrefsProxyConfig(sp), MediaMetadataAudioDurationReader()) {
         var lastRequest: ConversationRequest? = null
         override fun getProvider(function: AIFunction): AIProvider = AIProvider.ANTHROPIC
         override fun getModelName(function: AIFunction): String = "claude-test"
@@ -73,7 +77,7 @@ class AIOrchestratorConverseTest {
                 responseFormat = ResponseFormatKind.TOOL_USE
             )
         }
-        val orchestrator = AIOrchestrator(sp, usage, factory)
+        val orchestrator = AIOrchestrator(AndroidAiConfig(sp), RoomUsageSink(usage), factory)
 
         val result = orchestrator.converse(
             listOf(ConversationMessage(MessageRole.USER, "hello")),
@@ -96,7 +100,7 @@ class AIOrchestratorConverseTest {
         val factory = FakeFactory(sp) {
             throw AIProviderException(AIProviderException.ErrorType.RATE_LIMITED, "slow down")
         }
-        val orchestrator = AIOrchestrator(sp, CapturingUsageDao(), factory)
+        val orchestrator = AIOrchestrator(AndroidAiConfig(sp), RoomUsageSink(CapturingUsageDao()), factory)
         orchestrator.converse(listOf(ConversationMessage(MessageRole.USER, "x")), null)
     }
 }

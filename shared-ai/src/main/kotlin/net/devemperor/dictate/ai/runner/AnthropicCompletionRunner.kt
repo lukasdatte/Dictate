@@ -1,6 +1,5 @@
 package net.devemperor.dictate.ai.runner
 
-import android.content.SharedPreferences
 import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
 import com.anthropic.errors.BadRequestException
@@ -13,14 +12,12 @@ import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.Tool
 import com.anthropic.models.messages.ToolChoiceTool
 import com.anthropic.models.messages.ToolUnion
-import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.ai.AIProviderException.ErrorType
 import net.devemperor.dictate.ai.conversation.StructuredResponseCodec
+import net.devemperor.dictate.ai.port.ProxyConfig
 import net.devemperor.dictate.database.entity.MessageRole
 import net.devemperor.dictate.database.entity.ResponseFormatKind
-import net.devemperor.dictate.preferences.Pref
-import net.devemperor.dictate.preferences.get
 import java.io.IOException
 
 /**
@@ -33,7 +30,7 @@ import java.io.IOException
  */
 class AnthropicCompletionRunner(
     private val apiKey: String,
-    private val sp: SharedPreferences
+    private val proxy: ProxyConfig
 ) : CompletionRunner {
 
     private fun buildClient(): AnthropicClient {
@@ -41,13 +38,7 @@ class AnthropicCompletionRunner(
             .apiKey(apiKey)
             .maxRetries(3)
 
-        // Proxy support: uses DictateUtils.applyProxyToAnthropic()
-        if (sp.get(Pref.ProxyEnabled)) {
-            val proxyHost = sp.get(Pref.ProxyHost)
-            if (DictateUtils.isValidProxy(proxyHost)) {
-                DictateUtils.applyProxyToAnthropic(builder, sp)
-            }
-        }
+        proxy.applyTo(builder)
 
         return builder.build()
     }

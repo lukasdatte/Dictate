@@ -31,6 +31,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import net.devemperor.dictate.R
 import net.devemperor.dictate.ai.AIOrchestrator
+import net.devemperor.dictate.ai.adapter.AndroidAiFactory
 import net.devemperor.dictate.ai.prompt.PromptService
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.migration.LegacyAudioFileMigration
@@ -393,8 +394,8 @@ class DictatePipelineService : Service() {
         val sharedPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val database = DictateDatabase.getInstance(this)
 
-        aiOrchestratorImpl = AIOrchestrator(sharedPrefs, database.usageDao())
-        promptServiceImpl = PromptService.create(sharedPrefs)
+        aiOrchestratorImpl = AndroidAiFactory.androidOrchestrator(sharedPrefs, database.usageDao())
+        promptServiceImpl = AndroidAiFactory.androidPromptService(sharedPrefs)
         autoFormattingServiceImpl = AutoFormattingService.create(sharedPrefs, aiOrchestratorImpl)
         sessionManagerImpl = SessionManager(database)
         sessionTrackerImpl = SessionTracker(database.sessionDao())

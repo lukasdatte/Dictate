@@ -6,6 +6,11 @@ import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.AIProvider
+import net.devemperor.dictate.ai.adapter.AndroidAiConfig
+import net.devemperor.dictate.ai.adapter.AndroidPromptConfig
+import net.devemperor.dictate.ai.adapter.MediaMetadataAudioDurationReader
+import net.devemperor.dictate.ai.adapter.RoomUsageSink
+import net.devemperor.dictate.ai.adapter.SharedPrefsProxyConfig
 import net.devemperor.dictate.ai.factory.RunnerFactory
 import net.devemperor.dictate.ai.prompt.PromptService
 import net.devemperor.dictate.ai.runner.CompletionOptions
@@ -62,8 +67,8 @@ class PipelineOrchestratorRegenerationTest {
     fun setUp() {
         db = DictateDatabase.getInstance(app)
         factory = CapturingRunnerFactory(sp)
-        val aiOrchestrator = AIOrchestrator(sp, db.usageDao(), factory)
-        promptService = PromptService.create(sp)
+        val aiOrchestrator = AIOrchestrator(AndroidAiConfig(sp), RoomUsageSink(db.usageDao()), factory)
+        promptService = PromptService.create(AndroidPromptConfig(sp))
         sessionManager = SessionManager(db)
         callback = LatchingCallback()
         orchestrator = PipelineOrchestrator(
@@ -278,7 +283,9 @@ class PipelineOrchestratorRegenerationTest {
      * Handwritten capturing AI layer (K-1). Records every [CompletionOptions]
      * the orchestrator sends; provider/model fixed so no prefs are consulted.
      */
-    private class CapturingRunnerFactory(sp: SharedPreferences) : RunnerFactory(sp) {
+    private class CapturingRunnerFactory(sp: SharedPreferences) : RunnerFactory(
+        AndroidAiConfig(sp), SharedPrefsProxyConfig(sp), MediaMetadataAudioDurationReader()
+    ) {
         val calls = mutableListOf<CompletionOptions>()
         var lastResultText: String? = null
             private set

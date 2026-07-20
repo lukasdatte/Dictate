@@ -130,7 +130,7 @@ class ElevenLabsKeytermsParserTest {
         assertTrue(result.errors.all { it.reason == ElevenLabsKeytermsParser.ErrorReason.TOO_MANY_TERMS })
     }
 
-    // toJson/fromJson tests require org.json.JSONArray which is an Android framework class
-    // not available in local JVM unit tests without returnDefaultValues or Robolectric.
-    // JSON roundtrip is trivial (JSONArray constructor + toString) and covered by integration tests.
+    // toJson/fromJson serialization parity (kotlinx-serialization, A3.4) is covered
+    // by ElevenLabsKeytermsSerializationParityTest — now runnable on pure JVM since
+    // org.json is gone.
 }

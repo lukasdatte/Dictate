@@ -6,6 +6,11 @@ import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.AIProvider
+import net.devemperor.dictate.ai.adapter.AndroidAiConfig
+import net.devemperor.dictate.ai.adapter.AndroidPromptConfig
+import net.devemperor.dictate.ai.adapter.MediaMetadataAudioDurationReader
+import net.devemperor.dictate.ai.adapter.RoomUsageSink
+import net.devemperor.dictate.ai.adapter.SharedPrefsProxyConfig
 import net.devemperor.dictate.ai.factory.RunnerFactory
 import net.devemperor.dictate.ai.prompt.PromptService
 import net.devemperor.dictate.ai.runner.TranscriptionOptions
@@ -71,7 +76,7 @@ class TranscriptionRerunJobTest {
 
         db = DictateDatabase.getInstance(app)
         factory = CapturingTranscriptionFactory(sp)
-        val aiOrchestrator = AIOrchestrator(sp, db.usageDao(), factory)
+        val aiOrchestrator = AIOrchestrator(AndroidAiConfig(sp), RoomUsageSink(db.usageDao()), factory)
         sessionManager = SessionManager(db)
         callback = LatchingCallback()
         orchestrator = PipelineOrchestrator(
@@ -84,7 +89,7 @@ class TranscriptionRerunJobTest {
                     override fun onQueueChanged(queuedIds: List<Int>) = Unit
                 }
             ),
-            PromptService.create(sp),
+            PromptService.create(AndroidPromptConfig(sp)),
             sessionManager,
             SessionTracker(db.sessionDao()),
             db.promptDao(),
@@ -270,7 +275,9 @@ class TranscriptionRerunJobTest {
      * [transcribe]; the gate lets one test hold the job open to prove mutual
      * exclusion.
      */
-    private class CapturingTranscriptionFactory(sp: SharedPreferences) : RunnerFactory(sp) {
+    private class CapturingTranscriptionFactory(sp: SharedPreferences) : RunnerFactory(
+        AndroidAiConfig(sp), SharedPrefsProxyConfig(sp), MediaMetadataAudioDurationReader()
+    ) {
         @Volatile var calls: Int = 0
             private set
         @Volatile var lastResultText: String = ""

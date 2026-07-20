@@ -1,11 +1,8 @@
 package net.devemperor.dictate.ai.model
 
-import android.content.SharedPreferences
 import com.openai.client.okhttp.OpenAIOkHttpClient
-import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.ai.AIProvider
-import net.devemperor.dictate.preferences.Pref
-import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.ai.port.ProxyConfig
 import java.time.Duration
 
 /**
@@ -43,7 +40,7 @@ object ModelFetcher {
     fun fetchModels(
         provider: AIProvider,
         apiKey: String,
-        sp: SharedPreferences,
+        proxy: ProxyConfig,
         forTranscription: Boolean
     ): List<ModelInfo> {
         // Custom + Anthropic + ElevenLabs: No API fetching
@@ -56,14 +53,7 @@ object ModelFetcher {
             .baseUrl(provider.defaultBaseUrl)
             .timeout(Duration.ofSeconds(30))
             .maxRetries(2)
-            .also { builder ->
-                if (sp.get(Pref.ProxyEnabled)) {
-                    val proxyHost = sp.get(Pref.ProxyHost)
-                    if (DictateUtils.isValidProxy(proxyHost)) {
-                        DictateUtils.applyProxy(builder, sp)
-                    }
-                }
-            }
+            .also { builder -> proxy.applyTo(builder) }
             .build()
 
         val allModels = client.models().list().data()

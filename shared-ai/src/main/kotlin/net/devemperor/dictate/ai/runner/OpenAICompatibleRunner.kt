@@ -1,6 +1,5 @@
 package net.devemperor.dictate.ai.runner
 
-import android.content.SharedPreferences
 import com.openai.client.OpenAIClient
 import com.openai.client.okhttp.OpenAIOkHttpClient
 import com.openai.core.JsonValue
@@ -13,15 +12,14 @@ import com.openai.models.ResponseFormatJsonSchema
 import com.openai.models.audio.AudioResponseFormat
 import com.openai.models.audio.transcriptions.TranscriptionCreateParams
 import com.openai.models.chat.completions.ChatCompletionCreateParams
-import net.devemperor.dictate.DictateUtils
 import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.ai.AIProviderException.ErrorType
 import net.devemperor.dictate.ai.conversation.StructuredResponseCodec
+import net.devemperor.dictate.ai.port.AudioDurationReader
+import net.devemperor.dictate.ai.port.ProxyConfig
 import net.devemperor.dictate.database.entity.MessageRole
 import net.devemperor.dictate.database.entity.ResponseFormatKind
-import net.devemperor.dictate.preferences.Pref
-import net.devemperor.dictate.preferences.get
 import java.io.IOException
 import java.time.Duration
 
@@ -36,7 +34,8 @@ class OpenAICompatibleRunner(
     private val provider: AIProvider,
     private val apiKey: String,
     private val baseUrl: String,
-    private val sp: SharedPreferences,
+    private val proxy: ProxyConfig,
+    private val audioDuration: AudioDurationReader,
     private val timeoutSeconds: Long = 120
 ) : TranscriptionRunner, CompletionRunner {
 
@@ -47,12 +46,7 @@ class OpenAICompatibleRunner(
             .timeout(Duration.ofSeconds(timeoutSeconds))
             .maxRetries(3)
 
-        if (sp.get(Pref.ProxyEnabled)) {
-            val proxyHost = sp.get(Pref.ProxyHost)
-            if (DictateUtils.isValidProxy(proxyHost)) {
-                DictateUtils.applyProxy(builder, sp)
-            }
-        }
+        proxy.applyTo(builder)
         return builder.build()
     }
 
@@ -95,11 +89,11 @@ class OpenAICompatibleRunner(
         return wrapProviderCall(modelName = options.model) {
             val transcription = client.audio().transcriptions()
                 .create(paramsBuilder.build()).asTranscription()
-            val audioDuration = DictateUtils.getAudioDuration(options.audioFile)
+            val duration = audioDuration.durationSeconds(options.audioFile)
 
             TranscriptionResult(
                 text = transcription.text().trim(),
-                audioDurationSeconds = audioDuration,
+                audioDurationSeconds = duration,
                 modelName = options.model
             )
         }

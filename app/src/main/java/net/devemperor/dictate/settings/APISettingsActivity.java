@@ -26,6 +26,7 @@ import androidx.core.view.WindowInsetsCompat;
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.SimpleTextWatcher;
 import net.devemperor.dictate.ai.AIProvider;
+import net.devemperor.dictate.ai.adapter.SharedPrefsProxyConfig;
 import net.devemperor.dictate.ai.model.ModelFetcher;
 import net.devemperor.dictate.ai.model.ModelInfo;
 import net.devemperor.dictate.ai.model.ParameterDef;
@@ -270,7 +271,7 @@ public class APISettingsActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
-                List<ModelInfo> models = ModelFetcher.fetchModels(provider, apiKey, sp, true);
+                List<ModelInfo> models = ModelFetcher.fetchModels(provider, apiKey, new SharedPrefsProxyConfig(sp), true);
                 if (seq != transcriptionModelFetchSeq || isFinishing()) return;
                 List<String> modelIds = models.stream().map(ModelInfo::getId).collect(Collectors.toList());
 
@@ -415,7 +416,7 @@ public class APISettingsActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
-                List<ModelInfo> models = ModelFetcher.fetchModels(provider, apiKey, sp, false);
+                List<ModelInfo> models = ModelFetcher.fetchModels(provider, apiKey, new SharedPrefsProxyConfig(sp), false);
                 if (seq != rewordingModelFetchSeq || isFinishing()) return;
                 List<String> modelIds = models.stream().map(ModelInfo::getId).collect(Collectors.toList());
 

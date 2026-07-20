@@ -89,8 +89,8 @@ import java.util.concurrent.Executors
  * [aiOrchestrator] and [promptService] were extracted out of `:app` into the
  * shared `:shared-ai` module during Chunk A3 (spec `shared-ai-extraktion.md`
  * §6 A3.6/A3.7). They now sit behind the platform ports
- * ([net.devemperor.dictate.ai.port.AiConfig] / `UsageSink` / `ProxyConfig` /
- * `AudioDurationReader`) and are prefs-free at their core.
+ * ([net.devemperor.dictate.ai.port.AiConfig] / `PromptConfig` / `UsageSink` /
+ * `ProxyConfig` / `AudioDurationReader`) and are prefs-free at their core.
  *
  * This runner is **app-side** and deliberately keeps that split clean:
  *  - It receives both collaborators **fully wired** from

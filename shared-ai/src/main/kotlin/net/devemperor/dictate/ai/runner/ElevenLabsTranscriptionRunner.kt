@@ -1,17 +1,18 @@
 package net.devemperor.dictate.ai.runner
 
-import android.content.SharedPreferences
-import net.devemperor.dictate.DictateUtils
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.ai.AIProviderException.ErrorType
-import net.devemperor.dictate.preferences.Pref
-import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.ai.port.AudioDurationReader
+import net.devemperor.dictate.ai.port.ProxyConfig
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
-import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -25,7 +26,8 @@ import java.util.concurrent.TimeUnit
  */
 class ElevenLabsTranscriptionRunner(
     private val apiKey: String,
-    private val sp: SharedPreferences
+    private val proxy: ProxyConfig,
+    private val audioDuration: AudioDurationReader
 ) : TranscriptionRunner {
 
     private fun buildClient(): OkHttpClient {
@@ -34,15 +36,10 @@ class ElevenLabsTranscriptionRunner(
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(120, TimeUnit.SECONDS)
 
-        if (sp.get(Pref.ProxyEnabled)) {
-            val proxyHost = sp.get(Pref.ProxyHost)
-            if (DictateUtils.isValidProxy(proxyHost)) {
-                val proxy = DictateUtils.createProxy(sp)
-                if (proxy != null) {
-                    builder.proxy(proxy)
-                    DictateUtils.applyProxyAuthenticator(sp)
-                }
-            }
+        val resolvedProxy = proxy.rawProxy()
+        if (resolvedProxy != null) {
+            builder.proxy(resolvedProxy)
+            proxy.installAuthenticator()
         }
 
         return builder.build()
@@ -57,7 +54,8 @@ class ElevenLabsTranscriptionRunner(
         } catch (e: ElevenLabsApiException) {
             // Parse response body for specific error status (e.g. quota_exceeded on HTTP 401)
             val bodyStatus = try {
-                JSONObject(e.message ?: "").optJSONObject("detail")?.optString("status")
+                val detail = Json.parseToJsonElement(e.message ?: "").jsonObject["detail"]
+                (detail?.jsonObject?.get("status") as? JsonPrimitive)?.contentOrNull
             } catch (_: Exception) { null }
 
             throw when {
@@ -95,13 +93,13 @@ class ElevenLabsTranscriptionRunner(
                 val responseBody = response.body?.string()
                     ?: throw ElevenLabsApiException(500, "Empty response body")
 
-                val json = JSONObject(responseBody)
-                val text = json.optString("text", "").trim()
-                val audioDuration = DictateUtils.getAudioDuration(options.audioFile)
+                val json = Json.parseToJsonElement(responseBody).jsonObject
+                val text = (json["text"] as? JsonPrimitive)?.contentOrNull.orEmpty().trim()
+                val duration = audioDuration.durationSeconds(options.audioFile)
 
                 TranscriptionResult(
                     text = text,
-                    audioDurationSeconds = audioDuration,
+                    audioDurationSeconds = duration,
                     modelName = options.model
                 )
             }

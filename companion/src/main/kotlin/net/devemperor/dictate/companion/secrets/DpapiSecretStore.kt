@@ -54,7 +54,7 @@ class DpapiSecretStore(configDir: Path) : SecretStore {
         }
         try {
             Files.createDirectories(secretsDir)
-            Files.write(fileFor(ref), blob)
+            writeSecretBlobAtomically(fileFor(ref), blob)
         } catch (e: Exception) {
             throw SecretStoreException.StorageIo("write failed for ${ref.handle}", e)
         }

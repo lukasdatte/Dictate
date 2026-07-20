@@ -70,7 +70,7 @@ data class SecretRef(val namespace: String, val id: String) {
 }
 
 /**
- * Fehler-Semantik-Träger: distinguishes "store missing" from "decrypt failed"
+ * Error-semantics carrier: distinguishes "store missing" from "decrypt failed"
  * from "IO failed" so a lost/rotated KEK can never silently masquerade as an
  * empty (== missing) key (spec §4.3, §11).
  */

@@ -12,6 +12,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
@@ -88,6 +89,23 @@ class FileAesGcmSecretStoreTest {
             setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
             perms,
         )
+    }
+
+    @Test
+    fun writeOwnerOnly_refusesToClobberExistingFile_viaAtomicCreateNew() {
+        // Regression (T3 / B1-SF2): the master key is created 0600 from the first byte via an atomic
+        // CREATE_NEW open, not written world-readable then narrowed. CREATE_NEW also refuses to
+        // overwrite an existing file; the reverted write-then-chmod path would silently clobber it and
+        // NOT throw. masterKeyFile_hasOwnerOnlyPermissions asserts only the final 0600 state and so
+        // passes for both approaches — this collision guard is what actually pins the hardening.
+        assumeTrue("POSIX-only assertion", isPosix())
+        val dir = tmp.root.toPath().resolve("secrets").also { Files.createDirectories(it) }
+        val existing = dir.resolve("owner-only-probe")
+        Files.write(existing, byteArrayOf(9))
+
+        assertThrows(FileAlreadyExistsException::class.java) {
+            store().writeOwnerOnly(existing, byteArrayOf(1, 2, 3))
+        }
     }
 
     @Test

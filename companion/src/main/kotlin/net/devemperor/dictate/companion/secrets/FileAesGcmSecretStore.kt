@@ -3,9 +3,12 @@ package net.devemperor.dictate.companion.secrets
 import net.devemperor.dictate.ai.secrets.SecretRef
 import net.devemperor.dictate.ai.secrets.SecretStore
 import net.devemperor.dictate.ai.secrets.SecretStoreException
+import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
 import java.security.GeneralSecurityException
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -30,15 +33,22 @@ class FileAesGcmSecretStore(configDir: Path) : SecretStore {
     private val secretsDir: Path = configDir.resolve("secrets")
     private val masterKeyFile: Path = secretsDir.resolve(MASTER_KEY_FILE)
 
-    /** true once the secrets dir is writable; false only when even the file store cannot init (§6.4). */
-    override val available: Boolean by lazy {
-        try {
+    /**
+     * true once the secrets dir is writable; false only when even the file store cannot init (§6.4).
+     *
+     * Evaluated **per access**, not memoized: in the long-lived companion/headless-Hub process a
+     * first probe during a transient FS hiccup (slow/late mount) must not latch a false for the rest
+     * of the session. `createDirectories` is idempotent and `isWritable` is a cheap stat, so recovery
+     * is automatic once the directory becomes writable — matching the Android and DPAPI stores, which
+     * also evaluate availability per access.
+     */
+    override val available: Boolean
+        get() = try {
             Files.createDirectories(secretsDir)
             Files.isWritable(secretsDir)
         } catch (e: Exception) {
             false
         }
-    }
 
     override val hardwareBacked: Boolean = false
 
@@ -80,7 +90,7 @@ class FileAesGcmSecretStore(configDir: Path) : SecretStore {
             throw SecretStoreException.StorageIo("encrypt failed for ${ref.handle}", e)
         }
         try {
-            Files.write(fileFor(ref), iv + ciphertext)
+            writeSecretBlobAtomically(fileFor(ref), iv + ciphertext)
         } catch (e: Exception) {
             throw SecretStoreException.StorageIo("write failed for ${ref.handle}", e)
         }
@@ -106,17 +116,31 @@ class FileAesGcmSecretStore(configDir: Path) : SecretStore {
         return SecretKeySpec(raw, KEY_ALGORITHM)
     }
 
-    /** Writes [bytes] to [file] and restricts it to owner read/write (POSIX `0600`) where supported. */
-    private fun writeOwnerOnly(file: Path, bytes: ByteArray) {
-        Files.write(file, bytes)
+    /**
+     * Creates [file] with owner read/write only (POSIX `0600`) **from the start** and writes [bytes].
+     *
+     * The permission is an atomic create attribute rather than a write-then-chmod: a plain
+     * `Files.write` creates the file with the umask default (typically world/group-readable) and only
+     * a subsequent `setPosixFilePermissions` narrows it — a window during which the master key is
+     * readable, and, on a crash between the two calls, a *permanent* world-readable master key. Both
+     * are closed by handing the perms to the open call.
+     *
+     * `internal` (not `private`) so the T3 regression test can assert the CREATE_NEW collision
+     * behaviour directly — a revert to the old write-then-chmod would silently clobber an existing
+     * file instead of throwing, which the final-perms test alone cannot catch.
+     */
+    internal fun writeOwnerOnly(file: Path, bytes: ByteArray) {
+        val ownerOnly = setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)
         try {
-            Files.setPosixFilePermissions(
+            Files.newByteChannel(
                 file,
-                setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
-            )
+                setOf(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
+                PosixFilePermissions.asFileAttribute(ownerOnly),
+            ).use { it.write(ByteBuffer.wrap(bytes)) }
         } catch (e: UnsupportedOperationException) {
             // Non-POSIX filesystem (only reachable if this fallback ever ran on Windows, which
-            // detectSecretStore prevents) — nothing to restrict, and DPAPI is the Windows path.
+            // SecretStoreModule.detect prevents) — no POSIX perms to set, and DPAPI is the Windows path.
+            Files.write(file, bytes)
         }
     }
 

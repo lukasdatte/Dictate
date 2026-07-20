@@ -80,13 +80,24 @@ class AndroidKeystoreSecretStore(
             throw SecretStoreException.Unavailable("secret store unavailable for ${ref.handle}", e)
         }
 
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        // No caller-supplied IV: AndroidKeyStore GCM keys forbid it and generate a fresh random IV
-        // per encryption themselves (readable via cipher.iv). Same behaviour for the in-memory test
-        // key. Invariant preserved: a fresh 12-byte IV per put, prepended to the blob (§5.2, §11).
-        cipher.init(Cipher.ENCRYPT_MODE, key)
-        val ciphertext = cipher.doFinal(value)
-        val blob = cipher.iv + ciphertext
+        val blob = try {
+            Cipher.getInstance(TRANSFORMATION).run {
+                // No caller-supplied IV: AndroidKeyStore GCM keys forbid it and generate a fresh
+                // random IV per encryption themselves (readable via cipher.iv). Same behaviour for the
+                // in-memory test key. Invariant preserved: a fresh 12-byte IV per put, prepended to
+                // the blob (§5.2, §11).
+                init(Cipher.ENCRYPT_MODE, key)
+                iv + doFinal(value)
+            }
+        } catch (e: GeneralSecurityException) {
+            // A raw GeneralSecurityException here (e.g. KeyPermanentlyInvalidatedException when the
+            // Keystore key was invalidated) must surface as the store's StorageIo contract, never
+            // escape as an unwrapped crypto exception — mirrors FileAesGcmSecretStore.put and this
+            // class's own get. The sole prod caller (SecretsMigration, run on every app start) catches
+            // SecretStoreException and aborts cleanly (flag unset, plaintext intact, retry next
+            // start); an unwrapped exception would instead crash app start into a boot loop (§4.3).
+            throw SecretStoreException.StorageIo("encrypt failed for ${ref.handle}", e)
+        }
 
         blobPrefs.edit()
             .putString(ref.handle, Base64.encodeToString(blob, Base64.NO_WRAP))

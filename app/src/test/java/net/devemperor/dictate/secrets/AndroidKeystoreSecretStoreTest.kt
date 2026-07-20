@@ -11,6 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Round-trip and error-semantics of [AndroidKeystoreSecretStore] on the JVM.
@@ -103,12 +104,27 @@ class AndroidKeystoreSecretStoreTest {
     }
 
     @Test
+    fun get_whenKekUnavailableForStoredBlob_throwsDecryptionFailed() {
+        // §5.3 device-bound-key-lost-after-restore: a blob is present but the KEK cannot be obtained
+        // at read time. That must surface as DecryptionFailed, never a silent null — this covers the
+        // "KEK gone" get() branch specifically (get_withForeignKek exercises the GCM-tag path instead).
+        val prefs = FakeSharedPreferences()
+        store(prefs, InMemoryKekProvider()).put(ref, "value".toByteArray())
+
+        val failingKek = KekProvider { throw IllegalStateException("keystore key gone after restore") }
+
+        assertThrows(SecretStoreException.DecryptionFailed::class.java) { store(prefs, failingKek).get(ref) }
+    }
+
+    @Test
     fun get_onCorruptBlob_throwsDecryptionFailed() {
         val prefs = FakeSharedPreferences()
         val store = store(prefs)
         store.put(ref, "value".toByteArray())
 
-        // Tamper the stored ciphertext → GCM tag mismatch.
+        // Corrupt the stored blob into something that is not even valid Base64 → the decode branch
+        // must surface as DecryptionFailed, not a silent null (the GCM-tag-mismatch path is covered
+        // by get_withForeignKek_throwsDecryptionFailed_notEmpty).
         prefs.edit().putString(ref.handle, "not-a-valid-base64-blob!!!").apply()
 
         assertThrows(SecretStoreException.DecryptionFailed::class.java) { store.get(ref) }
@@ -130,6 +146,19 @@ class AndroidKeystoreSecretStoreTest {
 
         assertThrows(SecretStoreException.Unavailable::class.java) { store.put(ref, "x".toByteArray()) }
         assertFalse(store.available)
+    }
+
+    @Test
+    fun put_whenCipherFails_throwsStorageIo_notRawCryptoException() {
+        // Regression: a GeneralSecurityException from cipher.init/doFinal (e.g. an invalidated
+        // Keystore key) must be wrapped as the store's StorageIo contract, never escape raw — the sole
+        // prod caller (SecretsMigration, on every app start) catches only SecretStoreException, so an
+        // unwrapped crypto exception would crash app start into a boot loop. An invalid 5-byte AES key
+        // makes cipher.init throw InvalidKeyException here.
+        val badKey = KekProvider { SecretKeySpec(ByteArray(5), "AES") }
+        val store = store(kek = badKey)
+
+        assertThrows(SecretStoreException.StorageIo::class.java) { store.put(ref, "x".toByteArray()) }
     }
 
     @Test

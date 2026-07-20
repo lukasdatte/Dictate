@@ -293,11 +293,21 @@ class MigrationTo4Test {
     // 8 (bonus — KG-SST-3, v1→v4 chain for backup-restore scenarios)
     @Test
     fun migrate1To4_chain_preservesData() {
-        // Known v1 state: a RECORDING-type session with an audio file
+        // The v1 schema has no `sessions` table yet (only `usage` +
+        // `prompts`; see app/schemas/1.json) — MIGRATION_1_2 is what
+        // first creates it. So the DB genuinely starts at v1, and the
+        // pre-MIGRATION_2_3 row is seeded once the table exists (after
+        // 1→2). This mirrors the real backup-restore chain: a v1 DB
+        // upgrades, the sessions table appears at v2, and any row
+        // present when MIGRATION_2_3 runs is subject to its inference.
+        //
+        // The seeded row is a RECORDING-type session with an audio file
         // but no transcription. MIGRATION_2_3 should infer status
         // 'RECORDED' for it (see MigrationTo3.kt:92-97), and
         // MIGRATION_3_4 should leave inserted_at NULL (not COMPLETED).
-        helper.createDatabase(TEST_DB, 1).use { db ->
+        helper.createDatabase(TEST_DB, 1).close()
+
+        helper.runMigrationsAndValidate(TEST_DB, 2, true, MIGRATION_1_2).use { db ->
             db.execSQL(
                 """
                 INSERT INTO sessions (
@@ -316,7 +326,6 @@ class MigrationTo4Test {
 
         val db = helper.runMigrationsAndValidate(
             TEST_DB, 4, true,
-            MIGRATION_1_2,
             MIGRATION_2_3,
             MIGRATION_3_4
         )

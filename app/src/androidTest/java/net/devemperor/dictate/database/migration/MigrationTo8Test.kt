@@ -47,8 +47,8 @@ class MigrationTo8Test {
     ) {
         db.execSQL(
             """
-            INSERT INTO sessions (id, type, created_at, status, origin, audio_duration_seconds)
-            VALUES ('$sessionId', 'RECORDING', 1000, 'COMPLETED', 'KEYBOARD', 5)
+            INSERT INTO sessions (id, type, created_at, status, origin, audio_file_paths, audio_duration_seconds)
+            VALUES ('$sessionId', 'RECORDING', 1000, 'COMPLETED', 'KEYBOARD', '', 5)
             """.trimIndent()
         )
         db.execSQL(

@@ -215,3 +215,99 @@ escalation. The Phase-4 refresh section (below) is populated as blocks land.
 ## Phase-4 Refresh (added by orchestrator)
 
 _empty — populated during Phase 4 as edge-of-the-blade points emerge from block outputs._
+
+## Phase-4 Execution Results (2026-07-20)
+
+Executed at `HEAD e3bcf81` on branch `feature/desktop-companion-v1`. The runbook was
+written pre-implementation; the mapping below records the **drift adjustments** made
+before execution and the **actual result** per case. Every `covered-by` claim is backed
+by a real test run (fresh `--rerun-tasks` / `cleanTest` execution or on-device
+`connectedDebugAndroidTest`), not a bare assertion.
+
+### Prerequisites (re-verified)
+
+| # | Result |
+|---|--------|
+| 1 e2e-infra | PASS — `scripts/e2e/` + `docs/architecture/e2e-emulator.md` committed & versioned on the branch |
+| 2 schema-assets | PASS — `androidTest.assets.srcDirs += schemas` present in `app/build.gradle`; on-device `AndroidTestSetupSmokeTest` green, so `MigrationTestHelper` finds the exported schemas |
+| 3 toolchain | PASS — `:companion:test --dry-run` OK |
+| 4 emulator | PASS — AVD `dictate-e2e` booted on `emulator-5554` (Android 15 / API 35), `sys.boot_completed=1` |
+
+### Drift adjustments applied before execution
+
+1. **`received_texts` → `sessions` + `dispatch_state`.** The companion history model was
+   replaced. TC-P1/TC-P3 remapped: the desktop-dictation session graph is
+   `session` + `transcription` + `CONVERSATION_TURN processing_step` +
+   `conversation_message`; the phone-sync ablation (`received_texts` → `PHONE_SYNC`
+   sessions + 1:1 `dispatch_state`, ADR-0016 origin mapping) is verified by the new
+   `ReceivedTextsAblationMigrationTest` (2.sqm), not a `received_texts` migration.
+2. **TC-P1 harness.** Runbook said "per `CompanionE2ETest`". That class is the
+   **phone→PC dispatch** pipeline; the **desktop dictation** pipeline (the TC-P1 subject)
+   is `DesktopDictationPipelineTest`. Both verified.
+3. **Room v12 → v13.** This plan's Android schema advanced past C2's v12: E2 added
+   `MIGRATION_12_13` (peers + subscriptions subscriber tables). TC-A1 extended to run
+   `MigrationTo13Test` on-device alongside `MigrationTo12Test`.
+4. **Two-peer HTTP catalog E2E.** E2-completion added `CatalogSyncE2ETest` (commit
+   `d2e9ca9`) — a real provider server + real subscriber companion + real
+   `CatalogClient` over real HTTP covering subscribe → sync → provider-update → notify
+   and fork-never-overwritten. It subsumes the two-container intent of TC-C1/TC-C3.
+5. **TC-A2 is JVM/Robolectric, not emulator.** The B2 clear-text-key migration
+   (`SecretsMigration`) runs fully under Robolectric — no emulator needed. Verified on
+   the JVM.
+6. **SubscriberStores productive on both hosts.** `SqlDelightCatalogSubscriberStore`
+   (companion) and `AndroidCatalogSubscriberStore` (app) are the real sync-engine write
+   paths; exercised by `CatalogSyncE2ETest` / `AndroidCatalogSubscriberStoreTest`.
+
+### Case matrix
+
+| Case | Mode | Result | Evidence (fresh run) |
+|------|------|--------|----------------------|
+| TC-P1 | auto | **PASS** | `DesktopDictationPipelineTest` 5/5 — `autoInsertTake_persistsSessionTranscriptionTurnAndMessages` (session+transcription+CONVERSATION_TURN+SYSTEM/USER messages, terminal insert, NoopUsageSink) |
+| TC-P2 | auto | **PASS** | `DictationReducerTest` 31/31 — start→pause→resume→stop + discard (pure reducers) |
+| TC-P3 | auto | **PASS** | `verifySqlDelightMigration` green; `ReceivedTextsAblationMigrationTest` 5/5, `CompanionSchemaParityTest` 16/16, `SchemaMigratorTest` 5/5, `CatalogCheckConstraintParityTest` 8/8, `ConfigEntityCheckParityTest` 12/12 |
+| TC-P4 | auto | **PASS** | `ReviewDecisionTest` 5/5 (shared-ai) + `DesktopReviewDecisionMatrixTest` 8/8 (parametrised ADR-0013 matrix) + `DesktopDictationPipelineTest.reviewVerdict…`/`reDictate…` (panel holds, continuation turn persisted) |
+| TC-C1 | auto | **PASS** | `CatalogE2ETest` 7/7 — index shape, entity fetch, credential auth-gated + audit row, credential never in index (real HTTP) |
+| TC-C2 | auto | **PASS** | `ContentHashTest` 10/10 + `CanonicalJsonTest` 7/7 — determinism (no-op/reorder/value), canonical byte-stability |
+| TC-C3 | auto | **PASS** | `CatalogSyncE2ETest` 2/2 (two-peer real HTTP: subscribe→update→notify, fork never overwritten, idempotent 1×GET) + `CatalogSyncEngineTest` 13/13 (shared) + `SyncE2ETest` 8/8 (lazy phone-history paging) |
+| TC-C4 | auto | **PASS** | `TruncatedResponseE2ETest` 1/1 + `CompanionE2ETest` malformed/truncated cases (clean ErrorEnvelope, no crash, no partial persist, no dictated-text leak) |
+| TC-A1 | auto (emulator) | **PASS** | `MigrationTo12Test` 6/6 on `emulator-5554` (Double-Enum CHECK accept + 3 rejects, `profile_prompts` CASCADE, `runMigrationsAndValidate` v12) — release gate green. Drift-extension `MigrationTo13Test` 3/3 (v12→v13 peers/subscriptions, CHECK, CASCADE) |
+| TC-A2 | auto (Robolectric JVM) | **PASS** | `SecretsMigrationTest` 11/11 + `NoLegacyKeyReadTest` 2/2 + `AndroidKeystoreSecretStoreTest` 13/13 — keys in SecretStore, prefs cleared, no legacy-key read path |
+| TC-A3 | manual | **pending-manual** | emulator + mobile-mcp settings-UI flow; Robolectric settings-nav smoke is the auto companion |
+| TC-W1 | manual | **pending-manual** | Windows hotkey→panel→dictate→auto-insert acceptance (Block F) |
+| TC-W2 | manual | **pending-manual** | Windows DPAPI SecretStore round-trip |
+| TC-W3 | manual | **pending-manual** | real two-process peer sync across two ports |
+| TC-W4 | manual | **pending-manual** | Tailscale discovery of catalog-capable peers |
+| TC-W5 | manual | **pending-manual** | real-provider dictation smoke (user's own key) |
+
+**Auto totals:** 10/10 pass (8 companion/shared JVM + TC-A1 emulator + TC-A2 Robolectric).
+**Manual:** 6 pending (TC-A3 + TC-W1..W5), user-driven in Block F.
+
+### Finding F-E2E-1 — pre-existing on-device migration-fixture bit-rot (out of plan scope, Important)
+
+The `connectedDebugAndroidTest` run reported **13 failures**, all in **older** instrumented
+migration tests — `MigrationTo4Test` (1), `MigrationTo8Test` (5), `MigrationTo9Test` (4),
+`MigrationTo10Test` (3). None are in this plan's scope (TC-A1's `MigrationTo12Test`/
+`MigrationTo13Test` are 6/6 and 3/3 green).
+
+- **Cause:** their `seedSession…` helpers `INSERT INTO sessions (…)` without the
+  `audio_file_paths` column, which is `TEXT NOT NULL` (no default) since schema **v5** →
+  `SQLiteConstraintException: NOT NULL constraint failed: sessions.audio_file_paths`.
+  `MigrationTo4Test.migrate1To4_chain_preservesData` differs: it inserts into `sessions`
+  at v1 where that table does not yet exist → `no such table: sessions`.
+- **Pre-existing:** `audio_file_paths NOT NULL` predates this branch; this plan touched
+  neither the four test files (last changed by `4d6734d [conv-2]`) nor the tripped
+  columns. These on-device suites are **local-only / never-CI** (same
+  `pending: instrumented` convention as `MigrationTo11/12/13Test`), so the fixture rot
+  was simply never observed.
+- **Complexity self-assessment:** **simple** for the NOT-NULL group (add
+  `audio_file_paths` to each seed INSERT); the `MigrationTo4Test` v1
+  chain fixture needs a short look at the v1 schema before repair.
+- **Status: fixed 1caeccbd4a1378ac89d9556318e5b0e099950c28.** The NOT-NULL group now seeds
+  `audio_file_paths` with `''` — the schema-correct empty value (`MIGRATION_4_5` adds the
+  column as `NOT NULL DEFAULT ''` and `Converters.toStringList` decodes `''` as
+  `emptyList()`; `'[]'` would wrongly decode as a one-element list). The `migrate1To4_chain`
+  fixture now seeds the session **after** `MIGRATION_1_2` creates the `sessions` table
+  (v1 has only `usage`/`prompts`; see `app/schemas/1.json`), splitting the chain into a
+  1→2 leg (seed) and a 2→4 leg. Only the four test files were touched — no production or
+  migration-SQL change, assertions unchanged. Verified on `emulator-5554`: 13/13 red
+  before, 26/26 target + 9/9 `MigrationTo12/13Test` green after (35 tests, 0 failures).

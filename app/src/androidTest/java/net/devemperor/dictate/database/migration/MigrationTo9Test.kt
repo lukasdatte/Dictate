@@ -42,8 +42,8 @@ class MigrationTo9Test {
     ) {
         db.execSQL(
             """
-            INSERT INTO sessions (id, type, created_at, status, origin, audio_duration_seconds)
-            VALUES ('$id', '$type', 1000, 'COMPLETED', '$origin', 5)
+            INSERT INTO sessions (id, type, created_at, status, origin, audio_file_paths, audio_duration_seconds)
+            VALUES ('$id', '$type', 1000, 'COMPLETED', '$origin', '', 5)
             """.trimIndent()
         )
     }

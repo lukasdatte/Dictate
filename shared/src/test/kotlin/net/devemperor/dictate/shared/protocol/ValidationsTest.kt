@@ -240,4 +240,92 @@ class ValidationsTest {
 
         assertTrue(Validations.errorEnvelope(envelope).isValid)
     }
+
+    // ── Catalog (peer-katalog.md §3.3, AC2: every catalog DTO has a Validation + a violation case) ──
+
+    private val validHash = "a".repeat(Endpoints.HASH_LENGTH)
+
+    private fun catalogEntry(
+        id: String = "prompt-1",
+        hash: String = validHash,
+        label: String = "My prompt",
+    ) = CatalogEntry(id = id, kind = CatalogEntityKindWire.PROMPT, contentHash = hash, updatedAt = 1L, label = label)
+
+    @Test
+    fun catalogIndexResponse_valid_isAccepted() {
+        assertValid(Validations.catalogIndexResponse, CatalogIndexResponse(rootHash = validHash, entries = listOf(catalogEntry())))
+    }
+
+    @Test
+    fun catalogIndexResponse_nonHexRootHash_isRejected() {
+        assertEquals(
+            listOf("rootHash"),
+            paths(Validations.catalogIndexResponse, CatalogIndexResponse(rootHash = "Z".repeat(Endpoints.HASH_LENGTH), entries = emptyList())),
+        )
+    }
+
+    @Test
+    fun catalogIndexResponse_entryWithBadContentHash_isRejected() {
+        // Too short → not 64 hex chars. The path pinpoints the offending row.
+        assertEquals(
+            listOf("entries[0].contentHash"),
+            paths(Validations.catalogIndexResponse, CatalogIndexResponse(rootHash = validHash, entries = listOf(catalogEntry(hash = "abc")))),
+        )
+    }
+
+    @Test
+    fun catalogIndexResponse_tooManyEntries_isRejected() {
+        val entries = (0..Endpoints.MAX_CATALOG_ENTRIES).map { catalogEntry(id = "prompt-$it") }
+        assertEquals(listOf("entries"), paths(Validations.catalogIndexResponse, CatalogIndexResponse(rootHash = validHash, entries = entries)))
+    }
+
+    @Test
+    fun catalogEntityResponse_valid_isAccepted() {
+        assertValid(
+            Validations.catalogEntityResponse,
+            CatalogEntityResponse(id = "prompt-1", kind = CatalogEntityKindWire.PROMPT, contentHash = validHash, payload = "{\"name\":\"x\"}"),
+        )
+    }
+
+    @Test
+    fun catalogEntityResponse_emptyPayload_isRejected() {
+        assertEquals(
+            listOf("payload"),
+            paths(Validations.catalogEntityResponse, CatalogEntityResponse(id = "prompt-1", kind = CatalogEntityKindWire.PROMPT, contentHash = validHash, payload = "")),
+        )
+    }
+
+    @Test
+    fun catalogEntityResponse_payloadTooLong_isRejected() {
+        val payload = "a".repeat(Endpoints.MAX_ENTITY_PAYLOAD_LENGTH + 1)
+        assertEquals(
+            listOf("payload"),
+            paths(Validations.catalogEntityResponse, CatalogEntityResponse(id = "prompt-1", kind = CatalogEntityKindWire.PROMPT, contentHash = validHash, payload = payload)),
+        )
+    }
+
+    @Test
+    fun catalogCredentialResponse_valid_isAccepted() {
+        assertValid(
+            Validations.catalogCredentialResponse,
+            CatalogCredentialResponse(id = "cred-1", provider = "OPENAI", label = "My key", secret = "sk-123"),
+        )
+    }
+
+    @Test
+    fun catalogCredentialResponse_emptySecret_isRejected() {
+        // A blank secret is meaningless; the constraint carries no {value}, so the key can never leak.
+        assertEquals(
+            listOf("secret"),
+            paths(Validations.catalogCredentialResponse, CatalogCredentialResponse(id = "cred-1", provider = "OPENAI", label = "My key", secret = "")),
+        )
+    }
+
+    @Test
+    fun isCatalogEntityId_acceptsUuidAndRejectsWhitespace() {
+        assertTrue(Validations.isCatalogEntityId("11111111-2222-3333-4444-555555555555"))
+        assertTrue(!Validations.isCatalogEntityId("has space"))
+        assertTrue(!Validations.isCatalogEntityId(""))
+        assertTrue(!Validations.isCatalogEntityId("a".repeat(Endpoints.MAX_ENTITY_ID_LENGTH + 1)))
+    }
 }

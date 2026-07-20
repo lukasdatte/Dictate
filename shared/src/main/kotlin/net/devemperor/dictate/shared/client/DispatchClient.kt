@@ -5,12 +5,9 @@ import io.konform.validation.Validation
 import net.devemperor.dictate.shared.auth.AuthHeaders
 import net.devemperor.dictate.shared.auth.Credentials
 import net.devemperor.dictate.shared.protocol.CursorResponse
-import net.devemperor.dictate.shared.protocol.DecodeResult
 import net.devemperor.dictate.shared.protocol.DispatchRequest
 import net.devemperor.dictate.shared.protocol.DispatchResponse
 import net.devemperor.dictate.shared.protocol.Endpoints
-import net.devemperor.dictate.shared.protocol.ErrorCode
-import net.devemperor.dictate.shared.protocol.ErrorEnvelope
 import net.devemperor.dictate.shared.protocol.HealthResponse
 import net.devemperor.dictate.shared.protocol.InputCommandRequest
 import net.devemperor.dictate.shared.protocol.InputCommandResponse
@@ -24,7 +21,6 @@ import net.devemperor.dictate.shared.protocol.SyncRequest
 import net.devemperor.dictate.shared.protocol.SyncResponse
 import net.devemperor.dictate.shared.protocol.Validations
 import net.devemperor.dictate.shared.transport.DispatchTransport
-import net.devemperor.dictate.shared.transport.HttpResponseLite
 import java.io.IOException
 
 /**
@@ -179,9 +175,10 @@ class DispatchClient(
         val response = try {
             transport.post(path, body, headers)
         } catch (e: IOException) {
-            return DispatchResult.Failure(DispatchError.Unreachable(e.describe()))
+            return DispatchResult.Failure(DispatchError.Unreachable(e.describeWire()))
         }
-        return response.parse(responseSerializer, responseValidation)
+        // Response parsing + non-2xx classification are shared with CatalogClient (WireResponse.kt).
+        return response.parseWire(responseSerializer, responseValidation)
     }
 
     private fun <R> read(
@@ -193,54 +190,8 @@ class DispatchClient(
         val response = try {
             transport.get(path, headers)
         } catch (e: IOException) {
-            return DispatchResult.Failure(DispatchError.Unreachable(e.describe()))
+            return DispatchResult.Failure(DispatchError.Unreachable(e.describeWire()))
         }
-        return response.parse(responseSerializer, responseValidation)
+        return response.parseWire(responseSerializer, responseValidation)
     }
-
-    private fun <R> HttpResponseLite.parse(
-        serializer: KSerializer<R>,
-        validation: Validation<R>,
-    ): DispatchResult<R> {
-        if (status !in 200..299) return DispatchResult.Failure(classifyError(status, body))
-
-        return when (val decoded = ProtocolCodec.decode(body, serializer, validation)) {
-            is DecodeResult.Ok -> DispatchResult.Success(decoded.value)
-            is DecodeResult.Malformed ->
-                DispatchResult.Failure(DispatchError.Server(status, "unparsable response: ${decoded.reason}"))
-            is DecodeResult.Invalid ->
-                DispatchResult.Failure(DispatchError.Server(status, "response out of contract: ${decoded.details}"))
-        }
-    }
-
-    /**
-     * Maps a non-2xx onto the classification.
-     *
-     * The status alone is not enough — a 400 is a validation failure *or* a protocol mismatch, and
-     * a 401 is a bad secret *or* one of three token conditions — so the [ErrorEnvelope] decides.
-     * When the envelope will not parse (a proxy's HTML error page, say) the status still yields a
-     * usable answer.
-     */
-    private fun classifyError(status: Int, body: String): DispatchError {
-        val envelope = (ProtocolCodec.decode(body, ErrorEnvelope.serializer(), Validations.errorEnvelope)
-            as? DecodeResult.Ok)?.value
-            // Deliberately not echoing the body: an unparsable error page is untrusted content and
-            // this message goes into the logs. The length is enough to diagnose it.
-            ?: return DispatchError.Server(status, "unparsable error body (${body.length} bytes)")
-
-        return when (envelope.code) {
-            ErrorCode.PROTOCOL_VERSION_UNSUPPORTED -> DispatchError.ProtocolMismatch
-            ErrorCode.VALIDATION_FAILED -> DispatchError.Invalid(envelope.details)
-            ErrorCode.UNAUTHORIZED -> DispatchError.Unauthorized
-            ErrorCode.INVALID_TOKEN -> DispatchError.TokenInvalid
-            ErrorCode.TOKEN_EXPIRED -> DispatchError.TokenExpired
-            ErrorCode.TOKEN_CONSUMED -> DispatchError.TokenConsumed
-            ErrorCode.INSERTION_FAILED -> DispatchError.InsertionFailed
-            ErrorCode.INTERNAL -> DispatchError.Server(status, envelope.message)
-        }
-    }
-
-    /** Never the message alone: a bare `SocketTimeoutException` message is often null or empty. */
-    private fun IOException.describe(): String =
-        "${this::class.java.simpleName}: ${message.orEmpty()}"
 }

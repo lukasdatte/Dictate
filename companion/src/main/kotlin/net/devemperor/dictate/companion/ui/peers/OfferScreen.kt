@@ -16,9 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import net.devemperor.dictate.companion.ui.asTime
 import net.devemperor.dictate.shared.config.Visibility
-import java.text.DateFormat
-import java.util.Date
 
 /**
  * The offer view ("Was biete ich an?", peer-katalog.md §8.2 / F34): one row per own entity with a
@@ -65,6 +64,5 @@ internal fun OfferTab(viewModel: OfferViewModel) {
 
 private fun lastPickup(row: OfferRow): String {
     val access = row.lastAccess ?: return "never fetched"
-    val at = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(access.at))
-    return "last fetched $at by ${access.peerDeviceId}"
+    return "last fetched ${access.at.asTime()} by ${access.peerDeviceId}"
 }

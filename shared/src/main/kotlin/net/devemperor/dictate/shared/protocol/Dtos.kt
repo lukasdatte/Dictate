@@ -235,4 +235,86 @@ data class HealthResponse(
      * and can warn proactively before the first keyboard action hits a 404.
      */
     val supportsInputCommands: Boolean = false,
+    /**
+     * Whether this companion serves the `/v1/catalog` family (peer-katalog.md §4.4).
+     *
+     * Additive, defaulted `false` so an older peer's health response (which lacks the field) decodes
+     * as "no support" under `ignoreUnknownKeys` — a subscribing peer reads it during discovery/health
+     * and can skip a peer that cannot offer a catalog. Android never sets it (Android runs no server).
+     */
+    val supportsCatalog: Boolean = false,
+)
+
+// ── Catalog (peer-katalog.md §3.2) ────────────────────────────────────────────────────────
+
+/**
+ * The wire kind of a catalog entity — a SEPARATE enum from the C1 domain entity types, exactly as
+ * [SessionOriginWire] is separate from `SessionOrigin` above. The wire vocabulary must not be dragged
+ * along by an internal config refactor. `UNKNOWN` is the landing zone the receiver's mapper uses for
+ * a kind a newer provider introduced.
+ */
+@Serializable
+enum class CatalogEntityKindWire { PROVIDER_CONFIG, MODEL_REF, PROMPT, PROFILE, CREDENTIAL, UNKNOWN }
+
+/**
+ * One row of the catalog index — metadata ONLY, never a payload and never a secret.
+ *
+ * (Not to be confused with `net.devemperor.dictate.shared.config.CatalogEntry`, the tagged union of a
+ * v3 catalog *file*; this is the wire index row of the *peer* protocol.) `contentHash` is the SHA-256
+ * over the entity's canonical serialization (C1); for a CREDENTIAL it is the hash over a stable key
+ * fingerprint, never the plaintext (F12). `updatedAt` drives the "last synced" display, not the diff.
+ */
+@Serializable
+data class CatalogEntry(
+    val id: String,
+    val kind: CatalogEntityKindWire,
+    val contentHash: String,
+    val updatedAt: Long,
+    /** Human label for the offer view (e.g. prompt name, provider label). No payload. */
+    val label: String,
+)
+
+/**
+ * `GET /v1/catalog` — the whole shared offer of a peer, plus its rootHash.
+ *
+ * The rootHash is SHA-256 over the sorted `id:contentHash` join of all entries; a single GET answers
+ * "did anything change at all?" before any per-entity fetch (peer-katalog.md §6.1).
+ */
+@Serializable
+data class CatalogIndexResponse(
+    val protocolVersion: Int = ProtocolVersion.CURRENT,
+    val rootHash: String,
+    val entries: List<CatalogEntry>,
+)
+
+/**
+ * `GET /v1/catalog/entity/{id}` — the canonical v3 payload of ONE non-credential entity.
+ *
+ * `payload` is the exact canonical serialization (C1 `CanonicalJson`) the receiver re-hashes to verify
+ * `contentHash` (peer-katalog.md §6.3). A CREDENTIAL is NEVER served here — its route is /credential/{id}.
+ */
+@Serializable
+data class CatalogEntityResponse(
+    val protocolVersion: Int = ProtocolVersion.CURRENT,
+    val id: String,
+    val kind: CatalogEntityKindWire,
+    val contentHash: String,
+    val payload: String,
+)
+
+/**
+ * `GET /v1/catalog/credential/{id}` — the envelope-delivered secret value (F12).
+ *
+ * Reached only by an explicitly authorized call; every delivery writes an audit row (R8). The receiver
+ * puts `secret` straight into its own SecretStore (B1) and never persists it in a column.
+ * `provider`/`label` are metadata for the SecretStore namespace.
+ */
+@Serializable
+data class CatalogCredentialResponse(
+    val protocolVersion: Int = ProtocolVersion.CURRENT,
+    val id: String,
+    val provider: String,
+    val label: String,
+    /** Plaintext key, TLS in transit, straight into the receiver's SecretStore. */
+    val secret: String,
 )

@@ -66,11 +66,35 @@ android {
         unitTests.includeAndroidResources = true
         unitTests.all {
             // The Robolectric inflation suite inflates the full keyboard layout many
-            // times; a single test fork on the default heap accumulates enough shadow
-            // state to OOM. Give the fork a real heap and recycle the JVM periodically
-            // so memory does not grow unbounded across the whole suite.
+            // times; a single test method run accumulates enough shadow state that its
+            // fork needs a real heap. Give every fork 2g.
             maxHeapSize = "2g"
-            forkEvery = 80
+            // forkEvery = 1 — one test CLASS per JVM fork (E-T2, desktop-companion-v1
+            // Block E repair). Two independent reasons, both requiring hard process
+            // isolation, not merely periodic recycling:
+            //
+            //  1. Robolectric's android-all jar loading opens `jar:` FileSystems via the
+            //     JVM-global ZipFileSystemProvider and can leave one open. That map is
+            //     per-JVM, so a class that leaks an open FileSystem makes a LATER class in
+            //     the same fork throw java.nio.file.FileSystemAlreadyExistsException the
+            //     next time the same URI is opened — an order-dependent, non-deterministic
+            //     failure surfacing on an unrelated victim (observed:
+            //     AndroidKeystoreSecretStoreTest). The leak is inside Robolectric (no
+            //     newFileSystem call exists in this codebase), so we cannot close it; the
+            //     only guaranteed cure is a fresh JVM per class. Any forkEvery > 1 leaves a
+            //     collision window and keeps the flake, so the historical `forkEvery = 80`
+            //     (whole suite ≈ one fork) is exactly the high-collision configuration.
+            //  2. Shadow-state / heap accumulation across the suite is likewise bounded to a
+            //     single class per fork — strictly stronger than the previous periodic
+            //     recycle it replaces.
+            //
+            // Trade-off (per engineering-principles "call out the clever/heavier choice"):
+            // a fresh Robolectric bootstrap per class costs wall-clock. CI reliability on a
+            // keyboard app is worth more than test minutes here; if the suite grows large
+            // enough that speed hurts, add `maxParallelForks` (parallel forks are separate
+            // JVMs, so isolation is preserved) — deferred now because each parallel fork
+            // holds its own 2g heap and a fixed cap could OOM a small CI runner.
+            forkEvery = 1
         }
     }
 
@@ -161,6 +185,9 @@ dependencies {
     // provides the generated PagingSource behind SessionDao.pagedHistory.
     implementation libs.room.paging
     implementation libs.paging.runtime.ktx
+    // WorkManager — background catalog-sync poller (CatalogSyncWorker, peer-katalog.md §6.5).
+    // Version pinned + Kotlin-ceiling-verified in libs.versions.toml (`work`, D5.f / ADR-0015 R4).
+    implementation libs.work.runtime.ktx
 
     // Coroutines + Lifecycle (for StateFlow-based ActiveJobRegistry / ViewModels)
     implementation libs.kotlinx.coroutines.android

@@ -139,6 +139,58 @@ object Validations {
         InputCommandResponse::protocolVersion { supportedProtocol() }
     }
 
+    // ── Catalog (peer-katalog.md §3.3) ────────────────────────────────────────────────────
+
+    /** Lowercase hex SHA-256, exactly [Endpoints.HASH_LENGTH] chars — root- and content-hashes. */
+    private val HASH_PATTERN = Regex("^[0-9a-f]{${Endpoints.HASH_LENGTH}}$")
+
+    /** Opaque printable entity id (a UUIDv4 fits, so does a later key-fingerprint id). */
+    private val ENTITY_ID_PATTERN = Regex("^[A-Za-z0-9._:-]{1,${Endpoints.MAX_ENTITY_ID_LENGTH}}$")
+
+    /**
+     * Whether [id] is a well-formed catalog entity id. Exposed so the server's `catalogRoutes` can
+     * reject a malformed `{id}` path parameter against the SAME pattern the response validations use —
+     * one source of truth for the id format, no drift between route and DTO check.
+     */
+    fun isCatalogEntityId(id: String): Boolean = ENTITY_ID_PATTERN.matches(id)
+
+    val catalogIndexResponse = Validation<CatalogIndexResponse> {
+        CatalogIndexResponse::protocolVersion { supportedProtocol() }
+        CatalogIndexResponse::rootHash { pattern(HASH_PATTERN) }
+        CatalogIndexResponse::entries {
+            maxItems(Endpoints.MAX_CATALOG_ENTRIES)
+            onEach {
+                CatalogEntry::id { pattern(ENTITY_ID_PATTERN) }
+                CatalogEntry::contentHash { pattern(HASH_PATTERN) }
+                // The label IS a config entity's name/label (up to ConfigValidations.MAX_LABEL = 200),
+                // so the cap matches that, not the narrower device-name limit the spec sketch used.
+                CatalogEntry::label { maxLength(Endpoints.MAX_CATALOG_LABEL_LENGTH) }
+            }
+        }
+    }
+
+    val catalogEntityResponse = Validation<CatalogEntityResponse> {
+        CatalogEntityResponse::protocolVersion { supportedProtocol() }
+        CatalogEntityResponse::id { pattern(ENTITY_ID_PATTERN) }
+        CatalogEntityResponse::contentHash { pattern(HASH_PATTERN) }
+        // No `{value}` on payload — redaction rule: a length breach names the limit, never the payload.
+        CatalogEntityResponse::payload {
+            minLength(1)
+            maxLength(Endpoints.MAX_ENTITY_PAYLOAD_LENGTH)
+        }
+    }
+
+    val catalogCredentialResponse = Validation<CatalogCredentialResponse> {
+        CatalogCredentialResponse::protocolVersion { supportedProtocol() }
+        CatalogCredentialResponse::id { pattern(ENTITY_ID_PATTERN) }
+        CatalogCredentialResponse::provider {
+            minLength(1)
+            maxLength(64)
+        }
+        // NEVER a `{value}` constraint on `secret` — it would copy the key into logs (redaction rule).
+        CatalogCredentialResponse::secret { minLength(1) }
+    }
+
     /**
      * Deliberately empty.
      *

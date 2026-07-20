@@ -45,9 +45,7 @@ import net.devemperor.dictate.companion.CompanionContainer
 import net.devemperor.dictate.companion.data.DesktopHistoryEntry
 import net.devemperor.dictate.companion.domain.model.InsertionOutcome
 import net.devemperor.dictate.companion.domain.model.ReceivedText
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import net.devemperor.dictate.companion.ui.asTime
 
 /** The two histories one screen shows (§9.3): the phone mirror, and this PC's own dictations. */
 enum class HistoryScope(val label: String) { PHONE("Phone"), DESKTOP("This PC") }
@@ -400,8 +398,4 @@ private fun ReceivedText.subtitle(): String = when (lastOutcome) {
     null -> "synced"
 }
 
-private fun Long.asTime(): String =
-    TIME_FORMAT.format(Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()))
-
-private val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM. HH:mm")
 private const val SNACKBAR_MILLIS = 3_000L

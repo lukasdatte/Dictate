@@ -22,6 +22,21 @@ object Endpoints {
     /** Keyboard-action remote control (POST, authenticated). Additive — no version bump (ADR "Input-Command-Protokoll"). */
     const val INPUT = "$BASE/input"
 
+    /**
+     * Peer-catalog family (GET, authenticated). Additive — no version bump (ADR-0025): an older peer
+     * has no such route and answers a bare 404, which the `CatalogClient` maps to `EndpointMissing`.
+     *
+     * The namespace is cut so a later `/v1/ai` gateway/proxy family fits additively beside it
+     * (F31, peer-katalog.md Decision Log D5) — reserved, no code in v1.
+     */
+    const val CATALOG = "$BASE/catalog"
+
+    /** Index: root-hash + entity metadata (never a credential value). */
+    const val CATALOG_ENTITY = "$BASE/catalog/entity"      // + "/{id}"
+
+    /** Individually authorized secret value of a CREDENTIAL entity (peer-katalog.md §4.3). */
+    const val CATALOG_CREDENTIAL = "$BASE/catalog/credential" // + "/{id}"
+
     const val HEADER_AUTHORIZATION = "Authorization"
     const val HEADER_DEVICE_ID = "X-Dictate-Device"
     const val HEADER_PROTOCOL = "X-Dictate-Protocol"
@@ -49,4 +64,25 @@ object Endpoints {
 
     /** How long a shown pairing token stays redeemable. After that: `401 TOKEN_EXPIRED`. */
     const val PAIRING_TOKEN_TTL_MILLIS = 120_000L
+
+    // ── Catalog limits (peer-katalog.md §3.1) ─────────────────────────────────────────────────
+
+    /** Entity-id length (a UUIDv4 is 36 chars; the rest is reserve for a later key-fingerprint id). */
+    const val MAX_ENTITY_ID_LENGTH = 64
+
+    /** Root-/content-hash: lowercase hex SHA-256 = 64 chars. */
+    const val HASH_LENGTH = 64
+
+    /** Catalog-index cap: more shared entities than this is a bug or an attack, not a real offer. */
+    const val MAX_CATALOG_ENTRIES = 2_000
+
+    /** Canonical entity payload (the v3-JSON of one entity). */
+    const val MAX_ENTITY_PAYLOAD_LENGTH = 64_000
+
+    /**
+     * Catalog index label cap. Matches `ConfigValidations.MAX_LABEL`/`MAX_NAME` (200) — the label IS a
+     * config entity's name/label, so a narrower cap (e.g. the device-name limit) would make `index()`
+     * throw on a legitimately long-named shared entity. Deliberately not `MAX_DEVICE_NAME_LENGTH`.
+     */
+    const val MAX_CATALOG_LABEL_LENGTH = 200
 }

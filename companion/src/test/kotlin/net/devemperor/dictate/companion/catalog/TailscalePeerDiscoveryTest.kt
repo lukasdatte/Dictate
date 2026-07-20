@@ -59,7 +59,9 @@ class TailscalePeerDiscoveryTest {
         assertEquals(emptyList<PeerCandidate>(), discovery.discover())
     }
 
-    @Test
+    // 15s ceiling: the production exec self-bounds to TIMEOUT_SECONDS (5s) + destroyForcibly, so a
+    // hung `tailscale` on the CI box surfaces as a test failure here, never an unbounded CI stall.
+    @Test(timeout = 15_000)
     fun realCliBinding_neverThrows_evenWhereTailscaleIsMissing() {
         // The production default execs the actual binary. Whatever this machine has installed, the
         // contract is "candidates or empty" — an exception here would crash the Add-peer flow (AC11).

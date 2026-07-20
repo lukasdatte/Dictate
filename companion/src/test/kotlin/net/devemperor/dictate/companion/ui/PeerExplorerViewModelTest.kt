@@ -48,8 +48,9 @@ class PeerExplorerViewModelTest {
         scope = CoroutineScope(Dispatchers.Unconfined),
         clock = { now },
         staleAfterMillis = HOUR,
-        // Unconfined keeps the discovery hop inline too, so state is readable on the next line.
-        discoveryDispatcher = Dispatchers.Unconfined,
+        // Unconfined keeps every IO hop (discover, index fetch, sync, subscribe) inline too, so
+        // state is readable on the next line.
+        ioDispatcher = Dispatchers.Unconfined,
     )
 
     // ── the §8.1 matrix (AC13) ──────────────────────────────────────────────────────────────────
@@ -57,7 +58,7 @@ class PeerExplorerViewModelTest {
     @Test
     fun current_whenIndexHashMatchesWatermark() {
         store.addPeer(peer("p1", lastSuccessAt = now))
-        store.subscriptions += copy("local-a", "src-a", lastHash = "h1")
+        store.addCopy("p1", copy("local-a", "src-a", lastHash = "h1"))
         index = listOf(entry("src-a", "h1"))
 
         val vm = viewModel().also { it.selectPeer("p1") }
@@ -68,7 +69,7 @@ class PeerExplorerViewModelTest {
     @Test
     fun updateAvailable_whenIndexHashMoved() {
         store.addPeer(peer("p1", lastSuccessAt = now))
-        store.subscriptions += copy("local-a", "src-a", lastHash = "h1")
+        store.addCopy("p1", copy("local-a", "src-a", lastHash = "h1"))
         index = listOf(entry("src-a", "h2"))
 
         val vm = viewModel().also { it.selectPeer("p1") }
@@ -79,7 +80,7 @@ class PeerExplorerViewModelTest {
     @Test
     fun forked_whenModeIsLocal_regardlessOfIndex() {
         store.addPeer(peer("p1", lastSuccessAt = now))
-        store.subscriptions += copy("local-a", "src-a", lastHash = "h1", mode = SubscriptionMode.LOCAL)
+        store.addCopy("p1", copy("local-a", "src-a", lastHash = "h1", mode = SubscriptionMode.LOCAL))
         // Even a moved upstream hash must not re-label a fork — the copy left the sync world (§5.3).
         index = listOf(entry("src-a", "h2"))
 
@@ -91,7 +92,7 @@ class PeerExplorerViewModelTest {
     @Test
     fun stale_whenPeerLastSuccessOlderThanThreshold() {
         store.addPeer(peer("p1", lastSuccessAt = now))
-        store.subscriptions += copy("local-a", "src-a", lastHash = "h1")
+        store.addCopy("p1", copy("local-a", "src-a", lastHash = "h1"))
         index = listOf(entry("src-a", "h2"))
         now += HOUR + 1 // threshold passed → the index-derived states are masked by staleness
 
@@ -104,7 +105,7 @@ class PeerExplorerViewModelTest {
     @Test
     fun sourceRemoved_whenEntryAbsentFromCurrentIndex() {
         store.addPeer(peer("p1", lastSuccessAt = now))
-        store.subscriptions += copy("local-a", "src-a", lastHash = "h1")
+        store.addCopy("p1", copy("local-a", "src-a", lastHash = "h1"))
         index = listOf(entry("src-other", "hx")) // present index, our entry gone (deleted/un-shared)
 
         val vm = viewModel().also { it.selectPeer("p1") }
@@ -115,12 +116,25 @@ class PeerExplorerViewModelTest {
     @Test
     fun current_whenPeerFreshButNoIndexObtainable() {
         store.addPeer(peer("p1", lastSuccessAt = now))
-        store.subscriptions += copy("local-a", "src-a", lastHash = "h1")
+        store.addCopy("p1", copy("local-a", "src-a", lastHash = "h1"))
         index = null // transient: nothing fetched yet — no scare label (class doc)
 
         val vm = viewModel().also { it.selectPeer("p1") }
 
         assertEquals(CopyState.CURRENT, vm.state.value.copies.single().state)
+    }
+
+    @Test
+    fun copies_areScopedToTheSelectedPeer() {
+        store.addPeer(peer("p1", lastSuccessAt = now))
+        store.addPeer(peer("p2", lastSuccessAt = now))
+        store.addCopy("p1", copy("local-a", "src-a", lastHash = "h1"))
+        store.addCopy("p2", copy("local-b", "src-b", lastHash = "h2")) // must never leak into p1's view
+        index = null // watermark-only verdict; the point here is which rows appear, not their state
+
+        val vm = viewModel().also { it.selectPeer("p1") }
+
+        assertEquals(listOf("local-a"), vm.state.value.copies.map { it.copy.localEntityId })
     }
 
     // ── peer status (§8.1 list, D4) ─────────────────────────────────────────────────────────────
@@ -152,7 +166,7 @@ class PeerExplorerViewModelTest {
     @Test
     fun unsubscribe_deletesTheSubscription_copyRowStays() {
         store.addPeer(peer("p1", lastSuccessAt = now))
-        store.subscriptions += copy("local-a", "src-a", lastHash = "h1")
+        store.addCopy("p1", copy("local-a", "src-a", lastHash = "h1"))
         val vm = viewModel().also { it.selectPeer("p1") }
 
         vm.unsubscribe("local-a")
@@ -164,7 +178,7 @@ class PeerExplorerViewModelTest {
     fun fork_delegatesToTheStore_withTheCopysKind() {
         store.addPeer(peer("p1", lastSuccessAt = now))
         val theCopy = copy("local-a", "src-a", lastHash = "h1", kind = CatalogEntityKindWire.PROFILE)
-        store.subscriptions += theCopy
+        store.addCopy("p1", theCopy)
         val vm = viewModel().also { it.selectPeer("p1") }
 
         vm.fork(theCopy)
@@ -253,21 +267,29 @@ class PeerExplorerViewModelTest {
 /** In-memory [PeerExplorerStore]: lists are the state, mutations are recorded for assertion. */
 private class FakePeerExplorerStore : PeerExplorerStore {
     private val peerList = mutableListOf<PeerRecord>()
-    val subscriptions = mutableListOf<SubscribedCopy>()
+    // Each copy is recorded against its originating peer, so copiesFrom() scopes by peer exactly like
+    // the SQL store's source_peer_id filter (SqlDelightPeerExplorerStore.copiesFrom). Honoring the
+    // argument lets the VM test self-guard the peer-scoping wiring: a defect passing the wrong peerId
+    // to copiesFrom now shows up here instead of only in SqlDelightPeerExplorerStoreTest.
+    private val copies = mutableListOf<Pair<String, SubscribedCopy>>()
     val unsubscribedIds = mutableListOf<String>()
     val forked = mutableListOf<Pair<String, CatalogEntityKindWire>>()
 
+    /** Record a copy as originating from [peerId] (the fake's stand-in for `source_peer_id`). */
+    fun addCopy(peerId: String, copy: SubscribedCopy) { copies += peerId to copy }
+
     override fun peers(): List<PeerRecord> = peerList.toList()
     override fun addPeer(peer: PeerRecord) { peerList += peer }
-    override fun copiesFrom(peerId: String): List<SubscribedCopy> = subscriptions.toList()
+    override fun copiesFrom(peerId: String): List<SubscribedCopy> =
+        copies.filter { it.first == peerId }.map { it.second }
     override fun unsubscribe(localEntityId: String) {
         unsubscribedIds += localEntityId
-        subscriptions.removeAll { it.localEntityId == localEntityId }
+        copies.removeAll { it.second.localEntityId == localEntityId }
     }
     override fun fork(localEntityId: String, kind: CatalogEntityKindWire) {
         forked += localEntityId to kind
-        subscriptions.replaceAll {
-            if (it.localEntityId == localEntityId) it.copy(mode = SubscriptionMode.LOCAL) else it
+        copies.replaceAll { (peerId, copy) ->
+            peerId to if (copy.localEntityId == localEntityId) copy.copy(mode = SubscriptionMode.LOCAL) else copy
         }
     }
 }

@@ -36,6 +36,15 @@ enum class ErrorCode {
     /** 503 — the companion is alive but could not place the text anywhere. */
     INSERTION_FAILED,
 
+    /**
+     * 404 — the requested catalog entity is unknown OR not shared.
+     *
+     * One code for both, on purpose: telling them apart would leak which private entities exist
+     * (parallel to the uniform 401). The `CatalogClient` maps it to `DispatchError.EntityGone`
+     * (peer-katalog.md §6.4); a *bare* 404 with no envelope means "no catalog route" → `EndpointMissing`.
+     */
+    CATALOG_ENTITY_NOT_FOUND,
+
     /** 500 — anything unforeseen. */
     INTERNAL,
 }

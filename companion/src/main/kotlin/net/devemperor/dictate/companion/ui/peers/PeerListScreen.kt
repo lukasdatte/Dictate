@@ -15,8 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import java.text.DateFormat
-import java.util.Date
+import net.devemperor.dictate.companion.ui.asTime
 
 /**
  * The peer list (peer-katalog.md §8.1): name, address, derived reachability, last successful
@@ -76,15 +75,17 @@ internal fun PeerListScreen(viewModel: PeerExplorerViewModel, state: PeerExplore
 
 @Composable
 internal fun StatusLabel(status: PeerStatus) {
+    // Casing matches CopyStateLabel's lower-case status pills (they share PeerDetailScreen); the
+    // multi-word copy states ("update available") rule out all-caps as the unified style.
     val (text, color) = when (status) {
-        PeerStatus.OK -> "OK" to MaterialTheme.colorScheme.primary
-        PeerStatus.STALE -> "STALE" to MaterialTheme.colorScheme.tertiary
-        PeerStatus.UNREACHABLE -> "UNREACHABLE" to MaterialTheme.colorScheme.error
+        PeerStatus.OK -> "ok" to MaterialTheme.colorScheme.primary
+        PeerStatus.STALE -> "stale" to MaterialTheme.colorScheme.tertiary
+        PeerStatus.UNREACHABLE -> "unreachable" to MaterialTheme.colorScheme.error
     }
     Text(text, color = color, style = MaterialTheme.typography.labelMedium)
 }
 
 private fun lastReached(peer: PeerRow): String {
     val at = peer.record.lastSuccessAt ?: return "never reached"
-    return "last reached ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(at))}"
+    return "last reached ${at.asTime()}"
 }

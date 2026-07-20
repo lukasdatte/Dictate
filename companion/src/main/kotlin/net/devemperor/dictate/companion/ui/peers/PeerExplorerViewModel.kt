@@ -84,11 +84,14 @@ class PeerExplorerViewModel(
     private val clock: () -> Long,
     private val staleAfterMillis: Long = DEFAULT_STALE_AFTER_MILLIS,
     /**
-     * Where [PeerDiscovery.discover] runs. It execs a subprocess (up to its own timeout) and its
-     * contract forbids the UI thread — while [scope] in production IS the UI scope (the house
-     * pattern for the cheap local-DB loads). Tests override with `Unconfined` to stay inline.
+     * Where every blocking, credential/network-touching seam runs: [PeerDiscovery.discover] (execs a
+     * subprocess), [PeerIndexSource.entries] (fetches a peer's live index over the wire),
+     * [CatalogSyncRunner.syncNow] (one engine run) and [CatalogSubscriber.subscribe] (pull + verify +
+     * write). Their contracts forbid the UI thread — while [scope] in production IS the UI scope (the
+     * house pattern for the cheap local-DB loads, [store]). Tests override with `Unconfined` to stay
+     * inline.
      */
-    private val discoveryDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
 
     private val _state = MutableStateFlow(PeerExplorerUiState())
@@ -104,7 +107,7 @@ class PeerExplorerViewModel(
 
     /** One engine run against this peer, then re-derive — the §8.1 sync-now action. */
     fun syncNow(peerId: String) = scope.launch {
-        syncRunner?.syncNow(peerId)
+        withContext(ioDispatcher) { syncRunner?.syncNow(peerId) }
         load(_state.value.selectedPeerId)
     }
 
@@ -126,24 +129,28 @@ class PeerExplorerViewModel(
     /** Take over one offered entry from the selected peer ("Von Peer beziehen", §8.3). */
     fun subscribe(entry: CatalogEntry) = scope.launch {
         val peerId = _state.value.selectedPeerId ?: return@launch
-        subscriber?.subscribe(peerId, entry)
+        withContext(ioDispatcher) { subscriber?.subscribe(peerId, entry) }
         load(peerId)
     }
 
     /** Populate [PeerExplorerUiState.candidates] from discovery — empty off-tailnet, never an error (AC11). */
     fun discoverCandidates() = scope.launch {
-        val candidates = withContext(discoveryDispatcher) { discovery.discover() }
+        val candidates = withContext(ioDispatcher) { discovery.discover() }
         _state.value = _state.value.copy(candidates = candidates)
     }
 
     // ── derivation ──────────────────────────────────────────────────────────────────────────────
 
-    private fun load(selectedPeerId: String?) {
+    private suspend fun load(selectedPeerId: String?) {
         val now = clock()
         val peers = store.peers().map { PeerRow(it, status(it, now)) }
         val selected = peers.firstOrNull { it.record.peerId == selectedPeerId }
 
-        val index: List<CatalogEntry>? = selected?.let { indexSource.entries(it.record.peerId) }
+        // The live index is a wire fetch (credential-touching); hop off the UI scope. The local-DB
+        // reads (store.peers/copiesFrom) stay inline per the house pattern.
+        val index: List<CatalogEntry>? = selected?.let { peer ->
+            withContext(ioDispatcher) { indexSource.entries(peer.record.peerId) }
+        }
         val copies = selected?.let { peer ->
             store.copiesFrom(peer.record.peerId).map { copy -> CopyRow(copy, state(copy, peer.status, index)) }
         } ?: emptyList()

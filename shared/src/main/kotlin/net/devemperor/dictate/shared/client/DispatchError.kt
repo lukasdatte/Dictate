@@ -54,6 +54,15 @@ sealed class DispatchError {
     /** 503 — the companion is alive but could not place the text. Pending part + a hint. */
     object InsertionFailed : DispatchError()
 
+    /**
+     * 404 `CATALOG_ENTITY_NOT_FOUND` — the catalog entity is unknown or no longer shared at the source.
+     *
+     * Told apart from [EndpointMissing] (a *bare* 404 = old peer without a catalog route) by the
+     * presence of the envelope code: this one carried an `ErrorEnvelope`, that one did not. The
+     * catalog sync treats it as "the upstream deleted/unshared this entity" (peer-katalog.md §6.4).
+     */
+    object EntityGone : DispatchError()
+
     /** Any other status, or a response we cannot parse. Pending part. */
     data class Server(val status: Int, val message: String) : DispatchError()
 }

@@ -4,6 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * [PeerDiscovery] over the Tailscale CLI: `tailscale status --json`, parsed for the peers' MagicDNS
@@ -56,13 +57,43 @@ class TailscalePeerDiscovery(
 
         const val TIMEOUT_SECONDS = 5L
 
-        /** Exec the real CLI; null on ANY failure (missing binary, non-zero exit, timeout). */
+        /**
+         * Exec the real CLI; null on ANY failure (missing binary, non-zero exit, timeout).
+         *
+         * **The timeout must own the deadline, not `readText()`.** `readText()` blocks until stdout
+         * EOF, so reading it inline (as this once did) would outrun the [TIMEOUT_SECONDS] guard: a
+         * hung `tailscale` never reaches EOF, the read never returns, and the AC11 "timeout → empty
+         * list" promise silently breaks (worse: on `Dispatchers.IO` a hang starves the IO pool). So
+         * we drain stdout on a daemon thread, let [Process.waitFor] enforce the deadline, and on
+         * expiry [Process.destroyForcibly] the child — otherwise it orphan-leaks. stderr is discarded
+         * at the OS level ([ProcessBuilder.Redirect.DISCARD]) so its pipe can never fill and deadlock
+         * the child while we drain only stdout.
+         */
         fun execTailscaleStatus(): String? = try {
             val process = ProcessBuilder("tailscale", "status", "--json")
-                .redirectErrorStream(false)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
                 .start()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            if (process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS) && process.exitValue() == 0) output else null
+            val output = AtomicReference<String?>()
+            val drainer = Thread {
+                try {
+                    output.set(process.inputStream.bufferedReader().use { it.readText() })
+                } catch (_: Exception) {
+                    // Child torn down mid-read (destroyForcibly below): leave output null → empty list.
+                }
+            }.apply { isDaemon = true }.also { it.start() }
+            when {
+                !process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS) -> {
+                    process.destroyForcibly() // timed out: kill the child so it cannot orphan-leak
+                    null
+                }
+                process.exitValue() != 0 -> null
+                else -> {
+                    // Process exited → stdout is at EOF, but the drainer may not have run its final
+                    // set() yet; join (bounded) so output.get() sees the complete stdout, not null.
+                    drainer.join(TIMEOUT_SECONDS * 1000L)
+                    output.get()
+                }
+            }
         } catch (_: Exception) {
             null
         }

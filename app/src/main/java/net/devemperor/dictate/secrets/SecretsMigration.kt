@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.system.Os
 import android.util.Log
+import net.devemperor.dictate.ai.AIFunction
+import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.ai.secrets.SecretRef
 import net.devemperor.dictate.ai.secrets.SecretStore
 import net.devemperor.dictate.ai.secrets.SecretStoreException
@@ -99,6 +101,37 @@ object SecretsMigration {
                 SecretRef(PAIRING_NAMESPACE, Pref.WindowsDeviceSecret.key.removePrefix(PREF_KEY_PREFIX)),
             ),
         )
+    }
+
+    /**
+     * The legacy [SecretRef] under which B2 parked the API key for this (function, provider) slot
+     * (or null for an unsupported combination). Exposed here — the one file allowed to name the
+     * secret prefs (spec §2.6 allow-list) — so the C2 config-entity migration can re-map the legacy
+     * refs onto Credential-entity ids (§7.2) WITHOUT itself referencing the secret pref constants.
+     *
+     * @see docs/plans/2026-07-19 - desktop-companion-v1/research/secretstore.md §7.2
+     */
+    @JvmStatic
+    internal fun legacyKeyRef(function: AIFunction, provider: AIProvider): SecretRef? {
+        val pref: Pref<String>? = when (function) {
+            AIFunction.TRANSCRIPTION -> when (provider) {
+                AIProvider.OPENAI -> Pref.TranscriptionApiKeyOpenAI
+                AIProvider.GROQ -> Pref.TranscriptionApiKeyGroq
+                AIProvider.ELEVENLABS -> Pref.TranscriptionApiKeyElevenLabs
+                AIProvider.OPENROUTER -> Pref.TranscriptionApiKeyOpenRouter
+                AIProvider.CUSTOM -> Pref.TranscriptionApiKeyCustom
+                else -> null
+            }
+            AIFunction.COMPLETION -> when (provider) {
+                AIProvider.OPENAI -> Pref.RewordingApiKeyOpenAI
+                AIProvider.GROQ -> Pref.RewordingApiKeyGroq
+                AIProvider.ANTHROPIC -> Pref.RewordingApiKeyAnthropic
+                AIProvider.OPENROUTER -> Pref.RewordingApiKeyOpenRouter
+                AIProvider.CUSTOM -> Pref.RewordingApiKeyCustom
+                else -> null
+            }
+        }
+        return pref?.let { p -> SLOTS.firstOrNull { it.pref == p }?.ref }
     }
 
     /**

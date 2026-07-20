@@ -4,6 +4,7 @@ import android.app.Application;
 import android.content.SharedPreferences;
 
 import net.devemperor.dictate.audio.CacheAudioCleanupScheduler;
+import net.devemperor.dictate.config.ConfigEntityMigration;
 import net.devemperor.dictate.core.RecordingRepository;
 import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.database.DurationHealingScheduler;
@@ -73,6 +74,15 @@ public class DictateApplication extends Application {
         // enqueue. Mirrors the DictateDatabase/JobExecutor/ActiveJobRegistry
         // resetForTest() convention.
         final DictateDatabase db = DictateDatabase.getInstance(this);
+
+        // 1c. Chunk C2: one-time Prefs->entity migration (spec §8). Runs after the DB is built
+        //     (needs v12) and after the B2 secret migration (re-maps the `legacy` key refs onto
+        //     Credential-entity ids, §7.2). Idempotent + availability-guarded, so it is safe to call
+        //     unconditionally on every start; it populates the config entities + the Default profile.
+        //     The live AI read path is flipped to ProfileResolver together with the settings write
+        //     paths in C3 — this only fills the tables.
+        ConfigEntityMigration.run(this);
+
         final RecordingRepository recordingRepository = new RecordingRepository(this);
         DurationHealingScheduler.INSTANCE.schedule(db.sessionDao(), recordingRepository);
 

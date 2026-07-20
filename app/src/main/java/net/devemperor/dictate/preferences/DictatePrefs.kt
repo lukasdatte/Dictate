@@ -194,6 +194,25 @@ sealed class Pref<T>(val key: String, val default: T) {
     object SecretsMigratedV1 :
         Pref<Boolean>("net.devemperor.dictate.secrets_migrated_v1", false)
 
+    /**
+     * Device-local pointer to the active [net.devemperor.dictate.config.entity.ProfileRoomEntity]
+     * (spec §4.7, §13 D4). Kept a global pref, NOT an `is_active` column: "which profile is active"
+     * is device state, not shareable profile content, and would otherwise pollute the profile's
+     * `contentHash`. Empty = no active profile → the resolver returns the empty "not configured"
+     * config (§9.3). Set by the config-entity migration to the Default profile (§8.5).
+     */
+    object ActiveProfileId : Pref<String>("net.devemperor.dictate.active_profile_id", "")
+
+    /**
+     * Version flag for the one-time Prefs→entity migration
+     * ([net.devemperor.dictate.config.ConfigEntityMigration], spec §8). Runs only while
+     * `< CURRENT_MIGRATION_VERSION`; set to that version **last**, after a fully successful run, so
+     * an abort mid-migration leaves it low and the next start retries (idempotent, §8.5). Default 0
+     * = never run. Mirrors the `LegacyAudioPurgedV4`/`SecretsMigratedV1` idempotence idiom.
+     */
+    object ConfigEntityMigrationDone :
+        Pref<Int>("net.devemperor.dictate.config_entity_migration_done", 0)
+
     // ── Input Languages (Set<String>, separate access) ──
     object InputLanguages : Pref<String>("net.devemperor.dictate.input_languages", "")  // Sentinel, actually Set<String>
 

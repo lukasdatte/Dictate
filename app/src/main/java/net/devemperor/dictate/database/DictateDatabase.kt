@@ -35,7 +35,17 @@ import net.devemperor.dictate.database.migration.MIGRATION_7_8
 import net.devemperor.dictate.database.migration.MIGRATION_8_9
 import net.devemperor.dictate.database.migration.MIGRATION_9_10
 import net.devemperor.dictate.database.migration.MIGRATION_10_11
+import net.devemperor.dictate.database.migration.MIGRATION_11_12
 import net.devemperor.dictate.database.entity.PromptType
+import net.devemperor.dictate.config.dao.ApiCredentialDao
+import net.devemperor.dictate.config.dao.ModelRefDao
+import net.devemperor.dictate.config.dao.ProfileDao
+import net.devemperor.dictate.config.dao.ProviderConfigDao
+import net.devemperor.dictate.config.entity.ApiCredentialRoomEntity
+import net.devemperor.dictate.config.entity.ModelRefRoomEntity
+import net.devemperor.dictate.config.entity.ProfilePromptRoomEntity
+import net.devemperor.dictate.config.entity.ProfileRoomEntity
+import net.devemperor.dictate.config.entity.ProviderConfigRoomEntity
 
 @Database(
     entities = [
@@ -46,9 +56,15 @@ import net.devemperor.dictate.database.entity.PromptType
         ProcessingStepEntity::class,
         CompletionLogEntity::class,
         TextInsertionEntity::class,
-        ConversationMessageEntity::class
+        ConversationMessageEntity::class,
+        // Config-entity model (C2, spec §7).
+        ProviderConfigRoomEntity::class,
+        ApiCredentialRoomEntity::class,
+        ModelRefRoomEntity::class,
+        ProfileRoomEntity::class,
+        ProfilePromptRoomEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -62,6 +78,12 @@ abstract class DictateDatabase : RoomDatabase() {
     abstract fun completionLogDao(): CompletionLogDao
     abstract fun textInsertionDao(): TextInsertionDao
     abstract fun conversationMessageDao(): ConversationMessageDao
+
+    // ── Config-entity model (C2, spec §7) ──
+    abstract fun providerConfigDao(): ProviderConfigDao
+    abstract fun apiCredentialDao(): ApiCredentialDao
+    abstract fun modelRefDao(): ModelRefDao
+    abstract fun profileDao(): ProfileDao
 
     companion object {
         private const val DATABASE_NAME = "dictate.db"
@@ -132,7 +154,7 @@ abstract class DictateDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                     MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
-                    MIGRATION_10_11,
+                    MIGRATION_10_11, MIGRATION_11_12,
                 )
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
@@ -152,7 +174,12 @@ abstract class DictateDatabase : RoomDatabase() {
                         )
                         for (prompt in defaultPrompts) {
                             db.execSQL(
-                                "INSERT INTO prompts (pos, name, prompt, requires_selection, auto_apply, type) VALUES (?, ?, ?, ?, 0, ?)",
+                                // The v12 envelope columns (uuid/visibility/subscription_mode/
+                                // content_hash/updated_at) are NOT NULL with no SQLite default in the
+                                // Room-generated fresh schema, so they must be listed here (same
+                                // convention as `type`). The config-entity migration backfills the
+                                // uuid/content_hash for these default prompts on first start (§8.5).
+                                "INSERT INTO prompts (pos, name, prompt, requires_selection, auto_apply, type, uuid, visibility, subscription_mode, content_hash, updated_at) VALUES (?, ?, ?, ?, 0, ?, '', 'PRIVATE', 'LOCAL', '', 0)",
                                 arrayOf<Any>(
                                     prompt.pos,
                                     appContext.getString(prompt.nameRes),

@@ -1,0 +1,628 @@
+{
+  "plan": "docs/plans/2026-07-19 - desktop-companion-v1/desktop-companion-v1.md",
+  "_notes": "16 chunks mapped 1:1 from the plan's workstream DAG (Plan-Conventions block + §7), updated for the spec-deepening (§3 D5, 2026-07-20): D1 split into D1a (schema parity + received_texts replacement + sync rebuild — per D5.c) and D1b (capture + pipeline). Detail SSoT is the five implementer-ready specs under research/ (shared-ai-extraktion=A, secretstore=B, entitaetenmodell-android=C, desktop-host=D, peer-katalog=E); §5 chunk entries are stubs with spec-§ pointers, so plan_sections cite both the plan §5 stub and the owning spec §§. Two cross-block couplings flagged in the prior revision are now RESOLVED by D5: (1) the new edge E1→D3 (D5.b — D3 owns all companion entity tables, E1 only peers/subscriptions/catalog_access_log) chains block E strictly after D2/D3, so the D2/E3 Main.kt co-edit can no longer run in parallel; (2) deterministic SQLDelight migration numbers D1a=2.sqm / D3=3.sqm / E1=4.sqm (distinct files, chunks now in a chain D1a→D1b→D2→D3→E1) remove the migration-number collision. Block C keeps an extra migration/data-loss audit emphasis, Block E an extra security/credential-path emphasis (recorded in context_notes; the audit engine knows only the 4 fixed lenses).",
+  "blocks": [
+    {
+      "id": "A",
+      "name": "Fundament: ADRs + :shared-ai-Extraktion",
+      "chunk_ids": [
+        "A1",
+        "A2",
+        "A3"
+      ]
+    },
+    {
+      "id": "B",
+      "name": "SecretStore (projektweit)",
+      "chunk_ids": [
+        "B1",
+        "B2"
+      ]
+    },
+    {
+      "id": "C",
+      "name": "Entitätenmodell + Android-Umbau",
+      "chunk_ids": [
+        "C1",
+        "C2",
+        "C3"
+      ]
+    },
+    {
+      "id": "D",
+      "name": "Desktop-Diktat (Companion-Host)",
+      "chunk_ids": [
+        "D1a",
+        "D1b",
+        "D2",
+        "D3"
+      ]
+    },
+    {
+      "id": "E",
+      "name": "Peer-Katalog + Abo-Sync + Peer Explorer",
+      "chunk_ids": [
+        "E1",
+        "E2",
+        "E3"
+      ]
+    },
+    {
+      "id": "F",
+      "name": "Abschluss: ADR-Promotion + Doku + E2E",
+      "chunk_ids": [
+        "F1"
+      ],
+      "audit": [
+        "plan-and-api"
+      ]
+    }
+  ],
+  "chunks": [
+    {
+      "id": "A1",
+      "name": "ADR-Drafts (alle 8) + Konzept-Research + Specs einchecken",
+      "plan_sections": [
+        "Plan §5 Chunk A1 (L442-453)",
+        "Plan §6 ADR-Drafts (L641-657)",
+        "Plan §3 D4.1 (L293-296)"
+      ],
+      "files_expected": [
+        "docs/plans/2026-07-19 - desktop-companion-v1/adrs/adr-shared-ai-module.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/adrs/adr-secret-store.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/adrs/adr-config-entity-model.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/adrs/adr-desktop-dictation-host.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/adrs/adr-desktop-panel-ui.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/adrs/adr-desktop-review.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/adrs/adr-peer-catalog.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/adrs/adr-companion-history-parity.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/research/bestandsaufnahme.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/research/konzept-skizze.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/research/fragenkatalog.md"
+      ],
+      "depends_on": [],
+      "candidates": {
+        "knowledge_skills": [
+          "knowledge-adr-format",
+          "knowledge-doc-format"
+        ],
+        "modules": [
+          "docs/decisions/ (existing ADR style, 0001-0027)",
+          "docs/decisions/README.md (index)",
+          "~/.claude/templates/adr.md"
+        ]
+      },
+      "context_notes": "Author-only chunk, no production code — runs in parallel with A2. Move (not copy) tmp/desktop-concept/{bestandsaufnahme,konzept-skizze,fragenkatalog}.md into research/ and delete tmp/desktop-concept afterwards (D4.1). The five specs (shared-ai-extraktion, secretstore, entitaetenmodell-android, desktop-host, peer-katalog) and reports/e2e-runbook.md ALREADY exist in the plan folder and are checked in together with this chunk (Plan §5 A1). 8 draft filenames carry NO number (adr-{slug}.md, header '# ADR-NNNN' placeholder), Status 'Proposed (plan-scoped — pending promotion)'. Decision content must match §3 INCLUDING D5. audit_exempt: excluded from the Block-A code audit's file set.",
+      "audit_exempt": true,
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "spec-tight ADR authoring — all 8 decisions + relationships given in the §6 table and §3 (incl. D5) → opus-high",
+      "agent": "opus-high"
+    },
+    {
+      "id": "A2",
+      "name": "Pure Moves — :shared-ai-Scaffold + verhaltensneutrale Klassen-Moves",
+      "plan_sections": [
+        "Plan §5 Chunk A2 (L455-463)",
+        "spec shared-ai-extraktion.md §3.1-3.4 (Inventar), §5 (Gradle-Scaffold + Purity), §6 A2.0-A2.3 (Move-Schritte), §7 (Directory), §11 (AmplitudeProcessor-Nachtrag)",
+        "Plan §3 D5.d + D5.e (L359-370)"
+      ],
+      "files_expected": [
+        "settings.gradle",
+        "shared-ai/build.gradle",
+        "shared-ai/src/main/kotlin/net/devemperor/dictate/ai/**",
+        "shared-ai/src/main/kotlin/net/devemperor/dictate/core/AmplitudeProcessor.kt",
+        "shared-ai/src/test/kotlin/net/devemperor/dictate/ai/SharedAiPurityTest.kt",
+        "app/build.gradle",
+        "app/src/main/java/net/devemperor/dictate/ai/**"
+      ],
+      "depends_on": [],
+      "candidates": {
+        "knowledge_skills": [],
+        "modules": [
+          "spec shared-ai-extraktion.md (canonical detail)",
+          "shared/build.gradle (jvm-module + SharedPurityTest pattern to mirror)",
+          "shared/src/test/kotlin/net/devemperor/dictate/shared/SharedPurityTest.kt",
+          "app/src/main/java/net/devemperor/dictate/ai/ (move source)",
+          "app/src/main/java/net/devemperor/dictate/core/AmplitudeProcessor.kt (D5.e move)"
+        ]
+      },
+      "integration_targets": [
+        "settings.gradle",
+        "app/build.gradle"
+      ],
+      "context_notes": "Independent of A1 (parallel). Scaffold :shared-ai (pure kotlin(jvm), own dependency policy) WITH SharedAiPurityTest first, then package-preserving git moves of the 0-Android-dep classes (git log --follow intact; purity test red on Android import — negative self-test). PER D5.d: PromptTypeClassifier STAYS in :app (hangs on PromptType/16 pill files, ADR-0024 — plan-A2 stub corrected). PER D5.e: ALSO move core/AmplitudeProcessor.kt package-preserving to :shared-ai (not in the spec inventory — spec §11 addendum; F19 design-parity of the recording core). PRÜFAUFTRAG (spec §10 Gap 4 = R9 escalation case): verify the module's SDK/bytecode target stays Java-8-compatible; a forced bytecode bump is an escalation, not a silent workaround. Note: A2/A3/B1 all add files under shared-ai/ but to disjoint files.",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "mechanical package-preserving moves + build wiring against an explicit spec inventory (shared-ai §3/§5/§6) → opus-high",
+      "agent": "opus-high"
+    },
+    {
+      "id": "A3",
+      "name": "Ports + Runner/Orchestrator-Migration nach :shared-ai",
+      "plan_sections": [
+        "Plan §5 Chunk A3 (L465-476)",
+        "spec shared-ai-extraktion.md §4.1-4.5 (Port-Signaturen), §3.5 (App-Kopplungen), §6 A3.1-A3.7 (Move-Schritte), §8.1-8.2 (Charakterisierungs-Tests)"
+      ],
+      "files_expected": [
+        "shared-ai/src/main/kotlin/net/devemperor/dictate/ai/port/**",
+        "shared-ai/src/main/kotlin/net/devemperor/dictate/ai/**",
+        "app/src/main/java/net/devemperor/dictate/ai/**"
+      ],
+      "depends_on": [
+        "A2"
+      ],
+      "candidates": {
+        "knowledge_skills": [],
+        "modules": [
+          "spec shared-ai-extraktion.md §4 (port signatures), §8 (characterization tests)",
+          "app/src/main/java/net/devemperor/dictate/ai/AIOrchestrator.kt + factory/RunnerFactory.kt",
+          "app/src/main/java/net/devemperor/dictate/DictateUtils.java (proxy → ProxyConfig port)",
+          "app/.../database/dao UsageDao (threading → RoomUsageSink)"
+        ]
+      },
+      "integration_targets": [
+        "app/src/main/java/net/devemperor/dictate/core/PipelineOrchestrator.kt",
+        "app/src/main/java/net/devemperor/dictate/DictateUtils.java"
+      ],
+      "context_notes": "Define ports AiConfig/UsageSink/ProxyConfig/AudioDurationReader (spec §4.1-4.5); migrate AIOrchestrator, RunnerFactory, the runners (+ Keyterms org.json→kotlinx-serialization, A3.4), ModelFetcher, PromptService onto them and move them. :app implements the ports as pure adapters. WRITE the characterization tests (spec §8.1-8.2: Runner config from Prefs, proxy application) BEFORE the move; behaviour identical (§2 Kriterium 2). Acceptance grep-check: no AI-core path reads SharedPreferences/UsageDao/MediaMetadataRetriever directly anymore. Integration gate: PipelineOrchestrator + DictateUtils MUST change (adapter wiring).",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "backend port refactor with explicit port signatures (spec §4) and characterization-test-before-move discipline (spec §8) → opus-high",
+      "agent": "opus-high"
+    },
+    {
+      "id": "B1",
+      "name": "SecretStore-Port + Android/Desktop-Impls",
+      "plan_sections": [
+        "Plan §5 Chunk B1 (L482-489)",
+        "spec secretstore.md §4 (Port-Design), §5 (Android-Keystore-Impl incl. §5.4 Robolectric-Cipher-Seam, §5.3 Backup-Ausschluss), §6 (Desktop-Impl DPAPI + File-Fallback)"
+      ],
+      "files_expected": [
+        "shared-ai/src/main/kotlin/net/devemperor/dictate/ai/secrets/SecretStore.kt",
+        "app/src/main/java/net/devemperor/dictate/secrets/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/secrets/**"
+      ],
+      "depends_on": [
+        "A2"
+      ],
+      "candidates": {
+        "knowledge_skills": [],
+        "modules": [
+          "spec secretstore.md §4-6 (canonical detail; NO new dependency, package net.devemperor.dictate.ai.secrets)",
+          "companion .../platform (JNA patterns) — Desktop DPAPI via existing jna-platform Crypt32Util (spec §6)",
+          "TextInserter 'available'-flag pattern"
+        ]
+      },
+      "context_notes": "Port in :shared-ai (package net.devemperor.dictate.ai.secrets, no new dependency — spec §4). Android impl: Keystore master key + AES-256-GCM, Robolectric cipher seam (§5.4), backup exclusion (§5.3). Desktop impl: Windows DPAPI via the already-present jna-platform Crypt32Util + non-Windows file fallback AES-GCM, 'available' flag (§6). Error semantics: DecryptionFailed, never empty string (§2 Kriterium 3). DPAPI round-trip is a pending test (no Windows here). Shares shared-ai/ dir with A2/A3 but adds only ai/secrets/SecretStore.kt (file-disjoint).",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "well-scoped port + two impls with byte-identical round-trip tests, fully specified in secretstore §4-6 → opus-high",
+      "agent": "opus-high"
+    },
+    {
+      "id": "B2",
+      "name": "Android-Klartext-Key-Migration in den SecretStore",
+      "plan_sections": [
+        "Plan §5 Chunk B2 (L491-497)",
+        "spec secretstore.md §7 (Migrations-Design: 11 Slots §7.1, Legacy-Namespace + C2-Re-Mapping §7.2, Reihenfolge-Invariante §7.3, Rollback-Export §7.6)"
+      ],
+      "files_expected": [
+        "app/src/main/java/net/devemperor/dictate/secrets/**",
+        "app/src/main/java/net/devemperor/dictate/preferences/PrefsMigration.kt"
+      ],
+      "depends_on": [
+        "B1",
+        "A3"
+      ],
+      "candidates": {
+        "knowledge_skills": [],
+        "modules": [
+          "spec secretstore.md §7 (11 slots incl. WindowsDeviceSecret; runs BEFORE C2)",
+          "app/src/main/java/net/devemperor/dictate/preferences/PrefsMigration.kt (versioned, idempotent)",
+          "app/.../preferences/DictatePrefs.kt (the *ApiKey* Pref constants)"
+        ]
+      },
+      "integration_targets": [
+        "app/src/main/java/net/devemperor/dictate/preferences/PrefsMigration.kt"
+      ],
+      "context_notes": "One-off migration of 11 slots (all Pref.*ApiKey* PLUS WindowsDeviceSecret, spec §7.1/Gap 1) into the SecretStore under legacy namespace SecretRef('legacy',…) for C2 re-mapping (spec §7.2 — B2 runs BEFORE C2). Order invariant Backup→put→remove→Flag (§7.3); rollback export (§7.6). Tests: 11-slot fixture lossless, idempotent + fresh-install ok, grep-test no code path reads old Pref keys. Footguns spec §11 (IV-reuse, pref-deleted-before-put, backup-blob-without-key).",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "backend one-off migration against PrefsMigration + secretstore §7 with fixture + idempotency tests → opus-high",
+      "agent": "opus-high"
+    },
+    {
+      "id": "C1",
+      "name": "Konfigurations-Entitäten + kanonischer v3-Codec (:shared)",
+      "plan_sections": [
+        "Plan §5 Chunk C1 (L508-516)",
+        "spec entitaetenmodell-android.md §4.1-4.7 (Entitäts-DTOs + Envelope), §4.8 (Wire-Enums, per D5.a in :shared), §5 (kanonische Serialisierung + contentHash + v3-Format)",
+        "Plan §3 D5.a (L324-338)"
+      ],
+      "files_expected": [
+        "shared/src/main/kotlin/net/devemperor/dictate/shared/config/**"
+      ],
+      "depends_on": [],
+      "candidates": {
+        "knowledge_skills": [
+          "knowledge-sql"
+        ],
+        "modules": [
+          "spec entitaetenmodell-android.md §4-5 (canonical detail)",
+          "shared/src/main/kotlin/net/devemperor/dictate/shared/protocol/ (ProtocolCodec, Dtos, Validations — Konform pattern; SessionOriginWire↔SessionOrigin wire-vs-domain doctrine)",
+          "app/.../rewording/PromptImportExport.java (v1/v2 parse logic to port)"
+        ]
+      },
+      "context_notes": "Pure :shared work, no AI-core dependency — parallel to A3/B1. DTOs + Envelope (§4.1-4.7). PER D5.a: the wire-enums ProviderType/ProviderKind/ModelFunction/AmbiguityModeValue/PromptSelectionMode live in :shared (§4.8); the behaviour-carrying domain enums (AIProvider capabilities, AmbiguityMode.forcesTurn) do NOT move — mapper + parity tests live in :app (sees both modules) as a mandatory gate; the §4.8-TIP alternative is discarded (no :shared-ai→:shared edge). Canonical serialization + contentHash + v3 format (§5, incl. keyFingerprint rule §4.4, recompute-on-write §5.3). GATEWAY reserved (F31, active rejection test). Acceptance AK1-AK3 + enum-parity tests.",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "spec-tight :shared entity+codec vertical (entitaetenmodell §4-5) with snapshot/hash + enum-parity acceptance → opus-high",
+      "agent": "opus-high"
+    },
+    {
+      "id": "C2",
+      "name": "Android-Persistenz (Room v11→v12) + Prefs→Entitäten-Migration + Profil-Resolver",
+      "plan_sections": [
+        "Plan §5 Chunk C2 (L518-525)",
+        "spec entitaetenmodell-android.md §7 (Room v11→v12, 5 Tabellen + prompts-Recreate, CHECKs), §8 (Prefs→Entitäten-Migration: Backup §8.4, Default-Profil §8.5, det. UUIDs §8.6, SecretStore-Re-Mapping legacy→credential), §9 (ProfileResolver als AiConfig + Charakterisierungs-Test §9.4)"
+      ],
+      "files_expected": [
+        "app/src/main/java/net/devemperor/dictate/config/**",
+        "app/src/main/java/net/devemperor/dictate/database/**",
+        "app/schemas/**"
+      ],
+      "depends_on": [
+        "C1",
+        "B2",
+        "A3"
+      ],
+      "candidates": {
+        "knowledge_skills": [
+          "knowledge-sql"
+        ],
+        "modules": [
+          "spec entitaetenmodell-android.md §7-9 (canonical detail)",
+          "app/src/main/java/net/devemperor/dictate/database/DictateDatabase.kt + entity + dao + SessionEntityMapper (thin-mapper D3)",
+          "docs/DATABASE-PATTERNS.md (Double-Enum + CHECK)",
+          "secretstore §7.2 (legacy→credential re-mapping — depends on B2)"
+        ]
+      },
+      "integration_targets": [
+        "app/src/main/java/net/devemperor/dictate/database/DictateDatabase.kt"
+      ],
+      "context_notes": "BLOCK-C EXTRA AUDIT EMPHASIS (migration/data-loss). Room v11→v12 (spec §7): 5 new tables + prompts recreate, Double-Enum + CHECK. Prefs→entity migration (§8): backup FIRST (§8.4), Default profile in ONE transaction (§8.5), deterministic UUIDs (§8.6), SecretStore re-map legacy→credential (per secretstore §7.2). ProfileResolver implements AiConfig (§9) with characterization test §9.4 (byte-identical runner config). Acceptance AK4-AK7 (CHECK accept/reject, byte-equal runner config, grep key-freedom, backup + idempotency).",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "backend Room migration + resolver against entitaetenmodell §7-9 with fixture + characterization tests → opus-high",
+      "agent": "opus-high"
+    },
+    {
+      "id": "C3",
+      "name": "Android-UI-Umbau auf das Entitätenmodell",
+      "plan_sections": [
+        "Plan §5 Chunk C3 (L527-537)",
+        "spec entitaetenmodell-android.md §10 (Settings-Umbau: Provider/Modell/Profil §10.1-10.3, Import-Dispatcher §10.4, v3-Export §10.5, PromptsOverview-Badge §10.6)"
+      ],
+      "files_expected": [
+        "app/src/main/java/net/devemperor/dictate/settings/APISettingsActivity.java",
+        "app/src/main/java/net/devemperor/dictate/settings/**",
+        "app/src/main/java/net/devemperor/dictate/rewording/**",
+        "app/src/main/res/**"
+      ],
+      "depends_on": [
+        "C2"
+      ],
+      "candidates": {
+        "knowledge_skills": [],
+        "modules": [
+          "spec entitaetenmodell-android.md §10 (canonical detail)",
+          "app/.../settings/APISettingsActivity.java (783-line rebuild)",
+          "app/.../rewording/PromptsOverviewActivity.java + PromptImportExport",
+          "ParameterRegistry, ModelFetcher"
+        ]
+      },
+      "integration_targets": [
+        "app/src/main/java/net/devemperor/dictate/settings/APISettingsActivity.java"
+      ],
+      "context_notes": "Largest existing-code intervention. Entity-based settings (spec §10.1-10.3 — SETTINGS ONLY, no keyboard switcher per D4.4); import dispatcher §10.4; v3 export §10.5; PromptsOverview badge §10.6. ADR-0024/pills untouched. Acceptance AK8-AK9 + manual E2E checklist (cases in reports/e2e-runbook.md — TC-A3). Spec §14 Gaps 2-5 (Anthropic free-text, SecretRef format, backup cleanup, custom dedup) have named owners.",
+      "agent_recommendation": "fable-low",
+      "agent_rationale": "frontend-heavy Android settings/prompt UI rebuild (entitaetenmodell §10) with layout/interaction design latitude → fable-low",
+      "agent": "fable-medium"
+    },
+    {
+      "id": "D1a",
+      "name": "Companion-Schema-Vollparität + received_texts-Ablösung + Sync-Umbau",
+      "plan_sections": [
+        "Plan §5 Chunk D1a (L544-552)",
+        "spec desktop-host.md §3.2 (Enum-Vokabulare), §3.3 (Tabellen-Übersetzung), §3.4 (received_texts-Ablösung + dispatch_state + Backfill/Drop, Migration 2.sqm), §3.5 (Sync-/Repo-Umbau), §3.6 (Parity-Test-Design)",
+        "Plan §3 D5.c + D5.g (L349-390)"
+      ],
+      "files_expected": [
+        "companion/src/main/sqldelight/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/data/**"
+      ],
+      "depends_on": [
+        "A2"
+      ],
+      "candidates": {
+        "knowledge_skills": [
+          "knowledge-sql"
+        ],
+        "modules": [
+          "spec desktop-host.md §3 (canonical detail)",
+          "companion/src/main/sqldelight/.../db/Companion.sq",
+          "companion/.../data (SqlDelightHistoryRepository, SchemaMigrator, OriginCheckConstraintParityTest — Double-Enum both-directions)",
+          "the five existing E2E tests: SyncE2ETest, CompanionE2ETest, MultiConnectorE2ETest, TruncatedResponseE2ETest, SqlDelightHistoryRepositoryTest"
+        ]
+      },
+      "integration_targets": [
+        "companion/src/main/sqldelight/net/devemperor/dictate/companion/db/Companion.sq",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/data/SqlDelightHistoryRepository.kt"
+      ],
+      "context_notes": "HIGHEST REGRESSION RISK OF BLOCK D (own chunk per D5.c for focused audit). Migration 2.sqm (D5 numbering): SQLDelight full parity (enum vocab §3.2, table translation §3.3) + received_texts REPLACEMENT — sync fields move into the 1:1 companion table dispatch_state, backfill received_texts→sessions(+dispatch_state) then DROP (§3.4, D5.g, replaces old §10 Gap 5). Sync/repo rebuild §3.5 (blast radius). PROOF OF BEHAVIOUR-NEUTRALITY: the five existing E2E tests (SyncE2ETest, CompanionE2ETest, MultiConnectorE2ETest, TruncatedResponseE2ETest, SqlDelightHistoryRepositoryTest) MUST stay green WITHOUT assertion changes; parity suite must go red on artificial drift; received_texts MigrationTest lossless (§3.6). Companion.sq is edited here (2.sqm), by D3 (3.sqm), and E1 (4.sqm) — sequential chain, distinct migration files.",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "highest-regression schema chunk — 5 existing E2E tests must stay green without assertion changes; spec-tight (desktop-host §3) → opus-high with focused audit",
+      "agent": "opus-high"
+    },
+    {
+      "id": "D1b",
+      "name": "Audio-Capture + Desktop-Pipeline",
+      "plan_sections": [
+        "Plan §5 Chunk D1b (L554-563)",
+        "spec desktop-host.md §4 (Capture: WAV 16 kHz mono §4.1, Geräte §4.2, Rolling-Segments §4.3, Amplituden-Feed §4.4, Upload-Limit §4.5), §5 (Pipeline: Controller §5.1, Phasenmodell §5.2, DesktopUiState §5.3, Reducer-Reinheit §5.4, Schritte §5.5, Queue §5.6)"
+      ],
+      "files_expected": [
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/capture/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/pipeline/**"
+      ],
+      "depends_on": [
+        "D1a",
+        "A3"
+      ],
+      "candidates": {
+        "knowledge_skills": [],
+        "modules": [
+          "spec desktop-host.md §4-5 (canonical detail)",
+          "shared-ai AmplitudeProcessor (moved in A2 per D5.e — reused for the amplitude feed §4.4)",
+          "ADR-0007 (always-one-ahead), ADR-0009 (serial queue), ADR-0012 (conversation via :shared-ai)",
+          "companion CompanionContainer.kt (wiring)"
+        ]
+      },
+      "integration_targets": [
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/CompanionContainer.kt"
+      ],
+      "context_notes": "capture/ (spec §4): javax.sound WAV 16 kHz mono (§4.1), device selection (§4.2), rolling segments (§4.3), amplitude feed via the D5.e-moved shared-ai AmplitudeProcessor (§4.4); PRÜFAUFTRAG: verify provider upload limit vs ~2 MB/min and document (§4.5). pipeline/ (spec §5): slim Desktop orchestrator (D2 §3 decision) — controller §5.1, phase model §5.2, pure DesktopUiState + reducers (§5.3-5.4, no IO in reducers), steps §5.5, serial queue §5.6 (ADR-0009); runs against a transitional AiConfig from CompanionSettings until D3. Acceptance §2 Kriterien 5-6: headless dictation E2E with fake runners (WAV fixture → session+transcription+step+conversation persisted); reducer transitions + enqueue unit-tested.",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "backend capture + pipeline vertical against desktop-host §4-5 with a headless fake-runner E2E acceptance → opus-high",
+      "agent": "opus-high"
+    },
+    {
+      "id": "D2",
+      "name": "Hotkey + fokus-freies Panel + Recording-UI + Insert",
+      "plan_sections": [
+        "Plan §5 Chunk D2 (L565-572)",
+        "spec desktop-host.md §6.1 (GlobalHotkey-Port), §6.2 (PanelWindowControl), §6.3 (Fokus-Spike ~1 Tag + FocusRestorationPolicy-Fallback), §7 (Recording-UI-Nachbau §7.1-7.4), §8.5 (Insert/Auto-Insert)"
+      ],
+      "files_expected": [
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/hotkey/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/ui/panel/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/Main.kt"
+      ],
+      "depends_on": [
+        "D1b"
+      ],
+      "candidates": {
+        "knowledge_skills": [],
+        "modules": [
+          "spec desktop-host.md §6-7 (canonical detail)",
+          "companion .../platform/windows (Win32 JNA: WindowsRegistry, Win32InputPerformer)",
+          "companion Main.kt (window/tray)",
+          "AmplitudeVisualizerDrawable / VisualizerUtils (waveform spec: age-fade, HSV glow, pulse — parameters §7.1-7.3)",
+          "TextInserter (ADR-0018)"
+        ]
+      },
+      "integration_targets": [
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/Main.kt"
+      ],
+      "context_notes": "hotkey/ (spec §6.1): GlobalHotkey port, Win32 RegisterHotKey message-loop via JNA, Noop (Linux tray/button, F6). ui/panel/ (§6.2): frameless always-on-top Compose window, warm from process start, toggle <100 ms. Focus-freedom (§6.3): WS_EX_NOACTIVATE spike (~1 day timebox) as first task; fallback FocusRestorationPolicy (remember foreground window, restore before insert) — spike failure is NOT an escalation (D4.3), the pending test must not be faked green. Recording-UI (§7): Compose-canvas recreation, design parameters §7.1-7.3. Insert/auto-insert §8.5. Acceptance §2 Kriterien 8-10 (both focus paths unit-tested; design-parameter transfer; manual Windows acceptance via e2e-runbook — TC-W1). Note: Main.kt is also touched by E3, but E3 is now transitively AFTER D2 (D2→D3→E1→E2→E3), so no parallel co-edit.",
+      "agent_recommendation": "fable-low",
+      "agent_rationale": "frontend-heavy Compose panel + waveform recreation plus an exploratory focus spike with design latitude → fable-low",
+      "agent": "fable-medium"
+    },
+    {
+      "id": "D3",
+      "name": "Review + Profil/Modell/Prompt-UI + Companion-Entitäts-Tabellen (3.sqm)",
+      "plan_sections": [
+        "Plan §5 Chunk D3 (L574-589)",
+        "spec desktop-host.md §8 (Review: AmbiguityMode §8.1, ReviewDecision verbatim §8.2, Re-dictate §8.3, Zustände §8.4, Insert/Discard §8.5), §9 (Verwaltungs-/History-UI §9.1-9.3)",
+        "spec peer-katalog.md §5.2 (Entitäts-Tabellen-DDL)",
+        "Plan §3 D5.b (L340-347)"
+      ],
+      "files_expected": [
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/ui/panel/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/ui/profiles/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/ui/models/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/ui/prompts/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/pipeline/review/**",
+        "companion/src/main/sqldelight/**"
+      ],
+      "depends_on": [
+        "D2",
+        "C1"
+      ],
+      "candidates": {
+        "knowledge_skills": [
+          "knowledge-sql"
+        ],
+        "modules": [
+          "spec desktop-host.md §8-9 (canonical detail)",
+          "spec peer-katalog.md §5.2 (entity-table DDL for 3.sqm)",
+          "ReviewDecision (shared-ai, from A2) — one code path",
+          "companion .../ui/HistoryViewModel (+ test pattern)",
+          "ADR-0013 (verdict matrix), ADR-0012 (ConversationContinuation)",
+          "companion Companion.sq (3.sqm), OriginCheckConstraintParityTest (parity to C1 enums)"
+        ]
+      },
+      "integration_targets": [
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/ui/App.kt",
+        "companion/src/main/sqldelight/net/devemperor/dictate/companion/db/Companion.sq"
+      ],
+      "context_notes": "Needs C1 profile types (cross-block edge → gates on Block-C audit). Full review (spec §8): panel review, ReviewDecision verbatim §8.2, re-dictate = transcription-only S2 (origin REVIEW_REFINEMENT) → ConversationContinuation over the D1b queue → non-terminal panel update (ADR-0013). Management/history UI §9 (profile dropdown §9.1, screens §9.2, history §9.3). PER D5.b: D3 ALSO creates the companion entity tables FULLY — provider_configs/model_refs/prompts/profiles/profile_prompts per the peer-katalog §5.2 DDL incl. provenance columns (NULL until E2 — harmless), as Migration 3.sqm, enum parity to C1 via parity test. Acceptance §2 Kriterium 7 (verdict matrix + REVIEW_REFINEMENT session) + review E2E with fake runner + entity-table migration test. NOTE: the 3.sqm migration + parity test are spec-tight backend work bundled into this otherwise-frontend chunk — orchestrator may lift to opus-high in Phase-2 if the migration weight warrants it.",
+      "agent_recommendation": "fable-low",
+      "agent_rationale": "predominantly frontend Compose review + management screens (desktop-host §8-9); the 3.sqm entity-table migration is spec-tight (peer-katalog §5.2 DDL) — fable-low, flagged for possible opus-high override",
+      "agent": "opus-high"
+    },
+    {
+      "id": "E1",
+      "name": "Katalog-Protokoll + Server-Seite (4.sqm: peers/subscriptions/access_log)",
+      "plan_sections": [
+        "Plan §5 Chunk E1 (L596-604)",
+        "spec peer-katalog.md §3 (Wire-Familie: DTOs/Validations/Endpoints/supportsCatalog, CatalogClient), §4 (Server: CatalogService/Routes, Root-Hash §4.2, Credential-Call + Audit §4.3), §5 (Schema — nur peers/subscriptions/catalog_access_log), §14 D7 (Tabellen-Eigentum)",
+        "Plan §3 D5.b (L340-347)"
+      ],
+      "files_expected": [
+        "shared/src/main/kotlin/net/devemperor/dictate/shared/protocol/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/catalog/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/server/routes/CatalogRoutes.kt",
+        "companion/src/main/sqldelight/**"
+      ],
+      "depends_on": [
+        "C1",
+        "D3"
+      ],
+      "candidates": {
+        "knowledge_skills": [
+          "knowledge-sql"
+        ],
+        "modules": [
+          "spec peer-katalog.md §3-5 + §14 D7 (canonical detail)",
+          "shared/.../protocol/ (Dtos incl. HealthResponse, Endpoints, ProtocolCodec, Validations, ErrorEnvelope)",
+          "companion .../server/CompanionServer.kt (route registration) + server/routes/*",
+          "companion CompanionE2ETest + TruncatedResponseE2ETest (E2E pattern)",
+          "ADR-0016 (Wire-SSoT), ADR-0025 (additive endpoints)"
+        ]
+      },
+      "integration_targets": [
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/server/CompanionServer.kt",
+        "shared/src/main/kotlin/net/devemperor/dictate/shared/protocol/Dtos.kt"
+      ],
+      "context_notes": "BLOCK-E EXTRA AUDIT EMPHASIS (security/credential paths). Depends on D3 (edge E1→D3, D5.b): D3 owns the entity tables; E1 adds ONLY peers/subscriptions/catalog_access_log as Migration 4.sqm (spec §5, §14 D7). Wire family (§3): catalog DTOs/Validations/Endpoints + supportsCatalog health flag, NO version bump (ADR-0016/0025). Server (§4): CatalogService/routes behind existing auth, root-hash §4.2, credential secret delivered by a separate explicitly-authorized call with an audit-log line (§4.3, F12 envelope, receiver→SecretStore). Acceptance AC1-AC5 (additivity without version bump; Konform completeness; root-hash determinism; auth-parity 401; credential isolation + audit line). Namespace leaves room for /v1/ai/* (F31).",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "backend wire-protocol + server routes against peer-katalog §3-5 with explicit AC1-AC5 acceptance → opus-high",
+      "agent": "opus-high"
+    },
+    {
+      "id": "E2",
+      "name": "Sync-Engine + Benachrichtigung + Android-Bezieher",
+      "plan_sections": [
+        "Plan §5 Chunk E2 (L606-613)",
+        "spec peer-katalog.md §6 (Engine: No-Op §6.1, Verify-vor-Write §6.3, Fork-Schutz §6.4, Offline-Staleness §6.5), §6.5 (Scheduler: Companion-Timer + Android CatalogSyncWorker/WorkManager), §7 (Notification: AWT SystemTray + Android)",
+        "Plan §3 D5.f (L372-377)"
+      ],
+      "files_expected": [
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/catalog/**",
+        "app/src/main/java/net/devemperor/dictate/peers/**"
+      ],
+      "depends_on": [
+        "E1",
+        "B1"
+      ],
+      "candidates": {
+        "knowledge_skills": [],
+        "modules": [
+          "spec peer-katalog.md §6-7 (canonical detail)",
+          "companion .../catalog (sync engine on top of E1)",
+          "companion SyncE2ETest (sync/idempotency pattern)",
+          "SecretStore (B1) for credential storage at the receiver",
+          "androidx.work:work-runtime-ktx (WorkManager, per D5.f)"
+        ]
+      },
+      "context_notes": "BLOCK-E EXTRA AUDIT EMPHASIS (security/credential paths). Engine (spec §6): no-op path §6.1, verify-before-write §6.3, fork protection §6.4 (subscription_mode=NULL, sync never overwrites forks), offline staleness §6.5. Scheduler §6.5: companion timer; Android CatalogSyncWorker under WorkManager — PER D5.f: PRÜFAUFTRAG verify the WorkManager candidate version's Kotlin metadata <= 2.1.20 BEFORE adding and document in the chunk (R4); fallback AlarmManager+JobScheduler only after proven incompatibility. Notification §7: AWT SystemTray (Spec-D6) + Android system notification. Acceptance AC6-AC10 (idempotency = exactly one GET; update detection; fork protection; staleness not error; two-peer E2E §11). Credential updates land only in the SecretStore.",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "backend sync-engine + receiver against peer-katalog §6-7 with an explicit state matrix and E2E/idempotency acceptance → opus-high",
+      "agent": "opus-high"
+    },
+    {
+      "id": "E3",
+      "name": "Peer Explorer + Discovery + headless",
+      "plan_sections": [
+        "Plan §5 Chunk E3 (L615-625)",
+        "spec peer-katalog.md §8 (Explorer: Bezugs-/Angebots-Sicht, Zustandsmatrix §8.1; Android read-only), §9 (Discovery + headless: PeerDiscovery-Port + Tailscale-CLI-Impl + Noop §9.2, --headless §9.3)"
+      ],
+      "files_expected": [
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/ui/peers/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/catalog/discovery/**",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/Main.kt",
+        "app/src/main/java/net/devemperor/dictate/peers/**"
+      ],
+      "depends_on": [
+        "E2"
+      ],
+      "candidates": {
+        "knowledge_skills": [],
+        "modules": [
+          "spec peer-katalog.md §8-9 (canonical detail)",
+          "companion .../ui (Compose screens, HistoryViewModel test pattern for Explorer ViewModel)",
+          "companion .../domain/net + PairRoutes / QR pairing (dictate://pair)",
+          "companion Main.kt (--headless flag §9.3), tailscale status --json parsing (PeerDiscovery port §9.2)"
+        ]
+      },
+      "integration_targets": [
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/Main.kt",
+        "companion/src/main/kotlin/net/devemperor/dictate/companion/ui/App.kt"
+      ],
+      "context_notes": "Explorer (spec §8): consumer + offer view, state matrix §8.1 (current/update/decoupled/stale); Android read-only. Editor integration into the D3 screens ('subscribe from peer' tab). Discovery + headless (§9): PeerDiscovery port with Tailscale-CLI impl (tailscale status --json) + Noop (§9.2); --headless flag in Main.kt (server without Compose, §9.3). Acceptance AC11-AC13 (discovery fallback empty list; headless boot without Compose; explorer state matrix). Risks spec §15: Gap 3 tray coexistence spike (owner E2), Gap 5 Tailscale CLI vs LocalAPI. E3 edits Main.kt after D2 (chain), so no parallel co-edit.",
+      "agent_recommendation": "fable-low",
+      "agent_rationale": "frontend-leaning Compose peer explorer + discovery UI (peer-katalog §8-9) with a small backend port surface → fable-low",
+      "agent": "fable-medium"
+    },
+    {
+      "id": "F1",
+      "name": "ADR-Promotion + Doku + Gesamtabnahme",
+      "plan_sections": [
+        "Plan §5 Chunk F1 (L631-639)",
+        "Plan §2 Kriterium 9 (L183-217)",
+        "Plan §6 ADR-Drafts (L641-657)"
+      ],
+      "files_expected": [
+        "docs/decisions/0028-*.md",
+        "docs/decisions/0029-*.md",
+        "docs/decisions/003*-*.md",
+        "docs/decisions/README.md",
+        "CLAUDE.md",
+        "docs/DATABASE-PATTERNS.md",
+        "docs/plans/2026-07-19 - desktop-companion-v1/**"
+      ],
+      "depends_on": [
+        "A1",
+        "A2",
+        "A3",
+        "B1",
+        "B2",
+        "C1",
+        "C2",
+        "C3",
+        "D1a",
+        "D1b",
+        "D2",
+        "D3",
+        "E1",
+        "E2",
+        "E3"
+      ],
+      "candidates": {
+        "knowledge_skills": [
+          "knowledge-adr-format",
+          "knowledge-doc-format"
+        ],
+        "modules": [
+          "docs/decisions/README.md (index, next free number 0028)",
+          "docs/decisions/0015 (Decision-History: 4th module), 0017 (extension refs)",
+          "CLAUDE.md, docs/DATABASE-PATTERNS.md (SQLDelight parity section), companion README"
+        ]
+      },
+      "integration_targets": [
+        "docs/decisions/README.md",
+        "CLAUDE.md"
+      ],
+      "context_notes": "Docs/promotion only — Block F audit lens reduced to plan-and-api (no production code). Promote the 8 ADR drafts (next free numbers from 0028, index rows, bidirectional Plan↔ADR cross-links); ADR-0015 Decision-History entry (4th module), ADR-0017 extension refs; update CLAUDE.md (modules, :shared-ai, SecretStore/entity conventions), docs/DATABASE-PATTERNS.md (SQLDelight parity section), companion README; write the manual Windows E2E acceptance checklist (§2 criteria 3/4/7) in the plan folder. Promotion before archival (lifecycle-adr). Acceptance §2 Kriterium 9; no dead doc links; checklist checked off by the user.",
+      "agent_recommendation": "opus-high",
+      "agent_rationale": "well-specified doc promotion + updates against knowledge-adr/doc-format with a concrete file list → opus-high",
+      "agent": "opus-high"
+    }
+  ]
+}

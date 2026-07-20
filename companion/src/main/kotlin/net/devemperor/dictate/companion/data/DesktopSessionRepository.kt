@@ -1,6 +1,7 @@
 package net.devemperor.dictate.companion.data
 
 import net.devemperor.dictate.ai.AIProviderException
+import net.devemperor.dictate.ai.conversation.ReconstructedTurn
 import net.devemperor.dictate.companion.db.Conversation_messages
 import net.devemperor.dictate.companion.db.DictateCompanionDb
 import net.devemperor.dictate.companion.db.Processing_steps
@@ -143,6 +144,142 @@ class DesktopSessionRepository(private val database: DictateCompanionDb) {
         }
     }
 
+    // ── re-dictate: refinement session + conversation continuation (§8.3, ADR-0013 §6) ──────────
+
+    /**
+     * Persists the transcription-only S2 take of a review re-dictate (§8.3 step 1): a COMPLETED
+     * RECORDING with origin `REVIEW_REFINEMENT`, hung off the reviewed session via [parentSessionId].
+     * The continuation TURN it produces is appended to the *parent* session, not here.
+     */
+    fun createRefinementSession(
+        id: String,
+        createdAt: Long,
+        language: String?,
+        audioFilePath: String?,
+        audioFilePathsJson: String,
+        durationSeconds: Long,
+        parentSessionId: String,
+    ) {
+        queries.insertRefinementSession(
+            id = id,
+            createdAt = createdAt,
+            language = language,
+            audioFilePath = audioFilePath,
+            audioFilePaths = audioFilePathsJson,
+            durationSeconds = durationSeconds,
+            parentSessionId = parentSessionId,
+        )
+    }
+
+    /**
+     * Loads a reviewed session's persisted conversation for a continuation (§8.3 step 3): the current,
+     * SUCCESS `CONVERSATION_TURN` steps in chain order (each paired with its USER message) plus the
+     * persisted SYSTEM prompt. ERROR turns are skipped — exactly as Android's `loadConversation` does,
+     * so a failed follow-up never re-enters the replay (ADR-0013 §6).
+     */
+    fun loadConversation(reviewSessionId: String): ConversationSnapshot {
+        val messages = messages(reviewSessionId)
+        val systemContent = messages.firstOrNull { it.role == MessageRole.SYSTEM }?.content
+        val userByTurn = messages.filter { it.role == MessageRole.USER }.associateBy { it.turn_index }
+        val turns = steps(reviewSessionId)
+            .filter { it.step_type == StepType.CONVERSATION_TURN && it.is_current && it.status == StepStatus.SUCCESS }
+            .sortedBy { it.chain_index }
+            .mapNotNull { step ->
+                val user = userByTurn[step.chain_index] ?: return@mapNotNull null
+                ReconstructedTurn(
+                    userContent = user.content,
+                    assistantOutput = step.output_text.orEmpty(),
+                    assistantMessage = step.assistant_message,
+                    chainIndex = step.chain_index.toInt(),
+                )
+            }
+        return ConversationSnapshot(turns = turns, systemContent = systemContent)
+    }
+
+    /**
+     * Appends a `ConversationContinuation` turn to [reviewSessionId] in one transaction (§8.3 step 3):
+     * the new `CONVERSATION_TURN` step at `chain_index = max+1`, its USER follow-up message, and the
+     * session's updated `final_output_text`. No new SYSTEM row — the system prompt persists once at
+     * turn 0 (ADR-0012 §3).
+     */
+    fun appendContinuationTurn(record: ContinuationTurnRecord) {
+        database.transaction {
+            val existingSteps = steps(record.reviewSessionId)
+            val nextChainIndex = (existingSteps.maxOfOrNull { it.chain_index } ?: -1L) + 1L
+            val nextSeq = (messages(record.reviewSessionId).maxOfOrNull { it.seq } ?: -1L) + 1L
+            queries.insertProcessingStep(
+                id = record.stepId,
+                sessionId = record.reviewSessionId,
+                stepType = StepType.CONVERSATION_TURN,
+                chainIndex = nextChainIndex,
+                version = 1,
+                isCurrent = true,
+                inputText = record.followUpText,
+                outputText = record.output,
+                modelUsed = record.modelUsed,
+                provider = record.provider,
+                promptUsed = null,
+                promptEntityId = null,
+                previousStepId = existingSteps.maxByOrNull { it.chain_index }?.id,
+                previousTranscriptionId = null,
+                sourceSessionId = record.refinementSessionId,
+                promptTokens = record.promptTokens,
+                completionTokens = record.completionTokens,
+                durationMs = record.durationMs,
+                status = StepStatus.SUCCESS,
+                errorMessage = null,
+                createdAt = record.createdAt,
+                assistantMessage = record.assistantMessage,
+                responseFormat = record.responseFormat,
+            )
+            queries.insertConversationMessage(
+                id = record.userMessageId,
+                sessionId = record.reviewSessionId,
+                turnIndex = nextChainIndex,
+                seq = nextSeq,
+                role = MessageRole.USER,
+                content = record.userContent,
+                stepId = record.stepId,
+                createdAt = record.createdAt,
+            )
+            queries.completeDictationSession(finalOutputText = record.output, id = record.reviewSessionId)
+        }
+    }
+
+    /**
+     * Persists a failed continuation as an ERROR `CONVERSATION_TURN` step (§8.3 error path): auditable,
+     * and skipped by [loadConversation] on the next replay so a bad follow-up never poisons the dialog.
+     */
+    fun appendErrorTurn(reviewSessionId: String, stepId: String, followUpText: String, errorMessage: String?, createdAt: Long) {
+        val existingSteps = steps(reviewSessionId)
+        val nextChainIndex = (existingSteps.maxOfOrNull { it.chain_index } ?: -1L) + 1L
+        queries.insertProcessingStep(
+            id = stepId,
+            sessionId = reviewSessionId,
+            stepType = StepType.CONVERSATION_TURN,
+            chainIndex = nextChainIndex,
+            version = 1,
+            isCurrent = true,
+            inputText = followUpText,
+            outputText = null,
+            modelUsed = "",
+            provider = "",
+            promptUsed = null,
+            promptEntityId = null,
+            previousStepId = existingSteps.maxByOrNull { it.chain_index }?.id,
+            previousTranscriptionId = null,
+            sourceSessionId = null,
+            promptTokens = 0,
+            completionTokens = 0,
+            durationMs = 0,
+            status = StepStatus.ERROR,
+            errorMessage = errorMessage,
+            createdAt = createdAt,
+            assistantMessage = null,
+            responseFormat = null,
+        )
+    }
+
     // ── reads (history/tests) ────────────────────────────────────────────────────────────────
 
     fun session(id: String): Sessions? = queries.dictationSessionById(id).executeAsOneOrNull()
@@ -164,6 +301,34 @@ data class TranscriptionRow(
     val version: Long,
     val isCurrent: Boolean,
     val text: String,
+    val modelUsed: String,
+    val provider: String,
+    val promptTokens: Long,
+    val completionTokens: Long,
+    val durationMs: Long,
+    val createdAt: Long,
+)
+
+/** A reviewed session's replayable conversation: prior turns in chain order + the persisted system prompt. */
+data class ConversationSnapshot(
+    val turns: List<ReconstructedTurn>,
+    val systemContent: String?,
+)
+
+/** Everything a `ConversationContinuation` follow-up turn persists in a single transaction (§8.3 step 3). */
+data class ContinuationTurnRecord(
+    val reviewSessionId: String,
+    /** The `REVIEW_REFINEMENT` session whose transcript this follow-up came from (audit link). */
+    val refinementSessionId: String?,
+    val stepId: String,
+    val userMessageId: String,
+    /** Raw spoken follow-up (step `input_text`). */
+    val followUpText: String,
+    /** The `<user-reply>`-wrapped follow-up actually sent to the model (the USER message content). */
+    val userContent: String,
+    val output: String,
+    val assistantMessage: String?,
+    val responseFormat: ResponseFormatKind?,
     val modelUsed: String,
     val provider: String,
     val promptTokens: Long,

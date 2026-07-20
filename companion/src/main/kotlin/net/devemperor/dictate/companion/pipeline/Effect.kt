@@ -38,4 +38,28 @@ sealed interface Effect {
      * inserting — insert and discard share one acknowledge channel (ADR-0013 §4, spec §8.5).
      */
     data class AcknowledgeDiscard(val sessionId: String) : Effect
+
+    // ── Re-dictate (spec §8.3) ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Stop the S2 mic and transcribe it (transcription-only, no post-processing): persist a
+     * `REVIEW_REFINEMENT` session ([refinementSessionId], parented to [reviewSessionId]) with its
+     * transcription, then dispatch [DictationIntent.RefinementTranscribed] with the text (§8.3 step 1-2).
+     */
+    data class RunRefinementTranscription(val refinementSessionId: String, val reviewSessionId: String) : Effect
+
+    /**
+     * Run a `ConversationContinuation` (ADR-0013 §6): load [reviewSessionId]'s persisted turns + system
+     * prompt, send them plus the follow-up [followUpText] to the model, append the answer as a new turn,
+     * and dispatch [DictationIntent.ReviewTurnCompleted] (§8.3 step 3).
+     */
+    data class RunContinuation(
+        val reviewSessionId: String,
+        val followUpText: String,
+        /** The `REVIEW_REFINEMENT` session the follow-up came from — persisted as the turn's audit link. */
+        val refinementSessionId: String?,
+    ) : Effect
+
+    /** Abort an in-progress refinement recording (Discard during re-dictate, §8.4). */
+    data object CancelRefinement : Effect
 }

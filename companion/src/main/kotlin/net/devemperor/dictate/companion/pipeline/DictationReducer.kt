@@ -23,6 +23,11 @@ object DictationReducer {
             is DictationIntent.PipelineFailed -> onFailed(state, intent)
             is DictationIntent.InsertCompleted -> onInsertCompleted(state, intent.sessionId)
             DictationIntent.ConfirmInsert -> onConfirmInsert(state)
+            is DictationIntent.StartRefinement -> onStartRefinement(state, intent.refinementSessionId)
+            DictationIntent.StopRefinement -> onStopRefinement(state)
+            is DictationIntent.RefinementTranscribed -> onRefinementTranscribed(state, intent.followUpText)
+            is DictationIntent.ReviewTurnCompleted -> onReviewTurnCompleted(state, intent)
+            is DictationIntent.RefinementFailed -> onRefinementFailed(state, intent.errorKey)
         }
 
     private fun onStartHotkey(state: DesktopUiState, sessionId: String): Pair<DesktopUiState, List<Effect>> {
@@ -67,11 +72,86 @@ object DictationReducer {
         // acknowledges without inserting (one acknowledge channel, ADR-0013 §4 / spec §8.5). In
         // between — pipeline running — the take is committed (the audio is being uploaded): no-op.
         if (state.phase == DictationPhase.REVIEW) {
+            val review = state.review
+            // Discard doubles as Cancel of an in-flight re-dictate (§8.4): drop the refinement, stay in
+            // review, don't acknowledge the take. Only a Discard on a *settled* review closes it.
+            if (review != null && (review.refining || review.refinementRecording)) {
+                return state.copy(
+                    review = review.copy(refining = false, refinementRecording = false, refinementSessionId = null, error = null),
+                ) to listOf(Effect.CancelRefinement)
+            }
             val sessionId = state.activeSessionId ?: return state to emptyList()
             return finish(state, listOf(Effect.AcknowledgeDiscard(sessionId)))
         }
         if (state.phase != DictationPhase.RECORDING) return state to emptyList()
         return finish(state, listOf(Effect.DiscardCapture))
+    }
+
+    // ── Re-dictate over the review panel (ADR-0013 §6, spec §8.3) ────────────────────────────────
+
+    private fun onStartRefinement(state: DesktopUiState, refinementSessionId: String): Pair<DesktopUiState, List<Effect>> {
+        val review = state.review
+        // Only from a settled review (not while already refining/recording — ADR-0013 K1).
+        if (state.phase != DictationPhase.REVIEW || review == null || review.refining || review.refinementRecording) {
+            return state to emptyList()
+        }
+        return state.copy(
+            review = review.copy(refinementRecording = true, refinementSessionId = refinementSessionId, error = null),
+        ) to listOf(Effect.StartCapture(device = null))
+    }
+
+    private fun onStopRefinement(state: DesktopUiState): Pair<DesktopUiState, List<Effect>> {
+        val review = state.review
+        if (state.phase != DictationPhase.REVIEW || review == null || !review.refinementRecording) {
+            return state to emptyList()
+        }
+        val refinementSessionId = review.refinementSessionId ?: return state to emptyList()
+        // Mic stops; the S2 transcription + continuation is the "refining" window (Insert/Discard stay
+        // disabled). Transcription-only run, then the continuation is chained by RefinementTranscribed.
+        return state.copy(
+            review = review.copy(refinementRecording = false, refining = true),
+        ) to listOf(Effect.RunRefinementTranscription(refinementSessionId, review.sessionId))
+    }
+
+    private fun onRefinementTranscribed(state: DesktopUiState, followUpText: String): Pair<DesktopUiState, List<Effect>> {
+        val review = state.review
+        if (state.phase != DictationPhase.REVIEW || review == null || !review.refining) return state to emptyList()
+        // Still refining — kick off the ConversationContinuation with the spoken follow-up.
+        return state to listOf(Effect.RunContinuation(review.sessionId, followUpText, review.refinementSessionId))
+    }
+
+    private fun onReviewTurnCompleted(state: DesktopUiState, intent: DictationIntent.ReviewTurnCompleted): Pair<DesktopUiState, List<Effect>> {
+        val review = state.review
+        // Guard on `refining`: a continuation result that lands after the user cancelled (refining
+        // cleared) is dropped — the queue has no cancel, so the reducer state is the cancel authority.
+        if (state.phase != DictationPhase.REVIEW || review == null || review.sessionId != intent.sessionId || !review.refining) {
+            return state to emptyList()
+        }
+        return when (intent.verdict) {
+            Verdict.INSERT ->
+                if (intent.requiresConfirm) {
+                    // Insert verdict but the confirm gate is on: park the new output, wait for ConfirmInsert.
+                    state.copy(
+                        review = review.copy(message = intent.message, output = intent.output, refining = false, refinementSessionId = null, error = null),
+                    ) to emptyList()
+                } else {
+                    state.copy(phase = DictationPhase.INSERTED, review = null) to
+                        listOf(Effect.InsertText(intent.sessionId, intent.output))
+                }
+            // REVIEW verdict: non-terminal panel update — iterative re-dictate stays possible (§8.3).
+            Verdict.REVIEW -> state.copy(
+                review = review.copy(message = intent.message, output = intent.output, refining = false, refinementSessionId = null, error = null),
+            ) to emptyList()
+        }
+    }
+
+    private fun onRefinementFailed(state: DesktopUiState, errorKey: String): Pair<DesktopUiState, List<Effect>> {
+        val review = state.review
+        if (state.phase != DictationPhase.REVIEW || review == null) return state to emptyList()
+        // The take is NOT lost: the panel drops back to the last good review output and shows the error.
+        return state.copy(
+            review = review.copy(refining = false, refinementRecording = false, refinementSessionId = null, error = errorKey),
+        ) to emptyList()
     }
 
     private fun onTranscriptionCompleted(state: DesktopUiState, sessionId: String): Pair<DesktopUiState, List<Effect>> {

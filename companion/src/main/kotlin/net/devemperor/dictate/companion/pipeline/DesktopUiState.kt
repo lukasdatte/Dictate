@@ -50,6 +50,10 @@ data class ReviewUi(
     val output: String,
     val refining: Boolean = false,
     val refinementRecording: Boolean = false,
+    /** Pre-minted id of the in-flight `REVIEW_REFINEMENT` S2 session, set while re-dictating (§8.3). */
+    val refinementSessionId: String? = null,
+    /** A failed S2 transcription/continuation surfaces here; the panel shows it and stays in review. */
+    val error: String? = null,
 )
 
 /**

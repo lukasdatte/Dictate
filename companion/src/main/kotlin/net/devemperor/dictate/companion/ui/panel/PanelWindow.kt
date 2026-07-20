@@ -14,6 +14,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -92,7 +94,7 @@ private fun PanelContent(ui: PanelUi, controller: DesktopDictationController) {
             ProgressRow(if (dictation.phase == DictationPhase.TRANSCRIBING) "Transcribing…" else "Polishing…")
 
         dictation.phase == DictationPhase.REVIEW && dictation.review != null ->
-            ConfirmRow(dictation.review!!.output, controller)
+            ReviewRow(ui, dictation.review!!, controller)
 
         dictation.pipeline is PipelineUi.Failed ->
             ProgressRow("Dictation failed: ${(dictation.pipeline as PipelineUi.Failed).errorKey}", showSpinner = false)
@@ -151,22 +153,53 @@ private fun ProgressRow(text: String, showSpinner: Boolean = true) {
 }
 
 /**
- * The `insertion.confirmBeforeInsert` gate (F21, §8.5): the finished text waits for an explicit
- * Insert or Discard. D3 replaces this minimal row with the full review panel (message, re-dictate).
+ * The review panel (ADR-0013, spec §8.4/§8.5) — also the `insertion.confirmBeforeInsert` gate (F21).
+ * Renders `message` only when non-blank (output-only otherwise, ADR-0013 §5) and offers Insert /
+ * Re-dictate / Discard. Insert is disabled while a re-dictate is in flight (K1); Discard stays live
+ * because it doubles as the refinement's Cancel (§8.4). During the S2 recording the row shows the
+ * amplitude bars + a Stop button; during the follow-up turn it shows a "Refining…" spinner.
  */
 @Composable
-private fun ConfirmRow(output: String, controller: DesktopDictationController) {
+private fun ReviewRow(ui: PanelUi, review: net.devemperor.dictate.companion.pipeline.ReviewUi, controller: DesktopDictationController) {
     Row(
         modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(output, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+        when {
+            review.refinementRecording -> {
+                RecordingBar(
+                    levels = ui.levels,
+                    accent = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f).height(PANEL_HEIGHT - 24.dp),
+                )
+                IconButton(onClick = { controller.stopRefinement() }) {
+                    Icon(Icons.Default.Stop, contentDescription = "Stop re-dictation", tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+            review.refining -> {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                Text("Refining…", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            }
+            else -> {
+                Column(modifier = Modifier.weight(1f)) {
+                    if (!review.message.isNullOrBlank()) {
+                        Text(review.message!!, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Text(review.output, maxLines = if (review.message.isNullOrBlank()) 2 else 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+                    if (review.error != null) {
+                        Text("Re-dictate failed: ${review.error}", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                IconButton(onClick = { controller.confirmInsert() }) {
+                    Icon(Icons.Default.Check, contentDescription = "Insert", tint = MaterialTheme.colorScheme.primary)
+                }
+                IconButton(onClick = { controller.startRefinement() }) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Re-dictate")
+                }
+            }
         }
-        IconButton(onClick = { controller.confirmInsert() }) {
-            Icon(Icons.Default.Check, contentDescription = "Insert", tint = MaterialTheme.colorScheme.primary)
-        }
+        // Discard is always live: a plain acknowledge on a settled review, a Cancel while refining (§8.4).
         IconButton(onClick = { controller.discard() }) {
             Icon(Icons.Default.Close, contentDescription = "Discard", tint = MaterialTheme.colorScheme.error)
         }

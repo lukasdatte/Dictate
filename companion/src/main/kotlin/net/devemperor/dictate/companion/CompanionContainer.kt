@@ -7,6 +7,7 @@ import net.devemperor.dictate.companion.ai.CompanionProxyConfig
 import net.devemperor.dictate.companion.ai.NoopUsageSink
 import net.devemperor.dictate.companion.capture.JavaSoundAudioCaptureService
 import net.devemperor.dictate.companion.capture.WavAudioDurationReader
+import net.devemperor.dictate.companion.data.CompanionConfigRepository
 import net.devemperor.dictate.companion.data.CompanionDatabase
 import net.devemperor.dictate.companion.data.DesktopSessionRepository
 import net.devemperor.dictate.companion.data.memory.InMemoryChordMapping
@@ -19,10 +20,10 @@ import net.devemperor.dictate.companion.capture.AudioCaptureService
 import net.devemperor.dictate.companion.domain.FocusRestorationPolicy
 import net.devemperor.dictate.companion.domain.FocusRestoringTextInserter
 import net.devemperor.dictate.companion.hotkey.GlobalHotkey
+import net.devemperor.dictate.companion.pipeline.ConfigProfileSource
 import net.devemperor.dictate.companion.pipeline.DesktopDictationController
 import net.devemperor.dictate.companion.pipeline.DictationEffects
 import net.devemperor.dictate.companion.pipeline.SerialJobQueue
-import net.devemperor.dictate.companion.pipeline.TransitionalProfileSource
 import net.devemperor.dictate.companion.platform.fallback.NoopGlobalHotkey
 import net.devemperor.dictate.companion.ui.panel.ComposePanelWindowControl
 import net.devemperor.dictate.companion.domain.AuthService
@@ -83,6 +84,8 @@ class CompanionContainer(
      */
     val desktopDictation: DesktopDictationController? = null,
     val desktopSessions: DesktopSessionRepository? = null,
+    /** Local config-entity store behind the management screens (§9.2); null in the headless test graph. */
+    val configRepository: CompanionConfigRepository? = null,
     /** The pipeline's capture line — exposed for the panel's amplitude feed (§4.4/§7.4). */
     val desktopCapture: AudioCaptureService? = null,
     /** Visibility + spike state of the warm panel window (§6.2); null in the headless test graph. */
@@ -138,6 +141,7 @@ class CompanionContainer(
             // D3's `usage` table (D5.b migration); see NoopUsageSink.
             val settings = CompanionSettings(settingsRepository)
             val desktopSessions = DesktopSessionRepository(database)
+            val configRepository = CompanionConfigRepository(database, now = SystemClock::nowMillis)
             val aiConfig = CompanionAiConfig()
             val aiOrchestrator = AIOrchestrator(
                 config = aiConfig,
@@ -162,7 +166,10 @@ class CompanionContainer(
                     inserter = FocusRestoringTextInserter(platform.inserter, dictationFocus),
                     queue = SerialJobQueue(),
                     clock = SystemClock,
-                    profiles = TransitionalProfileSource(),
+                    // F20 (§8.1): the review ambiguity mode comes from the active profile; the rest of
+                    // the profile→AiConfig resolution stays transitional until the desktop credential
+                    // resolver lands (§5.1 NOTE / §15 Gap 5, see ConfigProfileSource).
+                    profiles = ConfigProfileSource(configRepository, activeProfileId = { settings.activeProfileId }),
                     panel = dictationPanel,
                     confirmBeforeInsert = settings::confirmBeforeInsert,
                 )
@@ -183,6 +190,7 @@ class CompanionContainer(
                 networkInterfaces = JvmNetworkInterfaces,
                 desktopDictation = desktopDictation,
                 desktopSessions = desktopSessions,
+                configRepository = configRepository,
                 desktopCapture = desktopCapture,
                 dictationPanel = dictationPanel,
                 dictationFocus = dictationFocus,

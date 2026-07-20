@@ -48,4 +48,38 @@ sealed interface DictationIntent {
 
     /** Effect callback: the auto-insert of an INSERT verdict completed — the take is done. */
     data class InsertCompleted(val sessionId: String) : DictationIntent
+
+    // ── Re-dictate over a review panel (ADR-0013 §6, spec §8.3) ─────────────────────────────────
+
+    /**
+     * Panel "Re-dictate" pressed while a take waits in REVIEW: start a transcription-only S2 recording
+     * (ADR-0013 K1 disables Insert/Discard). [refinementSessionId] is the pre-minted id of the
+     * `REVIEW_REFINEMENT` session the S2 audio/transcript will be persisted under (§8.3 step 1).
+     */
+    data class StartRefinement(val refinementSessionId: String) : DictationIntent
+
+    /** Panel "Stop" on the S2 recording → transcribe it and feed it back as a conversation turn. */
+    data object StopRefinement : DictationIntent
+
+    /**
+     * Pipeline callback: the S2 refinement transcript is ready (§8.3 step 2). [followUpText] is the
+     * spoken reply that becomes the follow-up user message of a `ConversationContinuation`.
+     */
+    data class RefinementTranscribed(val followUpText: String) : DictationIntent
+
+    /**
+     * Pipeline callback: a `ConversationContinuation` turn finished (§8.3 step 3, non-terminal). Runs
+     * `ReviewDecision.decide` again — an INSERT verdict inserts + closes, a REVIEW verdict updates the
+     * panel in place (iterative re-dictate). Mirrors [PipelineVerdict] but is valid in the REVIEW phase.
+     */
+    data class ReviewTurnCompleted(
+        val sessionId: String,
+        val verdict: Verdict,
+        val output: String,
+        val message: String?,
+        val requiresConfirm: Boolean = false,
+    ) : DictationIntent
+
+    /** Pipeline callback: an S2 transcription or continuation turn failed. Panel drops back to review. */
+    data class RefinementFailed(val errorKey: String) : DictationIntent
 }

@@ -7,6 +7,7 @@ import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.ai.conversation.ConversationMessage
+import net.devemperor.dictate.ai.conversation.ConversationReconstructor
 import net.devemperor.dictate.ai.conversation.ConversationTurnBuilder
 import net.devemperor.dictate.ai.conversation.PostProcessingInputs
 import net.devemperor.dictate.ai.conversation.ReviewDecision
@@ -14,6 +15,7 @@ import net.devemperor.dictate.ai.conversation.Verdict
 import net.devemperor.dictate.ai.prompt.PromptTemplates
 import net.devemperor.dictate.companion.capture.AudioCaptureService
 import net.devemperor.dictate.companion.capture.CaptureResult
+import net.devemperor.dictate.companion.data.ContinuationTurnRecord
 import net.devemperor.dictate.companion.data.ConversationTurnRecord
 import net.devemperor.dictate.companion.data.DesktopSessionRepository
 import net.devemperor.dictate.companion.data.TranscriptionRow
@@ -61,6 +63,11 @@ class DictationEffects(
             // Discard from the waiting panel: acknowledge without inserting — the same `inserted_at`
             // stamp as an insert, one acknowledge channel for both (ADR-0013 §4, §8.5).
             is Effect.AcknowledgeDiscard -> sessions.stampInserted(effect.sessionId, clock.nowMillis())
+            is Effect.RunRefinementTranscription -> submitRefinementTranscription(effect, dispatch)
+            is Effect.RunContinuation -> submitContinuation(effect, dispatch)
+            // No queue.cancel (D1b built none): drop the S2 audio; a continuation already on the queue
+            // finishes but its ReviewTurnCompleted is dropped by the reducer's `refining` guard (§8.4).
+            Effect.CancelRefinement -> capture.discard()
         }
     }
 
@@ -200,6 +207,96 @@ class DictationEffects(
         inserter.insert(text)
         sessions.stampInserted(sessionId, clock.nowMillis())
         dispatch(DictationIntent.InsertCompleted(sessionId))
+    }
+
+    // ── re-dictate: S2 transcription + ConversationContinuation (§8.3) ─────────────────────────
+
+    /**
+     * Stops the S2 mic and transcribes it (transcription-only, no post-processing): a
+     * `REVIEW_REFINEMENT` session + its transcription, then the follow-up text back to the reducer.
+     */
+    private fun submitRefinementTranscription(effect: Effect.RunRefinementTranscription, dispatch: (DictationIntent) -> Unit) {
+        queue.submit(effect.refinementSessionId) {
+            val take = try {
+                capture.stop()
+            } catch (e: Exception) {
+                dispatch(DictationIntent.RefinementFailed(AIProviderException.ErrorType.UNKNOWN.name))
+                return@submit
+            }
+            val profile = profiles.current()
+            try {
+                sessions.createRefinementSession(
+                    id = effect.refinementSessionId,
+                    createdAt = clock.nowMillis(),
+                    language = profile.language,
+                    audioFilePath = take.mergedWav.absolutePath,
+                    audioFilePathsJson = encodePaths(take.segmentPaths.map { it.absolutePath }),
+                    durationSeconds = take.durationSeconds,
+                    parentSessionId = effect.reviewSessionId,
+                )
+                val transcript = transcribe(effect.refinementSessionId, take, profile)
+                dispatch(DictationIntent.RefinementTranscribed(transcript.text))
+            } catch (e: AIProviderException) {
+                sessions.markFailed(effect.refinementSessionId, e.errorType, e.message)
+                dispatch(DictationIntent.RefinementFailed(e.errorType.name))
+            } catch (e: Exception) {
+                sessions.markFailed(effect.refinementSessionId, AIProviderException.ErrorType.UNKNOWN, e.message)
+                dispatch(DictationIntent.RefinementFailed(AIProviderException.ErrorType.UNKNOWN.name))
+            }
+        }
+    }
+
+    /**
+     * Runs a `ConversationContinuation` (ADR-0013 §6): the reviewed session's persisted turns + system
+     * prompt + the follow-up user message go back to the model, the answer is appended as a new turn,
+     * and the re-run `ReviewDecision.decide` verdict returns to the reducer (non-terminal).
+     */
+    private fun submitContinuation(effect: Effect.RunContinuation, dispatch: (DictationIntent) -> Unit) {
+        queue.submit("continuation-${effect.reviewSessionId}-${clock.nowMillis()}") {
+            val profile = profiles.current()
+            val stepId = UUID.randomUUID().toString()
+            try {
+                val snapshot = sessions.loadConversation(effect.reviewSessionId)
+                val followUpMsg = ConversationTurnBuilder.buildFollowUpUserMessage(effect.followUpText)
+                val messages = ConversationReconstructor.toApiMessages(snapshot.turns, followUpMsg)
+                val start = clock.nowMillis()
+                val result = ai.converse(messages, snapshot.systemContent)
+
+                sessions.appendContinuationTurn(
+                    ContinuationTurnRecord(
+                        reviewSessionId = effect.reviewSessionId,
+                        refinementSessionId = effect.refinementSessionId,
+                        stepId = stepId,
+                        userMessageId = UUID.randomUUID().toString(),
+                        followUpText = effect.followUpText,
+                        userContent = followUpMsg,
+                        output = result.output,
+                        assistantMessage = result.message,
+                        responseFormat = CompanionResponseFormatKind.valueOf(result.responseFormat.name),
+                        modelUsed = result.modelName,
+                        provider = ai.getProvider(AIFunction.COMPLETION).name,
+                        promptTokens = result.promptTokens,
+                        completionTokens = result.completionTokens,
+                        durationMs = clock.nowMillis() - start,
+                        createdAt = clock.nowMillis(),
+                    )
+                )
+
+                val verdict = ReviewDecision.decide(profile.ambiguityMode, result.needsClarification, result.message)
+                dispatch(
+                    DictationIntent.ReviewTurnCompleted(
+                        effect.reviewSessionId, verdict, result.output, result.message,
+                        requiresConfirm = verdict == Verdict.INSERT && confirmBeforeInsert(),
+                    )
+                )
+            } catch (e: AIProviderException) {
+                sessions.appendErrorTurn(effect.reviewSessionId, stepId, effect.followUpText, e.message, clock.nowMillis())
+                dispatch(DictationIntent.RefinementFailed(e.errorType.name))
+            } catch (e: Exception) {
+                sessions.appendErrorTurn(effect.reviewSessionId, stepId, effect.followUpText, e.message, clock.nowMillis())
+                dispatch(DictationIntent.RefinementFailed(AIProviderException.ErrorType.UNKNOWN.name))
+            }
+        }
     }
 
     private fun encodePaths(paths: List<String>): String =

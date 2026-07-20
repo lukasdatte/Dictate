@@ -1,0 +1,108 @@
+-- v3 -> v4: the shareable config-entity model (F22, Plan D5.b, peer-katalog.md §5.2).
+--
+-- D3 owns these five tables in full (incl. provenance columns); E1 only adds
+-- peers/subscriptions/catalog_access_log (Migration 4.sqm). The CREATE statements below must stay
+-- byte-identical to Companion.sq — `verifyMigrations` replays this against the checked-in
+-- databases/3.db snapshot and compares the result with the current .sq, so any drift fails the build.
+-- Enum parity to C1 (:shared.config.*) is pinned by `ConfigEntityCheckParityTest`.
+--
+-- Purely additive: no existing table is touched, no row is migrated. Provenance columns stay NULL /
+-- 'LOCAL' until Block E's catalog sync fills them. The §5.2 `source_peer_id` FK to `peers` is omitted
+-- (peers is E1's table, created later) — see the Companion.sq header for the full rationale.
+
+CREATE TABLE provider_configs (
+    id                   TEXT NOT NULL PRIMARY KEY,
+    provider_type        TEXT AS net.devemperor.dictate.shared.config.ProviderType NOT NULL
+                         CHECK (provider_type IN ('OPENAI','GROQ','ANTHROPIC','ELEVENLABS','OPENROUTER','CUSTOM')),
+    kind                 TEXT AS net.devemperor.dictate.shared.config.ProviderKind NOT NULL DEFAULT 'LOCAL'
+                         CHECK (kind IN ('LOCAL','GATEWAY')),
+    label                TEXT NOT NULL,
+    base_url             TEXT,
+    credential_ref       TEXT,
+    -- ── Envelope / provenance ──
+    visibility           TEXT AS net.devemperor.dictate.shared.config.Visibility NOT NULL DEFAULT 'PRIVATE'
+                         CHECK (visibility IN ('PRIVATE','SHARED')),
+    subscription_mode    TEXT AS net.devemperor.dictate.shared.config.SubscriptionMode NOT NULL DEFAULT 'LOCAL'
+                         CHECK (subscription_mode IN ('LOCAL','SUBSCRIBE','ONE_SHOT')),
+    source_peer_id       TEXT,
+    source_original_id   TEXT,
+    source_original_hash TEXT,
+    content_hash         TEXT NOT NULL,
+    updated_at           INTEGER NOT NULL
+);
+
+CREATE TABLE model_refs (
+    id                   TEXT NOT NULL PRIMARY KEY,
+    provider_ref         TEXT NOT NULL,
+    model_id             TEXT NOT NULL,
+    function             TEXT AS net.devemperor.dictate.shared.config.ModelFunction NOT NULL
+                         CHECK (function IN ('TRANSCRIPTION','COMPLETION')),
+    label                TEXT,
+    -- Canonical JSON (Map<String,String>) of default parameters (C1 §5.1); plain TEXT, no CHECK.
+    parameter_defaults   TEXT NOT NULL DEFAULT '{}',
+    -- ── Envelope / provenance ──
+    visibility           TEXT AS net.devemperor.dictate.shared.config.Visibility NOT NULL DEFAULT 'PRIVATE'
+                         CHECK (visibility IN ('PRIVATE','SHARED')),
+    subscription_mode    TEXT AS net.devemperor.dictate.shared.config.SubscriptionMode NOT NULL DEFAULT 'LOCAL'
+                         CHECK (subscription_mode IN ('LOCAL','SUBSCRIBE','ONE_SHOT')),
+    source_peer_id       TEXT,
+    source_original_id   TEXT,
+    source_original_hash TEXT,
+    content_hash         TEXT NOT NULL,
+    updated_at           INTEGER NOT NULL
+);
+CREATE INDEX model_refs_provider_ref ON model_refs(provider_ref);
+
+CREATE TABLE prompts (
+    id                   TEXT NOT NULL PRIMARY KEY,
+    name                 TEXT NOT NULL,
+    text                 TEXT NOT NULL,
+    requires_selection   INTEGER AS kotlin.Boolean NOT NULL DEFAULT 0,
+    auto_apply           INTEGER AS kotlin.Boolean NOT NULL DEFAULT 0,
+    -- ── Envelope / provenance ──
+    visibility           TEXT AS net.devemperor.dictate.shared.config.Visibility NOT NULL DEFAULT 'PRIVATE'
+                         CHECK (visibility IN ('PRIVATE','SHARED')),
+    subscription_mode    TEXT AS net.devemperor.dictate.shared.config.SubscriptionMode NOT NULL DEFAULT 'LOCAL'
+                         CHECK (subscription_mode IN ('LOCAL','SUBSCRIBE','ONE_SHOT')),
+    source_peer_id       TEXT,
+    source_original_id   TEXT,
+    source_original_hash TEXT,
+    content_hash         TEXT NOT NULL,
+    updated_at           INTEGER NOT NULL
+);
+
+CREATE TABLE profiles (
+    id                       TEXT NOT NULL PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    transcription_model_ref  TEXT,
+    completion_model_ref     TEXT,
+    style_prompt_mode        TEXT AS net.devemperor.dictate.shared.config.PromptSelectionMode NOT NULL DEFAULT 'PREDEFINED'
+                             CHECK (style_prompt_mode IN ('NONE','PREDEFINED','CUSTOM')),
+    style_prompt_custom_text TEXT NOT NULL DEFAULT '',
+    system_prompt_mode       TEXT AS net.devemperor.dictate.shared.config.PromptSelectionMode NOT NULL DEFAULT 'PREDEFINED'
+                             CHECK (system_prompt_mode IN ('NONE','PREDEFINED','CUSTOM')),
+    system_prompt_custom_text TEXT NOT NULL DEFAULT '',
+    ambiguity_mode           TEXT AS net.devemperor.dictate.shared.config.AmbiguityModeValue NOT NULL DEFAULT 'ALWAYS_INSERT'
+                             CHECK (ambiguity_mode IN ('ALWAYS_INSERT','AUTO','ALWAYS_REVIEW')),
+    parameter_overrides      TEXT NOT NULL DEFAULT '{}',
+    -- ── Envelope / provenance ──
+    visibility               TEXT AS net.devemperor.dictate.shared.config.Visibility NOT NULL DEFAULT 'PRIVATE'
+                             CHECK (visibility IN ('PRIVATE','SHARED')),
+    subscription_mode        TEXT AS net.devemperor.dictate.shared.config.SubscriptionMode NOT NULL DEFAULT 'LOCAL'
+                             CHECK (subscription_mode IN ('LOCAL','SUBSCRIBE','ONE_SHOT')),
+    source_peer_id           TEXT,
+    source_original_id       TEXT,
+    source_original_hash     TEXT,
+    content_hash             TEXT NOT NULL,
+    updated_at               INTEGER NOT NULL
+);
+
+CREATE TABLE profile_prompts (
+    profile_id  TEXT NOT NULL,
+    pos         INTEGER NOT NULL,
+    prompt_ref  TEXT NOT NULL,
+    auto_apply  INTEGER AS kotlin.Boolean NOT NULL DEFAULT 0,
+    PRIMARY KEY (profile_id, pos),
+    FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+CREATE INDEX profile_prompts_prompt_ref ON profile_prompts(prompt_ref);

@@ -6,7 +6,11 @@ import net.devemperor.dictate.companion.db.DictateCompanionDb
 import net.devemperor.dictate.companion.db.Conversation_messages
 import net.devemperor.dictate.companion.db.Dispatch_state
 import net.devemperor.dictate.companion.db.Key_command_chords
+import net.devemperor.dictate.companion.db.Model_refs
 import net.devemperor.dictate.companion.db.Processing_steps
+import net.devemperor.dictate.companion.db.Profiles
+import net.devemperor.dictate.companion.db.Prompts
+import net.devemperor.dictate.companion.db.Provider_configs
 import net.devemperor.dictate.companion.db.Sessions
 import net.devemperor.dictate.companion.domain.model.ChordModifier
 import net.devemperor.dictate.companion.domain.model.DefaultChords
@@ -57,6 +61,16 @@ class ChordMigrationSeedTest {
                 EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(),
             ),
             conversation_messagesAdapter = Conversation_messages.Adapter(EnumColumnAdapter()),
+            provider_configsAdapter = Provider_configs.Adapter(
+                EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(),
+            ),
+            model_refsAdapter = Model_refs.Adapter(
+                EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(),
+            ),
+            promptsAdapter = Prompts.Adapter(EnumColumnAdapter(), EnumColumnAdapter()),
+            profilesAdapter = Profiles.Adapter(
+                EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(),
+            ),
         )
         val seeded = db.companionQueries.allChords().executeAsList()
 

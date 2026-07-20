@@ -117,6 +117,16 @@ class CompanionSettings(private val settings: SettingsRepository) {
         get() = settings.get(KEY_CONFIRM_BEFORE_INSERT)?.toBooleanStrictOrNull() ?: false
         set(value) = settings.put(KEY_CONFIRM_BEFORE_INSERT, value.toString())
 
+    /**
+     * The active profile the desktop dictation runs under (F20, §9.1). A device-local pointer, NOT a
+     * profile field — the active choice is not shareable content and would pollute the config hash
+     * (entitaetenmodell §4.7 / §13 D4, mirrored on the desktop). `null` = no profile selected yet
+     * (the pipeline falls back to a plain-transcription default, [TransitionalProfileSource]).
+     */
+    var activeProfileId: String?
+        get() = settings.get(KEY_ACTIVE_PROFILE)?.takeIf { it.isNotBlank() }
+        set(value) = settings.put(KEY_ACTIVE_PROFILE, value.orEmpty())
+
     companion object {
 
         /** 0.0.0.0 — the `AllInterfaces` host; the legacy `server.bind` default before selection. */
@@ -151,5 +161,6 @@ class CompanionSettings(private val settings: SettingsRepository) {
         private const val KEY_ROLLING_SEGMENT = "audio.rollingSegmentSec"
         private const val KEY_HOTKEY_COMBO = "hotkey.combo"
         private const val KEY_CONFIRM_BEFORE_INSERT = "insertion.confirmBeforeInsert"
+        private const val KEY_ACTIVE_PROFILE = "config.activeProfileId"
     }
 }

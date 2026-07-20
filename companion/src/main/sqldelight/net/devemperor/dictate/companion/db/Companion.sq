@@ -184,6 +184,133 @@ CREATE TABLE key_command_chords (
     vk      INTEGER NOT NULL CHECK (vk BETWEEN 1 AND 254)
 );
 
+-- ── Shareable config-entity model (F22, D5.b) — the Companion mirror of the C2 Room tables ─────
+--
+-- The four config entities (provider/model/prompt/profile) plus a profile's ordered prompts. This is
+-- the "Spiegel C2" of peer-katalog.md §5.2: identical columns, identical Double-Enum CHECK
+-- vocabularies, and — deliberately — the SAME `:shared` enum SOURCE that C2 Room uses
+-- (net.devemperor.dictate.shared.config.*), NOT a parallel `catalog.*Wire` copy. Reusing the config
+-- enums is what makes "share one source so Android-Room and Companion-SQLDelight cannot drift"
+-- (§5.2's stated goal) true by construction rather than by a second parity test over a duplicate enum.
+-- Enum parity to C1 is pinned by `ConfigEntityCheckParityTest`; the CHECK is the SQL half of the
+-- Double-Enum rule (docs/DATABASE-PATTERNS.md), the `AS <Enum>` column is the Kotlin half.
+--
+-- Provenance columns (`source_*`, `subscription_mode`, `visibility`) are populated by Block E's
+-- catalog sync (F14); until then a locally created entity leaves `source_*` NULL and
+-- `subscription_mode = 'LOCAL'` — harmless (Plan §3 D5.b). `api_credentials` is intentionally NOT
+-- mirrored here (peer-katalog §5.2 / Plan D5.b list five tables, not six): desktop credential
+-- handling is the SecretStore + catalog-delivery path (Block B/E), not a local plaintext-adjacent
+-- mirror in D3's scope.
+--
+-- The §5.2 `FOREIGN KEY (source_peer_id) REFERENCES peers(...)` is deliberately OMITTED here: `peers`
+-- is created by E1 (Migration 4.sqm, which runs AFTER D3 per the E1→D3 edge), and SQLDelight
+-- validates FK target tables at compile time — a forward reference to a not-yet-defined table would
+-- fail the build. The `source_peer_id` provenance column is still present (D5.b: "vollständig"); the
+-- DB-level cascade is E1's to add (table-recreate) once `peers` exists. Until then E2's sync/delete
+-- code path is the referential-integrity authority (no non-NULL source_peer_id is written before E2).
+
+CREATE TABLE provider_configs (
+    id                   TEXT NOT NULL PRIMARY KEY,
+    provider_type        TEXT AS net.devemperor.dictate.shared.config.ProviderType NOT NULL
+                         CHECK (provider_type IN ('OPENAI','GROQ','ANTHROPIC','ELEVENLABS','OPENROUTER','CUSTOM')),
+    kind                 TEXT AS net.devemperor.dictate.shared.config.ProviderKind NOT NULL DEFAULT 'LOCAL'
+                         CHECK (kind IN ('LOCAL','GATEWAY')),
+    label                TEXT NOT NULL,
+    base_url             TEXT,
+    credential_ref       TEXT,
+    -- ── Envelope / provenance ──
+    visibility           TEXT AS net.devemperor.dictate.shared.config.Visibility NOT NULL DEFAULT 'PRIVATE'
+                         CHECK (visibility IN ('PRIVATE','SHARED')),
+    subscription_mode    TEXT AS net.devemperor.dictate.shared.config.SubscriptionMode NOT NULL DEFAULT 'LOCAL'
+                         CHECK (subscription_mode IN ('LOCAL','SUBSCRIBE','ONE_SHOT')),
+    source_peer_id       TEXT,
+    source_original_id   TEXT,
+    source_original_hash TEXT,
+    content_hash         TEXT NOT NULL,
+    updated_at           INTEGER NOT NULL
+);
+
+CREATE TABLE model_refs (
+    id                   TEXT NOT NULL PRIMARY KEY,
+    provider_ref         TEXT NOT NULL,
+    model_id             TEXT NOT NULL,
+    function             TEXT AS net.devemperor.dictate.shared.config.ModelFunction NOT NULL
+                         CHECK (function IN ('TRANSCRIPTION','COMPLETION')),
+    label                TEXT,
+    -- Canonical JSON (Map<String,String>) of default parameters (C1 §5.1); plain TEXT, no CHECK.
+    parameter_defaults   TEXT NOT NULL DEFAULT '{}',
+    -- ── Envelope / provenance ──
+    visibility           TEXT AS net.devemperor.dictate.shared.config.Visibility NOT NULL DEFAULT 'PRIVATE'
+                         CHECK (visibility IN ('PRIVATE','SHARED')),
+    subscription_mode    TEXT AS net.devemperor.dictate.shared.config.SubscriptionMode NOT NULL DEFAULT 'LOCAL'
+                         CHECK (subscription_mode IN ('LOCAL','SUBSCRIBE','ONE_SHOT')),
+    source_peer_id       TEXT,
+    source_original_id   TEXT,
+    source_original_hash TEXT,
+    content_hash         TEXT NOT NULL,
+    updated_at           INTEGER NOT NULL
+);
+CREATE INDEX model_refs_provider_ref ON model_refs(provider_ref);
+
+-- The shareable post-processing prompt (C1 PromptV3Entity). NO pill `type` and no keyboard `pos`
+-- (F6: pills are desktop-fremd) — the desktop mirror models only the shareable AI prompt.
+CREATE TABLE prompts (
+    id                   TEXT NOT NULL PRIMARY KEY,
+    name                 TEXT NOT NULL,
+    text                 TEXT NOT NULL,
+    requires_selection   INTEGER AS kotlin.Boolean NOT NULL DEFAULT 0,
+    auto_apply           INTEGER AS kotlin.Boolean NOT NULL DEFAULT 0,
+    -- ── Envelope / provenance ──
+    visibility           TEXT AS net.devemperor.dictate.shared.config.Visibility NOT NULL DEFAULT 'PRIVATE'
+                         CHECK (visibility IN ('PRIVATE','SHARED')),
+    subscription_mode    TEXT AS net.devemperor.dictate.shared.config.SubscriptionMode NOT NULL DEFAULT 'LOCAL'
+                         CHECK (subscription_mode IN ('LOCAL','SUBSCRIBE','ONE_SHOT')),
+    source_peer_id       TEXT,
+    source_original_id   TEXT,
+    source_original_hash TEXT,
+    content_hash         TEXT NOT NULL,
+    updated_at           INTEGER NOT NULL
+);
+
+CREATE TABLE profiles (
+    id                       TEXT NOT NULL PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    transcription_model_ref  TEXT,
+    completion_model_ref     TEXT,
+    style_prompt_mode        TEXT AS net.devemperor.dictate.shared.config.PromptSelectionMode NOT NULL DEFAULT 'PREDEFINED'
+                             CHECK (style_prompt_mode IN ('NONE','PREDEFINED','CUSTOM')),
+    style_prompt_custom_text TEXT NOT NULL DEFAULT '',
+    system_prompt_mode       TEXT AS net.devemperor.dictate.shared.config.PromptSelectionMode NOT NULL DEFAULT 'PREDEFINED'
+                             CHECK (system_prompt_mode IN ('NONE','PREDEFINED','CUSTOM')),
+    system_prompt_custom_text TEXT NOT NULL DEFAULT '',
+    ambiguity_mode           TEXT AS net.devemperor.dictate.shared.config.AmbiguityModeValue NOT NULL DEFAULT 'ALWAYS_INSERT'
+                             CHECK (ambiguity_mode IN ('ALWAYS_INSERT','AUTO','ALWAYS_REVIEW')),
+    parameter_overrides      TEXT NOT NULL DEFAULT '{}',
+    -- ── Envelope / provenance ──
+    visibility               TEXT AS net.devemperor.dictate.shared.config.Visibility NOT NULL DEFAULT 'PRIVATE'
+                             CHECK (visibility IN ('PRIVATE','SHARED')),
+    subscription_mode        TEXT AS net.devemperor.dictate.shared.config.SubscriptionMode NOT NULL DEFAULT 'LOCAL'
+                             CHECK (subscription_mode IN ('LOCAL','SUBSCRIBE','ONE_SHOT')),
+    source_peer_id           TEXT,
+    source_original_id       TEXT,
+    source_original_hash     TEXT,
+    content_hash             TEXT NOT NULL,
+    updated_at               INTEGER NOT NULL
+);
+
+-- A profile's ordered post-processing prompts. Row-per-position (not a JSON column) so order +
+-- auto-apply stay first-class; the (profile_id, pos) PK pins the order, the CASCADE FK drops the
+-- rows with the profile (C2 ProfilePromptRoomEntity parity).
+CREATE TABLE profile_prompts (
+    profile_id  TEXT NOT NULL,
+    pos         INTEGER NOT NULL,
+    prompt_ref  TEXT NOT NULL,
+    auto_apply  INTEGER AS kotlin.Boolean NOT NULL DEFAULT 0,
+    PRIMARY KEY (profile_id, pos),
+    FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+CREATE INDEX profile_prompts_prompt_ref ON profile_prompts(prompt_ref);
+
 -- ── devices ───────────────────────────────────────────────────────────────────────────────
 
 deviceById:
@@ -377,3 +504,103 @@ VALUES (:id, :sessionId, :turnIndex, :seq, :role, :content, :stepId, :createdAt)
 
 messagesForSession:
 SELECT * FROM conversation_messages WHERE session_id = :sessionId ORDER BY seq;
+
+-- The transcription-only S2 take of a review re-dictate (desktop-host.md §8.3 step 1). A COMPLETED
+-- RECORDING with origin REVIEW_REFINEMENT, hung off the reviewed session via parent_session_id — the
+-- audio/transcript of the spoken refinement live in their own session; the continuation TURN it
+-- produces is appended to the parent (reviewed) session, not here.
+insertRefinementSession:
+INSERT INTO sessions (id, type, created_at, language, audio_file_path, audio_file_paths,
+                      audio_duration_seconds, status, origin, host_origin, parent_session_id)
+VALUES (:id, 'RECORDING', :createdAt, :language, :audioFilePath, :audioFilePaths,
+        :durationSeconds, 'COMPLETED', 'REVIEW_REFINEMENT', 'DESKTOP_DICTATION', :parentSessionId);
+
+-- ── config entities (D3, §9) ──────────────────────────────────────────────────────────────────
+--
+-- CRUD over the shareable config mirror. Reads order by updated_at DESC (most-recently-touched
+-- first) for the management screens; writes are INSERT OR REPLACE upserts keyed on the entity id.
+
+allProviderConfigs:
+SELECT * FROM provider_configs ORDER BY updated_at DESC;
+
+providerConfigById:
+SELECT * FROM provider_configs WHERE id = :id;
+
+upsertProviderConfig:
+INSERT OR REPLACE INTO provider_configs (id, provider_type, kind, label, base_url, credential_ref,
+                      visibility, subscription_mode, source_peer_id, source_original_id,
+                      source_original_hash, content_hash, updated_at)
+VALUES (:id, :providerType, :kind, :label, :baseUrl, :credentialRef,
+        :visibility, :subscriptionMode, :sourcePeerId, :sourceOriginalId,
+        :sourceOriginalHash, :contentHash, :updatedAt);
+
+deleteProviderConfig:
+DELETE FROM provider_configs WHERE id = :id;
+
+allModelRefs:
+SELECT * FROM model_refs ORDER BY updated_at DESC;
+
+modelRefsByFunction:
+SELECT * FROM model_refs WHERE function = :function ORDER BY updated_at DESC;
+
+modelRefById:
+SELECT * FROM model_refs WHERE id = :id;
+
+upsertModelRef:
+INSERT OR REPLACE INTO model_refs (id, provider_ref, model_id, function, label, parameter_defaults,
+                      visibility, subscription_mode, source_peer_id, source_original_id,
+                      source_original_hash, content_hash, updated_at)
+VALUES (:id, :providerRef, :modelId, :function, :label, :parameterDefaults,
+        :visibility, :subscriptionMode, :sourcePeerId, :sourceOriginalId,
+        :sourceOriginalHash, :contentHash, :updatedAt);
+
+deleteModelRef:
+DELETE FROM model_refs WHERE id = :id;
+
+allPrompts:
+SELECT * FROM prompts ORDER BY updated_at DESC;
+
+promptById:
+SELECT * FROM prompts WHERE id = :id;
+
+upsertPrompt:
+INSERT OR REPLACE INTO prompts (id, name, text, requires_selection, auto_apply,
+                      visibility, subscription_mode, source_peer_id, source_original_id,
+                      source_original_hash, content_hash, updated_at)
+VALUES (:id, :name, :text, :requiresSelection, :autoApply,
+        :visibility, :subscriptionMode, :sourcePeerId, :sourceOriginalId,
+        :sourceOriginalHash, :contentHash, :updatedAt);
+
+deletePrompt:
+DELETE FROM prompts WHERE id = :id;
+
+allProfiles:
+SELECT * FROM profiles ORDER BY updated_at DESC;
+
+profileById:
+SELECT * FROM profiles WHERE id = :id;
+
+upsertProfile:
+INSERT OR REPLACE INTO profiles (id, name, transcription_model_ref, completion_model_ref,
+                      style_prompt_mode, style_prompt_custom_text, system_prompt_mode,
+                      system_prompt_custom_text, ambiguity_mode, parameter_overrides,
+                      visibility, subscription_mode, source_peer_id, source_original_id,
+                      source_original_hash, content_hash, updated_at)
+VALUES (:id, :name, :transcriptionModelRef, :completionModelRef,
+        :stylePromptMode, :stylePromptCustomText, :systemPromptMode,
+        :systemPromptCustomText, :ambiguityMode, :parameterOverrides,
+        :visibility, :subscriptionMode, :sourcePeerId, :sourceOriginalId,
+        :sourceOriginalHash, :contentHash, :updatedAt);
+
+deleteProfile:
+DELETE FROM profiles WHERE id = :id;
+
+promptsForProfile:
+SELECT * FROM profile_prompts WHERE profile_id = :profileId ORDER BY pos;
+
+insertProfilePrompt:
+INSERT OR REPLACE INTO profile_prompts (profile_id, pos, prompt_ref, auto_apply)
+VALUES (:profileId, :pos, :promptRef, :autoApply);
+
+deleteProfilePrompts:
+DELETE FROM profile_prompts WHERE profile_id = :profileId;

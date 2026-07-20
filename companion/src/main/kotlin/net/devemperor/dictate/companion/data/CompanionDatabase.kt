@@ -7,7 +7,11 @@ import net.devemperor.dictate.companion.db.Conversation_messages
 import net.devemperor.dictate.companion.db.DictateCompanionDb
 import net.devemperor.dictate.companion.db.Dispatch_state
 import net.devemperor.dictate.companion.db.Key_command_chords
+import net.devemperor.dictate.companion.db.Model_refs
 import net.devemperor.dictate.companion.db.Processing_steps
+import net.devemperor.dictate.companion.db.Profiles
+import net.devemperor.dictate.companion.db.Prompts
+import net.devemperor.dictate.companion.db.Provider_configs
 import net.devemperor.dictate.companion.db.Sessions
 import java.nio.file.Files
 import java.nio.file.Path
@@ -66,6 +70,31 @@ object CompanionDatabase {
             ),
             conversation_messagesAdapter = Conversation_messages.Adapter(
                 roleAdapter = EnumColumnAdapter(),
+            ),
+            // Config-entity tables (D3, §9). Every finite-set column is a Double-Enum backed by a
+            // `:shared.config` enum — the SAME source C2 Room uses, so Android and the companion cannot
+            // drift (pinned by ConfigEntityCheckParityTest). Booleans/JSON columns need no adapter.
+            provider_configsAdapter = Provider_configs.Adapter(
+                provider_typeAdapter = EnumColumnAdapter(),
+                kindAdapter = EnumColumnAdapter(),
+                visibilityAdapter = EnumColumnAdapter(),
+                subscription_modeAdapter = EnumColumnAdapter(),
+            ),
+            model_refsAdapter = Model_refs.Adapter(
+                functionAdapter = EnumColumnAdapter(),
+                visibilityAdapter = EnumColumnAdapter(),
+                subscription_modeAdapter = EnumColumnAdapter(),
+            ),
+            promptsAdapter = Prompts.Adapter(
+                visibilityAdapter = EnumColumnAdapter(),
+                subscription_modeAdapter = EnumColumnAdapter(),
+            ),
+            profilesAdapter = Profiles.Adapter(
+                style_prompt_modeAdapter = EnumColumnAdapter(),
+                system_prompt_modeAdapter = EnumColumnAdapter(),
+                ambiguity_modeAdapter = EnumColumnAdapter(),
+                visibilityAdapter = EnumColumnAdapter(),
+                subscription_modeAdapter = EnumColumnAdapter(),
             ),
         )
     }

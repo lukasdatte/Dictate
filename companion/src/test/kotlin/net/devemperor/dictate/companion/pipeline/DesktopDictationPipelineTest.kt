@@ -27,6 +27,7 @@ import net.devemperor.dictate.companion.data.CompanionDatabase
 import net.devemperor.dictate.companion.data.DesktopSessionRepository
 import net.devemperor.dictate.companion.domain.session.HostOrigin
 import net.devemperor.dictate.companion.domain.session.MessageRole
+import net.devemperor.dictate.companion.domain.session.SessionOrigin
 import net.devemperor.dictate.companion.domain.session.SessionStatus
 import net.devemperor.dictate.companion.domain.session.StepType
 import net.devemperor.dictate.companion.fakes.FakeTextInserter
@@ -209,6 +210,73 @@ class DesktopDictationPipelineTest {
         assertEquals(1, sessions.steps(sessionId).size)
         assertEquals(2, sessions.messages(sessionId).size)
     }
+
+    @Test
+    fun reDictate_persistsAReviewRefinementSessionAndAppendsAContinuationTurn() {
+        val capture = FakeAudioCapture(wavFixture())
+        // First turn → REVIEW ("draft"); the re-dictate continuation → a second REVIEW ("sharper draft"),
+        // proving the non-terminal panel update (ADR-0013 §6 iterative re-dictate).
+        val completion = SequencedCompletionRunner(
+            listOf(
+                FakeConversationResult(output = "draft", message = "which Anna?", needsClarification = true),
+                FakeConversationResult(output = "sharper draft", message = "still ambiguous?", needsClarification = true),
+            )
+        )
+        val controller = controller(
+            capture = capture,
+            transcription = FakeTranscriptionRunner(transcript),
+            completion = completion,
+            profile = DictationProfile(
+                ambiguityMode = AmbiguityMode.ALWAYS_REVIEW,
+                language = "de",
+                autoFormatEnabled = false,
+                instructions = listOf(TurnInstruction("tidy it", appliesToTranscript = true)),
+                stylePrompt = null,
+            ),
+        )
+
+        val reviewSessionId = controller.startHotkey()
+        controller.stopRecording() // → REVIEW ("draft")
+        assertEquals(DictationPhase.REVIEW, controller.state.value.phase)
+        assertEquals("draft", controller.state.value.review!!.output)
+
+        // ── re-dictate: S2 record → stop → transcription-only → ConversationContinuation ──
+        val refinementSessionId = controller.startRefinement()
+        assertTrue("Insert/Discard disabled while recording", controller.state.value.review!!.refinementRecording)
+        controller.stopRefinement() // InlineJobQueue → whole continuation runs synchronously
+
+        // ── panel updated NON-TERMINAL: still REVIEW, new output, refinement flags cleared ──
+        assertEquals(DictationPhase.REVIEW, controller.state.value.phase)
+        assertEquals("sharper draft", controller.state.value.review!!.output)
+        assertTrue(!controller.state.value.review!!.refining)
+        assertTrue(!controller.state.value.review!!.refinementRecording)
+        assertEquals("nothing inserted — still under review", emptyList<String>(), inserter.inserted)
+        assertEquals("converse called for turn-0 and the continuation", 2, completion.converseCalls)
+
+        // ── REVIEW_REFINEMENT session for the S2 take, parented to the reviewed session ──
+        val refinement = sessions.session(refinementSessionId)
+        assertNotNull("refinement session persisted", refinement)
+        refinement!!
+        assertEquals(SessionOrigin.REVIEW_REFINEMENT, refinement.origin)
+        assertEquals(reviewSessionId, refinement.parent_session_id)
+        assertEquals(HostOrigin.DESKTOP_DICTATION, refinement.host_origin)
+        assertEquals("S2 transcription persisted", 1, sessions.transcriptions(refinementSessionId).size)
+
+        // ── continuation turn appended to the REVIEWED session (chain_index 1) ──
+        val steps = sessions.steps(reviewSessionId).filter { it.step_type == StepType.CONVERSATION_TURN }
+        assertEquals("turn-0 + continuation", 2, steps.size)
+        assertEquals(listOf(0L, 1L), steps.map { it.chain_index })
+        assertEquals("sharper draft", steps.last().output_text)
+        assertEquals("continuation links back to the refinement session", refinementSessionId, steps.last().source_session_id)
+        assertEquals("final output updated to the continuation result", "sharper draft", sessions.session(reviewSessionId)!!.final_output_text)
+
+        // ── conversation messages: SYSTEM + USER(turn0) + USER(continuation) ──
+        val messages = sessions.messages(reviewSessionId)
+        assertEquals(3, messages.size)
+        assertEquals(1, messages.count { it.role == MessageRole.SYSTEM })
+        assertEquals(2, messages.count { it.role == MessageRole.USER })
+        assertTrue("continuation USER message wraps the spoken reply as <user-reply>", messages.last().content.contains("user-reply"))
+    }
 }
 
 // ── fakes ────────────────────────────────────────────────────────────────────────────────────
@@ -244,6 +312,30 @@ private class FakeCompletionRunner(
         responseFormat = ApiResponseFormatKind.JSON_SCHEMA,
         needsClarification = needsClarification,
     )
+}
+
+/** One scripted `converse` answer. */
+private data class FakeConversationResult(val output: String, val message: String?, val needsClarification: Boolean)
+
+/** Returns a scripted answer per `converse` call — the turn-0 verdict, then each continuation's. */
+private class SequencedCompletionRunner(private val answers: List<FakeConversationResult>) : CompletionRunner {
+    var converseCalls = 0
+        private set
+
+    override fun complete(options: CompletionOptions): CompletionResult = error("completion() not used by the pipeline")
+    override fun converse(request: ConversationRequest): ConversationResult {
+        val answer = answers[converseCalls.coerceAtMost(answers.lastIndex)]
+        converseCalls++
+        return ConversationResult(
+            message = answer.message,
+            output = answer.output,
+            promptTokens = 12,
+            completionTokens = 34,
+            modelName = request.model,
+            responseFormat = ApiResponseFormatKind.JSON_SCHEMA,
+            needsClarification = answer.needsClarification,
+        )
+    }
 }
 
 /** Production [RunnerFactory] with its two runner entry points swapped for fakes (the K-1 open seam). */

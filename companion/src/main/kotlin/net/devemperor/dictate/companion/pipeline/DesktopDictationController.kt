@@ -53,4 +53,14 @@ class DesktopDictationController(
 
     /** Panel "Insert" on a take waiting in the confirm/review state (§8.5). */
     fun confirmInsert() = dispatch(DictationIntent.ConfirmInsert)
+
+    /** Panel "Re-dictate": start a transcription-only S2 recording (§8.3). Returns its minted session id. */
+    fun startRefinement(): String {
+        val refinementSessionId = UUID.randomUUID().toString()
+        dispatch(DictationIntent.StartRefinement(refinementSessionId))
+        return refinementSessionId
+    }
+
+    /** Panel "Stop" on the S2 recording → transcribe + run the ConversationContinuation (§8.3). */
+    fun stopRefinement() = dispatch(DictationIntent.StopRefinement)
 }

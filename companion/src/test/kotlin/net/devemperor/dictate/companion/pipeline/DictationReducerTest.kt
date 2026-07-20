@@ -249,4 +249,108 @@ class DictationReducerTest {
         assertEquals(DictationPhase.INSERTED, state.phase)
         assertEquals(listOf(Effect.InsertText(sid, "auto")), effects)
     }
+
+    // ── Re-dictate over the review panel (ADR-0013 §6, spec §8.3) ─────────────────────────────
+
+    /** Drives to a settled REVIEW verdict panel. */
+    private fun inReview(): DesktopUiState = reduce(
+        postProcessing(),
+        DictationIntent.PipelineVerdict(sid, Verdict.REVIEW, "draft", "which Anna?"),
+    ).first
+
+    @Test
+    fun startRefinement_fromReview_startsS2CaptureAndDisablesInsertDiscard() {
+        val (state, effects) = reduce(inReview(), DictationIntent.StartRefinement("r-1"))
+        assertEquals(DictationPhase.REVIEW, state.phase)
+        assertTrue("refinement recording flagged (Insert/Discard disabled, ADR-0013 K1)", state.review!!.refinementRecording)
+        assertEquals("r-1", state.review!!.refinementSessionId)
+        assertEquals(listOf(Effect.StartCapture(device = null)), effects)
+    }
+
+    @Test
+    fun startRefinement_whileAlreadyRefining_isANoOp() {
+        val recording = reduce(inReview(), DictationIntent.StartRefinement("r-1")).first
+        val (state, effects) = reduce(recording, DictationIntent.StartRefinement("r-2"))
+        assertEquals("r-1", state.review!!.refinementSessionId) // unchanged
+        assertTrue(effects.isEmpty())
+    }
+
+    @Test
+    fun stopRefinement_transcribesTheS2Take() {
+        val recording = reduce(inReview(), DictationIntent.StartRefinement("r-1")).first
+        val (state, effects) = reduce(recording, DictationIntent.StopRefinement)
+        assertTrue("mic stopped", !state.review!!.refinementRecording)
+        assertTrue("now refining until the continuation returns", state.review!!.refining)
+        assertEquals(listOf(Effect.RunRefinementTranscription("r-1", sid)), effects)
+    }
+
+    @Test
+    fun refinementTranscribed_runsTheContinuation() {
+        val refining = reduce(
+            reduce(inReview(), DictationIntent.StartRefinement("r-1")).first,
+            DictationIntent.StopRefinement,
+        ).first
+        val (state, effects) = reduce(refining, DictationIntent.RefinementTranscribed("make it formal"))
+        assertTrue(state.review!!.refining)
+        assertEquals(listOf(Effect.RunContinuation(sid, "make it formal", "r-1")), effects)
+    }
+
+    @Test
+    fun reviewTurnCompleted_reviewVerdict_updatesThePanelInPlace_nonTerminal() {
+        val refining = refiningState()
+        val (state, effects) = reduce(
+            refining,
+            DictationIntent.ReviewTurnCompleted(sid, Verdict.REVIEW, "sharper draft", "still which Anna?"),
+        )
+        assertEquals("panel stays open — iterative re-dictate", DictationPhase.REVIEW, state.phase)
+        assertEquals("sharper draft", state.review!!.output)
+        assertEquals("still which Anna?", state.review!!.message)
+        assertTrue("no longer refining", !state.review!!.refining)
+        assertTrue("no insert on a REVIEW verdict", effects.isEmpty())
+    }
+
+    @Test
+    fun reviewTurnCompleted_insertVerdict_insertsAndCloses() {
+        val (state, effects) = reduce(
+            refiningState(),
+            DictationIntent.ReviewTurnCompleted(sid, Verdict.INSERT, "final", null),
+        )
+        assertEquals(DictationPhase.INSERTED, state.phase)
+        assertNull(state.review)
+        assertEquals(listOf(Effect.InsertText(sid, "final")), effects)
+    }
+
+    @Test
+    fun reviewTurnCompleted_afterCancel_isDropped() {
+        // Cancel clears `refining`; a continuation result that lands afterwards must not re-open the panel.
+        val cancelled = reduce(refiningState(), DictationIntent.Discard).first
+        val (state, effects) = reduce(cancelled, DictationIntent.ReviewTurnCompleted(sid, Verdict.INSERT, "late", null))
+        assertEquals(cancelled, state)
+        assertTrue(effects.isEmpty())
+    }
+
+    @Test
+    fun discard_duringRefinement_cancels_staysInReview() {
+        val (state, effects) = reduce(refiningState(), DictationIntent.Discard)
+        assertEquals("stays in review — the take is not acknowledged", DictationPhase.REVIEW, state.phase)
+        assertTrue(!state.review!!.refining)
+        assertEquals(listOf(Effect.CancelRefinement), effects)
+    }
+
+    @Test
+    fun refinementFailed_dropsBackToReviewWithAnError() {
+        val (state, effects) = reduce(refiningState(), DictationIntent.RefinementFailed("RATE_LIMITED"))
+        assertEquals(DictationPhase.REVIEW, state.phase)
+        assertEquals("RATE_LIMITED", state.review!!.error)
+        assertTrue(!state.review!!.refining)
+        assertEquals("original review output survives a failed follow-up", "draft", state.review!!.output)
+        assertTrue(effects.isEmpty())
+    }
+
+    /** Drives inReview → StartRefinement → StopRefinement → RefinementTranscribed (refining=true). */
+    private fun refiningState(): DesktopUiState {
+        val recording = reduce(inReview(), DictationIntent.StartRefinement("r-1")).first
+        val transcribing = reduce(recording, DictationIntent.StopRefinement).first
+        return reduce(transcribing, DictationIntent.RefinementTranscribed("follow up")).first
+    }
 }

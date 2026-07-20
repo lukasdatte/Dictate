@@ -394,8 +394,8 @@ class DictatePipelineService : Service() {
         val sharedPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val database = DictateDatabase.getInstance(this)
 
-        aiOrchestratorImpl = AndroidAiFactory.androidOrchestrator(sharedPrefs, database.usageDao())
-        promptServiceImpl = AndroidAiFactory.androidPromptService(sharedPrefs)
+        aiOrchestratorImpl = AndroidAiFactory.androidOrchestrator(this, sharedPrefs, database.usageDao())
+        promptServiceImpl = AndroidAiFactory.androidPromptService(this, sharedPrefs)
         autoFormattingServiceImpl = AutoFormattingService.create(sharedPrefs, aiOrchestratorImpl)
         sessionManagerImpl = SessionManager(database)
         sessionTrackerImpl = SessionTracker(database.sessionDao())

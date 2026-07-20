@@ -204,6 +204,15 @@ sealed class Pref<T>(val key: String, val default: T) {
     object ActiveProfileId : Pref<String>("net.devemperor.dictate.active_profile_id", "")
 
     /**
+     * Device-local DISPLAY order of the profile list (comma-joined profile uuids, C3 §10.3).
+     * `profiles` has no `pos` column on purpose: order is UI state, not shareable content, and a
+     * payload field would pollute the `contentHash` (same reasoning as [ActiveProfileId]). Parsed /
+     * merged by [net.devemperor.dictate.config.ProfileListMutations]; unknown ids are dropped, new
+     * profiles appended.
+     */
+    object ProfileOrder : Pref<String>("net.devemperor.dictate.profile_order", "")
+
+    /**
      * Version flag for the one-time Prefs→entity migration
      * ([net.devemperor.dictate.config.ConfigEntityMigration], spec §8). Runs only while
      * `< CURRENT_MIGRATION_VERSION`; set to that version **last**, after a fully successful run, so

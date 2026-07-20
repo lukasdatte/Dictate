@@ -242,7 +242,8 @@ object ConfigEntityMigration {
     private fun toCanonicalDecimal(value: Float): String =
         BigDecimal(value.toString()).stripTrailingZeros().toPlainString()
 
-    private fun fingerprint(keyBytes: ByteArray): String =
+    /** Also used by [ConfigEntitySetup] (onboarding write path) so fingerprints never drift. */
+    internal fun fingerprint(keyBytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(keyBytes)
             .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
             .take(16)

@@ -221,13 +221,16 @@ public class PromptEditActivity extends AppCompatActivity {
         Intent result = new Intent();
         if (promptId == -1) {
             PromptEntity newEntity = new PromptEntity(0, promptDao.count(), name, prompt, requiresSelection, autoApply, currentType.name());
-            long addId = promptDao.insert(newEntity);
+            // C3: stamp the shareable identity (uuid + content hash, spec §7.3) on insert.
+            long addId = promptDao.insert(net.devemperor.dictate.config.PromptProvenance.stamped(newEntity));
             result.putExtra("added_id", (int) addId);
         } else {
             PromptEntity existing = promptDao.getById(promptId);
             if (existing != null) {
-                PromptEntity updated = new PromptEntity(existing.getId(), existing.getPos(), name, prompt, requiresSelection, autoApply, currentType.name());
-                promptDao.update(updated);
+                // C3: carry uuid/provenance over and re-hash (a rebuilt 7-arg entity would
+                // silently reset the v12 identity columns).
+                promptDao.update(net.devemperor.dictate.config.PromptProvenance.edited(
+                        existing, name, prompt, requiresSelection, autoApply, currentType.name()));
             }
             result.putExtra("updated_id", promptId);
         }

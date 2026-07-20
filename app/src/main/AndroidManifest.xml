@@ -334,6 +334,22 @@
                 android:value=".settings.DictateSettingsActivity" />
         </activity>
         <activity
+            android:name=".settings.ProviderEditActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".settings.APISettingsActivity" />
+        </activity>
+        <activity
+            android:name=".settings.ProfileEditActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".settings.APISettingsActivity" />
+        </activity>
+        <activity
             android:name=".settings.WindowsPairingActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize">

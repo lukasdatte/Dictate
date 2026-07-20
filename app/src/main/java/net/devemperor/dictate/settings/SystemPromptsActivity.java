@@ -26,16 +26,22 @@ import com.google.android.material.textfield.TextInputLayout;
 
 import net.devemperor.dictate.R;
 import net.devemperor.dictate.SimpleTextWatcher;
-import net.devemperor.dictate.ai.AIProvider;
 import net.devemperor.dictate.ai.ElevenLabsKeytermsParser;
+import net.devemperor.dictate.config.ActiveProfile;
+import net.devemperor.dictate.database.DictateDatabase;
 import net.devemperor.dictate.preferences.DictatePrefsKt;
 import net.devemperor.dictate.preferences.Pref;
+import net.devemperor.dictate.shared.config.ModelRefEntity;
+import net.devemperor.dictate.shared.config.ProviderType;
 
 import java.util.List;
 
 public class SystemPromptsActivity extends AppCompatActivity {
 
+    // C3: style/system prompt selection + keyterms live on the ACTIVE profile / its transcription
+    // model ref (spec §4.5, §4.7) — sp keeps only device-local editor state (raw keyterms text).
     private SharedPreferences sp;
+    private DictateDatabase db;
 
     private RadioGroup transcriptionStylePromptRg;
     private RadioButton transcriptionStylePromptNothingRb;
@@ -71,6 +77,7 @@ public class SystemPromptsActivity extends AppCompatActivity {
         }
 
         sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE);
+        db = DictateDatabase.getInstance(this);
 
         transcriptionStylePromptRg = findViewById(R.id.transcription_style_prompt_rg);
         transcriptionStylePromptNothingRb = findViewById(R.id.transcription_style_prompt_nothing_rb);
@@ -96,8 +103,8 @@ public class SystemPromptsActivity extends AppCompatActivity {
     }
 
     private void setupTranscriptionStylePrompt() {
-        changeTranscriptionSelection(DictatePrefsKt.get(sp, Pref.StylePromptSelection.INSTANCE));
-        transcriptionStylePromptCustomEt.setText(DictatePrefsKt.get(sp, Pref.StylePromptCustomText.INSTANCE));
+        changeTranscriptionSelection(ActiveProfile.stylePromptSelection(sp, db));
+        transcriptionStylePromptCustomEt.setText(ActiveProfile.stylePromptCustomText(sp, db));
 
         transcriptionStylePromptRg.setOnCheckedChangeListener((group, checkedId) -> {
             if (checkedId == R.id.transcription_style_prompt_nothing_rb) {
@@ -112,14 +119,14 @@ public class SystemPromptsActivity extends AppCompatActivity {
         transcriptionStylePromptCustomEt.addTextChangedListener(new SimpleTextWatcher() {
             @Override
             public void afterTextChanged(Editable s) {
-                DictatePrefsKt.put(sp.edit(), Pref.StylePromptCustomText.INSTANCE, s.toString()).apply();
+                ActiveProfile.setStylePromptCustomText(sp, db, s.toString());
             }
         });
     }
 
     private void setupRewordingSystemPrompt() {
-        changeRewordingSelection(DictatePrefsKt.get(sp, Pref.SystemPromptSelection.INSTANCE));
-        rewordingSystemPromptCustomEt.setText(DictatePrefsKt.get(sp, Pref.SystemPromptCustomText.INSTANCE));
+        changeRewordingSelection(ActiveProfile.systemPromptSelection(sp, db));
+        rewordingSystemPromptCustomEt.setText(ActiveProfile.systemPromptCustomText(sp, db));
 
         rewordingSystemPromptRg.setOnCheckedChangeListener((group, checkedId) -> {
             if (checkedId == R.id.rewording_system_prompt_nothing_rb) {
@@ -134,7 +141,7 @@ public class SystemPromptsActivity extends AppCompatActivity {
         rewordingSystemPromptCustomEt.addTextChangedListener(new SimpleTextWatcher() {
             @Override
             public void afterTextChanged(Editable s) {
-                DictatePrefsKt.put(sp.edit(), Pref.SystemPromptCustomText.INSTANCE, s.toString()).apply();
+                ActiveProfile.setSystemPromptCustomText(sp, db, s.toString());
             }
         });
     }
@@ -159,7 +166,7 @@ public class SystemPromptsActivity extends AppCompatActivity {
         transcriptionStylePromptPredefinedRb.setChecked(selection == 1);
         transcriptionStylePromptCustomRb.setChecked(selection == 2);
         transcriptionStylePromptCustomEt.setEnabled(selection == 2);
-        DictatePrefsKt.put(sp.edit(), Pref.StylePromptSelection.INSTANCE, selection).apply();
+        ActiveProfile.setStylePromptSelection(sp, db, selection);
     }
 
     private void changeRewordingSelection(int selection) {
@@ -167,7 +174,7 @@ public class SystemPromptsActivity extends AppCompatActivity {
         rewordingSystemPromptPredefinedRb.setChecked(selection == 1);
         rewordingSystemPromptCustomRb.setChecked(selection == 2);
         rewordingSystemPromptCustomEt.setEnabled(selection == 2);
-        DictatePrefsKt.put(sp.edit(), Pref.SystemPromptSelection.INSTANCE, selection).apply();
+        ActiveProfile.setSystemPromptSelection(sp, db, selection);
     }
 
     private void setupKeyterms() {
@@ -189,11 +196,11 @@ public class SystemPromptsActivity extends AppCompatActivity {
 
                 ElevenLabsKeytermsParser.ParseResult result = ElevenLabsKeytermsParser.INSTANCE.parse(raw);
 
-                SharedPreferences.Editor editor = sp.edit();
-                DictatePrefsKt.put(editor, Pref.ElevenLabsKeytermsRaw.INSTANCE, raw);
-                DictatePrefsKt.put(editor, Pref.ElevenLabsKeytermsParsed.INSTANCE,
-                               ElevenLabsKeytermsParser.INSTANCE.toJson(result.getTerms()));
-                editor.apply();
+                // Raw text (incl. comments) is device-local editor state; the parsed JSON is the
+                // shareable model parameter (spec §4.5).
+                DictatePrefsKt.put(sp.edit(), Pref.ElevenLabsKeytermsRaw.INSTANCE, raw).apply();
+                ActiveProfile.setTranscriptionKeyterms(sp, db,
+                        ElevenLabsKeytermsParser.INSTANCE.toJson(result.getTerms()));
 
                 updateKeytermsStatus(keytermsTil, keytermsStatusTv, result);
             }
@@ -201,10 +208,10 @@ public class SystemPromptsActivity extends AppCompatActivity {
     }
 
     private void updateKeytermsEnabled() {
-        AIProvider provider = AIProvider.fromPersistKey(
-            DictatePrefsKt.get(sp, Pref.TranscriptionProvider.INSTANCE));
-        String model = DictatePrefsKt.get(sp, Pref.TranscriptionElevenLabsModel.INSTANCE);
-        boolean enabled = provider == AIProvider.ELEVENLABS && "scribe_v2".equals(model);
+        ProviderType provider = ActiveProfile.transcriptionProviderType(sp, db);
+        ModelRefEntity modelRef = ActiveProfile.transcriptionModelRef(sp, db);
+        boolean enabled = provider == ProviderType.ELEVENLABS
+                && modelRef != null && "scribe_v2".equals(modelRef.getModelId());
         keytermsEt.setEnabled(enabled);
     }
 

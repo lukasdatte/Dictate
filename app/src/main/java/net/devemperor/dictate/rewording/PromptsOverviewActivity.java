@@ -309,7 +309,8 @@ public class PromptsOverviewActivity extends AppCompatActivity {
         List<PromptEntity> sanitized = new ArrayList<>(importedPrompts.size());
         for (int i = 0; i < importedPrompts.size(); i++) {
             PromptEntity entity = importedPrompts.get(i);
-            sanitized.add(new PromptEntity(0, i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply(), entity.getType()));
+            sanitized.add(net.devemperor.dictate.config.PromptProvenance.stamped(
+                    new PromptEntity(0, i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply(), entity.getType())));
         }
         promptDao.deleteAll();
         promptDao.insertAll(sanitized);
@@ -322,7 +323,8 @@ public class PromptsOverviewActivity extends AppCompatActivity {
         List<PromptEntity> sanitized = new ArrayList<>(importedPrompts.size());
         for (int i = 0; i < importedPrompts.size(); i++) {
             PromptEntity entity = importedPrompts.get(i);
-            sanitized.add(new PromptEntity(0, startPos + i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply(), entity.getType()));
+            sanitized.add(net.devemperor.dictate.config.PromptProvenance.stamped(
+                    new PromptEntity(0, startPos + i, entity.getName(), entity.getPrompt(), entity.getRequiresSelection(), entity.getAutoApply(), entity.getType())));
         }
         promptDao.insertAll(sanitized);
         reloadPrompts();

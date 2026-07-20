@@ -30,6 +30,9 @@ interface ProviderConfigDao {
 
     @Query("SELECT COUNT(*) FROM provider_configs")
     fun count(): Int
+
+    @Query("DELETE FROM provider_configs WHERE id = :id")
+    fun deleteById(id: String)
 }
 
 @Dao
@@ -45,6 +48,9 @@ interface ApiCredentialDao {
 
     @Query("SELECT COUNT(*) FROM api_credentials")
     fun count(): Int
+
+    @Query("DELETE FROM api_credentials WHERE id = :id")
+    fun deleteById(id: String)
 }
 
 @Dao
@@ -63,6 +69,12 @@ interface ModelRefDao {
 
     @Query("SELECT COUNT(*) FROM model_refs")
     fun count(): Int
+
+    @Query("DELETE FROM model_refs WHERE id = :id")
+    fun deleteById(id: String)
+
+    @Query("DELETE FROM model_refs WHERE provider_ref = :providerRef")
+    fun deleteByProvider(providerRef: String)
 }
 
 @Dao
@@ -87,4 +99,8 @@ interface ProfileDao {
 
     @Query("SELECT COUNT(*) FROM profiles")
     fun count(): Int
+
+    /** `profile_prompts` rows fall with the profile via the CASCADE FK. */
+    @Query("DELETE FROM profiles WHERE id = :id")
+    fun deleteById(id: String)
 }

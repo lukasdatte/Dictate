@@ -5678,8 +5678,8 @@ public class DictateInputMethodService extends InputMethodService
     }
 
     private net.devemperor.dictate.preferences.AmbiguityMode currentAmbiguityMode() {
-        return net.devemperor.dictate.preferences.AmbiguityMode.fromPersistKey(
-                DictatePrefsKt.get(sp, Pref.AmbiguityMode.INSTANCE));
+        // C3: the ambiguity mode lives on the ACTIVE profile (spec §4.7), not in a pref anymore.
+        return net.devemperor.dictate.config.ActiveProfile.ambiguityMode(sp, dictateDb);
     }
 
     /** The review panel opens only when the IME view is visible (ADR-0013 §7). */

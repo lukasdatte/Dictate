@@ -69,6 +69,17 @@
                 android:contentDescription="@string/dictate_auto_apply"
                 android:src="@drawable/ic_baseline_autorenew_24" />
 
+            <!-- C3 §10.6: origin badge — visible only for peer-sourced prompts. -->
+            <TextView
+                android:id="@+id/item_prompts_overview_origin_tv"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:text="@string/dictate_config_origin_peer"
+                android:textAppearance="?attr/textAppearanceLabelSmall"
+                android:textColor="@color/dictate_blue"
+                android:visibility="gone" />
+
             <ImageView
                 android:id="@+id/item_prompts_overview_type_iv"
                 android:layout_width="18dp"

@@ -56,6 +56,7 @@ public class PromptsOverviewAdapter extends RecyclerView.Adapter<PromptsOverview
         final ImageView requiresSelectionIv;
         final ImageView autoApplyIv;
         final ImageView typeIv;
+        final TextView originTv;
         final ImageView dragHandleIv;
         final MaterialButton duplicateBtn;
         final MaterialButton deleteBtn;
@@ -67,6 +68,7 @@ public class PromptsOverviewAdapter extends RecyclerView.Adapter<PromptsOverview
             requiresSelectionIv = itemView.findViewById(R.id.item_prompts_overview_requires_selection_iv);
             autoApplyIv = itemView.findViewById(R.id.item_prompts_overview_auto_apply_iv);
             typeIv = itemView.findViewById(R.id.item_prompts_overview_type_iv);
+            originTv = itemView.findViewById(R.id.item_prompts_overview_origin_tv);
             dragHandleIv = itemView.findViewById(R.id.item_prompts_overview_drag_handle);
             duplicateBtn = itemView.findViewById(R.id.item_prompts_overview_duplicate_btn);
             deleteBtn = itemView.findViewById(R.id.item_prompts_overview_delete_btn);
@@ -97,6 +99,10 @@ public class PromptsOverviewAdapter extends RecyclerView.Adapter<PromptsOverview
                 entity.getRequiresSelection() ? enabledColor : disabledColor));
         holder.autoApplyIv.setImageTintList(ColorStateList.valueOf(
                 entity.getAutoApply() ? enabledColor : disabledColor));
+
+        // C3 §10.6: origin badge — a prompt fetched from a peer carries source_peer_id (v12
+        // provenance columns); local prompts render exactly as before (AK9).
+        holder.originTv.setVisibility(entity.getSourcePeerId() != null ? View.VISIBLE : View.GONE);
 
         holder.duplicateBtn.setOnClickListener(v -> dispatch(holder, callback::onDuplicateClicked));
         holder.deleteBtn.setOnClickListener(v -> dispatch(holder, callback::onDeleteClicked));

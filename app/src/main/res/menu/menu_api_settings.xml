@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/menu_api_settings_import"
+        android:title="@string/dictate_config_import"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_api_settings_export"
+        android:title="@string/dictate_config_export"
+        app:showAsAction="never" />
+</menu>

@@ -27,8 +27,8 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import net.devemperor.dictate.DictateUtils;
 import net.devemperor.dictate.R;
-import net.devemperor.dictate.ai.AIProvider;
 import net.devemperor.dictate.core.NotificationPermissionPolicy;
+import net.devemperor.dictate.config.ConfigEntitySetup;
 import net.devemperor.dictate.preferences.DictatePrefsKt;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
@@ -176,19 +176,10 @@ public class OnboardingAdapter extends RecyclerView.Adapter<OnboardingAdapter.Vi
                     .setPositiveButton(R.string.dictate_okay, (dialog, which) -> {
                         SharedPreferences sp = activity.getSharedPreferences("net.devemperor.dictate", Context.MODE_PRIVATE);
                         String apiKey = apiKeyEt.getText().toString().trim();
-                        // if user decided to use Groq, switch to all Groq settings
-                        SharedPreferences.Editor editor = sp.edit();
-                        if (apiKey.startsWith("gsk_")) {
-                            DictatePrefsKt.put(editor, Pref.TranscriptionProvider.INSTANCE, AIProvider.GROQ.name());
-                            DictatePrefsKt.put(editor, Pref.RewordingProvider.INSTANCE, AIProvider.GROQ.name());
-                            DictatePrefsKt.put(editor, Pref.TranscriptionApiKeyGroq.INSTANCE, apiKey);
-                            DictatePrefsKt.put(editor, Pref.RewordingApiKeyGroq.INSTANCE, apiKey);
-                        } else {
-                            DictatePrefsKt.put(editor, Pref.TranscriptionApiKeyOpenAI.INSTANCE, apiKey);
-                            DictatePrefsKt.put(editor, Pref.RewordingApiKeyOpenAI.INSTANCE, apiKey);
-                        }
-                        DictatePrefsKt.put(editor, Pref.OnboardingComplete.INSTANCE, true);
-                        editor.apply();
+                        // C3: the key becomes a credential + provider/model entities on the Default
+                        // profile (SecretStore, F12) — a "gsk_" prefix selects Groq, else OpenAI.
+                        ConfigEntitySetup.applyOnboardingKey(activity, sp, apiKey);
+                        DictatePrefsKt.put(sp.edit(), Pref.OnboardingComplete.INSTANCE, true).apply();
                         activity.startActivity(new Intent(activity, DictateSettingsActivity.class));
                         activity.finish();
                     })

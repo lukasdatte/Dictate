@@ -16,14 +16,14 @@ object PromptListMutations {
      */
     @JvmStatic
     fun copyOf(source: PromptEntity, copySuffix: String, pos: Int): PromptEntity =
-        PromptEntity(
-            id = 0,
-            pos = pos,
-            name = "${source.name.orEmpty()} $copySuffix",
-            prompt = source.prompt,
-            requiresSelection = source.requiresSelection,
-            autoApply = source.autoApply,
-            type = source.type
+        // C3: localCopy stamps a fresh uuid + content hash and drops peer provenance — the
+        // duplicate is a new local prompt (spec §7.3).
+        net.devemperor.dictate.config.PromptProvenance.localCopy(
+            source.copy(
+                id = 0,
+                pos = pos,
+                name = "${source.name.orEmpty()} $copySuffix",
+            )
         )
 
     /**

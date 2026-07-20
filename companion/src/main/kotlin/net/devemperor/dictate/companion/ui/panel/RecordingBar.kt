@@ -35,9 +35,10 @@ fun RecordingBar(
     Canvas(modifier = modifier) {
         val count = levels.size
         if (count == 0) return@Canvas
-        val cell = size.width / count
-        val gap = cell * RecordingBarDesign.GAP_FRACTION * 2
-        val barWidth = (cell - gap).coerceAtLeast(1f)
+        // Android geometry (AmplitudeVisualizerDrawable.kt:220-222): the gap is 2% of the WHOLE bars
+        // area, so with 30 bars the gaps are wider than the pills — that sparseness is the look.
+        val spacing = RecordingBarDesign.barSpacing(size.width)
+        val barWidth = RecordingBarDesign.barWidth(size.width, count).coerceAtLeast(1f)
         val centerY = size.height / 2f
 
         levels.forEachIndexed { index, amplitude ->
@@ -45,7 +46,7 @@ fun RecordingBar(
             drawRoundRect(
                 color = barColor,
                 alpha = RecordingBarDesign.ageFadeAlpha(index, count),
-                topLeft = Offset(index * cell + gap / 2f, centerY - barHeight / 2f),
+                topLeft = Offset(index * (barWidth + spacing), centerY - barHeight / 2f),
                 size = Size(barWidth, barHeight),
                 cornerRadius = CornerRadius(RecordingBarDesign.capCornerRadius(barWidth)),
             )

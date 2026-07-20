@@ -1,6 +1,7 @@
 package net.devemperor.dictate.companion.ui.panel
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -62,6 +63,21 @@ class RecordingBarDesignTest {
     @Test
     fun capCornerRadius_isHalfTheBarWidth() {
         assertEquals(3.5f, RecordingBarDesign.capCornerRadius(7f), epsilon)
+    }
+
+    @Test
+    fun barGeometry_gapIsTwoPercentOfTheBarsArea_notOfASingleCell() {
+        // Guards against the D2 self-fix finding: the first port read `:220` as 2% of one bar cell,
+        // which renders fat pills with hairline gaps. Android: barSpacing = barsAreaWidth * 0.02f;
+        // barWidth = (areaWidth − spacing × (n−1)) / n (AmplitudeVisualizerDrawable.kt:220-222).
+        val area = 300f
+        val spacing = RecordingBarDesign.barSpacing(area)
+        val width = RecordingBarDesign.barWidth(area)
+        assertEquals(6f, spacing, epsilon)
+        assertEquals((area - 6f * 29) / 30f, width, epsilon)
+        assertTrue("gaps wider than bars — the sparse phone-widget look", spacing > width)
+        // Layout invariant: 30 bars + 29 gaps fill the area exactly.
+        assertEquals(area, width * 30 + spacing * 29, 1e-2f)
     }
 
     @Test

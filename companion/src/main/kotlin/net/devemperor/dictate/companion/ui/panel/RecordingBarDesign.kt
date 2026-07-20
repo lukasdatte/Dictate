@@ -13,7 +13,11 @@ object RecordingBarDesign {
     /** Ring-buffer size / visible bars — `AmplitudeVisualizerDrawable.kt:66`, `RecordGlowFactory.kt:41`. */
     const val BAR_COUNT = 30
 
-    /** Bar gap as a fraction of one bar cell — `AmplitudeVisualizerDrawable.kt:220`. */
+    /**
+     * Gap between adjacent bars as a fraction of the **whole bars-area width** (not of one bar
+     * cell!) — `barSpacing = barsAreaWidth * 0.02f`, `AmplitudeVisualizerDrawable.kt:220`. With 30
+     * bars that makes the gaps wider than the bars — the sparse thin-pill look of the phone widget.
+     */
     const val GAP_FRACTION = 0.02f
 
     /** Max/min bar height as fractions of the widget height — `AmplitudeVisualizerDrawable.kt:225-226`. */
@@ -61,6 +65,13 @@ object RecordingBarDesign {
 
     /** Pill cap: `cornerRadius = barWidth / 2` (`:228`). */
     fun capCornerRadius(barWidth: Float): Float = barWidth / 2f
+
+    /** Gap between adjacent bars: `barSpacing = barsAreaWidth * 0.02f` (`:220`). */
+    fun barSpacing(areaWidth: Float): Float = areaWidth * GAP_FRACTION
+
+    /** Bar width after `count − 1` gaps: `(areaWidth − totalSpacing) / count` (`:221-222`). */
+    fun barWidth(areaWidth: Float, count: Int = BAR_COUNT): Float =
+        (areaWidth - barSpacing(areaWidth) * (count - 1)) / count
 
     /** Pastel transform in HSV space: `sat × 0.4, val = 1.0` (`VisualizerUtils.kt:11-16`). */
     fun pastel(hsv: FloatArray): FloatArray =

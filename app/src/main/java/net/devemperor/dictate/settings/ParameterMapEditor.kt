@@ -15,7 +15,7 @@ import net.devemperor.dictate.R
 import net.devemperor.dictate.SimpleTextWatcher
 import net.devemperor.dictate.ai.model.ParameterDef
 import net.devemperor.dictate.ai.model.ParameterType
-import java.math.BigDecimal
+import net.devemperor.dictate.config.ConfigEntityMapper
 import java.util.Locale
 
 /**
@@ -80,7 +80,7 @@ class ParameterMapEditor(
                         labelView.text = floatLabel(displayName, null)
                     } else {
                         val value = min + (progress - 1) / 10f
-                        values[def.name] = canonicalFloat(value)
+                        values[def.name] = ConfigEntityMapper.canonicalDecimal(value)
                         labelView.text = floatLabel(displayName, value)
                     }
                     applyExclusion(def, progress != 0)
@@ -161,10 +161,6 @@ class ParameterMapEditor(
 
     private fun floatLabel(displayName: String, value: Float?): String =
         if (value == null) "$displayName: Default" else String.format(Locale.US, "%s: %.1f", displayName, value)
-
-    /** Shortest lossless decimal — same canonical form the migration writes (§8.3). */
-    private fun canonicalFloat(value: Float): String =
-        BigDecimal(value.toString()).stripTrailingZeros().toPlainString()
 
     private fun formatParamName(name: String): String =
         name.split('_').joinToString(" ") { part ->

@@ -3,19 +3,17 @@ package net.devemperor.dictate.config
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import java.math.BigDecimal
 import net.devemperor.dictate.config.entity.ApiCredentialRoomEntity
 import net.devemperor.dictate.config.entity.ModelRefRoomEntity
 import net.devemperor.dictate.config.entity.ProfilePromptRoomEntity
 import net.devemperor.dictate.config.entity.ProfileRoomEntity
 import net.devemperor.dictate.config.entity.ProviderConfigRoomEntity
-import net.devemperor.dictate.shared.config.AmbiguityModeValue
 import net.devemperor.dictate.shared.config.ApiCredentialEntity
 import net.devemperor.dictate.shared.config.ModelRefEntity
 import net.devemperor.dictate.shared.config.ProfileEntity
 import net.devemperor.dictate.shared.config.ProfilePromptRef
 import net.devemperor.dictate.shared.config.ProviderConfigEntity
-import net.devemperor.dictate.shared.config.PromptSelectionMode
-import net.devemperor.dictate.shared.config.SourceRef
 
 /**
  * The thin, pure Room ⇄ `:shared`-DTO mapper (spec §7.1). Same role as `SessionEntityMapper`:
@@ -41,12 +39,15 @@ object ConfigEntityMapper {
     fun decodeParams(raw: String): Map<String, String> =
         if (raw.isBlank()) emptyMap() else runCatching { json.decodeFromString(mapSerializer, raw) }.getOrDefault(emptyMap())
 
-    private fun sourceRef(peerId: String?, originalId: String?, originalHash: String?): SourceRef? =
-        if (peerId != null && originalId != null && originalHash != null) {
-            SourceRef(peerId, originalId, originalHash)
-        } else {
-            null
-        }
+    /**
+     * The single canonical string form of a decimal parameter value (§8.3 / §10.2): shortest
+     * lossless decimal, '.' separator, no exponent, no trailing zeros (e.g. `0.7`, `1`, `1.5`).
+     * This string feeds `parameterDefaults`/`parameterOverrides` → `contentHash`, so the migration
+     * (`ConfigEntityMigration`) and the settings editor (`ParameterMapEditor`) MUST both route
+     * through this one helper — two copies would be a silent hash-divergence hazard.
+     */
+    fun canonicalDecimal(value: Float): String =
+        BigDecimal(value.toString()).stripTrailingZeros().toPlainString()
 
     // ── ProviderConfig ──────────────────────────────────────────────────────────────────────
 
@@ -71,7 +72,7 @@ object ConfigEntityMapper {
         contentHash = row.contentHash,
         updatedAt = row.updatedAt,
         visibility = row.visibilityEnum,
-        sourceRef = sourceRef(row.sourcePeerId, row.sourceOriginalId, row.sourceOriginalHash),
+        sourceRef = sourceRefOrNull(row.sourcePeerId, row.sourceOriginalId, row.sourceOriginalHash),
         subscriptionMode = row.subscriptionModeEnum,
         providerType = row.providerTypeEnum,
         kind = row.kindEnum,
@@ -101,7 +102,7 @@ object ConfigEntityMapper {
         contentHash = row.contentHash,
         updatedAt = row.updatedAt,
         visibility = row.visibilityEnum,
-        sourceRef = sourceRef(row.sourcePeerId, row.sourceOriginalId, row.sourceOriginalHash),
+        sourceRef = sourceRefOrNull(row.sourcePeerId, row.sourceOriginalId, row.sourceOriginalHash),
         subscriptionMode = row.subscriptionModeEnum,
         providerType = row.providerTypeEnum,
         label = row.label,
@@ -131,7 +132,7 @@ object ConfigEntityMapper {
         contentHash = row.contentHash,
         updatedAt = row.updatedAt,
         visibility = row.visibilityEnum,
-        sourceRef = sourceRef(row.sourcePeerId, row.sourceOriginalId, row.sourceOriginalHash),
+        sourceRef = sourceRefOrNull(row.sourcePeerId, row.sourceOriginalId, row.sourceOriginalHash),
         subscriptionMode = row.subscriptionModeEnum,
         providerRef = row.providerRef,
         modelId = row.modelId,
@@ -177,23 +178,17 @@ object ConfigEntityMapper {
         contentHash = row.contentHash,
         updatedAt = row.updatedAt,
         visibility = row.visibilityEnum,
-        sourceRef = sourceRef(row.sourcePeerId, row.sourceOriginalId, row.sourceOriginalHash),
+        sourceRef = sourceRefOrNull(row.sourcePeerId, row.sourceOriginalId, row.sourceOriginalHash),
         subscriptionMode = row.subscriptionModeEnum,
         name = row.name,
         transcriptionModelRef = row.transcriptionModelRef,
         completionModelRef = row.completionModelRef,
         orderedPrompts = prompts.sortedBy { it.pos }.map { ProfilePromptRef(it.promptRef, it.autoApply) },
-        stylePromptMode = promptSelectionMode(row.stylePromptMode),
+        stylePromptMode = row.stylePromptModeEnum,
         stylePromptCustomText = row.stylePromptCustomText,
-        systemPromptMode = promptSelectionMode(row.systemPromptMode),
+        systemPromptMode = row.systemPromptModeEnum,
         systemPromptCustomText = row.systemPromptCustomText,
-        ambiguityMode = ambiguityModeValue(row.ambiguityMode),
+        ambiguityMode = row.ambiguityModeEnum,
         parameterOverrides = decodeParams(row.parameterOverrides),
     )
-
-    private fun promptSelectionMode(value: String): PromptSelectionMode =
-        runCatching { PromptSelectionMode.valueOf(value) }.getOrDefault(PromptSelectionMode.PREDEFINED)
-
-    private fun ambiguityModeValue(value: String): AmbiguityModeValue =
-        runCatching { AmbiguityModeValue.valueOf(value) }.getOrDefault(AmbiguityModeValue.ALWAYS_INSERT)
 }

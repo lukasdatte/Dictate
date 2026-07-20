@@ -25,6 +25,7 @@ import net.devemperor.dictate.config.CatalogImport
 import net.devemperor.dictate.config.ConfigEntityMapper
 import net.devemperor.dictate.config.ConfigRepository
 import net.devemperor.dictate.config.ConfigSecrets
+import net.devemperor.dictate.config.ConfigWireMapping.toAIProvider
 import net.devemperor.dictate.config.ProfileListMutations
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.secrets.AndroidKeystoreSecretStore
@@ -134,7 +135,8 @@ class APISettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun providerTypeName(type: ProviderType): String = type.name
+    /** Human-facing provider label — the same displayName the provider editor shows, not the raw wire token. */
+    private fun providerTypeName(type: ProviderType): String = type.toAIProvider().displayName
 
     private fun confirmDeleteProvider(provider: ProviderConfigEntity) {
         MaterialAlertDialogBuilder(this)

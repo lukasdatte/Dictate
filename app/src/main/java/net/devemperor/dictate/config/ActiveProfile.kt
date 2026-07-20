@@ -105,12 +105,20 @@ object ActiveProfile {
     /**
      * Stores the parsed ElevenLabs keyterms JSON in the active transcription model ref's
      * `parameterDefaults["keyterms"]` (spec §4.5); empty JSON array removes the entry.
+     *
+     * Returns `false` (a no-op) when the active profile has no transcription model ref — keyterms
+     * have nowhere to live without one, unlike the pref-based predecessor that persisted them
+     * unconditionally. `SystemPromptsActivity` guards this path by disabling the keyterms field
+     * unless an ElevenLabs `scribe_v2` transcription model ref is active (`updateKeytermsEnabled`),
+     * so the `false` branch is defensive; the Boolean makes the no-op explicit and testable rather
+     * than a silent early-return. Returns `true` once the value is persisted.
      */
     @JvmStatic
-    fun setTranscriptionKeyterms(sp: SharedPreferences, db: DictateDatabase, parsedJson: String) {
-        val modelRef = transcriptionModelRef(sp, db) ?: return
+    fun setTranscriptionKeyterms(sp: SharedPreferences, db: DictateDatabase, parsedJson: String): Boolean {
+        val modelRef = transcriptionModelRef(sp, db) ?: return false
         val params = modelRef.parameterDefaults.toMutableMap()
         if (parsedJson.isEmpty() || parsedJson == "[]") params.remove("keyterms") else params["keyterms"] = parsedJson
         ConfigRepository(db).upsertModelRef(modelRef.copy(parameterDefaults = params.toMap()))
+        return true
     }
 }

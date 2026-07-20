@@ -1,6 +1,5 @@
 package net.devemperor.dictate.config
 
-import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.ai.secrets.SecretRef
 import net.devemperor.dictate.ai.secrets.SecretStore
@@ -9,9 +8,8 @@ import net.devemperor.dictate.database.entity.PromptEntity
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.preferences.put
-import net.devemperor.dictate.secrets.AndroidKeystoreSecretStore
-import net.devemperor.dictate.secrets.InMemoryKekProvider
 import net.devemperor.dictate.secrets.SecretsMigration
+import net.devemperor.dictate.testutil.ConfigMigrationScenario
 import net.devemperor.dictate.testutil.FakeSharedPreferences
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -45,16 +43,13 @@ class ConfigEntityMigrationTest {
         File(context.filesDir, "backup").deleteRecursively()
     }
 
-    private fun freshDb(seedPrompts: List<PromptEntity> = emptyList()): DictateDatabase {
-        val database = Room.inMemoryDatabaseBuilder(context, DictateDatabase::class.java)
-            .allowMainThreadQueries().build()
-        db = database
-        if (seedPrompts.isNotEmpty()) database.promptDao().insertAll(seedPrompts)
-        return database
-    }
+    private fun freshDb(seedPrompts: List<PromptEntity> = emptyList()): DictateDatabase =
+        ConfigMigrationScenario.inMemoryDb(context).also { database ->
+            db = database
+            if (seedPrompts.isNotEmpty()) database.promptDao().insertAll(seedPrompts)
+        }
 
-    private fun realStore() =
-        AndroidKeystoreSecretStore(FakeSharedPreferences(), InMemoryKekProvider(), hardwareBacked = false)
+    private fun realStore() = ConfigMigrationScenario.realStore()
 
     private fun completionFixture(key: String = "sk-ant-secret"): FakeSharedPreferences =
         FakeSharedPreferences().apply {
@@ -100,12 +95,23 @@ class ConfigEntityMigrationTest {
         val models = database.modelRefDao().count()
         val profiles = database.profileDao().count()
 
-        ConfigEntityMigration.run(context, sp, database, store) // second run
+        ConfigEntityMigration.run(context, sp, database, store) // second run — blocked by the Done flag
 
         assertEquals(providers, database.providerConfigDao().count())
         assertEquals(credentials, database.apiCredentialDao().count())
         assertEquals(models, database.modelRefDao().count())
         assertEquals(profiles, database.profileDao().count())
+
+        // Force a real re-execution of the migration body (as after a crash mid-run: Done stays low,
+        // §8.5). This exercises the deterministic-id path (§8.6) rather than just the flag guard above:
+        // the second body run must REPLACE the same rows, never duplicate them.
+        sp.edit().put(Pref.ConfigEntityMigrationDone, 0).apply()
+        ConfigEntityMigration.run(context, sp, database, store)
+
+        assertEquals("provider_configs not duplicated on forced re-run", providers, database.providerConfigDao().count())
+        assertEquals("api_credentials not duplicated on forced re-run", credentials, database.apiCredentialDao().count())
+        assertEquals("model_refs not duplicated on forced re-run", models, database.modelRefDao().count())
+        assertEquals("profiles not duplicated on forced re-run", profiles, database.profileDao().count())
     }
 
     @Test

@@ -1,20 +1,19 @@
 package net.devemperor.dictate.config
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.database.entity.PromptEntity
 import net.devemperor.dictate.database.entity.PromptType
-import net.devemperor.dictate.shared.config.ApiCredentialEntity
 import net.devemperor.dictate.shared.config.CatalogCodec
 import net.devemperor.dictate.shared.config.CatalogEntry
-import net.devemperor.dictate.shared.config.ModelRefEntity
-import net.devemperor.dictate.shared.config.ProfileEntity
 import net.devemperor.dictate.shared.config.PromptV3Entity
-import net.devemperor.dictate.shared.config.ProviderConfigEntity
 import net.devemperor.dictate.shared.config.contentHash
+import net.devemperor.dictate.shared.config.contentHashOfElement
 import net.devemperor.dictate.shared.protocol.DecodeResult
 
 /**
@@ -78,32 +77,21 @@ object CatalogImport {
             is DecodeResult.Ok -> decoded.value
         }
 
-        // §5.3 recompute check: a non-empty carried hash must match the payload it claims to describe.
-        val mismatches = file.entities.mapNotNull { entry ->
-            val (id, carried, recomputed) = when (entry) {
-                is CatalogEntry.Provider -> Triple(
-                    entry.entity.id, entry.entity.contentHash,
-                    contentHash(entry.entity, ProviderConfigEntity.serializer()),
-                )
-                is CatalogEntry.Credential -> Triple(
-                    entry.entity.id, entry.entity.contentHash,
-                    contentHash(entry.entity, ApiCredentialEntity.serializer()),
-                )
-                is CatalogEntry.Model -> Triple(
-                    entry.entity.id, entry.entity.contentHash,
-                    contentHash(entry.entity, ModelRefEntity.serializer()),
-                )
-                is CatalogEntry.Prompt -> Triple(
-                    entry.entity.id, entry.entity.contentHash,
-                    contentHash(entry.entity, PromptV3Entity.serializer()),
-                )
-                is CatalogEntry.Profile -> Triple(
-                    entry.entity.id, entry.entity.contentHash,
-                    contentHash(entry.entity, ProfileEntity.serializer()),
-                )
+        // §5.3 integrity check — recompute each carried contentHash from the RAW file bytes, NOT the
+        // decoded object. `decode` used `ignoreUnknownKeys`, so an additive field from a newer writer
+        // is dropped from the typed entity; hashing that lossy projection would never reproduce the
+        // hash the writer computed over the superset payload and would reject a valid cross-version
+        // file. Hashing the re-parsed JsonElement (schema-less — it drops nothing) keeps the file
+        // forward-compatible while a genuinely tampered payload value still mismatches. (finding
+        // logic-C-1; Block E's peer recompute MUST reuse contentHashOfElement for the same reason.)
+        val mismatches = lenientJson.parseToJsonElement(raw)
+            .jsonObject["entities"]!!.jsonArray
+            .mapNotNull { entry ->
+                val payload = entry.jsonObject["entity"]!!.jsonObject
+                val carried = payload["contentHash"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val id = payload["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (carried.isNotEmpty() && carried != contentHashOfElement(payload)) id else null
             }
-            if (carried.isNotEmpty() && carried != recomputed) id else null
-        }
         if (mismatches.isNotEmpty()) {
             return Result.Invalid("contentHash mismatch (corrupt or tampered file) for: ${mismatches.joinToString()}")
         }
@@ -142,7 +130,7 @@ object CatalogImport {
                 autoApply = dto.autoApply,
             ) ?: PromptEntity(
                 id = 0,
-                pos = dao.count(),
+                pos = dao.nextPos(),
                 name = dto.name,
                 prompt = dto.text,
                 requiresSelection = dto.requiresSelection,
@@ -171,7 +159,7 @@ object CatalogImport {
     fun appendLegacyPrompts(db: DictateDatabase, parsed: List<PromptEntity>, clock: () -> Long = { System.currentTimeMillis() }) {
         val dao = db.promptDao()
         db.runInTransaction {
-            var pos = dao.count()
+            var pos = dao.nextPos()
             parsed.forEach { entity ->
                 val uuid = java.util.UUID.randomUUID().toString()
                 val row = entity.copy(

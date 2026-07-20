@@ -1,11 +1,17 @@
 package net.devemperor.dictate.config
 
 import android.content.Context
-import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.database.entity.PromptEntity
 import net.devemperor.dictate.database.entity.PromptType
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import net.devemperor.dictate.rewording.PromptImportExport
 import net.devemperor.dictate.shared.config.CatalogCodec
 import net.devemperor.dictate.shared.config.CatalogEntry
@@ -16,6 +22,8 @@ import net.devemperor.dictate.shared.config.ProfileEntity
 import net.devemperor.dictate.shared.config.ProfilePromptRef
 import net.devemperor.dictate.shared.config.ProviderConfigEntity
 import net.devemperor.dictate.shared.config.ProviderType
+import net.devemperor.dictate.shared.config.contentHashOfElement
+import net.devemperor.dictate.testutil.ConfigMigrationScenario
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -41,8 +49,7 @@ class CatalogImportExportTest {
 
     @Before
     fun setUp() {
-        db = Room.inMemoryDatabaseBuilder(context, DictateDatabase::class.java)
-            .allowMainThreadQueries().build()
+        db = ConfigMigrationScenario.inMemoryDb(context)
         repo = ConfigRepository(db)
     }
 
@@ -154,8 +161,7 @@ class CatalogImportExportTest {
         seedProviderChain()
         val encoded = CatalogCodec.encode(CatalogExport.fullCatalog(db))
 
-        val fresh = Room.inMemoryDatabaseBuilder(context, DictateDatabase::class.java)
-            .allowMainThreadQueries().build()
+        val fresh = ConfigMigrationScenario.inMemoryDb(context)
         try {
             val result = CatalogImport.importV3(encoded, fresh)
             assertTrue("expected V3Imported, got $result", result is CatalogImport.Result.V3Imported)
@@ -202,6 +208,68 @@ class CatalogImportExportTest {
             CatalogImport.importV3("""{"version":3,"entities":[{"kind":"alien"}]}""", db)
                 is CatalogImport.Result.Malformed,
         )
+    }
+
+    /**
+     * Regression (finding logic-C-1): a file from a NEWER writer carrying an unknown additive payload
+     * field, with a carried `contentHash` computed over that superset payload, must import — the §5.3
+     * check recomputes from the raw file bytes (not the lossy `ignoreUnknownKeys` decode), so the
+     * additive field survives into the hash. Red on the pre-fix typed recompute (mismatch → Invalid).
+     */
+    @Test
+    fun v3Import_acceptsAdditiveFieldFromNewerWriter() {
+        seedProviderChain()
+        val encoded = CatalogCodec.encode(CatalogExport.fullCatalog(db))
+
+        val tree = Json.parseToJsonElement(encoded).jsonObject
+        val patchedEntities = tree["entities"]!!.jsonArray.map { entry ->
+            val obj = entry.jsonObject
+            if (obj["kind"]?.jsonPrimitive?.content != "prompt") return@map entry
+            val payload = obj["entity"]!!.jsonObject.toMutableMap()
+            // Newer writer adds an additive field and hashes the SUPERSET payload (envelope stripped).
+            payload["futureField"] = JsonPrimitive("from-a-newer-app-version")
+            payload["contentHash"] = JsonPrimitive(contentHashOfElement(JsonObject(payload)))
+            JsonObject(obj.toMutableMap().apply { put("entity", JsonObject(payload)) })
+        }
+        val newerFile = JsonObject(
+            tree.toMutableMap().apply { put("entities", JsonArray(patchedEntities)) },
+        ).toString()
+
+        val fresh = ConfigMigrationScenario.inMemoryDb(context)
+        try {
+            val result = CatalogImport.importV3(newerFile, fresh)
+            assertTrue(
+                "a newer-writer file with an additive payload field must import, got $result",
+                result is CatalogImport.Result.V3Imported,
+            )
+        } finally {
+            fresh.close()
+        }
+    }
+
+    /**
+     * Regression (finding logic-C-3): appending must use `MAX(pos)+1`, not `COUNT(*)`. With a gap in
+     * `pos` (a middle row deleted), `COUNT(*)` hands out an already-occupied position and two rows
+     * collide on the same `pos`. Red on the pre-fix `dao.count()` append.
+     */
+    @Test
+    fun appendLegacyPrompts_assignsUniquePosDespiteGapInPositions() {
+        val dao = db.promptDao()
+        dao.insert(PromptEntity(id = 0, pos = 0, name = "A", prompt = "a", type = PromptType.PROMPT.name, uuid = "u0"))
+        val midId = dao.insert(
+            PromptEntity(id = 0, pos = 1, name = "B", prompt = "b", type = PromptType.PROMPT.name, uuid = "u1"),
+        ).toInt()
+        dao.insert(PromptEntity(id = 0, pos = 2, name = "C", prompt = "c", type = PromptType.PROMPT.name, uuid = "u2"))
+        dao.deleteById(midId) // positions now {0, 2}, COUNT(*) = 2 → would collide at pos 2
+
+        CatalogImport.appendLegacyPrompts(
+            db,
+            listOf(PromptEntity(id = 0, pos = 0, name = "New", prompt = "new", type = PromptType.PROMPT.name)),
+        ) { 1L }
+
+        val positions = dao.getAll().map { it.pos }
+        assertEquals("no two prompts may share a pos", positions.size, positions.toSet().size)
+        assertEquals(3, dao.getAll().first { it.name == "New" }.pos)
     }
 
     // ── Legacy path (§10.4 v1/v2) ─────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 package net.devemperor.dictate.shared.config
 
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.JsonElement
 import java.security.MessageDigest
 
 /**
@@ -17,11 +18,24 @@ import java.security.MessageDigest
  *
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/entitaetenmodell-android.md §5.2, §5.3
  */
-fun <T> contentHash(value: T, serializer: KSerializer<T>): String {
-    val bytes = CanonicalJson.canonicalBytes(value, serializer)
-    // `and 0xFF` is mandatory: a Kotlin Byte is signed, so a byte >= 0x80 would sign-extend to a
-    // negative Int and format as "ffffff80" without the mask. A SHA-256 digest routinely has such
-    // bytes, so the mask is load-bearing, not cosmetic (guarded by ContentHashTest).
-    return MessageDigest.getInstance("SHA-256").digest(bytes)
+fun <T> contentHash(value: T, serializer: KSerializer<T>): String =
+    sha256Hex(CanonicalJson.canonicalBytes(value, serializer))
+
+/**
+ * The content hash of an already-parsed payload [element] — the same digest as [contentHash], but
+ * taken over the RAW file bytes (via [CanonicalJson.canonicalString]) rather than a typed round-trip.
+ * A newer writer's superset payload therefore verifies: an unknown additive field survives the parse
+ * and is folded into the hash exactly as the writer computed it (forward-compat, §5.4), while a
+ * tampered payload value still produces a different hash and is rejected.
+ */
+fun contentHashOfElement(element: JsonElement): String =
+    sha256Hex(CanonicalJson.canonicalString(element).toByteArray(Charsets.UTF_8))
+
+/**
+ * SHA-256 → lowercase hex. `and 0xFF` is mandatory: a Kotlin Byte is signed, so a byte >= 0x80 would
+ * sign-extend to a negative Int and format as "ffffff80" without the mask. A SHA-256 digest routinely
+ * has such bytes, so the mask is load-bearing, not cosmetic (guarded by ContentHashTest).
+ */
+private fun sha256Hex(bytes: ByteArray): String =
+    MessageDigest.getInstance("SHA-256").digest(bytes)
         .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
-}

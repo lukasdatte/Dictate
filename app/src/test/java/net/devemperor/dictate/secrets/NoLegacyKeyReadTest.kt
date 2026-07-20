@@ -11,17 +11,24 @@ import java.io.File
  * 11 secret pref constants must be referenced **only** in their definition (`DictatePrefs.kt`) and
  * in the migration (`SecretsMigration.kt`) — no other code may read or write them.
  *
- * # Pending — the readers/writers are re-pointed in C2/C3
- * B2 moves the secret *data* into the store; it deliberately does **not** re-point the runtime
- * consumers. `AndroidAiConfig` (API-key reads), `WindowsTarget` (device-secret read), and the
- * settings/onboarding **write** paths still reference these prefs and are switched to the
- * SecretStore atomically in **C2** (`ProfileResolver` reads) and **C3** (UI writes) — a reads-only
- * re-point in B2 would silently break newly entered keys (the write path would still target prefs).
- * The end-state assertion is therefore encoded here and marked pending until those chunks land.
+ * # Pending — one slot (`WindowsDeviceSecret`) is not yet re-pointed
+ * The **API-key** half is done: production reads credentials via `ProfileResolver`/`SecretStore`
+ * (C2/C3) and the former pref-based reader `AndroidAiConfig` was retired to `src/test`, so the 10
+ * API-key prefs are no longer referenced outside the allow-list.
  *
- * `pending:` prefix per test-first-patterns. Tracking artefact: chunks C2/C3 of the
- * desktop-companion-v1 plan (spec secretstore.md §7.2, §2.6). Remove `@Ignore` when C3 re-points
- * the last writer.
+ * The **device-secret** half remains open. `SecretsMigration` (live via `DictateApplication`)
+ * already moves `Pref.WindowsDeviceSecret` into the store, but three main-source consumers still
+ * reference the pref and were missed by C2/C3:
+ *   - `preferences/WindowsTarget.kt` — reads the pref to build the send target (now empty post-migration),
+ *   - `settings/WindowsPairingActivity.java` — still *writes* the secret back into the plaintext pref,
+ *   - `state/PipelinePrefMirror.kt` — watches the pref key to recompute `windowsPaired`.
+ * These are a latent runtime bug (a paired user is treated as unpaired; the pairing secret is
+ * re-persisted in plaintext), tracked separately as a Critical finding — re-pointing them needs a
+ * `SecretStore` read/write seam plus a non-secret `paired?` predicate (spec secretstore.md §7.2).
+ *
+ * `pending:` prefix per test-first-patterns. Tracking artefact: the `WindowsDeviceSecret` re-point
+ * (spec secretstore.md §7.2, §2.6; research `androidaiconfig-secret-pref-retirement.md` Part 2).
+ * Remove `@Ignore` only after all three `WindowsDeviceSecret` consumers read/write via the store.
  */
 class NoLegacyKeyReadTest {
 

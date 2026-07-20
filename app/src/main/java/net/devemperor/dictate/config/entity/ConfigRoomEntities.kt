@@ -5,7 +5,9 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import net.devemperor.dictate.shared.config.AmbiguityModeValue
 import net.devemperor.dictate.shared.config.ModelFunction
+import net.devemperor.dictate.shared.config.PromptSelectionMode
 import net.devemperor.dictate.shared.config.ProviderKind
 import net.devemperor.dictate.shared.config.ProviderType
 import net.devemperor.dictate.shared.config.SubscriptionMode
@@ -116,11 +118,11 @@ data class ProfileRoomEntity(
     @ColumnInfo(name = "name") val name: String,
     @ColumnInfo(name = "transcription_model_ref") val transcriptionModelRef: String? = null,
     @ColumnInfo(name = "completion_model_ref") val completionModelRef: String? = null,
-    @ColumnInfo(name = "style_prompt_mode") val stylePromptMode: String = "PREDEFINED",
+    @ColumnInfo(name = "style_prompt_mode") val stylePromptMode: String = PromptSelectionMode.PREDEFINED.name,
     @ColumnInfo(name = "style_prompt_custom_text") val stylePromptCustomText: String = "",
-    @ColumnInfo(name = "system_prompt_mode") val systemPromptMode: String = "PREDEFINED",
+    @ColumnInfo(name = "system_prompt_mode") val systemPromptMode: String = PromptSelectionMode.PREDEFINED.name,
     @ColumnInfo(name = "system_prompt_custom_text") val systemPromptCustomText: String = "",
-    @ColumnInfo(name = "ambiguity_mode") val ambiguityMode: String = "ALWAYS_INSERT",
+    @ColumnInfo(name = "ambiguity_mode") val ambiguityMode: String = AmbiguityModeValue.ALWAYS_INSERT.name,
     /** Canonical JSON (Map<String,String>) of completion parameter overrides. */
     @ColumnInfo(name = "parameter_overrides") val parameterOverrides: String = "{}",
     // ── Envelope / provenance ──
@@ -132,6 +134,12 @@ data class ProfileRoomEntity(
     @ColumnInfo(name = "content_hash") val contentHash: String,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
 ) {
+    val stylePromptModeEnum: PromptSelectionMode
+        get() = runCatching { PromptSelectionMode.valueOf(stylePromptMode) }.getOrDefault(PromptSelectionMode.PREDEFINED)
+    val systemPromptModeEnum: PromptSelectionMode
+        get() = runCatching { PromptSelectionMode.valueOf(systemPromptMode) }.getOrDefault(PromptSelectionMode.PREDEFINED)
+    val ambiguityModeEnum: AmbiguityModeValue
+        get() = runCatching { AmbiguityModeValue.valueOf(ambiguityMode) }.getOrDefault(AmbiguityModeValue.ALWAYS_INSERT)
     val visibilityEnum: Visibility
         get() = runCatching { Visibility.valueOf(visibility) }.getOrDefault(Visibility.PRIVATE)
     val subscriptionModeEnum: SubscriptionMode

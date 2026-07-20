@@ -6,7 +6,6 @@ import net.devemperor.dictate.database.entity.PromptType
 import net.devemperor.dictate.shared.config.CatalogEntry
 import net.devemperor.dictate.shared.config.CatalogFileV3
 import net.devemperor.dictate.shared.config.PromptV3Entity
-import net.devemperor.dictate.shared.config.SourceRef
 import net.devemperor.dictate.shared.config.SubscriptionMode
 import net.devemperor.dictate.shared.config.Visibility
 
@@ -68,12 +67,7 @@ object CatalogExport {
     /** Shareable DTO projection of an Android prompt row, or null for TEXT pills / unbackfilled rows. */
     fun toPromptDto(row: PromptEntity): PromptV3Entity? {
         if (row.typeEnum == PromptType.TEXT || row.uuid.isEmpty()) return null
-        val sourceRef =
-            if (row.sourcePeerId != null && row.sourceOriginalId != null && row.sourceOriginalHash != null) {
-                SourceRef(row.sourcePeerId, row.sourceOriginalId, row.sourceOriginalHash)
-            } else {
-                null
-            }
+        val sourceRef = sourceRefOrNull(row.sourcePeerId, row.sourceOriginalId, row.sourceOriginalHash)
         return PromptV3Entity(
             id = row.uuid,
             contentHash = row.contentHash,

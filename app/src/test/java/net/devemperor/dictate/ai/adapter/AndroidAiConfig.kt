@@ -4,19 +4,25 @@ import android.content.SharedPreferences
 import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.ai.ElevenLabsKeytermsParser
-import net.devemperor.dictate.ai.model.ParameterRegistry
 import net.devemperor.dictate.ai.port.AiConfig
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 
 /**
- * SharedPreferences-backed [AiConfig] adapter. Holds the provider/model/key/
- * baseUrl selection that used to live in `RunnerFactory`, plus the completion-
- * parameter and ElevenLabs-keyterms resolution that used to live in
- * `AIOrchestrator` — all moved here verbatim so the `:shared-ai` core stays
- * prefs-free with byte-identical behaviour (see AiConfigParityTest,
- * ParameterResolutionParityTest).
+ * Test-only, frozen pref-based [AiConfig] baseline. Originally the production adapter, it read the
+ * *secret* API-key prefs directly (`apiKey()`); production now resolves credentials via the
+ * entity-based `ProfileResolver`/`SecretStore`, so this class was moved to `src/test` to honour
+ * spec secretstore.md §2.6 (no code outside `DictatePrefs`/`SecretsMigration` reads the secret
+ * prefs). It survives here as the **characterization baseline** the new resolver is proven against
+ * (`AiConfigParityTest`, `ParameterResolutionParityTest`, `ProfileResolverCharacterizationTest`)
+ * and as a pref-driven `AiConfig` fixture for the orchestrator/pipeline tests.
  *
+ * Do **not** re-introduce this into `src/main` — that would re-enshrine a runtime `AiConfig` that
+ * reads plaintext key prefs. The non-secret completion-parameter reader was extracted to
+ * `net.devemperor.dictate.ai.adapter.PrefCompletionParameters` (still in main); [completionParameters]
+ * below delegates to it so this fixture stays a real test of the extracted helper.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/androidaiconfig-secret-pref-retirement.md
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §4.1, §6 A3.3/A3.6
  */
 class AndroidAiConfig(private val sp: SharedPreferences) : AiConfig {
@@ -71,21 +77,9 @@ class AndroidAiConfig(private val sp: SharedPreferences) : AiConfig {
         return provider.defaultBaseUrl
     }
 
-    override fun completionParameters(provider: AIProvider, model: String): Map<String, Any> {
-        val defs = ParameterRegistry.getCompletionParameters(provider, model)
-        val prefs = PARAMETER_PREFS[provider] ?: return emptyMap()
-        val params = mutableMapOf<String, Any>()
-        for (def in defs) {
-            val value: Any? = when (def.name) {
-                "temperature" -> prefs.temperature?.let { sp.get(it).takeIf { v -> v >= 0f } }
-                "max_completion_tokens", "max_tokens" -> prefs.maxTokens?.let { sp.get(it).takeIf { v -> v > 0 } }
-                "reasoning_effort" -> prefs.reasoningEffort?.let { sp.get(it).takeIf { v -> v.isNotEmpty() } }
-                else -> null  // top_p, frequency_penalty etc. - extendable later
-            }
-            if (value != null) params[def.name] = value
-        }
-        return params
-    }
+    override fun completionParameters(provider: AIProvider, model: String): Map<String, Any> =
+        // Delegate to the extracted main-source reader so this fixture exercises the real helper.
+        PrefCompletionParameters.of(sp, provider, model)
 
     override fun elevenLabsKeyterms(): List<String>? {
         // Reproduces the former AIOrchestrator.transcribe guard:
@@ -110,25 +104,5 @@ class AndroidAiConfig(private val sp: SharedPreferences) : AiConfig {
         AIProvider.OPENROUTER -> sp.get(Pref.RewordingOpenRouterModel)
         AIProvider.CUSTOM -> sp.get(Pref.RewordingCustomModel)
         AIProvider.ELEVENLABS -> throw IllegalStateException("ElevenLabs does not support completion")
-    }
-
-    private companion object {
-        /**
-         * Type-safe mapping: Provider -> Parameter Pref objects.
-         * No dynamic key construction - every access goes through Pref<T>.
-         */
-        data class ProviderParamPrefs(
-            val temperature: Pref<Float>? = null,
-            val maxTokens: Pref<Int>? = null,
-            val reasoningEffort: Pref<String>? = null
-        )
-
-        val PARAMETER_PREFS = mapOf(
-            AIProvider.OPENAI to ProviderParamPrefs(Pref.TemperatureOpenAI, Pref.MaxTokensOpenAI, Pref.ReasoningEffortOpenAI),
-            AIProvider.GROQ to ProviderParamPrefs(Pref.TemperatureGroq, Pref.MaxTokensGroq),
-            AIProvider.ANTHROPIC to ProviderParamPrefs(Pref.TemperatureAnthropic, Pref.MaxTokensAnthropic),
-            AIProvider.OPENROUTER to ProviderParamPrefs(Pref.TemperatureOpenRouter, Pref.MaxTokensOpenRouter),
-            AIProvider.CUSTOM to ProviderParamPrefs(Pref.TemperatureOpenAI, Pref.MaxTokensOpenAI)  // Custom uses OpenAI defaults
-        )
     }
 }

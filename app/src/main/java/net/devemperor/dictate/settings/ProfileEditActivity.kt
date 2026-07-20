@@ -174,11 +174,19 @@ class ProfileEditActivity : AppCompatActivity() {
     }
 
     private fun setupAmbiguitySpinner() {
+        val labels = ambiguityModes.map { getString(ambiguityLabelRes(it)) }
         ambiguitySpinner.adapter =
-            ArrayAdapter(this, android.R.layout.simple_spinner_item, ambiguityModes.map { it.name }).apply {
+            ArrayAdapter(this, android.R.layout.simple_spinner_item, labels).apply {
                 setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
             }
         ambiguitySpinner.setSelection(ambiguityModes.indexOf(profile.ambiguityMode).coerceAtLeast(0))
+    }
+
+    /** Localized spinner label per mode — same wording as the global ambiguity setting, not the raw enum name. */
+    private fun ambiguityLabelRes(mode: AmbiguityModeValue): Int = when (mode) {
+        AmbiguityModeValue.ALWAYS_INSERT -> R.string.dictate_ambiguity_always_insert
+        AmbiguityModeValue.AUTO -> R.string.dictate_ambiguity_auto
+        AmbiguityModeValue.ALWAYS_REVIEW -> R.string.dictate_ambiguity_always_review
     }
 
     // ── Prompt ordering (§10.3) ───────────────────────────────────────────────────────────────

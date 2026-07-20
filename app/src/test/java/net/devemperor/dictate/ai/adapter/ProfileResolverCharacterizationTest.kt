@@ -1,18 +1,14 @@
 package net.devemperor.dictate.ai.adapter
 
-import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.ai.port.AiConfig
-import net.devemperor.dictate.config.ConfigEntityMigration
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.preferences.Pref
 import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.preferences.put
-import net.devemperor.dictate.secrets.AndroidKeystoreSecretStore
-import net.devemperor.dictate.secrets.InMemoryKekProvider
-import net.devemperor.dictate.secrets.SecretsMigration
+import net.devemperor.dictate.testutil.ConfigMigrationScenario
 import net.devemperor.dictate.testutil.FakeSharedPreferences
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -73,15 +69,12 @@ class ProfileResolverCharacterizationTest {
     /** Seeds prefs, snapshots the pref path, runs B2 + C2, returns (expected, resolver). */
     private fun migrate(seed: FakeSharedPreferences.() -> Unit): Pair<Snapshot, ProfileResolver> {
         val sp = FakeSharedPreferences().apply(seed)
-        val store = AndroidKeystoreSecretStore(FakeSharedPreferences(), InMemoryKekProvider(), hardwareBacked = false)
+        val store = ConfigMigrationScenario.realStore()
 
         val expected = snapshot(AndroidAiConfig(sp)) // capture BEFORE B2 removes the key prefs
 
-        SecretsMigration.run(context, sp, store)
-        val database = Room.inMemoryDatabaseBuilder(context, DictateDatabase::class.java)
-            .allowMainThreadQueries().build()
+        val database = ConfigMigrationScenario.runB2C2(context, sp, store)
         db = database
-        ConfigEntityMigration.run(context, sp, database, store)
 
         return expected to ProfileResolver(sp, database, store)
     }
@@ -226,7 +219,7 @@ class ProfileResolverCharacterizationTest {
         // Simulate "no active profile" (§9.3): the resolver must return the empty "not configured" state.
         // (Cannot mutate sp after migrate() closed over it, so use a fresh resolver on a cleared pointer.)
         val sp = FakeSharedPreferences()
-        val store = AndroidKeystoreSecretStore(FakeSharedPreferences(), InMemoryKekProvider(), hardwareBacked = false)
+        val store = ConfigMigrationScenario.realStore()
         val emptyResolver = ProfileResolver(sp, db!!, store)
         assertEquals(AIProvider.OPENAI, emptyResolver.provider(AIFunction.COMPLETION))
         assertEquals("", emptyResolver.modelName(AIFunction.COMPLETION))

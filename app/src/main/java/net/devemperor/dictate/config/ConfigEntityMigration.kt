@@ -5,7 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIProvider
-import net.devemperor.dictate.ai.adapter.AndroidAiConfig
+import net.devemperor.dictate.ai.adapter.PrefCompletionParameters
 import net.devemperor.dictate.ai.prompt.PromptMode
 import net.devemperor.dictate.ai.secrets.SecretStore
 import net.devemperor.dictate.ai.secrets.SecretStoreException
@@ -18,14 +18,11 @@ import net.devemperor.dictate.preferences.put
 import net.devemperor.dictate.secrets.AndroidKeystoreSecretStore
 import net.devemperor.dictate.secrets.SecretsMigration
 import net.devemperor.dictate.shared.config.ApiCredentialEntity
-import net.devemperor.dictate.shared.config.ModelFunction
 import net.devemperor.dictate.shared.config.ModelRefEntity
 import net.devemperor.dictate.shared.config.ProfileEntity
 import net.devemperor.dictate.shared.config.ProfilePromptRef
 import net.devemperor.dictate.shared.config.ProviderConfigEntity
 import net.devemperor.dictate.shared.config.ProviderKind
-import java.math.BigDecimal
-import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -172,7 +169,7 @@ object ConfigEntityMigration {
                 id = modelRefId,
                 providerRef = providerConfigId,
                 modelId = sp.get(modelPref(function, provider)),
-                function = if (function == AIFunction.TRANSCRIPTION) ModelFunction.TRANSCRIPTION else ModelFunction.COMPLETION,
+                function = function.toWire(),
                 parameterDefaults = parameterDefaults(function, provider, sp),
             ),
         )
@@ -209,7 +206,7 @@ object ConfigEntityMigration {
 
     /**
      * The ModelRef's `parameterDefaults` (§8.3). Completion params mirror
-     * `AndroidAiConfig.completionParameters` exactly (same key set, same sentinel filtering) so the
+     * `PrefCompletionParameters.of` exactly (same key set, same sentinel filtering) so the
      * resolver reconstructs the byte-identical typed map; values are stored as the canonical string
      * form. Transcription adds ElevenLabs `keyterms` (§4.5).
      */
@@ -217,7 +214,7 @@ object ConfigEntityMigration {
         return when (function) {
             AIFunction.COMPLETION -> {
                 val model = sp.get(modelPref(function, provider))
-                AndroidAiConfig(sp).completionParameters(provider, model)
+                PrefCompletionParameters.of(sp, provider, model)
                     .mapValues { canonicalParam(it.value) }
             }
             AIFunction.TRANSCRIPTION -> {
@@ -231,16 +228,12 @@ object ConfigEntityMigration {
 
     /** Canonical string form of a completion-parameter value for hash-stable storage (§8.3). */
     private fun canonicalParam(value: Any): String = when (value) {
-        is Float -> toCanonicalDecimal(value)
+        is Float -> ConfigEntityMapper.canonicalDecimal(value)
         is Int -> value.toString()
         is Long -> value.toString()
         is String -> value
         else -> value.toString()
     }
-
-    /** Shortest lossless decimal, '.' separator, no exponent, no trailing zeros (e.g. `0.7`, `1`, `1.5`). */
-    private fun toCanonicalDecimal(value: Float): String =
-        BigDecimal(value.toString()).stripTrailingZeros().toPlainString()
 
     /** Also used by [ConfigEntitySetup] (onboarding write path) so fingerprints never drift. */
     internal fun fingerprint(keyBytes: ByteArray): String =

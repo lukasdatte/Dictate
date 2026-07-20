@@ -1,13 +1,16 @@
 package net.devemperor.dictate.config
 
+import net.devemperor.dictate.ai.AIFunction
 import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.ai.prompt.PromptMode
+import net.devemperor.dictate.config.ConfigWireMapping.toAIFunction
 import net.devemperor.dictate.config.ConfigWireMapping.toAIProvider
 import net.devemperor.dictate.config.ConfigWireMapping.toAmbiguityMode
 import net.devemperor.dictate.config.ConfigWireMapping.toPromptMode
 import net.devemperor.dictate.config.ConfigWireMapping.toWire
 import net.devemperor.dictate.preferences.AmbiguityMode
 import net.devemperor.dictate.shared.config.AmbiguityModeValue
+import net.devemperor.dictate.shared.config.ModelFunction
 import net.devemperor.dictate.shared.config.ProviderType
 import net.devemperor.dictate.shared.config.PromptSelectionMode
 import org.junit.Assert.assertEquals
@@ -64,6 +67,21 @@ class ConfigWireEnumParityTest {
     fun `PromptMode round-trips through PromptSelectionMode`() {
         for (m in PromptMode.entries) {
             assertEquals(m, m.toWire().toPromptMode())
+        }
+    }
+
+    @Test
+    fun `AIFunction names match ModelFunction names`() {
+        assertEquals(
+            AIFunction.entries.map { it.name }.toSet(),
+            ModelFunction.entries.map { it.name }.toSet(),
+        )
+    }
+
+    @Test
+    fun `AIFunction round-trips through ModelFunction`() {
+        for (f in AIFunction.entries) {
+            assertEquals(f, f.toWire().toAIFunction())
         }
     }
 }

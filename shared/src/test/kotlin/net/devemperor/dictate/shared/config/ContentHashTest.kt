@@ -1,5 +1,8 @@
 package net.devemperor.dictate.shared.config
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -114,6 +117,27 @@ class ContentHashTest {
         )
 
         assertEquals(hash(provider()), hash(forked))
+    }
+
+    // -- contentHashOfElement: raw-bytes equivalence + forward-compat (finding logic-C-1) --
+
+    @Test
+    fun contentHashOfElement_matchesTypedHash_forSameVersionPayload() {
+        // The file entity object carries the envelope; contentHashOfElement must strip it and land on
+        // the SAME digest as the typed contentHash — otherwise same-version files stop verifying.
+        val element = CanonicalJson.json.encodeToJsonElement(ProviderConfigEntity.serializer(), provider())
+        assertEquals(hash(provider()), contentHashOfElement(element))
+    }
+
+    @Test
+    fun contentHashOfElement_unknownAdditiveKey_changesHash() {
+        // A newer writer's superset payload hashes differently (the additive field is folded in) and
+        // a tampered value would too — the primitive-level guard behind the file-import forward-compat.
+        val element = CanonicalJson.json.encodeToJsonElement(ProviderConfigEntity.serializer(), provider())
+        val withFutureField = JsonObject(
+            element.jsonObject.toMutableMap().apply { put("futureField", JsonPrimitive("x")) },
+        )
+        assertNotEquals(contentHashOfElement(element), contentHashOfElement(withFutureField))
     }
 
     @Test

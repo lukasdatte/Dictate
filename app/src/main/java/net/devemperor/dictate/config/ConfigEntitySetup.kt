@@ -12,12 +12,10 @@ import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.preferences.put
 import net.devemperor.dictate.secrets.AndroidKeystoreSecretStore
 import net.devemperor.dictate.shared.config.ApiCredentialEntity
-import net.devemperor.dictate.shared.config.ModelFunction
 import net.devemperor.dictate.shared.config.ModelRefEntity
 import net.devemperor.dictate.shared.config.ProfileEntity
 import net.devemperor.dictate.shared.config.ProviderConfigEntity
 import net.devemperor.dictate.shared.config.ProviderKind
-import java.nio.charset.StandardCharsets
 import java.util.UUID
 
 /**
@@ -57,7 +55,7 @@ object ConfigEntitySetup {
         apiKey: String,
     ) {
         val repo = ConfigRepository(db)
-        val keyBytes = apiKey.toByteArray(StandardCharsets.UTF_8)
+        val keyBytes = apiKey.toByteArray(Charsets.UTF_8)
 
         var transcriptionModelRef: String? = null
         var completionModelRef: String? = null
@@ -97,7 +95,7 @@ object ConfigEntitySetup {
                     id = modelRefId,
                     providerRef = providerConfigId,
                     modelId = defaultModel(provider, function),
-                    function = if (function == AIFunction.TRANSCRIPTION) ModelFunction.TRANSCRIPTION else ModelFunction.COMPLETION,
+                    function = function.toWire(),
                 ),
             )
             when (function) {

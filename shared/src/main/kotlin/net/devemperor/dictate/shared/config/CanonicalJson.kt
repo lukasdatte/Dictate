@@ -71,6 +71,15 @@ object CanonicalJson {
         return canonicalize(stripEnvelope(tree))
     }
 
+    /**
+     * The canonical string of an ALREADY-PARSED [element] — the raw-bytes path used to verify a
+     * carried `contentHash` without a lossy typed round-trip. A [JsonElement] parsed straight from
+     * the file drops nothing, so an unknown additive field from a newer writer survives into the
+     * hash (forward-compat, §5.4). Same envelope-strip + key-sort as the typed [canonicalString];
+     * idempotent on an element that is already canonical.
+     */
+    fun canonicalString(element: JsonElement): String = canonicalize(stripEnvelope(element))
+
     /** Remove [ENVELOPE_FIELDS] from the top object only; leave arrays/primitives/nested objects. */
     private fun stripEnvelope(element: JsonElement): JsonElement =
         if (element is JsonObject) {

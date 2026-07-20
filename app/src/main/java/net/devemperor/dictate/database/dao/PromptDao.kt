@@ -50,4 +50,13 @@ interface PromptDao {
 
     @Query("SELECT COUNT(*) FROM prompts")
     fun count(): Int
+
+    /**
+     * The next free append position: `MAX(pos) + 1`, or 0 on an empty table. Use this — NOT
+     * [count] — when appending a row: `pos` can have gaps (a middle row deleted leaves e.g. 0,2),
+     * and `COUNT(*)` would then hand out an already-occupied `pos`, colliding two rows on the same
+     * position (there is no UNIQUE constraint on `pos`, so both persist and their order is undefined).
+     */
+    @Query("SELECT COALESCE(MAX(pos), -1) + 1 FROM prompts")
+    fun nextPos(): Int
 }

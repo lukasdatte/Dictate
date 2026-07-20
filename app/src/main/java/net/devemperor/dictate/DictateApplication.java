@@ -27,6 +27,11 @@ public class DictateApplication extends Application {
         // 1. Pre-existing provider migration (TLS, Anthropic-Keys, etc.).
         PrefsMigration.migrateProviderPrefs(sp);
 
+        // 1b. Block B2: one-time move of the 11 plaintext secret prefs into the encrypted
+        //     SecretStore (idempotent + availability-guarded; spec secretstore.md §7). Runs
+        //     here, before the first runner is built.
+        PrefsMigration.migrateSecrets(this);
+
         // 2. Versioned-envelope subsystem (Chunk 2 + Chunk 3).
         //    Order matters:
         //      a) LanguageLabelResolver.initialize loads the resource arrays

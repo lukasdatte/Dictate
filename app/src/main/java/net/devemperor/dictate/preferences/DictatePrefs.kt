@@ -182,6 +182,18 @@ sealed class Pref<T>(val key: String, val default: T) {
     object LegacyAudioPurgedV4 :
         Pref<Boolean>("net.devemperor.dictate.legacy_audio_purged_v4", false)
 
+    /**
+     * Idempotence flag for [net.devemperor.dictate.secrets.SecretsMigration] (Block B2).
+     * `false` = the one-time move of the 11 plaintext secret prefs into the encrypted
+     * SecretStore has not completed yet. Set to `true` **only** after a fully successful
+     * migration; a partial/aborted run leaves it `false` so the next app start retries
+     * (spec secretstore.md §7.3).
+     *
+     * @see net.devemperor.dictate.secrets.SecretsMigration
+     */
+    object SecretsMigratedV1 :
+        Pref<Boolean>("net.devemperor.dictate.secrets_migrated_v1", false)
+
     // ── Input Languages (Set<String>, separate access) ──
     object InputLanguages : Pref<String>("net.devemperor.dictate.input_languages", "")  // Sentinel, actually Set<String>
 

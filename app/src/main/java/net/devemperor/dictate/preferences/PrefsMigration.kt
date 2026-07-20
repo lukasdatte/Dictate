@@ -1,6 +1,8 @@
 package net.devemperor.dictate.preferences
 
+import android.content.Context
 import android.content.SharedPreferences
+import net.devemperor.dictate.secrets.SecretsMigration
 
 /**
  * One-time migration of SP provider keys from int (0/1/2) to String (enum name).
@@ -14,6 +16,20 @@ object PrefsMigration {
         migrateKey(sp, Pref.TranscriptionProvider.key)
         migrateKey(sp, Pref.RewordingProvider.key)
         removeObsoletePrefs(sp)
+    }
+
+    /**
+     * One-time move of the 11 plaintext secret prefs into the encrypted SecretStore (Block B2).
+     * Wired here so all pref-schema migrations share one entry surface; the actual work
+     * ([SecretsMigration]) is idempotent and availability-guarded, so this is safe to call
+     * unconditionally on every app start. Must run early — before the first runner is built
+     * (spec secretstore.md §7.3).
+     *
+     * @see net.devemperor.dictate.secrets.SecretsMigration
+     */
+    @JvmStatic
+    fun migrateSecrets(context: Context) {
+        SecretsMigration.run(context)
     }
 
     /**

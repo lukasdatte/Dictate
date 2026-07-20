@@ -52,7 +52,7 @@ class StartPcDictationActivity : Activity() {
             hasMicPermission = ContextCompat.checkSelfPermission(
                 this, Manifest.permission.RECORD_AUDIO,
             ) == PackageManager.PERMISSION_GRANTED,
-            isPaired = WindowsTarget.from(sp) != null,
+            isPaired = WindowsTarget.isPaired(sp),
         )
 
         val target = when (decision) {

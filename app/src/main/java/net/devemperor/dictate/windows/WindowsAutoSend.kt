@@ -20,7 +20,7 @@ object WindowsAutoSend {
 
     /** True iff the auto-send toggle is on AND a PC is paired. */
     fun shouldAutoSend(sp: SharedPreferences): Boolean =
-        sp.get(Pref.WindowsAutoSendEnabled) && WindowsTarget.from(sp) != null
+        sp.get(Pref.WindowsAutoSendEnabled) && WindowsTarget.isPaired(sp)
 
     /**
      * Should a finished pipeline completion of this [source] be diverted to the paired PC

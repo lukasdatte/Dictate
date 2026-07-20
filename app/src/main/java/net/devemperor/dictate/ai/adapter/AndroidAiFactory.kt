@@ -16,8 +16,9 @@ import net.devemperor.dictate.secrets.AndroidKeystoreSecretStore
  * C3 flip (spec §10 / §9): the live read path is the entity-based
  * [ProfileResolver] (active profile + SecretStore) and [ProfilePromptConfig] —
  * flipped together with the settings WRITE paths so reads and writes moved
- * atomically off the migrated prefs. The pref-based [AndroidAiConfig] remains
- * only as the migration's parameter mirror + characterization-test baseline.
+ * atomically off the migrated prefs. The migration's non-secret parameter mirror lives on in
+ * [PrefCompletionParameters]; the retired pref-based `AndroidAiConfig` survives only in test
+ * sources as the characterization baseline the resolver is proven against.
  *
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §4.5
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/entitaetenmodell-android.md §9

@@ -2204,7 +2204,7 @@ public class DictateInputMethodService extends InputMethodService
         View historyDetailBackBtn = dictateKeyboardView.findViewById(R.id.history_panel_detail_back_btn);
         View historyDetailInsertBtn = dictateKeyboardView.findViewById(R.id.history_panel_detail_insert_btn);
         View historyDetailSendBtn = dictateKeyboardView.findViewById(R.id.history_panel_detail_send_btn);
-        boolean windowsPaired = net.devemperor.dictate.preferences.WindowsTarget.from(sp) != null;
+        boolean windowsPaired = net.devemperor.dictate.preferences.WindowsTarget.isPaired(sp);
         if (historyRv != null && dictateDb != null) {
             historyRv.setLayoutManager(
                 new androidx.recyclerview.widget.LinearLayoutManager(this));
@@ -6972,7 +6972,7 @@ public class DictateInputMethodService extends InputMethodService
         // (there is no PC to dictate to yet). Activity-start from the IME MUST go through
         // ImeActivityLauncher (NEW_TASK+CLEAR_TOP, see its KDoc) so a stale task is not resurrected.
         boolean paired = sp != null
-                && net.devemperor.dictate.preferences.WindowsTarget.from(sp) != null;
+                && net.devemperor.dictate.preferences.WindowsTarget.isPaired(sp);
         if (paired) {
             startActivity(ImeActivityLauncher.INSTANCE.intentFor(
                     this, net.devemperor.dictate.core.PcDictationActivity.class));
@@ -7158,7 +7158,7 @@ public class DictateInputMethodService extends InputMethodService
         String sid = session.getId();
         String text = sessionManager.getFinalOutput(sid);
         if (text == null || text.isEmpty()) return;
-        if (net.devemperor.dictate.preferences.WindowsTarget.from(sp) == null) return; // slot would be GONE
+        if (!net.devemperor.dictate.preferences.WindowsTarget.isPaired(sp)) return; // slot would be GONE
         windowsDispatchCoordinator.dispatch(
                 sid, text, session.getCreatedAt(), originOf(sid),
                 /* acknowledgeOnSuccess = */ pending, /* surfacedAsPending = */ pending);

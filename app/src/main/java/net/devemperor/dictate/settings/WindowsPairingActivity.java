@@ -29,9 +29,12 @@ import com.journeyapps.barcodescanner.ScanContract;
 import com.journeyapps.barcodescanner.ScanOptions;
 
 import net.devemperor.dictate.R;
+import net.devemperor.dictate.ai.secrets.SecretStore;
 import net.devemperor.dictate.preferences.DictatePrefsKt;
 import net.devemperor.dictate.preferences.Pref;
 import net.devemperor.dictate.preferences.WindowsTarget;
+import net.devemperor.dictate.secrets.AndroidKeystoreSecretStore;
+import net.devemperor.dictate.secrets.PairingSecrets;
 import net.devemperor.dictate.shared.auth.PairingInfo;
 import net.devemperor.dictate.shared.auth.PairingUri;
 import net.devemperor.dictate.shared.client.DispatchClient;
@@ -41,6 +44,7 @@ import net.devemperor.dictate.shared.protocol.HealthResponse;
 import net.devemperor.dictate.shared.protocol.PairResponse;
 import net.devemperor.dictate.shared.transport.OkHttpDispatchTransport;
 
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 /**
@@ -200,9 +204,18 @@ public class WindowsPairingActivity extends AppCompatActivity {
                 setBusy(false);
                 if (result instanceof DispatchResult.Success) {
                     PairResponse response = ((DispatchResult.Success<PairResponse>) result).getValue();
-                    persistPairing(finalBaseUrl, response);
-                    Toast.makeText(this, R.string.dictate_pairing_success, Toast.LENGTH_SHORT).show();
-                    refreshPairedState();
+                    if (persistPairing(finalBaseUrl, response)) {
+                        Toast.makeText(this, R.string.dictate_pairing_success, Toast.LENGTH_SHORT).show();
+                        refreshPairedState();
+                    } else {
+                        // The handshake succeeded but the secret could not be stored securely — do
+                        // not leave the user "paired" with no usable secret (see persistPairing).
+                        new MaterialAlertDialogBuilder(this)
+                                .setTitle(R.string.dictate_pairing_failed_title)
+                                .setMessage(R.string.dictate_pairing_error_generic)
+                                .setPositiveButton(R.string.dictate_okay, null)
+                                .show();
+                    }
                 } else {
                     DispatchError error = ((DispatchResult.Failure) result).getError();
                     showPairingError(error);
@@ -211,13 +224,40 @@ public class WindowsPairingActivity extends AppCompatActivity {
         }).start();
     }
 
-    private void persistPairing(String baseUrl, PairResponse response) {
+    /**
+     * Store the pairing device secret in the {@link SecretStore}, then the non-secret prefs.
+     *
+     * <p>The secret goes into the encrypted store (spec secretstore.md §7.2) — never back into a
+     * plaintext pref. Order is <em>secret-before-url</em>, mirroring the migration's put-before-mark
+     * invariant: {@link WindowsTarget#isPaired} (which keys on the url being present) must never
+     * become true without a stored secret. If the store is unavailable or the put fails, nothing is
+     * written and {@code false} is returned, so the caller can surface an error instead of showing
+     * the user "paired" with no usable secret (keeps {@code url-present ⟺ secret-present}).
+     *
+     * @return true iff the secret was stored and the non-secret prefs written.
+     */
+    private boolean persistPairing(String baseUrl, PairResponse response) {
+        SecretStore store = AndroidKeystoreSecretStore.create(this);
+        if (!store.getAvailable()) {
+            Log.w(TAG, "secret store unavailable — cannot persist pairing secret");
+            return false;
+        }
+        try {
+            store.put(PairingSecrets.DEVICE_SECRET_REF,
+                    response.getDeviceSecret().getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            // SecretStore.put throws SecretStoreException (StorageIo/Unavailable). It is a Kotlin
+            // exception with no @Throws, so Java cannot catch the specific checked type — catch
+            // broadly and treat any store failure as "could not pair" rather than crash pairing.
+            Log.w(TAG, "pairing secret could not be stored", e);
+            return false;
+        }
         SharedPreferences.Editor editor = sp.edit();
         DictatePrefsKt.put(editor, Pref.WindowsTargetUrl.INSTANCE, baseUrl);
         DictatePrefsKt.put(editor, Pref.WindowsDeviceId.INSTANCE, response.getDeviceId());
-        DictatePrefsKt.put(editor, Pref.WindowsDeviceSecret.INSTANCE, response.getDeviceSecret());
         DictatePrefsKt.put(editor, Pref.WindowsServerName.INSTANCE, response.getServerName());
         editor.apply();
+        return true;
     }
 
     private void showPairingError(DispatchError error) {
@@ -246,7 +286,7 @@ public class WindowsPairingActivity extends AppCompatActivity {
 
     private void onTestClicked() {
         if (busy) return;
-        WindowsTarget target = WindowsTarget.from(sp);
+        WindowsTarget target = WindowsTarget.resolve(sp, AndroidKeystoreSecretStore.create(this));
         if (target == null) return;
         setBusy(true);
         new Thread(() -> {
@@ -281,9 +321,12 @@ public class WindowsPairingActivity extends AppCompatActivity {
     // ── Unpair ──────────────────────────────────────────────────────────────────────────
 
     private void onUnpairClicked() {
+        // Delete the secret from the store (it is no longer a plaintext pref — spec §7.2). delete()
+        // is a no-op if nothing is stored, so it never throws.
+        AndroidKeystoreSecretStore.create(this).delete(PairingSecrets.DEVICE_SECRET_REF);
         SharedPreferences.Editor editor = sp.edit();
+        // Clearing the url already flips WindowsTarget.isPaired to false (the paired-predicate).
         DictatePrefsKt.put(editor, Pref.WindowsTargetUrl.INSTANCE, "");
-        DictatePrefsKt.put(editor, Pref.WindowsDeviceSecret.INSTANCE, "");
         DictatePrefsKt.put(editor, Pref.WindowsServerName.INSTANCE, "");
         // Disarming auto-send on unpair is mandatory: an "active" auto-send mode without a target
         // would tip every dictation into the pending-part path (plan §1.2).
@@ -296,12 +339,14 @@ public class WindowsPairingActivity extends AppCompatActivity {
     // ── UI state ────────────────────────────────────────────────────────────────────────
 
     private void refreshPairedState() {
-        WindowsTarget target = WindowsTarget.from(sp);
-        boolean paired = target != null;
+        // Non-secret predicate: no target object (which would need the SecretStore) is needed just
+        // to render the paired UI; the display name is the non-secret server-name pref.
+        boolean paired = WindowsTarget.isPaired(sp);
         testBtn.setVisibility(paired ? View.VISIBLE : View.GONE);
         unpairBtn.setVisibility(paired ? View.VISIBLE : View.GONE);
         statusTv.setText(paired
-                ? getString(R.string.dictate_pairing_status_paired, target.getServerName())
+                ? getString(R.string.dictate_pairing_status_paired,
+                        DictatePrefsKt.get(sp, Pref.WindowsServerName.INSTANCE))
                 : getString(R.string.dictate_settings_windows_not_paired));
     }
 

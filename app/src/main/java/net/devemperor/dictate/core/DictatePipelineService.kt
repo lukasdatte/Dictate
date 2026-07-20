@@ -20,6 +20,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import android.view.WindowManager
+import androidx.annotation.VisibleForTesting
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,6 +34,8 @@ import net.devemperor.dictate.R
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.adapter.AndroidAiFactory
 import net.devemperor.dictate.ai.prompt.PromptService
+import net.devemperor.dictate.ai.secrets.SecretStore
+import net.devemperor.dictate.secrets.AndroidKeystoreSecretStore
 import net.devemperor.dictate.database.DictateDatabase
 import net.devemperor.dictate.migration.LegacyAudioFileMigration
 import net.devemperor.dictate.state.Action
@@ -828,9 +831,15 @@ class DictatePipelineService : Service() {
         // second DispatchClient and no second executor anywhere (§3.1).
         //
         // The transport/clients are rebuilt per call from the current
-        // WindowsTarget (the factory lambdas read the prefs lazily), so a
-        // re-pairing takes effect without rebuilding anything here.
+        // WindowsTarget (the factory lambdas read the prefs + the SecretStore
+        // lazily), so a re-pairing takes effect without rebuilding anything here.
+        //
+        // The device secret lives in the SecretStore (spec secretstore.md §7.2),
+        // not in the prefs, so the send-target factories resolve through it. Built
+        // via [secretStoreFactory] so the composition tests can inject an in-memory
+        // store (the real Keystore is absent under Robolectric — §5.4).
         // ──────────────────────────────────────────────────────────────
+        val secretStore = secretStoreFactory(this)
         val windowsSyncSource = AndroidSyncSource(database.sessionDao(), database.textInsertionDao())
         val windowsDispatchService = WindowsDispatchService(
             clientFactory = { t ->
@@ -848,7 +857,7 @@ class DictatePipelineService : Service() {
         windowsDispatchExecutorImpl = Executors.newSingleThreadExecutor()
         windowsDispatchCoordinatorImpl = WindowsDispatchCoordinator(
             service = windowsDispatchService,
-            targetProvider = { WindowsTarget.from(sharedPrefs) },
+            targetProvider = { WindowsTarget.resolve(sharedPrefs, secretStore) },
             emitAction = { action -> orchestrator.emitAction(action) },
             // The ONE audit authority (SessionManager.logTextInsertion — the sole
             // writer of text_insertions) with method=WINDOWS_DISPATCH + the target
@@ -869,7 +878,7 @@ class DictatePipelineService : Service() {
             // Resolve the paired target per send (re-pairing takes effect at once); no target = the
             // same "pair again" outcome as a rejected secret.
             send = { batch ->
-                WindowsTarget.from(sharedPrefs)?.let { target ->
+                WindowsTarget.resolve(sharedPrefs, secretStore)?.let { target ->
                     PcInputOutcomeMapper.classify(windowsDispatchService.input(target, batch))
                 } ?: PcSendResult.Failed(PcInputFailure.UNAUTHORIZED, opensCircuit = true)
             },
@@ -893,7 +902,7 @@ class DictatePipelineService : Service() {
         // WindowsDispatchService.sync itself already never throws).
         // ──────────────────────────────────────────────────────────────
         serviceScope.launch(Dispatchers.IO) {
-            WindowsTarget.from(sharedPrefs)?.let { target ->
+            WindowsTarget.resolve(sharedPrefs, secretStore)?.let { target ->
                 try {
                     windowsDispatchService.sync(target)
                 } catch (t: Throwable) {
@@ -2352,6 +2361,19 @@ class DictatePipelineService : Service() {
          * `getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE)`).
          */
         const val PREFS_NAME: String = "net.devemperor.dictate"
+
+        /**
+         * Factory for the [SecretStore] the Windows-dispatch send target resolves through.
+         *
+         * Test seam: the real Android Keystore is absent under Robolectric (its `AndroidKeyStore`
+         * provider is not installed — spec secretstore.md §5.4), so the composition tests swap in an
+         * in-memory store. Defaults to the production Keystore-backed store. Reset in the test's
+         * `@After`. Consistent with the service's existing lazy-factory lambda style (the
+         * `clientFactory`/`syncClientFactory` seams).
+         */
+        @VisibleForTesting
+        @JvmStatic
+        internal var secretStoreFactory: (Context) -> SecretStore = { AndroidKeystoreSecretStore.create(it) }
 
         /**
          * Wall-clock budget for `orchestrator.shutdown()` in onDestroy

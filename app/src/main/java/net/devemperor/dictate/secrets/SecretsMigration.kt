@@ -68,9 +68,6 @@ object SecretsMigration {
     /** Namespace of the ten API-key legacy refs; C2 re-maps these to credential IDs (§7.2). */
     internal const val LEGACY_NAMESPACE = "legacy"
 
-    /** Namespace of the pairing device secret — its final home (§7.2). */
-    internal const val PAIRING_NAMESPACE = "pairing"
-
     private const val PREF_KEY_PREFIX = "net.devemperor.dictate."
 
     /** A plaintext pref slot paired with the [SecretRef] it migrates to. */
@@ -95,12 +92,11 @@ object SecretsMigration {
             Pref.RewordingApiKeyCustom,
         ).forEach { add(Slot(it, SecretRef(LEGACY_NAMESPACE, it.key.removePrefix(PREF_KEY_PREFIX)))) }
 
-        add(
-            Slot(
-                Pref.WindowsDeviceSecret,
-                SecretRef(PAIRING_NAMESPACE, Pref.WindowsDeviceSecret.key.removePrefix(PREF_KEY_PREFIX)),
-            ),
-        )
+        // The pairing device secret goes straight to its final home. The destination ref is the
+        // shared SSoT [PairingSecrets.DEVICE_SECRET_REF] so the migration write, WindowsTarget's
+        // read, and the pairing write/clear can never drift (spec §7.2). The *source* pref
+        // (Pref.WindowsDeviceSecret) is still named here — this file is allow-listed for it (§2.6).
+        add(Slot(Pref.WindowsDeviceSecret, PairingSecrets.DEVICE_SECRET_REF))
     }
 
     /**

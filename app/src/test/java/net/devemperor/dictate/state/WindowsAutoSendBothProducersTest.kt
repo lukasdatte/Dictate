@@ -100,9 +100,10 @@ class WindowsAutoSendBothProducersTest(private val producer: Producer) {
         FakeSharedPreferences().apply {
             edit()
                 .putBoolean(Pref.WindowsAutoSendEnabled.key, enabled)
+                // Paired = the non-secret url + deviceId (WindowsTarget.isPaired); the secret is
+                // not a pref — it lives in the SecretStore (spec §7.2).
                 .putString(Pref.WindowsTargetUrl.key, target.baseUrl)
                 .putString(Pref.WindowsDeviceId.key, target.deviceId)
-                .putString(Pref.WindowsDeviceSecret.key, target.deviceSecret)
                 .putString(Pref.WindowsServerName.key, target.serverName)
                 .apply()
         }

@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.secrets.AndroidKeystoreSecretStore
+import net.devemperor.dictate.secrets.PairingSecrets
+import net.devemperor.dictate.testutil.FakeSecretStore
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -60,6 +63,14 @@ class DictatePipelineServiceCompositionTest {
         // initialize would leak across tests and assertions about
         // "freshly initialized in this onCreate" would be unreliable.
         JobExecutor.resetForTest()
+        // Restore the production SecretStore factory — the paired-sync tests swap in a fake (the
+        // real Keystore is absent under Robolectric — spec §5.4).
+        DictatePipelineService.secretStoreFactory = { AndroidKeystoreSecretStore.create(it) }
+    }
+
+    /** A ready in-memory SecretStore holding the pairing secret (Keystore is absent under Robolectric). */
+    private fun seededSecretStore() = FakeSecretStore().apply {
+        put(PairingSecrets.DEVICE_SECRET_REF, "s3cr3t".toByteArray())
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -258,12 +269,13 @@ class DictatePipelineServiceCompositionTest {
         // event. Pair to a connection-refused address (127.0.0.1:1) so the background sync fails,
         // and assert the service still constructs its whole surface. (When unpaired — every other
         // test here — the trigger is skipped entirely, so those tests never touch the network.)
+        // Paired = url + deviceId in prefs (WindowsTarget.isPaired); the secret comes from the store.
+        DictatePipelineService.secretStoreFactory = { seededSecretStore() }
         val prefs = ApplicationProvider.getApplicationContext<Context>()
             .getSharedPreferences(DictatePipelineService.PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
             .putString(Pref.WindowsTargetUrl.key, "http://127.0.0.1:1")
             .putString(Pref.WindowsDeviceId.key, "device-under-test")
-            .putString(Pref.WindowsDeviceSecret.key, "s3cr3t")
             .putString(Pref.WindowsServerName.key, "Unreachable-PC")
             .commit()
 
@@ -295,12 +307,13 @@ class DictatePipelineServiceCompositionTest {
             }
         }.apply { isDaemon = true; start() }
 
+        // Paired = url + deviceId in prefs (WindowsTarget.isPaired); the secret comes from the store.
+        DictatePipelineService.secretStoreFactory = { seededSecretStore() }
         val prefs = ApplicationProvider.getApplicationContext<Context>()
             .getSharedPreferences(DictatePipelineService.PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
             .putString(Pref.WindowsTargetUrl.key, "http://127.0.0.1:${listener.localPort}")
             .putString(Pref.WindowsDeviceId.key, "device-under-test")
-            .putString(Pref.WindowsDeviceSecret.key, "s3cr3t")
             .putString(Pref.WindowsServerName.key, "Paired-PC")
             .commit()
 

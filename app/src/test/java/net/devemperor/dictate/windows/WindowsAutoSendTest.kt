@@ -16,11 +16,11 @@ class WindowsAutoSendTest {
 
     private fun sp() = FakeSharedPreferences()
 
+    // Paired = the non-secret url + deviceId (WindowsTarget.isPaired); the secret is not a pref.
     private fun FakeSharedPreferences.pair() = apply {
         edit()
             .put(Pref.WindowsTargetUrl, "http://vm-win:8756")
             .put(Pref.WindowsDeviceId, "device-1")
-            .put(Pref.WindowsDeviceSecret, "s3cr3t")
             .apply()
     }
 

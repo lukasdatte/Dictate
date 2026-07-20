@@ -187,10 +187,10 @@ class PipelinePrefMirrorTest {
     // paired", so these tests pin the observable consequence: every input of
     // the predicate re-derives the state field.
 
+    // Paired = the non-secret url + deviceId (WindowsTarget.isPaired); the secret is not a pref.
     private fun pairedPrefs(): FakeSharedPreferences = FakeSharedPreferences().apply {
         edit().put(Pref.WindowsTargetUrl, "https://pc.example")
             .put(Pref.WindowsDeviceId, "dev-1")
-            .put(Pref.WindowsDeviceSecret, "s3cret")
             .apply()
     }
 
@@ -223,17 +223,17 @@ class PipelinePrefMirrorTest {
 
     @Test
     fun `unpairing re-derives PC-mode off without touching the toggle`() {
-        // WindowsPairingActivity clears the secret on unpair. The toggle pref
-        // survives, so only a mirror that keys on the pairing prefs too will
-        // drop the lit button.
+        // WindowsPairingActivity clears the target url on unpair (and deletes the secret from the
+        // store). The toggle pref survives, so only a mirror that keys on the pairing prefs too will
+        // drop the lit button. "Paired?" is now the non-secret url+deviceId predicate.
         val sp = pairedPrefs()
         sp.edit().put(Pref.WindowsAutoSendEnabled, true).apply()
         val mirror = PipelinePrefMirror(sp)
         val paired = mirror.applyChange(DictateUiState.initial(), Pref.WindowsAutoSendEnabled.key)
         assertTrue(paired.features.windowsAutoSendActive)
 
-        sp.edit().put(Pref.WindowsDeviceSecret, "").apply()
-        val unpaired = mirror.applyChange(paired, Pref.WindowsDeviceSecret.key)
+        sp.edit().put(Pref.WindowsTargetUrl, "").apply()
+        val unpaired = mirror.applyChange(paired, Pref.WindowsTargetUrl.key)
 
         assertFalse("unpair must drop PC-mode in the UI, as it does in the pipeline", unpaired.features.windowsAutoSendActive)
         assertFalse(unpaired.features.windowsPaired)

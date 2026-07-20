@@ -520,7 +520,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
      * while a PC is coupled — the device secret is the single "paired?" gate (ADR-0017/0019).
      */
     private void refreshWindowsDispatchState() {
-        boolean paired = WindowsTarget.from(sp) != null;
+        boolean paired = WindowsTarget.isPaired(sp);
         if (windowsPairingPreference != null) {
             windowsPairingPreference.setSummary(paired
                     ? DictatePrefsKt.get(sp, Pref.WindowsServerName.INSTANCE)

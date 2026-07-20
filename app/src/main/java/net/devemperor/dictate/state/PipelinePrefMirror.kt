@@ -214,7 +214,7 @@ class PipelinePrefMirror(
             instantOutputEnabled = sp.get(Pref.InstantOutput),
             autoEnterEnabled = sp.get(Pref.AutoEnter),
             windowsAutoSendActive = WindowsAutoSend.shouldAutoSend(sp),
-            windowsPaired = WindowsTarget.from(sp) != null,
+            windowsPaired = WindowsTarget.isPaired(sp),
             screenContextEnabled = sp.get(Pref.AccessibilityContextEnabled),
         ),
         theming = current.theming.copy(
@@ -313,24 +313,26 @@ class PipelinePrefMirror(
                 ),
             )
 
-        // PC send-mode (ADR-0019). FOUR keys collapse onto ONE field because
+        // PC send-mode (ADR-0019). THREE keys collapse onto ONE field because
         // the answer is a predicate over all of them ("toggle on AND paired").
         // ADR-0019 makes WindowsAutoSend.shouldAutoSend the single owner of
         // that predicate and forbids copying it, so the mirror *calls* it
         // instead of re-deriving `toggle && paired` here — that is what keeps
         // the lit button and the actual send destination from ever disagreeing.
-        // Any pairing key changing (pair, unpair, re-pair) re-derives both
-        // fields, so an unpair silently drops PC-mode in the UI exactly as it
-        // does in the pipeline.
+        // "Paired?" is now the non-secret WindowsTarget.isPaired (url + deviceId);
+        // the device secret is no longer a pref (it lives in the SecretStore since
+        // the secretstore migration), so it can no longer be watched here. Any
+        // pairing key changing (pair writes url+deviceId, unpair clears the url)
+        // re-derives both fields, so an unpair silently drops PC-mode in the UI
+        // exactly as it does in the pipeline.
         Pref.WindowsAutoSendEnabled.key,
         Pref.WindowsTargetUrl.key,
         Pref.WindowsDeviceId.key,
-        Pref.WindowsDeviceSecret.key,
         ->
             current.copy(
                 features = current.features.copy(
                     windowsAutoSendActive = WindowsAutoSend.shouldAutoSend(sp),
-                    windowsPaired = WindowsTarget.from(sp) != null,
+                    windowsPaired = WindowsTarget.isPaired(sp),
                 ),
             )
 

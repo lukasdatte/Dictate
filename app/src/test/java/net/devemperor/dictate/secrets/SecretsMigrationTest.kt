@@ -2,14 +2,15 @@ package net.devemperor.dictate.secrets
 
 import androidx.test.core.app.ApplicationProvider
 import net.devemperor.dictate.ai.secrets.SecretRef
-import net.devemperor.dictate.ai.secrets.SecretStore
-import net.devemperor.dictate.ai.secrets.SecretStoreException
 import net.devemperor.dictate.preferences.Pref
+import net.devemperor.dictate.preferences.WindowsTarget
 import net.devemperor.dictate.preferences.get
+import net.devemperor.dictate.testutil.FakeSecretStore
 import net.devemperor.dictate.testutil.FakeSharedPreferences
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -240,26 +241,43 @@ class SecretsMigrationTest {
         }
     }
 
-    /**
-     * Minimal in-test [SecretStore] to drive the abort paths deterministically: records puts, can
-     * report unavailable, and can throw on a chosen [SecretRef].
-     */
-    private class FakeSecretStore(
-        override val available: Boolean = true,
-        override val hardwareBacked: Boolean = false,
-        var failOn: SecretRef? = null,
-    ) : SecretStore {
-        private val stored = linkedMapOf<SecretRef, ByteArray>()
+    // ── §7.2 Pairing device-secret re-point — the paired user survives the migration ──────────
 
-        override fun get(ref: SecretRef): ByteArray? = stored[ref]
+    @Test
+    fun pairingSecretRef_matchesTheMigrationSlot() {
+        // The reader (WindowsTarget.resolve) and the writer (WindowsPairingActivity) address the
+        // secret via PairingSecrets.DEVICE_SECRET_REF; the migration destination must be the same
+        // handle or a migrated user's secret would be unreadable (§7.2 SSoT).
+        assertEquals(
+            PairingSecrets.DEVICE_SECRET_REF,
+            SecretsMigration.SLOTS.first { it.pref == Pref.WindowsDeviceSecret }.ref,
+        )
+    }
 
-        override fun put(ref: SecretRef, value: ByteArray) {
-            if (ref == failOn) throw SecretStoreException.StorageIo("forced failure for ${ref.handle}")
-            stored[ref] = value
-        }
+    @Test
+    fun pairedUserSurvivesMigration_isPairedStaysTrue_resolveReadsMigratedSecret() {
+        // Regression (C-TEST-2): before the re-point, SecretsMigration deleted the plaintext secret
+        // pref while WindowsTarget still read it — silently un-pairing an existing user. Now
+        // "paired?" is the non-secret url+deviceId predicate and the send target reads the secret
+        // from the store, so a paired user survives the migration untouched.
+        clearBackup()
+        val sp = FakeSharedPreferences()
+        sp.edit()
+            .putString(Pref.WindowsTargetUrl.key, "http://vm-win:8756")
+            .putString(Pref.WindowsDeviceId.key, "device-1")
+            .putString(Pref.WindowsServerName.key, "Office PC")
+            .putString(Pref.WindowsDeviceSecret.key, "device-secret-256bit")
+            .apply()
+        val store = realStore()
 
-        override fun delete(ref: SecretRef) {
-            stored.remove(ref)
-        }
+        SecretsMigration.run(context, sp, store)
+
+        assertFalse("the plaintext secret pref is gone after migration", sp.contains(Pref.WindowsDeviceSecret.key))
+        assertTrue("a paired user is still paired (url+deviceId survive)", WindowsTarget.isPaired(sp))
+        val target = WindowsTarget.resolve(sp, store)
+        assertNotNull("resolve reads the migrated secret from the store", target)
+        assertEquals("device-secret-256bit", target!!.deviceSecret)
+        assertEquals("http://vm-win:8756", target.baseUrl)
+        assertEquals("Office PC", target.serverName)
     }
 }

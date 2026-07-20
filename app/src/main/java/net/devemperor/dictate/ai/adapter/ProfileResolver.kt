@@ -19,7 +19,7 @@ import net.devemperor.dictate.preferences.get
 
 /**
  * Entity-backed [AiConfig] — resolves the effective AI configuration from the **active profile** +
- * its credentials (spec §9), the entity-model successor to the pref-based [AndroidAiConfig].
+ * its credentials (spec §9), the entity-model successor to the pref-based `AndroidAiConfig`.
  *
  * It reproduces `AndroidAiConfig`'s output **byte-for-byte** (proven by `ProfileResolverCharacterizationTest`,
  * §9.4): same provider/model/baseUrl, the same non-ASCII-stripped key (now read from the SecretStore,
@@ -33,9 +33,10 @@ import net.devemperor.dictate.preferences.get
  *  - credential referenced but absent/undecryptable in the store → key `""` (a lost Keystore KEK
  *    surfaces as "key missing", not a crash).
  *
- * ## Not yet the live read path
- * `AndroidAiFactory` still builds `AndroidAiConfig`; the flip to this resolver happens together with
- * the settings write-path switch in C3, so reads and writes move atomically.
+ * ## Live read path (C3)
+ * `AndroidAiFactory` builds this resolver; the flip landed together with the settings write-path
+ * switch in C3, so reads and writes moved atomically off the migrated prefs. The pref-based
+ * `AndroidAiConfig` was retired to test sources as the characterization baseline.
  *
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/entitaetenmodell-android.md §9
  */

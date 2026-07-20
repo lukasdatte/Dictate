@@ -1039,7 +1039,8 @@ data class LanguageState(
  *   mirrored from a pref — it is a system setting, so the IME pushes it in on
  *   the render path (see `Action.FeatureToggleAction.SetScreenContextAvailable`).
  * @property windowsPaired whether a PC is paired at all
- *   (`WindowsTarget.from(sp) != null`). Separate from
+ *   (`WindowsTarget.isPaired(sp)` — the non-secret url+deviceId predicate).
+ *   Separate from
  *   [windowsAutoSendActive] because "you have no PC" and "you have a PC and
  *   PC-mode is off" are different UI states: the former disables the toggle
  *   (mirroring the settings switch, which is greyed out until paired),

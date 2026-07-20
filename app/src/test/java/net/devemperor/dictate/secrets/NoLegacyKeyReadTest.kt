@@ -2,33 +2,26 @@ package net.devemperor.dictate.secrets
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 import java.io.File
 
 /**
- * Convention test for spec secretstore.md §2.6: once the SecretStore migration is complete, the
- * 11 secret pref constants must be referenced **only** in their definition (`DictatePrefs.kt`) and
- * in the migration (`SecretsMigration.kt`) — no other code may read or write them.
+ * Convention test for spec secretstore.md §2.6: with the SecretStore migration complete, the 11
+ * secret pref constants must be referenced **only** in their definition (`DictatePrefs.kt`) and in
+ * the migration (`SecretsMigration.kt`) — no other main-source code may read or write them.
  *
- * # Pending — one slot (`WindowsDeviceSecret`) is not yet re-pointed
- * The **API-key** half is done: production reads credentials via `ProfileResolver`/`SecretStore`
- * (C2/C3) and the former pref-based reader `AndroidAiConfig` was retired to `src/test`, so the 10
- * API-key prefs are no longer referenced outside the allow-list.
+ * # End state reached (no longer pending)
+ * Both halves are re-pointed to the [SecretStore][net.devemperor.dictate.ai.secrets.SecretStore]:
+ *   - the **ten API keys** read via `ProfileResolver`/`SecretStore` (C2/C3); the former pref-based
+ *     reader `AndroidAiConfig` was retired to `src/test`.
+ *   - the **device secret** reads via `WindowsTarget.resolve(sp, SecretStore)` and is written by
+ *     `WindowsPairingActivity` through the store; "paired?" is now the non-secret
+ *     `WindowsTarget.isPaired` predicate (url + deviceId), and `PipelinePrefMirror` no longer
+ *     watches the secret key (spec §2.6/§7.2, research `androidaiconfig-secret-pref-retirement.md`).
  *
- * The **device-secret** half remains open. `SecretsMigration` (live via `DictateApplication`)
- * already moves `Pref.WindowsDeviceSecret` into the store, but three main-source consumers still
- * reference the pref and were missed by C2/C3:
- *   - `preferences/WindowsTarget.kt` — reads the pref to build the send target (now empty post-migration),
- *   - `settings/WindowsPairingActivity.java` — still *writes* the secret back into the plaintext pref,
- *   - `state/PipelinePrefMirror.kt` — watches the pref key to recompute `windowsPaired`.
- * These are a latent runtime bug (a paired user is treated as unpaired; the pairing secret is
- * re-persisted in plaintext), tracked separately as a Critical finding — re-pointing them needs a
- * `SecretStore` read/write seam plus a non-secret `paired?` predicate (spec secretstore.md §7.2).
- *
- * `pending:` prefix per test-first-patterns. Tracking artefact: the `WindowsDeviceSecret` re-point
- * (spec secretstore.md §7.2, §2.6; research `androidaiconfig-secret-pref-retirement.md` Part 2).
- * Remove `@Ignore` only after all three `WindowsDeviceSecret` consumers read/write via the store.
+ * `SecretsMigration.kt` still *names* the secret prefs (it is their migration source) — it is on
+ * the allow-list. If a future change reintroduces a plaintext read/write of any secret pref, this
+ * test fails with the exact `file:line`.
  */
 class NoLegacyKeyReadTest {
 
@@ -75,11 +68,6 @@ class NoLegacyKeyReadTest {
     }
 
     @Test
-    @Ignore(
-        "pending: readers/writers of the 11 secret prefs are re-pointed to the SecretStore in " +
-            "C2 (AndroidAiConfig/ProfileResolver reads) + C3 (settings/onboarding writes); " +
-            "spec secretstore.md §2.6",
-    )
     fun secretPrefs_areReferencedOnlyInDefinitionAndMigration() {
         val violations = offendingReferences()
         assertEquals(violations.joinToString("\n"), emptyList<String>(), violations)

@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older that API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+   Auto-backup rules (API < 31; API 31+ uses data_extraction_rules.xml).
+   https://developer.android.com/guide/topics/data/autobackup
 -->
 <full-backup-content>
     <include domain="sharedpref" path="."/>
     <include domain="database" path="."/>
+    <!--
+      SecretStore blob file (spec secretstore.md §5.3): the AES-GCM blobs are wrapped by a
+      device-bound Keystore KEK that does NOT survive an Auto-Backup/device transfer. Backing the
+      blobs up would restore "dead" ciphertext with no key on the new device, which then reads as
+      corrupt (DecryptionFailed). Excluding the file means keys are simply re-entered after a
+      restore — the deliberately accepted consequence recorded in adr-secret-store.
+    -->
+    <exclude domain="sharedpref" path="net.devemperor.dictate.secretstore.xml"/>
 </full-backup-content>

@@ -96,7 +96,10 @@ _Observations (7):_ ______________________________________________
 - [ ] Criterion 7 — Peer sync: **PASS**
 
 > [!IMPORTANT]
-> §2 criterion 9 (ADR completeness) is satisfied once this checklist is fully ticked
-> and signed. Any FAIL routes to issue-triage per the runbook's "Failure Routing".
+> §2 criterion 9 (ADR completeness) is **already satisfied** — independently of this
+> checklist — by the 8 ADR drafts having been promoted to `docs/decisions/` (ADR-0028
+> through ADR-0035) plus their index rows. A fully ticked-and-signed checklist is what
+> closes the **Windows-only** criteria **3 / 4 / 7**, which the Linux CI host cannot
+> reach. Any FAIL routes to issue-triage per the runbook's "Failure Routing".
 
 **Tester:** ______________  **Date:** ____________  **Build/commit:** ____________

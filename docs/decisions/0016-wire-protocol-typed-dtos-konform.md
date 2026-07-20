@@ -218,6 +218,12 @@ under ADR-0012). This ADR governs the Windows-Dispatch wire, not all serializati
     convention (typed DTO + co-located validation + codec).
   - ADR-0012 — Post-Processing Conversation; `StructuredResponseCodec` plays the analogous
     single-codec "one wire authority" role for the AI conversation layer.
+  - ADR-0030 — Configuration Entity Model; reuses this wire-DTO + Konform-validation + additive-
+    versioning doctrine (and the wire-vs-domain enum pattern) for the config entities and the v3
+    canonical format. Additive reuse, not a revision of this ADR.
+  - ADR-0034 — Peer-Catalog Family; its catalog DTOs are an **additive payload family built on
+    this wire stack** (typed DTOs, Konform-on-both-sides, additive versioning), the same way
+    ADR-0025 added the input-command family. Additive reuse, not a revision of this ADR.
 - **Implementation:** `shared/src/main/kotlin/net/devemperor/dictate/shared/protocol/` —
   `Dtos.kt`, `Validations.kt`, `ProtocolCodec.kt`, `ProtocolVersion.kt`, `ErrorEnvelope.kt`,
   `Endpoints.kt`.

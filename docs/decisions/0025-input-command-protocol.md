@@ -107,6 +107,8 @@ owns the keyboard layout.
 - Plan: `tmp/plan-keyboard-action-engine.md` (worktree `feature/keyboard-action-engine`) (§1.3, §5, §9.1, D6) — motivated and implemented here.
 - Sibling: [ADR-0026](0026-keyboard-action-routing.md) *Keyboard-Action Routing* (the app side that produces these commands).
 - Extends: ADR-0016, ADR-0017, ADR-0018.
+- Built on by: [ADR-0034](0034-peer-catalog.md) *Peer-Catalog Family* — adds a further additive
+  payload family (the catalog DTOs) on this same protocol stack; additive reuse, not a revision.
 - Code: `shared/.../protocol/{Dtos,Validations,Endpoints}.kt`, `shared/.../client/DispatchClient.kt`
   (`input()`, 404→EndpointMissing); `companion/.../platform/windows/{Win32Keyboard,Win32InputPerformer}.kt`,
   `companion/.../domain/{InputCommandService,model/KeyChord,model/DefaultChords}.kt`,

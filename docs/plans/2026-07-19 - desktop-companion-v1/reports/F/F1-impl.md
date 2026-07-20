@@ -63,4 +63,4 @@ None. All edits are within docs / the promoted ADR set / the two named integrati
 
 ## Pending user action
 
-The Windows acceptance checklist (`reports/windows-acceptance-checklist.md`) is delivered **unchecked**; §2 criterion 9's final tick ("Abnahme-Checkliste vom User abgehakt") requires the user to run it on a Windows device and sign off. This cannot be completed by the agent.
+§2 **criterion 9 (ADR-Vollständigkeit)** is fully met by this chunk: it only requires the 8 §6 drafts to be promoted to `docs/decisions/` + index (ADR-0028–0035), which is done — it is **not** gated on the Windows checklist. What remains pending is the **Windows-only** criteria **3 / 4 / 7**: the acceptance checklist (`reports/windows-acceptance-checklist.md`) is delivered **unchecked** and requires the user to run it on a Windows device and sign off. This cannot be completed by the agent.

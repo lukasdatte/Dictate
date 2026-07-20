@@ -127,6 +127,9 @@ one place that decides the semantics.
   this ADR hardens is the one ADR-0012 rebuilt without a static check.
 - Relates to **ADR-0019** (auto-send): `InsertionSource.STATIC_PROMPT` stays the
   never-diverted audit classifier for text-pill inserts.
+- Built on by **ADR-0030** (config entity model): the shared `Prompt` entity carries this typed
+  pill-kind (`PromptType`) into the canonical v3 format instead of the `[bracket]` convention;
+  additive reuse of this typed column, not a revision.
 
 ## Decision History
 

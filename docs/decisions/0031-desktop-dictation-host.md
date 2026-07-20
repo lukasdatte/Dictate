@@ -172,7 +172,7 @@ orchestrator**, additive to the existing receiver role.
 
 ## References
 
-- **Related Plan:** [desktop-companion-v1](docs/plans/2026-07-19 - desktop-companion-v1/desktop-companion-v1.md)
+- **Related Plan:** [desktop-companion-v1](../plans/2026-07-19%20-%20desktop-companion-v1/desktop-companion-v1.md)
   — §3 (F2/F4/F5, D2, D4.2, D4.6, D5.c), §5 Block D. Motivates and is implemented by this ADR.
 - **Spec:** `docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md`
   (§4 capture, §5 orchestrator + queue, §6 hotkey/panel).

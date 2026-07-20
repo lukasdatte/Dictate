@@ -207,6 +207,11 @@ deferred to a follow-up.
     is the second, independent one.
   - ADR-0014 — In-keyboard history panel: the `REVIEW_REFINEMENT` carrier exclusion and the
     `COMPLETED`/text filter are shared verbatim with `SessionDao.pagedHistoryPanel()` (§4).
+  - ADR-0034 — Peer-Catalog Family: introduces a **config-only** authority direction (pull-only
+    peer sharing of profiles/prompts/models/credentials) that re-casts this ADR's authoritative-
+    instance pattern on a different axis; session/dictation sync stays exclusively this ADR's
+    phone-authoritative domain and is explicitly excluded from the catalog (F16); see the
+    2026-07-20 Decision-History entry.
   - ADR-0035 — Companion History Parity: this cursor-based, phone-authoritative sync keeps
     working unchanged against the companion's full Room-parity SQLDelight schema, and the
     `received_texts` retirement preserves it (five sync/dispatch tests green on unchanged
@@ -265,3 +270,20 @@ assertion changes.
 
 **Reasoning:** Full parity lets phone↔companion sync round-trip the complete record; the
 sync contract of this ADR is preserved. See ADR-0035.
+
+### 2026-07-20 — A config-only authority direction coexists (ADR-0034)
+
+**Trigger:** The desktop-companion-v1 plan (Block E) added a pull-only peer-catalog family
+for sharing configuration entities (profiles, prompts, models, credentials) between instances.
+
+**Before:** This ADR established the phone as the single authoritative instance; there was no
+peer-to-peer authority direction of any kind.
+
+**After:** ADR-0034 adds a **new authority direction for configuration only** — profiles, prompts,
+models and credentials flow pull-only between peers, re-casting this ADR's authoritative-instance
+pattern on a different axis. Session/dictation history is explicitly **not** shared by the catalog
+(F16); it stays this ADR's phone-authoritative, cursor-based sync, unchanged.
+
+**Reasoning:** Surfacing the new direction here keeps this ADR's core thesis ("the phone is THE
+authoritative instance") honest — the claim now holds specifically for dictation/session data, while
+configuration gained an orthogonal, opt-in sharing path. See ADR-0034.

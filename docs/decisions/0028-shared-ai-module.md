@@ -184,7 +184,7 @@ repository-wide dependency policy.
 
 ## References
 
-- **Related Plan:** [desktop-companion-v1](docs/plans/2026-07-19 - desktop-companion-v1/desktop-companion-v1.md)
+- **Related Plan:** [desktop-companion-v1](../plans/2026-07-19%20-%20desktop-companion-v1/desktop-companion-v1.md)
   — §3 D1/D5.a/D5.d/D5.e, §5 Block A. Motivates and is implemented by this ADR.
 - **Spec:** `docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md`
   (§3 inventory, §4 ports, §5 Gradle + `SharedAiPurityTest`, §6 move sequence, §8 tests).

@@ -180,7 +180,7 @@ Project-Wide because "secrets are encrypted at rest, reached only through
 
 ## References
 
-- **Related Plan:** [desktop-companion-v1](docs/plans/2026-07-19 - desktop-companion-v1/desktop-companion-v1.md)
+- **Related Plan:** [desktop-companion-v1](../plans/2026-07-19%20-%20desktop-companion-v1/desktop-companion-v1.md)
   — §3 (F11/F12/F13), §5 Block B. Motivates and is implemented by this ADR.
 - **Spec:** `docs/plans/2026-07-19 - desktop-companion-v1/research/secretstore.md`
   (§4 port, §5 Android, §6 desktop, §7 migration).

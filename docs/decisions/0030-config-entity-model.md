@@ -201,7 +201,7 @@ contract shared by both platforms and the peer protocol.
 
 ## References
 
-- **Related Plan:** [desktop-companion-v1](docs/plans/2026-07-19 - desktop-companion-v1/desktop-companion-v1.md)
+- **Related Plan:** [desktop-companion-v1](../plans/2026-07-19%20-%20desktop-companion-v1/desktop-companion-v1.md)
   — §3 (F17/F22/F23/F24/F27/F31, D3, D5.a/D5.b, D4.7), §5 Block C. Motivates and is
   implemented by this ADR.
 - **Spec:** `docs/plans/2026-07-19 - desktop-companion-v1/research/entitaetenmodell-android.md`

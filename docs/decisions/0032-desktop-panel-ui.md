@@ -163,7 +163,7 @@ documented focus-restore fallback.
 
 ## References
 
-- **Related Plan:** [desktop-companion-v1](docs/plans/2026-07-19 - desktop-companion-v1/desktop-companion-v1.md)
+- **Related Plan:** [desktop-companion-v1](../plans/2026-07-19%20-%20desktop-companion-v1/desktop-companion-v1.md)
   — §3 (F5/F6/F19/F21, D2, D4.3, D4.6), §5 Block D. Motivates and is implemented by this ADR.
 - **Spec:** `docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md`
   (§6 hotkey + focus-free panel, §5.3 `DesktopUiState`, §1a.1).

@@ -160,7 +160,7 @@ backfill, and make the companion DB the shared session archive — as a **dedica
 
 ## References
 
-- **Related Plan:** [desktop-companion-v1](docs/plans/2026-07-19 - desktop-companion-v1/desktop-companion-v1.md)
+- **Related Plan:** [desktop-companion-v1](../plans/2026-07-19%20-%20desktop-companion-v1/desktop-companion-v1.md)
   — §3 (F15/F16, D5.c, D5.g, `2.sqm` assignment), §5 Block D (D1a). Motivates and is implemented
   by this ADR.
 - **Spec:** `docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md`

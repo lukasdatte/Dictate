@@ -13,7 +13,7 @@ import org.junit.Test
 
 /**
  * The DB-backed chord repository (§B2): persistence, fallback, reset — and the SQL CHECK half of the
- * Double-Enum rule for the chord table (the parity of [OriginCheckConstraintParityTest], for chords).
+ * Double-Enum rule for the chord table (the parity of [CompanionSchemaParityTest], for chords).
  */
 class SqlDelightChordMappingRepositoryTest {
 

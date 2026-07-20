@@ -41,12 +41,10 @@ dependencies {
     // from D1b onward, the transcription/completion runners the desktop pipeline calls. Needed here
     // already because `sessions.last_error_type` is a Double-Enum column typed `AS
     // AIProviderException.ErrorType` — the shared taxonomy, never redefined companion-side
-    // (desktop-host.md §3.2). It is a pure Kotlin/JVM module (SharedAiPurityTest), so a JVM-17
-    // consumer takes its 1.8 bytecode without issue.
-    implementation project(':shared-ai')
-    // :shared-ai — the AI core (jvmTarget 1.8, Android-free). Brought in for the SecretStore port
+    // (desktop-host.md §3.2). It also carries the SecretStore port
     // (net.devemperor.dictate.ai.secrets), which both platform hosts implement (spec secretstore.md
-    // §4.1); the fuller AI-pipeline consumption follows in Block D.
+    // §4.1); the fuller AI-pipeline consumption follows in Block D. A pure Kotlin/JVM module
+    // (SharedAiPurityTest), so this JVM-17 consumer takes its 1.8 bytecode without issue.
     implementation project(':shared-ai')
 
     implementation compose.desktop.currentOs

@@ -7,6 +7,7 @@ import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import net.devemperor.dictate.companion.db.DictateCompanionDb
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,8 +71,12 @@ class SchemaMigratorTest {
 
         assertEquals(DictateCompanionDb.Schema.version, userVersion())
         assertTrue(tableExists("devices"))
-        assertTrue(tableExists("received_texts"))
         assertTrue(tableExists("settings"))
+        // The Room-parity session model (D1a). `received_texts` was ablated by 2.sqm — a fresh
+        // install creates the session tables and never the old one.
+        assertTrue(tableExists("sessions"))
+        assertTrue(tableExists("dispatch_state"))
+        assertFalse("received_texts must be gone after the ablation (2.sqm)", tableExists("received_texts"))
     }
 
     // ── The artificial schema pair ──────────────────────────────────────────────────────

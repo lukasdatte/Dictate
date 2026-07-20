@@ -1,16 +1,17 @@
--- Schema v1 of the companion's local history.
+-- Schema of the companion's local history.
 --
--- The phone is the authority; everything here is a derived copy (ADR-0020). The file is expendable
--- by design: a wiped database makes `cursor()` return null, and the phone resends its history from
--- the beginning. That is what "self-healing" means in practice, and it is why nothing here is
--- backed up or replicated.
+-- The phone is the authority for the sessions it dictated; those rows here are a derived copy
+-- (ADR-0020). The file is expendable by design for that mirror: a wiped database makes the sync
+-- cursor return null, and the phone resends its history from the beginning. That is what
+-- "self-healing" means in practice. Desktop-dictated sessions (host_origin = 'DESKTOP_DICTATION',
+-- Block D) are the exception — they originate here and have no upstream to resend them.
 --
--- The Kotlin-typed columns (`AS SessionOriginWire`, `AS InsertionOutcome`, `AS Boolean`) are half of
--- the Double-Enum rule from docs/DATABASE-PATTERNS.md; the CHECK constraints below are the other
--- half. The rule is a Room convention, but it is a *SQLite* rule really, and it earns its keep here
--- for the same reason: without the CHECK, a typo in a mapper writes 'KEYBORD' into the column and
--- nothing complains until a reader crashes months later. With it, the write fails at the boundary
--- where the bug is. `OriginCheckConstraintParityTest` pins the two halves against each other.
+-- The Kotlin-typed columns (`AS SessionType`, `AS InsertionOutcome`, `AS kotlin.Boolean`) are half
+-- of the Double-Enum rule from docs/DATABASE-PATTERNS.md; the CHECK constraints are the other half.
+-- Without the CHECK, a typo in a mapper writes 'KEYBORD' into the column and nothing complains until
+-- a reader crashes months later; with it, the write fails at the boundary where the bug is.
+-- `CompanionSchemaParityTest` pins the two halves against each other, and `RoomParityReference`
+-- pins the vocabularies against the Room originals in `:app` (desktop-host.md §3.2/§3.6).
 
 CREATE TABLE devices (
     device_id    TEXT NOT NULL PRIMARY KEY,
@@ -21,36 +22,157 @@ CREATE TABLE devices (
     last_seen_at INTEGER
 );
 
-CREATE TABLE received_texts (
-    -- The phone's Room session id — and therefore the idempotency key of a dispatch.
-    session_id   TEXT NOT NULL PRIMARY KEY,
-    device_id    TEXT NOT NULL,
-    text         TEXT NOT NULL,
-    -- Phone time. Together with session_id it is the total order the sync cursor pages along.
-    created_at   INTEGER NOT NULL,
-    -- PC time: when this row was last written here.
+-- ── Room-parity session model (F15, desktop-host.md §3) ─────────────────────────────────────
+--
+-- The four tables below are a 1:1 translation of Room schema v11 (app/schemas/.../11.json): same
+-- columns, affinities, nullability, FKs and indices. The only companion-added column is
+-- `sessions.host_origin` — the axis that separates the phone mirror from desktop dictation. The
+-- Double-Enum CHECK vocabularies come from the Room migration CHECKs (the Room JSON carries none).
+
+CREATE TABLE sessions (
+    id                       TEXT NOT NULL PRIMARY KEY,
+    type                     TEXT AS net.devemperor.dictate.companion.domain.session.SessionType NOT NULL
+                             CHECK (type IN ('RECORDING','REWORDING','POST_PROCESSING')),
+    created_at               INTEGER NOT NULL,
+    target_app_package       TEXT,
+    language                 TEXT,
+    audio_file_path          TEXT,
+    -- JSON array of segment paths, exactly as Room stores it (ADR-0007 rolling segments).
+    audio_file_paths         TEXT NOT NULL DEFAULT '[]',
+    audio_duration_seconds   INTEGER NOT NULL DEFAULT 0,
+    parent_session_id        TEXT,
+    status                   TEXT AS net.devemperor.dictate.companion.domain.session.SessionStatus NOT NULL
+                             CHECK (status IN ('RECORDING','RECORDING_INTERRUPTED','RECORDED',
+                                               'TRANSCRIBING','COMPLETED','FAILED','CANCELLED')),
+    origin                   TEXT AS net.devemperor.dictate.companion.domain.session.SessionOrigin NOT NULL
+                             CHECK (origin IN ('KEYBOARD','HISTORY_REPROCESS',
+                                               'POST_PROCESSING','REVIEW_REFINEMENT')),
+    queued_prompt_ids        TEXT,
+    -- The AI error taxonomy is owned by :shared-ai (AIProviderException.ErrorType) — never redefined
+    -- companion-side, or the error vocabulary would fork against the shared runners.
+    last_error_type          TEXT AS net.devemperor.dictate.ai.AIProviderException.ErrorType
+                             CHECK (last_error_type IS NULL OR last_error_type IN
+                                    ('INVALID_API_KEY','RATE_LIMITED','MODEL_NOT_FOUND','BAD_REQUEST',
+                                     'SERVER_ERROR','NETWORK_ERROR','CANCELLED','UNKNOWN')),
+    last_error_message       TEXT,
+    final_output_text        TEXT,
+    input_text               TEXT,
+    inserted_at              INTEGER,
+    -- Companion-only axis (F16), NOT part of the Room parity.
+    host_origin              TEXT AS net.devemperor.dictate.companion.domain.session.HostOrigin NOT NULL DEFAULT 'DESKTOP_DICTATION'
+                             CHECK (host_origin IN ('PHONE_SYNC','DESKTOP_DICTATION')),
+    FOREIGN KEY (parent_session_id) REFERENCES sessions(id) ON DELETE SET NULL
+);
+CREATE INDEX sessions_parent_session_id ON sessions(parent_session_id);
+CREATE INDEX sessions_type              ON sessions(type);
+CREATE INDEX sessions_created_at        ON sessions(created_at);
+CREATE INDEX sessions_origin            ON sessions(origin);
+CREATE INDEX sessions_status            ON sessions(status);
+CREATE INDEX sessions_host_origin       ON sessions(host_origin);
+-- The sync cursor axis. EXACTLY the ordering the cursor and the phone's `sessionsAfterCursor` page
+-- along — parity between the two sides is the contract that keeps paging from skipping rows
+-- (ADR-0020). Ex-`received_texts_cursor`, moved onto sessions by the received_texts ablation.
+CREATE INDEX sessions_sync_cursor       ON sessions(created_at, id);
+
+CREATE TABLE transcriptions (
+    id                TEXT NOT NULL PRIMARY KEY,
+    session_id        TEXT NOT NULL,
+    version           INTEGER NOT NULL,
+    is_current        INTEGER AS kotlin.Boolean NOT NULL,
+    text              TEXT NOT NULL,
+    model_used        TEXT NOT NULL,
+    -- Open vocabulary (AIProvider.name / free text): a provider set is not finite, so no CHECK.
+    provider          TEXT NOT NULL,
+    prompt_tokens     INTEGER NOT NULL,
+    completion_tokens INTEGER NOT NULL,
+    duration_ms       INTEGER NOT NULL,
+    created_at        INTEGER NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX transcriptions_session_id ON transcriptions(session_id);
+CREATE UNIQUE INDEX transcriptions_session_id_version ON transcriptions(session_id, version);
+
+CREATE TABLE processing_steps (
+    id                        TEXT NOT NULL PRIMARY KEY,
+    session_id                TEXT NOT NULL,
+    step_type                 TEXT AS net.devemperor.dictate.companion.domain.session.StepType NOT NULL
+                              CHECK (step_type IN ('AUTO_FORMAT','REWORDING','QUEUED_PROMPT','CONVERSATION_TURN')),
+    chain_index               INTEGER NOT NULL,
+    version                   INTEGER NOT NULL,
+    is_current                INTEGER AS kotlin.Boolean NOT NULL,
+    input_text                TEXT NOT NULL,
+    output_text               TEXT,
+    model_used                TEXT NOT NULL,
+    -- Open vocabulary, like transcriptions.provider — no CHECK.
+    provider                  TEXT NOT NULL,
+    prompt_used               TEXT,
+    prompt_entity_id          INTEGER,
+    previous_step_id          TEXT,
+    previous_transcription_id TEXT,
+    source_session_id         TEXT,
+    prompt_tokens             INTEGER NOT NULL,
+    completion_tokens         INTEGER NOT NULL,
+    duration_ms               INTEGER NOT NULL,
+    -- Room has NO CHECK here (bare TEXT NOT NULL); the companion adds one — a strict improvement
+    -- on a green field, every Room value stays valid (desktop-host.md §14 D3).
+    status                    TEXT AS net.devemperor.dictate.companion.domain.session.StepStatus NOT NULL
+                              CHECK (status IN ('SUCCESS','ERROR')),
+    error_message             TEXT,
+    created_at                INTEGER NOT NULL,
+    assistant_message         TEXT,
+    response_format           TEXT AS net.devemperor.dictate.companion.domain.session.ResponseFormatKind
+                              CHECK (response_format IS NULL OR response_format IN
+                                     ('JSON_SCHEMA','TOOL_USE','TEXT_FALLBACK')),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX processing_steps_session_id ON processing_steps(session_id);
+CREATE UNIQUE INDEX processing_steps_session_id_chain_index_version ON processing_steps(session_id, chain_index, version);
+CREATE INDEX processing_steps_previous_step_id ON processing_steps(previous_step_id);
+CREATE INDEX processing_steps_previous_transcription_id ON processing_steps(previous_transcription_id);
+CREATE INDEX processing_steps_source_session_id ON processing_steps(source_session_id);
+
+CREATE TABLE conversation_messages (
+    id         TEXT NOT NULL PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    turn_index INTEGER NOT NULL,
+    seq        INTEGER NOT NULL,
+    role       TEXT AS net.devemperor.dictate.companion.domain.session.MessageRole NOT NULL
+               CHECK (role IN ('SYSTEM','USER','ASSISTANT')),
+    content    TEXT NOT NULL,
+    step_id    TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (step_id) REFERENCES processing_steps(id) ON DELETE SET NULL
+);
+CREATE INDEX conversation_messages_session_id ON conversation_messages(session_id);
+CREATE UNIQUE INDEX conversation_messages_session_id_seq ON conversation_messages(session_id, seq);
+CREATE INDEX conversation_messages_step_id ON conversation_messages(step_id);
+
+-- ── dispatch_state — the phone-sync side channel (desktop-host.md §3.4) ──────────────────────
+--
+-- The sync-specific facts that used to live on `received_texts` — which device sent a row, when it
+-- last landed here, whether it was dispatched, and how the insertion went. Split off `sessions` so
+-- the session table stays a clean Room parity (device_id/dispatched would otherwise pollute the
+-- parity diff). 1:1 with a PHONE_SYNC session; desktop-dictated sessions have no row here.
+CREATE TABLE dispatch_state (
+    session_id   TEXT NOT NULL PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    device_id    TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    -- PC time: when this row was last written here (ex-`received_texts.received_at`).
     received_at  INTEGER NOT NULL,
-    origin       TEXT AS net.devemperor.dictate.shared.protocol.SessionOriginWire NOT NULL
-                 CHECK (origin IN ('KEYBOARD','HISTORY_REPROCESS','POST_PROCESSING','REVIEW_REFINEMENT','UNKNOWN')),
     -- 1 = arrived through /v1/dispatch, 0 = only mirrored by the sync. Never walks back (see upsert).
     dispatched   INTEGER AS kotlin.Boolean NOT NULL DEFAULT 0,
     last_outcome TEXT AS net.devemperor.dictate.companion.domain.model.InsertionOutcome
-                 CHECK (last_outcome IS NULL OR last_outcome IN ('TYPED_CTRL_V','CLIPBOARD_ONLY','FAILED')),
-    FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
+                 CHECK (last_outcome IS NULL OR last_outcome IN ('TYPED_CTRL_V','CLIPBOARD_ONLY','FAILED'))
 );
-
--- The cursor axis. EXACTLY the ordering `cursor()` and the phone's `sessionsAfterCursor` use —
--- parity between the two sides is the contract that keeps paging from skipping rows (ADR-0020).
-CREATE INDEX received_texts_cursor ON received_texts(created_at, session_id);
 
 CREATE TABLE settings (
     key   TEXT NOT NULL PRIMARY KEY,
     value TEXT NOT NULL
 );
 
--- Configurable command -> chord mapping for /v1/input (D6, §5.4). Double-Enum, like received_texts
--- above: `command` is a Kotlin `KeyCommand` AND a SQL CHECK; the modifier flags and `vk` carry their
--- own CHECKs so a bogus mapping fails at the write boundary, not at injection time. Seeded from
+-- Configurable command -> chord mapping for /v1/input (D6, §5.4). Double-Enum, like above:
+-- `command` is a Kotlin `KeyCommand` AND a SQL CHECK; the modifier flags and `vk` carry their own
+-- CHECKs so a bogus mapping fails at the write boundary, not at injection time. Seeded from
 -- DefaultChords by the v1 -> v2 migration; a missing row falls back to DefaultChords in the repo.
 CREATE TABLE key_command_chords (
     command TEXT AS net.devemperor.dictate.companion.domain.model.KeyCommand NOT NULL PRIMARY KEY
@@ -80,65 +202,93 @@ UPDATE devices SET last_seen_at = :at WHERE device_id = :deviceId;
 deleteDevice:
 DELETE FROM devices WHERE device_id = ?;
 
--- ── received_texts ────────────────────────────────────────────────────────────────────────
+-- ── phone-sync history (sessions + dispatch_state) ──────────────────────────────────────────
+--
+-- All of these scope to `host_origin = 'PHONE_SYNC'`: they are the phone mirror, and must never see
+-- (nor let the cursor advance past) a desktop-dictated session. A PHONE_SYNC session always has a
+-- 1:1 dispatch_state row, so the INNER JOIN never drops one — it just widens the projection.
 
 receivedTextById:
-SELECT * FROM received_texts WHERE session_id = ?;
+SELECT s.id, ds.device_id, s.final_output_text, s.created_at, ds.received_at, s.origin, ds.dispatched, ds.last_outcome
+FROM sessions s
+JOIN dispatch_state ds ON ds.session_id = s.id
+WHERE s.host_origin = 'PHONE_SYNC' AND s.id = ?;
 
 /**
- * The idempotent write, and the one place the "never downgrade a dispatch" invariant is enforced.
- *
- * `MAX(received_texts.dispatched, excluded.dispatched)` is the whole trick: the lazy sync mirrors
- * the phone's view of a row, and the phone may well still believe a row was never dispatched (it
- * sends its history, not its knowledge of our history). A plain `SET dispatched = excluded.dispatched`
- * would let a sync erase the fact that the text was typed into this PC's foreground window.
+ * The session half of the idempotent sync write. Writes the Room-parity fields with the fixed
+ * PHONE_SYNC shape (type RECORDING, status COMPLETED, the received text as final output). `inserted_at`
+ * mirrors the dispatch flag and — like `dispatched` in dispatch_state — never walks back: a sync that
+ * believes a row was never dispatched must not erase an inserted_at a real dispatch already stamped.
+ */
+upsertSyncSession:
+INSERT INTO sessions (id, type, created_at, status, origin, final_output_text, inserted_at,
+                      host_origin, audio_file_paths, audio_duration_seconds)
+VALUES (:id, 'RECORDING', :createdAt, 'COMPLETED', :origin, :finalOutputText, :insertedAt,
+        'PHONE_SYNC', '[]', 0)
+ON CONFLICT(id) DO UPDATE SET
+    created_at        = excluded.created_at,
+    origin            = excluded.origin,
+    final_output_text = excluded.final_output_text,
+    inserted_at       = coalesce(sessions.inserted_at, excluded.inserted_at);
+
+/**
+ * The dispatch_state half of the idempotent sync write, and the one place the "never downgrade a
+ * dispatch" invariant lives. `MAX(dispatch_state.dispatched, excluded.dispatched)` is the whole
+ * trick: the lazy sync mirrors the phone's view, and the phone may still believe a row was never
+ * dispatched. A plain assignment would erase the fact that the text was typed into this PC's window.
  *
  * `last_outcome` is deliberately absent from the DO UPDATE list — it belongs to the *insertion*, and
  * a sync never inserts anything. Only `recordDispatch` writes it.
  */
-upsertReceivedText:
-INSERT INTO received_texts(session_id, device_id, text, created_at, received_at, origin, dispatched, last_outcome)
-VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+upsertDispatchState:
+INSERT INTO dispatch_state(session_id, device_id, received_at, dispatched, last_outcome)
+VALUES (:sessionId, :deviceId, :receivedAt, :dispatched, NULL)
 ON CONFLICT(session_id) DO UPDATE SET
     device_id   = excluded.device_id,
-    text        = excluded.text,
-    created_at  = excluded.created_at,
     received_at = excluded.received_at,
-    origin      = excluded.origin,
-    dispatched  = MAX(received_texts.dispatched, excluded.dispatched);
+    dispatched  = MAX(dispatch_state.dispatched, excluded.dispatched);
 
 recordDispatch:
-UPDATE received_texts
+UPDATE dispatch_state
 SET received_at = :at, dispatched = 1, last_outcome = :outcome
 WHERE session_id = :sessionId;
 
-/** The receive watermark. NULL row set = "I know nothing" → the phone resends from the beginning. */
+/**
+ * The receive watermark. NULL row set = "I know nothing" → the phone resends from the beginning.
+ *
+ * JOINs dispatch_state (not just `host_origin`) so the watermark tracks only rows that still carry a
+ * device binding: revoking a device cascade-deletes its dispatch_state, and — exactly as the old
+ * `received_texts` cursor did before the ablation — those rows must drop out of the watermark too.
+ */
 selectCursor:
-SELECT created_at, session_id
-FROM received_texts
-ORDER BY created_at DESC, session_id DESC
+SELECT s.created_at, s.id
+FROM sessions s
+JOIN dispatch_state ds ON ds.session_id = s.id
+WHERE s.host_origin = 'PHONE_SYNC'
+ORDER BY s.created_at DESC, s.id DESC
 LIMIT 1;
 
 -- The history page.
 --
 -- instr() rather than LIKE: what a user types into a search box is a literal substring, and LIKE
 -- would quietly read their wildcard characters as wildcards. An empty term matches every row —
--- instr(x, '') is 1 — which is exactly what an empty search box should do, and it keeps the
--- "no filter" case out of the SQL where it would otherwise become a NULL-comparison trap.
+-- instr(x, '') is 1 — which is exactly what an empty search box should do.
 --
 -- lower() folds ASCII case only, so "GRUSS" will not find "Grüße": a known and accepted limit of a
 -- local substring search (SQLite has no Unicode case folding without an ICU build).
 pageHistory:
-SELECT *
-FROM received_texts
-WHERE instr(lower(text), lower(:term)) > 0
-ORDER BY created_at DESC, session_id DESC
+SELECT s.id, ds.device_id, s.final_output_text, s.created_at, ds.received_at, s.origin, ds.dispatched, ds.last_outcome
+FROM sessions s
+JOIN dispatch_state ds ON ds.session_id = s.id
+WHERE s.host_origin = 'PHONE_SYNC' AND instr(lower(s.final_output_text), lower(:term)) > 0
+ORDER BY s.created_at DESC, s.id DESC
 LIMIT :limit OFFSET :offset;
 
 countHistory:
 SELECT COUNT(*)
-FROM received_texts
-WHERE instr(lower(text), lower(:term)) > 0;
+FROM sessions s
+JOIN dispatch_state ds ON ds.session_id = s.id
+WHERE s.host_origin = 'PHONE_SYNC' AND instr(lower(s.final_output_text), lower(:term)) > 0;
 
 -- ── settings ──────────────────────────────────────────────────────────────────────────────
 

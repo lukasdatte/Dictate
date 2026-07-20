@@ -9,7 +9,9 @@ import net.devemperor.dictate.preferences.get
 /**
  * SharedPreferences-backed [PromptConfig] for `PromptService` /
  * `SystemPromptResolver`. Pure delegation to the style/system prompt selection
- * and custom-text prefs (spec §6 A3.5).
+ * and custom-text prefs.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §6 A3.5
  */
 class AndroidPromptConfig(private val sp: SharedPreferences) : PromptConfig {
     override fun stylePromptMode(): PromptMode = PromptMode.fromValue(sp.get(Pref.StylePromptSelection))

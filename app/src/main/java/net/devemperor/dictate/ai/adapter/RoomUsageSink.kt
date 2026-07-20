@@ -6,7 +6,9 @@ import net.devemperor.dictate.database.dao.UsageDao
 /**
  * Room-backed [UsageSink]. Pure delegation to [UsageDao.addUsage] — no added
  * threading, preserving today's synchronous-on-the-caller's-background-thread
- * semantics (spec §4.2).
+ * semantics.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §4.2
  */
 class RoomUsageSink(private val usageDao: UsageDao) : UsageSink {
     override fun addUsage(

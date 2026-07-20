@@ -69,6 +69,6 @@ class PromptService(
 
     companion object {
         @JvmStatic
-        fun create(config: PromptConfig) = PromptService(config, SystemPromptResolver(config))
+        fun create(config: PromptConfig) = PromptService(config, SystemPromptResolver.create(config))
     }
 }

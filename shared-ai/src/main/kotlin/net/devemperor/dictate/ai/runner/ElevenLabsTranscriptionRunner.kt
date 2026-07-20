@@ -30,7 +30,15 @@ class ElevenLabsTranscriptionRunner(
     private val audioDuration: AudioDurationReader
 ) : TranscriptionRunner {
 
-    private fun buildClient(): OkHttpClient {
+    /**
+     * Builds the okhttp client, wiring the proxy only when one is resolved.
+     *
+     * Extracted as `internal` (like [buildMultipartBody]) so the proxy path can
+     * be unit-tested without a live API call: the "no proxy → no authenticator"
+     * vs. "proxy → authenticator installed" branch is where proxy handling
+     * regresses silently. See ElevenLabsTranscriptionRunnerTest.
+     */
+    internal fun buildClient(): OkHttpClient {
         val builder = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)

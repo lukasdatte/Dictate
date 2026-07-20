@@ -12,7 +12,9 @@ import java.net.Proxy
 /**
  * SharedPreferences-backed [ProxyConfig], delegating to the (pure-JVM) proxy
  * helpers that remain in `DictateUtils`. Every method reproduces today's guard
- * exactly — a no-op unless `ProxyEnabled && isValidProxy(host)` (spec §4.3).
+ * exactly — a no-op unless `ProxyEnabled && isValidProxy(host)`.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §4.3
  */
 class SharedPrefsProxyConfig(private val sp: SharedPreferences) : ProxyConfig {
 

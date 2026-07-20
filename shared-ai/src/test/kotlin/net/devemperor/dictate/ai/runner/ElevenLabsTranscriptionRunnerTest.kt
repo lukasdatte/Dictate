@@ -6,9 +6,13 @@ import okhttp3.MultipartBody
 import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Proxy
 
 /**
  * Wire-format regression tests for [ElevenLabsTranscriptionRunner].
@@ -85,5 +89,44 @@ class ElevenLabsTranscriptionRunnerTest {
 
         assertTrue(wire.contains("name=\"model_id\""))
         assertTrue(wire.contains("scribe_v2"))
+    }
+
+    @Test
+    fun `no proxy configured leaves the client unproxied and skips the authenticator`() {
+        val proxyConfig = FakeProxyConfig(proxy = null)
+        val runner = ElevenLabsTranscriptionRunner(
+            apiKey = "test-key",
+            proxy = proxyConfig,
+            audioDuration = FakeAudioDurationReader()
+        )
+
+        val client = runner.buildClient()
+
+        assertNull("no proxy must be applied to the okhttp client", client.proxy)
+        assertEquals(
+            "installAuthenticator must not be called when no proxy is configured",
+            0,
+            proxyConfig.installAuthenticatorCalls
+        )
+    }
+
+    @Test
+    fun `resolved proxy is applied to the client and installs the authenticator`() {
+        val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("proxy.example", 8080))
+        val proxyConfig = FakeProxyConfig(proxy = proxy)
+        val runner = ElevenLabsTranscriptionRunner(
+            apiKey = "test-key",
+            proxy = proxyConfig,
+            audioDuration = FakeAudioDurationReader()
+        )
+
+        val client = runner.buildClient()
+
+        assertSame("resolved proxy must be applied to the okhttp client", proxy, client.proxy)
+        assertEquals(
+            "installAuthenticator must be called exactly once when a proxy is configured",
+            1,
+            proxyConfig.installAuthenticatorCalls
+        )
     }
 }

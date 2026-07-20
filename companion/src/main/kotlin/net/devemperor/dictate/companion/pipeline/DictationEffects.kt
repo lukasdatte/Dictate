@@ -41,6 +41,11 @@ class DictationEffects(
     private val clock: ClockPort,
     private val profiles: ActiveProfileSource,
     private val panel: PanelControl,
+    /**
+     * Live read of `insertion.confirmBeforeInsert` (F21, §8.5) — a supplier so a settings change
+     * applies to the next take without rebuilding the graph. Default: auto-insert.
+     */
+    private val confirmBeforeInsert: () -> Boolean = { false },
 ) {
 
     fun run(effect: Effect, dispatch: (DictationIntent) -> Unit) {
@@ -53,6 +58,9 @@ class DictationEffects(
             Effect.DiscardCapture -> capture.discard()
             is Effect.StopCaptureAndRun -> submitPipeline(effect.sessionId, dispatch)
             is Effect.InsertText -> insert(effect.sessionId, effect.text, dispatch)
+            // Discard from the waiting panel: acknowledge without inserting — the same `inserted_at`
+            // stamp as an insert, one acknowledge channel for both (ADR-0013 §4, §8.5).
+            is Effect.AcknowledgeDiscard -> sessions.stampInserted(effect.sessionId, clock.nowMillis())
         }
     }
 
@@ -99,7 +107,12 @@ class DictationEffects(
                 // Bare transcript: no turn, insert verbatim (ADR-0012 §1). ALWAYS_INSERT is the only
                 // mode that reaches here (the others force a turn), so the verdict is always INSERT.
                 sessions.completeWithFinalOutput(sessionId, transcript.text)
-                dispatch(DictationIntent.PipelineVerdict(sessionId, Verdict.INSERT, transcript.text, null))
+                dispatch(
+                    DictationIntent.PipelineVerdict(
+                        sessionId, Verdict.INSERT, transcript.text, null,
+                        requiresConfirm = confirmBeforeInsert(),
+                    )
+                )
                 return
             }
 
@@ -177,7 +190,10 @@ class DictationEffects(
 
         // ReviewDecision is the single verdict authority (shared-ai) — never rebuilt (§8.2 footgun).
         val verdict = ReviewDecision.decide(profile.ambiguityMode, result.needsClarification, result.message)
-        return DictationIntent.PipelineVerdict(sessionId, verdict, result.output, result.message)
+        return DictationIntent.PipelineVerdict(
+            sessionId, verdict, result.output, result.message,
+            requiresConfirm = verdict == Verdict.INSERT && confirmBeforeInsert(),
+        )
     }
 
     private fun insert(sessionId: String, text: String, dispatch: (DictationIntent) -> Unit) {

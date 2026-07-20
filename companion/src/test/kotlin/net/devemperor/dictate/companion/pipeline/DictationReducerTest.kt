@@ -185,4 +185,68 @@ class DictationReducerTest {
         assertEquals(postProcessed, state)
         assertTrue(effects.isEmpty())
     }
+
+    // ── confirm-before-insert gate + the one acknowledge channel (D2, F21 / §8.5) ─────────────
+
+    /** Drives to the confirm wait: an INSERT verdict carrying `requiresConfirm`. */
+    private fun waitingForConfirm(): DesktopUiState = reduce(
+        postProcessing(),
+        DictationIntent.PipelineVerdict(sid, Verdict.INSERT, "hold on", null, requiresConfirm = true),
+    ).first
+
+    @Test
+    fun verdictInsertWithConfirm_parksInReview_insteadOfAutoInserting() {
+        val (state, effects) = reduce(
+            postProcessing(),
+            DictationIntent.PipelineVerdict(sid, Verdict.INSERT, "hold on", null, requiresConfirm = true),
+        )
+        assertEquals(DictationPhase.REVIEW, state.phase)
+        assertEquals("hold on", state.review?.output)
+        assertTrue("no insert until the user confirms", effects.isEmpty())
+    }
+
+    @Test
+    fun confirmInsert_insertsTheParkedOutput() {
+        val (state, effects) = reduce(waitingForConfirm(), DictationIntent.ConfirmInsert)
+        assertEquals(DictationPhase.INSERTED, state.phase)
+        assertNull(state.review)
+        assertEquals(listOf(Effect.InsertText(sid, "hold on")), effects)
+    }
+
+    @Test
+    fun confirmInsert_outsideTheReviewWait_isANoOp() {
+        val (state, effects) = reduce(recording(), DictationIntent.ConfirmInsert)
+        assertEquals(DictationPhase.RECORDING, state.phase)
+        assertTrue(effects.isEmpty())
+    }
+
+    @Test
+    fun discard_fromTheReviewWait_acknowledgesWithoutInserting() {
+        val (state, effects) = reduce(waitingForConfirm(), DictationIntent.Discard)
+        assertEquals("terminal → back to rest", DictationPhase.IDLE, state.phase)
+        assertEquals(
+            "inserted_at stamp as the acknowledge — one channel for insert AND discard (ADR-0013 §4)",
+            listOf(Effect.AcknowledgeDiscard(sid), Effect.HidePanel),
+            effects,
+        )
+    }
+
+    @Test
+    fun discard_fromTheReviewWait_withAQueuedRun_startsTheNextTake() {
+        val queued = reduce(waitingForConfirm(), DictationIntent.StartHotkey("s-2")).first
+        val (state, effects) = reduce(queued, DictationIntent.Discard)
+        assertEquals(DictationPhase.RECORDING, state.phase)
+        assertEquals("s-2", state.activeSessionId)
+        assertEquals(listOf(Effect.AcknowledgeDiscard(sid), Effect.StartCapture(device = null)), effects)
+    }
+
+    @Test
+    fun verdictInsertWithoutConfirmFlag_stillAutoInserts() {
+        val (state, effects) = reduce(
+            postProcessing(),
+            DictationIntent.PipelineVerdict(sid, Verdict.INSERT, "auto", null, requiresConfirm = false),
+        )
+        assertEquals(DictationPhase.INSERTED, state.phase)
+        assertEquals(listOf(Effect.InsertText(sid, "auto")), effects)
+    }
 }

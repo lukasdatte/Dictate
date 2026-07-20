@@ -98,6 +98,25 @@ class CompanionSettings(private val settings: SettingsRepository) {
             ?: DEFAULT_ROLLING_SEGMENT_SEC
         set(value) = settings.put(KEY_ROLLING_SEGMENT, value.toString())
 
+    /**
+     * The dictation hotkey as its `HotkeyCombo.format()` string (desktop-host.md §6.1), or `null`
+     * when never configured / cleared. Stored as a plain string on purpose: the domain stays free of
+     * the `hotkey/` vocabulary, and the caller's `HotkeyCombo.parse(...) ?: DEFAULT` gives garbage
+     * values the same self-healing fallback every other setting here has.
+     */
+    var hotkeyCombo: String?
+        get() = settings.get(KEY_HOTKEY_COMBO)?.takeIf { it.isNotBlank() }
+        set(value) = settings.put(KEY_HOTKEY_COMBO, value.orEmpty())
+
+    /**
+     * F21 (desktop-host.md §8.5): when true, an INSERT-verdict dictation waits in the panel for an
+     * explicit confirm instead of auto-inserting. Default false — auto-insert is the point of the
+     * hotkey flow.
+     */
+    var confirmBeforeInsert: Boolean
+        get() = settings.get(KEY_CONFIRM_BEFORE_INSERT)?.toBooleanStrictOrNull() ?: false
+        set(value) = settings.put(KEY_CONFIRM_BEFORE_INSERT, value.toString())
+
     companion object {
 
         /** 0.0.0.0 — the `AllInterfaces` host; the legacy `server.bind` default before selection. */
@@ -130,5 +149,7 @@ class CompanionSettings(private val settings: SettingsRepository) {
         private const val KEY_START_MINIMIZED = "ui.startMinimized"
         private const val KEY_AUDIO_DEVICE = "audio.inputDevice"
         private const val KEY_ROLLING_SEGMENT = "audio.rollingSegmentSec"
+        private const val KEY_HOTKEY_COMBO = "hotkey.combo"
+        private const val KEY_CONFIRM_BEFORE_INSERT = "insertion.confirmBeforeInsert"
     }
 }

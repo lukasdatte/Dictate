@@ -22,6 +22,7 @@ object DictationReducer {
             is DictationIntent.PipelineVerdict -> onVerdict(state, intent)
             is DictationIntent.PipelineFailed -> onFailed(state, intent)
             is DictationIntent.InsertCompleted -> onInsertCompleted(state, intent.sessionId)
+            DictationIntent.ConfirmInsert -> onConfirmInsert(state)
         }
 
     private fun onStartHotkey(state: DesktopUiState, sessionId: String): Pair<DesktopUiState, List<Effect>> {
@@ -62,10 +63,15 @@ object DictationReducer {
     }
 
     private fun onDiscard(state: DesktopUiState): Pair<DesktopUiState, List<Effect>> {
-        // Discard is only meaningful while the mic is live; once the pipeline is running the take is
-        // committed (the audio is being uploaded). REVIEW discard is a D3 concern (§8.5).
+        // Discard while the mic is live throws the audio away. Discard from the REVIEW/confirm wait
+        // acknowledges without inserting (one acknowledge channel, ADR-0013 §4 / spec §8.5). In
+        // between — pipeline running — the take is committed (the audio is being uploaded): no-op.
+        if (state.phase == DictationPhase.REVIEW) {
+            val sessionId = state.activeSessionId ?: return state to emptyList()
+            return finish(state, listOf(Effect.AcknowledgeDiscard(sessionId)))
+        }
         if (state.phase != DictationPhase.RECORDING) return state to emptyList()
-        return finish(state, DictationPhase.CANCELLED, listOf(Effect.DiscardCapture))
+        return finish(state, listOf(Effect.DiscardCapture))
     }
 
     private fun onTranscriptionCompleted(state: DesktopUiState, sessionId: String): Pair<DesktopUiState, List<Effect>> {
@@ -81,8 +87,21 @@ object DictationReducer {
         val validPhase = state.phase == DictationPhase.POST_PROCESSING || state.phase == DictationPhase.TRANSCRIBING
         if (!validPhase || state.activeSessionId != intent.sessionId) return state to emptyList()
         return when (intent.verdict) {
-            Verdict.INSERT -> state.copy(phase = DictationPhase.INSERTED, pipeline = PipelineUi.Idle) to
-                listOf(Effect.InsertText(intent.sessionId, intent.output))
+            // The confirm gate (F21, §8.5): an INSERT verdict with `insertion.confirmBeforeInsert`
+            // set parks the finished text in the panel's waiting state instead of auto-inserting;
+            // ConfirmInsert (or Discard) resolves it. The Verdict itself is untouched — the gate is
+            // presentation policy, not a second decision path (§8.2 footgun).
+            Verdict.INSERT ->
+                if (intent.requiresConfirm) {
+                    state.copy(
+                        phase = DictationPhase.REVIEW,
+                        pipeline = PipelineUi.Idle,
+                        review = ReviewUi(sessionId = intent.sessionId, message = intent.message, output = intent.output),
+                    ) to emptyList()
+                } else {
+                    state.copy(phase = DictationPhase.INSERTED, pipeline = PipelineUi.Idle) to
+                        listOf(Effect.InsertText(intent.sessionId, intent.output))
+                }
             Verdict.REVIEW -> state.copy(
                 phase = DictationPhase.REVIEW,
                 pipeline = PipelineUi.Idle,
@@ -93,25 +112,33 @@ object DictationReducer {
 
     private fun onFailed(state: DesktopUiState, intent: DictationIntent.PipelineFailed): Pair<DesktopUiState, List<Effect>> {
         if (state.activeSessionId != intent.sessionId || state.phase !in NON_TERMINAL) return state to emptyList()
-        return finish(state, DictationPhase.FAILED, emptyList(), PipelineUi.Failed(intent.errorKey))
+        return finish(state, emptyList(), PipelineUi.Failed(intent.errorKey))
+    }
+
+    private fun onConfirmInsert(state: DesktopUiState): Pair<DesktopUiState, List<Effect>> {
+        val review = state.review ?: return state to emptyList()
+        if (state.phase != DictationPhase.REVIEW) return state to emptyList()
+        return state.copy(phase = DictationPhase.INSERTED, review = null) to
+            listOf(Effect.InsertText(review.sessionId, review.output))
     }
 
     private fun onInsertCompleted(state: DesktopUiState, sessionId: String): Pair<DesktopUiState, List<Effect>> {
         if (state.phase != DictationPhase.INSERTED || state.activeSessionId != sessionId) {
             return state to emptyList()
         }
-        return finish(state, DictationPhase.INSERTED, emptyList())
+        return finish(state, emptyList())
     }
 
     /**
-     * A take reached a terminal phase. Either the next queued run starts recording (ADR-0009: the
-     * panel stays up, recording order = insert order), or — with an empty queue — the panel returns to
-     * IDLE and hides. [terminalPhase]/[terminalPipeline] are irrelevant once we hand off, but are
-     * applied when the queue is empty so a Failed banner survives to the resting state.
+     * A take reached a terminal phase (INSERTED / FAILED / CANCELLED). Either the next queued run
+     * starts recording (ADR-0009: the panel stays up, recording order = insert order), or — with an
+     * empty queue — the panel returns to the resting IDLE phase and hides. The resting phase is always
+     * IDLE regardless of which terminal was reached (the persisted `sessions.status` already recorded
+     * COMPLETED/FAILED/CANCELLED, §5.2); [terminalPipeline] is the one carry-over, so a Failed banner
+     * survives on the hidden panel until the next take.
      */
     private fun finish(
         state: DesktopUiState,
-        terminalPhase: DictationPhase,
         pre: List<Effect>,
         terminalPipeline: PipelineUi = PipelineUi.Idle,
     ): Pair<DesktopUiState, List<Effect>> {

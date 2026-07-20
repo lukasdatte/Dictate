@@ -27,13 +27,20 @@ import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.withTimeoutOrNull
 import net.devemperor.dictate.companion.domain.CompanionSettings
+import net.devemperor.dictate.companion.hotkey.HotkeyCombo
 import net.devemperor.dictate.companion.platform.AppPaths
 import net.devemperor.dictate.companion.platform.SingleInstanceGuard
 import net.devemperor.dictate.companion.ui.App
 import net.devemperor.dictate.companion.ui.CompanionIcon
+import net.devemperor.dictate.companion.ui.panel.PanelViewModel
+import net.devemperor.dictate.companion.ui.panel.PanelWindow
 import net.devemperor.dictate.companion.ui.theme.CompanionTheme
 import java.awt.EventQueue
 import java.util.concurrent.CompletableFuture
@@ -126,12 +133,53 @@ private fun runCompanion(args: Array<String>, guard: SingleInstanceGuard) {
             onDispose { guard.onShowRequested { } }
         }
 
+        // ── Desktop dictation (Block D2): global hotkey + warm panel ─────────────────────────
+        // Registered once boot is Ready: the hotkey (or the tray item, the Linux path) funnels into
+        // container.startDictation() — remember-foreground first (§6.3), then the pipeline. The
+        // combo comes from `hotkey.combo`, self-healing to the default on garbage (§6.1).
+        DisposableEffect(bootState) {
+            val ready = (bootState as? BootState.Ready)?.companion?.container
+            if (ready != null && ready.desktopDictation != null) {
+                val combo = HotkeyCombo.parse(ready.settings.hotkeyCombo) ?: HotkeyCombo.DEFAULT
+                ready.globalHotkey.register(combo) { ready.startDictation() }
+            }
+            onDispose { ready?.globalHotkey?.unregister() }
+        }
+
+        (bootState as? BootState.Ready)?.companion?.container?.let { container ->
+            val controller = container.desktopDictation
+            val panel = container.dictationPanel
+            val capture = container.desktopCapture
+            if (controller != null && panel != null && capture != null) {
+                // The panel's brain lives as long as the application scope — the window itself stays
+                // warm (visible=false) from here on, which is what keeps the toggle <100 ms (F5).
+                val panelScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
+                val viewModel = remember {
+                    PanelViewModel(controller.state, capture.amplitudes, panelScope, container.clock).also { it.start() }
+                }
+                DisposableEffect(Unit) { onDispose { panelScope.cancel() } }
+                PanelWindow(
+                    controller = controller,
+                    viewModel = viewModel,
+                    control = panel,
+                    applyFocusFreeStyle = container.panelStyler,
+                )
+            }
+        }
+
         Tray(
             icon = CompanionIcon,
             tooltip = "Dictate Companion",
             onAction = { windowVisible = true },
             menu = {
                 Item("Open") { windowVisible = true }
+                // The Linux/macOS dictation trigger (no global hotkey there, spec §6.1/F6) — and a
+                // mouse fallback on Windows.
+                (bootState as? BootState.Ready)?.companion?.container?.let { container ->
+                    if (container.desktopDictation != null) {
+                        Item("Start dictation") { container.startDictation() }
+                    }
+                }
                 // "Pause receiving" needs a server to stop; it only appears once boot has produced one.
                 (bootState as? BootState.Ready)?.let { ready ->
                     CheckboxItem("Pause receiving", checked = !receiving) { paused ->

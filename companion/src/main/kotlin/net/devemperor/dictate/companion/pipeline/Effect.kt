@@ -32,4 +32,10 @@ sealed interface Effect {
 
     /** Auto-insert the INSERT-verdict [text] into the foreground window and stamp `inserted_at`. */
     data class InsertText(val sessionId: String, val text: String) : Effect
+
+    /**
+     * Discard from the panel's waiting state: stamp `inserted_at` as the acknowledge **without**
+     * inserting — insert and discard share one acknowledge channel (ADR-0013 §4, spec §8.5).
+     */
+    data class AcknowledgeDiscard(val sessionId: String) : Effect
 }

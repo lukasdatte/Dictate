@@ -50,4 +50,7 @@ class DesktopDictationController(
     fun resumeRecording() = dispatch(DictationIntent.ResumeRecording)
     fun stopRecording() = dispatch(DictationIntent.StopRecording)
     fun discard() = dispatch(DictationIntent.Discard)
+
+    /** Panel "Insert" on a take waiting in the confirm/review state (§8.5). */
+    fun confirmInsert() = dispatch(DictationIntent.ConfirmInsert)
 }

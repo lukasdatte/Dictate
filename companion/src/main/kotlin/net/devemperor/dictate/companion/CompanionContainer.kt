@@ -15,11 +15,16 @@ import net.devemperor.dictate.companion.data.SqlDelightChordMappingRepository
 import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
 import net.devemperor.dictate.companion.data.SqlDelightHistoryRepository
 import net.devemperor.dictate.companion.data.SqlDelightSettingsRepository
+import net.devemperor.dictate.companion.capture.AudioCaptureService
+import net.devemperor.dictate.companion.domain.FocusRestorationPolicy
+import net.devemperor.dictate.companion.domain.FocusRestoringTextInserter
+import net.devemperor.dictate.companion.hotkey.GlobalHotkey
 import net.devemperor.dictate.companion.pipeline.DesktopDictationController
 import net.devemperor.dictate.companion.pipeline.DictationEffects
-import net.devemperor.dictate.companion.pipeline.PanelControl
 import net.devemperor.dictate.companion.pipeline.SerialJobQueue
 import net.devemperor.dictate.companion.pipeline.TransitionalProfileSource
+import net.devemperor.dictate.companion.platform.fallback.NoopGlobalHotkey
+import net.devemperor.dictate.companion.ui.panel.ComposePanelWindowControl
 import net.devemperor.dictate.companion.domain.AuthService
 import net.devemperor.dictate.companion.domain.CompanionSettings
 import net.devemperor.dictate.companion.domain.DispatchService
@@ -78,7 +83,26 @@ class CompanionContainer(
      */
     val desktopDictation: DesktopDictationController? = null,
     val desktopSessions: DesktopSessionRepository? = null,
+    /** The pipeline's capture line — exposed for the panel's amplitude feed (§4.4/§7.4). */
+    val desktopCapture: AudioCaptureService? = null,
+    /** Visibility + spike state of the warm panel window (§6.2); null in the headless test graph. */
+    val dictationPanel: ComposePanelWindowControl? = null,
+    /** Remember-foreground/restore-before-insert policy (§6.3); shares the panel's spike verdict. */
+    val dictationFocus: FocusRestorationPolicy? = null,
+    /** System-wide dictation hotkey (§6.1); Noop off-Windows. */
+    val globalHotkey: GlobalHotkey = NoopGlobalHotkey,
+    /** `WS_EX_NOACTIVATE` styler the panel window applies on creation (§6.3). */
+    val panelStyler: (java.awt.Window) -> Boolean = { false },
 ) {
+
+    /**
+     * The one dictation trigger — hotkey, tray item and panel button all end here, so the §6.3
+     * remember-the-foreground-window step can never be forgotten by one of the entry points.
+     */
+    fun startDictation() {
+        dictationFocus?.onDictationTrigger()
+        desktopDictation?.startHotkey()
+    }
 
     val settings = CompanionSettings(settingsRepository)
     val addressCatalog = AddressCatalog(networkInterfaces)
@@ -111,8 +135,7 @@ class CompanionContainer(
             // ── Desktop-dictation pipeline (Block D) ──────────────────────────────────────────
             // Runs against a TRANSITIONAL AiConfig (§5.1 NOTE): OpenAI-compatible defaults, no key
             // until D3 wires the SecretStore-backed profile. Usage accounting is a no-op sink until
-            // D3's `usage` table (D5.b migration); see NoopUsageSink. The panel is headless (D2 adds
-            // the real focus-free window).
+            // D3's `usage` table (D5.b migration); see NoopUsageSink.
             val settings = CompanionSettings(settingsRepository)
             val desktopSessions = DesktopSessionRepository(database)
             val aiConfig = CompanionAiConfig()
@@ -121,16 +144,27 @@ class CompanionContainer(
                 usageSink = NoopUsageSink,
                 factory = RunnerFactory(aiConfig, CompanionProxyConfig, WavAudioDurationReader),
             )
+            // The warm panel + both §6.3 focus paths (D2): the spike-styled window control and the
+            // restoration fallback share one focus verdict; the pipeline's inserter is wrapped so
+            // every dictation insert restores the remembered editor window first. The phone-dispatch
+            // path below keeps the bare platform.inserter — no panel is in play there.
+            val dictationPanel = ComposePanelWindowControl()
+            val dictationFocus = FocusRestorationPolicy(
+                windows = platform.foregroundWindows,
+                focusFree = dictationPanel::focusFree,
+            )
+            val desktopCapture = JavaSoundAudioCaptureService(settings)
             val desktopDictation = DesktopDictationController(
                 DictationEffects(
-                    capture = JavaSoundAudioCaptureService(settings),
+                    capture = desktopCapture,
                     ai = aiOrchestrator,
                     sessions = desktopSessions,
-                    inserter = platform.inserter,
+                    inserter = FocusRestoringTextInserter(platform.inserter, dictationFocus),
                     queue = SerialJobQueue(),
                     clock = SystemClock,
                     profiles = TransitionalProfileSource(),
-                    panel = PanelControl.None,
+                    panel = dictationPanel,
+                    confirmBeforeInsert = settings::confirmBeforeInsert,
                 )
             )
 
@@ -149,6 +183,11 @@ class CompanionContainer(
                 networkInterfaces = JvmNetworkInterfaces,
                 desktopDictation = desktopDictation,
                 desktopSessions = desktopSessions,
+                desktopCapture = desktopCapture,
+                dictationPanel = dictationPanel,
+                dictationFocus = dictationFocus,
+                globalHotkey = platform.globalHotkey,
+                panelStyler = platform.panelStyler,
             )
         }
 

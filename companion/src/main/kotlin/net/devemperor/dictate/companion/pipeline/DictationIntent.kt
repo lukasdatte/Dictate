@@ -26,13 +26,22 @@ sealed interface DictationIntent {
     /** Pipeline callback: transcription finished — post-processing begins. */
     data class TranscriptionCompleted(val sessionId: String) : DictationIntent
 
-    /** Pipeline callback: post-processing finished with a shared [Verdict] (ADR-0013, §5.5 step 3). */
+    /**
+     * Pipeline callback: post-processing finished with a shared [Verdict] (ADR-0013, §5.5 step 3).
+     * [requiresConfirm] carries the `insertion.confirmBeforeInsert` setting (F21, §8.5), read by the
+     * IO side — an INSERT verdict with it set waits in the panel for an explicit confirm instead of
+     * auto-inserting. The reducer itself stays settings-free (§5.4).
+     */
     data class PipelineVerdict(
         val sessionId: String,
         val verdict: Verdict,
         val output: String,
         val message: String?,
+        val requiresConfirm: Boolean = false,
     ) : DictationIntent
+
+    /** Panel "Insert" pressed on a waiting take (confirm gate / review, §8.5). */
+    data object ConfirmInsert : DictationIntent
 
     /** Pipeline callback: a step failed. [errorKey] is a stable UI/error classifier. */
     data class PipelineFailed(val sessionId: String, val errorKey: String) : DictationIntent

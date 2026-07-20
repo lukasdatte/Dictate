@@ -4,15 +4,22 @@ import com.sun.jna.Platform
 import net.devemperor.dictate.companion.domain.port.AutostartManager
 import net.devemperor.dictate.companion.domain.port.ChordMappingRepository
 import net.devemperor.dictate.companion.domain.port.ClipboardPort
+import net.devemperor.dictate.companion.domain.port.ForegroundWindows
 import net.devemperor.dictate.companion.domain.port.InputCommandPerformer
 import net.devemperor.dictate.companion.domain.port.TextInserter
+import net.devemperor.dictate.companion.hotkey.GlobalHotkey
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
+import net.devemperor.dictate.companion.platform.fallback.NoopForegroundWindows
+import net.devemperor.dictate.companion.platform.fallback.NoopGlobalHotkey
 import net.devemperor.dictate.companion.platform.fallback.NoopInputCommandPerformer
 import net.devemperor.dictate.companion.platform.fallback.NoopTextInserter
 import net.devemperor.dictate.companion.platform.windows.AwtClipboard
 import net.devemperor.dictate.companion.platform.windows.JnaWin32Keyboard
+import net.devemperor.dictate.companion.platform.windows.Win32ForegroundWindows
+import net.devemperor.dictate.companion.platform.windows.Win32GlobalHotkey
 import net.devemperor.dictate.companion.platform.windows.Win32InputPerformer
 import net.devemperor.dictate.companion.platform.windows.Win32TextInserter
+import net.devemperor.dictate.companion.platform.windows.Win32WindowStyler
 import net.devemperor.dictate.companion.platform.windows.WinRegistryAutostart
 
 /**
@@ -38,6 +45,12 @@ object PlatformModule {
          * not knowable at OS-detection time. The container hands its repository in here.
          */
         val inputPerformer: (ChordMappingRepository) -> InputCommandPerformer,
+        /** The system-wide dictation hotkey (desktop-host.md §6.1); Noop off-Windows (tray/F6). */
+        val globalHotkey: GlobalHotkey = NoopGlobalHotkey,
+        /** Foreground-window read/steer for the §6.3 focus-restoration fallback. */
+        val foregroundWindows: ForegroundWindows = NoopForegroundWindows,
+        /** Applies the `WS_EX_NOACTIVATE` spike style to the panel window; `false` = not applied. */
+        val panelStyler: (java.awt.Window) -> Boolean = { false },
     )
 
     fun detect(): Bindings = if (Platform.isWindows()) windows() else fallback()
@@ -58,6 +71,9 @@ object PlatformModule {
             autostart = executable
                 ?.let { WinRegistryAutostart(WinRegistryAutostart.commandLineFor(it)) }
                 ?: NoopAutostart,
+            globalHotkey = Win32GlobalHotkey(),
+            foregroundWindows = Win32ForegroundWindows,
+            panelStyler = Win32WindowStyler::applyFocusFreeStyle,
         )
     }
 

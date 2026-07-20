@@ -118,8 +118,12 @@ object CatalogImport {
     /**
      * A v3 prompt entity → Android `prompts` row (`type=PROMPT`, §13 D3), matched by `uuid`: an
      * existing row is updated in place (keeping its pill `type` and `pos`), a new one is appended.
+     *
+     * `internal` so Block E's peer sync ([net.devemperor.dictate.peers.AndroidCatalogSubscriberStore])
+     * reuses the exact same prompt-write path a v3 import uses — the row⇄DTO shape, the hash recompute
+     * and the uuid-match all stay in one place.
      */
-    private fun upsertPromptRow(db: DictateDatabase, clock: () -> Long, dto: PromptV3Entity) {
+    internal fun upsertPromptRow(db: DictateDatabase, clock: () -> Long, dto: PromptV3Entity) {
         val dao = db.promptDao()
         val existing = dao.getAll().firstOrNull { it.uuid == dto.id }
         val row = (

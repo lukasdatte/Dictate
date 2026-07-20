@@ -49,6 +49,32 @@ class SqlDelightHistoryRepositoryTest {
     }
 
     @Test
+    fun recordDispatch_stampsInsertedAt_soTheArchiveMirrorsTheDispatchFlag() {
+        // A row synced as *pending*: inserted_at NULL, dispatched 0 (upsertSyncSession).
+        history.upsert(DEVICE_ID, upsert("s1", "hello", dispatched = false), receivedAt = 10L)
+        assertNull(database.companionQueries.dictationSessionById("s1").executeAsOne().inserted_at)
+
+        // Re-inserting it (DispatchService.reinsert -> recordDispatch) must stamp inserted_at, or the
+        // dispatch flag and the archive would disagree — the cross-table invariant writeSyncRow documents.
+        history.recordDispatch("s1", at = 30L, outcome = InsertionOutcome.TYPED_CTRL_V)
+
+        assertEquals(30L, database.companionQueries.dictationSessionById("s1").executeAsOne().inserted_at)
+        assertTrue(history.findById("s1")!!.dispatched)
+    }
+
+    @Test
+    fun recordDispatch_neverDowngradesAnInsertedAtAlreadyStamped() {
+        // Already dispatched — the dispatched upsert stamped inserted_at at receivedAt = 10.
+        history.upsert(DEVICE_ID, upsert("s1", "hello", dispatched = true), receivedAt = 10L)
+        assertEquals(10L, database.companionQueries.dictationSessionById("s1").executeAsOne().inserted_at)
+
+        history.recordDispatch("s1", at = 30L, outcome = InsertionOutcome.TYPED_CTRL_V)
+
+        // coalesce keeps the earliest real insertion — a later re-dispatch does not move it.
+        assertEquals(10L, database.companionQueries.dictationSessionById("s1").executeAsOne().inserted_at)
+    }
+
+    @Test
     fun cursor_isTheGreatestCreatedAtThenSessionId() {
         assertNull("an empty database knows nothing — the phone resends from the beginning", history.cursor())
 

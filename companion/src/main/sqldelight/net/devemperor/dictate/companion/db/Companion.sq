@@ -397,6 +397,18 @@ SET received_at = :at, dispatched = 1, last_outcome = :outcome
 WHERE session_id = :sessionId;
 
 /**
+ * The archive half of a dispatch. `recordDispatch` flips dispatch_state.dispatched to 1; this stamps
+ * `sessions.inserted_at` so the two agree — even for a row first written as a *pending* sync
+ * (`upsertSyncSession` wrote inserted_at NULL, dispatched 0), which a re-insert from the history would
+ * otherwise leave with dispatched = 1 but inserted_at still NULL. `coalesce` is the same
+ * never-downgrade rule `upsertSyncSession` applies to inserted_at: the earliest real insertion wins,
+ * a later re-insert does not move it. Run together with recordDispatch in one transaction
+ * (SqlDelightHistoryRepository.recordDispatch).
+ */
+markDispatchInserted:
+UPDATE sessions SET inserted_at = coalesce(inserted_at, :at) WHERE id = :sessionId;
+
+/**
  * The receive watermark. NULL row set = "I know nothing" → the phone resends from the beginning.
  *
  * JOINs dispatch_state (not just `host_origin`) so the watermark tracks only rows that still carry a

@@ -64,7 +64,15 @@ class SqlDelightHistoryRepository(private val database: DictateCompanionDb) : Hi
     }
 
     override fun recordDispatch(sessionId: String, at: Long, outcome: InsertionOutcome) {
-        queries.recordDispatch(at = at, outcome = outcome, sessionId = sessionId)
+        // One transaction, both halves of the mirror: dispatch_state records the outcome, and the
+        // session's `inserted_at` is stamped (coalesce = never-downgrade) so the archive agrees with the
+        // dispatch flag. Without the second write a re-inserted *pending* sync row would carry
+        // dispatched = 1 while inserted_at stayed NULL — the very cross-table invariant this repository
+        // documents (see writeSyncRow / upsertSyncSession).
+        database.transaction {
+            queries.recordDispatch(at = at, outcome = outcome, sessionId = sessionId)
+            queries.markDispatchInserted(at = at, sessionId = sessionId)
+        }
     }
 
     override fun cursor(): SyncCursor? =

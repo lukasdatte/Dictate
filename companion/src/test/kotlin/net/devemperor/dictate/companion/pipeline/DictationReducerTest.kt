@@ -1,0 +1,188 @@
+package net.devemperor.dictate.companion.pipeline
+
+import net.devemperor.dictate.ai.conversation.Verdict
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Every [DictationPhase] transition and the ADR-0009 enqueue, on the pure reducer — no microphone, no
+ * AI, no window (desktop-host.md §5.2/§5.6, acceptance §2 criterion 6).
+ */
+class DictationReducerTest {
+
+    private val sid = "s-1"
+
+    private fun reduce(state: DesktopUiState, intent: DictationIntent) = DictationReducer.reduce(state, intent)
+
+    /** Drives from IDLE to RECORDING for [sid]. */
+    private fun recording(sessionId: String = sid): DesktopUiState =
+        reduce(DesktopUiState(), DictationIntent.StartHotkey(sessionId)).first
+
+    /** Drives RECORDING → TRANSCRIBING → POST_PROCESSING for [sid]. */
+    private fun postProcessing(sessionId: String = sid): DesktopUiState {
+        val transcribing = reduce(recording(sessionId), DictationIntent.StopRecording).first
+        return reduce(transcribing, DictationIntent.TranscriptionCompleted(sessionId)).first
+    }
+
+    @Test
+    fun startHotkey_fromIdle_startsRecordingAndOpensPanel() {
+        val (state, effects) = reduce(DesktopUiState(), DictationIntent.StartHotkey(sid))
+        assertEquals(DictationPhase.RECORDING, state.phase)
+        assertEquals(sid, state.activeSessionId)
+        assertTrue(state.panelVisible)
+        assertEquals(RecordingUi.Active(paused = false, elapsedMillis = 0), state.recording)
+        assertEquals(listOf(Effect.ShowPanel, Effect.StartCapture(device = null)), effects)
+    }
+
+    @Test
+    fun pauseThenResume_togglesTheRecordingFlagAndAsksCapture() {
+        val (paused, pauseEff) = reduce(recording(), DictationIntent.PauseRecording)
+        assertEquals(RecordingUi.Active(paused = true, elapsedMillis = 0), paused.recording)
+        assertEquals(listOf(Effect.PauseCapture), pauseEff)
+
+        val (resumed, resumeEff) = reduce(paused, DictationIntent.ResumeRecording)
+        assertEquals(RecordingUi.Active(paused = false, elapsedMillis = 0), resumed.recording)
+        assertEquals(listOf(Effect.ResumeCapture), resumeEff)
+    }
+
+    @Test
+    fun pause_whenNotRecording_isANoOp() {
+        val (state, effects) = reduce(DesktopUiState(), DictationIntent.PauseRecording)
+        assertEquals(DesktopUiState(), state)
+        assertTrue(effects.isEmpty())
+    }
+
+    @Test
+    fun stopRecording_movesToTranscribingAndRunsThePipeline() {
+        val (state, effects) = reduce(recording(), DictationIntent.StopRecording)
+        assertEquals(DictationPhase.TRANSCRIBING, state.phase)
+        assertEquals(RecordingUi.Idle, state.recording)
+        assertEquals(PipelineUi.Transcribing, state.pipeline)
+        assertEquals(listOf(Effect.StopCaptureAndRun(sid)), effects)
+    }
+
+    @Test
+    fun transcriptionCompleted_movesToPostProcessing() {
+        val (state, effects) = reduce(
+            reduce(recording(), DictationIntent.StopRecording).first,
+            DictationIntent.TranscriptionCompleted(sid),
+        )
+        assertEquals(DictationPhase.POST_PROCESSING, state.phase)
+        assertEquals(PipelineUi.PostProcessing, state.pipeline)
+        assertTrue(effects.isEmpty())
+    }
+
+    @Test
+    fun verdictInsert_movesToInsertedAndEmitsInsert() {
+        val (state, effects) = reduce(
+            postProcessing(),
+            DictationIntent.PipelineVerdict(sid, Verdict.INSERT, "hello world", null),
+        )
+        assertEquals(DictationPhase.INSERTED, state.phase)
+        assertEquals(listOf(Effect.InsertText(sid, "hello world")), effects)
+    }
+
+    @Test
+    fun verdictReview_movesToReviewWithNoInsert() {
+        val (state, effects) = reduce(
+            postProcessing(),
+            DictationIntent.PipelineVerdict(sid, Verdict.REVIEW, "draft", "which Anna?"),
+        )
+        assertEquals(DictationPhase.REVIEW, state.phase)
+        assertNotNull(state.review)
+        assertEquals("which Anna?", state.review?.message)
+        assertEquals("draft", state.review?.output)
+        assertTrue(effects.isEmpty())
+    }
+
+    @Test
+    fun verdictInsert_worksOnABareTranscriptStraightFromTranscribing() {
+        // hasWork=false path (§5.5): the verdict arrives without a POST_PROCESSING hop.
+        val transcribing = reduce(recording(), DictationIntent.StopRecording).first
+        val (state, effects) = reduce(
+            transcribing,
+            DictationIntent.PipelineVerdict(sid, Verdict.INSERT, "bare", null),
+        )
+        assertEquals(DictationPhase.INSERTED, state.phase)
+        assertEquals(listOf(Effect.InsertText(sid, "bare")), effects)
+    }
+
+    @Test
+    fun insertCompleted_withEmptyQueue_returnsToIdleAndHidesPanel() {
+        val inserted = reduce(
+            postProcessing(),
+            DictationIntent.PipelineVerdict(sid, Verdict.INSERT, "out", null),
+        ).first
+        val (state, effects) = reduce(inserted, DictationIntent.InsertCompleted(sid))
+        assertEquals(DictationPhase.IDLE, state.phase)
+        assertNull(state.activeSessionId)
+        assertTrue(!state.panelVisible)
+        assertEquals(listOf(Effect.HidePanel), effects)
+    }
+
+    @Test
+    fun discard_fromRecording_cancelsAndDiscardsAudio() {
+        val (state, effects) = reduce(recording(), DictationIntent.Discard)
+        assertEquals(DictationPhase.IDLE, state.phase)
+        assertEquals(listOf(Effect.DiscardCapture, Effect.HidePanel), effects)
+    }
+
+    @Test
+    fun discard_onceThePipelineIsRunning_isANoOp() {
+        val transcribing = reduce(recording(), DictationIntent.StopRecording).first
+        val (state, effects) = reduce(transcribing, DictationIntent.Discard)
+        assertEquals(DictationPhase.TRANSCRIBING, state.phase)
+        assertTrue(effects.isEmpty())
+    }
+
+    @Test
+    fun pipelineFailed_movesToFailedAndSurfacesTheErrorBanner() {
+        val transcribing = reduce(recording(), DictationIntent.StopRecording).first
+        val (state, effects) = reduce(transcribing, DictationIntent.PipelineFailed(sid, "RATE_LIMITED"))
+        assertEquals(DictationPhase.IDLE, state.phase) // terminal → back to rest
+        assertEquals(PipelineUi.Failed("RATE_LIMITED"), state.pipeline)
+        assertEquals(listOf(Effect.HidePanel), effects)
+    }
+
+    @Test
+    fun secondHotkeyDuringPipeline_enqueues_neverDiscards() {
+        val transcribing = reduce(recording(), DictationIntent.StopRecording).first
+        val (state, effects) = reduce(transcribing, DictationIntent.StartHotkey("s-2"))
+        assertEquals("first take keeps running", DictationPhase.TRANSCRIBING, state.phase)
+        assertEquals("second take is queued, not lost", listOf(QueuedRun("s-2")), state.queued)
+        assertTrue("enqueue has no immediate effect", effects.isEmpty())
+    }
+
+    @Test
+    fun terminalWithAQueuedRun_startsTheNextRecording_panelAlreadyUp() {
+        val transcribing = reduce(recording(), DictationIntent.StopRecording).first
+        val queued = reduce(transcribing, DictationIntent.StartHotkey("s-2")).first
+        val postProcessed = reduce(queued, DictationIntent.TranscriptionCompleted(sid)).first
+        val inserted = reduce(postProcessed, DictationIntent.PipelineVerdict(sid, Verdict.INSERT, "out", null)).first
+
+        val (state, effects) = reduce(inserted, DictationIntent.InsertCompleted(sid))
+        assertEquals("the queued take starts recording (order preserved)", DictationPhase.RECORDING, state.phase)
+        assertEquals("s-2", state.activeSessionId)
+        assertTrue(state.queued.isEmpty())
+        assertEquals("panel already visible → only StartCapture", listOf(Effect.StartCapture(device = null)), effects)
+    }
+
+    @Test
+    fun secondHotkeyWithTheSameActiveSession_isDedupedAway() {
+        val transcribing = reduce(recording(), DictationIntent.StopRecording).first
+        val (state, effects) = reduce(transcribing, DictationIntent.StartHotkey(sid))
+        assertTrue("already the active session — no double-book", state.queued.isEmpty())
+        assertTrue(effects.isEmpty())
+    }
+
+    @Test
+    fun staleCallbackForAnOldSession_isIgnored() {
+        val postProcessed = postProcessing()
+        val (state, effects) = reduce(postProcessed, DictationIntent.PipelineVerdict("other", Verdict.INSERT, "x", null))
+        assertEquals(postProcessed, state)
+        assertTrue(effects.isEmpty())
+    }
+}

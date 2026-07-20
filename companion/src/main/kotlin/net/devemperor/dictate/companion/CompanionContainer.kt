@@ -1,12 +1,25 @@
 package net.devemperor.dictate.companion
 
+import net.devemperor.dictate.ai.AIOrchestrator
+import net.devemperor.dictate.ai.factory.RunnerFactory
+import net.devemperor.dictate.companion.ai.CompanionAiConfig
+import net.devemperor.dictate.companion.ai.CompanionProxyConfig
+import net.devemperor.dictate.companion.ai.NoopUsageSink
+import net.devemperor.dictate.companion.capture.JavaSoundAudioCaptureService
+import net.devemperor.dictate.companion.capture.WavAudioDurationReader
 import net.devemperor.dictate.companion.data.CompanionDatabase
+import net.devemperor.dictate.companion.data.DesktopSessionRepository
 import net.devemperor.dictate.companion.data.memory.InMemoryChordMapping
 import net.devemperor.dictate.companion.data.memory.InMemorySettings
 import net.devemperor.dictate.companion.data.SqlDelightChordMappingRepository
 import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
 import net.devemperor.dictate.companion.data.SqlDelightHistoryRepository
 import net.devemperor.dictate.companion.data.SqlDelightSettingsRepository
+import net.devemperor.dictate.companion.pipeline.DesktopDictationController
+import net.devemperor.dictate.companion.pipeline.DictationEffects
+import net.devemperor.dictate.companion.pipeline.PanelControl
+import net.devemperor.dictate.companion.pipeline.SerialJobQueue
+import net.devemperor.dictate.companion.pipeline.TransitionalProfileSource
 import net.devemperor.dictate.companion.domain.AuthService
 import net.devemperor.dictate.companion.domain.CompanionSettings
 import net.devemperor.dictate.companion.domain.DispatchService
@@ -57,6 +70,14 @@ class CompanionContainer(
     val appVersion: String,
     networkInterfaces: NetworkInterfaces,
     random: SecureRandom = SecureRandom(),
+    /**
+     * The desktop-dictation entry point (Block D). Wired only in [production] — the sync-server test
+     * graph ([forTest]) leaves it `null` because the pipeline's own tests construct it directly with
+     * fakes (headless E2E, spec §12). Null-here is the honest signal that a graph without a real
+     * capture line / AI orchestrator has no desktop host.
+     */
+    val desktopDictation: DesktopDictationController? = null,
+    val desktopSessions: DesktopSessionRepository? = null,
 ) {
 
     val settings = CompanionSettings(settingsRepository)
@@ -85,10 +106,38 @@ class CompanionContainer(
         ): CompanionContainer {
             val database = CompanionDatabase.open(AppPaths.databaseFile())
             val chordMapping = SqlDelightChordMappingRepository(database)
+            val settingsRepository = SqlDelightSettingsRepository(database)
+
+            // ── Desktop-dictation pipeline (Block D) ──────────────────────────────────────────
+            // Runs against a TRANSITIONAL AiConfig (§5.1 NOTE): OpenAI-compatible defaults, no key
+            // until D3 wires the SecretStore-backed profile. Usage accounting is a no-op sink until
+            // D3's `usage` table (D5.b migration); see NoopUsageSink. The panel is headless (D2 adds
+            // the real focus-free window).
+            val settings = CompanionSettings(settingsRepository)
+            val desktopSessions = DesktopSessionRepository(database)
+            val aiConfig = CompanionAiConfig()
+            val aiOrchestrator = AIOrchestrator(
+                config = aiConfig,
+                usageSink = NoopUsageSink,
+                factory = RunnerFactory(aiConfig, CompanionProxyConfig, WavAudioDurationReader),
+            )
+            val desktopDictation = DesktopDictationController(
+                DictationEffects(
+                    capture = JavaSoundAudioCaptureService(settings),
+                    ai = aiOrchestrator,
+                    sessions = desktopSessions,
+                    inserter = platform.inserter,
+                    queue = SerialJobQueue(),
+                    clock = SystemClock,
+                    profiles = TransitionalProfileSource(),
+                    panel = PanelControl.None,
+                )
+            )
+
             return CompanionContainer(
                 devices = SqlDelightDeviceRepository(database),
                 history = SqlDelightHistoryRepository(database),
-                settingsRepository = SqlDelightSettingsRepository(database),
+                settingsRepository = settingsRepository,
                 inserter = platform.inserter,
                 inputPerformer = platform.inputPerformer(chordMapping),
                 chordMapping = chordMapping,
@@ -98,6 +147,8 @@ class CompanionContainer(
                 serverName = defaultServerName(),
                 appVersion = APP_VERSION,
                 networkInterfaces = JvmNetworkInterfaces,
+                desktopDictation = desktopDictation,
+                desktopSessions = desktopSessions,
             )
         }
 

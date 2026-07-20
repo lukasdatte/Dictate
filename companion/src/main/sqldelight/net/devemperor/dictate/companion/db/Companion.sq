@@ -313,3 +313,67 @@ VALUES (?, ?, ?, ?, ?, ?);
 -- Reset = clear every override; the repo then falls back to DefaultChords for each command.
 deleteAllChords:
 DELETE FROM key_command_chords;
+
+-- ── desktop-dictation writes (sessions/transcriptions/processing_steps/conversation_messages) ──
+--
+-- The write surface for locally-dictated sessions (host_origin = 'DESKTOP_DICTATION', §5.5). These
+-- are NOT schema changes — the tables were created in D1a; adding named queries is what pulls the
+-- generated ColumnAdapters for `transcriptions` / `processing_steps` / `conversation_messages` into
+-- the DB constructor (D1a left them adapter-less on purpose, CompanionDatabase.kt). No .sqm needed:
+-- verifyMigrations only guards CREATE statements, and these add none.
+
+-- A fresh desktop take: origin KEYBOARD (a normal dictation), host_origin DESKTOP_DICTATION, type
+-- RECORDING. Created once the mic stops, already in the pipeline (status TRANSCRIBING) — the recording
+-- phase itself is transient in-memory state, only the persistable take reaches the archive.
+insertDictationSession:
+INSERT INTO sessions (id, type, created_at, language, audio_file_path, audio_file_paths,
+                      audio_duration_seconds, status, origin, host_origin)
+VALUES (:id, 'RECORDING', :createdAt, :language, :audioFilePath, :audioFilePaths,
+        :durationSeconds, :status, 'KEYBOARD', 'DESKTOP_DICTATION');
+
+updateDictationStatus:
+UPDATE sessions SET status = :status WHERE id = :id;
+
+failDictationSession:
+UPDATE sessions SET status = 'FAILED', last_error_type = :errorType, last_error_message = :message
+WHERE id = :id;
+
+completeDictationSession:
+UPDATE sessions SET status = 'COMPLETED', final_output_text = :finalOutputText WHERE id = :id;
+
+stampInserted:
+UPDATE sessions SET inserted_at = :insertedAt WHERE id = :id;
+
+dictationSessionById:
+SELECT * FROM sessions WHERE id = :id;
+
+insertTranscription:
+INSERT INTO transcriptions (id, session_id, version, is_current, text, model_used, provider,
+                            prompt_tokens, completion_tokens, duration_ms, created_at)
+VALUES (:id, :sessionId, :version, :isCurrent, :text, :modelUsed, :provider,
+        :promptTokens, :completionTokens, :durationMs, :createdAt);
+
+transcriptionsForSession:
+SELECT * FROM transcriptions WHERE session_id = :sessionId ORDER BY version;
+
+insertProcessingStep:
+INSERT INTO processing_steps (id, session_id, step_type, chain_index, version, is_current, input_text,
+                             output_text, model_used, provider, prompt_used, prompt_entity_id,
+                             previous_step_id, previous_transcription_id, source_session_id,
+                             prompt_tokens, completion_tokens, duration_ms, status, error_message,
+                             created_at, assistant_message, response_format)
+VALUES (:id, :sessionId, :stepType, :chainIndex, :version, :isCurrent, :inputText,
+        :outputText, :modelUsed, :provider, :promptUsed, :promptEntityId,
+        :previousStepId, :previousTranscriptionId, :sourceSessionId,
+        :promptTokens, :completionTokens, :durationMs, :status, :errorMessage,
+        :createdAt, :assistantMessage, :responseFormat);
+
+stepsForSession:
+SELECT * FROM processing_steps WHERE session_id = :sessionId ORDER BY chain_index, version;
+
+insertConversationMessage:
+INSERT INTO conversation_messages (id, session_id, turn_index, seq, role, content, step_id, created_at)
+VALUES (:id, :sessionId, :turnIndex, :seq, :role, :content, :stepId, :createdAt);
+
+messagesForSession:
+SELECT * FROM conversation_messages WHERE session_id = :sessionId ORDER BY seq;

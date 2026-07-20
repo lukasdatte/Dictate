@@ -3,8 +3,10 @@ package net.devemperor.dictate.companion.data
 import app.cash.sqldelight.EnumColumnAdapter
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import net.devemperor.dictate.companion.db.DictateCompanionDb
+import net.devemperor.dictate.companion.db.Conversation_messages
 import net.devemperor.dictate.companion.db.Dispatch_state
 import net.devemperor.dictate.companion.db.Key_command_chords
+import net.devemperor.dictate.companion.db.Processing_steps
 import net.devemperor.dictate.companion.db.Sessions
 import net.devemperor.dictate.companion.domain.model.ChordModifier
 import net.devemperor.dictate.companion.domain.model.DefaultChords
@@ -51,6 +53,10 @@ class ChordMigrationSeedTest {
             ),
             dispatch_stateAdapter = Dispatch_state.Adapter(EnumColumnAdapter()),
             key_command_chordsAdapter = Key_command_chords.Adapter(EnumColumnAdapter()),
+            processing_stepsAdapter = Processing_steps.Adapter(
+                EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(),
+            ),
+            conversation_messagesAdapter = Conversation_messages.Adapter(EnumColumnAdapter()),
         )
         val seeded = db.companionQueries.allChords().executeAsList()
 

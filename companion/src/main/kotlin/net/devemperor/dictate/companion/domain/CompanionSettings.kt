@@ -79,6 +79,25 @@ class CompanionSettings(private val settings: SettingsRepository) {
         get() = settings.get(KEY_START_MINIMIZED)?.toBooleanStrictOrNull() ?: false
         set(value) = settings.put(KEY_START_MINIMIZED, value.toString())
 
+    /**
+     * The chosen microphone mixer name (desktop-host.md §4.2), or `null` for the system default. A
+     * name rather than an index because indices reshuffle when a device is (un)plugged. A blank stored
+     * value reads as `null` — clearing the setting means "back to default".
+     */
+    var audioInputDevice: String?
+        get() = settings.get(KEY_AUDIO_DEVICE)?.takeIf { it.isNotBlank() }
+        set(value) = settings.put(KEY_AUDIO_DEVICE, value.orEmpty())
+
+    /**
+     * How many seconds of audio one rolling WAV segment holds before the capture loop rolls to the
+     * next (desktop-host.md §4.3). Bounded so a hand-edited settings row cannot make segments
+     * absurdly short (thrashing) or effectively infinite; garbage falls back to the default.
+     */
+    var rollingSegmentSeconds: Int
+        get() = settings.get(KEY_ROLLING_SEGMENT)?.toIntOrNull()?.takeIf { it in MIN_ROLLING_SEGMENT_SEC..MAX_ROLLING_SEGMENT_SEC }
+            ?: DEFAULT_ROLLING_SEGMENT_SEC
+        set(value) = settings.put(KEY_ROLLING_SEGMENT, value.toString())
+
     companion object {
 
         /** 0.0.0.0 — the `AllInterfaces` host; the legacy `server.bind` default before selection. */
@@ -93,6 +112,11 @@ class CompanionSettings(private val settings: SettingsRepository) {
         const val DEFAULT_RESTORE_DELAY_MILLIS = 800L
         const val MAX_RESTORE_DELAY_MILLIS = 10_000L
 
+        /** 30 s matches the phone's ADR-0007 rolling cadence; the bounds keep a hand-edit sane. */
+        const val DEFAULT_ROLLING_SEGMENT_SEC = 30
+        const val MIN_ROLLING_SEGMENT_SEC = 5
+        const val MAX_ROLLING_SEGMENT_SEC = 600
+
         private const val KEY_PORT = "server.port"
 
         /** Legacy single-address key — read for migration, never written again. */
@@ -104,5 +128,7 @@ class CompanionSettings(private val settings: SettingsRepository) {
 
         private const val KEY_RESTORE_DELAY = "insertion.clipboardRestoreDelayMillis"
         private const val KEY_START_MINIMIZED = "ui.startMinimized"
+        private const val KEY_AUDIO_DEVICE = "audio.inputDevice"
+        private const val KEY_ROLLING_SEGMENT = "audio.rollingSegmentSec"
     }
 }

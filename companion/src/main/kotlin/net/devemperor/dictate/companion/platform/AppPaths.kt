@@ -18,6 +18,13 @@ object AppPaths {
 
     fun databaseFile(): Path = dataDirectory().resolve("companion.db")
 
+    /**
+     * Where the desktop-dictation rolling WAV segments live (desktop-host.md §4.3). A dedicated
+     * sub-directory of [dataDirectory] so the recordings never mingle with the database file and can
+     * be cleaned as a unit.
+     */
+    fun recordingsDirectory(): Path = dataDirectory().resolve("recordings")
+
     fun dataDirectory(): Path {
         val windowsLocal = System.getenv("LOCALAPPDATA")
         if (!windowsLocal.isNullOrBlank()) return Paths.get(windowsLocal, APP_DIR_WINDOWS)

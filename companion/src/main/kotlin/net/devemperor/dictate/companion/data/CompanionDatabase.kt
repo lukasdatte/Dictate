@@ -3,9 +3,11 @@ package net.devemperor.dictate.companion.data
 import app.cash.sqldelight.EnumColumnAdapter
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import net.devemperor.dictate.companion.db.Conversation_messages
 import net.devemperor.dictate.companion.db.DictateCompanionDb
 import net.devemperor.dictate.companion.db.Dispatch_state
 import net.devemperor.dictate.companion.db.Key_command_chords
+import net.devemperor.dictate.companion.db.Processing_steps
 import net.devemperor.dictate.companion.db.Sessions
 import java.nio.file.Files
 import java.nio.file.Path
@@ -30,19 +32,20 @@ object CompanionDatabase {
     fun inMemory(): DictateCompanionDb = build(JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY))
 
     private fun build(driver: SqlDriver): DictateCompanionDb {
-        // SQLite has foreign keys OFF by default, per connection. Without this the ON DELETE CASCADE
-        // on received_texts is decoration: un-pairing a device would leave its texts behind as
-        // orphans, readable by the next device that happens to take the same id.
+        // SQLite has foreign keys OFF by default, per connection. Without this every ON DELETE CASCADE
+        // in the schema is decoration: un-pairing a device would leave its dispatch_state rows behind
+        // as orphans, and deleting a session would strand its transcriptions/steps/messages.
         driver.execute(identifier = null, sql = "PRAGMA foreign_keys = ON", parameters = 0)
 
         SchemaMigrator.migrate(driver)
 
         return DictateCompanionDb(
             driver = driver,
-            // Only the tables the generated queries touch take adapters here: SQLDelight omits an
-            // adapter from the DB constructor until a query references its table. `processing_steps`,
-            // `conversation_messages` and `transcriptions` are schema-only in D1a — their query
-            // surface (and thus their adapters) lands with the desktop pipeline in D1b.
+            // An adapter is generated per table the queries touch: SQLDelight omits an adapter from
+            // the DB constructor until a query references its table. `processing_steps` and
+            // `conversation_messages` were schema-only in D1a — the desktop-pipeline write queries
+            // (D1b, Companion.sq) pull their adapters in here now. `transcriptions` needs none: its
+            // only typed column is `is_current AS kotlin.Boolean`, a SQLDelight built-in.
             sessionsAdapter = Sessions.Adapter(
                 typeAdapter = EnumColumnAdapter(),
                 statusAdapter = EnumColumnAdapter(),
@@ -55,6 +58,14 @@ object CompanionDatabase {
             ),
             key_command_chordsAdapter = Key_command_chords.Adapter(
                 commandAdapter = EnumColumnAdapter(),
+            ),
+            processing_stepsAdapter = Processing_steps.Adapter(
+                step_typeAdapter = EnumColumnAdapter(),
+                statusAdapter = EnumColumnAdapter(),
+                response_formatAdapter = EnumColumnAdapter(),
+            ),
+            conversation_messagesAdapter = Conversation_messages.Adapter(
+                roleAdapter = EnumColumnAdapter(),
             ),
         )
     }

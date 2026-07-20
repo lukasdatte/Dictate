@@ -23,6 +23,7 @@ import net.devemperor.dictate.companion.capture.CaptureFormat
 import net.devemperor.dictate.companion.capture.CaptureResult
 import net.devemperor.dictate.companion.capture.WavAudioDurationReader
 import net.devemperor.dictate.companion.capture.WavWriter
+import net.devemperor.dictate.companion.data.CompanionConfigRepository
 import net.devemperor.dictate.companion.data.CompanionDatabase
 import net.devemperor.dictate.companion.data.DesktopSessionRepository
 import net.devemperor.dictate.companion.domain.session.HostOrigin
@@ -33,6 +34,10 @@ import net.devemperor.dictate.companion.domain.session.StepType
 import net.devemperor.dictate.companion.fakes.FakeTextInserter
 import net.devemperor.dictate.companion.fakes.MutableClock
 import net.devemperor.dictate.preferences.AmbiguityMode
+import net.devemperor.dictate.shared.config.AmbiguityModeValue
+import net.devemperor.dictate.shared.config.ProfileEntity
+import net.devemperor.dictate.shared.config.ProfilePromptRef
+import net.devemperor.dictate.shared.config.PromptV3Entity
 import net.devemperor.dictate.database.entity.ResponseFormatKind as ApiResponseFormatKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -66,6 +71,13 @@ class DesktopDictationPipelineTest {
         completion: CompletionRunner,
         transcription: TranscriptionRunner,
         profile: DictationProfile,
+    ): DesktopDictationController = controller(capture, completion, transcription, profiles = { profile })
+
+    private fun controller(
+        capture: AudioCaptureService,
+        completion: CompletionRunner,
+        transcription: TranscriptionRunner,
+        profiles: ActiveProfileSource,
     ): DesktopDictationController {
         val config: AiConfig = CompanionAiConfig()
         val orchestrator = AIOrchestrator(
@@ -80,7 +92,7 @@ class DesktopDictationPipelineTest {
             inserter = inserter,
             queue = InlineJobQueue(), // deterministic: the whole pipeline runs on the calling thread
             clock = clock,
-            profiles = { profile },
+            profiles = profiles,
             panel = PanelControl.None,
         )
         return DesktopDictationController(effects)
@@ -158,6 +170,47 @@ class DesktopDictationPipelineTest {
         assertEquals(1L, messages[1].seq)
         assertTrue("USER message carries the transcript", messages[1].content.contains(transcript))
         assertEquals("both messages hang off the turn step", step.id, messages[0].step_id)
+    }
+
+    @Test
+    fun profiledTake_resolvesTheAutoApplyInstructionIntoThePersistedUserMessage() {
+        // Seed a real Block-C profile with one auto-apply prompt in the SAME in-memory DB the sessions
+        // land in, and drive the pipeline through the REAL ConfigProfileSource — the regression guard
+        // that the finding's failure (only ambiguityMode resolved, instructions stuck at DEFAULT) cannot
+        // recur on the post-processing axis.
+        val config = CompanionConfigRepository(database, now = { 1L })
+        config.save(PromptV3Entity(id = "p-auto", name = "tidy", text = "tidy it", requiresSelection = false))
+        config.save(
+            ProfileEntity(
+                id = "prof-1", name = "P",
+                orderedPrompts = listOf(ProfilePromptRef(promptRef = "p-auto", autoApply = true)),
+                ambiguityMode = AmbiguityModeValue.ALWAYS_INSERT,
+            )
+        )
+        val source = ConfigProfileSource(
+            config = config,
+            activeProfileId = { "prof-1" },
+            language = { "de" },
+            autoFormatEnabled = { false },
+        )
+
+        val capture = FakeAudioCapture(wavFixture())
+        val controller = controller(
+            capture = capture,
+            transcription = FakeTranscriptionRunner(transcript),
+            // instructions non-empty → hasWork → a turn runs; ALWAYS_INSERT → auto-insert.
+            completion = FakeCompletionRunner(output = postProcessed, message = null, needsClarification = false),
+            profiles = source,
+        )
+
+        val sessionId = controller.startHotkey()
+        controller.stopRecording()
+
+        assertEquals(listOf(postProcessed), inserter.inserted)
+        val messages = sessions.messages(sessionId)
+        val userMessage = messages.single { it.role == MessageRole.USER }
+        assertTrue("the resolved auto-apply instruction reaches the persisted USER message", userMessage.content.contains("tidy it"))
+        assertEquals("language resolved from the device supplier", "de", sessions.session(sessionId)!!.language)
     }
 
     @Test

@@ -127,6 +127,27 @@ class CompanionSettings(private val settings: SettingsRepository) {
         get() = settings.get(KEY_ACTIVE_PROFILE)?.takeIf { it.isNotBlank() }
         set(value) = settings.put(KEY_ACTIVE_PROFILE, value.orEmpty())
 
+    /**
+     * The dictation language code (e.g. `"de"`), or `null` = auto-detect. A **device-local** pref, NOT
+     * a profile field: language is a per-device ergonomic, not shareable catalog content — putting it on
+     * the profile would pollute the config hash and break peer-catalog parity with Android
+     * (entitaetenmodell §4.7, mirrored by the desktop; research desktop-aiconfig-credential-resolution.md
+     * part b F10). The Android twin is `LanguageResolver.effectiveLanguage(sp)`. A blank stored value
+     * reads as `null` — clearing means "auto-detect".
+     */
+    var language: String?
+        get() = settings.get(KEY_LANGUAGE)?.takeIf { it.isNotBlank() }
+        set(value) = settings.put(KEY_LANGUAGE, value.orEmpty())
+
+    /**
+     * Whether the transcript is auto-formatted (punctuation/capitalisation) before insert — the
+     * Android `AutoFormattingService.isEnabled()` twin. A **device-local** pref for the same reason as
+     * [language] (F10). Default `false` (the current transitional behaviour); garbage falls back to it.
+     */
+    var autoFormatEnabled: Boolean
+        get() = settings.get(KEY_AUTO_FORMAT)?.toBooleanStrictOrNull() ?: false
+        set(value) = settings.put(KEY_AUTO_FORMAT, value.toString())
+
     companion object {
 
         /** 0.0.0.0 — the `AllInterfaces` host; the legacy `server.bind` default before selection. */
@@ -162,5 +183,7 @@ class CompanionSettings(private val settings: SettingsRepository) {
         private const val KEY_HOTKEY_COMBO = "hotkey.combo"
         private const val KEY_CONFIRM_BEFORE_INSERT = "insertion.confirmBeforeInsert"
         private const val KEY_ACTIVE_PROFILE = "config.activeProfileId"
+        private const val KEY_LANGUAGE = "dictation.language"
+        private const val KEY_AUTO_FORMAT = "dictation.autoFormatEnabled"
     }
 }

@@ -1,16 +1,18 @@
 package net.devemperor.dictate.companion.ai
 
 import net.devemperor.dictate.ai.AIProvider
+import net.devemperor.dictate.ai.prompt.PromptMode
 import net.devemperor.dictate.preferences.AmbiguityMode
 import net.devemperor.dictate.shared.config.AmbiguityModeValue
+import net.devemperor.dictate.shared.config.PromptSelectionMode
 import net.devemperor.dictate.shared.config.ProviderType
 
 /**
  * The companion's value-equality bridge between the platform-free **wire** enums in `:shared`
- * (`ProviderType`, `AmbiguityModeValue`) and the behaviour-carrying **domain** enums in `:shared-ai`
- * (`AIProvider`, `AmbiguityMode`). The desktop companion is — like `:app` — a module that sees BOTH,
- * so per D5.a it gets its own small mapper rather than reaching for the app's `ConfigWireMapping`
- * (which lives in `:app` and is invisible here).
+ * (`ProviderType`, `AmbiguityModeValue`, `PromptSelectionMode`) and the behaviour-carrying **domain**
+ * enums in `:shared-ai` (`AIProvider`, `AmbiguityMode`, `PromptMode`). The desktop companion is —
+ * like `:app` — a module that sees BOTH, so per D5.a it gets its own small mapper rather than reaching
+ * for the app's `ConfigWireMapping` (which lives in `:app` and is invisible here).
  *
  * Conversions are by enum `name()` (both sides share identical names by construction). Parity is
  * pinned by `CompanionConfigWireEnumParityTest`, the mirror of the app's `ConfigWireEnumParityTest`:
@@ -26,4 +28,7 @@ object CompanionConfigWireMapping {
 
     fun AmbiguityModeValue.toAmbiguityMode(): AmbiguityMode =
         AmbiguityMode.fromPersistKey(name)
+
+    fun PromptSelectionMode.toPromptMode(): PromptMode =
+        runCatching { PromptMode.valueOf(name) }.getOrDefault(PromptMode.NONE)
 }

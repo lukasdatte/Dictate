@@ -1,10 +1,13 @@
 package net.devemperor.dictate.companion.ai
 
 import net.devemperor.dictate.ai.AIProvider
+import net.devemperor.dictate.ai.prompt.PromptMode
 import net.devemperor.dictate.companion.ai.CompanionConfigWireMapping.toAIProvider
 import net.devemperor.dictate.companion.ai.CompanionConfigWireMapping.toAmbiguityMode
+import net.devemperor.dictate.companion.ai.CompanionConfigWireMapping.toPromptMode
 import net.devemperor.dictate.preferences.AmbiguityMode
 import net.devemperor.dictate.shared.config.AmbiguityModeValue
+import net.devemperor.dictate.shared.config.PromptSelectionMode
 import net.devemperor.dictate.shared.config.ProviderType
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -42,5 +45,18 @@ class CompanionConfigWireEnumParityTest {
     @Test
     fun everyAmbiguityModeValue_mapsToTheSameNamedAmbiguityMode() {
         for (v in AmbiguityModeValue.entries) assertEquals(v.name, v.toAmbiguityMode().persistKey)
+    }
+
+    @Test
+    fun promptSelectionModeNames_matchPromptModeNames() {
+        assertEquals(
+            PromptMode.entries.map { it.name }.toSet(),
+            PromptSelectionMode.entries.map { it.name }.toSet(),
+        )
+    }
+
+    @Test
+    fun everyPromptSelectionMode_mapsToTheSameNamedPromptMode() {
+        for (v in PromptSelectionMode.entries) assertEquals(v.name, v.toPromptMode().name)
     }
 }

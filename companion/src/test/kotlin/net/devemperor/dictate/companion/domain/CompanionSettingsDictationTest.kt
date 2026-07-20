@@ -45,4 +45,32 @@ class CompanionSettingsDictationTest {
         settings.confirmBeforeInsert = false
         assertFalse(settings.confirmBeforeInsert)
     }
+
+    @Test
+    fun language_defaultsToNull_meaningAutoDetect() {
+        assertNull(settings.language)
+    }
+
+    @Test
+    fun language_roundTripsACode_andBlankReadsAsNull() {
+        settings.language = "de"
+        assertEquals("de", settings.language)
+        settings.language = null
+        assertNull(settings.language)
+        settings.language = "   "
+        assertNull("a blank stored code reads as auto-detect", settings.language)
+    }
+
+    @Test
+    fun autoFormatEnabled_defaultsToFalse() {
+        assertFalse(settings.autoFormatEnabled)
+    }
+
+    @Test
+    fun autoFormatEnabled_roundTrips_andGarbageFallsBackToDefault() {
+        settings.autoFormatEnabled = true
+        assertTrue(settings.autoFormatEnabled)
+        settings.autoFormatEnabled = false
+        assertFalse(settings.autoFormatEnabled)
+    }
 }

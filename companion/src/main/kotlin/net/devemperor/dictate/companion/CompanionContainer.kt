@@ -173,10 +173,17 @@ class CompanionContainer(
                     inserter = FocusRestoringTextInserter(platform.inserter, dictationFocus),
                     queue = SerialJobQueue(),
                     clock = SystemClock,
-                    // F20 (§8.1): the review ambiguity mode comes from the active profile; the rest of
-                    // the profile→AiConfig resolution stays transitional until the desktop credential
-                    // resolver lands (§5.1 NOTE / §15 Gap 5, see ConfigProfileSource).
-                    profiles = ConfigProfileSource(configRepository, activeProfileId = { settings.activeProfileId }),
+                    // F20 (§8.1): the take's post-processing surface is resolved from the active profile
+                    // — ambiguity mode, auto-apply instructions and style prompt from the profile; language
+                    // and auto-format from device settings (research desktop-aiconfig-credential-resolution.md
+                    // part b F6-F11, see ConfigProfileSource). The provider/model/key half is
+                    // ProfileBackedAiConfig above.
+                    profiles = ConfigProfileSource(
+                        config = configRepository,
+                        activeProfileId = { settings.activeProfileId },
+                        language = settings::language,
+                        autoFormatEnabled = settings::autoFormatEnabled,
+                    ),
                     panel = dictationPanel,
                     confirmBeforeInsert = settings::confirmBeforeInsert,
                 )

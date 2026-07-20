@@ -206,6 +206,40 @@ class SecretsMigrationTest {
         fixture.keys.forEach { assertFalse("plaintext ${it.key} gone", sp.contains(it.key)) }
     }
 
+    @Test
+    fun backupWriteFailure_abortsCleanly_noPlaintextDeleted_noCrash() {
+        // Regression (B2 self-fix): a failure writing the rollback backup must abort the migration
+        // BEFORE any plaintext is deleted — it must never crash app start, and never leave a
+        // truncated backup that the write-once guard would later mistake for a complete snapshot
+        // (§7.6 — once the plaintext is gone the backup is the only rollback source). Force the
+        // failure by planting a plain *file* where the backup's parent directory must go, so the
+        // staged write cannot open its file.
+        clearBackup()
+        val sp = FakeSharedPreferences()
+        seedAllSlots(sp)
+        val store = realStore()
+
+        val backupParent = requireNotNull(backupFile().parentFile)
+        backupParent.deleteRecursively()
+        backupParent.parentFile?.mkdirs()
+        backupParent.writeText("not a directory") // occupy the parent path with a plain file
+
+        try {
+            // Must NOT throw — a backup IO failure is a clean abort, not an app-start crash.
+            SecretsMigration.run(context, sp, store)
+
+            assertFalse("flag stays unset when the backup could not be written", sp.get(Pref.SecretsMigratedV1))
+            fixture.forEach { (pref, value) ->
+                assertEquals("plaintext ${pref.key} must survive an aborted backup", value, sp.getString(pref.key, null))
+            }
+            SecretsMigration.SLOTS.forEach {
+                assertNull("no store write when the migration aborts before the slot loop", store.get(it.ref))
+            }
+        } finally {
+            backupParent.delete()
+        }
+    }
+
     /**
      * Minimal in-test [SecretStore] to drive the abort paths deterministically: records puts, can
      * report unavailable, and can throw on a chosen [SecretRef].

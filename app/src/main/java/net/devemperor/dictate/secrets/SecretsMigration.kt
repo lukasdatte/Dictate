@@ -12,6 +12,7 @@ import net.devemperor.dictate.preferences.get
 import net.devemperor.dictate.preferences.put
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.nio.charset.StandardCharsets
 
 /**
@@ -124,11 +125,13 @@ object SecretsMigration {
             return
         }
 
-        // §7.6 rollback export FIRST, before any delete. Written once so a retry after a partial
-        // run keeps the complete pre-migration snapshot rather than a truncated one.
-        exportBackupOnce(context, sp)
-
         try {
+            // §7.6 rollback export FIRST, before any delete. Written once (atomically) so a retry
+            // after a partial run keeps the complete pre-migration snapshot rather than a truncated
+            // one. Kept inside the try so a backup IO failure aborts cleanly (below) — the migration
+            // must never delete plaintext that has no rollback source, nor crash app start.
+            exportBackupOnce(context, sp)
+
             for (slot in SLOTS) {
                 val plaintext = sp.getString(slot.pref.key, "").orEmpty()
                 if (plaintext.isNotEmpty()) {
@@ -141,6 +144,11 @@ object SecretsMigration {
         } catch (e: SecretStoreException) {
             // Abort: leave the flag unset and the un-migrated plaintext in place; next start retries.
             Log.w(TAG, "secret migration aborted; will retry on next start", e)
+            return
+        } catch (e: IOException) {
+            // The rollback backup could not be written. Abort before any delete so the plaintext keeps
+            // its only rollback source; the next start retries with a fresh full backup (§7.6).
+            Log.w(TAG, "secret migration aborted (rollback backup IO failed); will retry on next start", e)
             return
         }
 
@@ -172,8 +180,22 @@ object SecretsMigration {
         if (!any) return // nothing to roll back
 
         backupFile.parentFile?.mkdirs()
-        backupFile.writeText(json.toString(2), StandardCharsets.UTF_8)
-        restrictToOwner(backupFile)
+        // Atomic write: stage into a temp file and rename into place. A crash or IO error mid-write
+        // must never leave a *truncated* backup, because the write-once guard above would then treat
+        // it as a complete snapshot — and once the plaintext is deleted the backup is the only
+        // rollback source (§7.6). On any failure the temp is removed and the IOException propagates
+        // so the caller aborts the migration before deleting anything.
+        val tmp = File(backupFile.parentFile, "${backupFile.name}.tmp")
+        try {
+            tmp.writeText(json.toString(2), StandardCharsets.UTF_8)
+            restrictToOwner(tmp)
+            if (!tmp.renameTo(backupFile)) {
+                throw IOException("could not finalize rollback backup at ${backupFile.absolutePath}")
+            }
+        } catch (e: IOException) {
+            tmp.delete()
+            throw e
+        }
     }
 
     /**

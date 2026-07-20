@@ -8,7 +8,7 @@
           Exclude the SecretStore blob file (spec secretstore.md §5.3). The AES-GCM blobs are
           wrapped by a device-bound Keystore KEK that does not survive backup/transfer; restoring
           "dead" ciphertext without its key reads as corrupt (DecryptionFailed). Keys are re-entered
-          on the new device — the accepted consequence recorded in adr-secret-store.
+          on the new device — the accepted consequence recorded in ADR-0029.
         -->
         <exclude domain="sharedpref" path="net.devemperor.dictate.secretstore.xml"/>
     </cloud-backup>

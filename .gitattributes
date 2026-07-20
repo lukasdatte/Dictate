@@ -1,0 +1,6 @@
+# Force textual diffs for source files. UTF-8 content (e.g. `§`, em-dashes in
+# CatalogService.kt) can trip git's binary-detection heuristic and get shown as
+# "Binary files ... differ" in diffs. `text` normalizes line endings; `diff`
+# forces git to treat the file as text so diffs stay readable.
+*.kt   text diff
+*.kts  text diff

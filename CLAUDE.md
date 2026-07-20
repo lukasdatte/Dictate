@@ -37,6 +37,10 @@ ADR-0028 added `:shared-ai`):
   providers, runners, `AIOrchestrator`, the post-processing conversation, prompt
   building, `AmplitudeProcessor`, and the four platform ports (`AiConfig`,
   `UsageSink`, `ProxyConfig`, `AudioDurationReader`) plus the `SecretStore` port.
+  Most classes carry the `net.devemperor.dictate.ai` package, but
+  `AmplitudeProcessor` was moved in package-preserving under
+  `net.devemperor.dictate.core` from its `:app` origin (D5.e) — so `:shared-ai`
+  is *predominantly* but not exclusively the `.ai` package.
   Its own `SharedAiPurityTest` allows the AI SDKs + OkHttp but forbids
   Android/Ktor/coroutines (ADR-0028). **`git log --follow`** traces classes moved
   out of `:app`.

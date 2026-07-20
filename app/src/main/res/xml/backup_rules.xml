@@ -10,7 +10,7 @@
       device-bound Keystore KEK that does NOT survive an Auto-Backup/device transfer. Backing the
       blobs up would restore "dead" ciphertext with no key on the new device, which then reads as
       corrupt (DecryptionFailed). Excluding the file means keys are simply re-entered after a
-      restore — the deliberately accepted consequence recorded in adr-secret-store.
+      restore — the deliberately accepted consequence recorded in ADR-0029.
     -->
     <exclude domain="sharedpref" path="net.devemperor.dictate.secretstore.xml"/>
 </full-backup-content>

@@ -80,3 +80,9 @@ Grün (vor jedem Commit + final):
   aktualisiert — falls eine `api_credentials`-Kopiezeile existiert — deren `keyFingerprint`
   (`sha256(key)`-hex[0..16), nie den Key). Der Companion hält keinen Credential-Spiegel (Wert nur im
   SecretStore), daher dort nur Secret + Watermark.
+
+## Known minor
+- **`AndroidCatalogSubscriberStore.promptDtoByUuid()` macht einen O(n)-Scan** — pro Prompt-Update ein
+  `getAll().firstOrNull { it.uuid == uuid }` über die volle Prompt-Tabelle. Sauberer wäre eine
+  `promptDao().byUuid(uuid)`-Query. Vorbestehend, kein Funktionsdefekt; als Follow-up notiert
+  (docs-final `notes_for_final`, `app-peers`-Worker).

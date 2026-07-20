@@ -299,7 +299,7 @@ The Android app persists with **Room**; the desktop companion (`:companion`) per
 
 ### The rules
 
-- **Full parity, not a subset.** The companion `sessions` / `transcriptions` / `processing_steps` / `conversation_messages` tables mirror Room table-for-table; the config-entity tables (`provider_configs` / `model_refs` / `prompts` / `profiles` / `profile_prompts`) mirror the `:shared` entity model.
+- **Full parity, not a subset.** The companion `sessions` / `transcriptions` / `processing_steps` / `conversation_messages` tables mirror Room table-for-table; the config-entity tables (`provider_configs` / `model_refs` / `prompts` / `profiles` / `profile_prompts`) mirror the `:shared` entity model. The one deliberate exception is Room's `api_credentials` table: the companion schema has **no** credential table, because a credential's secret never lives in a DB row on either platform — it is held by the `SecretStore` port (ADR-0029) and referenced only. The config entities carry the reference, so they still reach full parity without the table.
 - **Double-Enum on both sides.** Every finite-set column carries the same Kotlin enum + SQL `CHECK` on **both** platforms. The enum vocabularies (desktop-host spec §3.2) are the single source of truth for both the CHECK literals and the parity assertions.
 - **Parity tests are the drift guard — a mismatch fails the build.** They are the SQLDelight equivalent of the wire-vs-domain parity discipline (ADR-0016). Do not weaken or disable them:
   - `companion/.../data/CompanionSchemaParityTest.kt` — schema shape vs Room (`RoomParityReference.kt` is the reference).

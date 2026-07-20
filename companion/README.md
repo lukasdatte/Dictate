@@ -65,6 +65,9 @@ companion/src/main/sqldelight/.../db/
 └── migrations/{1..4}.sqm   1=key-command chords, 2=parity+dispatch_state, 3=config entities, 4=peers
 ```
 
+> `1.sqm` (key-command chords) is owned by the keyboard-action-engine plan;
+> desktop-companion-v1's own migration allocation begins at `2.sqm`.
+
 ## Build, Run, Test
 
 ```bash

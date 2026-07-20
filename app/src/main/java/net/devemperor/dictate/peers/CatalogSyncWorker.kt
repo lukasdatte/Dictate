@@ -56,9 +56,20 @@ class CatalogSyncWorker(
         /**
          * Schedule the background poll (KEEP-existing periodic) plus one immediate run — the app-start
          * trigger (D4.5). Idempotent: safe to call on every app start.
+         *
+         * Best-effort: scheduling is a background nicety, so a WorkManager that is not initialised in
+         * this environment (Robolectric does not run the androidx.startup default initializer; a
+         * restricted process may lack it too) must NOT crash app start. Production initialises WorkManager
+         * via the manifest's InitializationProvider, so the catch is inert there — it only guards the
+         * host environments where the poll simply cannot be scheduled.
          */
         fun enqueue(context: Context) {
-            val work = WorkManager.getInstance(context)
+            val work = try {
+                WorkManager.getInstance(context)
+            } catch (e: IllegalStateException) {
+                android.util.Log.w("CatalogSyncWorker", "WorkManager unavailable — skipping background sync scheduling", e)
+                return
+            }
 
             work.enqueueUniquePeriodicWork(
                 UNIQUE_PERIODIC,

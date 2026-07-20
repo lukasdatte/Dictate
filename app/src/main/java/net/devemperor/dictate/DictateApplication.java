@@ -83,6 +83,17 @@ public class DictateApplication extends Application {
         //     paths in C3 — this only fills the tables.
         ConfigEntityMigration.run(this);
 
+        // Block E2: wire the peer-catalog sync gateway and schedule the background poll
+        // (peer-katalog.md §6.5, D5.f). The gateway builds the shared CatalogSyncEngine over the
+        // Room subscriber store + the encrypted SecretStore; CatalogSyncWorker polls it periodically
+        // plus once now (the app-start trigger). Both are idempotent and best-effort.
+        net.devemperor.dictate.peers.CatalogSync.INSTANCE.setGateway(
+                new net.devemperor.dictate.peers.AndroidCatalogSyncGateway(
+                        db,
+                        net.devemperor.dictate.secrets.AndroidKeystoreSecretStore.create(this),
+                        this));
+        net.devemperor.dictate.peers.CatalogSyncWorker.Companion.enqueue(this);
+
         final RecordingRepository recordingRepository = new RecordingRepository(this);
         DurationHealingScheduler.INSTANCE.schedule(db.sessionDao(), recordingRepository);
 

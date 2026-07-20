@@ -36,6 +36,7 @@ import net.devemperor.dictate.database.migration.MIGRATION_8_9
 import net.devemperor.dictate.database.migration.MIGRATION_9_10
 import net.devemperor.dictate.database.migration.MIGRATION_10_11
 import net.devemperor.dictate.database.migration.MIGRATION_11_12
+import net.devemperor.dictate.database.migration.MIGRATION_12_13
 import net.devemperor.dictate.database.entity.PromptType
 import net.devemperor.dictate.config.dao.ApiCredentialDao
 import net.devemperor.dictate.config.dao.ModelRefDao
@@ -46,6 +47,10 @@ import net.devemperor.dictate.config.entity.ModelRefRoomEntity
 import net.devemperor.dictate.config.entity.ProfilePromptRoomEntity
 import net.devemperor.dictate.config.entity.ProfileRoomEntity
 import net.devemperor.dictate.config.entity.ProviderConfigRoomEntity
+import net.devemperor.dictate.peers.dao.PeerDao
+import net.devemperor.dictate.peers.dao.SubscriptionDao
+import net.devemperor.dictate.peers.entity.PeerRoomEntity
+import net.devemperor.dictate.peers.entity.SubscriptionRoomEntity
 
 @Database(
     entities = [
@@ -62,9 +67,12 @@ import net.devemperor.dictate.config.entity.ProviderConfigRoomEntity
         ApiCredentialRoomEntity::class,
         ModelRefRoomEntity::class,
         ProfileRoomEntity::class,
-        ProfilePromptRoomEntity::class
+        ProfilePromptRoomEntity::class,
+        // Peer-catalog subscriber model (E2, peer-katalog.md §5).
+        PeerRoomEntity::class,
+        SubscriptionRoomEntity::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -84,6 +92,10 @@ abstract class DictateDatabase : RoomDatabase() {
     abstract fun apiCredentialDao(): ApiCredentialDao
     abstract fun modelRefDao(): ModelRefDao
     abstract fun profileDao(): ProfileDao
+
+    // ── Peer-catalog subscriber model (E2, peer-katalog.md §5) ──
+    abstract fun peerDao(): PeerDao
+    abstract fun subscriptionDao(): SubscriptionDao
 
     companion object {
         private const val DATABASE_NAME = "dictate.db"
@@ -154,7 +166,7 @@ abstract class DictateDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                     MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
-                    MIGRATION_10_11, MIGRATION_11_12,
+                    MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
                 )
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {

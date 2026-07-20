@@ -12,6 +12,8 @@ package net.devemperor.dictate.companion.catalog.discovery
  *
  * Blocking (the Tailscale impl runs a subprocess); call it from a background coroutine, never the
  * UI thread.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §9.2
  */
 fun interface PeerDiscovery {
 

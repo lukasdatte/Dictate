@@ -50,6 +50,8 @@ object PeerSecrets {
  *
  * [transportFactory] is injectable so a two-peer E2E can point it at a `127.0.0.1:<port>` server; in
  * production it is [OkHttpDispatchTransport] over the peer's tailnet address.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §6.5, §8.1
  */
 class PeerCatalogClientFactory(
     private val secretStore: SecretStore,

@@ -9,6 +9,8 @@ import net.devemperor.dictate.shared.protocol.CatalogEntityKindWire
  * the "every credential delivery writes a row" invariant is asserted without a database. Every
  * credential delivery [record]s exactly one row; entity fetches may be recorded for the offer view
  * (§8.2) but are not security-critical. No payload is ever stored — only who fetched what, and when.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §4.3, §5.4
  */
 interface CatalogAuditLog {
 

@@ -10,6 +10,9 @@ import net.devemperor.dictate.companion.pipeline.PanelControl
  *
  * The Compose `Window` behind this exists from process start and is only ever *shown/hidden*
  * (`visible=false`), never re-created per hotkey — that is what keeps the toggle under 100 ms (F5).
+ *
+ * @see docs/decisions/0032-desktop-panel-ui.md
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §6.2, §6.3
  */
 interface PanelWindowControl {
 

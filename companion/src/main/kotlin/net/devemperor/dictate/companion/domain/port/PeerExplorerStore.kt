@@ -20,6 +20,8 @@ import net.devemperor.dictate.shared.protocol.CatalogEntityKindWire
  * - [fork] deletes the subscription row AND flips the copy's `subscription_mode` to `LOCAL` in one
  *   transaction (§5.3): the copy becomes locally editable and — because the sync query selects only
  *   `SUBSCRIBE` rows — permanently invisible to every future sync run (AC8, spec D3).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §8
  */
 interface PeerExplorerStore {
 

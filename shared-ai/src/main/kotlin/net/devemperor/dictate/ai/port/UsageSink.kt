@@ -9,6 +9,7 @@ package net.devemperor.dictate.ai.port
  * UsageDao.addUsage runs synchronously on the caller's background thread
  * (speechApiThread / rewordingApiThread). The adapter adds no threading.
  *
+ * @see docs/decisions/0028-shared-ai-module.md
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §4.2
  */
 interface UsageSink {

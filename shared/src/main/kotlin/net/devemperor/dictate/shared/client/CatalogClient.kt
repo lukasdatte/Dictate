@@ -36,6 +36,9 @@ import java.io.IOException
  * `CATALOG_ENTITY_NOT_FOUND` is classified as [DispatchError.EntityGone] by the shared classifier —
  * the entity was deleted or un-shared at the source (§6.4). The two are told apart by the envelope's
  * presence, exactly as `DispatchClient.input()` tells its bare 404 apart.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §3.5
+ * @see docs/decisions/0034-peer-catalog.md
  */
 class CatalogClient(
     private val transport: DispatchTransport,

@@ -25,6 +25,8 @@ import net.devemperor.dictate.shared.config.SubscriptionMode
  *
  * `APISettingsActivity` pattern: XML shell, programmatic rows, direct DAO reads (the DB allows
  * main-thread queries and the lists are small — the same trade the settings hub makes).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §8.3
  */
 class PeerExplorerActivity : AppCompatActivity() {
 

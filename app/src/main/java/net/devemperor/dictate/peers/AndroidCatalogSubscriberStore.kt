@@ -43,6 +43,9 @@ import java.security.MessageDigest
  * payload replaces the copy's payload half while its LOCAL envelope (id, provenance, `SUBSCRIBE`) is
  * kept; the repository then recomputes the hash. A credential's plaintext goes only to the
  * [SecretStore], never a column (F12, §6.2).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §6.2, §5.3
+ * @see docs/decisions/0034-peer-catalog.md
  */
 class AndroidCatalogSubscriberStore(
     private val db: DictateDatabase,

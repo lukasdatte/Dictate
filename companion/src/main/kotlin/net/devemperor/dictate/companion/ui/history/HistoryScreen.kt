@@ -59,6 +59,9 @@ enum class HistoryScope(val label: String) { PHONE("Phone"), DESKTOP("This PC") 
  * its own view model behind a scope toggle; this file is layout. The toggle only appears when there is
  * a desktop side to show ([CompanionContainer.desktopSessions] is non-null — always so in the real app,
  * null only in the headless test graph).
+ *
+ * @see docs/decisions/0035-companion-history-parity.md
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §9.3
  */
 @Composable
 fun HistoryScreen(container: CompanionContainer) {

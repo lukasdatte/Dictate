@@ -15,8 +15,9 @@ package net.devemperor.dictate.ai.secrets
  * Lives in `:shared-ai`, NOT `:shared`: it has no wire/serialization concern
  * (which would drag it into `:shared`), but it is consumed by the AI core
  * (`AiConfig`) and both platform hosts — the same reason `:shared-ai` exists
- * as a module (spec secretstore.md §4.1, ADR adr-shared-ai-module).
+ * as a module (spec secretstore.md §4.1, ADR-0028).
  *
+ * @see docs/decisions/0029-secret-store.md
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/secretstore.md §4
  */
 interface SecretStore {

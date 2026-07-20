@@ -38,6 +38,9 @@ import net.devemperor.dictate.shared.sync.VerifiedEntityUpdate
  * source hash, because the hash is payload-only) and advances the subscription watermark in the SAME
  * transaction. A credential never touches an entity column — its plaintext goes straight to the
  * [SecretStore] and only the subscription watermark moves (F12, §6.2).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §6
+ * @see docs/decisions/0034-peer-catalog.md
  */
 class SqlDelightCatalogSubscriberStore(
     private val database: DictateCompanionDb,

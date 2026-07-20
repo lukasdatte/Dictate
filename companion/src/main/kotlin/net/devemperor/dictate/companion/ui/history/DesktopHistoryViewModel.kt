@@ -49,6 +49,9 @@ data class DesktopHistoryUiState(
  * Same plain-class + injected-[scope] shape as [HistoryViewModel], for the same reason: paging,
  * filtering and what a re-insert does are the parts that can be wrong, and here they are testable on
  * `Dispatchers.Unconfined` without rendering anything.
+ *
+ * @see docs/decisions/0035-companion-history-parity.md
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §9.3
  */
 class DesktopHistoryViewModel(
     private val sessions: DesktopSessionRepository,

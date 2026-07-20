@@ -15,6 +15,9 @@ data class WindowHandle(val value: Long)
  * on Windows, `NoopForegroundWindows` elsewhere, `FakeForegroundWindows` in tests — which is what
  * makes the policy's remember/restore order unit-testable on this Linux VM (acceptance §2
  * criterion 8).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §6.3
+ * @see docs/decisions/0018-windows-text-insertion-port.md
  */
 interface ForegroundWindows {
 

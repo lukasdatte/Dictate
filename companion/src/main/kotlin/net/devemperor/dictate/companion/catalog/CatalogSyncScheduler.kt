@@ -25,6 +25,8 @@ import java.util.concurrent.TimeUnit
  * secret behind its `secret_ref` (→ credentials) — all of which live in the `peers` table and the
  * SecretStore. That wiring is [CatalogSyncTargets]' job, injected, so this scheduler stays a pure
  * timing coordinator that a test can drive with fake targets and a real engine.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §6.5
  */
 class CatalogSyncScheduler(
     private val targets: CatalogSyncTargets,

@@ -26,6 +26,8 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * @param runCommand runs the CLI and returns its stdout, or null on any failure — injected so tests
  *   feed fixture JSON without a subprocess (the production default execs the real binary).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §9.2
  */
 class TailscalePeerDiscovery(
     private val runCommand: () -> String? = { execTailscaleStatus() },

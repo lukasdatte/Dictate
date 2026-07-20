@@ -12,6 +12,7 @@ import net.devemperor.dictate.ai.AIProvider
  * `RunnerFactory.getApiKey` exactly, including the non-ASCII strip
  * (`replace(Regex("[^ -~]"), "")`) — see AiConfigParityTest.
  *
+ * @see docs/decisions/0028-shared-ai-module.md
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §4.1
  */
 interface AiConfig {

@@ -38,6 +38,9 @@ data class OfferUiState(val rows: List<OfferRow> = emptyList())
  * and cannot change the `content_hash`, because `visibility` is an envelope field excluded from
  * canonical serialization. Un-sharing therefore never masquerades as a content update to subscribers;
  * they see the entity vanish from the index (SOURCE_REMOVED), which is the honest signal (§6.4).
+ *
+ * @see docs/decisions/0034-peer-catalog.md
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §8.2
  */
 class OfferViewModel(
     private val config: CompanionConfigRepository,

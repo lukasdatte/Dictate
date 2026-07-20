@@ -225,10 +225,30 @@ The following columns follow this pattern:
 | `processing_steps` | `step_type` | `StepType` | `database/entity/StepType.kt` (CHECK added in schema v8, `MigrationTo8`) |
 | `text_insertions` | `insertion_method` | `InsertionMethod` | `database/entity/InsertionMethod.kt` (CHECK added in schema v10, `MigrationTo10`, alongside the new value `WINDOWS_DISPATCH` — ADR-0019) |
 | `prompts` | `type` | `PromptType` | `database/entity/PromptType.kt` (CHECK added in schema v11, `MigrationTo11`; replaces the former `[bracketed]` string convention for text pills — ADR — prompt pill types) |
+| `provider_configs` | `provider_type` | `ProviderType` | `shared/config/ConfigEnums.kt` (CHECK added in schema v12, `MigrationTo12` — shareable config-entity model, ADR-0030) |
+| `provider_configs` | `kind` | `ProviderKind` | `shared/config/ConfigEnums.kt` (schema v12) |
+| `api_credentials` | `provider_type` | `ProviderType` | `shared/config/ConfigEnums.kt` (schema v12) |
+| `model_refs` | `function` | `ModelFunction` | `shared/config/ConfigEnums.kt` (schema v12) |
+| `profiles` | `style_prompt_mode` | `PromptSelectionMode` | `shared/config/ConfigEnums.kt` (schema v12) |
+| `profiles` | `system_prompt_mode` | `PromptSelectionMode` | `shared/config/ConfigEnums.kt` (schema v12) |
+| `profiles` | `ambiguity_mode` | `AmbiguityModeValue` | `shared/config/ConfigEnums.kt` (schema v12) |
+| `provider_configs` / `api_credentials` / `model_refs` / `profiles` / `prompts` | `visibility`, `subscription_mode` | `Visibility`, `SubscriptionMode` | `shared/config/ConfigEnums.kt` — the envelope/provenance columns every shareable entity carries (schema v12, `MigrationTo12`) |
+| `subscriptions` | `kind` | `CatalogEntityKindWire` | `shared/protocol/Dtos.kt` (CHECK added in schema v13, `MigrationTo13` — peer-catalog subscriber journal, ADR-0034) |
+| `subscriptions` | `mode` | `SubscriptionMode` | `shared/config/ConfigEnums.kt` (schema v13; **subset** CHECK — only `SUBSCRIBE`/`ONE_SHOT`, never `LOCAL`, because a subscription row is always an active binding — a fork deletes its row) |
+
+> **Enum home for the shareable columns.** The v12/v13 config-entity and
+> peer-catalog enums live in **`:shared`** (`shared/config/ConfigEnums.kt`,
+> `shared/protocol/Dtos.kt`), not in `app`'s `database/entity/`, because they are
+> the cross-platform **canonical** enums: the identical `enum class` + CHECK
+> literals also drive the companion's SQLDelight schema and its parity tests (see
+> [SQLDelight Parity](#sqldelight-parity-companion)). The Double-Enum discipline is
+> unchanged — the Room entity columns are still `String` with a `xxxEnum`
+> `getOrDefault` accessor (`config/entity/ConfigRoomEntities.kt`,
+> `peers/entity/PeerRoomEntities.kt`); only the enum's file home differs.
 
 Columns that should be retrofitted to this pattern when next touched:
 
-*None.* The last three retrofit debts were discharged in successive migrations: `processing_steps.step_type` (v8), `sessions.type` (v9), and `text_insertions.insertion_method` (v10, which also widened it with `WINDOWS_DISPATCH` and added `target_device_id` — a `CHECK` can only change via a table recreate, so a new enum value *is* the "next touched" event). Every finite-set column now carries its Double-Enum `CHECK`. Room's `validateMigration` ignores `CHECK` constraints, so these stay invisible to schema validation exactly as the existing `status`/`origin` CHECKs do.
+*None.* The three original retrofit debts were discharged in successive migrations: `processing_steps.step_type` (v8), `sessions.type` (v9), and `text_insertions.insertion_method` (v10, which also widened it with `WINDOWS_DISPATCH` and added `target_device_id` — a `CHECK` can only change via a table recreate, so a new enum value *is* the "next touched" event). Schema v12 (`MigrationTo12`, shareable config-entity model) and v13 (`MigrationTo13`, peer-catalog subscriber journal) then extended the pattern to every new finite-set column from the outset — no retrofit needed, each landed with its `CHECK` already in place. Every finite-set column now carries its Double-Enum `CHECK`. Room's `validateMigration` ignores `CHECK` constraints, so these stay invisible to schema validation exactly as the existing `status`/`origin` CHECKs do.
 
 `target_device_id` (added in v10) is deliberately NOT a Double-Enum column: a device id is an open vocabulary (a UUID), like `target_app_package` — the pattern explicitly does not apply to open vocabularies.
 

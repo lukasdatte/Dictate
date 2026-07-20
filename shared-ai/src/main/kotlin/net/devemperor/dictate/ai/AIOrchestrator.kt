@@ -28,6 +28,7 @@ import java.io.File
  * Thread safety: Methods are blocking and must be called from background threads
  * (same as existing speechApiThread / rewordingApiThread).
  *
+ * @see docs/decisions/0028-shared-ai-module.md
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §4.5, §6 A3.6
  */
 class AIOrchestrator(

@@ -25,6 +25,9 @@ import net.devemperor.dictate.shared.protocol.CatalogEntry
  * Credentials are enumerated from SHARED provider configs that carry a `credentialRef`: that ref IS the
  * SecretStore id the plaintext resolves under. The secret itself never passes through here — this
  * repository holds no [net.devemperor.dictate.ai.secrets.SecretStore] (F12).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §4.2, §10
+ * @see docs/decisions/0034-peer-catalog.md
  */
 class SqlDelightCatalogRepository(
     private val config: CompanionConfigRepository,

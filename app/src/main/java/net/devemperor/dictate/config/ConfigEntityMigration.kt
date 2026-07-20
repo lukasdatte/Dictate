@@ -246,7 +246,7 @@ object ConfigEntityMigration {
     /**
      * Backfills every `prompts` row with a stable uuid (kept if already present — §8.6) + content
      * hash + envelope defaults, and returns the ordered [ProfilePromptRef] list for the profile.
-     * TEXT pills keep their `type`; the shareable hash covers only name/text/flags (§8.5.1).
+     * TEXT pills keep their `type`; the shareable hash covers only name/text/flags (§8.5).
      */
     private fun backfillPromptsAndCollect(db: DictateDatabase, clock: () -> Long): List<ProfilePromptRef> {
         val dao = db.promptDao()

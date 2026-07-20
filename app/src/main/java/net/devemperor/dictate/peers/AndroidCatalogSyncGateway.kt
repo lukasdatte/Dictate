@@ -21,6 +21,8 @@ import net.devemperor.dictate.shared.transport.OkHttpDispatchTransport
  * [CatalogSync.gateway], where the reflectively-created [CatalogSyncWorker] reads it. A run that cannot
  * reach a peer is not a failure — the engine records that as staleness and returns an outcome (§6.4);
  * one bad peer never starves the rest.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §6.5
  */
 class AndroidCatalogSyncGateway(
     private val db: DictateDatabase,

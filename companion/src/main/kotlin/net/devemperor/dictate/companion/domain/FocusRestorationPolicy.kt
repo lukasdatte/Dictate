@@ -22,6 +22,8 @@ import net.devemperor.dictate.companion.domain.port.WindowHandle
  *
  * The raw `GetForegroundWindow`/`SetForegroundWindow` calls sit behind the [ForegroundWindows] port;
  * the settle sleep is injected so tests do not wait.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §6.3
  */
 class FocusRestorationPolicy(
     private val windows: ForegroundWindows,

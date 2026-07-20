@@ -10,6 +10,8 @@ import net.devemperor.dictate.peers.entity.SubscriptionRoomEntity
 /**
  * DAOs for the peer-catalog subscriber tables (peer-katalog.md §5, §6). All enum columns are `String`
  * (Double-Enum rule); the sync engine's write path is [net.devemperor.dictate.peers.AndroidCatalogSubscriberStore].
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §5.1, §5.3
  */
 @Dao
 interface PeerDao {

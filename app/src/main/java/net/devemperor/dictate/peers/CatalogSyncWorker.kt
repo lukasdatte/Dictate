@@ -25,6 +25,8 @@ import java.util.concurrent.TimeUnit
  * A run that cannot reach a peer is NOT a failure — the engine records that as staleness and returns
  * an outcome (§6.4), so a clean run is [Result.success]. [Result.retry] is reserved for an
  * unexpected throw (a DB error), letting WorkManager back off and try again.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §6.5
  */
 class CatalogSyncWorker(
     context: Context,

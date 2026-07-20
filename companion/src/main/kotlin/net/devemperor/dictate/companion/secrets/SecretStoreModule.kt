@@ -21,6 +21,7 @@ import java.util.Base64
  * daemon (spec secretstore.md §6.1).
  *
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/secretstore.md §6
+ * @see docs/decisions/0029-secret-store.md
  */
 object SecretStoreModule {
 

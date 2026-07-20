@@ -9,6 +9,8 @@ import java.util.UUID
  * edit re-hashes WITHOUT losing the row's uuid/provenance (the historical 7-arg constructor would
  * silently reset them). Mirrors `ConfigRepository`'s recompute-on-write invariant (§5.3) for the
  * legacy Room prompt table.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/entitaetenmodell-android.md §7.3, §8.5
  */
 object PromptProvenance {
 

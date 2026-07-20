@@ -31,6 +31,9 @@ data class ConfigUiState(
  * [CompanionConfigRepository], which recomputes each entity's `content_hash` — so a profile the user
  * builds here is immediately catalog-shareable (Block E) without a separate "prepare for sharing" step.
  * The [scope] is injected so a test runs everything on `Dispatchers.Unconfined` and reads the next line.
+ *
+ * @see docs/decisions/0030-config-entity-model.md
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §9.2
  */
 class ConfigViewModel(
     private val config: CompanionConfigRepository,

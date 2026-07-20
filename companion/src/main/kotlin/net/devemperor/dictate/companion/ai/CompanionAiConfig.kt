@@ -24,7 +24,7 @@ class CompanionAiConfig : AiConfig {
         AIFunction.COMPLETION -> DEFAULT_COMPLETION_MODEL
     }
 
-    /** No credential until D3 wires the SecretStore-backed profile key. */
+    /** Always keyless by design: the SecretStore-backed profile key lives in [ProfileBackedAiConfig]. */
     override fun apiKey(function: AIFunction): String = ""
 
     override fun baseUrl(function: AIFunction): String = provider(function).defaultBaseUrl

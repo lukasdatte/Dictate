@@ -13,6 +13,7 @@ import net.devemperor.dictate.ai.prompt.PromptMode
  * runner configuration (provider/model/key), so it gets its own narrow port
  * (Interface Segregation). The AI core never sees preference keys.
  *
+ * @see docs/decisions/0028-shared-ai-module.md
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §4.1 (Schnitt-Begründung), §6 A3.5
  */
 interface PromptConfig {

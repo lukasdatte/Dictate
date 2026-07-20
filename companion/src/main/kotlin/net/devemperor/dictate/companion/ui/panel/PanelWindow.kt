@@ -49,6 +49,9 @@ import net.devemperor.dictate.companion.ui.theme.CompanionTheme
  * On first composition the Win32 `WS_EX_NOACTIVATE` spike style is applied via [applyFocusFreeStyle]
  * (a platform lambda; `{ false }` off-Windows) and its outcome reported to [control] — see
  * `ComposePanelWindowControl` for how that gates against the manual spike verdict (§6.3).
+ *
+ * @see docs/decisions/0032-desktop-panel-ui.md
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §6
  */
 @Composable
 fun PanelWindow(
@@ -158,6 +161,9 @@ private fun ProgressRow(text: String, showSpinner: Boolean = true) {
  * Re-dictate / Discard. Insert is disabled while a re-dictate is in flight (K1); Discard stays live
  * because it doubles as the refinement's Cancel (§8.4). During the S2 recording the row shows the
  * amplitude bars + a Stop button; during the follow-up turn it shows a "Refining…" spinner.
+ *
+ * @see docs/decisions/0033-desktop-review.md
+ * @see docs/decisions/0013-review-panel-and-ambiguity-modes.md
  */
 @Composable
 private fun ReviewRow(ui: PanelUi, review: net.devemperor.dictate.companion.pipeline.ReviewUi, controller: DesktopDictationController) {

@@ -38,13 +38,14 @@ always-on hub.
 | `ai/` | Companion-side implementations of the `:shared-ai` ports (`AiConfig`, `UsageSink`, `ProxyConfig`) + profile-backed config resolution. |
 | `platform/` | OS seams — paths, network interfaces, single-instance guard, clock, `PlatformModule.detect()`. |
 | `domain/` | Auth, pairing, catalog, dispatch services + `CompanionSettings`, `FocusRestorationPolicy`. |
-| `Main.kt` | Entry point; `--headless` runs the full server/persistence/catalog stack without Compose (ADR-0034, F8). |
+| `Main.kt` | Entry point (delegates start-up to `CompanionBootstrap`); `--minimized` starts straight into the tray (autostart), `--headless` runs the full server/persistence/catalog stack without Compose (ADR-0034, F8). |
 
 ## Module Layout
 
 ```
 companion/src/main/kotlin/net/devemperor/dictate/companion/
-├── Main.kt                 entry point (--headless flag)
+├── Main.kt                 entry point (--minimized / --headless flags)
+├── CompanionBootstrap.kt   start-up sequencing (db open, bind resolve, server start)
 ├── CompanionContainer.kt   composition root (wires ports + services)
 ├── capture/                audio capture + amplitude
 ├── pipeline/               DesktopDictationController + reducer + queue
@@ -61,7 +62,7 @@ companion/src/main/kotlin/net/devemperor/dictate/companion/
 
 companion/src/main/sqldelight/.../db/
 ├── Companion.sq            schema (Room-parity, ADR-0035)
-└── migrations/{1..4}.sqm   2=parity+dispatch_state, 3=config entities, 4=peers
+└── migrations/{1..4}.sqm   1=key-command chords, 2=parity+dispatch_state, 3=config entities, 4=peers
 ```
 
 ## Build, Run, Test

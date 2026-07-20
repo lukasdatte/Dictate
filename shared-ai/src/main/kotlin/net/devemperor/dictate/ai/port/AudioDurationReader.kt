@@ -8,6 +8,7 @@ import java.io.File
  * including the -1 fallback on any error. The Companion backs it with a
  * javax.sound / WAV-header reader (Block D).
  *
+ * @see docs/decisions/0028-shared-ai-module.md
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §4.4
  */
 interface AudioDurationReader {

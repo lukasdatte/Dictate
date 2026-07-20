@@ -39,6 +39,8 @@ data class PanelUi(
  * The [scope] is injected; [start] wires the flows and the ticker. Tests skip [start] and drive
  * [onDictationState]/[onAmplitude]/[onTick] directly against a `MutableClock` — buffer shift,
  * pause/resume timer freezing and the transitions are all synchronous state math.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §7
  */
 class PanelViewModel(
     private val dictation: StateFlow<DesktopUiState>,

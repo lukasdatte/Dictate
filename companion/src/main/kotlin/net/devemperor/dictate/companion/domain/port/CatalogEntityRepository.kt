@@ -14,6 +14,8 @@ import net.devemperor.dictate.shared.protocol.CatalogEntry
  * Credentials are split off the entity path on purpose: their SECRET is never a payload, so a
  * credential is only ever named here as [SharedCredential] metadata; the plaintext is delivered
  * exclusively by [CatalogService.credential] out of the SecretStore (F12, §4.3).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §4.2
  */
 interface CatalogEntityRepository {
 

@@ -73,6 +73,9 @@ data class PeerExplorerUiState(
  * [indexSource] and [syncRunner] are the seams to the credential-touching client wiring (see
  * [PeerIndexSource]); [discovery] feeds the "Add peer" candidates. The [scope] is injected so tests
  * run on `Dispatchers.Unconfined` and assert on the next line.
+ *
+ * @see docs/decisions/0034-peer-catalog.md
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §8
  */
 class PeerExplorerViewModel(
     private val store: PeerExplorerStore,

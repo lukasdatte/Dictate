@@ -30,6 +30,8 @@ import net.devemperor.dictate.shared.config.contentHash
  * Provenance (`source_*`, `subscription_mode`) round-trips through [SourceRef]; a locally created
  * entity has none. The FK to `peers` is E1's (Companion.sq header) — until then `source_peer_id` is
  * only ever written NULL from here (local create/edit never sets provenance; that is Block E's job).
+ *
+ * @see docs/decisions/0030-config-entity-model.md
  */
 class CompanionConfigRepository(
     private val database: DictateCompanionDb,

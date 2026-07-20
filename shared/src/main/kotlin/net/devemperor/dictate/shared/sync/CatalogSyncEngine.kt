@@ -33,6 +33,9 @@ import net.devemperor.dictate.shared.protocol.CatalogEntry
  *
  * A forked or `ONE_SHOT` copy is simply never in [CatalogSubscriberStore.activeSubscriptions] (AC8,
  * see that port's doc). The engine iterates what it is given; it contains no fork test.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §6
+ * @see docs/decisions/0034-peer-catalog.md
  */
 class CatalogSyncEngine(
     private val store: CatalogSubscriberStore,

@@ -22,6 +22,10 @@ import net.devemperor.dictate.shared.protocol.SyncCursor
  * primary keys + `ON CONFLICT DO UPDATE`, and "a sync never downgrades a dispatch" by
  * `MAX(dispatch_state.dispatched, excluded.dispatched)` (mirrored by a `coalesce` on
  * `sessions.inserted_at`). Putting them in the statements means a second writer cannot forget them.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §3.4, §3.5
+ * @see docs/decisions/0035-companion-history-parity.md
+ * @see docs/decisions/0020-lazy-cursor-sync.md
  */
 class SqlDelightHistoryRepository(private val database: DictateCompanionDb) : HistoryRepository {
 

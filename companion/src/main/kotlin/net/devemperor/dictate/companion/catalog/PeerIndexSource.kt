@@ -12,6 +12,8 @@ import net.devemperor.dictate.shared.protocol.CatalogEntry
  * built for the peer — address, device id, SecretStore-resolved secret — which is exactly the
  * credential-touching wiring the [CatalogSyncTargets] seam owns. The production implementation
  * arrives with that adapter (delegated E2 persistence work); the ViewModel tests drive fakes.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §8.1
  */
 fun interface PeerIndexSource {
 

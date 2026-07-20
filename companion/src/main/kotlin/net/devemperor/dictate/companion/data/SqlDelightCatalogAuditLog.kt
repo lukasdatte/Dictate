@@ -11,6 +11,9 @@ import net.devemperor.dictate.shared.protocol.CatalogEntityKindWire
  *
  * A credential delivery calls [record] exactly once, so the offer view (§8.2) and any security review
  * can answer "who fetched which credential, and when". No payload is stored — only who/what/when.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §5.4
+ * @see docs/decisions/0034-peer-catalog.md
  */
 class SqlDelightCatalogAuditLog(
     database: DictateCompanionDb,

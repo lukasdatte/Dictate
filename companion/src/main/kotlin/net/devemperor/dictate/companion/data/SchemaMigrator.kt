@@ -24,6 +24,8 @@ import net.devemperor.dictate.companion.db.DictateCompanionDb
  * migrate **from** (`1.sqm` = v1 → v2). `verifyMigrations = true` in the Gradle block plays them
  * against the checked-in schema snapshot on every build, so a forgotten migration cannot merge —
  * the SQLDelight equivalent of Room's `exportSchema` + `MigrationTestHelper`.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §3
  */
 object SchemaMigrator {
 

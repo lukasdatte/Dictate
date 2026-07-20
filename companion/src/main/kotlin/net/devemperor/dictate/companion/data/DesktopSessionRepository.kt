@@ -24,6 +24,10 @@ import net.devemperor.dictate.companion.domain.session.StepType
  *
  * Complements [SqlDelightHistoryRepository] (the phone-mirror read/write side); they share the four
  * tables but never each other's rows.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §5.5, §8.3, §9.3
+ * @see docs/decisions/0012-pipeline-post-processing-conversation.md
+ * @see docs/decisions/0013-review-panel-and-ambiguity-modes.md
  */
 class DesktopSessionRepository(private val database: DictateCompanionDb) {
 

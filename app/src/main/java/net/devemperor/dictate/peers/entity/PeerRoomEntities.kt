@@ -20,6 +20,8 @@ import net.devemperor.dictate.shared.protocol.CatalogEntityKindWire
  *
  * [PeerRoomEntity.secretRef] is the SecretStore handle of our pairing secret FOR this peer, never the
  * secret itself; a subscribed credential's plaintext lives in the SecretStore too, never a column.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §5.1, §5.3
  */
 @Entity(tableName = "peers")
 data class PeerRoomEntity(

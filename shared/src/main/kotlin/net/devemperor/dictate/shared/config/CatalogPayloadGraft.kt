@@ -37,6 +37,9 @@ import kotlinx.serialization.json.jsonObject
  * to overwrite the local envelope — a malicious/broken peer cannot rewrite our `id` or provenance
  * through the payload. (Verify-before-write already re-canonicalizes and would reject such a payload;
  * this is belt-and-suspenders.)
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §6.2
+ * @see docs/decisions/0034-peer-catalog.md
  */
 object CatalogPayloadGraft {
 

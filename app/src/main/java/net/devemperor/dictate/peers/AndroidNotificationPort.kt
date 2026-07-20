@@ -24,6 +24,8 @@ import net.devemperor.dictate.shared.sync.SyncNotification
  * `NotificationManagerCompat.areNotificationsEnabled()` — the same surface the onboarding flow
  * requests. When notifications are disabled [notify] is a silent no-op: a background sync must never
  * throw because the user declined the toast.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §7.2
  */
 class AndroidNotificationPort(private val context: Context) : NotificationPort {
 

@@ -27,6 +27,7 @@ import javax.crypto.spec.SecretKeySpec
  * stronger libsecret backend is a documented later hardening (spec secretstore.md §6.4, §12 Gap 2).
  *
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/secretstore.md §6.4
+ * @see docs/decisions/0029-secret-store.md
  */
 class FileAesGcmSecretStore(configDir: Path) : SecretStore {
 

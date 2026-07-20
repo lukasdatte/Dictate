@@ -20,7 +20,7 @@ import java.nio.charset.StandardCharsets
 /**
  * One-time, idempotent migration of the **11 plaintext secret prefs** out of the app's
  * `SharedPreferences` and into the encrypted [SecretStore] (Block B2 — spec secretstore.md §7,
- * ADR adr-secret-store). Resolves the ADR-0017 §F-3 plaintext-secret defer.
+ * ADR-0029). Resolves the ADR-0017 §F-3 plaintext-secret defer.
  *
  * # What moves where (§3.1 / §7.1 / §7.2)
  * - The **ten API keys** land under a stable **legacy** namespace,
@@ -53,6 +53,7 @@ import java.nio.charset.StandardCharsets
  * invariant (spec §2.6) is encoded as a pending `NoLegacyKeyReadTest`.
  *
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/secretstore.md §7
+ * @see docs/decisions/0029-secret-store.md
  * @see net.devemperor.dictate.preferences.PrefsMigration.migrateSecrets
  */
 object SecretsMigration {

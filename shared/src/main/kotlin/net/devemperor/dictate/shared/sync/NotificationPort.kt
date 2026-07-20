@@ -17,6 +17,9 @@ import net.devemperor.dictate.shared.protocol.CatalogEntityKindWire
  * (§6.1 step 5) — an idle sync is silent. Implementations must be best-effort and never throw into
  * the engine's background thread (a failed toast must not fail a sync); the `Noop` fallback is the
  * headless/unsupported answer, mirroring `TextInserter.available`.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §7
+ * @see docs/decisions/0034-peer-catalog.md
  */
 interface NotificationPort {
 

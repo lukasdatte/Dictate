@@ -22,6 +22,8 @@ import net.devemperor.dictate.shared.protocol.Validations
  * response that broke our own contract surfaces as a 500 here, not as a puzzle on the far side
  * (ADR-0016). The `{id}` path parameter is validated against the shared entity-id pattern before the
  * service is touched: a malformed id is a 400, an unknown/private id is a 404 (the service's job).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §4.1
  */
 fun Route.catalogRoutes(catalog: CatalogService) {
 

@@ -26,6 +26,9 @@ import java.nio.file.Path
  * vocabularies are the companion mirrors of Room's enums (pinned by `CompanionSchemaParityTest`);
  * `last_error_type` is `:shared-ai`'s error taxonomy directly, so the shared runners and the archive
  * cannot drift apart (docs/DATABASE-PATTERNS.md, desktop-host.md §3.2).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §3.2, §3.3
+ * @see docs/decisions/0030-config-entity-model.md
  */
 object CompanionDatabase {
 

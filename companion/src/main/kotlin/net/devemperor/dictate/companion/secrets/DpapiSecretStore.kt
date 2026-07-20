@@ -19,6 +19,7 @@ import java.nio.file.Path
  * `pending: block-B-windows-abnahme`); on Linux this class only has to compile.
  *
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/secretstore.md §6.3
+ * @see docs/decisions/0029-secret-store.md
  */
 class DpapiSecretStore(configDir: Path) : SecretStore {
 

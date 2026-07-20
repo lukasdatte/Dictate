@@ -76,9 +76,14 @@ that gap: dictate on the phone, the words appear at the caret on the PC.
 │  :shared  (pure kotlin("jvm"), jvmTarget 1.8, Android-free,         │
 │            NO Ktor / NO coroutines — SharedPurityTest enforces it)  │
 │  protocol/  DTOs + Konform Validation + ProtocolCodec + Endpoints   │
-│  client/    DispatchClient        transport/ OkHttpDispatchTransport │
-│  auth/      PairingUri · Secrets · AuthHeaders                       │
-│  sync/      SyncClient · Cursor · SyncSource                         │
+│  client/    DispatchClient · CatalogClient · WireResponse (the      │
+│             shared 2xx-parse + non-2xx classify) · DispatchError    │
+│  transport/ OkHttpDispatchTransport  (one transport, both clients)  │
+│  auth/      PairingUri · Secrets · AuthHeaders                      │
+│  sync/      SyncClient · Cursor · SyncSource         (history → PC) │
+│             CatalogSyncEngine · CatalogSubscriberStore  (peer pull) │
+│  config/    catalog entities · CanonicalJson · CatalogCodec ·       │
+│             ContentHash · ConfigValidations   (config-sharing)      │
 └───────────────────────────────┬─────────────────────────────────────┘
                                  │ same wire types, both sides
                                  ▼
@@ -96,6 +101,22 @@ The `:shared` module is the single wire authority: DTOs, their Konform validatio
 the endpoint constants live there once, so client and server can never disagree
 (ADR-0016). It is deliberately Android-free and Ktor-free so the app's Kotlin/coroutine
 lines stay untouched; the client is blocking OkHttp on a dedicated executor.
+
+> [!NOTE]
+> `:shared` grew beyond dispatch since this subsystem shipped. The `client/` and `sync/`
+> packages now also host a **sibling wire family — the peer-catalog / config-sharing
+> subsystem** (`CatalogClient`, `CatalogSyncEngine`, `CatalogSubscriberStore`), plus the
+> `config/` package with the canonical **config-entity model** (`CatalogCodec`,
+> `CanonicalJson`, `ContentHash`, catalog `Entities`). It rides the *same*
+> `DispatchTransport` and returns the *same* `DispatchResult`/`DispatchError` — the 2xx-parse
+> and non-2xx classification were lifted out of `DispatchClient` into `WireResponse.kt` so both
+> clients share one implementation. That family is a peer subsystem, not part of Windows-Dispatch;
+> it is covered by ADR-0030 (config entities) and ADR-0034 (peer catalog), with its own spec at
+> `docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md`. The only overlap this
+> doc carries is the shared `DispatchError` surface: `DispatchOutcomeMapper` folds the
+> non-dispatch arms — `EntityGone` (catalog-only) and `EndpointMissing` (the keyboard-action
+> `/v1/input` path) — into `WINDOWS_UNREACHABLE` purely to keep its `when` exhaustive; a
+> dictation dispatch never produces either.
 
 ### 1a.1 The five endpoints (ADR-0017)
 
@@ -200,7 +221,17 @@ case (ADR-0019).
   `core/DictatePipelineService.kt` (`setHeadlessTerminalSink`, the app-start sync)
 - **Pairing UI:** `app/src/main/java/net/devemperor/dictate/settings/WindowsPairingActivity.java`
 - **Shared wire:** `shared/src/main/kotlin/net/devemperor/dictate/shared/` (protocol, client,
-  transport, auth, sync)
+  transport, auth, sync). Dispatch-specific: `client/DispatchClient.kt`,
+  `client/DispatchError.kt` (the closed failure hierarchy); the 2xx-parse + non-2xx
+  classification is shared with `CatalogClient` in `client/WireResponse.kt`
+  (`parseWire` / `classifyWireError`)
+- **Error classification:** `app/.../windows/DispatchOutcomeMapper.kt` — the one place a
+  `DispatchError` becomes a user-facing `PipelineErrorKind`
+- **Sibling wire family (not Windows-Dispatch):** the peer-catalog / config-sharing
+  subsystem shares the same `:shared` transport — `client/CatalogClient.kt`,
+  `sync/CatalogSyncEngine.kt`, `sync/CatalogSubscriberStore.kt`, and the `config/` entity
+  model (`CatalogCodec.kt`, `CanonicalJson.kt`, `ContentHash.kt`, `Entities.kt`). See
+  ADR-0030 / ADR-0034
 - **Companion:** `companion/src/main/kotlin/net/devemperor/dictate/companion/` (server, domain,
   platform, data)
 - **Sync:** `windows/AndroidSyncSource.kt` + `SessionDao.sessionsAfterCursor` /
@@ -273,3 +304,7 @@ goes to the PC **exclusively**, leaving the invisible Android field untouched. T
 - **Database:** `docs/DATABASE-PATTERNS.md` (`insertion_method` Double-Enum + `target_device_id`)
 - **Cooperating ADRs:** ADR-0009 (run-queue), ADR-0011 (headless fallback), ADR-0013
   (review panel), ADR-0014 (history panel)
+- **Sibling wire family (peer-catalog / config-sharing):** ADR-0030 (Configuration Entity
+  Model — the canonical `contentHash` v3 format in `:shared/config`), ADR-0034 (Peer-Catalog
+  Family — pull-only config sharing over this same transport, reusing `DispatchResult` /
+  `DispatchError`). Spec: `docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md`

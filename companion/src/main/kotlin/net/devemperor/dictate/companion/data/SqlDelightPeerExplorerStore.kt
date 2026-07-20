@@ -24,6 +24,9 @@ import net.devemperor.dictate.shared.protocol.CatalogEntityKindWire
  * bindings, joined with their entity for the label) — plus the entities whose `source_peer_id`
  * points at the peer while their mode is `LOCAL`: the forks, which by design no longer have a
  * subscription row (§5.3) but still belong in the Explorer as `FORKED`.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §8
+ * @see docs/decisions/0034-peer-catalog.md
  */
 class SqlDelightPeerExplorerStore(
     private val database: DictateCompanionDb,

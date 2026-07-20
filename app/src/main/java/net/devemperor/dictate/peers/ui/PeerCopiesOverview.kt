@@ -16,6 +16,8 @@ import net.devemperor.dictate.shared.protocol.CatalogEntityKindWire
  * Robolectric (the phone-side sibling of the companion's `PeerExplorerViewModel`; the full §8.1
  * matrix needs the peers table + live index, which arrive with the delegated sync adapter — until
  * then the phone derives what its own rows prove: origin, mode, forked-ness).
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §8.3
  */
 object PeerCopiesOverview {
 

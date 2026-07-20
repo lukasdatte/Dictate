@@ -20,6 +20,8 @@ import net.devemperor.dictate.shared.protocol.SessionOriginWire
  * come from `:shared-ai` (they already exist there after Block A) and are NOT redefined here, or the
  * shared error taxonomy would fork. Only the pure session-structure enums — which are Room-only in
  * `:app` today — are mirrored below.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/desktop-host.md §3.2, §3.6
  */
 
 /** SSoT: app/.../database/entity/SessionType.kt + MigrationTo9.kt CHECK. */

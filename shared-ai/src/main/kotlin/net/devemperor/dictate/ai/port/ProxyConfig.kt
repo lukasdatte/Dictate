@@ -13,6 +13,7 @@ import java.net.Proxy
  * Note: the openai/anthropic builder types come from the SDKs, which are
  * `:shared-ai` dependencies — allowed here (unlike in `:shared`).
  *
+ * @see docs/decisions/0028-shared-ai-module.md
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/shared-ai-extraktion.md §4.3
  */
 interface ProxyConfig {

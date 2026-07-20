@@ -26,6 +26,9 @@ import net.devemperor.dictate.shared.protocol.CatalogEntityKindWire
  * between them can never leave a copy whose watermark says "current" over stale bytes. A credential's
  * plaintext goes to the SecretStore and NEVER to a column; only its fingerprint hash is the watermark
  * (F12, §6.2) — which is why credential application is its own method, not an entity write.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §6
+ * @see docs/decisions/0034-peer-catalog.md
  */
 interface CatalogSubscriberStore {
 

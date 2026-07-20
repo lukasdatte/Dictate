@@ -22,6 +22,7 @@ import javax.crypto.spec.GCMParameterSpec
  * in-memory key (§5.4); the real Keystore path is verified in the Android acceptance run.
  *
  * @see docs/plans/2026-07-19 - desktop-companion-v1/research/secretstore.md §5
+ * @see docs/decisions/0029-secret-store.md
  */
 class AndroidKeystoreSecretStore(
     private val blobPrefs: SharedPreferences,

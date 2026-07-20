@@ -15,6 +15,8 @@ package net.devemperor.dictate.peers
  * Implementations build the shared [net.devemperor.dictate.shared.sync.CatalogSyncEngine] over the
  * phone's Room tables, the Android SecretStore and an [AndroidNotificationPort], and iterate the
  * peers best-effort. Called on a background thread; must not throw for a mere unreachable peer.
+ *
+ * @see docs/plans/2026-07-19 - desktop-companion-v1/research/peer-katalog.md §6.5
  */
 fun interface CatalogSyncGateway {
     fun syncAllOnce()

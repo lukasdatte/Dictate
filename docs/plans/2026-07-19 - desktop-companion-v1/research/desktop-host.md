@@ -1226,6 +1226,30 @@ Entscheidungen betreffen Block D.
 **Rationale:** Risiko-Isolation (1), ein Schema-Owner pro Fläche + kein
 D↔E-Block-Zyklus (2, 3), DRY wo Verhalten identisch bleiben MUSS (4).
 
+### D5 — Freshness-Pass 2026-07-20 (Post-Implementation, vor Archivierung)
+
+**Trigger:** Integrations-Check nach Abschluss Block A–E (Finding `integ-1`,
+green) — Abgleich gegen den gebauten Stand. D4 hatte die Migrations-Nummern
+(D1a=`2.sqm`, D3=`3.sqm`, E1=`4.sqm`) bereits as-built festgelegt; die folgenden
+zwei Punkte waren beim D4-Zeitpunkt noch nicht ausgeführt.
+**As-built vs. Spec:**
+1. **`usage`-Tabelle liegt in `3.sqm` (D3), nicht in der D1a-Migration `2.sqm`.**
+   §3.3-Note/§5.4 lesen die `usage`-Tabelle konzeptionell als D1-Begleiter des
+   `UsageSink`-Ports; physisch wurde sie in die D3-Migration
+   `companion/.../db/migrations/3.sqm` gefaltet (Inline-Header dort dokumentiert
+   „Folded into this migration"). Verhalten unverändert — nur die
+   Migrations-Zuordnung wanderte sich, um die Tabellen-Owner-Grenze sauber zu
+   halten (D3 besitzt die zusätzlichen Companion-Tabellen).
+2. **Verwaltungs-UI konsolidiert.** §9.2 skizziert getrennte Profil-/Modell-/
+   Prompt-Editor-Screens (implizit `ui/profiles`/`ui/models`/`ui/prompts`).
+   Gebaut wurde EIN konsolidierter Screen
+   `companion/.../ui/config/ManagementScreen.kt` + `ConfigViewModel.kt`
+   (Provider/Modell/Prompt/Profil in einer datengetriebenen Fläche) — DRY über die
+   gemeinsame Entitäts-Bearbeitung, statt vier fast identischer Screens.
+**Bewertung:** Kein Code-Impact; beide Punkte sind
+charakterisierungs-/paritäts-getestet und in den Impl-Reports notiert. Body
+unverändert; dieser Eintrag ist die normative As-built-Korrektur.
+
 ## 15. Information Gaps
 
 1. **Cross-Modul-Enum-SSoT.** Die Session-Struktur-Enums sind companion-lokal

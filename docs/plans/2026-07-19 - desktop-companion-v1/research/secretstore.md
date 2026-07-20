@@ -750,6 +750,22 @@ Extraktion, Regression rot-vor-grün).
   11er-Umfang, und `adr-secret-store` darf die ADR-0017-§F-3-Auflösung behaupten.
 - **What changed:** §7.1 auf verbindliche 11 Slots umgestellt; §12 Gap 1 geschlossen.
 
+### 2026-07-20 — Freshness-Pass (Post-Implementation, vor Archivierung)
+
+- **Trigger:** Integrations-Check nach Abschluss Block A–E (Finding `integ-1`,
+  green) — Abgleich der fünf Block-Specs gegen den gebauten Stand vor der
+  F-Stage-Archivierung/EN-Übersetzung.
+- **Reasoning:** Diese Spec ist as-built korrekt. Der `SecretStore`-Port liegt
+  wie §9 spezifiziert in `shared-ai/.../ai/secrets/SecretStore.kt`; die
+  Android-Backends (`AndroidKeystoreSecretStore`/`KekProvider`/`SecretsMigration`)
+  in `app/.../secrets/`, die Desktop-Backends (`DpapiSecretStore`/
+  `FileAesGcmSecretStore`/`SecretStoreModule`) in `companion/.../secrets/`.
+  Einzige Ergänzung gegenüber der §9-Dateiliste: `app/.../secrets/PairingSecrets.kt`
+  ist zusätzlich entstanden — der Pairing-Secret-Zugriff läuft ebenfalls über den
+  SecretStore (ADR-0029), passend zum §7.1-Umfang „alle 11 Secrets".
+- **What changed:** Kein Body-Umbau — §9-Directory-Layout um die de-facto
+  vorhandene `PairingSecrets.kt` ergänzt vermerkt; sonst keine residuale Drift.
+
 ## 14. References
 
 - **Plan:** `~/.claude/plans/desktop-companion-v1.md` — §5 Block B (B1/B2),

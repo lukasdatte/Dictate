@@ -800,6 +800,25 @@ manuelle Einmal-Verifikation aus §2.3 (fabrizierter `android.`-Import macht rot
   A2-Move-Umfang um `AmplitudeProcessor` erweitert (dieser Eintrag ist die
   normative Quelle dafür; §3-Inventar listet nur `ai/`-Dateien).
 
+### 2026-07-20 — Freshness-Pass (Post-Implementation, vor Archivierung)
+
+- **Trigger:** Integrations-Check nach Abschluss Block A–E (Finding `integ-1`,
+  green) — Abgleich der fünf Block-Specs gegen den gebauten Stand vor der
+  F-Stage-Archivierung/EN-Übersetzung.
+- **Reasoning:** Diese Spec ist as-built korrekt. `:shared-ai` (jvmTarget 1.8,
+  Package `net.devemperor.dictate.ai`) wurde mit den vier Ports (`AiConfig`/
+  `UsageSink`/`ProxyConfig`/`AudioDurationReader`) plus dem `SecretStore`-Port
+  (Block B, `ai/secrets/`) gebaut; `AIProvider`/`AmbiguityMode`/`AIFunction`/
+  `MessageRole`/`ResponseFormatKind` liegen wie §3.4/D5.a spezifiziert im Modul;
+  `AmplitudeProcessor` ist package-erhaltend gemovt (D5.e). Ein Detail außerhalb
+  dieser Spec zur Einordnung: die von den Schwester-Specs gebrauchten **Wire-Enums**
+  (Config-Familie + Katalog) sind alle in der EINEN Datei
+  `shared/src/main/kotlin/net/devemperor/dictate/shared/config/ConfigEnums.kt`
+  konsolidiert (nicht in mehreren `catalog.*Wire`-Kopien) — konsistent mit dem
+  Spiegel-Ansatz aus D5.a, betrifft aber `:shared`, nicht `:shared-ai`.
+- **What changed:** Kein Body-Umbau — Bestätigung der Verhaltensneutralität und
+  Modul-Topologie gegen den Endstand; keine residuale Drift in dieser Spec.
+
 ## 12. References
 
 - **Related Plan:** `~/.claude/plans/desktop-companion-v1.md` — §5 Block A

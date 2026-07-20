@@ -1275,6 +1275,32 @@ gebrochen. Drift ist test-verhindert — wie im Bestand.
 **Alternatives:** Move der Originale nach `:shared` (verworfen, s. o.);
 Spiegel ohne Paritäts-Test (verworfen bereits in D2).
 
+### Freshness-Pass 2026-07-20 — as-built Struktur (Post-Implementation)
+
+**Trigger:** Integrations-Check nach Abschluss Block A–E (Finding `integ-1`,
+green) — Abgleich der fünf Block-Specs gegen den gebauten Stand vor der
+F-Stage-Archivierung/EN-Übersetzung.
+**As-built vs. Spec:**
+1. **Wire-Enum-Heim konsolidiert.** D6 nennt die Config-Familie
+   (`ProviderType`/`ProviderKind`/`ModelFunction`/`AmbiguityModeValue`/
+   `PromptSelectionMode`) in `:shared`. Gebaut wurde EIN gemeinsames Heim
+   `shared/src/main/kotlin/net/devemperor/dictate/shared/config/ConfigEnums.kt`,
+   das zusätzlich die von peer-katalog §5.2/§5.3 gebrauchten Katalog-Wire-Enums
+   trägt — als `Visibility` (`PRIVATE`/`SHARED`) und `SubscriptionMode`
+   (`LOCAL`/`SUBSCRIBE`/`ONE_SHOT`), **nicht** als separate `shared.catalog.*Wire`-
+   Kopien. Der „Wire"-Namenszusatz entfällt (ein Heim ⇒ keine Domain-/Wire-
+   Namenskollision zu entschärfen). D6s Aufzählung war die Config-Teilmenge; die
+   Konsolidierung ist der D5.a-Doktrin treu (ein SSoT-Enum-Modul), superseded also
+   die verstreute Platzierung, nicht die Entscheidung selbst.
+2. **Verwaltungs-UI (Companion-Seite).** Der companion-seitige Entitäts-Editor
+   landete konsolidiert in `companion/.../ui/config/ManagementScreen.kt` +
+   `ConfigViewModel.kt` (ein Screen), nicht in getrennten `ui/profiles`/`ui/models`/
+   `ui/prompts` — Detail liegt bei desktop-host §9.2 (Freshness-Pass-Eintrag dort).
+   Die Android-Settings (§10 C3) sind davon unberührt.
+**Bewertung:** Kein Code-Impact, D5-endorsed und paritäts-getestet
+(`ConfigEntityCheckParityTest`). Body unverändert; dieser Eintrag ist die
+normative As-built-Korrektur der Enum-Package-Referenzen.
+
 ## 14. Information Gaps
 
 1. ~~**`AiConfig`-Port-Signatur (Block A) / Enum-Placement**~~ — **teilweise

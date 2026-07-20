@@ -1113,6 +1113,32 @@ integriert. Enum-Parität zu C1/C2 bleibt Pflicht-Gate (Parity-Test, §13).
 **Alternatives:** E1 legt vollständig an (alter Fallback) — verworfen wegen
 Zyklus; Zwei-Stufen-Migration — verworfen wegen Nicht-Determinismus.
 
+### D8 — Freshness-Pass 2026-07-20 (Post-Implementation, vor Archivierung)
+
+**Trigger:** Integrations-Check nach Abschluss Block A–E (Finding `integ-1`,
+green) — Abgleich gegen den gebauten Stand. D7 hatte die Migrations-Zuordnung
+(D3=`3.sqm`, E1=`4.sqm`, D1a=`2.sqm`) bereits as-built; der folgende Punkt zur
+Enum-Platzierung war beim D7-Zeitpunkt noch offen.
+**As-built vs. Spec — Katalog-Wire-Enums konsolidiert:** §5.2/§5.3 referenzieren
+`net.devemperor.dictate.shared.catalog.VisibilityWire` und
+`...catalog.SubscriptionModeWire` als separate Katalog-Wire-Enums. Gebaut wurde
+KEIN `shared.catalog`-Package; beide leben im gemeinsamen Config-Enum-Heim
+`shared/.../config/ConfigEnums.kt` als:
+- `Visibility` (`PRIVATE`/`SHARED`) — Namenszusatz „Wire" entfällt (ein Heim ⇒
+  keine Domain-/Wire-Namenskollision).
+- `SubscriptionMode` (`LOCAL`/`SUBSCRIBE`/`ONE_SHOT`) — der §5.2/§5.3-`NULL`-Fall
+  „lokal/geforkt" wurde zum expliziten `LOCAL`-Member: die Spalten sind
+  `NOT NULL DEFAULT 'LOCAL'` mit `CHECK (... IN ('LOCAL','SUBSCRIBE','ONE_SHOT'))`
+  (Companion.sq), ein Fork setzt `subscription_mode = 'LOCAL'` statt `NULL`. Das
+  CHECK-Vokabular ist damit gegenüber §5.2 („`IS NULL OR IN ('SUBSCRIBE','ONE_SHOT')`")
+  aktualisiert.
+
+`CatalogEntityKindWire` blieb wie spezifiziert in `shared.protocol`. Die Enum-Parität
+ist per `ConfigEntityCheckParityTest` / `CatalogAccessCheckParityTest` gepinnt.
+**Bewertung:** Kein Code-Impact; D5.a-Doktrin-treu (ein SSoT-Enum-Modul). Body
+unverändert; dieser Eintrag ist die normative As-built-Korrektur der
+`shared.catalog.*Wire`-Package-Referenzen in §3/§5.
+
 ## 15. Information Gaps
 
 1. ~~**Companion-Entitäts-Tabellen — Eigentum D3 vs. E1**~~ — **geschlossen

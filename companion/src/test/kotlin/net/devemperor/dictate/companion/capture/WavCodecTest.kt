@@ -64,6 +64,24 @@ class WavCodecTest {
     }
 
     @Test
+    fun merge_returnValueAlwaysExists_soFinishUploadsARealFile() {
+        // Regression for logic-D-1: JavaSoundAudioCaptureService.finish() uploads exactly the File that
+        // WavConcat.merge() RETURNS. For a single-segment take that is the lone {take}_1.wav (merge is
+        // zero-copy and never writes the {take}.wav output path). Ignoring the return and binding
+        // mergedWav to File(dir, "{take}.wav") pointed the pipeline at a file that does not exist,
+        // failing every dictation shorter than one rolling segment. The merged file must always exist.
+        val seg1 = temp.newFile("take_1.wav")
+        WavWriter(seg1).use { it.write(ByteArray(64), 64) }
+        val singleMerged = WavConcat.merge(listOf(seg1), File(temp.root, "take.wav"))
+        assertTrue("single-segment merge result must be a real, readable file", singleMerged.exists())
+
+        val seg2 = temp.newFile("take_2.wav")
+        WavWriter(seg2).use { it.write(ByteArray(32), 32) }
+        val multiMerged = WavConcat.merge(listOf(seg1, seg2), File(temp.root, "take-multi.wav"))
+        assertTrue("multi-segment merge result must be a real, readable file", multiMerged.exists())
+    }
+
+    @Test
     fun merge_concatenatesDataAndSumsTheHeader() {
         val a = temp.newFile("a.wav")
         val b = temp.newFile("b.wav")
@@ -102,6 +120,15 @@ class WavCodecTest {
         }.array()
         assertEquals(2000, PcmAmplitude.peak(buf, 6))
         assertEquals(30000, PcmAmplitude.peak(buf, 8))
+    }
+
+    @Test
+    fun peak_clampsAFullScaleNegativeSampleToThe32767AndroidRange() {
+        // abs(-32768) = 32768 overflows getMaxAmplitude's 0..32767 range; peak must clamp to 32767.
+        val buf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).apply {
+            putShort(Short.MIN_VALUE) // -32768, the loudest possible 16-bit sample
+        }.array()
+        assertEquals(32767, PcmAmplitude.peak(buf, 2))
     }
 
     private fun leInt(bytes: ByteArray, offset: Int): Int =

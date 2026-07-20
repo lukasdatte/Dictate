@@ -311,6 +311,22 @@ CREATE TABLE profile_prompts (
 );
 CREATE INDEX profile_prompts_prompt_ref ON profile_prompts(prompt_ref);
 
+-- ── usage — post-call AI accounting (UsageSink, desktop-host.md §5.4) ────────────────────────
+--
+-- A companion-only accounting table, written by SqlDelightUsageSink after every desktop transcription
+-- and completion. NOT part of the Room parity set (§3.3 NOTE) and — deliberately — NOT a Double-Enum:
+-- `model_provider` is an OPEN vocabulary (AIProvider.name / free text), so no CHECK and no adapter,
+-- mirroring Room's `UsageEntity` / `RoomUsageSink` byte-for-byte (§3.2). Folded into the D3 migration
+-- (3.sqm) per the D1b-1 hand-off rather than taking a fresh number — E1 keeps `4.sqm`; the table is
+-- created inside 3.sqm (v3→v4), so only the current-schema snapshot regenerates.
+CREATE TABLE usage (
+    model_name     TEXT NOT NULL PRIMARY KEY,
+    audio_time     INTEGER NOT NULL DEFAULT 0,
+    input_tokens   INTEGER NOT NULL DEFAULT 0,
+    output_tokens  INTEGER NOT NULL DEFAULT 0,
+    model_provider TEXT NOT NULL DEFAULT 'OPENAI'
+);
+
 -- ── devices ───────────────────────────────────────────────────────────────────────────────
 
 deviceById:
@@ -604,3 +620,53 @@ VALUES (:profileId, :pos, :promptRef, :autoApply);
 
 deleteProfilePrompts:
 DELETE FROM profile_prompts WHERE profile_id = :profileId;
+
+-- ── usage (UsageSink, §5.4) ──────────────────────────────────────────────────────────────────
+--
+-- The increment-upsert mirrors Room's UsageDao.addUsage exactly: the three counters accumulate,
+-- model_provider is set on first insert and left untouched on conflict (a model's provider does not
+-- change under it). The read queries back the SqlDelightUsageSink test and any future usage screen.
+
+addUsage:
+INSERT INTO usage (model_name, audio_time, input_tokens, output_tokens, model_provider)
+VALUES (:modelName, :audioTime, :inputTokens, :outputTokens, :provider)
+ON CONFLICT(model_name) DO UPDATE SET
+    audio_time    = audio_time + :audioTime,
+    input_tokens  = input_tokens + :inputTokens,
+    output_tokens = output_tokens + :outputTokens;
+
+usageByModel:
+SELECT * FROM usage WHERE model_name = :modelName;
+
+allUsage:
+SELECT * FROM usage ORDER BY model_name;
+
+-- ── desktop-dictation history (§9.3) ─────────────────────────────────────────────────────────
+--
+-- The DESKTOP_DICTATION counterpart to pageHistory/countHistory: those JOIN dispatch_state and scope
+-- to PHONE_SYNC, so a locally-dictated session (no dispatch_state row) can never appear there. These
+-- page over completed local takes, exposing both the final output and the raw transcript (a correlated
+-- subquery, highest version = the current one) so the screen can show what post-processing changed.
+-- REVIEW_REFINEMENT takes are excluded — their transcript belongs to the reviewed parent (§8.3), not a
+-- separate history row. instr(lower(...)) matches the pageHistory substring-search semantics.
+
+pageDesktopHistory:
+SELECT s.id, s.created_at, s.final_output_text, s.inserted_at,
+    (SELECT t.text FROM transcriptions t WHERE t.session_id = s.id ORDER BY t.version DESC LIMIT 1) AS transcript_text
+FROM sessions s
+WHERE s.host_origin = 'DESKTOP_DICTATION' AND s.status = 'COMPLETED' AND s.origin != 'REVIEW_REFINEMENT'
+  AND instr(lower(s.final_output_text), lower(:term)) > 0
+ORDER BY s.created_at DESC, s.id DESC
+LIMIT :limit OFFSET :offset;
+
+countDesktopHistory:
+SELECT COUNT(*)
+FROM sessions s
+WHERE s.host_origin = 'DESKTOP_DICTATION' AND s.status = 'COMPLETED' AND s.origin != 'REVIEW_REFINEMENT'
+  AND instr(lower(s.final_output_text), lower(:term)) > 0;
+
+desktopHistoryEntry:
+SELECT s.id, s.created_at, s.final_output_text, s.inserted_at,
+    (SELECT t.text FROM transcriptions t WHERE t.session_id = s.id ORDER BY t.version DESC LIMIT 1) AS transcript_text
+FROM sessions s
+WHERE s.host_origin = 'DESKTOP_DICTATION' AND s.id = :sessionId;

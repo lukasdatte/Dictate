@@ -72,19 +72,19 @@ class DesktopSessionRepository(private val database: DictateCompanionDb) {
         queries.stampInserted(insertedAt = insertedAt, id = id)
     }
 
-    fun insertTranscription(row: TranscriptionRow) {
+    fun insertTranscription(record: TranscriptionRecord) {
         queries.insertTranscription(
-            id = row.id,
-            sessionId = row.sessionId,
-            version = row.version,
-            isCurrent = row.isCurrent,
-            text = row.text,
-            modelUsed = row.modelUsed,
-            provider = row.provider,
-            promptTokens = row.promptTokens,
-            completionTokens = row.completionTokens,
-            durationMs = row.durationMs,
-            createdAt = row.createdAt,
+            id = record.id,
+            sessionId = record.sessionId,
+            version = record.version,
+            isCurrent = record.isCurrent,
+            text = record.text,
+            modelUsed = record.modelUsed,
+            provider = record.provider,
+            promptTokens = record.promptTokens,
+            completionTokens = record.completionTokens,
+            durationMs = record.durationMs,
+            createdAt = record.createdAt,
         )
     }
 
@@ -280,6 +280,46 @@ class DesktopSessionRepository(private val database: DictateCompanionDb) {
         )
     }
 
+    // ── history reads (desktop-dictated sessions, §9.3) ──────────────────────────────────────────
+    //
+    // The phone-mirror history (SqlDelightHistoryRepository / pageHistory) JOINs dispatch_state and
+    // scopes to host_origin = 'PHONE_SYNC', so a locally-dictated session — which has no dispatch_state
+    // row — can never surface there. These reads are the DESKTOP_DICTATION counterpart: they page over
+    // the sessions this host produced, exposing both the final output (what was inserted) and the raw
+    // transcript (before post-processing) so the History screen can show the difference (§9.3). Only
+    // COMPLETED takes are listed — an in-flight or FAILED session has no final output to re-insert.
+
+    /**
+     * One page of completed desktop-dictated sessions, newest first (§9.3). [term] is a
+     * case-insensitive substring of the final output (empty matches everything, as in [pageHistory]).
+     */
+    fun pageDesktopHistory(term: String, limit: Long, offset: Long): List<DesktopHistoryEntry> =
+        queries.pageDesktopHistory(term, limit, offset).executeAsList().map { row ->
+            DesktopHistoryEntry(
+                sessionId = row.id,
+                createdAt = row.created_at,
+                finalOutputText = row.final_output_text.orEmpty(),
+                transcriptText = row.transcript_text,
+                insertedAt = row.inserted_at,
+            )
+        }
+
+    /** How many completed desktop-dictated sessions match [term] — the pager's total (§9.3). */
+    fun countDesktopHistory(term: String): Long =
+        queries.countDesktopHistory(term).executeAsOne()
+
+    /** A single desktop session as a history entry, or null if absent / not yet completed (§9.3). */
+    fun desktopHistoryEntry(sessionId: String): DesktopHistoryEntry? =
+        queries.desktopHistoryEntry(sessionId).executeAsOneOrNull()?.let { row ->
+            DesktopHistoryEntry(
+                sessionId = row.id,
+                createdAt = row.created_at,
+                finalOutputText = row.final_output_text.orEmpty(),
+                transcriptText = row.transcript_text,
+                insertedAt = row.inserted_at,
+            )
+        }
+
     // ── reads (history/tests) ────────────────────────────────────────────────────────────────
 
     fun session(id: String): Sessions? = queries.dictationSessionById(id).executeAsOneOrNull()
@@ -294,8 +334,23 @@ class DesktopSessionRepository(private val database: DictateCompanionDb) {
         queries.messagesForSession(sessionId).executeAsList()
 }
 
-/** A transcription row to persist (§5.5 step 1). */
-data class TranscriptionRow(
+/**
+ * A completed desktop-dictated session as the History screen shows it (§9.3): the [finalOutputText]
+ * that was (or can be) inserted, plus the raw [transcriptText] before post-processing so the user can
+ * see what the model changed. [insertedAt] is null for a take that was reviewed-and-discarded (never
+ * placed into a window), which the screen surfaces the same way the phone-mirror rows surface "synced".
+ */
+data class DesktopHistoryEntry(
+    val sessionId: String,
+    val createdAt: Long,
+    val finalOutputText: String,
+    /** The current transcription's text (version 1 / is_current), or null if none was persisted. */
+    val transcriptText: String?,
+    val insertedAt: Long?,
+)
+
+/** A transcription record to persist (§5.5 step 1). */
+data class TranscriptionRecord(
     val id: String,
     val sessionId: String,
     val version: Long,

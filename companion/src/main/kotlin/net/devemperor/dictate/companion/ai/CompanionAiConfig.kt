@@ -5,18 +5,15 @@ import net.devemperor.dictate.ai.AIProvider
 import net.devemperor.dictate.ai.port.AiConfig
 
 /**
- * The **transitional** [AiConfig] the desktop pipeline runs against in D1/D2 (desktop-host.md §5.1
- * NOTE): a fixed OpenAI-compatible default, no key yet.
+ * A **fixed** OpenAI-compatible [AiConfig] with no credential ([apiKey] returns `""`).
  *
- * D3 replaces this with the resolved Block-C profile (`ProfileResolver` → `AiConfig`,
- * entitaetenmodell-android.md §9): provider, model, per-provider key from the SecretStore, and the
- * ambiguity/prompt configuration. Until then a desktop take can be *driven end to end with a fake
- * runner* (the headless E2E, §12) — a **real** provider call only succeeds once D3 wires a key, at
- * which point [apiKey] returns something non-empty. Returning `""` here is the honest state: the
- * pipeline is complete, the credentials are not.
- *
- * Keys are deliberately **not** read from the plaintext settings table (secrets policy) — the key
- * home is the SecretStore, wired in D3.
+ * Production no longer uses this: `CompanionContainer.production` wires [ProfileBackedAiConfig], which
+ * resolves provider/model/key/params from the active Block-C profile + the SecretStore (§9). This
+ * class is retained only as the **fixed-config test baseline** for the headless pipeline E2E
+ * (`DesktopDictationPipelineTest`), where a fake runner is driven and the real credential resolution
+ * is deliberately out of scope — the desktop counterpart of Android keeping `AndroidAiConfig` in test
+ * sources. Keys are never read from the plaintext settings table (secrets policy); the key home is the
+ * SecretStore.
  */
 class CompanionAiConfig : AiConfig {
 

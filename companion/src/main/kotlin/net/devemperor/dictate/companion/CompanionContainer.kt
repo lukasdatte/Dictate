@@ -2,9 +2,9 @@ package net.devemperor.dictate.companion
 
 import net.devemperor.dictate.ai.AIOrchestrator
 import net.devemperor.dictate.ai.factory.RunnerFactory
-import net.devemperor.dictate.companion.ai.CompanionAiConfig
 import net.devemperor.dictate.companion.ai.CompanionProxyConfig
-import net.devemperor.dictate.companion.ai.NoopUsageSink
+import net.devemperor.dictate.companion.ai.ProfileBackedAiConfig
+import net.devemperor.dictate.companion.ai.SqlDelightUsageSink
 import net.devemperor.dictate.companion.capture.JavaSoundAudioCaptureService
 import net.devemperor.dictate.companion.capture.WavAudioDurationReader
 import net.devemperor.dictate.companion.data.CompanionConfigRepository
@@ -48,6 +48,7 @@ import net.devemperor.dictate.companion.platform.AppPaths
 import net.devemperor.dictate.companion.platform.JvmNetworkInterfaces
 import net.devemperor.dictate.companion.platform.PlatformModule
 import net.devemperor.dictate.companion.platform.SystemClock
+import net.devemperor.dictate.companion.secrets.SecretStoreModule
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
 import net.devemperor.dictate.companion.platform.fallback.NoopClipboard
 import net.devemperor.dictate.companion.platform.fallback.NoopInputCommandPerformer
@@ -136,16 +137,22 @@ class CompanionContainer(
             val settingsRepository = SqlDelightSettingsRepository(database)
 
             // ── Desktop-dictation pipeline (Block D) ──────────────────────────────────────────
-            // Runs against a TRANSITIONAL AiConfig (§5.1 NOTE): OpenAI-compatible defaults, no key
-            // until D3 wires the SecretStore-backed profile. Usage accounting is a no-op sink until
-            // D3's `usage` table (D5.b migration); see NoopUsageSink.
+            // AiConfig is resolved from the active Block-C profile + its SecretStore credential
+            // (ProfileBackedAiConfig, §9): provider/model/key/baseUrl/params all come from what the
+            // user configured, so a real transcription/completion authenticates. Usage now persists
+            // via SqlDelightUsageSink (the `usage` table, §5.4) instead of being discarded.
             val settings = CompanionSettings(settingsRepository)
             val desktopSessions = DesktopSessionRepository(database)
             val configRepository = CompanionConfigRepository(database, now = SystemClock::nowMillis)
-            val aiConfig = CompanionAiConfig()
+            val secretStore = SecretStoreModule.detect(AppPaths.dataDirectory())
+            val aiConfig = ProfileBackedAiConfig(
+                config = configRepository,
+                secretStore = secretStore,
+                activeProfileId = { settings.activeProfileId },
+            )
             val aiOrchestrator = AIOrchestrator(
                 config = aiConfig,
-                usageSink = NoopUsageSink,
+                usageSink = SqlDelightUsageSink(database),
                 factory = RunnerFactory(aiConfig, CompanionProxyConfig, WavAudioDurationReader),
             )
             // The warm panel + both §6.3 focus paths (D2): the spike-styled window control and the

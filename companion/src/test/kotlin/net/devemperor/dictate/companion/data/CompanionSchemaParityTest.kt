@@ -4,6 +4,9 @@ import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import net.devemperor.dictate.ai.AIProviderException
 import net.devemperor.dictate.companion.domain.model.InsertionOutcome
+import net.devemperor.dictate.companion.fakes.assertCheckFailure
+import net.devemperor.dictate.companion.fakes.exec
+import net.devemperor.dictate.companion.fakes.names
 import net.devemperor.dictate.companion.domain.session.HostOrigin
 import net.devemperor.dictate.companion.domain.session.MessageRole
 import net.devemperor.dictate.companion.domain.session.ResponseFormatKind
@@ -15,7 +18,6 @@ import net.devemperor.dictate.companion.domain.session.StepType
 import net.devemperor.dictate.shared.protocol.InsertionOutcomeWire
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -199,13 +201,4 @@ class CompanionSchemaParityTest {
                 "VALUES ('disp-$suffix', 'test-device-0001', 1, 0, $outcome)",
         )
     }
-
-    private fun assertCheckFailure(insert: () -> Unit) {
-        val failure = runCatching { insert() }.exceptionOrNull()
-        assertTrue("expected a CHECK constraint failure, got: $failure", failure?.message?.contains("CHECK constraint failed") == true)
-    }
-
-    private fun Iterable<Enum<*>>.names(): Set<String> = map { it.name }.toSet()
-
-    private fun SqlDriver.exec(sql: String) = execute(identifier = null, sql = sql, parameters = 0)
 }

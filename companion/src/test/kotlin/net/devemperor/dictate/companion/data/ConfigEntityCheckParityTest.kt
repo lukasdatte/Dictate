@@ -2,6 +2,9 @@ package net.devemperor.dictate.companion.data
 
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import net.devemperor.dictate.companion.fakes.assertCheckFailure
+import net.devemperor.dictate.companion.fakes.exec
+import net.devemperor.dictate.companion.fakes.names
 import net.devemperor.dictate.shared.config.AmbiguityModeValue
 import net.devemperor.dictate.shared.config.ModelFunction
 import net.devemperor.dictate.shared.config.PromptSelectionMode
@@ -10,7 +13,6 @@ import net.devemperor.dictate.shared.config.ProviderType
 import net.devemperor.dictate.shared.config.SubscriptionMode
 import net.devemperor.dictate.shared.config.Visibility
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -152,16 +154,4 @@ class ConfigEntityCheckParityTest {
             "content_hash, updated_at) " +
             "VALUES ('$id', 'n', '$stylePromptMode', '$systemPromptMode', '$ambiguityMode', 'h', 1)",
     )
-
-    private fun assertCheckFailure(insert: () -> Unit) {
-        val failure = runCatching { insert() }.exceptionOrNull()
-        assertTrue(
-            "expected a CHECK constraint failure, got: $failure",
-            failure?.message?.contains("CHECK constraint failed") == true,
-        )
-    }
-
-    private fun Iterable<Enum<*>>.names(): Set<String> = map { it.name }.toSet()
-
-    private fun SqlDriver.exec(sql: String) = execute(identifier = null, sql = sql, parameters = 0)
 }

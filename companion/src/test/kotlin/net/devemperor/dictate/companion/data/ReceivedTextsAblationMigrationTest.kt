@@ -4,6 +4,7 @@ import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import net.devemperor.dictate.companion.db.DictateCompanionDb
+import net.devemperor.dictate.companion.fakes.exec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -108,8 +109,6 @@ class ReceivedTextsAblationMigrationTest {
                 "VALUES ('$id', 'dev-1', 'hello $id', $createdAt, $receivedAt, '$origin', $dispatched, $outcome)",
         )
     }
-
-    private fun SqlDriver.exec(sql: String) = execute(identifier = null, sql = sql, parameters = 0)
 
     private fun count(sql: String): Int = driver.executeQuery(
         identifier = null, sql = sql, parameters = 0,

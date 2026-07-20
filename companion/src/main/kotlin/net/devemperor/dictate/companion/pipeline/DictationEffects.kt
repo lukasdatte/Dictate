@@ -18,7 +18,7 @@ import net.devemperor.dictate.companion.capture.CaptureResult
 import net.devemperor.dictate.companion.data.ContinuationTurnRecord
 import net.devemperor.dictate.companion.data.ConversationTurnRecord
 import net.devemperor.dictate.companion.data.DesktopSessionRepository
-import net.devemperor.dictate.companion.data.TranscriptionRow
+import net.devemperor.dictate.companion.data.TranscriptionRecord
 import net.devemperor.dictate.companion.domain.port.ClockPort
 import net.devemperor.dictate.companion.domain.port.TextInserter
 import java.util.UUID
@@ -141,7 +141,7 @@ class DictationEffects(
         val result = ai.transcribe(take.mergedWav, profile.language, profile.stylePrompt)
         val id = UUID.randomUUID().toString()
         sessions.insertTranscription(
-            TranscriptionRow(
+            TranscriptionRecord(
                 id = id,
                 sessionId = sessionId,
                 version = 1,

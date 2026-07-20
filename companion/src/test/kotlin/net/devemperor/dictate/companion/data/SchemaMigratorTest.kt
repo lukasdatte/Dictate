@@ -6,6 +6,7 @@ import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import net.devemperor.dictate.companion.db.DictateCompanionDb
+import net.devemperor.dictate.companion.fakes.exec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -122,8 +123,6 @@ class SchemaMigratorTest {
     }
 
     // ── Plumbing ────────────────────────────────────────────────────────────────────────
-
-    private fun SqlDriver.exec(sql: String) = execute(identifier = null, sql = sql, parameters = 0)
 
     private fun userVersion(): Long = driver.executeQuery(
         identifier = null,

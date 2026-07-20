@@ -116,20 +116,33 @@ class JavaSoundAudioCaptureService(
         }
 
         fun pause() {
+            // Stop the line, not merely the read loop (spec §4.3, "Bei Pause: line.stop()"). javax.sound
+            // has no MediaRecorder-style pause; a line left running while the loop sleeps keeps capturing
+            // into its internal buffer, which overruns and then leaks that during-pause audio out on the
+            // next read after resume. line.stop() ceases capture outright and retains already-buffered PCM.
             paused.set(true)
+            line.stop()
         }
 
         fun resume() {
+            line.start()
             paused.set(false)
         }
 
         fun finish(): CaptureResult {
-            stopLoop()
+            // line.stop() BEFORE stopLoop(): stopping the line unblocks a pending line.read so the read
+            // loop returns and joins promptly. Ordering it after stopLoop() risks the 1s join timing out
+            // on a stalled driver, then close()ing the line/writer under the still-live capture thread —
+            // its next writer.write() would throw IllegalStateException (logic-D-3).
             line.stop()
+            stopLoop()
             line.close()
             writer?.close()
-            val merged = File(recordingsDir, "${takeId}.wav")
-            WavConcat.merge(segments, merged)
+            // Use merge()'s return, not a self-built path: for a single-segment take merge is zero-copy
+            // and returns the lone {takeId}_1.wav (the {takeId}.wav output is never written), so binding
+            // mergedWav to File(recordingsDir, "{takeId}.wav") would point the pipeline at a missing file
+            // and fail every short (single-segment) dictation (logic-D-1).
+            val merged = WavConcat.merge(segments, File(recordingsDir, "${takeId}.wav"))
             return CaptureResult(
                 mergedWav = merged,
                 segmentPaths = segments.toList(),
@@ -138,8 +151,8 @@ class JavaSoundAudioCaptureService(
         }
 
         fun discard() {
+            line.stop() // unblock a pending line.read before the join (see finish(), logic-D-3)
             stopLoop()
-            line.stop()
             line.close()
             writer?.close()
             segments.forEach { it.delete() }

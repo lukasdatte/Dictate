@@ -27,7 +27,9 @@ object PcmAmplitude {
         while (i < end) {
             // low byte unsigned, high byte sign-extended → signed 16-bit little-endian.
             val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
-            val magnitude = abs(sample)
+            // Clamp to 32767: a full-scale negative sample is -32768, and abs(-32768) = 32768,
+            // one above Android getMaxAmplitude's 0..32767 range the shared AmplitudeProcessor is tuned for.
+            val magnitude = minOf(abs(sample), 32767)
             if (magnitude > peak) peak = magnitude
             i += 2
         }

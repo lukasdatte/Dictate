@@ -1,5 +1,6 @@
 package net.devemperor.dictate.companion.pipeline
 
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -30,7 +31,7 @@ class SerialJobQueue : JobQueue {
     private data class Entry(val sessionId: String, val job: () -> Unit)
 
     private val pending = ConcurrentLinkedQueue<Entry>()
-    private val known = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val known = ConcurrentHashMap.newKeySet<String>()
     private val draining = AtomicBoolean(false)
     private val worker = Executors.newSingleThreadExecutor { r ->
         Thread(r, "desktop-job-queue").apply { isDaemon = true }

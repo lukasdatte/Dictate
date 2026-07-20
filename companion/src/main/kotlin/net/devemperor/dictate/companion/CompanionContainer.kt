@@ -10,6 +10,13 @@ import net.devemperor.dictate.companion.capture.JavaSoundAudioCaptureService
 import net.devemperor.dictate.companion.capture.WavAudioDurationReader
 import net.devemperor.dictate.companion.catalog.CatalogSubscriber
 import net.devemperor.dictate.companion.catalog.CatalogSyncRunner
+import net.devemperor.dictate.companion.catalog.CatalogSyncScheduler
+import net.devemperor.dictate.companion.catalog.CatalogClientPeerIndexSource
+import net.devemperor.dictate.companion.catalog.EngineCatalogSyncRunner
+import net.devemperor.dictate.companion.catalog.PeerCatalogClientFactory
+import net.devemperor.dictate.companion.catalog.PeerStoreCatalogSyncTargets
+import net.devemperor.dictate.companion.catalog.TakeoverCatalogSubscriber
+import net.devemperor.dictate.companion.data.SqlDelightCatalogSubscriberStore
 import net.devemperor.dictate.companion.catalog.discovery.NoopPeerDiscovery
 import net.devemperor.dictate.companion.catalog.discovery.PeerDiscovery
 import net.devemperor.dictate.companion.catalog.discovery.TailscalePeerDiscovery
@@ -135,6 +142,12 @@ class CompanionContainer(
     val peerIndexSource: PeerIndexSource? = null,
     val catalogSyncRunner: CatalogSyncRunner? = null,
     val catalogSubscriber: CatalogSubscriber? = null,
+    /**
+     * The background catalog-sync poll (Block E2, §6.5). Wired in [production]; null in the test graph.
+     * [CompanionBootstrap] calls [CatalogSyncScheduler.start] once the server is up — a null here is the
+     * honest "this graph does not poll peers" signal (the minimal sync-test graph has no config store).
+     */
+    val catalogSyncScheduler: CatalogSyncScheduler? = null,
 ) {
 
     /**
@@ -214,6 +227,35 @@ class CompanionContainer(
                 clock = SystemClock,
             )
 
+            // ── Peer-catalog subscriber side (Block E2, peer-katalog.md §6) ───────────────────
+            // The consumer half: the shared sync engine over the real peers/subscriptions rows +
+            // config mirror + SecretStore, driven on a timer by the scheduler and surfaced to the
+            // Explorer through the three live seams (index / sync-now / subscribe). One CatalogClient
+            // factory (peer row + SecretStore-backed pairing secret) feeds all of them.
+            val peerExplorer = SqlDelightPeerExplorerStore(database, configRepository)
+            val subscriberStore = SqlDelightCatalogSubscriberStore(database, configRepository, secretStore)
+            val catalogSyncEngine = net.devemperor.dictate.shared.sync.CatalogSyncEngine(
+                store = subscriberStore,
+                notifier = platform.notificationPort,
+                clock = SystemClock::nowMillis,
+            )
+            val peerClients = PeerCatalogClientFactory(secretStore)
+            val catalogSyncScheduler = CatalogSyncScheduler(
+                targets = PeerStoreCatalogSyncTargets(peerExplorer, peerClients),
+                engine = catalogSyncEngine,
+                intervalMillis = { settings.catalogSyncIntervalMillis },
+            )
+            val peerIndexSource = CatalogClientPeerIndexSource(peerExplorer, peerClients)
+            val catalogSyncRunner = EngineCatalogSyncRunner(peerExplorer, peerClients, catalogSyncEngine)
+            val catalogSubscriber = TakeoverCatalogSubscriber(
+                peers = peerExplorer,
+                clients = peerClients,
+                config = configRepository,
+                secretStore = secretStore,
+                database = database,
+                clock = SystemClock::nowMillis,
+            )
+
             val desktopCapture = JavaSoundAudioCaptureService(settings)
             val desktopDictation = DesktopDictationController(
                 DictationEffects(
@@ -261,9 +303,13 @@ class CompanionContainer(
                 globalHotkey = platform.globalHotkey,
                 panelStyler = platform.panelStyler,
                 catalogService = catalogService,
-                peerExplorer = SqlDelightPeerExplorerStore(database, configRepository),
+                peerExplorer = peerExplorer,
                 peerDiscovery = TailscalePeerDiscovery(),
                 catalogAuditLog = catalogAuditLog,
+                peerIndexSource = peerIndexSource,
+                catalogSyncRunner = catalogSyncRunner,
+                catalogSubscriber = catalogSubscriber,
+                catalogSyncScheduler = catalogSyncScheduler,
             )
         }
 

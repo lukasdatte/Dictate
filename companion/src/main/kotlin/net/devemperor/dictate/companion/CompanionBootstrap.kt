@@ -44,6 +44,10 @@ object CompanionBootstrap {
         val binding = resolveBinding(container)
         val server = CompanionServer(container, binding.hosts, container.settings.port)
         server.start()
+        // Start the background catalog-sync poll (Block E2, §6.5, ADR-0020 app-start trigger). Idempotent
+        // and best-effort — it fires one immediate run and then polls; a null scheduler (the headless
+        // sync-test graph) simply does not poll. It never throws into boot.
+        container.catalogSyncScheduler?.start()
         return ReadyCompanion(container, binding, server)
     }
 

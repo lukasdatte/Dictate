@@ -117,6 +117,33 @@ class CatalogServiceTest {
     }
 
     @Test
+    fun credentialFingerprint_isDomainSeparatedAndIdSalted_notABarePlaintextHash() {
+        sharedCredentialProvider(id = "prov-1", credentialRef = "cred-1")
+
+        val fingerprint = service.index().entries.single { it.kind == CatalogEntityKindWire.CREDENTIAL }.contentHash
+
+        // Not the bare sha256(secret) an attacker could pre-compute from the public index (§4.3 fix):
+        // the domain tag + id salt make a low-entropy confirmation oracle infeasible.
+        val bare = java.security.MessageDigest.getInstance("SHA-256").digest(sentinel.toByteArray())
+            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+        assertNotEquals(bare, fingerprint)
+    }
+
+    @Test
+    fun credentialFingerprint_isStable_andTracksTheSecret() {
+        secretStore.put(CredentialSecrets.credentialRef("cred-1"), sentinel.toByteArray())
+        config.save(ProviderConfigEntity(id = "prov-1", providerType = ProviderType.OPENAI, label = "My OpenAI", credentialRef = "cred-1", visibility = Visibility.SHARED))
+        val first = service.index().entries.single { it.kind == CatalogEntityKindWire.CREDENTIAL }.contentHash
+
+        // Same secret → same fingerprint (a stable sync watermark, AC6 no-op path relies on it).
+        assertEquals(first, service.index().entries.single { it.kind == CatalogEntityKindWire.CREDENTIAL }.contentHash)
+
+        // Key rotation → new fingerprint (drives AC7 update detection for a credential).
+        secretStore.put(CredentialSecrets.credentialRef("cred-1"), "sk-proj-rotated-999".toByteArray())
+        assertNotEquals(first, service.index().entries.single { it.kind == CatalogEntityKindWire.CREDENTIAL }.contentHash)
+    }
+
+    @Test
     fun entity_neverServesACredential() {
         sharedCredentialProvider(id = "prov-1", credentialRef = "cred-1")
 

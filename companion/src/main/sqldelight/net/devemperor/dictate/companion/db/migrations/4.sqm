@@ -1,0 +1,47 @@
+-- v4 -> v5: the peer-catalog tables (E1, peer-katalog.md §5, Plan §3 D5.b / §14 D7).
+--
+-- E1 owns EXACTLY these three tables; the five config-entity tables are D3's (3.sqm) per the E1→D3
+-- edge. The CREATE statements below must stay byte-identical to Companion.sq — `verifyMigrations`
+-- replays this against the checked-in databases/4.db snapshot and compares the result with the
+-- current .sq, so any drift fails the build. Enum vocabularies (CatalogEntityKindWire,
+-- :shared.config.SubscriptionMode) are pinned by CatalogAccessCheckParityTest / ConfigEntityCheckParityTest.
+--
+-- Purely additive: no existing table is touched, no row is migrated. The §5.2 `source_peer_id` FK from
+-- the entity tables to `peers` is deliberately still omitted — E2 adds it (table-recreate on
+-- provenance-empty tables) together with the provenance writes and the peer-deletion cascade it owns.
+
+CREATE TABLE peers (
+    peer_id         TEXT NOT NULL PRIMARY KEY,
+    display_name    TEXT NOT NULL,
+    address         TEXT NOT NULL,
+    device_id       TEXT NOT NULL,
+    secret_ref      TEXT NOT NULL,
+    added_at        INTEGER NOT NULL,
+    last_contact_at INTEGER,
+    last_success_at INTEGER,
+    last_root_hash  TEXT
+);
+
+CREATE TABLE subscriptions (
+    local_entity_id  TEXT NOT NULL PRIMARY KEY,
+    peer_id          TEXT NOT NULL,
+    source_entity_id TEXT NOT NULL,
+    kind             TEXT AS net.devemperor.dictate.shared.protocol.CatalogEntityKindWire NOT NULL
+                     CHECK (kind IN ('PROVIDER_CONFIG','MODEL_REF','PROMPT','PROFILE','CREDENTIAL','UNKNOWN')),
+    mode             TEXT AS net.devemperor.dictate.shared.config.SubscriptionMode NOT NULL
+                     CHECK (mode IN ('SUBSCRIBE','ONE_SHOT')),
+    last_hash        TEXT NOT NULL,
+    last_checked_at  INTEGER,
+    FOREIGN KEY (peer_id) REFERENCES peers(peer_id) ON DELETE CASCADE
+);
+CREATE INDEX subscriptions_peer_id ON subscriptions(peer_id);
+
+CREATE TABLE catalog_access_log (
+    id             INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    peer_device_id TEXT NOT NULL,
+    entity_id      TEXT NOT NULL,
+    kind           TEXT AS net.devemperor.dictate.shared.protocol.CatalogEntityKindWire NOT NULL
+                   CHECK (kind IN ('PROVIDER_CONFIG','MODEL_REF','PROMPT','PROFILE','CREDENTIAL','UNKNOWN')),
+    at             INTEGER NOT NULL
+);
+CREATE INDEX catalog_access_log_entity_id ON catalog_access_log(entity_id);

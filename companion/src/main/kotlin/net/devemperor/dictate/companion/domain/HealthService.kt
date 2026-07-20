@@ -17,6 +17,13 @@ class HealthService(
     private val appVersion: String,
     private val inserter: TextInserter,
     private val inputPerformer: InputCommandPerformer,
+    /**
+     * Whether this companion serves the `/v1/catalog` family (peer-katalog.md §4.4). Wired to
+     * "is a [net.devemperor.dictate.companion.domain.CatalogService] present" — true in the production
+     * graph (the routes are always mounted there), false in a minimal test graph that has no config
+     * store. Honest by construction: it can never claim catalog support the router did not mount.
+     */
+    private val supportsCatalog: Boolean = false,
 ) {
 
     fun health(): HealthResponse = HealthResponse(
@@ -24,5 +31,6 @@ class HealthService(
         appVersion = appVersion,
         canInsert = inserter.available,
         supportsInputCommands = inputPerformer.available,
+        supportsCatalog = supportsCatalog,
     )
 }

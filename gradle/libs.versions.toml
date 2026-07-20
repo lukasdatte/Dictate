@@ -27,6 +27,18 @@ lifecycle = "2.7.0"
 # PagingDataAdapter + Flow<PagingData>; room-paging (versioned with Room)
 # generates the PagingSource implementation for SessionDao.pagedHistory.
 paging = "3.3.6"
+# WorkManager — the Android catalog-sync poller (CatalogSyncWorker, peer-katalog.md §6.5, Plan D5.f).
+#
+# ADR-0015 ceiling PRÜFAUFTRAG (R4) — verified BEFORE adding, per D5.f:
+#   Requirement: no dependency built with Kotlin > 2.1.20 (the compiler rejects newer metadata).
+#   Method: javap -v on androidx/work/CoroutineWorker.class of the published AAR + POM kotlin-stdlib.
+#   Result (2026-07-20):
+#     work-runtime 2.10.5 → @Metadata mv=[1,8,0] (Kotlin 1.9 line), kotlin-stdlib 1.8.22  → OK, wide margin
+#     work-runtime 2.11.2 → @Metadata mv=[2,1,0] (Kotlin 2.1.20),   kotlin-stdlib 2.1.20  → OK, exactly at ceiling
+#     work-runtime 2.12.0-alpha+ → Kotlin 2.2 line → WOULD BE REJECTED — do not adopt until `kotlin` lifts.
+#   Chosen: 2.10.5 — the conservative stable line whose metadata sits well below the ceiling (mv 1.8.0),
+#   so there is zero forward-metadata risk. Fallback AlarmManager+JobScheduler was NOT needed (D5.f).
+work = "2.10.5"
 # Robolectric — explicit Quality-Gate K-4 exception for FGS / Service /
 # IME-lifecycle / DB-migration tests where an Android Context is
 # unavoidable (state file §"Test-Strategy"). Block 1 chunk C2 is the
@@ -88,6 +100,8 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 # Room ↔ Paging3 bridge — lets @Query methods return PagingSource<Int, T>.
 room-paging = { module = "androidx.room:room-paging", version.ref = "room" }
 paging-runtime-ktx = { module = "androidx.paging:paging-runtime-ktx", version.ref = "paging" }
+# WorkManager + its CoroutineWorker (CatalogSyncWorker). Kotlin-ceiling-verified — see `work` version.
+work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 preference = { group = "androidx.preference", name = "preference", version.ref = "preference" }
 emoji2-emojipicker = { module = "androidx.emoji2:emoji2-emojipicker", version.ref = "emojiPicker" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }

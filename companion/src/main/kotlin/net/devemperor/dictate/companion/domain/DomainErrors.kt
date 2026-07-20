@@ -35,4 +35,12 @@ sealed class CompanionException(message: String) : RuntimeException(message) {
 
     /** 503 `INSERTION_FAILED` — alive, but the text could not be placed anywhere. */
     class InsertionFailedException : CompanionException("could not insert text")
+
+    /**
+     * 404 `CATALOG_ENTITY_NOT_FOUND` — the requested catalog entity is unknown OR not shared.
+     *
+     * One exception for both, on purpose: distinguishing them would leak which private entities exist
+     * (parallel to the uniform [UnauthorizedException]). The message names nothing about the entity.
+     */
+    class CatalogEntityNotFoundException : CompanionException("catalog entity not found")
 }

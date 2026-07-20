@@ -32,6 +32,9 @@ object DispatchOutcomeMapper {
         // to the same dismiss-only "unreachable" for completeness (the keyboard-action path has its
         // own PcInputFailure.COMPANION_UPDATE_REQUIRED classification, §6.1).
         DispatchError.EndpointMissing,
+        // Likewise EntityGone is a /v1/catalog-only outcome (the peer-catalog sync, Block E) that a
+        // dictation dispatch cannot produce; mapped here only to keep the `when` exhaustive.
+        DispatchError.EntityGone,
         is DispatchError.Server,
         -> PipelineErrorKind.WINDOWS_UNREACHABLE
     }

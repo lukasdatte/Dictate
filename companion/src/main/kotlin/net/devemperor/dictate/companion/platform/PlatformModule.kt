@@ -8,12 +8,16 @@ import net.devemperor.dictate.companion.domain.port.ForegroundWindows
 import net.devemperor.dictate.companion.domain.port.InputCommandPerformer
 import net.devemperor.dictate.companion.domain.port.TextInserter
 import net.devemperor.dictate.companion.hotkey.GlobalHotkey
+import net.devemperor.dictate.shared.sync.NotificationPort
+import java.awt.SystemTray
 import net.devemperor.dictate.companion.platform.fallback.NoopAutostart
 import net.devemperor.dictate.companion.platform.fallback.NoopForegroundWindows
 import net.devemperor.dictate.companion.platform.fallback.NoopGlobalHotkey
 import net.devemperor.dictate.companion.platform.fallback.NoopInputCommandPerformer
+import net.devemperor.dictate.companion.platform.fallback.NoopNotificationPort
 import net.devemperor.dictate.companion.platform.fallback.NoopTextInserter
 import net.devemperor.dictate.companion.platform.windows.AwtClipboard
+import net.devemperor.dictate.companion.platform.windows.AwtNotificationPort
 import net.devemperor.dictate.companion.platform.windows.JnaWin32Keyboard
 import net.devemperor.dictate.companion.platform.windows.Win32ForegroundWindows
 import net.devemperor.dictate.companion.platform.windows.Win32GlobalHotkey
@@ -51,9 +55,23 @@ object PlatformModule {
         val foregroundWindows: ForegroundWindows = NoopForegroundWindows,
         /** Applies the `WS_EX_NOACTIVATE` spike style to the panel window; `false` = not applied. */
         val panelStyler: (java.awt.Window) -> Boolean = { false },
+        /**
+         * Where a completed catalog sync surfaces its changes (peer-katalog.md §7). An
+         * [AwtNotificationPort] wherever a system tray is supported (Windows and most Linux DEs),
+         * the Noop otherwise (headless, unsupported tray) — the same degrade-honestly rule as
+         * [TextInserter].
+         */
+        val notificationPort: NotificationPort = NoopNotificationPort,
     )
 
     fun detect(): Bindings = if (Platform.isWindows()) windows() else fallback()
+
+    /**
+     * A tray balloon port when the desktop has a supported tray, the Noop otherwise. Used by BOTH
+     * OS branches: notifications are not a Windows-only concern (§7.1) — only keystroke injection is.
+     */
+    private fun notificationPort(): NotificationPort =
+        if (SystemTray.isSupported()) AwtNotificationPort() else NoopNotificationPort
 
     private fun windows(): Bindings {
         val clipboard = AwtClipboard()
@@ -74,6 +92,7 @@ object PlatformModule {
             globalHotkey = Win32GlobalHotkey(),
             foregroundWindows = Win32ForegroundWindows,
             panelStyler = Win32WindowStyler::applyFocusFreeStyle,
+            notificationPort = notificationPort(),
         )
     }
 
@@ -87,5 +106,6 @@ object PlatformModule {
         clipboard = AwtClipboard(),
         autostart = NoopAutostart,
         inputPerformer = { NoopInputCommandPerformer },
+        notificationPort = notificationPort(),
     )
 }

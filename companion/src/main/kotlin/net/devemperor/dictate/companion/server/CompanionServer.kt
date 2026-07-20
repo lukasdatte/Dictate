@@ -15,6 +15,7 @@ import net.devemperor.dictate.companion.server.plugins.authenticated
 import net.devemperor.dictate.companion.server.plugins.installCallLogging
 import net.devemperor.dictate.companion.server.plugins.installSerialization
 import net.devemperor.dictate.companion.server.plugins.installStatusPages
+import net.devemperor.dictate.companion.server.routes.catalogRoutes
 import net.devemperor.dictate.companion.server.routes.dispatchRoutes
 import net.devemperor.dictate.companion.server.routes.healthRoutes
 import net.devemperor.dictate.companion.server.routes.inputRoutes
@@ -106,6 +107,10 @@ fun Application.companionModule(container: CompanionContainer) {
             inputRoutes(container.inputCommandService)
             syncRoutes(container.syncService)
             healthRoutes(container.healthService)
+            // The production graph always wires a CatalogService (peer-katalog.md §4.4); a minimal test
+            // graph without a config store leaves it null and simply serves no catalog family, which its
+            // health response reports honestly (supportsCatalog = false).
+            container.catalogService?.let { catalogRoutes(it) }
         }
     }
 }

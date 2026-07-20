@@ -43,6 +43,9 @@ fun Application.installStatusPages() = install(StatusPages) {
     exception<CompanionException.InsertionFailedException> { call, _ ->
         call.respondEnvelope(HttpStatusCode.ServiceUnavailable, ErrorCode.INSERTION_FAILED, "could not insert text")
     }
+    exception<CompanionException.CatalogEntityNotFoundException> { call, _ ->
+        call.respondEnvelope(HttpStatusCode.NotFound, ErrorCode.CATALOG_ENTITY_NOT_FOUND, "catalog entity not found")
+    }
     exception<Throwable> { call, cause ->
         call.application.log.error("unhandled exception on ${call.request.local.uri}", cause)
         call.respondEnvelope(HttpStatusCode.InternalServerError, ErrorCode.INTERNAL, "internal error")

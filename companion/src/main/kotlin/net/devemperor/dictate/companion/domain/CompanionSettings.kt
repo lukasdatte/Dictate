@@ -148,6 +148,17 @@ class CompanionSettings(private val settings: SettingsRepository) {
         get() = settings.get(KEY_AUTO_FORMAT)?.toBooleanStrictOrNull() ?: false
         set(value) = settings.put(KEY_AUTO_FORMAT, value.toString())
 
+    /**
+     * How often the [net.devemperor.dictate.companion.catalog.CatalogSyncScheduler] polls every
+     * subscribed peer's catalog, in milliseconds (peer-katalog.md §6.5). Bounded so a hand-edit
+     * cannot make the companion hammer a peer every second or effectively never sync; garbage falls
+     * back to the 15-minute default (the same floor WorkManager imposes on the Android twin).
+     */
+    var catalogSyncIntervalMillis: Long
+        get() = settings.get(KEY_CATALOG_SYNC_INTERVAL)?.toLongOrNull()?.takeIf { it in MIN_CATALOG_SYNC_INTERVAL_MILLIS..MAX_CATALOG_SYNC_INTERVAL_MILLIS }
+            ?: DEFAULT_CATALOG_SYNC_INTERVAL_MILLIS
+        set(value) = settings.put(KEY_CATALOG_SYNC_INTERVAL, value.toString())
+
     companion object {
 
         /** 0.0.0.0 — the `AllInterfaces` host; the legacy `server.bind` default before selection. */
@@ -167,6 +178,11 @@ class CompanionSettings(private val settings: SettingsRepository) {
         const val MIN_ROLLING_SEGMENT_SEC = 5
         const val MAX_ROLLING_SEGMENT_SEC = 600
 
+        /** 15 min — the WorkManager `PeriodicWorkRequest` floor, matched here so both hosts poll alike. */
+        const val DEFAULT_CATALOG_SYNC_INTERVAL_MILLIS = 15 * 60 * 1000L
+        const val MIN_CATALOG_SYNC_INTERVAL_MILLIS = 60 * 1000L
+        const val MAX_CATALOG_SYNC_INTERVAL_MILLIS = 24 * 60 * 60 * 1000L
+
         private const val KEY_PORT = "server.port"
 
         /** Legacy single-address key — read for migration, never written again. */
@@ -185,5 +201,6 @@ class CompanionSettings(private val settings: SettingsRepository) {
         private const val KEY_ACTIVE_PROFILE = "config.activeProfileId"
         private const val KEY_LANGUAGE = "dictation.language"
         private const val KEY_AUTO_FORMAT = "dictation.autoFormatEnabled"
+        private const val KEY_CATALOG_SYNC_INTERVAL = "catalog.syncIntervalMillis"
     }
 }

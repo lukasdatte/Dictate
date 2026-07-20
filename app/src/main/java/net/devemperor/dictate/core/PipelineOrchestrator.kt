@@ -84,6 +84,34 @@ import java.util.concurrent.Executors
  *
  * This class does NOT hold Android Views or Context references.
  *
+ * # AI collaborators live in `:shared-ai` (Block A / A3)
+ *
+ * [aiOrchestrator] and [promptService] were extracted out of `:app` into the
+ * shared `:shared-ai` module during Chunk A3 (spec `shared-ai-extraktion.md`
+ * §6 A3.6/A3.7). They now sit behind the platform ports
+ * ([net.devemperor.dictate.ai.port.AiConfig] / `UsageSink` / `ProxyConfig` /
+ * `AudioDurationReader`) and are prefs-free at their core.
+ *
+ * This runner is **app-side** and deliberately keeps that split clean:
+ *  - It receives both collaborators **fully wired** from
+ *    [DictatePipelineService] (the single IME wiring site per spec §4.5, via
+ *    [net.devemperor.dictate.ai.adapter.AndroidAiFactory]); it never constructs
+ *    them and therefore never touches `SharedPreferences`, `UsageDao`, an SDK
+ *    builder, or `MediaMetadataRetriever` for the AI path.
+ *  - It calls only the collaborators' **public API**
+ *    ([AIOrchestrator.transcribe]/`complete`/`converse`/`getProvider`/
+ *    `getModelName`, [PromptService.buildQueuedPrompt] etc.), whose signatures
+ *    A3 left unchanged — which is why the port extraction reaches this file as
+ *    a dependency-home shift, not a call-site rewrite.
+ *
+ * The one Android media touch that remains here — session-row audio duration —
+ * flows through [RecordingRepository.extractDurationSeconds] (Open Decision
+ * SA-1), which is a recording concern, not an AI-core path, and is out of A3's
+ * port scope.
+ *
+ * @see net.devemperor.dictate.ai.adapter.AndroidAiFactory
+ * @see net.devemperor.dictate.ai.port.AiConfig
+ *
  * After the reprocess-refactor (Chunk 2):
  *  - `runTranscriptionPipeline` persists the audio file FIRST (before any API
  *    call) and creates the session with `status = RECORDED` and the correct

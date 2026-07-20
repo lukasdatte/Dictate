@@ -22,11 +22,39 @@ No linter or formatter is configured.
 
 **Layered architecture** with a mix of Kotlin (new code) and Java (legacy).
 
+### Module Topology
+
+Gradle monorepo with **four** modules (ADR-0015 established the first three,
+ADR-0028 added `:shared-ai`):
+
+- **`:app`** — the Android IME/keyboard app (Android SDK, jvmTarget 1.8).
+- **`:shared`** — pure-JVM wire + entity module (jvmTarget 1.8): protocol DTOs,
+  Konform validations (ADR-0016), and the configuration **entities** +
+  canonical/v3 codec (ADR-0030). Wire-purity is machine-enforced by
+  `SharedPurityTest` — no Android, no Ktor, no coroutines.
+- **`:shared-ai`** — pure-JVM **AI core** (jvmTarget 1.8, package
+  `net.devemperor.dictate.ai`), consumed by both `:app` and `:companion`:
+  providers, runners, `AIOrchestrator`, the post-processing conversation, prompt
+  building, `AmplitudeProcessor`, and the four platform ports (`AiConfig`,
+  `UsageSink`, `ProxyConfig`, `AudioDurationReader`) plus the `SecretStore` port.
+  Its own `SharedAiPurityTest` allows the AI SDKs + OkHttp but forbids
+  Android/Ktor/coroutines (ADR-0028). **`git log --follow`** traces classes moved
+  out of `:app`.
+- **`:companion`** — Compose Desktop companion (JVM 17): dictation host, catalog
+  peer, SQLDelight persistence.
+
+**Kotlin ceiling ≤ 2.1.20** (ADR-0015) is compiler-wide and applies to `:shared-ai`
+too — every new dependency (incl. AI SDKs) must be built with Kotlin ≤ 2.1.20.
+
 ### Core Layer (`core/`)
 - `DictateInputMethodService.java` — Main IME service (~2100 lines). Handles keyboard UI, recording, orchestration. Uses `ExecutorService` threads for API calls.
 - `RecordingManager.kt`, `BluetoothScoManager.kt`, `PromptQueueManager.kt`, `AutoFormattingService.kt` — extracted concerns.
 
-### AI Abstraction Layer (`ai/`)
+### AI Abstraction Layer (`ai/`, in `:shared-ai`)
+The AI core lives in **`:shared-ai`** (package `net.devemperor.dictate.ai`), shared
+by phone and desktop (ADR-0028). `:app` keeps only the Android **port
+implementations** (`ai/adapter/`, `secrets/`). Never call an AI SDK directly from
+UI/service code — go through `AIOrchestrator`.
 - `AIOrchestrator.kt` — Central entry point for all AI operations (transcription + completion). Tracks usage after calls.
 - `AIProvider` enum — Defines providers (OPENAI, GROQ, ANTHROPIC, OPEN_ROUTER, CUSTOM) with capability flags (`supportsTranscription`, `supportsCompletion`, `isOpenAICompatible`).
 - `RunnerFactory` — Factory creating `TranscriptionRunner` or `CompletionRunner` based on provider.
@@ -53,6 +81,8 @@ No linter or formatter is configured.
 - Preferences are always accessed through `DictatePrefs.kt` sealed class — never use raw string keys.
 - AI provider integration goes through `AIOrchestrator` → `RunnerFactory` → Runner interfaces. Never call AI SDKs directly from UI/service code.
 - Database access via Room DAOs, singleton `DictateDatabase.getInstance()`.
+- **Secrets go through the `SecretStore` port** (`net.devemperor.dictate.ai.secrets`, in `:shared-ai`) — never plaintext `SharedPreferences`. API keys and the pairing secret are encrypted at rest (Android Keystore AES-GCM / Windows DPAPI / POSIX-`0600` file fallback). A `get` distinguishes "no secret" (`null`) from `DecryptionFailed` — never collapse a decrypt failure into an empty key (ADR-0029).
+- **Configuration is modelled as entities, not loose prefs** — ProviderConfig / ApiCredential / ModelRef / Prompt / Profile are defined once in `:shared` with a canonical serialization + `contentHash` that *is* the v3 file/wire format. Credentials are referenced only (the secret lives in the SecretStore, never in a payload/column). `contentHash`/`updatedAt` are recompute-on-write denormalized caches; write through `ConfigRepository`. Mirror wire-enums live in `:shared`, behaviour-bearing domain enums in `:shared-ai`/`:app`, parity enforced by tests in `:app` (ADR-0030).
 
 ## Database Patterns
 

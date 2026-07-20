@@ -236,6 +236,9 @@ be unified onto `converse` later if a need arises.
   - ADR-0013 — Ambiguity Modes and the In-Keyboard Review Panel (extends this
     foundation: the `message` field + persisted conversation this ADR exposed
     become the review verdict + dictated-refinement dialog)
+  - ADR-0030 — Configuration Entity Model (model/prompt resolution now flows
+    through a `Profile` entity rather than loose prefs; this conversation's
+    mechanics are unchanged — see the 2026-07-20 Decision-History entry)
 - **Database pattern:** `docs/DATABASE-PATTERNS.md` §"Double-Enum Pattern"
   (`role`, `response_format`, retrofitted `step_type`)
 - Implementation:
@@ -370,3 +373,19 @@ OpenRouter, Groq) degrade to lenient text on a rejected structured request.
 unsupported-`response_format` 400 there is a capability gap, not a real error.
 Reclassifying by endpoint shape (single-catalog vs heterogeneous) rather than by
 "first-party" keeps the rule principled and avoids per-model string parsing.
+
+### 2026-07-20 — Resolution now flows through a Profile (ADR-0030)
+
+**Trigger:** The desktop-companion-v1 plan (Block C) replaced flat `SharedPreferences`
+config with a configuration entity model.
+
+**Before:** Model and prompt selection for the post-processing conversation was
+resolved from scattered `SharedPreferences` slots.
+
+**After:** ADR-0030 introduces a `Profile` entity that bundles the transcription model,
+completion model, ordered prompts, and ambiguity mode; the conversation's model/prompt
+resolution now flows through the active Profile. The conversation mechanics of this ADR
+are unchanged.
+
+**Reasoning:** A shareable, hashable Profile is a cleaner single source for config
+resolution than loose prefs. See ADR-0030.

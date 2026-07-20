@@ -208,6 +208,10 @@ Activity, unpaired → pairing). Alias + shortcut funnel through the
   multi-backend), ADR-0008 (surface axes), ADR-0011 (headless completion
   fallback), ADR-0013 (review panel / durable final text), ADR-0019 (auto-send
   terminal), ADR-0026 (keyboard-action routing).
+- ADR-0033 — Desktop Review Mode: F8's "review stays IME-only" gains a documented
+  desktop-host exception (the separate desktop dictation host renders its own review
+  panel); this Activity's own behaviour is unchanged. See the 2026-07-20
+  Decision-History entry.
 - `docs/architecture/state-architecture/rendering.md` §6.1 (third render host).
 
 ## Decision History
@@ -309,3 +313,14 @@ Activity, unpaired → pairing). Alias + shortcut funnel through the
     panel-toggle state, and a lean own adapter avoids the IME's
     `PromptsKeyboardAdapter` coupling (reprocess/instant/select-all/AI-run
     branches irrelevant to a TEXT-only PC row).
+
+- **2026-07-20 — F8 "review stays IME-only" gains a desktop-host exception (ADR-0033).**
+  - **Trigger:** feature decision F18 in the desktop-companion-v1 plan (Block D) — full
+    review incl. re-dictate on the standalone desktop dictation host.
+  - **Before:** F8 kept review IME-only for the PC-Dictation Activity, which only points
+    the user back to the keyboard for review.
+  - **After:** ADR-0033 gives the separate desktop dictation host its own review panel;
+    this Activity's behaviour is unchanged. Only the "IME-only render surface" sub-aspect
+    is revised, not superseded.
+  - **Reasoning:** the desktop host has no IME to fall back to, so it needs a review
+    surface of its own; the Activity's design still stands. See ADR-0033.

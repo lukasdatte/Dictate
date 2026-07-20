@@ -246,6 +246,10 @@ conversation (ADR-0012) and is unchanged.
   - ADR-0014 — In-Keyboard History Panel (extends this: follows the panel-axis +
     LayoutMode precedent, finally tags the `REVIEW_REFINEMENT` refinement carrier
     this ADR introduced, and yields to the review panel in `forKeyboard`)
+  - ADR-0033 — Desktop Review Mode (revises the "review is IME-only" sub-aspect —
+    a non-IME desktop host may render its own review panel; the `ReviewDecision`
+    rule and ambiguity modes are reused unchanged — see the 2026-07-20
+    Decision-History entry)
 - **Plan:** `tmp/plan-paket2-review-modi.md` (Paket 2 — implementation plan)
 - Implementation:
   - `preferences/AmbiguityMode.kt` — the tri-state pref
@@ -439,3 +443,20 @@ no cross-product of special cases.
 more guard-free, non-terminal follow-up family instead of a new terminal producer.
 The `acknowledgeOnSuccess=false` split avoids a double `markInserted` on the same
 session. See ADR-0019 for the full design.
+
+### 2026-07-20 — "Review is IME-only" sub-aspect revised for the desktop host (ADR-0033)
+
+**Trigger:** Feature decision F18 (full review incl. re-dictate on the desktop) in the
+desktop-companion-v1 plan (Block D) needed a review surface on a host with no IME.
+
+**Before:** The review panel was strictly an in-keyboard (IME) surface; the verdict rule
+`ReviewDecision.decide` and the ambiguity modes were the shared authority.
+
+**After:** ADR-0033 revises only the "review can only be rendered inside the IME"
+constraint: the desktop host renders its own Compose review panel (Accept / Re-dictate /
+Discard) while calling the same `ReviewDecision` authority unchanged. The verdict rule
+and ambiguity modes of this ADR are not superseded.
+
+**Reasoning:** A standalone desktop host must be able to clarify ambiguous dictations;
+only the render surface is new, so a partial revision with cross-references is more
+honest than a supersede. See ADR-0033.

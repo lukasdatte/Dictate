@@ -10,8 +10,9 @@ This document is the authoritative reference for database-related architectural 
 
 1. [Double-Enum Pattern](#double-enum-pattern)
 2. [Denormalized Cache Columns](#denormalized-cache-columns)
-3. [Migration Conventions](#migration-conventions) *(placeholder — fill as conventions emerge)*
-4. [Versioning & Schema Exports](#versioning--schema-exports) *(placeholder)*
+3. [SQLDelight Parity (Companion)](#sqldelight-parity-companion)
+4. [Migration Conventions](#migration-conventions) *(placeholder — fill as conventions emerge)*
+5. [Versioning & Schema Exports](#versioning--schema-exports) *(placeholder)*
 
 ---
 
@@ -260,6 +261,41 @@ Some columns on the `sessions` table are deliberately denormalized — they dupl
 | `sessions.final_output_text` | Last successful step's output OR current transcription | `SessionManager.updateFinalOutputText()` at end of pipeline |
 | `sessions.input_text` | For REWORDING sessions, the user's input text | `SessionManager.updateInputText()` on session creation |
 | `sessions.last_error_message` | Last error context for FAILED sessions | `SessionManager.finalizeFailed()` |
+
+---
+
+## SQLDelight Parity (Companion)
+
+**Status:** Mandatory for every finite-set column and every session/config table shared across platforms.
+
+### What it is
+
+The Android app persists with **Room**; the desktop companion (`:companion`) persists with **SQLDelight**. The two ORMs **cannot share table definitions** (ADR-0030 D3), so the companion schema (`companion/src/main/sqldelight/.../db/Companion.sq` + `.../migrations/*.sqm`) is a **hand-translation** of the Room schema. Any drift in an enum vocabulary or a column silently corrupts phone↔companion sync or the shared history view.
+
+### Why it exists
+
+- **One shared session archive (ADR-0035, F16).** Phone-synced sessions and desktop-recorded sessions live in the **same** `sessions` table, separated by the `origin` column. The cursor-based sync (ADR-0020) round-trips the full record only if both schemas match exactly.
+- **Cross-platform config identity (ADR-0030).** A `contentHash` means "the same profile" on phone and desktop only if the canonical serialization and the entity columns are byte-for-byte equivalent.
+
+### The rules
+
+- **Full parity, not a subset.** The companion `sessions` / `transcriptions` / `processing_steps` / `conversation_messages` tables mirror Room table-for-table; the config-entity tables (`provider_configs` / `model_refs` / `prompts` / `profiles` / `profile_prompts`) mirror the `:shared` entity model.
+- **Double-Enum on both sides.** Every finite-set column carries the same Kotlin enum + SQL `CHECK` on **both** platforms. The enum vocabularies (desktop-host spec §3.2) are the single source of truth for both the CHECK literals and the parity assertions.
+- **Parity tests are the drift guard — a mismatch fails the build.** They are the SQLDelight equivalent of the wire-vs-domain parity discipline (ADR-0016). Do not weaken or disable them:
+  - `companion/.../data/CompanionSchemaParityTest.kt` — schema shape vs Room (`RoomParityReference.kt` is the reference).
+  - `companion/.../data/ConfigEntityCheckParityTest.kt` + `CatalogCheckConstraintParityTest.kt` — CHECK-constraint parity.
+  - `companion/.../ai/CompanionConfigWireEnumParityTest.kt` — enum-vocabulary parity.
+  - Verify migrations with `./gradlew :companion:verifySqlDelightMigration`.
+- **`contentHash`/`updatedAt` are recompute-on-write** on the SQLDelight side too — same rule as [Denormalized Cache Columns](#denormalized-cache-columns): recompute from the current payload at every write path, never trust a value delivered from a file or peer (ADR-0030 recompute-on-import).
+- **`received_texts` is retired (ADR-0035, D5.g).** Its sync/dispatch bookkeeping moved to the 1:1 `dispatch_state` table; the `2.sqm` migration backfills `received_texts` → `sessions` (+ `dispatch_state`) then DROPs it. The behaviour-neutrality proof is five existing tests (`SyncE2ETest`, `CompanionE2ETest`, `MultiConnectorE2ETest`, `TruncatedResponseE2ETest`, `SqlDelightHistoryRepositoryTest`) staying green **without assertion changes**.
+
+### Migration-number assignment (desktop-companion-v1)
+
+| `.sqm` | Chunk | Content |
+|--------|-------|---------|
+| `2.sqm` | D1a | Full session-schema parity + `dispatch_state` + `received_texts` backfill/DROP (ADR-0035) |
+| `3.sqm` | D3 | Config-entity tables (`provider_configs`/`model_refs`/`prompts`/`profiles`/`profile_prompts`) incl. provenance columns, NULL until E2 (ADR-0030/0034) |
+| `4.sqm` | E1 | `peers` / `subscriptions` / `catalog_access_log` (ADR-0034) |
 
 ---
 

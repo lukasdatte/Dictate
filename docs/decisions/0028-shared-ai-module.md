@@ -1,6 +1,6 @@
-# ADR-NNNN: `:shared-ai` — A Fourth Pure-JVM Module for the AI Core Behind Platform Ports
+# ADR-0028: `:shared-ai` — A Fourth Pure-JVM Module for the AI Core Behind Platform Ports
 
-**Status:** Proposed (plan-scoped — pending promotion)
+**Status:** Accepted
 **Scope:** Project-Wide
 **Date:** 2026-07-20
 **Supersedes:** —
@@ -221,3 +221,19 @@ by `SharedAiPurityTest`) holding the AI core behind four platform ports (`AiConf
 Android-free core to depend on. Package-preserving minimises the `:app` diff and
 extraction risk. Mirror enums + parity tests reuse the repo's existing wire-vs-domain
 doctrine instead of introducing the module coupling Block A avoids.
+
+### 2026-07-20 — Promoted and accepted
+
+**Trigger:** Chunk F1 (Block F) of the desktop-companion-v1 plan — blocks A–E are
+implemented; the plan-scoped draft is promoted to a numbered, accepted ADR before
+plan archival (§2 criterion 9).
+
+**Before:** Plan-scoped draft `adrs/adr-shared-ai-module.md` with an `NNNN` placeholder and
+`Proposed (plan-scoped — pending promotion)` status; sibling ADRs referenced by slug.
+
+**After:** `docs/decisions/0028-shared-ai-module.md`, Status **Accepted**, indexed in
+`docs/decisions/README.md`; sibling cross-references resolved to their assigned ADR
+numbers. The reciprocal fourth-module note was added to ADR-0015.
+
+**Reasoning:** The decision is active in the codebase across the implemented blocks;
+promotion makes it a binding, navigable ADR with bidirectional cross-links.

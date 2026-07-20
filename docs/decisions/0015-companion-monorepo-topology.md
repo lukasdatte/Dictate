@@ -96,6 +96,7 @@ This is a Project-Wide ADR because it defines a repository-wide module boundary 
   - ADR-0016 — the wire-protocol DTOs and Konform validation live in this `shared/` module.
   - ADR-0017 — the OkHttp client (phone) and Ktor server (companion) whose split this topology hosts; "Desktop = the only server" is why Ktor is excluded from `shared/`.
   - ADR-0003 — the `:app` side depending on `shared/` (PIPELINE-origin / FGS persistence) consumes this module boundary.
+  - ADR-0028 — a fourth module (`:shared-ai`, the pure-JVM AI core) added inside this topology, reusing the purity-test mechanism and the Kotlin ≤ 2.1.20 / jvmTarget-1.8 ceiling; see the 2026-07-20 Decision-History entry.
 - **Implementation:** `settings.gradle:24-27`, `shared/build.gradle`, `companion/build.gradle`, `app/build.gradle:92,102`, `gradle/libs.versions.toml`.
 - **Test suite:** `shared/src/test/kotlin/net/devemperor/dictate/shared/SharedPurityTest.kt`.
 
@@ -110,3 +111,21 @@ This is a Project-Wide ADR because it defines a repository-wide module boundary 
 **After:** Two new Gradle modules — `shared/` (pure `kotlin("jvm")`, jvmTarget 1.8, Android-/Ktor-/coroutine-free, enforced by `SharedPurityTest`) and `companion/` (Compose Desktop, JVM 17) — in the same repository. Binding version policy: Kotlin stays 2.1.20, no library built with Kotlin > 2.1.20 (CMP 1.8.2, Ktor 3.1.3, SQLDelight 2.1.0, kotlinx-serialization 1.8.0). The Kotlin 2.2.x bump is a deferred follow-up.
 
 **Reasoning:** A monorepo makes the shared wire protocol a single compiled source both apps build against, so protocol drift is a compile error — the exact drift a separate repo would reintroduce. KMP was rejected as pure ceremony for two JVM targets with no non-JVM target in sight. The blocking-OkHttp client keeps `shared/` coroutine-free, which severs the app's 1.7.3 coroutines line from Ktor's demands and lets `:app` ship untouched. Freezing Kotlin at 2.1.20 accepts running one library line behind in exchange for not dragging the entire existing app (Room/KSP, 209 tests, jvmTarget 11) through an upgrade unrelated to Windows-Dispatch.
+
+### 2026-07-20 — Fourth module `:shared-ai` added (ADR-0028)
+
+**Trigger:** The desktop-companion-v1 plan (Block A) extracted the AI core into a new
+module so the desktop companion could run the same pipeline as the phone.
+
+**Before:** The topology had three modules — `:app`, `:shared` (wire-pure), and
+`:companion` — with `SharedPurityTest` guarding `:shared`.
+
+**After:** A fourth module `:shared-ai` (pure `kotlin("jvm")`, jvmTarget 1.8,
+Android-/Ktor-/coroutine-free, guarded by its own `SharedAiPurityTest`) holds the AI
+core behind four platform ports, consumed by both `:app` and `:companion`. The binding
+Kotlin ≤ 2.1.20 ceiling now also constrains AI-SDK upgrades. See ADR-0028 for the full
+decision.
+
+**Reasoning:** `:shared` is deliberately wire-pure; the SDK-heavy AI core needs a
+separate home with its own dependency policy rather than diluting `:shared`. The
+existing purity-test and version-ceiling mechanisms extend to the new module unchanged.

@@ -1,6 +1,6 @@
-# ADR-NNNN: Configuration Entity Model — ProviderConfig / ModelRef / Prompt / Profile in `:shared`, Canonical Serialization + contentHash as the v3 Format
+# ADR-0030: Configuration Entity Model — ProviderConfig / ModelRef / Prompt / Profile in `:shared`, Canonical Serialization + contentHash as the v3 Format
 
-**Status:** Proposed (plan-scoped — pending promotion)
+**Status:** Accepted
 **Scope:** Project-Wide
 **Date:** 2026-07-20
 **Supersedes:** —
@@ -215,8 +215,8 @@ contract shared by both platforms and the peer protocol.
   - ADR-0024 — the typed prompt-pill column the Prompt entity carries (not `[bracket]`).
   - ADR-0012 — model/prompt resolution now flows through a Profile; a Decision-History
     note is added there at promotion.
-  - `adr-secret-store` — ApiCredential secrets live in the SecretStore, referenced only.
-  - `adr-peer-catalog` — consumes the v3 format + contentHash as the sync unit.
+  - ADR-0029 — ApiCredential secrets live in the SecretStore, referenced only.
+  - ADR-0034 — consumes the v3 format + contentHash as the sync unit.
 
 ## Decision History
 
@@ -240,3 +240,19 @@ export and peer sync share one codec and gives phone/desktop a byte-exact common
 identity. Entities live in `:shared` (above both DBs, D3); mirror enums + parity tests
 reuse the existing wire-vs-domain doctrine instead of coupling modules; a hard migration
 with a backup is cleaner than a coexistence flag.
+
+### 2026-07-20 — Promoted and accepted
+
+**Trigger:** Chunk F1 (Block F) of the desktop-companion-v1 plan — blocks A–E are
+implemented; the plan-scoped draft is promoted to a numbered, accepted ADR before
+plan archival (§2 criterion 9).
+
+**Before:** Plan-scoped draft `adrs/adr-config-entity-model.md` with an `NNNN` placeholder and
+`Proposed (plan-scoped — pending promotion)` status; sibling ADRs referenced by slug.
+
+**After:** `docs/decisions/0030-config-entity-model.md`, Status **Accepted**, indexed in
+`docs/decisions/README.md`; sibling cross-references resolved to their assigned ADR
+numbers. The reciprocal profile-resolution note was added to ADR-0012.
+
+**Reasoning:** The decision is active in the codebase across the implemented blocks;
+promotion makes it a binding, navigable ADR with bidirectional cross-links.

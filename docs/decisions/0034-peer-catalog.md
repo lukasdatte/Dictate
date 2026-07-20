@@ -1,6 +1,6 @@
-# ADR-NNNN: Peer-Catalog Family — Pull-Only Configuration Sharing over the Existing Wire Stack, with Envelope Credential Delivery, Fork Semantics, and Discovery
+# ADR-0034: Peer-Catalog Family — Pull-Only Configuration Sharing over the Existing Wire Stack, with Envelope Credential Delivery, Fork Semantics, and Discovery
 
-**Status:** Proposed (plan-scoped — pending promotion)
+**Status:** Accepted
 **Scope:** Project-Wide
 **Date:** 2026-07-20
 **Supersedes:** —
@@ -47,7 +47,7 @@
   auth, F10; the client/server transport) and ADR-0023 (bind-address); ADR-0020 (the
   cursor-based idempotent sync + authoritative-instance pattern, here re-cast for
   config with a different authority direction).
-- **Config identity foundation:** `adr-config-entity-model` — the canonical
+- **Config identity foundation:** ADR-0030 — the canonical
   serialization + `contentHash` that make catalog diffing and fork-dedup possible; the
   `GATEWAY` reserved enum and v3 codec.
 - **Concept / decisions:** `.../research/fragenkatalog.md` §F7/§F25 (providers =
@@ -106,19 +106,19 @@ and a headless peer mode.
    before any per-entity fetch. Changed entities are fetched individually and
    **verified before write** with two hash checks: the delivered `contentHash` is
    recomputed from the canonical payload, and it must match the index entry
-   (`adr-config-entity-model` recompute-on-import invariant).
+   (ADR-0030 recompute-on-import invariant).
 
 3. **Read-only copies, explicit fork (F14/F29).** A subscribed entity is **read-only**;
    editing requires an explicit **fork** that detaches the copy and records provenance
    (`sourceRef` + origin hash), enabling an "upstream changed" update hint. Envelope
    `subscriptionMode` (`LOCAL` / subscribed) and `sourceRef` live on every entity
-   (`adr-config-entity-model`).
+   (ADR-0030).
 
 4. **Envelope credential delivery (spec §3.2/§4.3, F12).** Secrets are **never** served
    on the entity route; `GET /v1/catalog/credential/{id}` returns the plaintext key over
    **TLS in transit**, reached only by an explicitly authorized call, and **every
    delivery writes an audit row** (`catalog_access_log`). The receiver puts the secret
-   straight into its own **SecretStore** (`adr-secret-store`) — never a column. Offering
+   straight into its own **SecretStore** (ADR-0029) — never a column. Offering
    peers **may** decrypt shared keys (not zero-knowledge, F12); TLS + SecretStore are
    mandatory; there is no separate share-password.
 
@@ -133,7 +133,7 @@ and a headless peer mode.
 
 7. **Headless peer = `--headless` companion (F8/F25).** An always-on hub is the companion
    run with `--headless` — the same codebase, no new module — offering its catalog without
-   a UI. Its file-fallback SecretStore (`adr-secret-store` §6.4) holds the shared keys.
+   a UI. Its file-fallback SecretStore (ADR-0029 §6.4) holds the shared keys.
 
 8. **New authority direction, dictations excluded (F16, extends ADR-0017/0020).** Catalog
    authority flows from provider to subscriber for **configuration entities only**. The
@@ -240,10 +240,10 @@ convention shared by both platforms.
   - ADR-0020 — the sync/authoritative-instance pattern re-cast for config; explicitly a
     different axis from (phone-authoritative) session sync, which stays as-is.
   - ADR-0023 — the companion bind-address the catalog server also uses.
-  - `adr-config-entity-model` — the canonical form + contentHash + v3 codec + `GATEWAY` this
+  - ADR-0030 — the canonical form + contentHash + v3 codec + `GATEWAY` this
     family diffs and shares.
-  - `adr-secret-store` — where delivered credentials land; the headless file-fallback backend.
-  - `adr-companion-history-parity` — the session archive (F16) that peers are explicitly NOT.
+  - ADR-0029 — where delivered credentials land; the headless file-fallback backend.
+  - ADR-0035 — the session archive (F16) that peers are explicitly NOT.
 
 ## Decision History
 
@@ -271,3 +271,19 @@ pull-only (F9) keeps devices in control; hash-diffing (F27) makes sync cheap; en
 keeps subscribers in control; a `--headless` flag (F8) gives a hub for free. Excluding
 dictations (F16) and reserving the gateway namespace (F31) draw the scope lines the long-term
 architecture needs.
+
+### 2026-07-20 — Promoted and accepted
+
+**Trigger:** Chunk F1 (Block F) of the desktop-companion-v1 plan — blocks A–E are
+implemented; the plan-scoped draft is promoted to a numbered, accepted ADR before
+plan archival (§2 criterion 9).
+
+**Before:** Plan-scoped draft `adrs/adr-peer-catalog.md` with an `NNNN` placeholder and
+`Proposed (plan-scoped — pending promotion)` status; sibling ADRs referenced by slug.
+
+**After:** `docs/decisions/0034-peer-catalog.md`, Status **Accepted**, indexed in
+`docs/decisions/README.md`; sibling cross-references resolved to their assigned ADR
+numbers. The reciprocal authority-direction note was added to ADR-0017.
+
+**Reasoning:** The decision is active in the codebase across the implemented blocks;
+promotion makes it a binding, navigable ADR with bidirectional cross-links.

@@ -1,6 +1,6 @@
-# ADR-NNNN: Companion History Parity — Full Session-Schema Parity in SQLDelight, `received_texts` Retirement, and the Companion DB as the Shared Session Archive
+# ADR-0035: Companion History Parity — Full Session-Schema Parity in SQLDelight, `received_texts` Retirement, and the Companion DB as the Shared Session Archive
 
-**Status:** Proposed (plan-scoped — pending promotion)
+**Status:** Accepted
 **Subsystem:** companion, data
 **Date:** 2026-07-20
 **Supersedes:** —
@@ -54,7 +54,7 @@
 ## Context
 
 The companion persists almost nothing about a dictation: a thin `received_texts` table for
-text dispatched from the phone. The desktop dictation host (`adr-desktop-dictation-host`) is
+text dispatched from the phone. The desktop dictation host (ADR-0031) is
 about to **record and post-process its own sessions**, which need the full session record
 (transcriptions, conversation turns, `final_output_text`, status). And F16 wants **one** shared
 archive: phone-synced sessions and desktop sessions together, not two schemas.
@@ -96,7 +96,7 @@ backfill, and make the companion DB the shared session archive — as a **dedica
 4. **Companion DB = the shared archive (F16).** Phone-synced sessions and desktop-recorded
    sessions live in the **same** `sessions` table, separated by an `origin` marker — one
    history the user browses across both sources. **Peers are never a dictation store**
-   (`adr-peer-catalog` F16); the archive is companion-local.
+   (ADR-0034 F16); the archive is companion-local.
 
 5. **Sync stays ADR-0020, filters stay ADR-0014 (extended).** The cursor-based, idempotent,
    phone-authoritative session sync (ADR-0020) keeps working against the parity schema; the
@@ -172,9 +172,9 @@ backfill, and make the companion DB the shared session archive — as a **dedica
     sessions (Decision-History note added there at promotion).
   - ADR-0020 — the cursor-based phone-authoritative session sync this parity schema keeps
     serving; note added there at promotion.
-  - `adr-desktop-dictation-host` — the D1b capture/pipeline host that records into this archive,
+  - ADR-0031 — the D1b capture/pipeline host that records into this archive,
     sequenced after D1a.
-  - `adr-peer-catalog` — the peer family that shares configuration but **never** dictations (F16).
+  - ADR-0034 — the peer family that shares configuration but **never** dictations (F16).
 
 ## Decision History
 
@@ -200,3 +200,19 @@ round-trip the full record and keeps the two schemas from drifting; a backfill-t
 retirement leaves one unambiguous archive; isolating the highest-risk migration in its own
 chunk gives it a focused audit; and proving neutrality with unchanged test assertions is the
 only honest proof.
+
+### 2026-07-20 — Promoted and accepted
+
+**Trigger:** Chunk F1 (Block F) of the desktop-companion-v1 plan — blocks A–E are
+implemented; the plan-scoped draft is promoted to a numbered, accepted ADR before
+plan archival (§2 criterion 9).
+
+**Before:** Plan-scoped draft `adrs/adr-companion-history-parity.md` with an `NNNN` placeholder and
+`Proposed (plan-scoped — pending promotion)` status; sibling ADRs referenced by slug.
+
+**After:** `docs/decisions/0035-companion-history-parity.md`, Status **Accepted**, indexed in
+`docs/decisions/README.md`; sibling cross-references resolved to their assigned ADR
+numbers. The reciprocal history-parity notes were added to ADR-0014 and ADR-0020.
+
+**Reasoning:** The decision is active in the codebase across the implemented blocks;
+promotion makes it a binding, navigable ADR with bidirectional cross-links.

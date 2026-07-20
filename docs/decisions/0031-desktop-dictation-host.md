@@ -1,6 +1,6 @@
-# ADR-NNNN: Desktop Dictation Host — The Companion Becomes a Recording + Pipeline Host with Its Own Slim Orchestrator
+# ADR-0031: Desktop Dictation Host — The Companion Becomes a Recording + Pipeline Host with Its Own Slim Orchestrator
 
-**Status:** Proposed (plan-scoped — pending promotion)
+**Status:** Accepted
 **Subsystem:** companion, audio-pipeline, state
 **Date:** 2026-07-20
 **Supersedes:** —
@@ -106,13 +106,13 @@ orchestrator**, additive to the existing receiver role.
 6. **Transitional config, then Profile (spec §5.1 note).** D1 runs against a
    transitional `AiConfig` from `CompanionSettings`; D3 later gates on the Block-C
    Profile (`ActiveProfileSource`). `AiConfig` is the `:shared-ai` port
-   (`adr-shared-ai-module`).
+   (ADR-0028).
 
 7. **Additive to ADR-0027 (D4.6).** The phone-records→PC-types mode is untouched and
    runs in parallel. The desktop host is a new capability, not a replacement.
 
 8. **Chunk order (D5.c).** SQLDelight full parity + `received_texts` retirement (D1a,
-   the sibling `adr-companion-history-parity`) lands **before** capture + pipeline
+   the sibling ADR-0035) lands **before** capture + pipeline
    (D1b), isolating the highest-regression-risk work in its own audited chunk.
 
 ## Alternatives Considered
@@ -186,9 +186,9 @@ orchestrator**, additive to the existing receiver role.
   - ADR-0012 / ADR-0013 — the post-processing conversation and review/ambiguity
     semantics the desktop pipeline mirrors (`final_output_text` invariant, `ReviewDecision`).
   - ADR-0018 — the `TextInserter` used for insertion.
-  - `adr-desktop-panel-ui` — the panel/hotkey surface this host drives.
-  - `adr-desktop-review` — the desktop review mode that consumes the REVIEW verdict.
-  - `adr-companion-history-parity` — the D1a SQLDelight parity that lands before this host's D1b.
+  - ADR-0032 — the panel/hotkey surface this host drives.
+  - ADR-0033 — the desktop review mode that consumes the REVIEW verdict.
+  - ADR-0035 — the D1a SQLDelight parity that lands before this host's D1b.
 
 ## Decision History
 
@@ -213,3 +213,19 @@ dragging 19 IME-shaped modules into a context without those surfaces, while reus
 `:shared-ai` and the existing `sessions.status` keeps AI behaviour and persistence in
 parity with the phone. WAV 16 kHz mono and a strict serial queue are the simplest choices
 that meet v1; the phone path stays untouched.
+
+### 2026-07-20 — Promoted and accepted
+
+**Trigger:** Chunk F1 (Block F) of the desktop-companion-v1 plan — blocks A–E are
+implemented; the plan-scoped draft is promoted to a numbered, accepted ADR before
+plan archival (§2 criterion 9).
+
+**Before:** Plan-scoped draft `adrs/adr-desktop-dictation-host.md` with an `NNNN` placeholder and
+`Proposed (plan-scoped — pending promotion)` status; sibling ADRs referenced by slug.
+
+**After:** `docs/decisions/0031-desktop-dictation-host.md`, Status **Accepted**, indexed in
+`docs/decisions/README.md`; sibling cross-references resolved to their assigned ADR
+numbers. The reciprocal role-extension note was added to ADR-0017.
+
+**Reasoning:** The decision is active in the codebase across the implemented blocks;
+promotion makes it a binding, navigable ADR with bidirectional cross-links.

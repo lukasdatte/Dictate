@@ -202,7 +202,8 @@ the schema-assets defect §"Current instrumented-test status").
   on this Linux host now; TC-A1/TC-A2 run against the emulator once the two pre-flight
   groundwork commits (Q1a infra + Q2b schema-assets) are present in the worktree.
 - All `mode: manual` cases confirmed by the user: TC-A3 (emulator + mobile-mcp) and the
-  Windows/real-deployment set TC-W1..W5 in Block F (§2 criteria 3/4/7).
+  Windows/real-deployment set TC-W1..W5 in Block F (§2 criteria 3/4/7). The Block-F
+  Windows sign-off is a checkbox checklist: [→ windows-acceptance-checklist.md](./windows-acceptance-checklist.md).
 - No server crash on any catalog route; credential values never appear in a catalog index.
 
 ## Failure Routing

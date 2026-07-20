@@ -207,6 +207,10 @@ deferred to a follow-up.
     is the second, independent one.
   - ADR-0014 — In-keyboard history panel: the `REVIEW_REFINEMENT` carrier exclusion and the
     `COMPLETED`/text filter are shared verbatim with `SessionDao.pagedHistoryPanel()` (§4).
+  - ADR-0035 — Companion History Parity: this cursor-based, phone-authoritative sync keeps
+    working unchanged against the companion's full Room-parity SQLDelight schema, and the
+    `received_texts` retirement preserves it (five sync/dispatch tests green on unchanged
+    assertions); see the 2026-07-20 Decision-History entry.
 - **Implementation:** `shared/src/main/kotlin/net/devemperor/dictate/shared/sync/` (`SyncClient.kt`,
   `Cursor.kt`, `SyncSource.kt`); `app/src/main/java/net/devemperor/dictate/windows/AndroidSyncSource.kt`;
   `app/.../core/DictatePipelineService.kt:852-871` (app-start trigger);
@@ -245,3 +249,19 @@ The `(created_at, id)` pair is the minimal total order that survives same-millis
 boundaries. Full-history scope serves the product goal (a complete archive on the PC), and its
 privacy cost was made an explicit, accepted decision rather than a silent default. Idempotent
 `session_id` upserts make interrupted runs self-resuming without any repair protocol.
+
+### 2026-07-20 — Sync serves the full-parity companion schema (ADR-0035)
+
+**Trigger:** The desktop-companion-v1 plan (Block D, chunk D1a) brought the companion
+SQLDelight schema to full Room parity and retired `received_texts`.
+
+**Before:** The companion persisted a thin schema; this ADR's cursor-based,
+phone-authoritative sync wrote into it.
+
+**After:** ADR-0035 gives the companion a full Room-parity session schema (with parity
+tests) and retires `received_texts` by backfill; this ADR's sync keeps working unchanged
+against the parity schema — the five existing sync/dispatch tests stay green without
+assertion changes.
+
+**Reasoning:** Full parity lets phone↔companion sync round-trip the complete record; the
+sync contract of this ADR is preserved. See ADR-0035.

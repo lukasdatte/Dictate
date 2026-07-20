@@ -1,6 +1,6 @@
-# ADR-NNNN: Project-Wide `SecretStore` Port — Encrypted-at-Rest Secrets on Every Host, Resolving the ADR-0017 §F-3 Plaintext Defer
+# ADR-0029: Project-Wide `SecretStore` Port — Encrypted-at-Rest Secrets on Every Host, Resolving the ADR-0017 §F-3 Plaintext Defer
 
-**Status:** Proposed (plan-scoped — pending promotion)
+**Status:** Accepted
 **Scope:** Project-Wide
 **Date:** 2026-07-20
 **Supersedes:** —
@@ -217,3 +217,19 @@ per-host mechanism, reusing the `PlatformModule`/`available` patterns already in
 companion and needing no new dependency (JNA is present). Migrating the pairing secret
 too is what makes the project-wide claim (F11) and the ADR-0017 resolution honest;
 zero-knowledge sharing was rejected as beyond v1 (F12).
+
+### 2026-07-20 — Promoted and accepted
+
+**Trigger:** Chunk F1 (Block F) of the desktop-companion-v1 plan — blocks A–E are
+implemented; the plan-scoped draft is promoted to a numbered, accepted ADR before
+plan archival (§2 criterion 9).
+
+**Before:** Plan-scoped draft `adrs/adr-secret-store.md` with an `NNNN` placeholder and
+`Proposed (plan-scoped — pending promotion)` status; sibling ADRs referenced by slug.
+
+**After:** `docs/decisions/0029-secret-store.md`, Status **Accepted**, indexed in
+`docs/decisions/README.md`; sibling cross-references resolved to their assigned ADR
+numbers. The reciprocal §F-3-resolution note was added to ADR-0017.
+
+**Reasoning:** The decision is active in the codebase across the implemented blocks;
+promotion makes it a binding, navigable ADR with bidirectional cross-links.

@@ -93,6 +93,14 @@ editing rules".
 | [0025](0025-input-command-protocol.md) | Input-Command Protocol — Semantic Keyboard Commands over the Wire, not VK Codes | shared, companion · *Project-Wide* | Accepted | 2026-07-15 |
 | [0026](0026-keyboard-action-routing.md) | Keyboard-Action Routing — Exclusive Sink Router in front of the InsertionService | state, service · *Project-Wide* | Accepted | 2026-07-15 |
 | [0027](0027-pc-dictation-activity.md) | PC-Dictation Activity — a Third Render Host with a PC-only Terminal Mode | ui-mode, state, windows · *Project-Wide* | Accepted | 2026-07-16 |
+| [0028](0028-shared-ai-module.md) | `:shared-ai` — A Fourth Pure-JVM Module for the AI Core Behind Platform Ports | build, ai · *Project-Wide* | Accepted | 2026-07-20 |
+| [0029](0029-secret-store.md) | Project-Wide `SecretStore` Port — Encrypted-at-Rest Secrets on Every Host | security, ai · *Project-Wide* | Accepted | 2026-07-20 |
+| [0030](0030-config-entity-model.md) | Configuration Entity Model — Entities in `:shared`, Canonical Serialization + contentHash as the v3 Format | data, protocol, ai · *Project-Wide* | Accepted | 2026-07-20 |
+| [0031](0031-desktop-dictation-host.md) | Desktop Dictation Host — The Companion as a Recording + Pipeline Host with Its Own Slim Orchestrator | companion, audio-pipeline, state | Accepted | 2026-07-20 |
+| [0032](0032-desktop-panel-ui.md) | Desktop Mini-Panel — Frameless, Always-on-Top, Focus-Free Compose Surface + Global Hotkey | companion, ui | Accepted | 2026-07-20 |
+| [0033](0033-desktop-review.md) | Desktop Review Mode — Full Review incl. Re-Dictate on the Companion | companion, ai, state, ui | Accepted | 2026-07-20 |
+| [0034](0034-peer-catalog.md) | Peer-Catalog Family — Pull-Only Configuration Sharing over the Existing Wire Stack | protocol, companion · *Project-Wide* | Accepted | 2026-07-20 |
+| [0035](0035-companion-history-parity.md) | Companion History Parity — Full SQLDelight Session-Schema Parity + `received_texts` Retirement | companion, data | Accepted | 2026-07-20 |
 
 ## Relationship graph
 

@@ -1,6 +1,6 @@
-# ADR-NNNN: Desktop Review Mode — The Full Review Panel Incl. Re-Dictate on the Companion, Revising the "Review is IME-Only" Rule of ADR-0013 / ADR-0027-F8
+# ADR-0033: Desktop Review Mode — The Full Review Panel Incl. Re-Dictate on the Companion, Revising the "Review is IME-Only" Rule of ADR-0013 / ADR-0027-F8
 
-**Status:** Proposed (plan-scoped — pending promotion)
+**Status:** Accepted
 **Subsystem:** companion, ai, state, ui
 **Date:** 2026-07-20
 **Supersedes:** —
@@ -41,7 +41,7 @@
   Activity (a store-open review panel there just shows a hint back to the IME).
 - **Shared pipeline semantics:** ADR-0012 (the persisted post-processing conversation)
   and ADR-0013 §3 (the `final_output_text` crash-resilience invariant) the desktop
-  pipeline already mirrors (`adr-desktop-dictation-host`).
+  pipeline already mirrors (ADR-0031).
 - **Concept / decisions:** `.../research/fragenkatalog.md` §F18 (full review mode from
   v1, incl. dictated refinement); `.../research/bestandsaufnahme.md` §8 (existing
   review/ADR-0013 inventory).
@@ -57,7 +57,7 @@ PC-Dictation Activity (that Activity just points the user back to the keyboard).
 "review is IME-only" stance was correct for those hosts, where the review surface and the
 keyboard share a render pipeline.
 
-The desktop dictation host (`adr-desktop-dictation-host`) is a different situation: it is
+The desktop dictation host (ADR-0031) is a different situation: it is
 a standalone recording + pipeline host with **no IME at all**. If review stayed IME-only,
 a desktop dictation that the AI flags as ambiguous would have nowhere to go — the user
 could only accept a possibly-wrong insert or discard. Feature decision F18 requires the
@@ -90,7 +90,7 @@ Give the desktop host the **full review panel including re-dictate**, sharing th
 
 4. **No new persisted status or verdict.** Desktop REVIEW maps onto the existing
    `sessions.status = COMPLETED` with the review held in UI state, exactly as the phase
-   model does (`adr-desktop-dictation-host`) — Room/SQLDelight parity, no new vocabulary.
+   model does (ADR-0031) — Room/SQLDelight parity, no new vocabulary.
 
 5. **The IME hosts stay as they were.** ADR-0013's in-keyboard panel and ADR-0027's
    Activity behaviour are unchanged; the Activity still points back to the IME for review.
@@ -161,7 +161,7 @@ Give the desktop host the **full review panel including re-dictate**, sharing th
     desktop-host exception. Note added there at promotion.
   - ADR-0012 — the persisted post-processing conversation re-dictate feeds a turn into.
   - ADR-0009 — the serial queue the re-dictate continuation runs on.
-  - `adr-desktop-dictation-host` — the host whose REVIEW verdict this surface consumes.
+  - ADR-0031 — the host whose REVIEW verdict this surface consumes.
 
 ## Decision History
 
@@ -186,3 +186,19 @@ dictations (F18), so review cannot stay IME-only; but the verdict logic is corre
 so only the render surface is new. Sharing `ReviewDecision` prevents cross-platform drift; a
 partial revision with cross-references is more honest than either a full supersede or a
 duplicated flow.
+
+### 2026-07-20 — Promoted and accepted
+
+**Trigger:** Chunk F1 (Block F) of the desktop-companion-v1 plan — blocks A–E are
+implemented; the plan-scoped draft is promoted to a numbered, accepted ADR before
+plan archival (§2 criterion 9).
+
+**Before:** Plan-scoped draft `adrs/adr-desktop-review.md` with an `NNNN` placeholder and
+`Proposed (plan-scoped — pending promotion)` status; sibling ADRs referenced by slug.
+
+**After:** `docs/decisions/0033-desktop-review.md`, Status **Accepted**, indexed in
+`docs/decisions/README.md`; sibling cross-references resolved to their assigned ADR
+numbers. The reciprocal review-surface notes were added to ADR-0013 and ADR-0027.
+
+**Reasoning:** The decision is active in the codebase across the implemented blocks;
+promotion makes it a binding, navigable ADR with bidirectional cross-links.

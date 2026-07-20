@@ -239,6 +239,9 @@ keep their axes; history reprocess/regenerate (ADR-0012) is untouched.
     follows the review/staging precedent)
   - ADR-0001 / ADR-0002 — State module + cross-module cascade (the `historyPanel`
     axis and its auto-close cascade follow these)
+  - ADR-0035 — Companion History Parity (this ADR's history filter definitions now
+    apply equivalently to desktop-origin sessions in the companion's full-parity
+    SQLDelight schema — see the 2026-07-20 Decision-History entry)
 - **Plan:** `tmp/plan-paket3-history-panel.md` (Paket 3 — implementation plan)
 - **Database pattern:** `docs/DATABASE-PATTERNS.md` §"Double-Enum Pattern"
   (`sessions.origin` widened, `sessions.type` retrofitted)
@@ -333,3 +336,18 @@ old GONE assertion was rewritten into visibility/enabled/callback tests.
 change local to the adapter + one handler. Routing the send through the shared dispatch
 primitive — not a bespoke acknowledge branch — is what prevents a second acknowledge
 channel and the ghost-pending gap ADR-0019 documents. See ADR-0019.
+
+### 2026-07-20 — Filter equivalence extended to desktop-origin sessions (ADR-0035)
+
+**Trigger:** The desktop-companion-v1 plan (Block D, chunk D1a) brought the companion's
+SQLDelight schema to full Room parity as the shared session archive.
+
+**Before:** The in-keyboard history filter definitions were defined for Android/Room
+sessions.
+
+**After:** ADR-0035 establishes the companion DB as the origin-separated shared archive
+(phone-synced + desktop-recorded sessions); this ADR's filter definitions now apply
+equivalently to desktop-origin sessions.
+
+**Reasoning:** One shared archive across sources means the same filter semantics must
+hold for both origins. See ADR-0035.

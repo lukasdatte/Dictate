@@ -1,6 +1,6 @@
-# ADR-NNNN: Desktop Mini-Panel — A Frameless, Always-on-Top, Focus-Free Compose Surface with a Ported Global Hotkey and a Focus-Restore Fallback
+# ADR-0032: Desktop Mini-Panel — A Frameless, Always-on-Top, Focus-Free Compose Surface with a Ported Global Hotkey and a Focus-Restore Fallback
 
-**Status:** Proposed (plan-scoped — pending promotion)
+**Status:** Accepted
 **Subsystem:** companion, ui
 **Date:** 2026-07-20
 **Supersedes:** —
@@ -49,7 +49,7 @@
 
 ## Context
 
-The desktop dictation host (`adr-desktop-dictation-host`) needs a UI. The design intent
+The desktop dictation host (ADR-0031) needs a UI. The design intent
 (F5) is a system-wide HUD: press a hotkey anywhere, a small panel appears warm and fast
 (<50 ms), you dictate, and the transcript is inserted into whatever app you were using.
 For that insertion to land in the right place, the panel ideally must **not** steal
@@ -100,7 +100,7 @@ documented focus-restore fallback.
 
 6. **Recording core 1:1, management screens their own layouts (F19).** The recording
    surface reproduces the Android recording UX 1:1 in Compose (shared amplitude curve
-   parameters via the moved `AmplitudeProcessor`, `adr-shared-ai-module` D5.e); the
+   parameters via the moved `AmplitudeProcessor`, ADR-0028 D5.e); the
    prompt/model/profile/peer **management** screens are their own Compose layouts with a
    desktop colour/shape language, not a keyboard clone.
 
@@ -174,8 +174,8 @@ documented focus-restore fallback.
     the desktop.
   - ADR-0018 — `TextInserter`/`available`, the port-behind-a-capability pattern the hotkey
     follows and the insertion path auto-insert uses.
-  - `adr-desktop-dictation-host` — the host whose `DesktopUiState` this panel renders.
-  - `adr-shared-ai-module` — the moved `AmplitudeProcessor` (D5.e) driving the shared
+  - ADR-0031 — the host whose `DesktopUiState` this panel renders.
+  - ADR-0028 — the moved `AmplitudeProcessor` (D5.e) driving the shared
     recording amplitude curve.
 
 ## Decision History
@@ -199,3 +199,19 @@ target without a browser or IPC (F1). The focus-restore fallback makes the focus
 path choice rather than a blocker (D4.3). The hotkey behind a port keeps Windows first-class and
 Linux degraded gracefully, reusing the established `TextInserter`/`PlatformModule` pattern; the
 whole surface mirrors the ADR-0004/0027 render-host model on the desktop.
+
+### 2026-07-20 — Promoted and accepted
+
+**Trigger:** Chunk F1 (Block F) of the desktop-companion-v1 plan — blocks A–E are
+implemented; the plan-scoped draft is promoted to a numbered, accepted ADR before
+plan archival (§2 criterion 9).
+
+**Before:** Plan-scoped draft `adrs/adr-desktop-panel-ui.md` with an `NNNN` placeholder and
+`Proposed (plan-scoped — pending promotion)` status; sibling ADRs referenced by slug.
+
+**After:** `docs/decisions/0032-desktop-panel-ui.md`, Status **Accepted**, indexed in
+`docs/decisions/README.md`; sibling cross-references resolved to their assigned ADR
+numbers.
+
+**Reasoning:** The decision is active in the codebase across the implemented blocks;
+promotion makes it a binding, navigable ADR with bidirectional cross-links.

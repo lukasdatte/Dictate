@@ -252,6 +252,15 @@ Project-Wide. The rules bind every part of the client/server transport:
     recovery that consumes this ADR's auth failures.
   - ADR-0020 — the sync endpoints (`/v1/sync`, `/v1/sync/cursor`) mounted behind this ADR's
     `authenticated` wrapper.
+  - ADR-0029 — resolves the §4 / §F-3 plaintext-secret defer: the pairing device secret (and all
+    API keys) move into the project-wide `SecretStore`, encrypted at rest; see the 2026-07-20
+    Decision-History entry.
+  - ADR-0031 — extends the role model: the companion becomes a recording + pipeline host in its
+    own right, not only a passive dispatch receiver (additive to the phone→PC path); see the
+    2026-07-20 Decision-History entry.
+  - ADR-0034 — extends the authority model in a new, config-only direction (pull-only peer-catalog
+    sharing) reusing this ADR's pairing/bearer-secret auth; dictations stay excluded (F16); see the
+    2026-07-20 Decision-History entry.
 - **Implementation:**
   - `shared/src/main/kotlin/net/devemperor/dictate/shared/auth/` — `PairingUri.kt`, `Secrets.kt`,
     `AuthHeaders.kt`.
@@ -289,3 +298,51 @@ because a tailnet device is not an authorized device — reachability must not i
 type into the active window. Consistency with the existing plaintext-secret tier was chosen over a
 point encryption improvement, with a project-wide follow-up recorded, so the security posture is
 uniform and honestly represented rather than selectively gold-plated.
+
+### 2026-07-20 — §F-3 plaintext-secret defer resolved (ADR-0029)
+
+**Trigger:** The desktop-companion-v1 plan (Block B) delivered the project-wide
+encrypted secret store this ADR named as a follow-up.
+
+**Before:** §4 / §F-3 stored the pairing device secret in plain `SharedPreferences`
+"for consistency with the existing API keys", deferring encrypted storage as a
+project-wide concern.
+
+**After:** ADR-0029 introduces a `SecretStore` port with per-host encrypted backends
+(Android Keystore, Windows DPAPI, POSIX-`0600` file fallback) and migrates the pairing
+device secret — plus all API keys — into it; no plaintext secret survives. The §F-3
+defer is closed.
+
+**Reasoning:** The deferred follow-up became due once the entity model and peer sync
+needed a credible at-rest store; migrating the pairing secret too is what makes the
+project-wide claim honest. See ADR-0029.
+
+### 2026-07-20 — Companion role extended to a recording/pipeline host (ADR-0031)
+
+**Trigger:** Feature decisions F2/F4/F5 in the desktop-companion-v1 plan (Block D) made
+the companion able to dictate on its own.
+
+**Before:** The companion was a passive dispatch receiver: the phone recorded and ran
+the pipeline, the companion only typed the inserted text.
+
+**After:** ADR-0031 adds a desktop dictation host (javax.sound capture + the `:shared-ai`
+pipeline + a slim own orchestrator) that records and post-processes locally. This is
+additive — the phone-records→PC-types path (ADR-0027) is unchanged.
+
+**Reasoning:** Standalone desktop dictation needs local recording and pipeline
+execution; the receiver role stays intact alongside it. See ADR-0031.
+
+### 2026-07-20 — New config-only authority direction (ADR-0034)
+
+**Trigger:** The desktop-companion-v1 plan (Block E) added peer-to-peer sharing of
+configuration entities over the wire stack this ADR's transport and pairing secure.
+
+**Before:** Authority flowed one way — the phone was authoritative for session sync
+(ADR-0020); there was no peer-to-peer configuration sharing.
+
+**After:** ADR-0034 adds a pull-only peer-catalog family that reuses this ADR's
+pairing/bearer-secret auth and introduces a config-only authority direction (provider →
+subscriber). Dictation sessions remain excluded (F16).
+
+**Reasoning:** Sharing setups between devices needs a new authority axis, but it reuses
+the existing pairing model and transport rather than a second stack. See ADR-0034.

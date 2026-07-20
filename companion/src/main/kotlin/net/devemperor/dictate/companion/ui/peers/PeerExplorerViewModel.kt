@@ -1,10 +1,13 @@
 package net.devemperor.dictate.companion.ui.peers
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import net.devemperor.dictate.companion.catalog.CatalogSubscriber
 import net.devemperor.dictate.companion.catalog.CatalogSyncRunner
 import net.devemperor.dictate.companion.catalog.PeerIndexSource
@@ -80,6 +83,12 @@ class PeerExplorerViewModel(
     private val scope: CoroutineScope,
     private val clock: () -> Long,
     private val staleAfterMillis: Long = DEFAULT_STALE_AFTER_MILLIS,
+    /**
+     * Where [PeerDiscovery.discover] runs. It execs a subprocess (up to its own timeout) and its
+     * contract forbids the UI thread — while [scope] in production IS the UI scope (the house
+     * pattern for the cheap local-DB loads). Tests override with `Unconfined` to stay inline.
+     */
+    private val discoveryDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
 
     private val _state = MutableStateFlow(PeerExplorerUiState())
@@ -123,7 +132,8 @@ class PeerExplorerViewModel(
 
     /** Populate [PeerExplorerUiState.candidates] from discovery — empty off-tailnet, never an error (AC11). */
     fun discoverCandidates() = scope.launch {
-        _state.value = _state.value.copy(candidates = discovery.discover())
+        val candidates = withContext(discoveryDispatcher) { discovery.discover() }
+        _state.value = _state.value.copy(candidates = candidates)
     }
 
     // ── derivation ──────────────────────────────────────────────────────────────────────────────

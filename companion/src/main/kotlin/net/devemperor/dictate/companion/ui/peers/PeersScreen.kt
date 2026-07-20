@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import net.devemperor.dictate.companion.CompanionContainer
+import net.devemperor.dictate.companion.catalog.PeerIndexSource
 
 /**
  * The Peers destination (peer-katalog.md §8): two tabs — the consumer view ("Subscriptions": peer
@@ -41,7 +42,7 @@ fun PeersScreen(container: CompanionContainer) {
     val explorer = remember {
         PeerExplorerViewModel(
             store = explorerStore,
-            indexSource = container.peerIndexSource ?: net.devemperor.dictate.companion.catalog.PeerIndexSource { null },
+            indexSource = container.peerIndexSource ?: PeerIndexSource { null },
             discovery = container.peerDiscovery,
             syncRunner = container.catalogSyncRunner,
             subscriber = container.catalogSubscriber,

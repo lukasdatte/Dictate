@@ -20,6 +20,13 @@ import net.devemperor.dictate.companion.data.SqlDelightDeviceRepository
 import net.devemperor.dictate.companion.data.SqlDelightHistoryRepository
 import net.devemperor.dictate.companion.data.SqlDelightSettingsRepository
 import net.devemperor.dictate.companion.capture.AudioCaptureService
+import net.devemperor.dictate.companion.catalog.CatalogSubscriber
+import net.devemperor.dictate.companion.catalog.CatalogSyncRunner
+import net.devemperor.dictate.companion.catalog.PeerIndexSource
+import net.devemperor.dictate.companion.catalog.discovery.NoopPeerDiscovery
+import net.devemperor.dictate.companion.catalog.discovery.PeerDiscovery
+import net.devemperor.dictate.companion.catalog.discovery.TailscalePeerDiscovery
+import net.devemperor.dictate.companion.domain.CatalogService
 import net.devemperor.dictate.companion.domain.FocusRestorationPolicy
 import net.devemperor.dictate.companion.domain.FocusRestoringTextInserter
 import net.devemperor.dictate.companion.hotkey.GlobalHotkey
@@ -38,6 +45,7 @@ import net.devemperor.dictate.companion.domain.PairingService
 import net.devemperor.dictate.companion.domain.SyncService
 import net.devemperor.dictate.companion.domain.net.AddressCatalog
 import net.devemperor.dictate.companion.domain.port.AutostartManager
+import net.devemperor.dictate.companion.domain.port.CatalogAuditLog
 import net.devemperor.dictate.companion.domain.port.ChordMappingRepository
 import net.devemperor.dictate.companion.domain.port.ClipboardPort
 import net.devemperor.dictate.companion.domain.port.ClockPort
@@ -45,6 +53,7 @@ import net.devemperor.dictate.companion.domain.port.DeviceRepository
 import net.devemperor.dictate.companion.domain.port.HistoryRepository
 import net.devemperor.dictate.companion.domain.port.InputCommandPerformer
 import net.devemperor.dictate.companion.domain.port.NetworkInterfaces
+import net.devemperor.dictate.companion.domain.port.PeerExplorerStore
 import net.devemperor.dictate.companion.domain.port.SettingsRepository
 import net.devemperor.dictate.companion.domain.port.TextInserter
 import net.devemperor.dictate.companion.platform.AppPaths
@@ -106,17 +115,16 @@ class CompanionContainer(
      * `/v1/catalog` family and `HealthService` reports `supportsCatalog = true` — the two stay honest
      * together because both key off this one field.
      */
-    val catalogService: net.devemperor.dictate.companion.domain.CatalogService? = null,
+    val catalogService: CatalogService? = null,
     /**
      * The consumer-side Peer Explorer store (Block E3, peer-katalog.md §8) over `peers`/
      * `subscriptions` + entity provenance; null in the minimal sync-test graph (no config store).
      */
-    val peerExplorer: net.devemperor.dictate.companion.domain.port.PeerExplorerStore? = null,
+    val peerExplorer: PeerExplorerStore? = null,
     /** Tailnet candidate enumeration for "Add peer" (§9.2); Noop off-Tailscale and in tests (AC11). */
-    val peerDiscovery: net.devemperor.dictate.companion.catalog.discovery.PeerDiscovery =
-        net.devemperor.dictate.companion.catalog.discovery.NoopPeerDiscovery,
+    val peerDiscovery: PeerDiscovery = NoopPeerDiscovery,
     /** The offer view's read side of the credential-delivery audit (§8.2); null without a catalog. */
-    val catalogAuditLog: net.devemperor.dictate.companion.domain.port.CatalogAuditLog? = null,
+    val catalogAuditLog: CatalogAuditLog? = null,
     /**
      * The three live-catalog seams of the Explorer (§8.1): fetch a peer's index, run one sync, take
      * over an offered entry. All need a per-peer CatalogClient built from the `peers` row + the
@@ -124,9 +132,9 @@ class CompanionContainer(
      * work (issue E2-1); until it lands they stay null and the UI degrades honestly (stored-state
      * matrix only, sync-now/subscribe disabled).
      */
-    val peerIndexSource: net.devemperor.dictate.companion.catalog.PeerIndexSource? = null,
-    val catalogSyncRunner: net.devemperor.dictate.companion.catalog.CatalogSyncRunner? = null,
-    val catalogSubscriber: net.devemperor.dictate.companion.catalog.CatalogSubscriber? = null,
+    val peerIndexSource: PeerIndexSource? = null,
+    val catalogSyncRunner: CatalogSyncRunner? = null,
+    val catalogSubscriber: CatalogSubscriber? = null,
 ) {
 
     /**
@@ -199,7 +207,7 @@ class CompanionContainer(
             // secretStore is the SAME instance the AI config resolves keys from, so a delivered
             // credential and a locally used one address the identical SecretStore namespace (B1).
             val catalogAuditLog = SqlDelightCatalogAuditLog(database)
-            val catalogService = net.devemperor.dictate.companion.domain.CatalogService(
+            val catalogService = CatalogService(
                 entities = SqlDelightCatalogRepository(configRepository),
                 secretStore = secretStore,
                 auditLog = catalogAuditLog,
@@ -254,7 +262,7 @@ class CompanionContainer(
                 panelStyler = platform.panelStyler,
                 catalogService = catalogService,
                 peerExplorer = SqlDelightPeerExplorerStore(database, configRepository),
-                peerDiscovery = net.devemperor.dictate.companion.catalog.discovery.TailscalePeerDiscovery(),
+                peerDiscovery = TailscalePeerDiscovery(),
                 catalogAuditLog = catalogAuditLog,
             )
         }
@@ -283,7 +291,7 @@ class CompanionContainer(
              * exercise the catalog, and a null keeps the `/v1/catalog` routes unmounted and
              * `supportsCatalog = false`. The catalog E2E passes a real one built on an in-memory DB.
              */
-            catalogService: net.devemperor.dictate.companion.domain.CatalogService? = null,
+            catalogService: CatalogService? = null,
         ): CompanionContainer = CompanionContainer(
             devices = devices,
             history = history,

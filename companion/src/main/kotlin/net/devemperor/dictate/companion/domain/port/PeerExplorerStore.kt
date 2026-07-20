@@ -7,7 +7,7 @@ import net.devemperor.dictate.shared.protocol.CatalogEntityKindWire
  * The Peer Explorer's view of the local `peers` / `subscriptions` tables plus the provenance columns
  * of the entity copies (peer-katalog.md §8) — what the consumer side *stored*, not what the peer
  * currently offers (that live half comes from
- * [net.devemperor.dictate.companion.ui.peers.PeerIndexSource]).
+ * [net.devemperor.dictate.companion.catalog.PeerIndexSource]).
  *
  * A port for the same reason [HistoryRepository] is one: the ViewModel derives the §8.1 state matrix
  * from these rows and must be testable against a fake. The production impl is
@@ -61,10 +61,10 @@ data class PeerRecord(
  * One subscribed (or forked) local copy as the Explorer shows it: the subscription row's identity
  * and watermark, plus the entity row's display fields.
  *
- * [mode] is the ENTITY's `subscription_mode` — `SUBSCRIBE`/`ONE_SHOT` for live bindings,
- * `LOCAL` for a fork that still carries its `source_peer_id` provenance (the §8.1 `FORKED` state).
- * A forked/one-shot copy has no subscription row, so [lastHash]/[lastCheckedAt] are the entity's
- * own content hash and null respectively.
+ * [mode] is the copy's `subscription_mode` — `SUBSCRIBE`/`ONE_SHOT` for live bindings (which have a
+ * subscription row, per the §5.3 CHECK), `LOCAL` for a fork that still carries its `source_peer_id`
+ * provenance (the §8.1 `FORKED` state). Only a FORK has no subscription row left, so for it
+ * [lastHash]/[lastCheckedAt] are the entity's own content hash and null respectively.
  */
 data class SubscribedCopy(
     val localEntityId: String,

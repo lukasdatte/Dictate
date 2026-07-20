@@ -48,6 +48,8 @@ class PeerExplorerViewModelTest {
         scope = CoroutineScope(Dispatchers.Unconfined),
         clock = { now },
         staleAfterMillis = HOUR,
+        // Unconfined keeps the discovery hop inline too, so state is readable on the next line.
+        discoveryDispatcher = Dispatchers.Unconfined,
     )
 
     // ── the §8.1 matrix (AC13) ──────────────────────────────────────────────────────────────────

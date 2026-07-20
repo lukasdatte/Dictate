@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import net.devemperor.dictate.companion.CompanionContainer
 import net.devemperor.dictate.shared.config.ModelFunction
 import net.devemperor.dictate.shared.config.ProviderType
+import net.devemperor.dictate.shared.config.SubscriptionMode
 
 /**
  * The config-management screen (desktop-host.md §9.2): the local profile / model / prompt editor, in
@@ -94,6 +95,7 @@ private fun ProfilesSection(state: ConfigUiState, viewModel: ConfigViewModel) = 
                 onClick = { viewModel.setActiveProfile(profile.id) },
             )
             Text(profile.name, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            SourceBadge(profile.sourceRef?.peerId, profile.subscriptionMode)
             Text(profile.ambiguityMode.name, style = MaterialTheme.typography.labelSmall)
             Button(onClick = { viewModel.duplicateProfile(profile.id) }) { Text("Duplicate") }
             DeleteButton { viewModel.deleteProfile(profile.id) }
@@ -111,6 +113,7 @@ private fun ProvidersSection(state: ConfigUiState, viewModel: ConfigViewModel) =
     state.providers.forEach { provider ->
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(provider.label, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            SourceBadge(provider.sourceRef?.peerId, provider.subscriptionMode)
             Text(provider.providerType.name, style = MaterialTheme.typography.labelSmall)
             DeleteButton { viewModel.deleteProvider(provider.id) }
         }
@@ -130,6 +133,7 @@ private fun ModelsSection(state: ConfigUiState, viewModel: ConfigViewModel) = Se
     state.models.forEach { model ->
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(model.modelId, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            SourceBadge(model.sourceRef?.peerId, model.subscriptionMode)
             Text(model.function.name, style = MaterialTheme.typography.labelSmall)
             DeleteButton { viewModel.deleteModel(model.id) }
         }
@@ -159,6 +163,7 @@ private fun PromptsSection(state: ConfigUiState, viewModel: ConfigViewModel) = S
                 Text(prompt.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(prompt.text, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            SourceBadge(prompt.sourceRef?.peerId, prompt.subscriptionMode)
             DeleteButton { viewModel.deletePrompt(prompt.id) }
         }
     }
@@ -189,6 +194,23 @@ private fun AddRow(value: String, onValueChange: (String) -> Unit, placeholder: 
         )
         Button(onClick = onAdd) { Text("Add") }
     }
+}
+
+/**
+ * The Block-E peer-source column of the editor lists (peer-katalog.md E3, §8.3): a copy taken from
+ * a peer is labelled with where it came from — a live subscription as "from <peer>", a fork (mode
+ * back to LOCAL, provenance kept) as "forked". Locally created entities show nothing. Subscribing
+ * itself happens on the Peers screen; this badge is the editor-side provenance mirror.
+ */
+@Composable
+private fun SourceBadge(sourcePeerId: String?, mode: SubscriptionMode) {
+    if (sourcePeerId == null) return
+    val text = when (mode) {
+        SubscriptionMode.LOCAL -> "forked"
+        SubscriptionMode.SUBSCRIBE -> "from $sourcePeerId"
+        SubscriptionMode.ONE_SHOT -> "copied from $sourcePeerId"
+    }
+    Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
 }
 
 @Composable

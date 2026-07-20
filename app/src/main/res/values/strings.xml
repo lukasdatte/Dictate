@@ -712,4 +712,20 @@
     <string name="dictate_config_import_failed">Import failed</string>
     <string name="dictate_config_origin_peer">Peer</string>
     <string name="dictate_config_auto_apply">auto</string>
+
+    <!-- Peer-catalog sync (Block E). Channel name shown in the system notification settings. -->
+    <string name="dictate_catalog_sync_channel_name">Peer sync</string>
+    <string name="dictate_catalog_sync_notif_title">Catalog updated</string>
+
+    <!-- Read-only Peer Explorer settings page (Block E3, peer-katalog.md §8.3). -->
+    <string name="dictate_peer_explorer_title">Peers</string>
+    <string name="dictate_settings_peer_explorer">Peers 🤝</string>
+    <string name="dictate_settings_peer_explorer_summary">See prompts, profiles, models and keys subscribed from other devices</string>
+    <string name="dictate_peer_explorer_intro">Entities this phone has taken over from paired companions, grouped by source. Subscriptions update automatically in the background.</string>
+    <string name="dictate_peer_explorer_empty">Nothing subscribed yet. Subscribe prompts, profiles or models from a companion on the PC — copies appear here.</string>
+    <!-- Row format: label · kind · mode, e.g. "Formal tone · PROMPT · subscribed". -->
+    <string name="dictate_peer_explorer_row">%1$s · %2$s · %3$s</string>
+    <string name="dictate_peer_explorer_mode_subscribed">subscribed</string>
+    <string name="dictate_peer_explorer_mode_one_shot">one-time copy</string>
+    <string name="dictate_peer_explorer_mode_forked">forked (local)</string>
 </resources>

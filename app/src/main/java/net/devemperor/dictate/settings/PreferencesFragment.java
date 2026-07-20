@@ -259,6 +259,17 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
             });
         }
 
+        // Read-only Peer Explorer (Block E3, peer-katalog.md §8.3).
+        Preference peerExplorerPreference = findPreference("net.devemperor.dictate.peer_explorer");
+        if (peerExplorerPreference != null) {
+            peerExplorerPreference.setOnPreferenceClickListener(preference -> {
+                Intent intent = new Intent(requireContext(), net.devemperor.dictate.peers.ui.PeerExplorerActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+                return true;
+            });
+        }
+
         Preference promptPreference = findPreference("net.devemperor.dictate.prompts");
         if (promptPreference != null) {
             promptPreference.setOnPreferenceClickListener(preference -> {

@@ -3,6 +3,7 @@ package net.devemperor.dictate.companion.data
 import app.cash.sqldelight.EnumColumnAdapter
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import net.devemperor.dictate.companion.db.Catalog_access_log
 import net.devemperor.dictate.companion.db.Conversation_messages
 import net.devemperor.dictate.companion.db.DictateCompanionDb
 import net.devemperor.dictate.companion.db.Dispatch_state
@@ -13,6 +14,7 @@ import net.devemperor.dictate.companion.db.Profiles
 import net.devemperor.dictate.companion.db.Prompts
 import net.devemperor.dictate.companion.db.Provider_configs
 import net.devemperor.dictate.companion.db.Sessions
+import net.devemperor.dictate.companion.db.Subscriptions
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -95,6 +97,18 @@ object CompanionDatabase {
                 ambiguity_modeAdapter = EnumColumnAdapter(),
                 visibilityAdapter = EnumColumnAdapter(),
                 subscription_modeAdapter = EnumColumnAdapter(),
+            ),
+            // Peer-catalog audit (E1, §5.4). `kind` is a Double-Enum backed by the `:shared.protocol`
+            // wire enum (pinned by CatalogAccessCheckParityTest).
+            catalog_access_logAdapter = Catalog_access_log.Adapter(
+                kindAdapter = EnumColumnAdapter(),
+            ),
+            // Consumer-side subscriptions (E3 Explorer queries pulled this adapter in; `peers` has no
+            // typed column and stays adapter-less). `kind` is the wire enum, `mode` the SAME
+            // `:shared.config.SubscriptionMode` the entity tables use (Companion.sq §5.3 note).
+            subscriptionsAdapter = Subscriptions.Adapter(
+                kindAdapter = EnumColumnAdapter(),
+                modeAdapter = EnumColumnAdapter(),
             ),
         )
     }

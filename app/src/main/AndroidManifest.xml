@@ -349,6 +349,14 @@
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value=".settings.APISettingsActivity" />
         </activity>
+        <!-- Read-only Peer Explorer (Block E3, peer-katalog.md §8.3): copies subscribed from peers. -->
+        <activity
+            android:name=".peers.ui.PeerExplorerActivity"
+            android:exported="false">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".settings.DictateSettingsActivity" />
+        </activity>
         <activity
             android:name=".settings.WindowsPairingActivity"
             android:exported="false"

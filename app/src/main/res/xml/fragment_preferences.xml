@@ -200,6 +200,12 @@
             app:iconSpaceReserved="false"/>
 
         <androidx.preference.Preference
+            android:key="net.devemperor.dictate.peer_explorer"
+            android:title="@string/dictate_settings_peer_explorer"
+            android:summary="@string/dictate_settings_peer_explorer_summary"
+            app:iconSpaceReserved="false"/>
+
+        <androidx.preference.Preference
             android:key="net.devemperor.dictate.prompts"
             android:title="@string/dictate_settings_prompts_title"
             android:summary="@string/dictate_settings_prompts_summary"

@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,12 +31,14 @@ import net.devemperor.dictate.companion.CompanionContainer
 import net.devemperor.dictate.companion.ui.config.ManagementScreen
 import net.devemperor.dictate.companion.ui.devices.DevicesScreen
 import net.devemperor.dictate.companion.ui.history.HistoryScreen
+import net.devemperor.dictate.companion.ui.peers.PeersScreen
 import net.devemperor.dictate.companion.ui.settings.SettingsScreen
 import net.devemperor.dictate.companion.ui.theme.CompanionTheme
 
 enum class Destination(val label: String) {
     HISTORY("History"),
     CONFIG("Config"),
+    PEERS("Peers"),
     DEVICES("Devices"),
     SETTINGS("Settings"),
 }
@@ -64,6 +67,7 @@ fun App(container: CompanionContainer, baseUrl: () -> String) {
                                     imageVector = when (entry) {
                                         Destination.HISTORY -> Icons.AutoMirrored.Filled.List
                                         Destination.CONFIG -> Icons.Default.Tune
+                                        Destination.PEERS -> Icons.Default.Share
                                         Destination.DEVICES -> Icons.Default.Phone
                                         Destination.SETTINGS -> Icons.Default.Settings
                                     },
@@ -82,6 +86,7 @@ fun App(container: CompanionContainer, baseUrl: () -> String) {
                     when (destination) {
                         Destination.HISTORY -> HistoryScreen(container)
                         Destination.CONFIG -> ManagementScreen(container)
+                        Destination.PEERS -> PeersScreen(container)
                         Destination.DEVICES -> DevicesScreen(container, baseUrl)
                         Destination.SETTINGS -> SettingsScreen(container)
                     }

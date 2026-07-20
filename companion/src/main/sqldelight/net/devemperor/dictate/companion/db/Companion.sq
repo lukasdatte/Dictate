@@ -311,6 +311,73 @@ CREATE TABLE profile_prompts (
 );
 CREATE INDEX profile_prompts_prompt_ref ON profile_prompts(prompt_ref);
 
+-- ── Peer-catalog tables (E1, peer-katalog.md §5) ─────────────────────────────────────────────
+--
+-- E1 owns EXACTLY these three tables (Migration 4.sqm, v4→v5); the five config-entity tables above
+-- are D3's (3.sqm) per the E1→D3 edge (Plan §3 D5.b, peer-katalog.md §14 D7). `peers` and
+-- `subscriptions` were schema-only in E1; E3 added the Explorer's read/action queries (end of this
+-- file), the sync engine's own write queries remain the E2 persistence adapter's to add; only
+-- `catalog_access_log` gets its queries here (the credential-delivery audit, R8, is E1's).
+--
+-- The §5.2 `source_peer_id` FK from the entity tables to `peers` is deliberately still NOT added: it
+-- needs a table-recreate on four tables, is not required by any E1 acceptance criterion, and E2 owns
+-- both the provenance writes AND the peer-deletion cascade — so E2 adds the FK on tables that are
+-- still provenance-empty. Until then no non-NULL `source_peer_id` is ever written (D3 header note).
+
+-- A peer we subscribe to (we are its HTTP client). peer_id is opaque + public-key-ready (F30): today
+-- a server-name/UUID, later a key fingerprint — never derived from the address (which is mutable).
+CREATE TABLE peers (
+    peer_id         TEXT NOT NULL PRIMARY KEY,
+    display_name    TEXT NOT NULL,
+    -- MagicDNS name + port, e.g. "heim-pc.tailXXXX.ts.net:8756".
+    address         TEXT NOT NULL,
+    -- Our pairing credential FOR this peer. The secret lives in the SecretStore; here only the ref (B1).
+    device_id       TEXT NOT NULL,
+    secret_ref      TEXT NOT NULL,
+    added_at        INTEGER NOT NULL,
+    -- Last ATTEMPT (even failed) — drives no staleness.
+    last_contact_at INTEGER,
+    -- Last SUCCESSFUL contact — basis of the staleness display (§6.5), derived, never a status column.
+    last_success_at INTEGER,
+    -- Root-hash at the last successful run — the cheap change detector.
+    last_root_hash  TEXT
+);
+
+-- The sync journal: which local entity copy mirrors which peer entity, in which mode, at which hash.
+-- `mode` reuses the C1 `:shared.config.SubscriptionMode` enum (the SAME source the entity tables use,
+-- NOT a parallel catalog.*Wire copy — D3's unification, Companion.sq header) but its CHECK is the
+-- SUBSET ('SUBSCRIBE','ONE_SHOT'): a subscription row always represents an ACTIVE binding, never LOCAL
+-- (a fork DELETES the row and sets the entity's subscription_mode = 'LOCAL' in one transaction, §5.3).
+CREATE TABLE subscriptions (
+    -- The local copy's id. A copy has at most one subscription.
+    local_entity_id  TEXT NOT NULL PRIMARY KEY,
+    peer_id          TEXT NOT NULL,
+    -- Id of the entity AT THE PROVIDER (may differ from local_entity_id).
+    source_entity_id TEXT NOT NULL,
+    kind             TEXT AS net.devemperor.dictate.shared.protocol.CatalogEntityKindWire NOT NULL
+                     CHECK (kind IN ('PROVIDER_CONFIG','MODEL_REF','PROMPT','PROFILE','CREDENTIAL','UNKNOWN')),
+    mode             TEXT AS net.devemperor.dictate.shared.config.SubscriptionMode NOT NULL
+                     CHECK (mode IN ('SUBSCRIBE','ONE_SHOT')),
+    -- Last fetched contentHash — diff basis and drift detector.
+    last_hash        TEXT NOT NULL,
+    last_checked_at  INTEGER,
+    FOREIGN KEY (peer_id) REFERENCES peers(peer_id) ON DELETE CASCADE
+);
+CREATE INDEX subscriptions_peer_id ON subscriptions(peer_id);
+
+-- The offer-side audit (R8): who fetched what, and when. Credential deliveries are ALWAYS logged
+-- (security); entity fetches optionally (offer view "last pickup", §8.2). No payload, only who/what/when.
+CREATE TABLE catalog_access_log (
+    id             INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    -- Which device fetched (call.device.deviceId).
+    peer_device_id TEXT NOT NULL,
+    entity_id      TEXT NOT NULL,
+    kind           TEXT AS net.devemperor.dictate.shared.protocol.CatalogEntityKindWire NOT NULL
+                   CHECK (kind IN ('PROVIDER_CONFIG','MODEL_REF','PROMPT','PROFILE','CREDENTIAL','UNKNOWN')),
+    at             INTEGER NOT NULL
+);
+CREATE INDEX catalog_access_log_entity_id ON catalog_access_log(entity_id);
+
 -- ── usage — post-call AI accounting (UsageSink, desktop-host.md §5.4) ────────────────────────
 --
 -- A companion-only accounting table, written by SqlDelightUsageSink after every desktop transcription
@@ -682,3 +749,42 @@ SELECT s.id, s.created_at, s.final_output_text, s.inserted_at,
     (SELECT t.text FROM transcriptions t WHERE t.session_id = s.id ORDER BY t.version DESC LIMIT 1) AS transcript_text
 FROM sessions s
 WHERE s.host_origin = 'DESKTOP_DICTATION' AND s.id = :sessionId;
+
+-- ── catalog_access_log (offer-side audit, E1 §5.4) ────────────────────────────────────────────
+--
+-- Write path of the R8 mitigation: every credential delivery appends one row (CatalogAuditLog). The
+-- read queries back the E1 audit test and the E3 offer view ("who fetched what, when", §8.2).
+
+recordCatalogAccess:
+INSERT INTO catalog_access_log(peer_device_id, entity_id, kind, at)
+VALUES (:peerDeviceId, :entityId, :kind, :at);
+
+catalogAccessForEntity:
+SELECT * FROM catalog_access_log WHERE entity_id = :entityId ORDER BY at DESC;
+
+allCatalogAccess:
+SELECT * FROM catalog_access_log ORDER BY at DESC;
+
+-- ── peers + subscriptions (consumer-side read/actions, E3 §8) ─────────────────────────────────
+--
+-- The Peer Explorer's read side plus its two mutations (unsubscribe = row delete; fork's entity
+-- half runs through CompanionConfigRepository — see SqlDelightPeerExplorerStore). The sync engine's
+-- OWN write path (recordContact/recordSuccess/applyEntityUpdate) is the delegated E2 persistence
+-- adapter's to add — these queries deliberately stay read-plus-user-action only.
+
+allPeers:
+SELECT * FROM peers ORDER BY display_name, peer_id;
+
+insertPeer:
+INSERT INTO peers(peer_id, display_name, address, device_id, secret_ref, added_at, last_contact_at, last_success_at, last_root_hash)
+VALUES (:peerId, :displayName, :address, :deviceId, :secretRef, :addedAt, NULL, NULL, NULL);
+
+subscriptionsForPeer:
+SELECT * FROM subscriptions WHERE peer_id = :peerId ORDER BY local_entity_id;
+
+deleteSubscription:
+DELETE FROM subscriptions WHERE local_entity_id = :localEntityId;
+
+insertSubscription:
+INSERT INTO subscriptions(local_entity_id, peer_id, source_entity_id, kind, mode, last_hash, last_checked_at)
+VALUES (:localEntityId, :peerId, :sourceEntityId, :kind, :mode, :lastHash, :lastCheckedAt);

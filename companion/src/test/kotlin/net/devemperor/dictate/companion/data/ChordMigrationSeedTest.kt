@@ -2,6 +2,7 @@ package net.devemperor.dictate.companion.data
 
 import app.cash.sqldelight.EnumColumnAdapter
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import net.devemperor.dictate.companion.db.Catalog_access_log
 import net.devemperor.dictate.companion.db.DictateCompanionDb
 import net.devemperor.dictate.companion.db.Conversation_messages
 import net.devemperor.dictate.companion.db.Dispatch_state
@@ -12,6 +13,7 @@ import net.devemperor.dictate.companion.db.Profiles
 import net.devemperor.dictate.companion.db.Prompts
 import net.devemperor.dictate.companion.db.Provider_configs
 import net.devemperor.dictate.companion.db.Sessions
+import net.devemperor.dictate.companion.db.Subscriptions
 import net.devemperor.dictate.companion.domain.model.ChordModifier
 import net.devemperor.dictate.companion.domain.model.DefaultChords
 import net.devemperor.dictate.companion.domain.model.KeyChord
@@ -71,6 +73,8 @@ class ChordMigrationSeedTest {
             profilesAdapter = Profiles.Adapter(
                 EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(), EnumColumnAdapter(),
             ),
+            catalog_access_logAdapter = Catalog_access_log.Adapter(EnumColumnAdapter()),
+            subscriptionsAdapter = Subscriptions.Adapter(EnumColumnAdapter(), EnumColumnAdapter()),
         )
         val seeded = db.companionQueries.allChords().executeAsList()
 

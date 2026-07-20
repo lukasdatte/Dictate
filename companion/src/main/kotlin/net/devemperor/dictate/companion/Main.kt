@@ -70,14 +70,48 @@ fun main(args: Array<String>) {
     when (val acquisition = SingleInstanceGuard.acquire(AppPaths.dataDirectory())) {
         is SingleInstanceGuard.Acquisition.AlreadyRunning -> {
             // Another companion already owns the data dir and port 8756. A manual launch means the
-            // user wants to see it — ask it to surface. An autostart re-fire (--minimized) must not
-            // pop a window uninvited. Either way we do NOT start a second app.
-            if (!args.contains(FLAG_MINIMIZED)) acquisition.requestShow()
+            // user wants to see it — ask it to surface. An autostart re-fire (--minimized) and a
+            // service re-fire (--headless) must not pop a window uninvited. Either way we do NOT
+            // start a second app.
+            if (!args.contains(FLAG_MINIMIZED) && !args.contains(FLAG_HEADLESS)) acquisition.requestShow()
             exitProcess(0)
         }
 
-        is SingleInstanceGuard.Acquisition.Primary -> runCompanion(args, acquisition.guard)
+        is SingleInstanceGuard.Acquisition.Primary ->
+            if (args.contains(FLAG_HEADLESS)) runHeadless(acquisition.guard) else runCompanion(args, acquisition.guard)
     }
+}
+
+/**
+ * `--headless` (peer-katalog.md §9.3, F8): the full companion — server, persistence, catalog offer,
+ * sync — without ever touching Compose/Skiko or AWT. The hub-peer / autostart-service mode: a
+ * headless companion serves its catalog and receives dictations; it just has no window and no tray.
+ *
+ * It is deliberately the SAME boot path as the windowed app ([CompanionBootstrap.start] — already
+ * Compose-free, that is its whole point): headless only skips `application {}`. Failures print to
+ * stderr and exit non-zero — there is no window to show them in, and a service manager needs the
+ * exit code, not a spinner.
+ *
+ * The desktop-dictation hotkey path stays dormant: registering a global hotkey without any UI to
+ * confirm/review would insert text with no visible feedback anywhere, so headless is a *receiver*,
+ * not a dictation host.
+ */
+private fun runHeadless(guard: SingleInstanceGuard) {
+    Runtime.getRuntime().addShutdownHook(Thread { guard.release() })
+    val ready = try {
+        CompanionBootstrap.start()
+    } catch (e: Throwable) {
+        System.err.println("Dictate Companion could not start: ${describeBootFailure(e)}")
+        exitProcess(1)
+    }
+    Runtime.getRuntime().addShutdownHook(Thread { ready.server.stop() })
+    println(
+        "Dictate Companion running headless on port ${ready.server.boundPort()}" +
+            (ready.binding.advertised?.let { " ($it)" } ?: ""),
+    )
+    // Ktor's CIO engine runs on daemon threads; park the main thread until SIGTERM/SIGINT ends the
+    // process (the shutdown hooks above then stop the server and free the single-instance lock).
+    Thread.currentThread().join()
 }
 
 private fun runCompanion(args: Array<String>, guard: SingleInstanceGuard) {
@@ -298,6 +332,9 @@ private fun BootFailed(message: String) {
 }
 
 private const val FLAG_MINIMIZED = "--minimized"
+
+/** Server without a window (§9.3) — the autostart/hub-peer mode. See [runHeadless]. */
+private const val FLAG_HEADLESS = "--headless"
 
 /** A boot that has not finished by here is wedged, not slow; surface it as an error. */
 private const val BOOT_TIMEOUT_MILLIS = 20_000L

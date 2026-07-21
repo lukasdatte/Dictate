@@ -4,3 +4,6 @@
 # forces git to treat the file as text so diffs stay readable.
 *.kt   text diff
 *.kts  text diff
+*.sq text eol=lf
+*.sqm text eol=lf
+companion/src/main/sqldelight/databases/*.db binary

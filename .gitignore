@@ -18,3 +18,4 @@ build/
 local.properties
 worktrees/
 .kotlin/
+tmp/

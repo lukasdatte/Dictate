@@ -2,6 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ This repository holds two unrelated codebases
+
+Everything below describes the **fork lineage** — `main`, `feature/*`, the repo
+root and `worktrees/feature/*`. It is a fork of Dictate 3.2.
+
+A **second lineage** lives in the same clone under `worktrees/dk/`: the
+upstream project `DevEmperor/DictateKeyboard`, a FlorisBoard-based rewrite that
+shares **no git history** with this one. Different build (Gradle 9.4.1 / Kotlin
+DSL / `:app :wear :lib:*`), different conventions, different rules.
+
+**If your working directory is under `worktrees/dk/`, none of this file
+applies.** Read that worktree's own `CLAUDE.md` instead. Never merge, rebase or
+cherry-pick between the lineages — they have no merge base.
+
+- Decision + rationale: [`docs/decisions/0028-two-lineage-repository.md`](docs/decisions/0028-two-lineage-repository.md)
+- How to contribute upstream: [`docs/runbooks/upstream-contribution.md`](docs/runbooks/upstream-contribution.md)
+- Tooling: `scripts/dk/` (`new.sh`, `sync.sh`, `pr.sh`, `done.sh`)
+
 ## Project Overview
 
 Dictate is an Android Input Method Editor (IME) — a keyboard app that uses AI (OpenAI Whisper, GPT, Anthropic Claude, Groq, OpenRouter) for speech-to-text transcription and text rewording. Package: `net.devemperor.dictate`, min SDK 26, target SDK 35.

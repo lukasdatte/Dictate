@@ -1,0 +1,11 @@
+{
+  "integrationBranch": "main",
+  "checklist": null,
+  "hook": null,
+  "excludeBranches": [
+    {
+      "pattern": "dk/*",
+      "handledBy": "scripts/dk/done.sh — docs/runbooks/upstream-contribution.md § 4.9"
+    }
+  ]
+}

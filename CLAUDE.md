@@ -19,6 +19,7 @@ cherry-pick between the lineages — they have no merge base.
 - Decision + rationale: [`docs/decisions/0028-two-lineage-repository.md`](docs/decisions/0028-two-lineage-repository.md)
 - How to contribute upstream: [`docs/runbooks/upstream-contribution.md`](docs/runbooks/upstream-contribution.md)
 - Tooling: `scripts/dk/` (`new.sh`, `sync.sh`, `pr.sh`, `done.sh`)
+- Teardown: the `cleanup-worktrees` skill reads [`.worktree-teardown.json`](.worktree-teardown.json); `dk/*` branches are excluded there and retired with `scripts/dk/done.sh` instead.
 
 ## Project Overview
 
